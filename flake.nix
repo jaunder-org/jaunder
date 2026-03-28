@@ -30,9 +30,13 @@
         devShells.default = pkgs.mkShell {
           buildInputs = [
             toolchain
+            pkgs.cargo-generate
             pkgs.cargo-leptos
+            pkgs.dart-sass
+            pkgs.leptosfmt
             pkgs.openssl
             pkgs.pkg-config
+            pkgs.prettier
             pkgs.wasm-bindgen-cli
           ]
           ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
