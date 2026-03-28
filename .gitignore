@@ -1,0 +1,5 @@
+# Direnv state
+/.direnv/
+
+# agent-shell state
+/.agent-shell/
