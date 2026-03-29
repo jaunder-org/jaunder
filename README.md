@@ -1,110 +1,27 @@
-<picture>
-    <source srcset="https://raw.githubusercontent.com/leptos-rs/leptos/main/docs/logos/Leptos_logo_Solid_White.svg" media="(prefers-color-scheme: dark)">
-    <img src="https://raw.githubusercontent.com/leptos-rs/leptos/main/docs/logos/Leptos_logo_RGB.svg" alt="Leptos Logo">
-</picture>
+# Jaunder
 
-# Leptos Axum Starter Template
+## Overview
 
-This is a template for use with the [Leptos](https://github.com/leptos-rs/leptos) web framework and the [cargo-leptos](https://github.com/leptos-rs/cargo-leptos) tool using [Axum](https://github.com/tokio-rs/axum).
+`Jaunder` is an easily-hosted, multi-protocol social media application written in Rust. It provides a unified approach to consuming content from federated social networks (ActivityPub, RSS, Atom, JSON Feed, and Authenticated Transfer Protocol (AT Protocol / Bluesky)) and publishing original content (short-form, long-form, media) that is also pushed to those networks in whatever manner is appropriate. The primary design goals are:
 
-## Creating your template repo
+- **Low operational cost**: Runs on a Raspberry Pi or small VPS as a single binary.
+- **Privacy by default**: User data is never shared between users, even on multi-user instances.
+- **Open standards**: All producer and consumer behavior is built on open, publicly specified protocols — including W3C/IETF standards (ActivityPub, RSS & Atom, WebSub, WebMentions) and significant open ecosystem protocols (AT Protocol, JSON Feed). The architecture supports incorporating additional protocols over time.
+- **High fidelity**: Raw protocol data is stored without alteration alongside a pre-processed normalized form. The raw copy enables reprocessing if normalization logic changes; the processed copy makes reads fast.
+- **Easy setup**: Users should be guided through the process of setting up the system, and wherever possible, the system should validate their settings and make suggestions if things seem wrong.
+- **Easy maintenance**: Good practices should be the default; for instance, backups should be annoying until they're setup.
 
-If you don't have `cargo-leptos` installed you can install it with
+## Setting up jaunder
 
-```bash
-cargo install cargo-leptos --locked
+`Jaunder` is intended to be easy to get set up. To bring up the service by hand, one would do:
+
+```
+jaunder init # initial, guided database setup
+jaunder serve
 ```
 
-Then run
-```bash
-cargo leptos new --git https://github.com/leptos-rs/start-axum-workspace/
-```
+Additional configuration can then be done via the web interface.
 
-to generate a new project template.
+By default, `Jaunder` will listen on http://localhost:3000/. To make this publically accessible, you need to have a reverse proxy (`Caddy` is recommended) that will listen on a publically accessible IP address and handle HTTPS.
 
-```bash
-cd jaunder
-```
-
-to go to your newly created project.
-Feel free to explore the project structure, but the best place to start with your application code is in `app/src/lib.rs`.
-Additionally, Cargo.toml may need updating as new versions of the dependencies are released, especially if things are not working after a `cargo update`.
-
-### Islands support
-
-Note that for islands to work correctly, you need to have a `use app;` in your frontend `lib.rs` otherwise rustc / wasm_bindgen gets confused.
-To prevent clippy from complaining, at the top of the `frontend/src/lib.rs` file place:
-```rust
-#[allow(clippy::single_component_path_imports)]
-#[allow(unused_imports)]
-use app;
-```
-
-## Running your project
-
-```bash
-cargo leptos watch
-```
-
-## Installing Additional Tools
-
-By default, `cargo-leptos` uses `nightly` Rust, `cargo-generate`, and `sass`. If you run into any trouble, you may need to install one or more of these tools.
-
-1. `rustup toolchain install nightly --allow-downgrade` - make sure you have Rust nightly
-2. `rustup default nightly` - setup nightly as default, or you can use rust-toolchain file later on
-3. `rustup target add wasm32-unknown-unknown` - add the ability to compile Rust to WebAssembly
-4. `cargo install cargo-generate` - install `cargo-generate` binary (should be installed automatically in future)
-5. `npm install -g sass` - install `dart-sass` (should be optional in future
-
-## Compiling for Release
-```bash
-cargo leptos build --release
-```
-
-Will generate your server binary in target/server/release and your site package in target/site
-
-## Testing Your Project
-
-Cargo-leptos uses [Playwright](https://playwright.dev) as the end-to-end test tool.
-
-Prior to the first run of the end-to-end tests run Playwright must be installed.
-In the project's `end2end` directory run `npm install -D playwright @playwright/test` to install playwright and browser specific APIs.
-
-To run the tests during development in the project root run:
-```bash
-cargo leptos end-to-end
-```
-
-To run tests for release in the project root run:
-```bash
-cargo leptos end-to-end --release
-```
-There are some examples tests are located in `end2end/tests` directory that pass tests with the sample Leptos app.
-
-A web-based report on tests is available by running `npx playwright show-report` in the `end2end` directory.
-
-
-## Executing a Server on a Remote Machine Without the Toolchain
-After running a `cargo leptos build --release` the minimum files needed are:
-
-1. The server binary located in `target/server/release`
-2. The `site` directory and all files within located in `target/site`
-
-Copy these files to your remote server. The directory structure should be:
-```text
-jaunder
-site/
-```
-Set the following environment variables (updating for your project as needed):
-```text
-LEPTOS_OUTPUT_NAME="jaunder"
-LEPTOS_SITE_ROOT="site"
-LEPTOS_SITE_PKG_DIR="pkg"
-LEPTOS_SITE_ADDR="127.0.0.1:3000"
-LEPTOS_RELOAD_PORT="3001"
-```
-Finally, run the server binary.
-
-## Licensing
-
-This template itself is released under the Unlicense. You should replace the LICENSE for your own application with an appropriate license if you plan to release it publicly.
+For information on the design of `Jaunder`, see [the Design document](./docs/DESIGN.md).
