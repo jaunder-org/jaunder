@@ -3,10 +3,15 @@ name = "server"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
 
 [dependencies]
-app = { path = "../app", default-features = false, features = ["ssr"] }
+web = { path = "../web", default-features = false, features = ["ssr"] }
 leptos = { workspace = true, features = [ "ssr" ]}
 leptos_axum.workspace = true
 

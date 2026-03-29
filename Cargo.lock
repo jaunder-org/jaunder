@@ -51,19 +51,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
-name = "app"
-version = "0.1.0"
-dependencies = [
- "cfg-if",
- "http",
- "leptos",
- "leptos_axum",
- "leptos_meta",
- "leptos_router",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "async-compression"
 version = "0.4.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -625,18 +612,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "frontend"
-version = "0.1.0"
-dependencies = [
- "app",
- "console_error_panic_hook",
- "console_log",
- "leptos",
- "log",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "futures"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -891,6 +866,18 @@ name = "httpdate"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
+name = "hydrate"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "console_log",
+ "leptos",
+ "log",
+ "wasm-bindgen",
+ "web",
+]
 
 [[package]]
 name = "hydration_context"
@@ -2022,7 +2009,6 @@ dependencies = [
 name = "server"
 version = "0.1.0"
 dependencies = [
- "app",
  "axum",
  "leptos",
  "leptos_axum",
@@ -2031,6 +2017,7 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "web",
 ]
 
 [[package]]
@@ -2798,6 +2785,19 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap",
  "semver",
+]
+
+[[package]]
+name = "web"
+version = "0.1.0"
+dependencies = [
+ "cfg-if",
+ "http",
+ "leptos",
+ "leptos_axum",
+ "leptos_meta",
+ "leptos_router",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
