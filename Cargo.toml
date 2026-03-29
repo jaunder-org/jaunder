@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["app", "frontend", "server"]
+members = [
+  "hydrate",
+  "server",
+  "web"
+]
 
 # need to be applied only to wasm build
 [profile.release]
@@ -39,7 +43,7 @@ name = "jaunder"
 bin-package = "server"
 
 # the package in the workspace that contains the frontend wasm binary (library crate)
-lib-package = "frontend"
+lib-package = "hydrate"
 
 # The site root folder is where cargo-leptos generate all output. WARNING: all content of this folder will be erased on a rebuild. Use it in your server setup.
 site-root = "target/site"

@@ -56,23 +56,23 @@
           }
         );
 
-        frontendWasm = craneLib.buildPackage (
+        hydrateWasm = craneLib.buildPackage (
           commonArgs
           // {
             cargoArtifacts = craneLib.buildDepsOnly (
               commonArgs
               // {
                 CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
-                cargoExtraArgs = "-p frontend";
+                cargoExtraArgs = "-p hydrate";
                 doCheck = false;
               }
             );
             CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
-            cargoExtraArgs = "-p frontend";
+            cargoExtraArgs = "-p hydrate";
             doCheck = false;
             installPhaseCommand = ''
               mkdir -p $out/lib
-              cp target/wasm32-unknown-unknown/release/frontend.wasm $out/lib/
+              cp target/wasm32-unknown-unknown/release/hydrate.wasm $out/lib/
             '';
           }
         );
@@ -103,11 +103,11 @@
               wasm-bindgen \
                 --target web \
                 --out-dir $out \
-                ${frontendWasm}/lib/frontend.wasm
+                ${hydrateWasm}/lib/hydrate.wasm
               # Rename to match output-name = "jaunder" expected by the Leptos SSR HTML
-              mv $out/frontend.js $out/jaunder.js
-              mv $out/frontend_bg.wasm $out/jaunder_bg.wasm
-              sed -i 's/frontend_bg\.wasm/jaunder_bg.wasm/g' $out/jaunder.js
+              mv $out/hydrate.js $out/jaunder.js
+              mv $out/hydrate_bg.wasm $out/jaunder_bg.wasm
+              sed -i 's/hydrate_bg\.wasm/jaunder_bg.wasm/g' $out/jaunder.js
             '';
 
         site = pkgs.runCommand "jaunder-site" { } ''
@@ -218,6 +218,7 @@
             toolchain
             pkgs.cargo-generate
             pkgs.cargo-leptos
+            pkgs.cargo-nextest
             pkgs.dart-sass
             pkgs.leptosfmt
             pkgs.nodejs
