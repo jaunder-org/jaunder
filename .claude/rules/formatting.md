@@ -1,0 +1,2 @@
+- **All .rs files**: first formatted with `leptosfmt`, then formatted with `cargo fmt`.
+- **All .js/.ts files**: formatted with `prettier`.

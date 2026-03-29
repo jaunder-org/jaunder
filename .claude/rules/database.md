@@ -1,0 +1,2 @@
+- **Backend support**: sqlite and postgresql
+- **SQL toolkit**: sqlx

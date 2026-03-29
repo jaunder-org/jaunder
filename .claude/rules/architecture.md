@@ -1,0 +1,5 @@
+- **Parse, don't validate**: use Rust's type system to make invalid states unrepresentable. Invalid data should be rejected at the boundary; interior code works only with valid types.
+- **Thin view layer**: Leptos components should render data they receive, with logic pushed into server functions or pure transformation functions.
+- **Server functions as the behavior seam**: treat `#[server]` functions as the boundary where business logic lives. These are the primary unit of testable behavior.
+- **Fallible operations at the boundary**: handle `Result`/`Option` conversion at system edges (HTTP handlers, DB calls), not scattered through business logic.
+- **Pure functions for transformations**: non-trivial data transformations should be pure functions, keeping them easy to test and reason about.
