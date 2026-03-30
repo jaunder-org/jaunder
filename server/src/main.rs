@@ -1,3 +1,5 @@
+mod cli;
+
 use leptos::logging::log;
 use leptos::prelude::*;
 
