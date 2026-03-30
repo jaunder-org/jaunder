@@ -2,4 +2,5 @@
 - Each milestone document uses numbered steps and numbered items within each step. Every item has a unique reference of the form `M<n>.<step>.<item>` (e.g. `M0.5.3`). Numbers must not restart within a step that contains sub-sections, as that would create duplicate references.
 - Milestone items should be addressed sequentially. If the order seems incorrect, ask if they can be reordered.
 - Commit messages should reference the milestone item(s) they address, e.g. `M0.1.1: Rename app/ to web/`.
+- Milestone items should be checked off in the commit that completes them.
 - CI uses GitHub Actions.
