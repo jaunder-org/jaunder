@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${SKIP_E2E:-0}" == "1" ]]; then
+    echo "--- pre-push: SKIP_E2E=1, skipping end-to-end tests ---"
+    exit 0
+fi
+
+echo "--- pre-push: checking for problematic crates ---"
+cargo deny check
+
+echo "--- pre-push: running end-to-end tests ---"
+nix flake check
+
+echo "--- pre-push: all checks passed ---"
