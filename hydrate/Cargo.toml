@@ -1,0 +1,19 @@
+[package]
+name = "hydrate"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+web = { path = "../web", default-features = false, features = ["hydrate"] }
+leptos = { workspace = true, features = [ "hydrate" ] }
+
+console_error_panic_hook.workspace = true
+console_log.workspace = true
+log.workspace = true
+wasm-bindgen.workspace = true
