@@ -12,4 +12,7 @@ cargo clippy -- -D warnings
 echo "--- pre-commit: running tests ---"
 cargo nextest run
 
+echo "--- pre-commit: checking coverage ---"
+scripts/check-coverage
+
 echo "--- pre-commit: all checks passed ---"
