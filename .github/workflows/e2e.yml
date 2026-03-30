@@ -1,0 +1,26 @@
+name: E2E
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e:
+    name: End-to-end tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: cachix/cachix-action@v15
+        with:
+          name: jaunder-org
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Run end-to-end tests
+        run: nix flake check

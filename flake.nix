@@ -1,6 +1,13 @@
 {
   description = "jaunder - a federated social media application";
 
+  nixConfig = {
+    extra-substituters = [ "https://jaunder-org.cachix.org" ];
+    extra-trusted-public-keys = [
+      "jaunder-org.cachix.org-1:usr4hb9a8+Ykafq+ZmX8ROwK8TXQXFwqGSDRLQysJeo="
+    ];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     fenix = {
@@ -216,6 +223,7 @@
         devShells.default = pkgs.mkShell {
           buildInputs = [
             toolchain
+            pkgs.cachix
             pkgs.cargo-deny
             pkgs.cargo-generate
             pkgs.cargo-leptos
