@@ -19,6 +19,7 @@ leptos_router = { version = "0.8.2" }
 leptos_axum = { version = "0.8.2" }
 
 axum = "0.8.4"
+clap = { version = "4", features = ["derive", "env"] }
 cfg-if = "1.0.0"
 console_error_panic_hook = "0.1.7"
 console_log = "1.0.0"
