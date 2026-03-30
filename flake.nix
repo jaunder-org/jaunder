@@ -227,6 +227,7 @@
             pkgs.cargo-deny
             pkgs.cargo-generate
             pkgs.cargo-leptos
+            pkgs.cargo-llvm-cov
             pkgs.cargo-nextest
             pkgs.dart-sass
             pkgs.leptosfmt
