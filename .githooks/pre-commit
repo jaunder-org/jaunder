@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "--- pre-commit: checking formatting ---"
+leptosfmt -x .direnv -x .git -x target --check '**/*.rs'
+cargo fmt --check
+prettier --check end2end
+
+echo "--- pre-commit: linting ---"
+cargo clippy -- -D warnings
+
+echo "--- pre-commit: running tests ---"
+cargo nextest run
+
+echo "--- pre-commit: all checks passed ---"
