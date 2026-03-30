@@ -1,0 +1,5 @@
+- NEVER commit a change without accompanying tests unless the user explicitly waives testing for that change.
+- NEVER remove functionality to pass tests.
+- unit tests in the same file.
+- integration tests in `tests/`, mirroring the source path.
+- e2e tests in `e2e/` using `playwright`.

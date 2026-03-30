@@ -1,0 +1,2 @@
+- Everything in rust except e2e tests using playwright
+- Web framework is leptos using SSR via cargo-leptos
