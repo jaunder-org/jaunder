@@ -1,3 +1,5 @@
+pub mod storage;
+
 use axum::Router;
 use leptos::prelude::*;
 use leptos_axum::{generate_route_list, LeptosRoutes};
