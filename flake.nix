@@ -216,6 +216,7 @@
         devShells.default = pkgs.mkShell {
           buildInputs = [
             toolchain
+            pkgs.cargo-deny
             pkgs.cargo-generate
             pkgs.cargo-leptos
             pkgs.cargo-nextest
