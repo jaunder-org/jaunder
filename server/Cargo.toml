@@ -16,6 +16,7 @@ web = { path = "../web", default-features = false, features = ["ssr"] }
 leptos = { workspace = true, features = [ "ssr" ]}
 leptos_axum.workspace = true
 
+async-trait.workspace = true
 axum.workspace = true
 clap.workspace = true
 simple_logger.workspace = true
@@ -23,6 +24,7 @@ tokio.workspace = true
 tower.workspace = true
 tower-http.workspace = true
 log.workspace = true
+sqlx.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
