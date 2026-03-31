@@ -104,6 +104,26 @@ pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<dyn Site
     }
 }
 
+/// Opens an existing database described by `opts`, runs pending migrations, and
+/// returns a [`SiteConfigStorage`] implementation.
+///
+/// Unlike [`open_database`], this function fails if the database does not
+/// already exist. Use [`open_database`] in `cmd_init`, which creates the
+/// database when it is missing.
+pub async fn open_existing_database(
+    opts: &DbConnectOptions,
+) -> sqlx::Result<Arc<dyn SiteConfigStorage>> {
+    match opts {
+        DbConnectOptions::Sqlite(options) => {
+            // create_if_missing defaults to false, so this fails when the file
+            // does not exist.
+            let pool = SqlitePool::connect_with(options.clone()).await?;
+            sqlx::migrate!("./migrations").run(&pool).await?;
+            Ok(Arc::new(SqliteSiteConfigStorage { pool }))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

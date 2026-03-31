@@ -11,8 +11,8 @@ async fn main() -> anyhow::Result<()> {
         } => {
             server::commands::cmd_init(&storage, skip_if_exists).await?;
         }
-        Commands::Serve { .. } => {
-            todo!("M1.5: implement cmd_serve")
+        Commands::Serve { storage, bind } => {
+            server::commands::cmd_serve(&storage, bind).await?;
         }
     }
     Ok(())
