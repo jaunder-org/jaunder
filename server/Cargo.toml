@@ -28,4 +28,7 @@ log.workspace = true
 sqlx.workspace = true
 
 [dev-dependencies]
+axum = { workspace = true }
+leptos = { workspace = true, features = ["ssr"] }
 tempfile.workspace = true
+tower = { workspace = true }
