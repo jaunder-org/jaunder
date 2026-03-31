@@ -239,6 +239,7 @@
             pkgs.prettier
             pkgs.sqlx-cli
             pkgs.sqlite
+            pkgs.typescript-language-server
             pkgs.wasm-bindgen-cli
           ]
           ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
