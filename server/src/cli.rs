@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand};
 
-use server::storage::DbConnectOptions;
+use crate::storage::DbConnectOptions;
 
 #[derive(Parser)]
 #[command(name = "jaunder", about = "A self-hosted social reader")]
