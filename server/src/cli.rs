@@ -2,6 +2,8 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand};
 
+use server::storage::DbConnectOptions;
+
 #[derive(Parser)]
 #[command(name = "jaunder", about = "A self-hosted social reader")]
 pub struct Cli {
@@ -12,9 +14,15 @@ pub struct Cli {
 /// Arguments shared by subcommands that need access to the storage directory.
 #[derive(Args)]
 pub struct StorageArgs {
-    /// Path to the storage directory (database, media, backups).
+    /// Path to the storage directory (media, backups).
     #[arg(long, env = "JAUNDER_STORAGE_PATH", default_value = "./data")]
     pub storage_path: PathBuf,
+
+    /// Database URL.
+    ///
+    /// Only `sqlite:` URLs are supported until M20 adds PostgreSQL.
+    #[arg(long, env = "JAUNDER_DB", default_value = "sqlite:./data/jaunder.db")]
+    pub db: DbConnectOptions,
 }
 
 #[derive(Subcommand)]
@@ -157,5 +165,47 @@ mod tests {
             panic!("wrong variant");
         };
         assert!(skip_if_exists);
+    }
+
+    // --- db precedence ---
+
+    #[test]
+    fn db_default() {
+        let cli = parse(&["init"]);
+        let Commands::Init { storage, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(storage.db.to_string(), "sqlite:./data/jaunder.db");
+    }
+
+    #[test]
+    fn db_from_flag() {
+        let cli = parse(&["init", "--db", "sqlite:/tmp/test.db"]);
+        let Commands::Init { storage, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(storage.db.to_string(), "sqlite:/tmp/test.db");
+    }
+
+    #[test]
+    fn db_flag_beats_env() {
+        std::env::set_var("JAUNDER_DB", "sqlite:/tmp/from_env.db");
+        let cli = parse(&["init", "--db", "sqlite:/tmp/from_flag.db"]);
+        std::env::remove_var("JAUNDER_DB");
+        let Commands::Init { storage, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(storage.db.to_string(), "sqlite:/tmp/from_flag.db");
+    }
+
+    #[test]
+    fn db_env_beats_default() {
+        std::env::set_var("JAUNDER_DB", "sqlite:/tmp/from_env.db");
+        let cli = parse(&["init"]);
+        std::env::remove_var("JAUNDER_DB");
+        let Commands::Init { storage, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(storage.db.to_string(), "sqlite:/tmp/from_env.db");
     }
 }

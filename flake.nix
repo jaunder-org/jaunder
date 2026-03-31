@@ -47,6 +47,7 @@
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [
             pkgs.openssl
+            pkgs.sqlite
           ]
           ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
             pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
@@ -236,6 +237,8 @@
             pkgs.openssl
             pkgs.pkg-config
             pkgs.prettier
+            pkgs.sqlx-cli
+            pkgs.sqlite
             pkgs.wasm-bindgen-cli
           ]
           ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
