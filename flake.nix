@@ -230,6 +230,7 @@
             pkgs.cargo-llvm-cov
             pkgs.cargo-nextest
             pkgs.dart-sass
+            pkgs.jq
             pkgs.leptosfmt
             pkgs.nodejs
             pkgs.openssl
