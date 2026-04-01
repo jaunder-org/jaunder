@@ -197,9 +197,10 @@
                     site-addr = "127.0.0.1:3000"
                     env = "PROD"
                     EOF
+                    ${serverBin}/bin/server init --skip-if-exists
                   '';
                   serviceConfig = {
-                    ExecStart = "${serverBin}/bin/server";
+                    ExecStart = "${serverBin}/bin/server serve";
                     WorkingDirectory = "/var/lib/jaunder";
                     StateDirectory = "jaunder";
                     Restart = "on-failure";
