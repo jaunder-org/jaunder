@@ -9,6 +9,9 @@ fi
 echo "--- pre-push: checking for problematic crates ---"
 cargo deny check
 
+echo "--- pre-push: checking coverage ---"
+scripts/check-coverage
+
 echo "--- pre-push: running end-to-end tests ---"
 nix flake check
 

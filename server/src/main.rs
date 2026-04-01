@@ -1,15 +1,19 @@
-use leptos::logging::log;
-use leptos::prelude::*;
+use clap::Parser;
+use server::cli::{Cli, Commands};
 
 #[tokio::main]
-async fn main() {
-    let conf = get_configuration(None).unwrap();
-    let addr = conf.leptos_options.site_addr;
-    let app = server::create_router(conf.leptos_options);
-
-    log!("listening on http://{}", &addr);
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app.into_make_service())
-        .await
-        .unwrap();
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Init {
+            storage,
+            skip_if_exists,
+        } => {
+            server::commands::cmd_init(&storage, skip_if_exists).await?;
+        }
+        Commands::Serve { storage, bind } => {
+            server::commands::cmd_serve(&storage, bind).await?;
+        }
+    }
+    Ok(())
 }

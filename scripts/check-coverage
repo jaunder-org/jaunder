@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Check that line coverage has not dropped below the committed baseline.
+#
+# Usage:
+#   scripts/check-coverage           — fail if coverage < baseline
+#   scripts/check-coverage --update  — write current coverage as the new baseline
+#
+# The baseline is stored in .coverage-baseline at the repository root and
+# should be committed alongside the code that establishes it.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+BASELINE_FILE="$ROOT/.coverage-baseline"
+UPDATE=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --update) UPDATE=true ;;
+        *) echo "error: unknown argument: $arg" >&2; exit 1 ;;
+    esac
+done
+
+echo "--- coverage: running cargo llvm-cov ---"
+CURRENT=$(cargo llvm-cov nextest --json --summary-only 2>/dev/null \
+    | jq '.data[0].totals.lines.percent' \
+    | awk '{ printf "%.2f", $1 }')
+
+if $UPDATE; then
+    awk "BEGIN { printf \"%.2f\\n\", $CURRENT }" > "$BASELINE_FILE"
+    echo "Coverage baseline updated to $(cat "$BASELINE_FILE")%"
+    exit 0
+fi
+
+if [[ ! -f "$BASELINE_FILE" ]]; then
+    echo "error: no coverage baseline found at $BASELINE_FILE" >&2
+    echo "Run: scripts/check-coverage --update" >&2
+    exit 1
+fi
+
+BASELINE=$(cat "$BASELINE_FILE")
+
+echo "Current coverage:  ${CURRENT}%"
+echo "Baseline coverage: ${BASELINE}%"
+
+if awk "BEGIN { exit !($CURRENT < $BASELINE) }"; then
+    echo "error: coverage dropped below baseline (${CURRENT}% < ${BASELINE}%)" >&2
+    echo "Fix coverage or run: scripts/check-coverage --update" >&2
+    exit 1
+fi
+
+echo "Coverage OK (${CURRENT}% >= ${BASELINE}%)"

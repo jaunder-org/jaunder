@@ -37,7 +37,12 @@
 
         craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
 
-        src = craneLib.cleanCargoSource ./.;
+        src = pkgs.lib.cleanSourceWith {
+          src = craneLib.path ./.;
+          filter =
+            path: type:
+            (pkgs.lib.hasSuffix ".sql" path) || (craneLib.filterCargoSources path type);
+        };
 
         commonArgs = {
           inherit src;
@@ -47,6 +52,7 @@
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [
             pkgs.openssl
+            pkgs.sqlite
           ]
           ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
             pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
@@ -191,9 +197,10 @@
                     site-addr = "127.0.0.1:3000"
                     env = "PROD"
                     EOF
+                    ${serverBin}/bin/server init --skip-if-exists
                   '';
                   serviceConfig = {
-                    ExecStart = "${serverBin}/bin/server";
+                    ExecStart = "${serverBin}/bin/server serve";
                     WorkingDirectory = "/var/lib/jaunder";
                     StateDirectory = "jaunder";
                     Restart = "on-failure";
@@ -227,13 +234,18 @@
             pkgs.cargo-deny
             pkgs.cargo-generate
             pkgs.cargo-leptos
+            pkgs.cargo-llvm-cov
             pkgs.cargo-nextest
             pkgs.dart-sass
+            pkgs.jq
             pkgs.leptosfmt
             pkgs.nodejs
             pkgs.openssl
             pkgs.pkg-config
             pkgs.prettier
+            pkgs.sqlx-cli
+            pkgs.sqlite
+            pkgs.typescript-language-server
             pkgs.wasm-bindgen-cli
           ]
           ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [

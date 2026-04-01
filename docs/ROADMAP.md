@@ -82,7 +82,7 @@ Implements the Mastodon client REST API as a compatibility shim, allowing existi
 
 ## M20: PostgreSQL backend
 
-Adds PostgreSQL as a second storage backend behind the existing database trait abstraction. Targets heavier multi-user deployments and high-volume AP instances. Full-text search is implemented via `tsvector` columns and GIN indexes rather than SQLite FTS5.
+Adds PostgreSQL as a second database backend selectable at runtime. The backend is chosen via the `--db` bootstrap flag (or `JAUNDER_DB` environment variable), which accepts a URL encoding both engine and connection parameters (`sqlite:./data` or `postgres://...`); SQLite remains the default for small deployments. All M1–M19 application features are fully supported on both backends. A `jaunder migrate-db --to <url>` command transfers all data from the current backend to a new one, allowing operators to move between SQLite and PostgreSQL (or back) without data loss. Full-text search uses `tsvector` columns and GIN indexes on the PostgreSQL backend instead of SQLite FTS5.
 
 ## M21: OAuth 2.0
 
