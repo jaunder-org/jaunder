@@ -1,2 +1,2 @@
-- **Backend support**: sqlite and postgresql
+- **Backend support**: sqlite and postgresql, dynamically selected at runtime
 - **SQL toolkit**: sqlx
