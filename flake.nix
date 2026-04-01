@@ -235,7 +235,7 @@
             inherit cargoArtifacts;
             cargoClippyExtraArgs = "-- -D warnings";
           });
-          rustfmt = craneLib.cargoFmt { inherit src; };
+          rustfmt = craneLib.cargoFmt { inherit src; pname = "jaunder"; version = "0.1.0"; };
           leptosfmt-check = pkgs.runCommand "leptosfmt-check" {
             nativeBuildInputs = [ pkgs.leptosfmt ];
           } ''
@@ -246,7 +246,7 @@
           nextest = craneLib.cargoNextest (commonArgs // {
             inherit cargoArtifacts;
           });
-          deny = craneLib.cargoDeny { inherit src; };
+          deny = craneLib.cargoDeny { inherit src; pname = "jaunder"; version = "0.1.0"; };
           prettier-check = pkgs.runCommand "prettier-check" {
             nativeBuildInputs = [ pkgs.prettier ];
           } ''
