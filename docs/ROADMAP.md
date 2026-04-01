@@ -8,13 +8,13 @@ Rename workspace crates to names that will age well, install git hooks for pre-c
 
 The `jaunder init` command: reads bootstrap config (bind address and storage path from CLI args or `JAUNDER_*` environment variables), runs the initial guided setup, creates the database, and applies the initial schema migrations. Without this milestone there is no runnable instance.
 
-## M2: Email and SMTP
+## M2: User management
 
-SMTP site config (relay host, port, credentials, sender address). Optional email address on user accounts with verification flow. Enables password reset email delivery (used in M3) and email notification delivery (used in M10).
+User registration (username + password), login returning an opaque device token, and Bearer token authentication middleware. User profile: display name, bio, and avatar image. Active sessions view with individual token revocation. Registration policy: open, invite-only, or closed, with invite generation via CLI or web interface.
 
-## M3: User management
+## M3: Email and SMTP
 
-User registration (username + password), login returning an opaque device token, and Bearer token authentication middleware. User profile: display name, bio, and avatar image. Active sessions view with individual token revocation. Registration policy: open, invite-only, or closed, with invite generation via CLI or web interface. Password reset: username-keyed, time-limited token delivered via email (requires SMTP configured in M2).
+SMTP site config (relay host, port, credentials, sender address). Optional email address on user accounts with verification flow. Password reset: username-keyed, time-limited token delivered via email (requires SMTP configured in M3). Enables email notification delivery (used in M11).
 
 ## M4: Simple blog
 
