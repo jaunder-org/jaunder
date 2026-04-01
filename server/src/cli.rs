@@ -56,7 +56,14 @@ pub enum Commands {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+
+    /// Serializes all tests that read or write the env vars clap resolves at parse time.
+    /// `cargo test` runs tests in parallel threads within the same process, so concurrent
+    /// set_var/remove_var calls race against each other.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(std::iter::once("jaunder").chain(args.iter().copied()))
@@ -67,6 +74,8 @@ mod tests {
 
     #[test]
     fn storage_path_default() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("JAUNDER_STORAGE_PATH");
         let cli = parse(&["init"]);
         let Commands::Init { storage, .. } = cli.command else {
             panic!("wrong variant");
@@ -76,6 +85,7 @@ mod tests {
 
     #[test]
     fn storage_path_from_flag() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let cli = parse(&["init", "--storage-path", "/tmp/mydata"]);
         let Commands::Init { storage, .. } = cli.command else {
             panic!("wrong variant");
@@ -85,6 +95,7 @@ mod tests {
 
     #[test]
     fn storage_path_flag_beats_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("JAUNDER_STORAGE_PATH", "/tmp/from_env");
         let cli = parse(&["init", "--storage-path", "/tmp/from_flag"]);
         std::env::remove_var("JAUNDER_STORAGE_PATH");
@@ -96,6 +107,7 @@ mod tests {
 
     #[test]
     fn storage_path_env_beats_default() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("JAUNDER_STORAGE_PATH", "/tmp/from_env");
         let cli = parse(&["init"]);
         std::env::remove_var("JAUNDER_STORAGE_PATH");
@@ -109,6 +121,8 @@ mod tests {
 
     #[test]
     fn bind_default() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("JAUNDER_BIND");
         let cli = parse(&["serve"]);
         let Commands::Serve { bind, .. } = cli.command else {
             panic!("wrong variant");
@@ -118,6 +132,7 @@ mod tests {
 
     #[test]
     fn bind_from_flag() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let cli = parse(&["serve", "--bind", "0.0.0.0:8080"]);
         let Commands::Serve { bind, .. } = cli.command else {
             panic!("wrong variant");
@@ -127,6 +142,7 @@ mod tests {
 
     #[test]
     fn bind_flag_beats_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("JAUNDER_BIND", "0.0.0.0:9000");
         let cli = parse(&["serve", "--bind", "0.0.0.0:8080"]);
         std::env::remove_var("JAUNDER_BIND");
@@ -138,6 +154,7 @@ mod tests {
 
     #[test]
     fn bind_env_beats_default() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("JAUNDER_BIND", "0.0.0.0:9000");
         let cli = parse(&["serve"]);
         std::env::remove_var("JAUNDER_BIND");
@@ -171,6 +188,8 @@ mod tests {
 
     #[test]
     fn db_default() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("JAUNDER_DB");
         let cli = parse(&["init"]);
         let Commands::Init { storage, .. } = cli.command else {
             panic!("wrong variant");
@@ -180,6 +199,7 @@ mod tests {
 
     #[test]
     fn db_from_flag() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let cli = parse(&["init", "--db", "sqlite:/tmp/test.db"]);
         let Commands::Init { storage, .. } = cli.command else {
             panic!("wrong variant");
@@ -189,6 +209,7 @@ mod tests {
 
     #[test]
     fn db_flag_beats_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("JAUNDER_DB", "sqlite:/tmp/from_env.db");
         let cli = parse(&["init", "--db", "sqlite:/tmp/from_flag.db"]);
         std::env::remove_var("JAUNDER_DB");
@@ -200,6 +221,7 @@ mod tests {
 
     #[test]
     fn db_env_beats_default() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("JAUNDER_DB", "sqlite:/tmp/from_env.db");
         let cli = parse(&["init"]);
         std::env::remove_var("JAUNDER_DB");
