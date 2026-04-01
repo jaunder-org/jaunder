@@ -3,3 +3,5 @@
 - unit tests in the same file.
 - integration tests in `tests/`, mirroring the source path.
 - e2e tests in `e2e/` using `playwright`.
+- check coverage using `scripts/check-coverage`
+- CI uses GitHub Actions.

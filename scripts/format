@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+FILE=$(jq -r '.tool_input.file_path')
+leptosfmt "$FILE"
+rustfmt "$FILE"

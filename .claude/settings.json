@@ -1,0 +1,44 @@
+{
+    "hooks": {
+        "PostToolUse": [
+            {
+                "matcher": "Edit(*.rs)|Write(*.rs)",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "jq -r '.tool_input.file_path' | { read -r f; leptosfmt \"$f\"; rustfmt --edition 2021 \"$f\"; } 2>/dev/null || true"
+                    }
+                ]
+            },
+            {
+                "matcher": "Edit(*.ts)|Write(*.ts)|Edit(*.js)|Write(*.js)",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "jq -r '.tool_input.file_path' | { read -r f; prettier --write \"$f\"; } 2>/dev/null || true"
+                    }
+                ]
+            },
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "jq -r '.tool_input.file_path' | { read -r f; git add \"$f\"; } 2>/dev/null || true"
+                    }
+                ]
+            }
+        ],
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "agent",
+                        "prompt": "Verify that all unit tests pass by running `cargo nextest run`. If any tests fail, output exactly this JSON and nothing else: {\"continue\": false, \"stopReason\": \"Tests failed: <list of failing test names>\"}. If all tests pass, output nothing.",
+                        "timeout": 120
+                    }
+                ]
+            }
+        ]
+    }
+}

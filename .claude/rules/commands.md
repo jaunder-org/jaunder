@@ -3,4 +3,4 @@
 - **Run a single unit or integration test**: cargo nextest run -E 'test(name)'
 - **Run end to end tests**: nix flake check
 - **Lint**: cargo clippy -- -D warnings
-- **Check formatting**: leptosfmt --check <file>; cargo fmt --check; prettier --check
+- **Check formatting**: leptosfmt --check <file>; cargo fmt --check; prettier --check end2end
