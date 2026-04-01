@@ -25,15 +25,15 @@ jobs:
 
       - name: Check formatting
         run: |
-          nix build .#checks.x86_64-linux.leptosfmt-check
-          nix build .#checks.x86_64-linux.rustfmt
-          nix build .#checks.x86_64-linux.prettier-check
+          nix build --accept-flake-config .#checks.x86_64-linux.leptosfmt-check
+          nix build --accept-flake-config .#checks.x86_64-linux.rustfmt
+          nix build --accept-flake-config .#checks.x86_64-linux.prettier-check
 
       - name: Lint
-        run: nix build .#checks.x86_64-linux.clippy
+        run: nix build --accept-flake-config .#checks.x86_64-linux.clippy
 
       - name: Test
-        run: nix build .#checks.x86_64-linux.nextest
+        run: nix build --accept-flake-config .#checks.x86_64-linux.nextest
 
       - name: Dependency audit
-        run: nix build .#checks.x86_64-linux.deny
+        run: nix build --accept-flake-config .#checks.x86_64-linux.deny
