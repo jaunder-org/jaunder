@@ -37,7 +37,12 @@
 
         craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
 
-        src = craneLib.cleanCargoSource ./.;
+        src = pkgs.lib.cleanSourceWith {
+          src = craneLib.path ./.;
+          filter =
+            path: type:
+            (pkgs.lib.hasSuffix ".sql" path) || (craneLib.filterCargoSources path type);
+        };
 
         commonArgs = {
           inherit src;
