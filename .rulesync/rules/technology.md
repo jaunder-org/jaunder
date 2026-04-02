@@ -1,3 +1,8 @@
+---
+root: false
+targets:
+  - '*'
+---
 - Use rust, except e2e tests using playwright and typescript.
 - Web framework is leptos using SSR via cargo-leptos.
 - The production deployment will be behind a reverse proxy providing https.

@@ -1,3 +1,8 @@
+---
+root: false
+targets:
+  - '*'
+---
 - `common` contains code shared between other packages
 - `server` contains the back-end
 - `web` contains leptos components

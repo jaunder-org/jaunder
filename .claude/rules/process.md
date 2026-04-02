@@ -1,4 +1,0 @@
-- If you are uncertain about what the user meant, seek clarification.
-- Commits should be atomic units of work.
-- Refactors should be committed before the changes that use them.
-- Request review from the user before committing.

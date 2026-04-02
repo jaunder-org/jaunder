@@ -1,3 +1,8 @@
+---
+root: false
+targets:
+  - '*'
+---
 - **Build**: cargo build
 - **Run all unit and integration tests**: cargo nextest run
 - **Run a single unit or integration test**: cargo nextest run -E 'test(name)'

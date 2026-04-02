@@ -1,3 +1,8 @@
+---
+root: false
+targets:
+  - '*'
+---
 - Use `sqlx` for database access.
 - Support `SQLite` and `PostgreSQL`, dynamically selected at runtime.
 - **Migrations:** Store all SQL migrations in `server/migrations`.

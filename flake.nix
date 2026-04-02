@@ -15,6 +15,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     flake-utils.url = "github:numtide/flake-utils";
+    serena =  {
+      inputs.nixpkgs.follows = "nixpkgs";
+      url = "github:oraios/serena";
+    };
     crane.url = "github:ipetkov/crane";
   };
 
@@ -24,6 +28,7 @@
       nixpkgs,
       fenix,
       flake-utils,
+      serena,
       crane,
     }:
     flake-utils.lib.eachDefaultSystem (
