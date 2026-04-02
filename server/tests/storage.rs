@@ -1,7 +1,7 @@
 use server::password::Password;
 use server::storage::{
-    open_database, CreateUserError, DbConnectOptions, ProfileUpdate, SqliteUserStorage,
-    UserAuthError, UserStorage,
+    open_database, CreateUserError, DbConnectOptions, ProfileUpdate, SessionAuthError,
+    SessionStorage, SqliteSessionStorage, SqliteUserStorage, UserAuthError, UserStorage,
 };
 use server::username::Username;
 use sqlx::SqlitePool;
@@ -13,7 +13,7 @@ fn sqlite_url(base: &TempDir) -> DbConnectOptions {
         .unwrap()
 }
 
-async fn user_storage(base: &TempDir) -> SqliteUserStorage {
+async fn open_pool(base: &TempDir) -> SqlitePool {
     let opts: sqlx::sqlite::SqliteConnectOptions =
         format!("sqlite:{}", base.path().join("jaunder.db").display())
             .parse()
@@ -22,7 +22,19 @@ async fn user_storage(base: &TempDir) -> SqliteUserStorage {
         .await
         .unwrap();
     sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-    SqliteUserStorage::new(pool)
+    pool
+}
+
+async fn user_storage(base: &TempDir) -> SqliteUserStorage {
+    SqliteUserStorage::new(open_pool(base).await)
+}
+
+async fn storage_pair(base: &TempDir) -> (SqliteUserStorage, SqliteSessionStorage) {
+    let pool = open_pool(base).await;
+    (
+        SqliteUserStorage::new(pool.clone()),
+        SqliteSessionStorage::new(pool),
+    )
 }
 
 fn username(s: &str) -> Username {
@@ -197,4 +209,100 @@ async fn update_profile_persists_changes() {
     let record = users.get_user(user_id).await.unwrap().unwrap();
     assert_eq!(record.display_name.as_deref(), Some("David"));
     assert_eq!(record.bio.as_deref(), Some("A bio"));
+}
+
+// --- SessionStorage integration tests ---
+
+#[tokio::test]
+async fn create_session_then_authenticate_returns_correct_record() {
+    let base = TempDir::new().unwrap();
+    let (users, sessions) = storage_pair(&base).await;
+
+    let user_id = users
+        .create_user(&username("alice"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let raw_token = sessions
+        .create_session(user_id, Some("test"))
+        .await
+        .unwrap();
+    let record = sessions.authenticate(&raw_token).await.unwrap();
+
+    assert_eq!(record.user_id, user_id);
+    assert_eq!(record.username.as_str(), "alice");
+    assert_eq!(record.label.as_deref(), Some("test"));
+    assert!(!record.token_hash.is_empty());
+}
+
+#[tokio::test]
+async fn authenticate_updates_last_used_at() {
+    let base = TempDir::new().unwrap();
+    let (users, sessions) = storage_pair(&base).await;
+
+    let user_id = users
+        .create_user(&username("bob"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let raw_token = sessions.create_session(user_id, None).await.unwrap();
+    let first = sessions.authenticate(&raw_token).await.unwrap();
+    let second = sessions.authenticate(&raw_token).await.unwrap();
+
+    assert!(second.last_used_at >= first.last_used_at);
+}
+
+#[tokio::test]
+async fn revoke_session_then_authenticate_returns_session_not_found() {
+    let base = TempDir::new().unwrap();
+    let (users, sessions) = storage_pair(&base).await;
+
+    let user_id = users
+        .create_user(&username("carol"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let raw_token = sessions.create_session(user_id, None).await.unwrap();
+    let record = sessions.authenticate(&raw_token).await.unwrap();
+
+    sessions.revoke_session(&record.token_hash).await.unwrap();
+
+    let err = sessions.authenticate(&raw_token).await.unwrap_err();
+    assert!(matches!(err, SessionAuthError::SessionNotFound));
+}
+
+#[tokio::test]
+async fn list_sessions_returns_only_sessions_for_given_user() {
+    let base = TempDir::new().unwrap();
+    let (users, sessions) = storage_pair(&base).await;
+
+    let alice_id = users
+        .create_user(&username("alice"), &password("password123"), None)
+        .await
+        .unwrap();
+    let bob_id = users
+        .create_user(&username("bob"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    sessions
+        .create_session(alice_id, Some("alice-1"))
+        .await
+        .unwrap();
+    sessions
+        .create_session(alice_id, Some("alice-2"))
+        .await
+        .unwrap();
+    sessions
+        .create_session(bob_id, Some("bob-1"))
+        .await
+        .unwrap();
+
+    let alice_sessions = sessions.list_sessions(alice_id).await.unwrap();
+    assert_eq!(alice_sessions.len(), 2);
+    assert!(alice_sessions.iter().all(|s| s.user_id == alice_id));
+
+    let bob_sessions = sessions.list_sessions(bob_id).await.unwrap();
+    assert_eq!(bob_sessions.len(), 1);
+    assert_eq!(bob_sessions[0].user_id, bob_id);
 }
