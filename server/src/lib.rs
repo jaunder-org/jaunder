@@ -1,6 +1,8 @@
 pub mod cli;
 pub mod commands;
+pub mod password;
 pub mod storage;
+pub mod username;
 
 use std::sync::Arc;
 
