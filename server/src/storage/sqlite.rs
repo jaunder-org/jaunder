@@ -1,0 +1,374 @@
+use chrono::{DateTime, Utc};
+use sqlx::SqlitePool;
+
+use argon2::{
+    password_hash::{rand_core::OsRng, SaltString},
+    Argon2, PasswordHash, PasswordHasher, PasswordVerifier,
+};
+use async_trait::async_trait;
+
+use super::{
+    CreateUserError, ProfileUpdate, SessionAuthError, SessionRecord, SessionStorage,
+    SiteConfigStorage, UserAuthError, UserRecord, UserStorage,
+};
+
+// ---------------------------------------------------------------------------
+// SiteConfig
+// ---------------------------------------------------------------------------
+
+/// SQLite-backed [`SiteConfigStorage`].
+pub struct SqliteSiteConfigStorage {
+    pool: SqlitePool,
+}
+
+impl SqliteSiteConfigStorage {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl SiteConfigStorage for SqliteSiteConfigStorage {
+    async fn get(&self, key: &str) -> sqlx::Result<Option<String>> {
+        let row = sqlx::query_as::<_, (String,)>("SELECT value FROM site_config WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|(v,)| v))
+    }
+
+    async fn set(&self, key: &str, value: &str) -> sqlx::Result<()> {
+        sqlx::query(
+            "INSERT INTO site_config (key, value) VALUES (?, ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Users
+// ---------------------------------------------------------------------------
+
+type UserRow = (
+    i64,
+    String,
+    Option<String>,
+    Option<String>,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+);
+
+fn user_record_from_row(
+    (user_id, username, display_name, bio, created_at, last_authenticated_at): UserRow,
+) -> UserRecord {
+    UserRecord {
+        user_id,
+        username: username
+            .parse()
+            .expect("username stored in database is always valid"),
+        display_name,
+        bio,
+        created_at,
+        last_authenticated_at,
+    }
+}
+
+/// SQLite-backed [`UserStorage`].
+pub struct SqliteUserStorage {
+    pool: SqlitePool,
+}
+
+impl SqliteUserStorage {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl UserStorage for SqliteUserStorage {
+    async fn create_user(
+        &self,
+        username: &crate::username::Username,
+        password: &crate::password::Password,
+        display_name: Option<&str>,
+    ) -> Result<i64, CreateUserError> {
+        let password = password.as_str().to_owned();
+        let password_hash = tokio::task::spawn_blocking(move || -> Result<String, String> {
+            let salt = SaltString::generate(&mut OsRng);
+            Argon2::default()
+                .hash_password(password.as_bytes(), &salt)
+                .map(|h| h.to_string())
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?
+        .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?;
+
+        let now = Utc::now();
+
+        let result = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO users (username, password_hash, display_name, created_at)
+             VALUES (?, ?, ?, ?)
+             RETURNING user_id",
+        )
+        .bind(username.as_str())
+        .bind(&password_hash)
+        .bind(display_name)
+        .bind(now)
+        .fetch_one(&self.pool)
+        .await;
+
+        match result {
+            Ok(id) => Ok(id),
+            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+                Err(CreateUserError::UsernameTaken)
+            }
+            Err(e) => Err(CreateUserError::Internal(e)),
+        }
+    }
+
+    async fn authenticate(
+        &self,
+        username: &crate::username::Username,
+        password: &crate::password::Password,
+    ) -> Result<UserRecord, UserAuthError> {
+        let row = sqlx::query_as::<
+            _,
+            (
+                i64,
+                String,
+                Option<String>,
+                Option<String>,
+                DateTime<Utc>,
+                Option<DateTime<Utc>>,
+                String,
+            ),
+        >(
+            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, password_hash
+             FROM users WHERE username = ?",
+        )
+        .bind(username.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| UserAuthError::Internal(e.to_string()))?;
+
+        let (user_id, username, display_name, bio, created_at, _last_authenticated_at, hash) =
+            match row {
+                Some(r) => r,
+                None => return Err(UserAuthError::InvalidCredentials),
+            };
+
+        let password = password.as_str().to_owned();
+        let hash_clone = hash.clone();
+        let valid = tokio::task::spawn_blocking(move || {
+            let parsed = PasswordHash::new(&hash_clone).map_err(|e| e.to_string())?;
+            Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .map(|_| true)
+                .or_else(|e| match e {
+                    argon2::password_hash::Error::Password => Ok(false),
+                    other => Err(other.to_string()),
+                })
+        })
+        .await
+        .map_err(|e| UserAuthError::Internal(e.to_string()))?
+        .map_err(UserAuthError::Internal)?;
+
+        if !valid {
+            return Err(UserAuthError::InvalidCredentials);
+        }
+
+        let now = Utc::now();
+
+        sqlx::query("UPDATE users SET last_authenticated_at = ? WHERE user_id = ?")
+            .bind(now)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| UserAuthError::Internal(e.to_string()))?;
+
+        Ok(UserRecord {
+            user_id,
+            username: username
+                .parse()
+                .expect("username stored in database is always valid"),
+            display_name,
+            bio,
+            created_at,
+            last_authenticated_at: Some(now),
+        })
+    }
+
+    async fn get_user(&self, user_id: i64) -> sqlx::Result<Option<UserRecord>> {
+        let row = sqlx::query_as::<_, UserRow>(
+            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at
+             FROM users WHERE user_id = ?",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(user_record_from_row))
+    }
+
+    async fn get_user_by_username(
+        &self,
+        username: &crate::username::Username,
+    ) -> sqlx::Result<Option<UserRecord>> {
+        let row = sqlx::query_as::<_, UserRow>(
+            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at
+             FROM users WHERE username = ?",
+        )
+        .bind(username.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(user_record_from_row))
+    }
+
+    async fn update_profile(&self, user_id: i64, update: &ProfileUpdate<'_>) -> sqlx::Result<()> {
+        sqlx::query("UPDATE users SET display_name = ?, bio = ? WHERE user_id = ?")
+            .bind(update.display_name)
+            .bind(update.bio)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sessions
+// ---------------------------------------------------------------------------
+
+fn hash_token(raw_token: &str) -> Result<String, SessionAuthError> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use sha2::{Digest, Sha256};
+
+    let bytes = URL_SAFE_NO_PAD
+        .decode(raw_token)
+        .map_err(|_| SessionAuthError::InvalidToken)?;
+    let hash = Sha256::digest(&bytes);
+    Ok(URL_SAFE_NO_PAD.encode(hash))
+}
+
+type SessionRow = (
+    String,
+    i64,
+    String,
+    Option<String>,
+    DateTime<Utc>,
+    DateTime<Utc>,
+);
+
+fn session_record_from_row(
+    (token_hash, user_id, username, label, created_at, last_used_at): SessionRow,
+) -> SessionRecord {
+    SessionRecord {
+        token_hash,
+        user_id,
+        username: username
+            .parse()
+            .expect("username stored in database is always valid"),
+        label,
+        created_at,
+        last_used_at,
+    }
+}
+
+/// SQLite-backed [`SessionStorage`].
+pub struct SqliteSessionStorage {
+    pool: SqlitePool,
+}
+
+impl SqliteSessionStorage {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl SessionStorage for SqliteSessionStorage {
+    async fn create_session(&self, user_id: i64, label: Option<&str>) -> sqlx::Result<String> {
+        let raw_token = crate::auth::generate_token();
+        let token_hash = hash_token(&raw_token)
+            .map_err(|_| sqlx::Error::Io(std::io::Error::other("token hash failed")))?;
+        let now = Utc::now();
+
+        sqlx::query(
+            "INSERT INTO sessions (token_hash, user_id, label, created_at, last_used_at)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&token_hash)
+        .bind(user_id)
+        .bind(label)
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(raw_token)
+    }
+
+    async fn authenticate(&self, raw_token: &str) -> Result<SessionRecord, SessionAuthError> {
+        let token_hash = hash_token(raw_token)?;
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| SessionAuthError::SessionNotFound)?;
+
+        let row = sqlx::query_as::<_, SessionRow>(
+            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
+             FROM sessions s JOIN users u ON s.user_id = u.user_id
+             WHERE s.token_hash = ?",
+        )
+        .bind(&token_hash)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| SessionAuthError::SessionNotFound)?
+        .ok_or(SessionAuthError::SessionNotFound)?;
+
+        let now = Utc::now();
+
+        sqlx::query("UPDATE sessions SET last_used_at = ? WHERE token_hash = ?")
+            .bind(now)
+            .bind(&token_hash)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| SessionAuthError::SessionNotFound)?;
+
+        tx.commit()
+            .await
+            .map_err(|_| SessionAuthError::SessionNotFound)?;
+
+        let mut record = session_record_from_row(row);
+        record.last_used_at = now;
+        Ok(record)
+    }
+
+    async fn revoke_session(&self, token_hash: &str) -> sqlx::Result<()> {
+        sqlx::query("DELETE FROM sessions WHERE token_hash = ?")
+            .bind(token_hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn list_sessions(&self, user_id: i64) -> sqlx::Result<Vec<SessionRecord>> {
+        let rows = sqlx::query_as::<_, SessionRow>(
+            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
+             FROM sessions s JOIN users u ON s.user_id = u.user_id
+             WHERE s.user_id = ?",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(session_record_from_row).collect())
+    }
+}
