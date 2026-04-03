@@ -10,7 +10,9 @@ use crate::password::Password;
 use crate::username::Username;
 
 mod sqlite;
-pub use sqlite::{SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage};
+pub use sqlite::{
+    SqliteInviteStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
+};
 
 /// Parsed connection options for a supported database backend.
 ///
@@ -156,6 +158,27 @@ pub enum SessionAuthError {
     SessionNotFound,
 }
 
+/// An invite code record returned by [`InviteStorage`] queries.
+#[derive(Clone, Debug)]
+pub struct InviteRecord {
+    pub code: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub used_at: Option<DateTime<Utc>>,
+    pub used_by: Option<i64>,
+}
+
+/// Errors that can occur when consuming an invite code.
+#[derive(Debug, Error)]
+pub enum UseInviteError {
+    #[error("invite code not found")]
+    NotFound,
+    #[error("invite code has expired")]
+    Expired,
+    #[error("invite code has already been used")]
+    AlreadyUsed,
+}
+
 /// Async operations on the `sessions` table.
 #[async_trait]
 pub trait SessionStorage: Send + Sync {
@@ -166,6 +189,16 @@ pub trait SessionStorage: Send + Sync {
     async fn revoke_session(&self, token_hash: &str) -> sqlx::Result<()>;
 
     async fn list_sessions(&self, user_id: i64) -> sqlx::Result<Vec<SessionRecord>>;
+}
+
+/// Async operations on the `invites` table.
+#[async_trait]
+pub trait InviteStorage: Send + Sync {
+    async fn create_invite(&self, expires_at: DateTime<Utc>) -> sqlx::Result<String>;
+
+    async fn use_invite(&self, code: &str, user_id: i64) -> Result<(), UseInviteError>;
+
+    async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>>;
 }
 
 /// Application-wide state bundling storage handles.

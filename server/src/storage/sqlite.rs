@@ -8,8 +8,8 @@ use argon2::{
 use async_trait::async_trait;
 
 use super::{
-    CreateUserError, ProfileUpdate, SessionAuthError, SessionRecord, SessionStorage,
-    SiteConfigStorage, UserAuthError, UserRecord, UserStorage,
+    CreateUserError, InviteRecord, InviteStorage, ProfileUpdate, SessionAuthError, SessionRecord,
+    SessionStorage, SiteConfigStorage, UseInviteError, UserAuthError, UserRecord, UserStorage,
 };
 
 // ---------------------------------------------------------------------------
@@ -370,5 +370,108 @@ impl SessionStorage for SqliteSessionStorage {
         .await?;
 
         Ok(rows.into_iter().map(session_record_from_row).collect())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Invites
+// ---------------------------------------------------------------------------
+
+type InviteRow = (
+    String,
+    DateTime<Utc>,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+    Option<i64>,
+);
+
+fn invite_record_from_row(
+    (code, created_at, expires_at, used_at, used_by): InviteRow,
+) -> InviteRecord {
+    InviteRecord {
+        code,
+        created_at,
+        expires_at,
+        used_at,
+        used_by,
+    }
+}
+
+/// SQLite-backed [`InviteStorage`].
+pub struct SqliteInviteStorage {
+    pool: SqlitePool,
+}
+
+impl SqliteInviteStorage {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl InviteStorage for SqliteInviteStorage {
+    async fn create_invite(&self, expires_at: DateTime<Utc>) -> sqlx::Result<String> {
+        let code = crate::auth::generate_token();
+        let now = Utc::now();
+
+        sqlx::query("INSERT INTO invites (code, created_at, expires_at) VALUES (?, ?, ?)")
+            .bind(&code)
+            .bind(now)
+            .bind(expires_at)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(code)
+    }
+
+    async fn use_invite(&self, code: &str, user_id: i64) -> Result<(), UseInviteError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| UseInviteError::NotFound)?;
+
+        let row = sqlx::query_as::<_, InviteRow>(
+            "SELECT code, created_at, expires_at, used_at, used_by
+             FROM invites WHERE code = ?",
+        )
+        .bind(code)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| UseInviteError::NotFound)?
+        .ok_or(UseInviteError::NotFound)?;
+
+        let record = invite_record_from_row(row);
+
+        if record.used_at.is_some() {
+            return Err(UseInviteError::AlreadyUsed);
+        }
+
+        let now = Utc::now();
+        if record.expires_at <= now {
+            return Err(UseInviteError::Expired);
+        }
+
+        sqlx::query("UPDATE invites SET used_at = ?, used_by = ? WHERE code = ?")
+            .bind(now)
+            .bind(user_id)
+            .bind(code)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| UseInviteError::NotFound)?;
+
+        tx.commit().await.map_err(|_| UseInviteError::NotFound)?;
+
+        Ok(())
+    }
+
+    async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>> {
+        let rows = sqlx::query_as::<_, InviteRow>(
+            "SELECT code, created_at, expires_at, used_at, used_by FROM invites",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(invite_record_from_row).collect())
     }
 }
