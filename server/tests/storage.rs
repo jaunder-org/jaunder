@@ -1,9 +1,9 @@
 use chrono::Utc;
 use server::password::Password;
 use server::storage::{
-    open_database, CreateUserError, DbConnectOptions, InviteStorage, ProfileUpdate,
-    SessionAuthError, SessionStorage, SqliteInviteStorage, SqliteSessionStorage, SqliteUserStorage,
-    UseInviteError, UserAuthError, UserStorage,
+    create_user_with_invite, open_database, CreateUserError, DbConnectOptions, InviteStorage,
+    ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteInviteStorage,
+    SqliteSessionStorage, SqliteUserStorage, UseInviteError, UserAuthError, UserStorage,
 };
 use server::username::Username;
 use sqlx::SqlitePool;
@@ -409,4 +409,166 @@ async fn use_invite_on_already_used_code_returns_already_used() {
 
     let err = invites.use_invite(&code, user_id).await.unwrap_err();
     assert!(matches!(err, UseInviteError::AlreadyUsed));
+}
+
+// --- create_user_with_invite integration tests ---
+
+#[tokio::test]
+async fn create_user_with_invite_creates_user_and_marks_invite_used() {
+    let base = TempDir::new().unwrap();
+    let pool = open_pool(&base).await;
+    let invites = SqliteInviteStorage::new(pool.clone());
+    let users = SqliteUserStorage::new(pool.clone());
+
+    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let code = invites.create_invite(expires_at).await.unwrap();
+
+    let user_id = create_user_with_invite(
+        &pool,
+        &username("alice"),
+        &password("password123"),
+        Some("Alice"),
+        &code,
+    )
+    .await
+    .unwrap();
+
+    // User was created
+    let record = users.get_user(user_id).await.unwrap().unwrap();
+    assert_eq!(record.username.as_str(), "alice");
+    assert_eq!(record.display_name.as_deref(), Some("Alice"));
+
+    // Invite was marked used
+    let list = invites.list_invites().await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert!(list[0].used_at.is_some());
+    assert_eq!(list[0].used_by, Some(user_id));
+}
+
+#[tokio::test]
+async fn create_user_with_invite_second_call_returns_already_used() {
+    let base = TempDir::new().unwrap();
+    let pool = open_pool(&base).await;
+    let invites = SqliteInviteStorage::new(pool.clone());
+
+    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let code = invites.create_invite(expires_at).await.unwrap();
+
+    create_user_with_invite(
+        &pool,
+        &username("alice"),
+        &password("password123"),
+        None,
+        &code,
+    )
+    .await
+    .unwrap();
+
+    let err = create_user_with_invite(
+        &pool,
+        &username("bob"),
+        &password("password123"),
+        None,
+        &code,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
+
+    // bob was not inserted
+    let users = SqliteUserStorage::new(pool.clone());
+    assert!(users
+        .get_user_by_username(&username("bob"))
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn create_user_with_invite_expired_returns_invite_expired() {
+    let base = TempDir::new().unwrap();
+    let pool = open_pool(&base).await;
+    let invites = SqliteInviteStorage::new(pool.clone());
+
+    let expires_at = Utc::now() - chrono::Duration::hours(1);
+    let code = invites.create_invite(expires_at).await.unwrap();
+
+    let err = create_user_with_invite(
+        &pool,
+        &username("alice"),
+        &password("password123"),
+        None,
+        &code,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, RegisterWithInviteError::InviteExpired));
+
+    let users = SqliteUserStorage::new(pool.clone());
+    assert!(users
+        .get_user_by_username(&username("alice"))
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn create_user_with_invite_unknown_code_returns_not_found() {
+    let base = TempDir::new().unwrap();
+    let pool = open_pool(&base).await;
+
+    let err = create_user_with_invite(
+        &pool,
+        &username("alice"),
+        &password("password123"),
+        None,
+        "no-such-code",
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, RegisterWithInviteError::InviteNotFound));
+
+    let users = SqliteUserStorage::new(pool.clone());
+    assert!(users
+        .get_user_by_username(&username("alice"))
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn create_user_with_invite_duplicate_username_returns_username_taken() {
+    let base = TempDir::new().unwrap();
+    let pool = open_pool(&base).await;
+    let invites = SqliteInviteStorage::new(pool.clone());
+    let users = SqliteUserStorage::new(pool.clone());
+
+    // Create alice directly (without invite)
+    users
+        .create_user(&username("alice"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let code = invites.create_invite(expires_at).await.unwrap();
+
+    let err = create_user_with_invite(
+        &pool,
+        &username("alice"),
+        &password("other_password"),
+        None,
+        &code,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, RegisterWithInviteError::UsernameTaken));
+
+    // Invite was NOT marked used
+    let list = invites.list_invites().await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert!(list[0].used_at.is_none());
 }

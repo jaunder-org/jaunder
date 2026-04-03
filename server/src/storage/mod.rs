@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 
 use async_trait::async_trait;
 use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::SqlitePool;
 use thiserror::Error;
 
 use crate::password::Password;
@@ -179,6 +180,21 @@ pub enum UseInviteError {
     AlreadyUsed,
 }
 
+/// Errors that can occur during atomic invite-and-user creation.
+#[derive(Debug, Error)]
+pub enum RegisterWithInviteError {
+    #[error("invite code not found")]
+    InviteNotFound,
+    #[error("invite code has expired")]
+    InviteExpired,
+    #[error("invite code has already been used")]
+    InviteAlreadyUsed,
+    #[error("username is already taken")]
+    UsernameTaken,
+    #[error(transparent)]
+    Internal(#[from] sqlx::Error),
+}
+
 /// Async operations on the `sessions` table.
 #[async_trait]
 pub trait SessionStorage: Send + Sync {
@@ -199,6 +215,99 @@ pub trait InviteStorage: Send + Sync {
     async fn use_invite(&self, code: &str, user_id: i64) -> Result<(), UseInviteError>;
 
     async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>>;
+}
+
+/// Atomically creates a user and marks an invite code as used within a single
+/// transaction. This spans two tables so it cannot be expressed through the
+/// single-table trait objects.
+///
+/// Steps:
+/// (a) SELECT the invite row; return `InviteNotFound`, `InviteAlreadyUsed`, or
+///     `InviteExpired` as appropriate.
+/// (b) Hash the password via `spawn_blocking`.
+/// (c) INSERT the user row; map a unique-constraint violation to `UsernameTaken`.
+/// (d) UPDATE the invite row setting `used_at` and `used_by`.
+/// (e) COMMIT.
+pub async fn create_user_with_invite(
+    pool: &SqlitePool,
+    username: &Username,
+    password: &Password,
+    display_name: Option<&str>,
+    invite_code: &str,
+) -> Result<i64, RegisterWithInviteError> {
+    use argon2::{
+        password_hash::{rand_core::OsRng, SaltString},
+        Argon2, PasswordHasher,
+    };
+
+    let mut tx = pool.begin().await?;
+
+    // (a) Validate invite
+    let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
+        "SELECT used_at, expires_at FROM invites WHERE code = ?",
+    )
+    .bind(invite_code)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(RegisterWithInviteError::InviteNotFound)?;
+
+    let (used_at, expires_at) = row;
+
+    if used_at.is_some() {
+        return Err(RegisterWithInviteError::InviteAlreadyUsed);
+    }
+
+    let now = Utc::now();
+    if expires_at <= now {
+        return Err(RegisterWithInviteError::InviteExpired);
+    }
+
+    // (b) Hash password outside the async executor
+    let password_str = password.as_str().to_owned();
+    let password_hash = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let salt = SaltString::generate(&mut OsRng);
+        Argon2::default()
+            .hash_password(password_str.as_bytes(), &salt)
+            .map(|h| h.to_string())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?
+    .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?;
+
+    // (c) Insert user
+    let result = sqlx::query_scalar::<_, i64>(
+        "INSERT INTO users (username, password_hash, display_name, created_at)
+         VALUES (?, ?, ?, ?)
+         RETURNING user_id",
+    )
+    .bind(username.as_str())
+    .bind(&password_hash)
+    .bind(display_name)
+    .bind(now)
+    .fetch_one(&mut *tx)
+    .await;
+
+    let user_id = match result {
+        Ok(id) => id,
+        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+            return Err(RegisterWithInviteError::UsernameTaken);
+        }
+        Err(e) => return Err(RegisterWithInviteError::Internal(e)),
+    };
+
+    // (d) Mark invite used
+    sqlx::query("UPDATE invites SET used_at = ?, used_by = ? WHERE code = ?")
+        .bind(now)
+        .bind(user_id)
+        .bind(invite_code)
+        .execute(&mut *tx)
+        .await?;
+
+    // (e) Commit
+    tx.commit().await?;
+
+    Ok(user_id)
 }
 
 /// Application-wide state bundling storage handles.
