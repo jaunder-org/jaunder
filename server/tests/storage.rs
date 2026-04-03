@@ -61,12 +61,16 @@ fn password(s: &str) -> Password {
 #[tokio::test]
 async fn set_then_get_roundtrips() {
     let base = TempDir::new().unwrap();
-    let db = open_database(&sqlite_url(&base)).await.unwrap();
+    let state = open_database(&sqlite_url(&base)).await.unwrap();
 
-    db.set("site.name", "Test Site").await.unwrap();
+    state
+        .site_config
+        .set("site.name", "Test Site")
+        .await
+        .unwrap();
 
     assert_eq!(
-        db.get("site.name").await.unwrap().as_deref(),
+        state.site_config.get("site.name").await.unwrap().as_deref(),
         Some("Test Site")
     );
 }
@@ -74,21 +78,26 @@ async fn set_then_get_roundtrips() {
 #[tokio::test]
 async fn get_missing_key_returns_none() {
     let base = TempDir::new().unwrap();
-    let db = open_database(&sqlite_url(&base)).await.unwrap();
+    let state = open_database(&sqlite_url(&base)).await.unwrap();
 
-    assert!(db.get("nonexistent").await.unwrap().is_none());
+    assert!(state
+        .site_config
+        .get("nonexistent")
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]
 async fn set_overwrites_existing_value() {
     let base = TempDir::new().unwrap();
-    let db = open_database(&sqlite_url(&base)).await.unwrap();
+    let state = open_database(&sqlite_url(&base)).await.unwrap();
 
-    db.set("site.name", "First").await.unwrap();
-    db.set("site.name", "Second").await.unwrap();
+    state.site_config.set("site.name", "First").await.unwrap();
+    state.site_config.set("site.name", "Second").await.unwrap();
 
     assert_eq!(
-        db.get("site.name").await.unwrap().as_deref(),
+        state.site_config.get("site.name").await.unwrap().as_deref(),
         Some("Second")
     );
 }
