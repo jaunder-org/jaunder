@@ -1,7 +1,9 @@
+use chrono::Utc;
 use server::password::Password;
 use server::storage::{
-    open_database, CreateUserError, DbConnectOptions, ProfileUpdate, SessionAuthError,
-    SessionStorage, SqliteSessionStorage, SqliteUserStorage, UserAuthError, UserStorage,
+    open_database, CreateUserError, DbConnectOptions, InviteStorage, ProfileUpdate,
+    SessionAuthError, SessionStorage, SqliteInviteStorage, SqliteSessionStorage, SqliteUserStorage,
+    UseInviteError, UserAuthError, UserStorage,
 };
 use server::username::Username;
 use sqlx::SqlitePool;
@@ -34,6 +36,17 @@ async fn storage_pair(base: &TempDir) -> (SqliteUserStorage, SqliteSessionStorag
     (
         SqliteUserStorage::new(pool.clone()),
         SqliteSessionStorage::new(pool),
+    )
+}
+
+async fn invite_storage_triple(
+    base: &TempDir,
+) -> (SqliteUserStorage, SqliteSessionStorage, SqliteInviteStorage) {
+    let pool = open_pool(base).await;
+    (
+        SqliteUserStorage::new(pool.clone()),
+        SqliteSessionStorage::new(pool.clone()),
+        SqliteInviteStorage::new(pool),
     )
 }
 
@@ -305,4 +318,95 @@ async fn list_sessions_returns_only_sessions_for_given_user() {
     let bob_sessions = sessions.list_sessions(bob_id).await.unwrap();
     assert_eq!(bob_sessions.len(), 1);
     assert_eq!(bob_sessions[0].user_id, bob_id);
+}
+
+// --- InviteStorage integration tests ---
+
+#[tokio::test]
+async fn create_invite_and_list_invites_includes_it() {
+    let base = TempDir::new().unwrap();
+    let (_, _, invites) = invite_storage_triple(&base).await;
+
+    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let code = invites.create_invite(expires_at).await.unwrap();
+
+    let list = invites.list_invites().await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].code, code);
+    assert!(list[0].used_at.is_none());
+}
+
+#[tokio::test]
+async fn use_invite_with_valid_code_marks_it_used() {
+    let base = TempDir::new().unwrap();
+    let (users, _, invites) = invite_storage_triple(&base).await;
+
+    let user_id = users
+        .create_user(&username("alice"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let code = invites.create_invite(expires_at).await.unwrap();
+
+    invites.use_invite(&code, user_id).await.unwrap();
+
+    let list = invites.list_invites().await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert!(list[0].used_at.is_some());
+    assert_eq!(list[0].used_by, Some(user_id));
+}
+
+#[tokio::test]
+async fn use_invite_with_unknown_code_returns_not_found() {
+    let base = TempDir::new().unwrap();
+    let (users, _, invites) = invite_storage_triple(&base).await;
+
+    let user_id = users
+        .create_user(&username("bob"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let err = invites
+        .use_invite("no-such-code", user_id)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, UseInviteError::NotFound));
+}
+
+#[tokio::test]
+async fn use_invite_with_expired_code_returns_expired() {
+    let base = TempDir::new().unwrap();
+    let (users, _, invites) = invite_storage_triple(&base).await;
+
+    let user_id = users
+        .create_user(&username("carol"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    // expires_at in the past
+    let expires_at = Utc::now() - chrono::Duration::hours(1);
+    let code = invites.create_invite(expires_at).await.unwrap();
+
+    let err = invites.use_invite(&code, user_id).await.unwrap_err();
+    assert!(matches!(err, UseInviteError::Expired));
+}
+
+#[tokio::test]
+async fn use_invite_on_already_used_code_returns_already_used() {
+    let base = TempDir::new().unwrap();
+    let (users, _, invites) = invite_storage_triple(&base).await;
+
+    let user_id = users
+        .create_user(&username("dave"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let code = invites.create_invite(expires_at).await.unwrap();
+
+    invites.use_invite(&code, user_id).await.unwrap();
+
+    let err = invites.use_invite(&code, user_id).await.unwrap_err();
+    assert!(matches!(err, UseInviteError::AlreadyUsed));
 }
