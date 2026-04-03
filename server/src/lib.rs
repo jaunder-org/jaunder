@@ -12,16 +12,17 @@ use leptos::prelude::*;
 use leptos_axum::{generate_route_list, LeptosRoutes};
 use web::{shell, App};
 
-use crate::storage::SiteConfigStorage;
+use crate::storage::AppState;
 
-pub fn create_router(leptos_options: LeptosOptions, db: Arc<dyn SiteConfigStorage>) -> Router {
+pub fn create_router(leptos_options: LeptosOptions, state: Arc<AppState>) -> Router {
     let routes = generate_route_list(App);
+    let extension_state = state.clone();
     Router::new()
         .leptos_routes_with_context(
             &leptos_options,
             routes,
             move || {
-                provide_context(db.clone());
+                provide_context(state.clone());
             },
             {
                 let leptos_options = leptos_options.clone();
@@ -29,6 +30,7 @@ pub fn create_router(leptos_options: LeptosOptions, db: Arc<dyn SiteConfigStorag
             },
         )
         .fallback(leptos_axum::file_and_error_handler(shell))
+        .layer(axum::Extension(extension_state))
         .with_state(leptos_options)
 }
 
@@ -46,7 +48,7 @@ mod tests {
         LeptosOptions::builder().output_name("test").build()
     }
 
-    async fn test_db() -> Arc<dyn SiteConfigStorage> {
+    async fn test_state() -> Arc<AppState> {
         crate::storage::open_database(&"sqlite::memory:".parse().unwrap())
             .await
             .unwrap()
@@ -54,7 +56,7 @@ mod tests {
 
     #[tokio::test]
     async fn home_route_returns_ok() {
-        let app = create_router(test_options(), test_db().await);
+        let app = create_router(test_options(), test_state().await);
         let response = app
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
@@ -64,7 +66,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_route_returns_not_found() {
-        let app = create_router(test_options(), test_db().await);
+        let app = create_router(test_options(), test_state().await);
         let response = app
             .oneshot(
                 Request::builder()
@@ -79,7 +81,7 @@ mod tests {
 
     #[tokio::test]
     async fn home_response_contains_app_content() {
-        let app = create_router(test_options(), test_db().await);
+        let app = create_router(test_options(), test_state().await);
         let response = app
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await

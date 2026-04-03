@@ -310,45 +310,57 @@ pub async fn create_user_with_invite(
     Ok(user_id)
 }
 
-/// Application-wide state bundling storage handles.
+/// Application-wide state bundling all storage handles.
 ///
-/// Step 3 stub: contains only `sessions`. Expanded in Step 5 to include
-/// `site_config`, `users`, and `invites`.
+/// The raw `pool` is stored so free functions like `create_user_with_invite`
+/// that span multiple tables can execute transactions directly.
 pub struct AppState {
+    pub pool: SqlitePool,
+    pub site_config: Arc<dyn SiteConfigStorage>,
+    pub users: Arc<dyn UserStorage>,
     pub sessions: Arc<dyn SessionStorage>,
+    pub invites: Arc<dyn InviteStorage>,
+}
+
+fn make_app_state(pool: SqlitePool) -> Arc<AppState> {
+    Arc::new(AppState {
+        site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
+        users: Arc::new(SqliteUserStorage::new(pool.clone())),
+        sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
+        invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
+        pool,
+    })
 }
 
 /// Opens (or creates) the database described by `opts`, runs pending
-/// migrations, and returns a [`SiteConfigStorage`] implementation.
+/// migrations, and returns an [`AppState`] bundling all storage handles.
 ///
 /// Only `sqlite:` URLs are supported in M1; PostgreSQL support is added in M20.
-pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<dyn SiteConfigStorage>> {
+pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     match opts {
         DbConnectOptions::Sqlite(options) => {
             let pool =
                 sqlx::SqlitePool::connect_with(options.clone().create_if_missing(true)).await?;
             sqlx::migrate!("./migrations").run(&pool).await?;
-            Ok(Arc::new(SqliteSiteConfigStorage::new(pool)))
+            Ok(make_app_state(pool))
         }
     }
 }
 
 /// Opens an existing database described by `opts`, runs pending migrations, and
-/// returns a [`SiteConfigStorage`] implementation.
+/// returns an [`AppState`] bundling all storage handles.
 ///
 /// Unlike [`open_database`], this function fails if the database does not
 /// already exist. Use [`open_database`] in `cmd_init`, which creates the
 /// database when it is missing.
-pub async fn open_existing_database(
-    opts: &DbConnectOptions,
-) -> sqlx::Result<Arc<dyn SiteConfigStorage>> {
+pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     match opts {
         DbConnectOptions::Sqlite(options) => {
             // create_if_missing defaults to false, so this fails when the file
             // does not exist.
             let pool = sqlx::SqlitePool::connect_with(options.clone()).await?;
             sqlx::migrate!("./migrations").run(&pool).await?;
-            Ok(Arc::new(SqliteSiteConfigStorage::new(pool)))
+            Ok(make_app_state(pool))
         }
     }
 }
