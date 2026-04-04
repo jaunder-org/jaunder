@@ -468,6 +468,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "common"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "async-trait",
+ "chrono",
+ "sqlx",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "compression-codecs"
 version = "0.4.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2598,6 +2609,7 @@ dependencies = [
  "base64",
  "chrono",
  "clap",
+ "common",
  "leptos",
  "leptos_axum",
  "log",
@@ -3716,7 +3728,9 @@ dependencies = [
 name = "web"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "cfg-if",
+ "common",
  "http",
  "leptos",
  "leptos_axum",
