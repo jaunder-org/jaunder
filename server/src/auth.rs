@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fmt, str::FromStr, sync::Arc};
 
 use axum::{
     extract::FromRequestParts,
@@ -7,8 +7,9 @@ use axum::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use leptos::prelude::ServerFnError;
 use rand::RngCore;
+use thiserror::Error;
 
-use crate::storage::AppState;
+use crate::storage::{AppState, SiteConfigStorage};
 use crate::username::Username;
 
 /// Generates an opaque session token: 32 cryptographically random bytes encoded
@@ -17,6 +18,60 @@ pub fn generate_token() -> String {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// The site's user-registration access policy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RegistrationPolicy {
+    /// Anyone may register without a code.
+    Open,
+    /// New accounts require a valid, unused invite code.
+    InviteOnly,
+    /// Registration is disabled; no new accounts can be created.
+    Closed,
+}
+
+impl fmt::Display for RegistrationPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RegistrationPolicy::Open => write!(f, "open"),
+            RegistrationPolicy::InviteOnly => write!(f, "invite_only"),
+            RegistrationPolicy::Closed => write!(f, "closed"),
+        }
+    }
+}
+
+/// Error returned when a string does not name a valid [`RegistrationPolicy`].
+#[derive(Debug, Error)]
+#[error("invalid registration policy: {0:?}")]
+pub struct InvalidRegistrationPolicy(String);
+
+impl FromStr for RegistrationPolicy {
+    type Err = InvalidRegistrationPolicy;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "open" => Ok(RegistrationPolicy::Open),
+            "invite_only" => Ok(RegistrationPolicy::InviteOnly),
+            "closed" => Ok(RegistrationPolicy::Closed),
+            other => Err(InvalidRegistrationPolicy(other.to_owned())),
+        }
+    }
+}
+
+/// Reads `site.registration_policy` from the config store and parses it.
+///
+/// Returns [`RegistrationPolicy::Closed`] when the key is absent or its
+/// value cannot be parsed — a safe default that prevents unintended open
+/// registration on a freshly initialised instance.
+pub async fn load_registration_policy(store: &dyn SiteConfigStorage) -> RegistrationPolicy {
+    store
+        .get("site.registration_policy")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(RegistrationPolicy::Closed)
 }
 
 /// The authenticated user extracted from a valid session cookie or Bearer token.
@@ -78,4 +133,108 @@ pub async fn require_auth() -> Result<AuthUser, ServerFnError> {
     leptos_axum::extract::<AuthUser>()
         .await
         .map_err(|_| ServerFnError::new("unauthorized"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::SqliteSiteConfigStorage;
+
+    // --- FromStr / Display ---
+
+    #[test]
+    fn open_parses() {
+        assert_eq!(
+            "open".parse::<RegistrationPolicy>().unwrap(),
+            RegistrationPolicy::Open
+        );
+    }
+
+    #[test]
+    fn invite_only_parses() {
+        assert_eq!(
+            "invite_only".parse::<RegistrationPolicy>().unwrap(),
+            RegistrationPolicy::InviteOnly
+        );
+    }
+
+    #[test]
+    fn closed_parses() {
+        assert_eq!(
+            "closed".parse::<RegistrationPolicy>().unwrap(),
+            RegistrationPolicy::Closed
+        );
+    }
+
+    #[test]
+    fn unknown_string_returns_error() {
+        assert!("unknown".parse::<RegistrationPolicy>().is_err());
+    }
+
+    #[test]
+    fn display_round_trips() {
+        for policy in [
+            RegistrationPolicy::Open,
+            RegistrationPolicy::InviteOnly,
+            RegistrationPolicy::Closed,
+        ] {
+            assert_eq!(
+                policy.to_string().parse::<RegistrationPolicy>().unwrap(),
+                policy
+            );
+        }
+    }
+
+    // --- load_registration_policy ---
+
+    async fn in_memory_store() -> SqliteSiteConfigStorage {
+        let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        SqliteSiteConfigStorage::new(pool)
+    }
+
+    #[tokio::test]
+    async fn absent_key_returns_closed() {
+        let store = in_memory_store().await;
+        assert_eq!(
+            load_registration_policy(&store).await,
+            RegistrationPolicy::Closed
+        );
+    }
+
+    #[tokio::test]
+    async fn key_set_to_open_returns_open() {
+        let store = in_memory_store().await;
+        store.set("site.registration_policy", "open").await.unwrap();
+        assert_eq!(
+            load_registration_policy(&store).await,
+            RegistrationPolicy::Open
+        );
+    }
+
+    #[tokio::test]
+    async fn key_set_to_invite_only_returns_invite_only() {
+        let store = in_memory_store().await;
+        store
+            .set("site.registration_policy", "invite_only")
+            .await
+            .unwrap();
+        assert_eq!(
+            load_registration_policy(&store).await,
+            RegistrationPolicy::InviteOnly
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_value_in_db_returns_closed() {
+        let store = in_memory_store().await;
+        store
+            .set("site.registration_policy", "garbage")
+            .await
+            .unwrap();
+        assert_eq!(
+            load_registration_policy(&store).await,
+            RegistrationPolicy::Closed
+        );
+    }
 }
