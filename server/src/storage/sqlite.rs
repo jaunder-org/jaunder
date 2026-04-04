@@ -1,10 +1,6 @@
 use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 
-use argon2::{
-    password_hash::{rand_core::OsRng, SaltString},
-    Argon2, PasswordHash, PasswordHasher, PasswordVerifier,
-};
 use async_trait::async_trait;
 
 use super::{
@@ -97,17 +93,11 @@ impl UserStorage for SqliteUserStorage {
         password: &crate::password::Password,
         display_name: Option<&str>,
     ) -> Result<i64, CreateUserError> {
-        let password = password.as_str().to_owned();
-        let password_hash = tokio::task::spawn_blocking(move || -> Result<String, String> {
-            let salt = SaltString::generate(&mut OsRng);
-            Argon2::default()
-                .hash_password(password.as_bytes(), &salt)
-                .map(|h| h.to_string())
-                .map_err(|e| e.to_string())
-        })
-        .await
-        .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?
-        .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?;
+        let password_clone = password.clone();
+        let password_hash = tokio::task::spawn_blocking(move || password_clone.hash())
+            .await
+            .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?
+            .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?;
 
         let now = Utc::now();
 
@@ -163,21 +153,11 @@ impl UserStorage for SqliteUserStorage {
                 None => return Err(UserAuthError::InvalidCredentials),
             };
 
-        let password = password.as_str().to_owned();
-        let hash_clone = hash.clone();
-        let valid = tokio::task::spawn_blocking(move || {
-            let parsed = PasswordHash::new(&hash_clone).map_err(|e| e.to_string())?;
-            Argon2::default()
-                .verify_password(password.as_bytes(), &parsed)
-                .map(|_| true)
-                .or_else(|e| match e {
-                    argon2::password_hash::Error::Password => Ok(false),
-                    other => Err(other.to_string()),
-                })
-        })
-        .await
-        .map_err(|e| UserAuthError::Internal(e.to_string()))?
-        .map_err(UserAuthError::Internal)?;
+        let password_clone = password.clone();
+        let valid = tokio::task::spawn_blocking(move || password_clone.verify(&hash))
+            .await
+            .map_err(|e| UserAuthError::Internal(e.to_string()))?
+            .map_err(UserAuthError::Internal)?;
 
         if !valid {
             return Err(UserAuthError::InvalidCredentials);

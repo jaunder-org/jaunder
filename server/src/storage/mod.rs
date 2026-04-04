@@ -235,11 +235,6 @@ pub async fn create_user_with_invite(
     display_name: Option<&str>,
     invite_code: &str,
 ) -> Result<i64, RegisterWithInviteError> {
-    use argon2::{
-        password_hash::{rand_core::OsRng, SaltString},
-        Argon2, PasswordHasher,
-    };
-
     let mut tx = pool.begin().await?;
 
     // (a) Validate invite
@@ -263,17 +258,13 @@ pub async fn create_user_with_invite(
     }
 
     // (b) Hash password outside the async executor
-    let password_str = password.as_str().to_owned();
-    let password_hash = tokio::task::spawn_blocking(move || -> Result<String, String> {
-        let salt = SaltString::generate(&mut OsRng);
-        Argon2::default()
-            .hash_password(password_str.as_bytes(), &salt)
-            .map(|h| h.to_string())
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?
-    .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?;
+    let password_clone = password.clone();
+    let password_hash = tokio::task::spawn_blocking(move || password_clone.hash())
+        .await
+        .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?
+        .map_err(|e| {
+            RegisterWithInviteError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
+        })?;
 
     // (c) Insert user
     let result = sqlx::query_scalar::<_, i64>(
