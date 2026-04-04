@@ -15,6 +15,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     flake-utils.url = "github:numtide/flake-utils";
+    serena =  {
+      inputs.nixpkgs.follows = "nixpkgs";
+      url = "github:oraios/serena";
+    };
     crane.url = "github:ipetkov/crane";
   };
 
@@ -24,6 +28,7 @@
       nixpkgs,
       fenix,
       flake-utils,
+      serena,
       crane,
     }:
     flake-utils.lib.eachDefaultSystem (
@@ -167,6 +172,11 @@
           '';
         };
 
+        end2endSrc = pkgs.lib.cleanSourceWith {
+          src = ./end2end;
+          filter = path: _type: !(pkgs.lib.hasInfix "/node_modules" path);
+        };
+
       in
       {
         checks = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
@@ -225,6 +235,29 @@
               )
             '';
           };
+        } // {
+          clippy = craneLib.cargoClippy (commonArgs // {
+            inherit cargoArtifacts;
+            cargoClippyExtraArgs = "-- -D warnings";
+          });
+          rustfmt = craneLib.cargoFmt { inherit src; pname = "jaunder"; version = "0.1.0"; };
+          leptosfmt-check = pkgs.runCommand "leptosfmt-check" {
+            nativeBuildInputs = [ pkgs.leptosfmt ];
+          } ''
+            cd ${src}
+            leptosfmt -x .direnv -x .git -x target --check '**/*.rs'
+            touch $out
+          '';
+          nextest = craneLib.cargoNextest (commonArgs // {
+            inherit cargoArtifacts;
+          });
+          deny = craneLib.cargoDeny { inherit src; pname = "jaunder"; version = "0.1.0"; };
+          prettier-check = pkgs.runCommand "prettier-check" {
+            nativeBuildInputs = [ pkgs.prettier ];
+          } ''
+            prettier --check ${end2endSrc}
+            touch $out
+          '';
         };
 
         devShells.default = pkgs.mkShell {
