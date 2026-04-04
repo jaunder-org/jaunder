@@ -65,7 +65,9 @@ pub async fn cmd_user_invite(storage: &StorageArgs, expires_in: Option<u64>) -> 
         .await
         .map_err(|e| anyhow::anyhow!("{e}; run `jaunder init` first"))?;
 
-    let hours = expires_in.unwrap_or(168) as i64;
+    let hours_u64 = expires_in.unwrap_or(168);
+    let hours = i64::try_from(hours_u64)
+        .map_err(|_| anyhow::anyhow!("--expires-in value {hours_u64} is too large"))?;
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(hours);
 
     let code = state.invites.create_invite(expires_at).await?;
