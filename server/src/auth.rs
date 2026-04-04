@@ -188,8 +188,13 @@ mod tests {
     // --- load_registration_policy ---
 
     async fn in_memory_store() -> SqliteSiteConfigStorage {
-        let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let pool = sqlx::SqlitePool::connect(":memory:")
+            .await
+            .expect("in-memory SQLite pool should open");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("migrations should run on in-memory pool");
         SqliteSiteConfigStorage::new(pool)
     }
 
