@@ -157,6 +157,8 @@ pub enum SessionAuthError {
     InvalidToken,
     #[error("session not found")]
     SessionNotFound,
+    #[error(transparent)]
+    Internal(#[from] sqlx::Error),
 }
 
 /// An invite code record returned by [`InviteStorage`] queries.
@@ -323,19 +325,27 @@ fn make_app_state(pool: SqlitePool) -> Arc<AppState> {
     })
 }
 
+async fn init_pool(opts: &DbConnectOptions, create_if_missing: bool) -> sqlx::Result<SqlitePool> {
+    match opts {
+        DbConnectOptions::Sqlite(options) => {
+            let mut options = options.clone();
+            if create_if_missing {
+                options = options.create_if_missing(true);
+            }
+            let pool = sqlx::SqlitePool::connect_with(options).await?;
+            sqlx::migrate!("./migrations").run(&pool).await?;
+            Ok(pool)
+        }
+    }
+}
+
 /// Opens (or creates) the database described by `opts`, runs pending
 /// migrations, and returns an [`AppState`] bundling all storage handles.
 ///
 /// Only `sqlite:` URLs are supported in M1; PostgreSQL support is added in M20.
 pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
-    match opts {
-        DbConnectOptions::Sqlite(options) => {
-            let pool =
-                sqlx::SqlitePool::connect_with(options.clone().create_if_missing(true)).await?;
-            sqlx::migrate!("./migrations").run(&pool).await?;
-            Ok(make_app_state(pool))
-        }
-    }
+    let pool = init_pool(opts, true).await?;
+    Ok(make_app_state(pool))
 }
 
 /// Opens an existing database described by `opts`, runs pending migrations, and
@@ -345,15 +355,8 @@ pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState
 /// already exist. Use [`open_database`] in `cmd_init`, which creates the
 /// database when it is missing.
 pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
-    match opts {
-        DbConnectOptions::Sqlite(options) => {
-            // create_if_missing defaults to false, so this fails when the file
-            // does not exist.
-            let pool = sqlx::SqlitePool::connect_with(options.clone()).await?;
-            sqlx::migrate!("./migrations").run(&pool).await?;
-            Ok(make_app_state(pool))
-        }
-    }
+    let pool = init_pool(opts, false).await?;
+    Ok(make_app_state(pool))
 }
 
 #[cfg(test)]

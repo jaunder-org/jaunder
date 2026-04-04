@@ -296,11 +296,7 @@ impl SessionStorage for SqliteSessionStorage {
     async fn authenticate(&self, raw_token: &str) -> Result<SessionRecord, SessionAuthError> {
         let token_hash = hash_token(raw_token)?;
 
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| SessionAuthError::SessionNotFound)?;
+        let mut tx = self.pool.begin().await?;
 
         let row = sqlx::query_as::<_, SessionRow>(
             "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
@@ -309,8 +305,7 @@ impl SessionStorage for SqliteSessionStorage {
         )
         .bind(&token_hash)
         .fetch_optional(&mut *tx)
-        .await
-        .map_err(|_| SessionAuthError::SessionNotFound)?
+        .await?
         .ok_or(SessionAuthError::SessionNotFound)?;
 
         let now = Utc::now();
@@ -319,12 +314,9 @@ impl SessionStorage for SqliteSessionStorage {
             .bind(now)
             .bind(&token_hash)
             .execute(&mut *tx)
-            .await
-            .map_err(|_| SessionAuthError::SessionNotFound)?;
+            .await?;
 
-        tx.commit()
-            .await
-            .map_err(|_| SessionAuthError::SessionNotFound)?;
+        tx.commit().await?;
 
         let mut record = session_record_from_row(row);
         record.last_used_at = now;
