@@ -269,6 +269,7 @@ mod tests {
 
     #[test]
     fn user_create_parses_username_and_password() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
         let cli = parse(&[
             "user-create",
             "--username",
@@ -292,6 +293,7 @@ mod tests {
 
     #[test]
     fn user_create_parses_display_name() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
         let cli = parse(&[
             "user-create",
             "--username",
@@ -309,6 +311,7 @@ mod tests {
 
     #[test]
     fn user_create_password_optional() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
         let cli = parse(&["user-create", "--username", "alice"]);
         let Commands::UserCreate { password, .. } = cli.command else {
             panic!("wrong variant");
@@ -318,6 +321,7 @@ mod tests {
 
     #[test]
     fn user_create_missing_username_is_clap_error() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
         let result = Cli::try_parse_from(["jaunder", "user-create", "--password", "secret123"]);
         assert!(result.is_err());
     }
@@ -326,6 +330,7 @@ mod tests {
 
     #[test]
     fn user_invite_parses_expires_in() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
         let cli = parse(&["user-invite", "--expires-in", "48"]);
         let Commands::UserInvite { expires_in, .. } = cli.command else {
             panic!("wrong variant");
@@ -335,6 +340,7 @@ mod tests {
 
     #[test]
     fn user_invite_expires_in_optional() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
         let cli = parse(&["user-invite"]);
         let Commands::UserInvite { expires_in, .. } = cli.command else {
             panic!("wrong variant");
