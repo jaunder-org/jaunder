@@ -20,10 +20,17 @@ async fn main() -> anyhow::Result<()> {
             password,
             display_name,
         } => {
+            let username = username
+                .parse::<server::username::Username>()
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let password = password
+                .map(|p| p.parse::<server::password::Password>())
+                .transpose()
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
             server::commands::cmd_user_create(
                 &storage,
                 &username,
-                password.as_deref(),
+                password,
                 display_name.as_deref(),
             )
             .await?;
