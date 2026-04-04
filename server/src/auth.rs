@@ -1,16 +1,11 @@
-use std::{fmt, str::FromStr, sync::Arc};
+// RegistrationPolicy, load_registration_policy live in `common` (shared by
+// both `web` and `server`).  AuthUser and require_auth are defined in `web`
+// (they use Leptos/Axum types) and re-exported here for server-crate callers.
+pub use common::auth::{load_registration_policy, InvalidRegistrationPolicy, RegistrationPolicy};
+pub use web::auth::{require_auth, AuthUser};
 
-use axum::{
-    extract::FromRequestParts,
-    http::{request::Parts, StatusCode},
-};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use leptos::prelude::ServerFnError;
 use rand::RngCore;
-use thiserror::Error;
-
-use crate::storage::{AppState, SiteConfigStorage};
-use crate::username::Username;
 
 /// Generates an opaque session token: 32 cryptographically random bytes encoded
 /// as base64url without padding (43 characters).
@@ -34,125 +29,10 @@ pub fn hash_token(raw_token: &str) -> Result<String, String> {
     Ok(URL_SAFE_NO_PAD.encode(hash))
 }
 
-/// The site's user-registration access policy.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RegistrationPolicy {
-    /// Anyone may register without a code.
-    Open,
-    /// New accounts require a valid, unused invite code.
-    InviteOnly,
-    /// Registration is disabled; no new accounts can be created.
-    Closed,
-}
-
-impl fmt::Display for RegistrationPolicy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RegistrationPolicy::Open => write!(f, "open"),
-            RegistrationPolicy::InviteOnly => write!(f, "invite_only"),
-            RegistrationPolicy::Closed => write!(f, "closed"),
-        }
-    }
-}
-
-/// Error returned when a string does not name a valid [`RegistrationPolicy`].
-#[derive(Debug, Error)]
-#[error("invalid registration policy: {0:?}")]
-pub struct InvalidRegistrationPolicy(String);
-
-impl FromStr for RegistrationPolicy {
-    type Err = InvalidRegistrationPolicy;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "open" => Ok(RegistrationPolicy::Open),
-            "invite_only" => Ok(RegistrationPolicy::InviteOnly),
-            "closed" => Ok(RegistrationPolicy::Closed),
-            other => Err(InvalidRegistrationPolicy(other.to_owned())),
-        }
-    }
-}
-
-/// Reads `site.registration_policy` from the config store and parses it.
-///
-/// Returns [`RegistrationPolicy::Closed`] when the key is absent or its
-/// value cannot be parsed — a safe default that prevents unintended open
-/// registration on a freshly initialised instance.
-pub async fn load_registration_policy(store: &dyn SiteConfigStorage) -> RegistrationPolicy {
-    store
-        .get("site.registration_policy")
-        .await
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(RegistrationPolicy::Closed)
-}
-
-/// The authenticated user extracted from a valid session cookie or Bearer token.
-pub struct AuthUser {
-    pub user_id: i64,
-    pub username: Username,
-    pub token_hash: String,
-}
-
-impl<S> FromRequestParts<S> for AuthUser
-where
-    S: Send + Sync,
-{
-    type Rejection = StatusCode;
-
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        // Cookie takes precedence over Authorization header.
-        let raw_token = parts
-            .headers
-            .get(axum::http::header::COOKIE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| {
-                s.split(';')
-                    .map(str::trim)
-                    .find(|c| c.starts_with("session="))
-                    .and_then(|c| c.strip_prefix("session="))
-                    .map(str::to_string)
-            })
-            .or_else(|| {
-                parts
-                    .headers
-                    .get(axum::http::header::AUTHORIZATION)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|s| s.strip_prefix("Bearer "))
-                    .map(str::to_string)
-            });
-
-        let raw_token = raw_token.ok_or(StatusCode::UNAUTHORIZED)?;
-
-        let state = parts
-            .extensions
-            .get::<Arc<AppState>>()
-            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        match state.sessions.authenticate(&raw_token).await {
-            Ok(record) => Ok(AuthUser {
-                user_id: record.user_id,
-                username: record.username,
-                token_hash: record.token_hash,
-            }),
-            Err(_) => Err(StatusCode::UNAUTHORIZED),
-        }
-    }
-}
-
-/// Extracts the authenticated user inside a Leptos server function.
-/// Returns `ServerFnError` when no valid session is present.
-pub async fn require_auth() -> Result<AuthUser, ServerFnError> {
-    leptos_axum::extract::<AuthUser>()
-        .await
-        .map_err(|_| ServerFnError::new("unauthorized"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::SqliteSiteConfigStorage;
+    use crate::storage::{SiteConfigStorage, SqliteSiteConfigStorage};
 
     // --- FromStr / Display ---
 

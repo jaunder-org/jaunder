@@ -3,10 +3,12 @@ use sqlx::SqlitePool;
 
 use async_trait::async_trait;
 
-use super::{
+use common::password::Password;
+use common::storage::{
     CreateUserError, InviteRecord, InviteStorage, ProfileUpdate, SessionAuthError, SessionRecord,
     SessionStorage, SiteConfigStorage, UseInviteError, UserAuthError, UserRecord, UserStorage,
 };
+use common::username::Username;
 
 // ---------------------------------------------------------------------------
 // SiteConfig
@@ -89,12 +91,12 @@ impl SqliteUserStorage {
 impl UserStorage for SqliteUserStorage {
     async fn create_user(
         &self,
-        username: &crate::username::Username,
-        password: &crate::password::Password,
+        username: &Username,
+        password: &Password,
         display_name: Option<&str>,
     ) -> Result<i64, CreateUserError> {
-        let password_clone = password.clone();
-        let password_hash = tokio::task::spawn_blocking(move || password_clone.hash())
+        let password = password.clone();
+        let password_hash = tokio::task::spawn_blocking(move || password.hash())
             .await
             .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?
             .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?;
@@ -124,8 +126,8 @@ impl UserStorage for SqliteUserStorage {
 
     async fn authenticate(
         &self,
-        username: &crate::username::Username,
-        password: &crate::password::Password,
+        username: &Username,
+        password: &Password,
     ) -> Result<UserRecord, UserAuthError> {
         let row = sqlx::query_as::<
             _,
@@ -153,8 +155,8 @@ impl UserStorage for SqliteUserStorage {
                 None => return Err(UserAuthError::InvalidCredentials),
             };
 
-        let password_clone = password.clone();
-        let valid = tokio::task::spawn_blocking(move || password_clone.verify(&hash))
+        let password = password.clone();
+        let valid = tokio::task::spawn_blocking(move || password.verify(&hash))
             .await
             .map_err(|e| UserAuthError::Internal(e.to_string()))?
             .map_err(UserAuthError::Internal)?;
@@ -195,10 +197,7 @@ impl UserStorage for SqliteUserStorage {
         Ok(row.map(user_record_from_row))
     }
 
-    async fn get_user_by_username(
-        &self,
-        username: &crate::username::Username,
-    ) -> sqlx::Result<Option<UserRecord>> {
+    async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at
              FROM users WHERE username = ?",
