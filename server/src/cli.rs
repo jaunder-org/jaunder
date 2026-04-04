@@ -52,6 +52,40 @@ pub enum Commands {
         #[arg(long, env = "JAUNDER_BIND", default_value = "127.0.0.1:3000")]
         bind: SocketAddr,
     },
+
+    /// Create a user account directly, bypassing the registration policy.
+    ///
+    /// Intended for bootstrapping an initial operator account. The storage
+    /// directory must already be initialized via `jaunder init`.
+    UserCreate {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// Username for the new account (must match [a-z0-9_-]+).
+        #[arg(long)]
+        username: String,
+
+        /// Password for the new account. If omitted, you will be prompted
+        /// interactively (input is hidden).
+        #[arg(long)]
+        password: Option<String>,
+
+        /// Optional display name.
+        #[arg(long)]
+        display_name: Option<String>,
+    },
+
+    /// Generate an invite code.
+    ///
+    /// The storage directory must already be initialized via `jaunder init`.
+    UserInvite {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// Hours until the invite code expires. Defaults to 168 (7 days).
+        #[arg(long)]
+        expires_in: Option<u64>,
+    },
 }
 
 #[cfg(test)]
@@ -229,5 +263,82 @@ mod tests {
             panic!("wrong variant");
         };
         assert_eq!(storage.db.to_string(), "sqlite:/tmp/from_env.db");
+    }
+
+    // --- user-create ---
+
+    #[test]
+    fn user_create_parses_username_and_password() {
+        let cli = parse(&[
+            "user-create",
+            "--username",
+            "alice",
+            "--password",
+            "secret123",
+        ]);
+        let Commands::UserCreate {
+            username,
+            password,
+            display_name,
+            ..
+        } = cli.command
+        else {
+            panic!("wrong variant");
+        };
+        assert_eq!(username, "alice");
+        assert_eq!(password, Some("secret123".to_owned()));
+        assert_eq!(display_name, None);
+    }
+
+    #[test]
+    fn user_create_parses_display_name() {
+        let cli = parse(&[
+            "user-create",
+            "--username",
+            "alice",
+            "--password",
+            "secret123",
+            "--display-name",
+            "Alice Smith",
+        ]);
+        let Commands::UserCreate { display_name, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(display_name, Some("Alice Smith".to_owned()));
+    }
+
+    #[test]
+    fn user_create_password_optional() {
+        let cli = parse(&["user-create", "--username", "alice"]);
+        let Commands::UserCreate { password, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(password, None);
+    }
+
+    #[test]
+    fn user_create_missing_username_is_clap_error() {
+        let result = Cli::try_parse_from(["jaunder", "user-create", "--password", "secret123"]);
+        assert!(result.is_err());
+    }
+
+    // --- user-invite ---
+
+    #[test]
+    fn user_invite_parses_expires_in() {
+        let cli = parse(&["user-invite", "--expires-in", "48"]);
+        let Commands::UserInvite { expires_in, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(expires_in, Some(48));
+    }
+
+    #[test]
+    fn user_invite_expires_in_optional() {
+        let cli = parse(&["user-invite"]);
+        let Commands::UserInvite { expires_in, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(expires_in, None);
     }
 }
