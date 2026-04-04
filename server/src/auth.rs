@@ -145,7 +145,9 @@ mod tests {
     #[test]
     fn open_parses() {
         assert_eq!(
-            "open".parse::<RegistrationPolicy>().unwrap(),
+            "open"
+                .parse::<RegistrationPolicy>()
+                .expect("\"open\" is a valid RegistrationPolicy"),
             RegistrationPolicy::Open
         );
     }
@@ -153,7 +155,9 @@ mod tests {
     #[test]
     fn invite_only_parses() {
         assert_eq!(
-            "invite_only".parse::<RegistrationPolicy>().unwrap(),
+            "invite_only"
+                .parse::<RegistrationPolicy>()
+                .expect("\"invite_only\" is a valid RegistrationPolicy"),
             RegistrationPolicy::InviteOnly
         );
     }
@@ -161,7 +165,9 @@ mod tests {
     #[test]
     fn closed_parses() {
         assert_eq!(
-            "closed".parse::<RegistrationPolicy>().unwrap(),
+            "closed"
+                .parse::<RegistrationPolicy>()
+                .expect("\"closed\" is a valid RegistrationPolicy"),
             RegistrationPolicy::Closed
         );
     }
@@ -179,7 +185,10 @@ mod tests {
             RegistrationPolicy::Closed,
         ] {
             assert_eq!(
-                policy.to_string().parse::<RegistrationPolicy>().unwrap(),
+                policy
+                    .to_string()
+                    .parse::<RegistrationPolicy>()
+                    .expect("Display output should round-trip through FromStr"),
                 policy
             );
         }
@@ -210,7 +219,10 @@ mod tests {
     #[tokio::test]
     async fn key_set_to_open_returns_open() {
         let store = in_memory_store().await;
-        store.set("site.registration_policy", "open").await.unwrap();
+        store
+            .set("site.registration_policy", "open")
+            .await
+            .expect("set should succeed");
         assert_eq!(
             load_registration_policy(&store).await,
             RegistrationPolicy::Open
@@ -223,7 +235,7 @@ mod tests {
         store
             .set("site.registration_policy", "invite_only")
             .await
-            .unwrap();
+            .expect("set should succeed");
         assert_eq!(
             load_registration_policy(&store).await,
             RegistrationPolicy::InviteOnly
@@ -236,7 +248,7 @@ mod tests {
         store
             .set("site.registration_policy", "garbage")
             .await
-            .unwrap();
+            .expect("set should succeed");
         assert_eq!(
             load_registration_policy(&store).await,
             RegistrationPolicy::Closed
