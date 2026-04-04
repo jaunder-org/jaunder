@@ -224,17 +224,6 @@ impl UserStorage for SqliteUserStorage {
 // Sessions
 // ---------------------------------------------------------------------------
 
-fn hash_token(raw_token: &str) -> Result<String, SessionAuthError> {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-    use sha2::{Digest, Sha256};
-
-    let bytes = URL_SAFE_NO_PAD
-        .decode(raw_token)
-        .map_err(|_| SessionAuthError::InvalidToken)?;
-    let hash = Sha256::digest(&bytes);
-    Ok(URL_SAFE_NO_PAD.encode(hash))
-}
-
 type SessionRow = (
     String,
     i64,
@@ -274,8 +263,8 @@ impl SqliteSessionStorage {
 impl SessionStorage for SqliteSessionStorage {
     async fn create_session(&self, user_id: i64, label: Option<&str>) -> sqlx::Result<String> {
         let raw_token = crate::auth::generate_token();
-        let token_hash = hash_token(&raw_token)
-            .map_err(|_| sqlx::Error::Io(std::io::Error::other("token hash failed")))?;
+        let token_hash = crate::auth::hash_token(&raw_token)
+            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
         let now = Utc::now();
 
         sqlx::query(
@@ -294,7 +283,7 @@ impl SessionStorage for SqliteSessionStorage {
     }
 
     async fn authenticate(&self, raw_token: &str) -> Result<SessionRecord, SessionAuthError> {
-        let token_hash = hash_token(raw_token)?;
+        let token_hash = crate::auth::hash_token(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
 
         let mut tx = self.pool.begin().await?;
 

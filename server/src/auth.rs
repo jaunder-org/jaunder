@@ -20,6 +20,20 @@ pub fn generate_token() -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
+/// Hashes a raw token using SHA-256 and returns the base64url-encoded digest.
+///
+/// This is used to store hashes of opaque tokens (sessions, invites) so that
+/// the raw token is never persisted.
+pub fn hash_token(raw_token: &str) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+
+    let bytes = URL_SAFE_NO_PAD
+        .decode(raw_token)
+        .map_err(|e| e.to_string())?;
+    let hash = Sha256::digest(&bytes);
+    Ok(URL_SAFE_NO_PAD.encode(hash))
+}
+
 /// The site's user-registration access policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RegistrationPolicy {
