@@ -12,6 +12,7 @@ const MIN_LENGTH: usize = 8;
 ///
 /// [`Display`] is intentionally not implemented to prevent passwords from
 /// being accidentally logged or serialised.
+#[derive(Clone)]
 pub struct Password(String);
 
 /// Error returned when a string cannot be parsed as a [`Password`].
@@ -33,6 +34,38 @@ impl FromStr for Password {
 impl Password {
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Hashes the password using Argon2id with default parameters.
+    ///
+    /// This is a CPU-intensive operation and should be called from a blocking
+    /// context (e.g., via [`tokio::task::spawn_blocking`]).
+    pub fn hash(&self) -> Result<String, String> {
+        use argon2::{
+            password_hash::{rand_core::OsRng, SaltString},
+            Argon2, PasswordHasher,
+        };
+
+        let salt = SaltString::generate(&mut OsRng);
+        Argon2::default()
+            .hash_password(self.0.as_bytes(), &salt)
+            .map(|h| h.to_string())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Verifies the password against a stored Argon2 hash.
+    ///
+    /// This is a CPU-intensive operation and should be called from a blocking
+    /// context (e.g., via [`tokio::task::spawn_blocking`]).
+    pub fn verify(&self, hash: &str) -> Result<bool, String> {
+        use argon2::{Argon2, PasswordHash, PasswordVerifier};
+
+        let parsed = PasswordHash::new(hash).map_err(|e| e.to_string())?;
+        match Argon2::default().verify_password(self.0.as_bytes(), &parsed) {
+            Ok(_) => Ok(true),
+            Err(argon2::password_hash::Error::Password) => Ok(false),
+            Err(e) => Err(e.to_string()),
+        }
     }
 }
 
