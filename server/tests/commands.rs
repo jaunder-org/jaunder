@@ -7,6 +7,7 @@ use axum::{
 use leptos::prelude::LeptosOptions;
 use server::cli::StorageArgs;
 use server::commands::{cmd_init, cmd_serve, cmd_user_create, cmd_user_invite};
+use server::password::Password;
 use server::storage::{open_database, open_existing_database, DbConnectOptions};
 use server::username::Username;
 use tempfile::TempDir;
@@ -130,12 +131,13 @@ async fn cmd_user_create_creates_retrievable_user() {
     let args = storage_args(&base);
     cmd_init(&args, false).await.expect("init");
 
-    cmd_user_create(&args, "alice", Some("password123"), None)
+    let username: Username = "alice".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    cmd_user_create(&args, &username, Some(password), None)
         .await
         .expect("user create");
 
     let state = open_existing_database(&args.db).await.expect("open db");
-    let username: Username = "alice".parse().expect("valid username");
     let user = state
         .users
         .get_user_by_username(&username)

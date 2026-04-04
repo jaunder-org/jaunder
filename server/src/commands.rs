@@ -22,37 +22,29 @@ pub async fn cmd_init(storage: &StorageArgs, skip_if_exists: bool) -> anyhow::Re
 
 pub async fn cmd_user_create(
     storage: &StorageArgs,
-    username: &str,
-    password: Option<&str>,
+    username: &Username,
+    password: Option<Password>,
     display_name: Option<&str>,
 ) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db)
         .await
         .map_err(|e| anyhow::anyhow!("{e}; run `jaunder init` first"))?;
 
-    let username = username
-        .parse::<Username>()
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    let password_str = match password {
-        Some(p) => p.to_owned(),
+    let password = match password {
+        Some(p) => p,
         None => {
             let p1 = rpassword::prompt_password("Password: ")?;
             let p2 = rpassword::prompt_password("Confirm password: ")?;
             if p1 != p2 {
                 return Err(anyhow::anyhow!("passwords do not match"));
             }
-            p1
+            p1.parse::<Password>().map_err(|e| anyhow::anyhow!("{e}"))?
         }
     };
 
-    let password = password_str
-        .parse::<Password>()
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
     let user_id = state
         .users
-        .create_user(&username, &password, display_name)
+        .create_user(username, &password, display_name)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
