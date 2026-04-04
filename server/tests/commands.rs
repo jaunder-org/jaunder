@@ -6,7 +6,7 @@ use axum::{
 };
 use leptos::prelude::LeptosOptions;
 use server::cli::StorageArgs;
-use server::commands::{cmd_init, cmd_serve, cmd_user_create};
+use server::commands::{cmd_init, cmd_serve, cmd_user_create, cmd_user_invite};
 use server::storage::{open_database, open_existing_database, DbConnectOptions};
 use server::username::Username;
 use tempfile::TempDir;
@@ -143,4 +143,17 @@ async fn cmd_user_create_creates_retrievable_user() {
         .expect("db query");
     assert!(user.is_some(), "user should exist after creation");
     assert_eq!(user.expect("user present").username.as_str(), "alice");
+}
+
+#[tokio::test]
+async fn cmd_user_invite_creates_retrievable_invite() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base);
+    cmd_init(&args, false).await.expect("init");
+
+    cmd_user_invite(&args, Some(48)).await.expect("user invite");
+
+    let state = open_existing_database(&args.db).await.expect("open db");
+    let invites = state.invites.list_invites().await.expect("list invites");
+    assert_eq!(invites.len(), 1, "exactly one invite should exist");
 }

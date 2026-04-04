@@ -60,11 +60,17 @@ pub async fn cmd_user_create(
     Ok(())
 }
 
-pub async fn cmd_user_invite(
-    _storage: &StorageArgs,
-    _expires_in: Option<u64>,
-) -> anyhow::Result<()> {
-    todo!("cmd_user_invite not yet implemented")
+pub async fn cmd_user_invite(storage: &StorageArgs, expires_in: Option<u64>) -> anyhow::Result<()> {
+    let state = open_existing_database(&storage.db)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}; run `jaunder init` first"))?;
+
+    let hours = expires_in.unwrap_or(168) as i64;
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(hours);
+
+    let code = state.invites.create_invite(expires_at).await?;
+    println!("{code}");
+    Ok(())
 }
 
 pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr) -> anyhow::Result<()> {
