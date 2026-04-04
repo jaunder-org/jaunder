@@ -6,8 +6,9 @@ use axum::{
 };
 use leptos::prelude::LeptosOptions;
 use server::cli::StorageArgs;
-use server::commands::{cmd_init, cmd_serve};
+use server::commands::{cmd_init, cmd_serve, cmd_user_create};
 use server::storage::{open_database, open_existing_database, DbConnectOptions};
+use server::username::Username;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -121,4 +122,25 @@ async fn cmd_serve_starts_and_accepts_connections() {
 
     task.abort();
     assert!(connected, "server did not start within 1s");
+}
+
+#[tokio::test]
+async fn cmd_user_create_creates_retrievable_user() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base);
+    cmd_init(&args, false).await.expect("init");
+
+    cmd_user_create(&args, "alice", Some("password123"), None)
+        .await
+        .expect("user create");
+
+    let state = open_existing_database(&args.db).await.expect("open db");
+    let username: Username = "alice".parse().expect("valid username");
+    let user = state
+        .users
+        .get_user_by_username(&username)
+        .await
+        .expect("db query");
+    assert!(user.is_some(), "user should exist after creation");
+    assert_eq!(user.expect("user present").username.as_str(), "alice");
 }
