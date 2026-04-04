@@ -18,6 +18,7 @@ impl FromStr for Username {
     type Err = InvalidUsername;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.to_lowercase();
         if s.is_empty()
             || !s
                 .chars()
@@ -25,7 +26,7 @@ impl FromStr for Username {
         {
             return Err(InvalidUsername);
         }
-        Ok(Username(s.to_owned()))
+        Ok(Username(s))
     }
 }
 
@@ -53,8 +54,16 @@ mod tests {
     }
 
     #[test]
+    fn username_normalizes_to_lowercase() {
+        let u: Username = "Alice".parse().unwrap();
+        assert_eq!(u.as_str(), "alice");
+
+        let u2: Username = "BOB_99".parse().unwrap();
+        assert_eq!(u2.as_str(), "bob_99");
+    }
+
+    #[test]
     fn username_rejects_invalid_names() {
-        assert!("Alice".parse::<Username>().is_err());
         assert!("a b".parse::<Username>().is_err());
         assert!("".parse::<Username>().is_err());
         assert!("a@b".parse::<Username>().is_err());

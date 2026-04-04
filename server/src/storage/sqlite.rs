@@ -283,7 +283,8 @@ impl SessionStorage for SqliteSessionStorage {
     }
 
     async fn authenticate(&self, raw_token: &str) -> Result<SessionRecord, SessionAuthError> {
-        let token_hash = crate::auth::hash_token(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
+        let token_hash =
+            crate::auth::hash_token(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
 
         let mut tx = self.pool.begin().await?;
 
