@@ -1,7 +1,9 @@
 use std::{io, net::SocketAddr};
 
 use crate::cli::StorageArgs;
+use crate::password::Password;
 use crate::storage::{init_storage, open_database, open_existing_database};
+use crate::username::Username;
 
 pub async fn cmd_init(storage: &StorageArgs, skip_if_exists: bool) -> anyhow::Result<()> {
     match init_storage(&storage.storage_path) {
@@ -16,6 +18,53 @@ pub async fn cmd_init(storage: &StorageArgs, skip_if_exists: bool) -> anyhow::Re
         storage.db,
     );
     Ok(())
+}
+
+pub async fn cmd_user_create(
+    storage: &StorageArgs,
+    username: &str,
+    password: Option<&str>,
+    display_name: Option<&str>,
+) -> anyhow::Result<()> {
+    let state = open_existing_database(&storage.db)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}; run `jaunder init` first"))?;
+
+    let username = username
+        .parse::<Username>()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let password_str = match password {
+        Some(p) => p.to_owned(),
+        None => {
+            let p1 = rpassword::prompt_password("Password: ")?;
+            let p2 = rpassword::prompt_password("Confirm password: ")?;
+            if p1 != p2 {
+                return Err(anyhow::anyhow!("passwords do not match"));
+            }
+            p1
+        }
+    };
+
+    let password = password_str
+        .parse::<Password>()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let user_id = state
+        .users
+        .create_user(&username, &password, display_name)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    println!("Created user '{}' with id {user_id}", username);
+    Ok(())
+}
+
+pub async fn cmd_user_invite(
+    _storage: &StorageArgs,
+    _expires_in: Option<u64>,
+) -> anyhow::Result<()> {
+    todo!("cmd_user_invite not yet implemented")
 }
 
 pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr) -> anyhow::Result<()> {

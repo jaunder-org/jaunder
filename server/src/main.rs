@@ -14,11 +14,25 @@ async fn main() -> anyhow::Result<()> {
         Commands::Serve { storage, bind } => {
             server::commands::cmd_serve(&storage, bind).await?;
         }
-        Commands::UserCreate { .. } => {
-            todo!("user create not yet implemented")
+        Commands::UserCreate {
+            storage,
+            username,
+            password,
+            display_name,
+        } => {
+            server::commands::cmd_user_create(
+                &storage,
+                &username,
+                password.as_deref(),
+                display_name.as_deref(),
+            )
+            .await?;
         }
-        Commands::UserInvite { .. } => {
-            todo!("user invite not yet implemented")
+        Commands::UserInvite {
+            storage,
+            expires_in,
+        } => {
+            server::commands::cmd_user_invite(&storage, expires_in).await?;
         }
     }
     Ok(())
