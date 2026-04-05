@@ -43,6 +43,7 @@ base64 = "0.22"
 rand = "0.9"
 sha2 = "0.10"
 rpassword = "7"
+lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls"] }
 thiserror = "2.0.12"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1.45.0", features = ["full"] }
