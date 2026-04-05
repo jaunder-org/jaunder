@@ -65,6 +65,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn register_route_returns_ok() {
+        let app = create_router(test_options(), test_state().await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/register")
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
+            .await
+            .expect("failed to get response");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn register_route_with_invite_only_policy_returns_ok() {
+        let state = test_state().await;
+        state
+            .site_config
+            .set("site.registration_policy", "invite_only")
+            .await
+            .expect("failed to set registration policy");
+        let app = create_router(test_options(), state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/register")
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
+            .await
+            .expect("failed to get response");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn login_route_returns_ok() {
+        let app = create_router(test_options(), test_state().await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/login")
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
+            .await
+            .expect("failed to get response");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn unknown_route_returns_not_found() {
         let app = create_router(test_options(), test_state().await);
         let response = app
