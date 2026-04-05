@@ -121,7 +121,7 @@ use leptos::prelude::*;
 
 /// Returns the site's current registration policy as a string.
 /// Possible values: `"open"`, `"invite_only"`, `"closed"`.
-#[server(endpoint = "/api/get_registration_policy")]
+#[server(endpoint = "/get_registration_policy")]
 pub async fn get_registration_policy() -> Result<String, ServerFnError> {
     let state = expect_context::<Arc<AppState>>();
     let policy = load_registration_policy(&*state.site_config).await;
@@ -130,7 +130,7 @@ pub async fn get_registration_policy() -> Result<String, ServerFnError> {
 
 /// Registers a new user.  Returns the raw session token on success and sets
 /// the `session` cookie.
-#[server(endpoint = "/api/register")]
+#[server(endpoint = "/register")]
 pub async fn register(
     username: String,
     password: String,
@@ -179,7 +179,7 @@ pub async fn register(
 
 /// Authenticates a user.  Returns the raw session token on success and sets
 /// the `session` cookie.
-#[server(endpoint = "/api/login")]
+#[server(endpoint = "/login")]
 pub async fn login(
     username: String,
     password: String,
@@ -211,7 +211,7 @@ pub async fn login(
 }
 
 /// Revokes the current session and clears the `session` cookie.
-#[server(endpoint = "/api/logout")]
+#[server(endpoint = "/logout")]
 pub async fn logout() -> Result<(), ServerFnError> {
     let auth = require_auth().await?;
     let state = expect_context::<Arc<AppState>>();
