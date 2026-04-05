@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::storage::DbConnectOptions;
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 #[command(name = "jaunder", about = "A self-hosted social reader")]
 pub struct Cli {
     #[command(subcommand)]
@@ -12,7 +12,7 @@ pub struct Cli {
 }
 
 /// Arguments shared by subcommands that need access to the storage directory.
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct StorageArgs {
     /// Path to the storage directory (media, backups).
     #[arg(long, env = "JAUNDER_STORAGE_PATH", default_value = "./data")]
@@ -25,7 +25,7 @@ pub struct StorageArgs {
     pub db: DbConnectOptions,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 pub enum Commands {
     /// Initialize the storage directory and database.
     ///

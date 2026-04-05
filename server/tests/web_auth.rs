@@ -154,6 +154,37 @@ async fn register_open_creates_user_sets_cookie_returns_token() {
     assert!(user.is_some(), "user should exist after registration");
 }
 
+#[tokio::test]
+async fn register_duplicate_username_returns_error() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    state
+        .site_config
+        .set("site.registration_policy", "open")
+        .await
+        .unwrap();
+
+    // Register alice once.
+    post_form(
+        Arc::clone(&state),
+        "/api/register",
+        "username=alice&password=password123",
+        None,
+    )
+    .await;
+
+    // Register alice again.
+    let (status, _, _) = post_form(
+        Arc::clone(&state),
+        "/api/register",
+        "username=alice&password=otherpassword",
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 // M2.9.9: `register` with InviteOnly + valid code creates user, marks invite used, returns token.
 #[tokio::test]
 async fn register_invite_only_valid_code_creates_user_marks_invite_used() {
@@ -286,6 +317,87 @@ async fn login_correct_password_sets_cookie_and_returns_token() {
     assert!(!token.is_empty());
     let cookie = set_cookie.expect("Set-Cookie header should be present on login");
     assert!(cookie.starts_with("session="), "cookie: {cookie}");
+}
+
+#[tokio::test]
+async fn login_unknown_user_returns_error() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, _, _) = post_form(
+        Arc::clone(&state),
+        "/api/login",
+        "username=nobody&password=password123",
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn login_with_label_creates_session_with_label() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    state
+        .site_config
+        .set("site.registration_policy", "open")
+        .await
+        .unwrap();
+    // Register.
+    post_form(
+        Arc::clone(&state),
+        "/api/register",
+        "username=alice&password=password123",
+        None,
+    )
+    .await;
+
+    // Login with label.
+    let (status, _, body) = post_form(
+        Arc::clone(&state),
+        "/api/login",
+        "username=alice&password=password123&label=my-device",
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let raw_token = extract_token(&body);
+    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    assert_eq!(record.label.as_deref(), Some("my-device"));
+}
+
+#[tokio::test]
+async fn login_with_empty_label_creates_session_without_label() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    state
+        .site_config
+        .set("site.registration_policy", "open")
+        .await
+        .unwrap();
+    post_form(
+        Arc::clone(&state),
+        "/api/register",
+        "username=alice&password=password123",
+        None,
+    )
+    .await;
+
+    // Login with empty label.
+    let (status, _, body) = post_form(
+        Arc::clone(&state),
+        "/api/login",
+        "username=alice&password=password123&label=",
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let raw_token = extract_token(&body);
+    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    assert!(record.label.is_none());
 }
 
 // M2.9.13: `login` with wrong password returns error.
@@ -519,4 +631,47 @@ async fn debug_api_routes_exist() {
         StatusCode::NOT_FOUND,
         "/api/register route not registered (got 404)"
     );
+}
+
+#[tokio::test]
+async fn get_registration_policy_returns_correct_value() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    state
+        .site_config
+        .set("site.registration_policy", "invite_only")
+        .await
+        .unwrap();
+
+    // Server functions are POST by default.
+    let (status, _, body) =
+        post_form(Arc::clone(&state), "/api/get_registration_policy", "", None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.trim(), "\"invite_only\"");
+}
+
+#[tokio::test]
+async fn auth_user_extraction_fails_with_invalid_token() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    // logout() requires AuthUser. If we provide an invalid token, it should fail.
+    let cookie_header = "session=invalidtoken";
+    let (status, _, _) =
+        post_form(Arc::clone(&state), "/api/logout", "", Some(&cookie_header)).await;
+
+    // Leptos server functions return 500 for ServerFnError.
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn auth_user_extraction_fails_when_missing() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    // logout() requires AuthUser. If we provide no token, it should fail.
+    let (status, _, _) = post_form(Arc::clone(&state), "/api/logout", "", None).await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
