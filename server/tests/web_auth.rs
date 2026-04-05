@@ -257,6 +257,54 @@ async fn register_invite_only_missing_code_returns_error() {
     );
 }
 
+// M2.9.15: `register` with InviteOnly policy and invalid code returns error.
+#[tokio::test]
+async fn register_invite_only_invalid_code_returns_error() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    state
+        .site_config
+        .set("site.registration_policy", "invite_only")
+        .await
+        .unwrap();
+
+    let (status, _, _) = post_form(
+        Arc::clone(&state),
+        "/api/register",
+        "username=alice&password=password123&invite_code=invalid-code",
+        None,
+    )
+    .await;
+
+    assert_ne!(status, StatusCode::OK);
+}
+
+// M2.9.16: `register` with InviteOnly policy and expired code returns error.
+#[tokio::test]
+async fn register_invite_only_expired_code_returns_error() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    state
+        .site_config
+        .set("site.registration_policy", "invite_only")
+        .await
+        .unwrap();
+
+    // Create an already-expired invite.
+    let expires_at = Utc::now() - chrono::Duration::hours(1);
+    let code = state.invites.create_invite(expires_at).await.unwrap();
+
+    let (status, _, _) = post_form(
+        Arc::clone(&state),
+        "/api/register",
+        format!("username=alice&password=password123&invite_code={code}"),
+        None,
+    )
+    .await;
+
+    assert_ne!(status, StatusCode::OK);
+}
+
 // M2.9.11: `register` with Closed policy returns error.
 #[tokio::test]
 async fn register_closed_policy_returns_error() {

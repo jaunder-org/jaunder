@@ -121,4 +121,34 @@ mod tests {
         };
         run(cli).await.unwrap();
     }
+
+    #[tokio::test]
+    async fn run_serve() {
+        let base = TempDir::new().unwrap();
+        let storage = test_storage_args(&base);
+        run(Cli {
+            command: Commands::Init {
+                storage: storage.clone(),
+                skip_if_exists: false,
+            },
+        })
+        .await
+        .unwrap();
+
+        let bind: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let cli = Cli {
+            command: Commands::Serve { storage, bind },
+        };
+
+        // We can't easily run the server indefinitely in a test that expects
+        // completion, but we can spawn it and abort it, similar to theSuccess
+        // test in commands.rs.
+        let task = tokio::spawn(async move {
+            let _ = run(cli).await;
+        });
+
+        // Wait a bit for it to start.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        task.abort();
+    }
 }

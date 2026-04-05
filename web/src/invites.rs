@@ -29,7 +29,11 @@ pub async fn create_invite(expires_in_hours: Option<u64>) -> Result<String, Serv
     let _auth = require_auth().await?;
     let state = expect_context::<Arc<AppState>>();
     let hours = expires_in_hours.unwrap_or(168);
-    let expires_at = Utc::now() + chrono::Duration::hours(hours as i64);
+    let duration = i64::try_from(hours)
+        .ok()
+        .and_then(chrono::Duration::try_hours)
+        .ok_or_else(|| ServerFnError::new("expires_in_hours too large"))?;
+    let expires_at = Utc::now() + duration;
     state
         .invites
         .create_invite(expires_at)

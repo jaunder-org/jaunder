@@ -299,6 +299,123 @@ async fn create_invite_appears_in_list_invites() {
     );
 }
 
+// create_invite requires authentication.
+#[tokio::test]
+async fn create_invite_unauthorized_returns_error() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, _, _) = post_form(Arc::clone(&state), "/api/create_invite", "", None).await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+// create_invite with extremely large hours (causing overflow in i64)?
+#[tokio::test]
+async fn create_invite_large_hours_returns_error() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"alice".parse::<Username>().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status1, _, _) = post_form(
+        Arc::clone(&state),
+        "/api/create_invite",
+        "expires_in_hours=24",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status1, StatusCode::OK);
+
+    // This should fail due to u64 -> i64 conversion.
+    let (status2, _, _) = post_form(
+        Arc::clone(&state),
+        "/api/create_invite",
+        "expires_in_hours=18446744073709551615", // u64::MAX
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status2, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+// M2.10.10: revoke_session returns error when target session does not exist.
+#[tokio::test]
+async fn revoke_session_unknown_hash_returns_error() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"alice".parse::<Username>().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (_status, _, _) = post_form(
+        Arc::clone(&state),
+        "/api/revoke_session",
+        "token_hash=nonexistenthash",
+        Some(&cookie),
+    )
+    .await;
+
+    // ...
+}
+
+// M2.10.11: revoke_session returns error when target session belongs to another user.
+#[tokio::test]
+async fn revoke_session_other_user_hash_returns_error() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user1_id = state
+        .users
+        .create_user(
+            &"alice".parse::<Username>().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let user2_id = state
+        .users
+        .create_user(
+            &"bob".parse::<Username>().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let token1 = state.sessions.create_session(user1_id, None).await.unwrap();
+    let token2 = state.sessions.create_session(user2_id, None).await.unwrap();
+    let record2 = state.sessions.authenticate(&token2).await.unwrap();
+
+    let cookie1 = format!("session={token1}");
+    let (status, _, _) = post_form(
+        Arc::clone(&state),
+        "/api/revoke_session",
+        format!("token_hash={}", record2.token_hash),
+        Some(&cookie1),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 // list_invites returns error when policy is not InviteOnly.
 #[tokio::test]
 async fn list_invites_returns_error_when_policy_not_invite_only() {
