@@ -1,4 +1,7 @@
 pub mod auth;
+pub mod invites;
+pub mod profile;
+pub mod sessions;
 
 use crate::auth::{LoginPage, LogoutPage, RegisterPage};
 use leptos::prelude::*;

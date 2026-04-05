@@ -16,6 +16,8 @@ axum = { workspace = true, optional = true }
 common = { workspace = true, optional = true }
 http.workspace = true
 cfg-if.workspace = true
+chrono = { workspace = true, optional = true }
+serde.workspace = true
 thiserror.workspace = true
 
 [features]
@@ -27,6 +29,7 @@ ssr = [
     "leptos_router/ssr",
     "dep:leptos_axum",
     "dep:axum",
+    "dep:chrono",
     "dep:common",
 ]
 
