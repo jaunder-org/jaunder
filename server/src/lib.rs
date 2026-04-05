@@ -143,10 +143,10 @@ mod tests {
                 Request::builder()
                     .uri("/profile")
                     .body(Body::empty())
-                    .unwrap(),
+                    .expect("failed to build request"),
             )
             .await
-            .unwrap();
+            .expect("failed to get response");
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -158,33 +158,35 @@ mod tests {
                 Request::builder()
                     .uri("/sessions")
                     .body(Body::empty())
-                    .unwrap(),
+                    .expect("failed to build request"),
             )
             .await
-            .unwrap();
+            .expect("failed to get response");
         assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn invites_route_returns_not_found_when_policy_is_closed() {
-        // Default policy is Closed; InvitesPage sets 404 via SSR ResponseOptions.
-        // Leptos SSR resolves Suspense asynchronously after headers are sent,
-        // so the status is 200 but the body contains "Page not found."
+        // Default policy is Closed; InvitesPage sets "Page not found." body via Suspense.
+        // Leptos SSR resolves Suspense after headers are sent, so status is 200 even
+        // though the page shows "Page not found.". If Leptos ever emits 404 at the
+        // HTTP layer, this test should be updated to assert NOT_FOUND.
         let app = create_router(test_options(), test_state().await);
         let response = app
             .oneshot(
                 Request::builder()
                     .uri("/invites")
                     .body(Body::empty())
-                    .unwrap(),
+                    .expect("failed to build request"),
             )
             .await
-            .unwrap();
+            .expect("failed to get response");
+        assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
-            .unwrap();
-        let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("Page not found."));
+            .expect("failed to read body");
+        let html = String::from_utf8(body.to_vec()).expect("body is not valid UTF-8");
+        assert!(html.contains("Page not found."), "body: {html}");
     }
 
     #[tokio::test]
