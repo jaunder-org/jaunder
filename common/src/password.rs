@@ -97,4 +97,11 @@ mod tests {
         let p: Password = "supersecret".parse().unwrap();
         assert!(!format!("{p:?}").contains("supersecret"));
     }
+
+    #[test]
+    fn as_str_returns_original_value() {
+        let raw = "correct horse battery staple";
+        let p: Password = raw.parse().expect("password meets minimum length");
+        assert_eq!(p.as_str(), raw);
+    }
 }

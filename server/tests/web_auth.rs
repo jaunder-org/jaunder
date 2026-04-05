@@ -73,6 +73,42 @@ async fn post_form(
     (status, set_cookie, body_str)
 }
 
+/// Sends a form-encoded POST request through a fresh router built from `state`,
+/// attaching an `Authorization: Bearer <token>` header instead of a cookie.
+/// Returns (status, Set-Cookie header value, response body).
+async fn post_form_with_bearer(
+    state: Arc<server::storage::AppState>,
+    uri: &str,
+    body: impl Into<String>,
+    bearer_token: &str,
+) -> (StatusCode, Option<String>, String) {
+    ensure_server_fns_registered();
+
+    let request = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::AUTHORIZATION, format!("Bearer {bearer_token}"))
+        .body(Body::from(body.into()))
+        .expect("failed to build request with bearer token");
+
+    let app = server::create_router(test_options(), state);
+    let response = app.oneshot(request).await.expect("router oneshot failed");
+
+    let status = response.status();
+    let set_cookie = response.headers().get(header::SET_COOKIE).map(|v| {
+        v.to_str()
+            .expect("Set-Cookie header is not valid UTF-8")
+            .to_string()
+    });
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let body_str = String::from_utf8(bytes.to_vec()).expect("response body is not valid UTF-8");
+
+    (status, set_cookie, body_str)
+}
+
 /// Extracts a raw token from a server-function JSON response body.
 /// Successful server functions return a JSON string: `"<token>"`.
 fn extract_token(body: &str) -> String {
@@ -322,6 +358,151 @@ async fn logout_revokes_session_and_clears_cookie() {
     assert!(
         sessions_after.is_empty(),
         "session should be revoked after logout"
+    );
+}
+
+// register() with a username containing a space (invalid after lowercase parse) returns error.
+#[tokio::test]
+async fn register_invalid_username_returns_error() {
+    let base = TempDir::new().expect("failed to create temp dir");
+    let state = test_state(&base).await;
+    state
+        .site_config
+        .set("site.registration_policy", "open")
+        .await
+        .expect("failed to set registration policy");
+
+    // "alice doe" lowercases to "alice doe" which fails Username parse
+    // because Username only allows [a-z0-9_-]+.
+    let (status, _set_cookie, _body) = post_form(
+        Arc::clone(&state),
+        "/api/register",
+        "username=alice%20doe&password=password123",
+        None,
+    )
+    .await;
+
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "register with space in username should fail"
+    );
+}
+
+// register() with a password shorter than 8 characters returns error and creates no user.
+#[tokio::test]
+async fn register_short_password_returns_error() {
+    let base = TempDir::new().expect("failed to create temp dir");
+    let state = test_state(&base).await;
+    state
+        .site_config
+        .set("site.registration_policy", "open")
+        .await
+        .expect("failed to set registration policy");
+
+    let (status, _set_cookie, _body) = post_form(
+        Arc::clone(&state),
+        "/api/register",
+        "username=alice&password=short",
+        None,
+    )
+    .await;
+
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "register with short password should fail"
+    );
+
+    let user = state
+        .users
+        .get_user_by_username(&"alice".parse::<Username>().expect("valid username"))
+        .await
+        .expect("database query failed");
+    assert!(
+        user.is_none(),
+        "user should not be created when password is too short"
+    );
+}
+
+// login() with a username containing a space (invalid parse) returns error.
+#[tokio::test]
+async fn login_invalid_username_returns_error() {
+    let base = TempDir::new().expect("failed to create temp dir");
+    let state = test_state(&base).await;
+
+    let (status, _set_cookie, _body) = post_form(
+        Arc::clone(&state),
+        "/api/login",
+        "username=alice%20doe&password=password123",
+        None,
+    )
+    .await;
+
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "login with space in username should fail"
+    );
+}
+
+// logout() via Authorization: Bearer <token> revokes the session and clears the cookie.
+#[tokio::test]
+async fn logout_with_bearer_token_revokes_session() {
+    let base = TempDir::new().expect("failed to create temp dir");
+    let state = test_state(&base).await;
+
+    // Create a user and session directly so we have the raw token.
+    let user_id = state
+        .users
+        .create_user(
+            &"henry".parse::<Username>().expect("valid username"),
+            &"password123".parse().expect("valid password"),
+            None,
+        )
+        .await
+        .expect("failed to create user");
+    let raw_token = state
+        .sessions
+        .create_session(user_id, None)
+        .await
+        .expect("failed to create session");
+
+    let sessions_before = state
+        .sessions
+        .list_sessions(user_id)
+        .await
+        .expect("failed to list sessions");
+    assert_eq!(
+        sessions_before.len(),
+        1,
+        "one session should exist before logout"
+    );
+
+    // POST to /api/logout with Bearer token instead of a cookie.
+    let (status, set_cookie, _body) =
+        post_form_with_bearer(Arc::clone(&state), "/api/logout", "", &raw_token).await;
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "logout with bearer token should succeed"
+    );
+
+    let clear_cookie = set_cookie.expect("Set-Cookie header should be present on logout");
+    assert!(
+        clear_cookie.contains("Max-Age=0"),
+        "logout should clear cookie via Max-Age=0, got: {clear_cookie}"
+    );
+
+    let sessions_after = state
+        .sessions
+        .list_sessions(user_id)
+        .await
+        .expect("failed to list sessions after logout");
+    assert!(
+        sessions_after.is_empty(),
+        "session should be revoked after bearer-token logout"
     );
 }
 
