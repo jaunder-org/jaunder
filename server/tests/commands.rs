@@ -53,6 +53,22 @@ async fn cmd_init_skip_if_exists_succeeds_on_already_initialized() {
     cmd_init(&args, true).await.unwrap();
 }
 
+#[tokio::test]
+async fn cmd_init_fails_on_invalid_path() {
+    let base = TempDir::new().unwrap();
+    let args = storage_args(&base);
+    // Create a file where the storage directory should be, so create_dir fails
+    // with something other than AlreadyExists (actually it might be AlreadyExists or NotADirectory).
+    // Actually, let's use a path in a non-existent directory.
+    let args = StorageArgs {
+        storage_path: base.path().join("nonexistent").join("storage"),
+        db: args.db,
+    };
+
+    let result = cmd_init(&args, false).await;
+    assert!(result.is_err());
+}
+
 // M1.5.4: cmd_serve fails with an appropriate error when the storage path has
 // not been initialized.
 #[tokio::test]
@@ -158,4 +174,29 @@ async fn cmd_user_invite_creates_retrievable_invite() {
     let state = open_existing_database(&args.db).await.expect("open db");
     let invites = state.invites.list_invites().await.expect("list invites");
     assert_eq!(invites.len(), 1, "exactly one invite should exist");
+}
+
+#[tokio::test]
+async fn cmd_user_invite_default_expires_in() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base);
+    cmd_init(&args, false).await.expect("init");
+
+    cmd_user_invite(&args, None).await.expect("user invite");
+
+    let state = open_existing_database(&args.db).await.expect("open db");
+    let invites = state.invites.list_invites().await.expect("list invites");
+    assert_eq!(invites.len(), 1, "exactly one invite should exist");
+}
+
+#[tokio::test]
+async fn cmd_user_invite_too_large_expires_in_returns_error() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base);
+    cmd_init(&args, false).await.expect("init");
+
+    // u64::MAX is definitely too large for i64
+    let result = cmd_user_invite(&args, Some(u64::MAX)).await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("too large"));
 }

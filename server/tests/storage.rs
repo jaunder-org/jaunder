@@ -234,6 +234,15 @@ async fn update_profile_persists_changes() {
     assert_eq!(record.bio.as_deref(), Some("A bio"));
 }
 
+#[tokio::test]
+async fn get_user_unknown_id_returns_none() {
+    let base = TempDir::new().unwrap();
+    let users = user_storage(&base).await;
+
+    let record = users.get_user(999).await.unwrap();
+    assert!(record.is_none());
+}
+
 // --- SessionStorage integration tests ---
 
 #[tokio::test]
@@ -292,6 +301,15 @@ async fn revoke_session_then_authenticate_returns_session_not_found() {
 
     let err = sessions.authenticate(&raw_token).await.unwrap_err();
     assert!(matches!(err, SessionAuthError::SessionNotFound));
+}
+
+#[tokio::test]
+async fn authenticate_with_invalid_base64_token_returns_invalid_token() {
+    let base = TempDir::new().unwrap();
+    let (_, sessions) = storage_pair(&base).await;
+
+    let err = sessions.authenticate("not-base64!").await.unwrap_err();
+    assert!(matches!(err, SessionAuthError::InvalidToken));
 }
 
 #[tokio::test]

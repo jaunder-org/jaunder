@@ -148,4 +148,28 @@ mod tests {
             RegistrationPolicy::Closed
         );
     }
+
+    // --- generate_token / hash_token ---
+
+    #[test]
+    fn generate_token_returns_non_empty_string() {
+        let t1 = generate_token();
+        let t2 = generate_token();
+        assert!(!t1.is_empty());
+        assert!(!t2.is_empty());
+        assert_ne!(t1, t2);
+    }
+
+    #[test]
+    fn hash_token_roundtrips() {
+        let raw = generate_token();
+        let hash = hash_token(&raw).expect("hashing should succeed");
+        assert!(!hash.is_empty());
+        assert_ne!(raw, hash);
+    }
+
+    #[test]
+    fn hash_token_rejects_invalid_base64() {
+        assert!(hash_token("not base64!").is_err());
+    }
 }

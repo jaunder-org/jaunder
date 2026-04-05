@@ -104,4 +104,28 @@ mod tests {
         let p: Password = raw.parse().expect("password meets minimum length");
         assert_eq!(p.as_str(), raw);
     }
+
+    #[test]
+    fn hash_and_verify_roundtrip() {
+        let raw = "supersecretpassword";
+        let p: Password = raw.parse().unwrap();
+        let hash = p.hash().expect("hashing should succeed");
+        assert!(p.verify(&hash).expect("verification should succeed"));
+    }
+
+    #[test]
+    fn verify_rejects_wrong_password() {
+        let p1: Password = "password123".parse().unwrap();
+        let p2: Password = "wrongpassword".parse().unwrap();
+        let hash = p1.hash().unwrap();
+        assert!(!p2
+            .verify(&hash)
+            .expect("verification should return false, not error"));
+    }
+
+    #[test]
+    fn verify_rejects_invalid_hash() {
+        let p: Password = "password123".parse().unwrap();
+        assert!(p.verify("not a valid argon2 hash").is_err());
+    }
 }

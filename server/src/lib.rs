@@ -116,7 +116,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_route_returns_not_found() {
+    async fn unknown_route_returns_not_found_with_message() {
         let app = create_router(test_options(), test_state().await);
         let response = app
             .oneshot(
@@ -128,6 +128,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Page not found."));
     }
 
     #[tokio::test]

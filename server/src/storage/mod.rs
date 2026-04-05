@@ -239,4 +239,11 @@ mod tests {
         let err = init_storage(&storage).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
     }
+
+    #[test]
+    fn init_storage_fails_on_missing_parent() {
+        let storage = std::path::Path::new("/nonexistent/path/to/storage");
+        let result = init_storage(storage);
+        assert!(result.is_err());
+    }
 }
