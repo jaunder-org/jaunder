@@ -136,6 +136,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn profile_route_returns_ok() {
+        let app = create_router(test_options(), test_state().await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/profile")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn sessions_route_returns_ok() {
+        let app = create_router(test_options(), test_state().await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn invites_route_returns_not_found_when_policy_is_closed() {
+        // Default policy is Closed; InvitesPage sets 404 via SSR ResponseOptions.
+        // Leptos SSR resolves Suspense asynchronously after headers are sent,
+        // so the status is 200 but the body contains "Page not found."
+        let app = create_router(test_options(), test_state().await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/invites")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Page not found."));
+    }
+
+    #[tokio::test]
     async fn home_response_contains_app_content() {
         let app = create_router(test_options(), test_state().await);
         let response = app
