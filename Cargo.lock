@@ -3731,12 +3731,14 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "cfg-if",
+ "chrono",
  "common",
  "http",
  "leptos",
  "leptos_axum",
  "leptos_meta",
  "leptos_router",
+ "serde",
  "thiserror 2.0.18",
 ]
 
