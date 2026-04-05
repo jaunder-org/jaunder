@@ -13,6 +13,11 @@ codegen-units = 1
 lto = true
 opt-level = 'z'
 
+# Force web crate to a single CGU in test builds so inventory::submit! statics
+# are always linked when any web symbol is referenced.
+[profile.test.package.web]
+codegen-units = 1
+
 [workspace.dependencies]
 common = { path = "common" }
 leptos = { version = "0.8.2" }
