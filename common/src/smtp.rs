@@ -65,7 +65,7 @@ pub struct SmtpConfig {
     /// Optional SMTP auth password.
     pub password: Option<String>,
     /// Sender address (e.g. `"Jaunder <noreply@example.com>"`).
-    pub sender: String,
+    pub sender: email_address::EmailAddress,
 }
 
 // ---------------------------------------------------------------------------
@@ -81,6 +81,9 @@ pub struct SmtpConfig {
 /// - `smtp.port` defaults to `587`.
 /// - `smtp.tls_mode` defaults to `"starttls"`.
 /// - `smtp.sender` defaults to `"Jaunder <noreply@localhost>"`.
+///
+/// Returns `None` if `smtp.sender` is present but cannot be parsed as a valid
+/// email address, treating an invalid sender as a misconfigured mailer.
 pub async fn load_smtp_config(store: &dyn SiteConfigStorage) -> Option<SmtpConfig> {
     let host = store.get("smtp.host").await.ok().flatten()?;
 
@@ -104,12 +107,14 @@ pub async fn load_smtp_config(store: &dyn SiteConfigStorage) -> Option<SmtpConfi
 
     let password = store.get("smtp.password").await.ok().flatten();
 
-    let sender = store
+    let sender_str = store
         .get("smtp.sender")
         .await
         .ok()
         .flatten()
         .unwrap_or_else(|| "Jaunder <noreply@localhost>".to_owned());
+
+    let sender = sender_str.parse::<email_address::EmailAddress>().ok()?;
 
     Some(SmtpConfig {
         host,
@@ -200,7 +205,12 @@ mod tests {
         assert_eq!(config.tls_mode, SmtpTlsMode::Tls);
         assert_eq!(config.username, Some("user@example.com".to_owned()));
         assert_eq!(config.password, Some("s3cr3t".to_owned()));
-        assert_eq!(config.sender, "Jaunder <noreply@example.com>");
+        assert_eq!(
+            config.sender,
+            "Jaunder <noreply@example.com>"
+                .parse::<email_address::EmailAddress>()
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -214,6 +224,21 @@ mod tests {
         assert_eq!(config.tls_mode, SmtpTlsMode::StartTls);
         assert_eq!(config.username, None);
         assert_eq!(config.password, None);
-        assert_eq!(config.sender, "Jaunder <noreply@localhost>");
+        assert_eq!(
+            config.sender,
+            "Jaunder <noreply@localhost>"
+                .parse::<email_address::EmailAddress>()
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn load_smtp_config_returns_none_for_invalid_sender() {
+        let store = MapConfigStore(HashMap::from([
+            ("smtp.host", "mail.example.com"),
+            ("smtp.sender", "not-a-valid-email"),
+        ]));
+
+        assert!(load_smtp_config(&store).await.is_none());
     }
 }
