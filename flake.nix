@@ -71,6 +71,11 @@
           // {
             inherit cargoArtifacts;
             cargoExtraArgs = "-p server";
+            # Tests are covered by the separate `nextest` check, which runs
+            # each test in its own process.  Disabling here avoids a duplicate
+            # `cargo test` run that shares a process across async tests and can
+            # cause Leptos reactive state to leak between parallel tests.
+            doCheck = false;
           }
         );
 
@@ -187,6 +192,7 @@
               { pkgs, ... }:
               {
                 virtualisation.memorySize = 2048;
+                environment.systemPackages = [ pkgs.sqlite ];
 
                 systemd.services.jaunder = {
                   wantedBy = [ "multi-user.target" ];
@@ -223,6 +229,9 @@
               machine.start()
               machine.wait_for_unit("jaunder.service", timeout=60)
               machine.wait_for_open_port(3000, timeout=30)
+
+              machine.succeed("sqlite3 /var/lib/jaunder/data/jaunder.db \"INSERT OR REPLACE INTO site_config (key, value) VALUES ('site.registration_policy', 'open')\"")
+              machine.succeed("cd /var/lib/jaunder && ${serverBin}/bin/server user-create --username testlogin --password testpassword123")
 
               machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
               machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")

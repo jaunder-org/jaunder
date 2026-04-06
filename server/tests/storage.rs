@@ -1,9 +1,10 @@
 use chrono::Utc;
 use server::password::Password;
 use server::storage::{
-    create_user_with_invite, open_database, CreateUserError, DbConnectOptions, InviteStorage,
-    ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteInviteStorage,
-    SqliteSessionStorage, SqliteUserStorage, UseInviteError, UserAuthError, UserStorage,
+    open_database, AtomicOps, CreateUserError, DbConnectOptions, InviteStorage, ProfileUpdate,
+    RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteAtomicOps,
+    SqliteInviteStorage, SqliteSessionStorage, SqliteUserStorage, UseInviteError, UserAuthError,
+    UserStorage,
 };
 use server::username::Username;
 use sqlx::SqlitePool;
@@ -233,6 +234,15 @@ async fn update_profile_persists_changes() {
     assert_eq!(record.bio.as_deref(), Some("A bio"));
 }
 
+#[tokio::test]
+async fn get_user_unknown_id_returns_none() {
+    let base = TempDir::new().unwrap();
+    let users = user_storage(&base).await;
+
+    let record = users.get_user(999).await.unwrap();
+    assert!(record.is_none());
+}
+
 // --- SessionStorage integration tests ---
 
 #[tokio::test]
@@ -291,6 +301,15 @@ async fn revoke_session_then_authenticate_returns_session_not_found() {
 
     let err = sessions.authenticate(&raw_token).await.unwrap_err();
     assert!(matches!(err, SessionAuthError::SessionNotFound));
+}
+
+#[tokio::test]
+async fn authenticate_with_invalid_base64_token_returns_invalid_token() {
+    let base = TempDir::new().unwrap();
+    let (_, sessions) = storage_pair(&base).await;
+
+    let err = sessions.authenticate("not-base64!").await.unwrap_err();
+    assert!(matches!(err, SessionAuthError::InvalidToken));
 }
 
 #[tokio::test]
@@ -432,15 +451,15 @@ async fn create_user_with_invite_creates_user_and_marks_invite_used() {
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let code = invites.create_invite(expires_at).await.unwrap();
 
-    let user_id = create_user_with_invite(
-        &pool,
-        &username("alice"),
-        &password("password123"),
-        Some("Alice"),
-        &code,
-    )
-    .await
-    .unwrap();
+    let user_id = SqliteAtomicOps::new(pool.clone())
+        .create_user_with_invite(
+            &username("alice"),
+            &password("password123"),
+            Some("Alice"),
+            &code,
+        )
+        .await
+        .unwrap();
 
     // User was created
     let record = users.get_user(user_id).await.unwrap().unwrap();
@@ -463,25 +482,15 @@ async fn create_user_with_invite_second_call_returns_already_used() {
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let code = invites.create_invite(expires_at).await.unwrap();
 
-    create_user_with_invite(
-        &pool,
-        &username("alice"),
-        &password("password123"),
-        None,
-        &code,
-    )
-    .await
-    .unwrap();
+    SqliteAtomicOps::new(pool.clone())
+        .create_user_with_invite(&username("alice"), &password("password123"), None, &code)
+        .await
+        .unwrap();
 
-    let err = create_user_with_invite(
-        &pool,
-        &username("bob"),
-        &password("password123"),
-        None,
-        &code,
-    )
-    .await
-    .unwrap_err();
+    let err = SqliteAtomicOps::new(pool.clone())
+        .create_user_with_invite(&username("bob"), &password("password123"), None, &code)
+        .await
+        .unwrap_err();
 
     assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
 
@@ -503,15 +512,10 @@ async fn create_user_with_invite_expired_returns_invite_expired() {
     let expires_at = Utc::now() - chrono::Duration::hours(1);
     let code = invites.create_invite(expires_at).await.unwrap();
 
-    let err = create_user_with_invite(
-        &pool,
-        &username("alice"),
-        &password("password123"),
-        None,
-        &code,
-    )
-    .await
-    .unwrap_err();
+    let err = SqliteAtomicOps::new(pool.clone())
+        .create_user_with_invite(&username("alice"), &password("password123"), None, &code)
+        .await
+        .unwrap_err();
 
     assert!(matches!(err, RegisterWithInviteError::InviteExpired));
 
@@ -528,15 +532,15 @@ async fn create_user_with_invite_unknown_code_returns_not_found() {
     let base = TempDir::new().unwrap();
     let pool = open_pool(&base).await;
 
-    let err = create_user_with_invite(
-        &pool,
-        &username("alice"),
-        &password("password123"),
-        None,
-        "no-such-code",
-    )
-    .await
-    .unwrap_err();
+    let err = SqliteAtomicOps::new(pool.clone())
+        .create_user_with_invite(
+            &username("alice"),
+            &password("password123"),
+            None,
+            "no-such-code",
+        )
+        .await
+        .unwrap_err();
 
     assert!(matches!(err, RegisterWithInviteError::InviteNotFound));
 
@@ -564,15 +568,10 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken() {
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let code = invites.create_invite(expires_at).await.unwrap();
 
-    let err = create_user_with_invite(
-        &pool,
-        &username("alice"),
-        &password("other_password"),
-        None,
-        &code,
-    )
-    .await
-    .unwrap_err();
+    let err = SqliteAtomicOps::new(pool.clone())
+        .create_user_with_invite(&username("alice"), &password("other_password"), None, &code)
+        .await
+        .unwrap_err();
 
     assert!(matches!(err, RegisterWithInviteError::UsernameTaken));
 

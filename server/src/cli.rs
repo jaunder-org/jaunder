@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::storage::DbConnectOptions;
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 #[command(name = "jaunder", about = "A self-hosted social reader")]
 pub struct Cli {
     #[command(subcommand)]
@@ -12,7 +12,7 @@ pub struct Cli {
 }
 
 /// Arguments shared by subcommands that need access to the storage directory.
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct StorageArgs {
     /// Path to the storage directory (media, backups).
     #[arg(long, env = "JAUNDER_STORAGE_PATH", default_value = "./data")]
@@ -25,7 +25,7 @@ pub struct StorageArgs {
     pub db: DbConnectOptions,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 pub enum Commands {
     /// Initialize the storage directory and database.
     ///
@@ -51,6 +51,40 @@ pub enum Commands {
         /// Address and port to bind to.
         #[arg(long, env = "JAUNDER_BIND", default_value = "127.0.0.1:3000")]
         bind: SocketAddr,
+    },
+
+    /// Create a user account directly, bypassing the registration policy.
+    ///
+    /// Intended for bootstrapping an initial operator account. The storage
+    /// directory must already be initialized via `jaunder init`.
+    UserCreate {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// Username for the new account (must match [a-z0-9_-]+).
+        #[arg(long)]
+        username: String,
+
+        /// Password for the new account. If omitted, you will be prompted
+        /// interactively (input is hidden).
+        #[arg(long)]
+        password: Option<String>,
+
+        /// Optional display name.
+        #[arg(long)]
+        display_name: Option<String>,
+    },
+
+    /// Generate an invite code.
+    ///
+    /// The storage directory must already be initialized via `jaunder init`.
+    UserInvite {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// Hours until the invite code expires. Defaults to 168 (7 days).
+        #[arg(long)]
+        expires_in: Option<u64>,
     },
 }
 
@@ -229,5 +263,88 @@ mod tests {
             panic!("wrong variant");
         };
         assert_eq!(storage.db.to_string(), "sqlite:/tmp/from_env.db");
+    }
+
+    // --- user-create ---
+
+    #[test]
+    fn user_create_parses_username_and_password() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&[
+            "user-create",
+            "--username",
+            "alice",
+            "--password",
+            "secret123",
+        ]);
+        let Commands::UserCreate {
+            username,
+            password,
+            display_name,
+            ..
+        } = cli.command
+        else {
+            panic!("wrong variant");
+        };
+        assert_eq!(username, "alice");
+        assert_eq!(password, Some("secret123".to_owned()));
+        assert_eq!(display_name, None);
+    }
+
+    #[test]
+    fn user_create_parses_display_name() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&[
+            "user-create",
+            "--username",
+            "alice",
+            "--password",
+            "secret123",
+            "--display-name",
+            "Alice Smith",
+        ]);
+        let Commands::UserCreate { display_name, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(display_name, Some("Alice Smith".to_owned()));
+    }
+
+    #[test]
+    fn user_create_password_optional() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&["user-create", "--username", "alice"]);
+        let Commands::UserCreate { password, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(password, None);
+    }
+
+    #[test]
+    fn user_create_missing_username_is_clap_error() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let result = Cli::try_parse_from(["jaunder", "user-create", "--password", "secret123"]);
+        assert!(result.is_err());
+    }
+
+    // --- user-invite ---
+
+    #[test]
+    fn user_invite_parses_expires_in() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&["user-invite", "--expires-in", "48"]);
+        let Commands::UserInvite { expires_in, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(expires_in, Some(48));
+    }
+
+    #[test]
+    fn user_invite_expires_in_optional() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&["user-invite"]);
+        let Commands::UserInvite { expires_in, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(expires_in, None);
     }
 }

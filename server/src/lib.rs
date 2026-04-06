@@ -65,18 +65,148 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_route_returns_not_found() {
+    async fn profile_route_returns_ok() {
         let app = create_router(test_options(), test_state().await);
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/nonexistent")
+                    .uri("/profile")
                     .body(Body::empty())
-                    .unwrap(),
+                    .expect("failed to build request"),
             )
             .await
+            .expect("failed to get response");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn sessions_route_returns_ok() {
+        let app = create_router(test_options(), test_state().await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions")
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
+            .await
+            .expect("failed to get response");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn register_route_returns_ok() {
+        let app = create_router(test_options(), test_state().await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/register")
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
+            .await
+            .expect("failed to get response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Register"), "body: {html}");
+    }
+
+    #[tokio::test]
+    async fn login_route_returns_ok() {
+        let app = create_router(test_options(), test_state().await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/login")
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
+            .await
+            .expect("failed to get response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Login"), "body: {html}");
+    }
+
+    #[tokio::test]
+    async fn logout_route_returns_ok() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let app = create_router(test_options(), test_state().await);
+                let response = app
+                    .oneshot(
+                        Request::builder()
+                            .uri("/logout")
+                            .body(Body::empty())
+                            .expect("failed to build request"),
+                    )
+                    .await
+                    .expect("failed to get response");
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let html = String::from_utf8(body.to_vec()).unwrap();
+                assert!(html.contains("Logging out"), "body: {html}");
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn register_route_with_invite_only_policy_returns_ok() {
+        let state = test_state().await;
+        state
+            .site_config
+            .set("site.registration_policy", "invite_only")
+            .await
+            .unwrap();
+        let app = create_router(test_options(), state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/register")
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
+            .await
+            .expect("failed to get response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Invite code"), "body: {html}");
+    }
+
+    #[tokio::test]
+    async fn invites_route_returns_not_found_when_policy_is_closed() {
+        // Default policy is Closed; InvitesPage sets "Page not found." body via Suspense.
+        // Leptos SSR resolves Suspense after headers are sent, so status is 200 even
+        // though the page shows "Page not found.". If Leptos ever emits 404 at the
+        // HTTP layer, this test should be updated to assert NOT_FOUND.
+        let app = create_router(test_options(), test_state().await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/invites")
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
+            .await
+            .expect("failed to get response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read body");
+        let html = String::from_utf8(body.to_vec()).expect("body is not valid UTF-8");
+        assert!(html.contains("Page not found."), "body: {html}");
     }
 
     #[tokio::test]

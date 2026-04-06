@@ -6,8 +6,10 @@ use axum::{
 };
 use leptos::prelude::LeptosOptions;
 use server::cli::StorageArgs;
-use server::commands::{cmd_init, cmd_serve};
+use server::commands::{cmd_init, cmd_serve, cmd_user_create, cmd_user_invite};
+use server::password::Password;
 use server::storage::{open_database, open_existing_database, DbConnectOptions};
+use server::username::Username;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -49,6 +51,22 @@ async fn cmd_init_skip_if_exists_succeeds_on_already_initialized() {
 
     cmd_init(&args, false).await.unwrap();
     cmd_init(&args, true).await.unwrap();
+}
+
+#[tokio::test]
+async fn cmd_init_fails_on_invalid_path() {
+    let base = TempDir::new().unwrap();
+    let args = storage_args(&base);
+    // Create a file where the storage directory should be, so create_dir fails
+    // with something other than AlreadyExists (actually it might be AlreadyExists or NotADirectory).
+    // Actually, let's use a path in a non-existent directory.
+    let args = StorageArgs {
+        storage_path: base.path().join("nonexistent").join("storage"),
+        db: args.db,
+    };
+
+    let result = cmd_init(&args, false).await;
+    assert!(result.is_err());
 }
 
 // M1.5.4: cmd_serve fails with an appropriate error when the storage path has
@@ -121,4 +139,64 @@ async fn cmd_serve_starts_and_accepts_connections() {
 
     task.abort();
     assert!(connected, "server did not start within 1s");
+}
+
+#[tokio::test]
+async fn cmd_user_create_creates_retrievable_user() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base);
+    cmd_init(&args, false).await.expect("init");
+
+    let username: Username = "alice".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    cmd_user_create(&args, &username, Some(password), None)
+        .await
+        .expect("user create");
+
+    let state = open_existing_database(&args.db).await.expect("open db");
+    let user = state
+        .users
+        .get_user_by_username(&username)
+        .await
+        .expect("db query");
+    assert!(user.is_some(), "user should exist after creation");
+    assert_eq!(user.expect("user present").username.as_str(), "alice");
+}
+
+#[tokio::test]
+async fn cmd_user_invite_creates_retrievable_invite() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base);
+    cmd_init(&args, false).await.expect("init");
+
+    cmd_user_invite(&args, Some(48)).await.expect("user invite");
+
+    let state = open_existing_database(&args.db).await.expect("open db");
+    let invites = state.invites.list_invites().await.expect("list invites");
+    assert_eq!(invites.len(), 1, "exactly one invite should exist");
+}
+
+#[tokio::test]
+async fn cmd_user_invite_default_expires_in() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base);
+    cmd_init(&args, false).await.expect("init");
+
+    cmd_user_invite(&args, None).await.expect("user invite");
+
+    let state = open_existing_database(&args.db).await.expect("open db");
+    let invites = state.invites.list_invites().await.expect("list invites");
+    assert_eq!(invites.len(), 1, "exactly one invite should exist");
+}
+
+#[tokio::test]
+async fn cmd_user_invite_too_large_expires_in_returns_error() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base);
+    cmd_init(&args, false).await.expect("init");
+
+    // u64::MAX is definitely too large for i64
+    let result = cmd_user_invite(&args, Some(u64::MAX)).await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("too large"));
 }

@@ -1,16 +1,14 @@
 use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 
-use argon2::{
-    password_hash::{rand_core::OsRng, SaltString},
-    Argon2, PasswordHash, PasswordHasher, PasswordVerifier,
-};
 use async_trait::async_trait;
 
-use super::{
+use common::password::Password;
+use common::storage::{
     CreateUserError, InviteRecord, InviteStorage, ProfileUpdate, SessionAuthError, SessionRecord,
     SessionStorage, SiteConfigStorage, UseInviteError, UserAuthError, UserRecord, UserStorage,
 };
+use common::username::Username;
 
 // ---------------------------------------------------------------------------
 // SiteConfig
@@ -93,21 +91,15 @@ impl SqliteUserStorage {
 impl UserStorage for SqliteUserStorage {
     async fn create_user(
         &self,
-        username: &crate::username::Username,
-        password: &crate::password::Password,
+        username: &Username,
+        password: &Password,
         display_name: Option<&str>,
     ) -> Result<i64, CreateUserError> {
-        let password = password.as_str().to_owned();
-        let password_hash = tokio::task::spawn_blocking(move || -> Result<String, String> {
-            let salt = SaltString::generate(&mut OsRng);
-            Argon2::default()
-                .hash_password(password.as_bytes(), &salt)
-                .map(|h| h.to_string())
-                .map_err(|e| e.to_string())
-        })
-        .await
-        .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?
-        .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?;
+        let password = password.clone();
+        let password_hash = tokio::task::spawn_blocking(move || password.hash())
+            .await
+            .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?
+            .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?;
 
         let now = Utc::now();
 
@@ -134,8 +126,8 @@ impl UserStorage for SqliteUserStorage {
 
     async fn authenticate(
         &self,
-        username: &crate::username::Username,
-        password: &crate::password::Password,
+        username: &Username,
+        password: &Password,
     ) -> Result<UserRecord, UserAuthError> {
         let row = sqlx::query_as::<
             _,
@@ -163,21 +155,11 @@ impl UserStorage for SqliteUserStorage {
                 None => return Err(UserAuthError::InvalidCredentials),
             };
 
-        let password = password.as_str().to_owned();
-        let hash_clone = hash.clone();
-        let valid = tokio::task::spawn_blocking(move || {
-            let parsed = PasswordHash::new(&hash_clone).map_err(|e| e.to_string())?;
-            Argon2::default()
-                .verify_password(password.as_bytes(), &parsed)
-                .map(|_| true)
-                .or_else(|e| match e {
-                    argon2::password_hash::Error::Password => Ok(false),
-                    other => Err(other.to_string()),
-                })
-        })
-        .await
-        .map_err(|e| UserAuthError::Internal(e.to_string()))?
-        .map_err(UserAuthError::Internal)?;
+        let password = password.clone();
+        let valid = tokio::task::spawn_blocking(move || password.verify(&hash))
+            .await
+            .map_err(|e| UserAuthError::Internal(e.to_string()))?
+            .map_err(UserAuthError::Internal)?;
 
         if !valid {
             return Err(UserAuthError::InvalidCredentials);
@@ -215,10 +197,7 @@ impl UserStorage for SqliteUserStorage {
         Ok(row.map(user_record_from_row))
     }
 
-    async fn get_user_by_username(
-        &self,
-        username: &crate::username::Username,
-    ) -> sqlx::Result<Option<UserRecord>> {
+    async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at
              FROM users WHERE username = ?",
@@ -243,17 +222,6 @@ impl UserStorage for SqliteUserStorage {
 // ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
-
-fn hash_token(raw_token: &str) -> Result<String, SessionAuthError> {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-    use sha2::{Digest, Sha256};
-
-    let bytes = URL_SAFE_NO_PAD
-        .decode(raw_token)
-        .map_err(|_| SessionAuthError::InvalidToken)?;
-    let hash = Sha256::digest(&bytes);
-    Ok(URL_SAFE_NO_PAD.encode(hash))
-}
 
 type SessionRow = (
     String,
@@ -294,8 +262,8 @@ impl SqliteSessionStorage {
 impl SessionStorage for SqliteSessionStorage {
     async fn create_session(&self, user_id: i64, label: Option<&str>) -> sqlx::Result<String> {
         let raw_token = crate::auth::generate_token();
-        let token_hash = hash_token(&raw_token)
-            .map_err(|_| sqlx::Error::Io(std::io::Error::other("token hash failed")))?;
+        let token_hash = crate::auth::hash_token(&raw_token)
+            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
         let now = Utc::now();
 
         sqlx::query(
@@ -314,13 +282,10 @@ impl SessionStorage for SqliteSessionStorage {
     }
 
     async fn authenticate(&self, raw_token: &str) -> Result<SessionRecord, SessionAuthError> {
-        let token_hash = hash_token(raw_token)?;
+        let token_hash =
+            crate::auth::hash_token(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
 
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| SessionAuthError::SessionNotFound)?;
+        let mut tx = self.pool.begin().await?;
 
         let row = sqlx::query_as::<_, SessionRow>(
             "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
@@ -329,8 +294,7 @@ impl SessionStorage for SqliteSessionStorage {
         )
         .bind(&token_hash)
         .fetch_optional(&mut *tx)
-        .await
-        .map_err(|_| SessionAuthError::SessionNotFound)?
+        .await?
         .ok_or(SessionAuthError::SessionNotFound)?;
 
         let now = Utc::now();
@@ -339,12 +303,9 @@ impl SessionStorage for SqliteSessionStorage {
             .bind(now)
             .bind(&token_hash)
             .execute(&mut *tx)
-            .await
-            .map_err(|_| SessionAuthError::SessionNotFound)?;
+            .await?;
 
-        tx.commit()
-            .await
-            .map_err(|_| SessionAuthError::SessionNotFound)?;
+        tx.commit().await?;
 
         let mut record = session_record_from_row(row);
         record.last_used_at = now;

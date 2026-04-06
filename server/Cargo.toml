@@ -12,6 +12,7 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
+common.workspace = true
 web = { path = "../web", default-features = false, features = ["ssr"] }
 leptos = { workspace = true, features = [ "ssr" ]}
 leptos_axum.workspace = true
@@ -21,6 +22,7 @@ argon2.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 rand.workspace = true
+rpassword.workspace = true
 sha2.workspace = true
 axum.workspace = true
 clap.workspace = true
@@ -36,5 +38,6 @@ chrono.workspace = true
 [dev-dependencies]
 axum = { workspace = true }
 leptos = { workspace = true, features = ["ssr"] }
+server_fn = { version = "0.8", features = ["axum-no-default"] }
 tempfile.workspace = true
 tower = { workspace = true }
