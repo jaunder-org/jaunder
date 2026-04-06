@@ -1,4 +1,16 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+
+/** Wait for Leptos WASM hydration to complete before interacting with forms.
+ *
+ * Leptos sets `prop:value` bindings on controlled inputs during hydration,
+ * which resets any values filled before hydration completes. Waiting for
+ * `data-hydrated` (set by the WASM `hydrate()` function after
+ * `hydrate_body()` returns) ensures all reactive effects have run before
+ * Playwright fills form fields.
+ */
+async function waitForHydration(page: Page): Promise<void> {
+  await page.waitForSelector("body[data-hydrated]");
+}
 
 test("register page shows form", async ({ page }) => {
   await page.goto("http://localhost:3000/register");
@@ -10,6 +22,7 @@ test("register page shows form", async ({ page }) => {
 
 test("register with open policy succeeds", async ({ page }) => {
   await page.goto("http://localhost:3000/register");
+  await waitForHydration(page);
 
   await page.fill('input[name="username"]', "newuser");
   await page.fill('input[name="password"]', "newpassword123");
@@ -29,6 +42,7 @@ test("login page shows form", async ({ page }) => {
 
 test("login with valid credentials succeeds", async ({ page }) => {
   await page.goto("http://localhost:3000/login");
+  await waitForHydration(page);
 
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "testpassword123");
@@ -40,6 +54,7 @@ test("login with valid credentials succeeds", async ({ page }) => {
 
 test("login with wrong password shows error", async ({ page }) => {
   await page.goto("http://localhost:3000/login");
+  await waitForHydration(page);
 
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "wrongpassword!");
@@ -52,6 +67,7 @@ test("login with wrong password shows error", async ({ page }) => {
 test("logout page logs out", async ({ page }) => {
   // Log in first to establish a session
   await page.goto("http://localhost:3000/login");
+  await waitForHydration(page);
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "testpassword123");
   await page.click('button[type="submit"]');
