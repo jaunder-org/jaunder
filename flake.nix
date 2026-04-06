@@ -71,6 +71,11 @@
           // {
             inherit cargoArtifacts;
             cargoExtraArgs = "-p server";
+            # Tests are covered by the separate `nextest` check, which runs
+            # each test in its own process.  Disabling here avoids a duplicate
+            # `cargo test` run that shares a process across async tests and can
+            # cause Leptos reactive state to leak between parallel tests.
+            doCheck = false;
           }
         );
 
