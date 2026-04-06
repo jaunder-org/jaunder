@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
+use crate::mailer::MailSender;
 use crate::password::Password;
 use crate::username::Username;
 
@@ -199,6 +200,27 @@ pub trait AtomicOps: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
+// EmailVerification (stub — full trait added in M3.7)
+// ---------------------------------------------------------------------------
+
+/// Stub trait for email verification token storage.
+///
+/// The full interface (with `create_email_verification` and
+/// `use_email_verification`) is added in Step 7.  The stub is introduced here
+/// so that `AppState` can carry the field through to that step.
+pub trait EmailVerificationStorage: Send + Sync {}
+
+// ---------------------------------------------------------------------------
+// PasswordReset (stub — full trait added in M3.8)
+// ---------------------------------------------------------------------------
+
+/// Stub trait for password-reset token storage.
+///
+/// The full interface (with `create_password_reset` and
+/// `use_password_reset`) is added in Step 8.
+pub trait PasswordResetStorage: Send + Sync {}
+
+// ---------------------------------------------------------------------------
 // AppState
 // ---------------------------------------------------------------------------
 
@@ -212,4 +234,10 @@ pub struct AppState {
     /// `server` crate) holds the database pool so `common` and `web` stay
     /// free of SQLite implementation details.
     pub atomic: Arc<dyn AtomicOps>,
+    /// Email verification token storage (stub until Step 7).
+    pub email_verifications: Arc<dyn EmailVerificationStorage>,
+    /// Password reset token storage (stub until Step 8).
+    pub password_resets: Arc<dyn PasswordResetStorage>,
+    /// Outbound email sender.  `NoopMailSender` when SMTP is not configured.
+    pub mailer: Arc<dyn MailSender>,
 }

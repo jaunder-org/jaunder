@@ -580,3 +580,24 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken() {
     assert_eq!(list.len(), 1);
     assert!(list[0].used_at.is_none());
 }
+
+// --- AppState mailer tests ---
+
+#[tokio::test]
+async fn open_database_uses_noop_mailer_when_smtp_not_configured() {
+    let base = TempDir::new().unwrap();
+    let opts = sqlite_url(&base);
+    let state = open_database(&opts).await.unwrap();
+
+    let msg = common::mailer::EmailMessage {
+        from: None,
+        to: vec!["alice@example.com".parse().unwrap()],
+        subject: "Test".to_string(),
+        body_text: "Hello".to_string(),
+    };
+    let result = state.mailer.send_email(&msg).await;
+    assert!(
+        matches!(result, Err(common::mailer::MailError::NotConfigured)),
+        "expected NotConfigured, got {result:?}"
+    );
+}
