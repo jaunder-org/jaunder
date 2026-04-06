@@ -6,9 +6,10 @@ use async_trait::async_trait;
 
 use common::password::Password;
 use common::storage::{
-    CreateUserError, EmailVerificationStorage, InviteRecord, InviteStorage, ProfileUpdate,
-    SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage, UseEmailVerificationError,
-    UseInviteError, UserAuthError, UserRecord, UserStorage,
+    CreateUserError, EmailVerificationStorage, InviteRecord, InviteStorage, PasswordResetStorage,
+    ProfileUpdate, SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage,
+    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError, UserRecord,
+    UserStorage,
 };
 use common::username::Username;
 
@@ -264,6 +265,21 @@ impl UserStorage for SqliteUserStorage {
         sqlx::query("UPDATE users SET display_name = ?, bio = ? WHERE user_id = ?")
             .bind(update.display_name)
             .bind(update.bio)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn set_password(&self, user_id: i64, new_password: &Password) -> sqlx::Result<()> {
+        let password = new_password.clone();
+        let password_hash = tokio::task::spawn_blocking(move || password.hash())
+            .await
+            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?
+            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
+
+        sqlx::query("UPDATE users SET password_hash = ? WHERE user_id = ?")
+            .bind(&password_hash)
             .bind(user_id)
             .execute(&self.pool)
             .await?;
@@ -590,6 +606,83 @@ impl EmailVerificationStorage for SqliteEmailVerificationStorage {
             None => Err(UseEmailVerificationError::NotFound),
             Some((Some(_), _)) => Err(UseEmailVerificationError::AlreadyUsed),
             Some((None, _)) => Err(UseEmailVerificationError::Expired),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PasswordResets
+// ---------------------------------------------------------------------------
+
+/// SQLite-backed [`PasswordResetStorage`].
+pub struct SqlitePasswordResetStorage {
+    pool: SqlitePool,
+}
+
+impl SqlitePasswordResetStorage {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl PasswordResetStorage for SqlitePasswordResetStorage {
+    async fn create_password_reset(
+        &self,
+        user_id: i64,
+        expires_at: DateTime<Utc>,
+    ) -> sqlx::Result<String> {
+        let raw_token = crate::auth::generate_token();
+        let token_hash = crate::auth::hash_token(&raw_token)
+            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
+        let now = Utc::now();
+
+        sqlx::query(
+            "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(&token_hash)
+        .bind(user_id)
+        .bind(now)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(raw_token)
+    }
+
+    async fn use_password_reset(&self, raw_token: &str) -> Result<i64, UsePasswordResetError> {
+        let token_hash =
+            crate::auth::hash_token(raw_token).map_err(|_| UsePasswordResetError::NotFound)?;
+
+        let now = Utc::now();
+
+        let claimed = sqlx::query_as::<_, (i64,)>(
+            "UPDATE password_resets SET used_at = ?
+             WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
+             RETURNING user_id",
+        )
+        .bind(now)
+        .bind(&token_hash)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some((user_id,)) = claimed {
+            return Ok(user_id);
+        }
+
+        let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
+            "SELECT used_at, expires_at FROM password_resets WHERE token_hash = ?",
+        )
+        .bind(&token_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            None => Err(UsePasswordResetError::NotFound),
+            Some((Some(_), _)) => Err(UsePasswordResetError::AlreadyUsed),
+            Some((None, _)) => Err(UsePasswordResetError::Expired),
         }
     }
 }
