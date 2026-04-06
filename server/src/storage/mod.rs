@@ -9,12 +9,14 @@ use sqlx::SqlitePool;
 // them without a circular dependency.  Re-export everything for
 // backward-compatibility with existing server-crate consumers.
 pub use common::storage::{
-    AppState, AtomicOps, CreateUserError, InviteRecord, InviteStorage, ProfileUpdate,
-    RegisterWithInviteError, SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage,
-    UseInviteError, UserAuthError, UserRecord, UserStorage,
+    AppState, AtomicOps, CreateUserError, EmailVerificationStorage, InviteRecord, InviteStorage,
+    PasswordResetStorage, ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionRecord,
+    SessionStorage, SiteConfigStorage, UseInviteError, UserAuthError, UserRecord, UserStorage,
 };
 
+use common::mailer::{MailSender, NoopMailSender};
 use common::password::Password;
+use common::smtp::load_smtp_config;
 use common::username::Username;
 
 mod sqlite;
@@ -121,6 +123,24 @@ impl AtomicOps for SqliteAtomicOps {
 }
 
 // ---------------------------------------------------------------------------
+// Stub storage implementations
+// ---------------------------------------------------------------------------
+
+/// Stub implementation of [`EmailVerificationStorage`].
+///
+/// Has no methods at this stage (the trait is empty until Step 7).
+pub struct StubEmailVerificationStorage;
+
+impl EmailVerificationStorage for StubEmailVerificationStorage {}
+
+/// Stub implementation of [`PasswordResetStorage`].
+///
+/// Has no methods at this stage (the trait is empty until Step 8).
+pub struct StubPasswordResetStorage;
+
+impl PasswordResetStorage for StubPasswordResetStorage {}
+
+// ---------------------------------------------------------------------------
 // DbConnectOptions
 // ---------------------------------------------------------------------------
 
@@ -173,13 +193,16 @@ pub fn init_storage(path: &Path) -> io::Result<()> {
 // Database helpers
 // ---------------------------------------------------------------------------
 
-fn make_app_state(pool: SqlitePool) -> Arc<AppState> {
+fn make_app_state(pool: SqlitePool, mailer: Arc<dyn MailSender>) -> Arc<AppState> {
     Arc::new(AppState {
         site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
         users: Arc::new(SqliteUserStorage::new(pool.clone())),
         sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
         invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
         atomic: Arc::new(SqliteAtomicOps::new(pool)),
+        email_verifications: Arc::new(StubEmailVerificationStorage),
+        password_resets: Arc::new(StubPasswordResetStorage),
+        mailer,
     })
 }
 
@@ -197,11 +220,23 @@ async fn init_pool(opts: &DbConnectOptions, create_if_missing: bool) -> sqlx::Re
     }
 }
 
+async fn build_mailer(site_config: &SqliteSiteConfigStorage) -> Arc<dyn MailSender> {
+    match load_smtp_config(site_config).await {
+        Some(cfg) => match crate::mailer::LettreMailSender::from_config(&cfg) {
+            Ok(sender) => Arc::new(sender),
+            Err(_) => Arc::new(NoopMailSender),
+        },
+        None => Arc::new(NoopMailSender),
+    }
+}
+
 /// Opens (or creates) the database described by `opts`, runs pending
 /// migrations, and returns an [`AppState`] bundling all storage handles.
 pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     let pool = init_pool(opts, true).await?;
-    Ok(make_app_state(pool))
+    let site_config = SqliteSiteConfigStorage::new(pool.clone());
+    let mailer = build_mailer(&site_config).await;
+    Ok(make_app_state(pool, mailer))
 }
 
 /// Opens an existing database described by `opts`, runs pending migrations.
@@ -209,7 +244,9 @@ pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState
 /// Unlike [`open_database`], fails if the database does not already exist.
 pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     let pool = init_pool(opts, false).await?;
-    Ok(make_app_state(pool))
+    let site_config = SqliteSiteConfigStorage::new(pool.clone());
+    let mailer = build_mailer(&site_config).await;
+    Ok(make_app_state(pool, mailer))
 }
 
 #[cfg(test)]
