@@ -45,6 +45,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         } => {
             server::commands::cmd_user_invite(&storage, expires_in).await?;
         }
+        Commands::SmtpTest { storage, to } => {
+            server::commands::cmd_smtp_test(&storage, &to).await?;
+        }
     }
     Ok(())
 }
@@ -120,6 +123,34 @@ mod tests {
             },
         };
         run(cli).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_smtp_test_fails_when_smtp_not_configured() {
+        let base = TempDir::new().unwrap();
+        let storage = test_storage_args(&base);
+        run(Cli {
+            command: Commands::Init {
+                storage: storage.clone(),
+                skip_if_exists: false,
+            },
+        })
+        .await
+        .unwrap();
+
+        let cli = Cli {
+            command: Commands::SmtpTest {
+                storage,
+                to: "alice@example.com".to_string(),
+            },
+        };
+        let result = run(cli).await;
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("SMTP is not configured"),
+            "expected 'SMTP is not configured', got: {msg}"
+        );
     }
 
     #[tokio::test]
