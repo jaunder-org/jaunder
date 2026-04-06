@@ -206,8 +206,8 @@ impl UserStorage for SqliteUserStorage {
         Ok(UserRecord {
             user_id,
             username: username
-                .parse()
-                .expect("username stored in database is always valid"),
+                .parse::<Username>()
+                .map_err(|e| UserAuthError::Internal(e.to_string()))?,
             display_name,
             bio,
             created_at,
@@ -285,17 +285,17 @@ type SessionRow = (
 
 fn session_record_from_row(
     (token_hash, user_id, username, label, created_at, last_used_at): SessionRow,
-) -> SessionRecord {
-    SessionRecord {
+) -> Result<SessionRecord, sqlx::Error> {
+    Ok(SessionRecord {
         token_hash,
         user_id,
         username: username
-            .parse()
-            .expect("username stored in database is always valid"),
+            .parse::<Username>()
+            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e.to_string())))?,
         label,
         created_at,
         last_used_at,
-    }
+    })
 }
 
 /// SQLite-backed [`SessionStorage`].
@@ -358,7 +358,7 @@ impl SessionStorage for SqliteSessionStorage {
 
         tx.commit().await?;
 
-        let mut record = session_record_from_row(row);
+        let mut record = session_record_from_row(row)?;
         record.last_used_at = now;
         Ok(record)
     }
@@ -381,7 +381,7 @@ impl SessionStorage for SqliteSessionStorage {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows.into_iter().map(session_record_from_row).collect())
+        rows.into_iter().map(session_record_from_row).collect()
     }
 }
 
