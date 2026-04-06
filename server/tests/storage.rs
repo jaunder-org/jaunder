@@ -1,10 +1,10 @@
 use chrono::Utc;
 use server::password::Password;
 use server::storage::{
-    open_database, AtomicOps, CreateUserError, DbConnectOptions, InviteStorage, ProfileUpdate,
-    RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteAtomicOps,
-    SqliteInviteStorage, SqliteSessionStorage, SqliteUserStorage, UseInviteError, UserAuthError,
-    UserStorage,
+    open_database, AtomicOps, CreateUserError, DbConnectOptions, EmailVerificationStorage,
+    InviteStorage, ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionStorage,
+    SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage, SqliteSessionStorage,
+    SqliteUserStorage, UseEmailVerificationError, UseInviteError, UserAuthError, UserStorage,
 };
 use server::username::Username;
 use sqlx::SqlitePool;
@@ -37,6 +37,16 @@ async fn storage_pair(base: &TempDir) -> (SqliteUserStorage, SqliteSessionStorag
     (
         SqliteUserStorage::new(pool.clone()),
         SqliteSessionStorage::new(pool),
+    )
+}
+
+async fn email_verification_storage(
+    base: &TempDir,
+) -> (SqliteUserStorage, SqliteEmailVerificationStorage) {
+    let pool = open_pool(base).await;
+    (
+        SqliteUserStorage::new(pool.clone()),
+        SqliteEmailVerificationStorage::new(pool),
     )
 }
 
@@ -643,4 +653,129 @@ async fn set_email_clears_previously_set_email() {
     let record = users.get_user(user_id).await.unwrap().unwrap();
     assert!(record.email.is_none());
     assert!(!record.email_verified);
+}
+
+// --- EmailVerificationStorage integration tests ---
+
+#[tokio::test]
+async fn create_email_verification_and_use_returns_user_id_and_email() {
+    let base = TempDir::new().unwrap();
+    let (users, ev) = email_verification_storage(&base).await;
+
+    let user_id = users
+        .create_user(&username("alice"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let raw_token = ev
+        .create_email_verification(user_id, "alice@example.com", expires_at)
+        .await
+        .unwrap();
+
+    let (returned_user_id, returned_email) = ev.use_email_verification(&raw_token).await.unwrap();
+
+    assert_eq!(returned_user_id, user_id);
+    assert_eq!(returned_email, "alice@example.com");
+}
+
+#[tokio::test]
+async fn use_email_verification_already_used_returns_already_used() {
+    let base = TempDir::new().unwrap();
+    let (users, ev) = email_verification_storage(&base).await;
+
+    let user_id = users
+        .create_user(&username("alice"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let raw_token = ev
+        .create_email_verification(user_id, "alice@example.com", expires_at)
+        .await
+        .unwrap();
+
+    ev.use_email_verification(&raw_token).await.unwrap();
+
+    let err = ev.use_email_verification(&raw_token).await.unwrap_err();
+    assert!(
+        matches!(err, UseEmailVerificationError::AlreadyUsed),
+        "expected AlreadyUsed, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn use_email_verification_expired_returns_expired() {
+    let base = TempDir::new().unwrap();
+    let (users, ev) = email_verification_storage(&base).await;
+
+    let user_id = users
+        .create_user(&username("alice"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let expires_at = Utc::now() - chrono::Duration::hours(1);
+    let raw_token = ev
+        .create_email_verification(user_id, "alice@example.com", expires_at)
+        .await
+        .unwrap();
+
+    let err = ev.use_email_verification(&raw_token).await.unwrap_err();
+    assert!(
+        matches!(err, UseEmailVerificationError::Expired),
+        "expected Expired, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn use_email_verification_unknown_token_returns_not_found() {
+    let base = TempDir::new().unwrap();
+    let (_, ev) = email_verification_storage(&base).await;
+
+    let err = ev
+        .use_email_verification("not-a-real-token")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, UseEmailVerificationError::NotFound),
+        "expected NotFound, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn second_email_verification_supersedes_first() {
+    let base = TempDir::new().unwrap();
+    let (users, ev) = email_verification_storage(&base).await;
+
+    let user_id = users
+        .create_user(&username("alice"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let first_token = ev
+        .create_email_verification(user_id, "alice@example.com", expires_at)
+        .await
+        .unwrap();
+
+    // Create a second verification; the first should be superseded.
+    let second_token = ev
+        .create_email_verification(user_id, "alice2@example.com", expires_at)
+        .await
+        .unwrap();
+
+    // Second token works normally.
+    let (uid, email) = ev.use_email_verification(&second_token).await.unwrap();
+    assert_eq!(uid, user_id);
+    assert_eq!(email, "alice2@example.com");
+
+    // First token is now either NotFound or Expired.
+    let err = ev.use_email_verification(&first_token).await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            UseEmailVerificationError::NotFound | UseEmailVerificationError::Expired
+        ),
+        "expected NotFound or Expired for superseded token, got {err:?}"
+    );
 }
