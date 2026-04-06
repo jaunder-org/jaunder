@@ -11,7 +11,8 @@ use sqlx::SqlitePool;
 pub use common::storage::{
     AppState, AtomicOps, CreateUserError, EmailVerificationStorage, InviteRecord, InviteStorage,
     PasswordResetStorage, ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionRecord,
-    SessionStorage, SiteConfigStorage, UseInviteError, UserAuthError, UserRecord, UserStorage,
+    SessionStorage, SiteConfigStorage, UseEmailVerificationError, UseInviteError, UserAuthError,
+    UserRecord, UserStorage,
 };
 
 use common::mailer::{MailSender, NoopMailSender};
@@ -21,7 +22,8 @@ use common::username::Username;
 
 mod sqlite;
 pub use sqlite::{
-    SqliteInviteStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
+    SqliteEmailVerificationStorage, SqliteInviteStorage, SqliteSessionStorage,
+    SqliteSiteConfigStorage, SqliteUserStorage,
 };
 
 // ---------------------------------------------------------------------------
@@ -126,13 +128,6 @@ impl AtomicOps for SqliteAtomicOps {
 // Stub storage implementations
 // ---------------------------------------------------------------------------
 
-/// Stub implementation of [`EmailVerificationStorage`].
-///
-/// Has no methods at this stage (the trait is empty until Step 7).
-pub struct StubEmailVerificationStorage;
-
-impl EmailVerificationStorage for StubEmailVerificationStorage {}
-
 /// Stub implementation of [`PasswordResetStorage`].
 ///
 /// Has no methods at this stage (the trait is empty until Step 8).
@@ -199,8 +194,8 @@ fn make_app_state(pool: SqlitePool, mailer: Arc<dyn MailSender>) -> Arc<AppState
         users: Arc::new(SqliteUserStorage::new(pool.clone())),
         sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
         invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
-        atomic: Arc::new(SqliteAtomicOps::new(pool)),
-        email_verifications: Arc::new(StubEmailVerificationStorage),
+        atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
+        email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool)),
         password_resets: Arc::new(StubPasswordResetStorage),
         mailer,
     })

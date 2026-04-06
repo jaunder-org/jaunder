@@ -6,8 +6,9 @@ use async_trait::async_trait;
 
 use common::password::Password;
 use common::storage::{
-    CreateUserError, InviteRecord, InviteStorage, ProfileUpdate, SessionAuthError, SessionRecord,
-    SessionStorage, SiteConfigStorage, UseInviteError, UserAuthError, UserRecord, UserStorage,
+    CreateUserError, EmailVerificationStorage, InviteRecord, InviteStorage, ProfileUpdate,
+    SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage, UseEmailVerificationError,
+    UseInviteError, UserAuthError, UserRecord, UserStorage,
 };
 use common::username::Username;
 
@@ -485,5 +486,110 @@ impl InviteStorage for SqliteInviteStorage {
         .await?;
 
         Ok(rows.into_iter().map(invite_record_from_row).collect())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EmailVerifications
+// ---------------------------------------------------------------------------
+
+/// SQLite-backed [`EmailVerificationStorage`].
+pub struct SqliteEmailVerificationStorage {
+    pool: SqlitePool,
+}
+
+impl SqliteEmailVerificationStorage {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl EmailVerificationStorage for SqliteEmailVerificationStorage {
+    async fn create_email_verification(
+        &self,
+        user_id: i64,
+        email: &str,
+        expires_at: DateTime<Utc>,
+    ) -> sqlx::Result<String> {
+        let raw_token = crate::auth::generate_token();
+        let token_hash = crate::auth::hash_token(&raw_token)
+            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
+        let now = Utc::now();
+
+        let mut tx = self.pool.begin().await?;
+
+        // Supersede any existing pending token for this user by setting its
+        // expires_at to its created_at, making it appear immediately expired.
+        sqlx::query(
+            "UPDATE email_verifications
+             SET expires_at = created_at
+             WHERE user_id = ? AND used_at IS NULL AND expires_at > ?",
+        )
+        .bind(user_id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO email_verifications
+             (token_hash, user_id, email, created_at, expires_at)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&token_hash)
+        .bind(user_id)
+        .bind(email)
+        .bind(now)
+        .bind(expires_at)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(raw_token)
+    }
+
+    async fn use_email_verification(
+        &self,
+        raw_token: &str,
+    ) -> Result<(i64, String), UseEmailVerificationError> {
+        let token_hash =
+            crate::auth::hash_token(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
+
+        let now = Utc::now();
+
+        // Atomically claim the token: the UPDATE succeeds only when the token
+        // exists, has not yet been used, and has not expired.  This single
+        // statement is the "claim" — no separate read is needed first, so two
+        // concurrent requests cannot both succeed.  RETURNING gives us the
+        // data we need without a second round-trip.
+        let claimed = sqlx::query_as::<_, (i64, String)>(
+            "UPDATE email_verifications SET used_at = ?
+             WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
+             RETURNING user_id, email",
+        )
+        .bind(now)
+        .bind(&token_hash)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some((user_id, email)) = claimed {
+            return Ok((user_id, email));
+        }
+
+        // Zero rows affected — inspect the row to return the right error.
+        let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
+            "SELECT used_at, expires_at FROM email_verifications WHERE token_hash = ?",
+        )
+        .bind(&token_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            None => Err(UseEmailVerificationError::NotFound),
+            Some((Some(_), _)) => Err(UseEmailVerificationError::AlreadyUsed),
+            Some((None, _)) => Err(UseEmailVerificationError::Expired),
+        }
     }
 }
