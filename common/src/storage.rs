@@ -98,6 +98,10 @@ pub trait UserStorage: Send + Sync {
         email: Option<&EmailAddress>,
         verified: bool,
     ) -> sqlx::Result<()>;
+
+    /// Replaces the stored password hash for `user_id` with a hash of `new_password`.
+    /// Hashing is performed inside `spawn_blocking`, consistent with `create_user`.
+    async fn set_password(&self, user_id: i64, new_password: &Password) -> sqlx::Result<()>;
 }
 
 // ---------------------------------------------------------------------------
@@ -249,14 +253,36 @@ pub trait EmailVerificationStorage: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// PasswordReset (stub — full trait added in M3.8)
+// PasswordReset
 // ---------------------------------------------------------------------------
 
-/// Stub trait for password-reset token storage.
-///
-/// The full interface (with `create_password_reset` and
-/// `use_password_reset`) is added in Step 8.
-pub trait PasswordResetStorage: Send + Sync {}
+/// Errors returned by [`PasswordResetStorage::use_password_reset`].
+#[derive(Debug, Error)]
+pub enum UsePasswordResetError {
+    #[error("token not found")]
+    NotFound,
+    #[error("token has expired")]
+    Expired,
+    #[error("token has already been used")]
+    AlreadyUsed,
+    #[error(transparent)]
+    Internal(#[from] sqlx::Error),
+}
+
+/// Storage for password-reset tokens.
+#[async_trait]
+pub trait PasswordResetStorage: Send + Sync {
+    /// Stores a new reset token for `user_id` expiring at `expires_at`.
+    /// Returns the raw (un-hashed) token to be delivered to the user by email.
+    async fn create_password_reset(
+        &self,
+        user_id: i64,
+        expires_at: DateTime<Utc>,
+    ) -> sqlx::Result<String>;
+
+    /// Validates `raw_token`, marks it used, and returns `user_id`.
+    async fn use_password_reset(&self, raw_token: &str) -> Result<i64, UsePasswordResetError>;
+}
 
 // ---------------------------------------------------------------------------
 // AppState
