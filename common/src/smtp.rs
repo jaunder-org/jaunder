@@ -69,42 +69,61 @@ pub struct SmtpConfig {
 }
 
 // ---------------------------------------------------------------------------
+// SmtpConfigError
+// ---------------------------------------------------------------------------
+
+/// Errors returned when SMTP configuration is present but invalid.
+#[derive(Debug, Error)]
+pub enum SmtpConfigError {
+    /// `smtp.port` is set to a value that is not a valid port number.
+    #[error("smtp.port {0:?} is not a valid port number")]
+    InvalidPort(String),
+    /// `smtp.tls_mode` is set to an unrecognised value.
+    #[error("smtp.tls_mode {0:?} is not valid; expected \"plain\", \"starttls\", or \"tls\"")]
+    InvalidTlsMode(String),
+    /// `smtp.sender` is set to a value that cannot be parsed as an email address.
+    #[error("smtp.sender {0:?} is not a valid email address")]
+    InvalidSender(String),
+}
+
+// ---------------------------------------------------------------------------
 // load_smtp_config
 // ---------------------------------------------------------------------------
 
 /// Reads SMTP configuration from the site-config store.
 ///
-/// Returns `None` when `smtp.host` is absent — in that case the caller should
-/// use a no-op mailer. If `smtp.host` is present but other optional fields are
-/// absent or invalid, sensible defaults are used:
+/// Returns `Ok(None)` when `smtp.host` is absent — the caller should use a
+/// no-op mailer. Returns `Err` when `smtp.host` is present but another field
+/// holds an invalid value, so callers can surface a precise error message
+/// rather than silently treating misconfiguration as "not configured".
+///
+/// When optional fields are absent, sensible defaults apply:
 ///
 /// - `smtp.port` defaults to `587`.
 /// - `smtp.tls_mode` defaults to `"starttls"`.
 /// - `smtp.sender` defaults to `"Jaunder <noreply@localhost>"`.
-///
-/// Returns `None` if `smtp.sender` is present but cannot be parsed as a valid
-/// email address, treating an invalid sender as a misconfigured mailer.
-pub async fn load_smtp_config(store: &dyn SiteConfigStorage) -> Option<SmtpConfig> {
-    let host = store.get("smtp.host").await.ok().flatten()?;
+pub async fn load_smtp_config(
+    store: &dyn SiteConfigStorage,
+) -> Result<Option<SmtpConfig>, SmtpConfigError> {
+    let Some(host) = store.get("smtp.host").await.ok().flatten() else {
+        return Ok(None);
+    };
 
-    let port = store
-        .get("smtp.port")
-        .await
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<u16>().ok())
-        .unwrap_or(587);
+    let port = match store.get("smtp.port").await.ok().flatten() {
+        None => 587,
+        Some(v) => v
+            .parse::<u16>()
+            .map_err(|_| SmtpConfigError::InvalidPort(v))?,
+    };
 
-    let tls_mode = store
-        .get("smtp.tls_mode")
-        .await
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<SmtpTlsMode>().ok())
-        .unwrap_or(SmtpTlsMode::StartTls);
+    let tls_mode = match store.get("smtp.tls_mode").await.ok().flatten() {
+        None => SmtpTlsMode::StartTls,
+        Some(v) => v
+            .parse::<SmtpTlsMode>()
+            .map_err(|_| SmtpConfigError::InvalidTlsMode(v))?,
+    };
 
     let username = store.get("smtp.username").await.ok().flatten();
-
     let password = store.get("smtp.password").await.ok().flatten();
 
     let sender_str = store
@@ -114,16 +133,18 @@ pub async fn load_smtp_config(store: &dyn SiteConfigStorage) -> Option<SmtpConfi
         .flatten()
         .unwrap_or_else(|| "Jaunder <noreply@localhost>".to_owned());
 
-    let sender = sender_str.parse::<email_address::EmailAddress>().ok()?;
+    let sender = sender_str
+        .parse::<email_address::EmailAddress>()
+        .map_err(|_| SmtpConfigError::InvalidSender(sender_str))?;
 
-    Some(SmtpConfig {
+    Ok(Some(SmtpConfig {
         host,
         port,
         tls_mode,
         username,
         password,
         sender,
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +205,7 @@ mod tests {
     #[tokio::test]
     async fn load_smtp_config_returns_none_when_host_absent() {
         let store = MapConfigStore(HashMap::new());
-        assert!(load_smtp_config(&store).await.is_none());
+        assert!(load_smtp_config(&store).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -198,7 +219,10 @@ mod tests {
             ("smtp.sender", "Jaunder <noreply@example.com>"),
         ]));
 
-        let config = load_smtp_config(&store).await.expect("expected Some");
+        let config = load_smtp_config(&store)
+            .await
+            .unwrap()
+            .expect("expected Some");
 
         assert_eq!(config.host, "mail.example.com");
         assert_eq!(config.port, 465);
@@ -217,7 +241,10 @@ mod tests {
     async fn load_smtp_config_uses_defaults_for_missing_optional_fields() {
         let store = MapConfigStore(HashMap::from([("smtp.host", "relay.example.com")]));
 
-        let config = load_smtp_config(&store).await.expect("expected Some");
+        let config = load_smtp_config(&store)
+            .await
+            .unwrap()
+            .expect("expected Some");
 
         assert_eq!(config.host, "relay.example.com");
         assert_eq!(config.port, 587);
@@ -233,12 +260,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_smtp_config_returns_none_for_invalid_sender() {
+    async fn load_smtp_config_returns_err_for_invalid_sender() {
         let store = MapConfigStore(HashMap::from([
             ("smtp.host", "mail.example.com"),
             ("smtp.sender", "not-a-valid-email"),
         ]));
 
-        assert!(load_smtp_config(&store).await.is_none());
+        let err = load_smtp_config(&store).await.unwrap_err();
+        assert!(matches!(err, SmtpConfigError::InvalidSender(_)));
+    }
+
+    #[tokio::test]
+    async fn load_smtp_config_returns_err_for_invalid_port() {
+        let store = MapConfigStore(HashMap::from([
+            ("smtp.host", "mail.example.com"),
+            ("smtp.port", "not-a-port"),
+        ]));
+
+        let err = load_smtp_config(&store).await.unwrap_err();
+        assert!(matches!(err, SmtpConfigError::InvalidPort(_)));
+    }
+
+    #[tokio::test]
+    async fn load_smtp_config_returns_err_for_invalid_tls_mode() {
+        let store = MapConfigStore(HashMap::from([
+            ("smtp.host", "mail.example.com"),
+            ("smtp.tls_mode", "ssl"),
+        ]));
+
+        let err = load_smtp_config(&store).await.unwrap_err();
+        assert!(matches!(err, SmtpConfigError::InvalidTlsMode(_)));
     }
 }

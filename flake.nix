@@ -259,6 +259,9 @@
           '';
           nextest = craneLib.cargoNextest (commonArgs // {
             inherit cargoArtifacts;
+            preCheck = ''
+              export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
+            '';
           });
           deny = craneLib.cargoDeny { inherit src; pname = "jaunder"; version = "0.1.0"; };
           prettier-check = pkgs.runCommand "prettier-check" {
@@ -294,6 +297,9 @@
             pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
           ];
           RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
+          shellHook = ''
+            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [pkgs.openssl]}:$LD_LIBRARY_PATH"
+          '';
         };
       }
     );
