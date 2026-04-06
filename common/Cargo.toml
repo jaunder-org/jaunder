@@ -7,9 +7,13 @@ license = "GPL-3.0-only"
 [dependencies]
 argon2 = { workspace = true }
 async-trait.workspace = true
+email_address.workspace = true
 chrono.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+
+[features]
+test-utils = []
 
 [dev-dependencies]
 tokio = { workspace = true }
