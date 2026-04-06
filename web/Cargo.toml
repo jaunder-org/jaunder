@@ -20,6 +20,9 @@ chrono = { workspace = true, optional = true }
 serde.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+common = { workspace = true, features = ["test-utils"] }
+
 [features]
 default = []
 hydrate = ["leptos/hydrate"]

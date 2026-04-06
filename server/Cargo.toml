@@ -38,6 +38,7 @@ chrono.workspace = true
 
 [dev-dependencies]
 axum = { workspace = true }
+common = { workspace = true, features = ["test-utils"] }
 leptos = { workspace = true, features = ["ssr"] }
 server_fn = { version = "0.8", features = ["axum-no-default"] }
 tempfile.workspace = true
