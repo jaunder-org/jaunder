@@ -11,8 +11,8 @@ use sqlx::SqlitePool;
 pub use common::storage::{
     AppState, AtomicOps, CreateUserError, EmailVerificationStorage, InviteRecord, InviteStorage,
     PasswordResetStorage, ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionRecord,
-    SessionStorage, SiteConfigStorage, UseEmailVerificationError, UseInviteError, UserAuthError,
-    UserRecord, UserStorage,
+    SessionStorage, SiteConfigStorage, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserAuthError, UserRecord, UserStorage,
 };
 
 use common::mailer::{MailSender, NoopMailSender};
@@ -22,8 +22,8 @@ use common::username::Username;
 
 mod sqlite;
 pub use sqlite::{
-    SqliteEmailVerificationStorage, SqliteInviteStorage, SqliteSessionStorage,
-    SqliteSiteConfigStorage, SqliteUserStorage,
+    SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
+    SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
 };
 
 // ---------------------------------------------------------------------------
@@ -125,17 +125,6 @@ impl AtomicOps for SqliteAtomicOps {
 }
 
 // ---------------------------------------------------------------------------
-// Stub storage implementations
-// ---------------------------------------------------------------------------
-
-/// Stub implementation of [`PasswordResetStorage`].
-///
-/// Has no methods at this stage (the trait is empty until Step 8).
-pub struct StubPasswordResetStorage;
-
-impl PasswordResetStorage for StubPasswordResetStorage {}
-
-// ---------------------------------------------------------------------------
 // DbConnectOptions
 // ---------------------------------------------------------------------------
 
@@ -195,8 +184,8 @@ fn make_app_state(pool: SqlitePool, mailer: Arc<dyn MailSender>) -> Arc<AppState
         sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
         invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
         atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
-        email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool)),
-        password_resets: Arc::new(StubPasswordResetStorage),
+        email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
+        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool)),
         mailer,
     })
 }
