@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
+use email_address::EmailAddress;
+
 use crate::mailer::MailSender;
 use crate::password::Password;
 use crate::username::Username;
@@ -38,6 +40,8 @@ pub struct UserRecord {
     pub bio: Option<String>,
     pub created_at: DateTime<Utc>,
     pub last_authenticated_at: Option<DateTime<Utc>>,
+    pub email: Option<EmailAddress>,
+    pub email_verified: bool,
 }
 
 /// Errors that can occur when creating a user.
@@ -87,6 +91,13 @@ pub trait UserStorage: Send + Sync {
     async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>>;
 
     async fn update_profile(&self, user_id: i64, update: &ProfileUpdate<'_>) -> sqlx::Result<()>;
+
+    async fn set_email(
+        &self,
+        user_id: i64,
+        email: Option<&EmailAddress>,
+        verified: bool,
+    ) -> sqlx::Result<()>;
 }
 
 // ---------------------------------------------------------------------------

@@ -601,3 +601,46 @@ async fn open_database_uses_noop_mailer_when_smtp_not_configured() {
         "expected NotConfigured, got {result:?}"
     );
 }
+
+// --- UserStorage::set_email integration tests ---
+
+#[tokio::test]
+async fn set_email_persists_and_get_user_reflects_it() {
+    let base = TempDir::new().unwrap();
+    let users = user_storage(&base).await;
+
+    let user_id = users
+        .create_user(&username("alice"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let addr: email_address::EmailAddress = "alice@example.com".parse().unwrap();
+    users.set_email(user_id, Some(&addr), true).await.unwrap();
+
+    let record = users.get_user(user_id).await.unwrap().unwrap();
+    assert_eq!(
+        record.email.as_ref().map(|e| e.as_str()),
+        Some("alice@example.com")
+    );
+    assert!(record.email_verified);
+}
+
+#[tokio::test]
+async fn set_email_clears_previously_set_email() {
+    let base = TempDir::new().unwrap();
+    let users = user_storage(&base).await;
+
+    let user_id = users
+        .create_user(&username("bob"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let addr: email_address::EmailAddress = "bob@example.com".parse().unwrap();
+    users.set_email(user_id, Some(&addr), true).await.unwrap();
+
+    users.set_email(user_id, None, false).await.unwrap();
+
+    let record = users.get_user(user_id).await.unwrap().unwrap();
+    assert!(record.email.is_none());
+    assert!(!record.email_verified);
+}

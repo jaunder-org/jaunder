@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use email_address::EmailAddress;
 use sqlx::SqlitePool;
 
 use async_trait::async_trait;
@@ -59,21 +60,38 @@ type UserRow = (
     Option<String>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
+    Option<String>,
+    bool,
 );
 
 fn user_record_from_row(
-    (user_id, username, display_name, bio, created_at, last_authenticated_at): UserRow,
-) -> UserRecord {
-    UserRecord {
+    (
         user_id,
-        username: username
-            .parse()
-            .expect("username stored in database is always valid"),
+        username,
         display_name,
         bio,
         created_at,
         last_authenticated_at,
-    }
+        email,
+        email_verified,
+    ): UserRow,
+) -> sqlx::Result<UserRecord> {
+    let username = username
+        .parse()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let email = email
+        .map(|s| s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e))))
+        .transpose()?;
+    Ok(UserRecord {
+        user_id,
+        username,
+        display_name,
+        bio,
+        created_at,
+        last_authenticated_at,
+        email,
+        email_verified,
+    })
 }
 
 /// SQLite-backed [`UserStorage`].
@@ -139,9 +157,11 @@ impl UserStorage for SqliteUserStorage {
                 DateTime<Utc>,
                 Option<DateTime<Utc>>,
                 String,
+                Option<String>,
+                bool,
             ),
         >(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, password_hash
+            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, password_hash, email, email_verified
              FROM users WHERE username = ?",
         )
         .bind(username.as_str())
@@ -149,11 +169,20 @@ impl UserStorage for SqliteUserStorage {
         .await
         .map_err(|e| UserAuthError::Internal(e.to_string()))?;
 
-        let (user_id, username, display_name, bio, created_at, _last_authenticated_at, hash) =
-            match row {
-                Some(r) => r,
-                None => return Err(UserAuthError::InvalidCredentials),
-            };
+        let (
+            user_id,
+            username,
+            display_name,
+            bio,
+            created_at,
+            _last_authenticated_at,
+            hash,
+            email,
+            email_verified,
+        ) = match row {
+            Some(r) => r,
+            None => return Err(UserAuthError::InvalidCredentials),
+        };
 
         let password = password.clone();
         let valid = tokio::task::spawn_blocking(move || password.verify(&hash))
@@ -183,29 +212,51 @@ impl UserStorage for SqliteUserStorage {
             bio,
             created_at,
             last_authenticated_at: Some(now),
+            email: email
+                .map(|s| {
+                    s.parse::<EmailAddress>()
+                        .map_err(|e| UserAuthError::Internal(e.to_string()))
+                })
+                .transpose()?,
+            email_verified,
         })
     }
 
     async fn get_user(&self, user_id: i64) -> sqlx::Result<Option<UserRecord>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at
+            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, email, email_verified
              FROM users WHERE user_id = ?",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(user_record_from_row))
+        Ok(row.map(user_record_from_row).transpose()?)
     }
 
     async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at
+            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, email, email_verified
              FROM users WHERE username = ?",
         )
         .bind(username.as_str())
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(user_record_from_row))
+        Ok(row.map(user_record_from_row).transpose()?)
+    }
+
+    async fn set_email(
+        &self,
+        user_id: i64,
+        email: Option<&EmailAddress>,
+        verified: bool,
+    ) -> sqlx::Result<()> {
+        sqlx::query("UPDATE users SET email = ?, email_verified = ? WHERE user_id = ?")
+            .bind(email.map(EmailAddress::as_str))
+            .bind(verified)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     async fn update_profile(&self, user_id: i64, update: &ProfileUpdate<'_>) -> sqlx::Result<()> {

@@ -2722,6 +2722,7 @@ dependencies = [
  "chrono",
  "clap",
  "common",
+ "email_address",
  "leptos",
  "leptos_axum",
  "lettre",
