@@ -86,6 +86,20 @@ pub enum Commands {
         #[arg(long)]
         expires_in: Option<u64>,
     },
+
+    /// Send a test email via the configured SMTP relay.
+    ///
+    /// Loads SMTP configuration from the database and sends a test message to
+    /// the given address. Returns an error if SMTP is not configured.
+    /// The storage directory must already be initialized via `jaunder init`.
+    SmtpTest {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// Email address to send the test message to.
+        #[arg(long)]
+        to: String,
+    },
 }
 
 #[cfg(test)]
@@ -346,5 +360,24 @@ mod tests {
             panic!("wrong variant");
         };
         assert_eq!(expires_in, None);
+    }
+
+    // --- smtp-test ---
+
+    #[test]
+    fn smtp_test_parses_to() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&["smtp-test", "--to", "alice@example.com"]);
+        let Commands::SmtpTest { to, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(to, "alice@example.com");
+    }
+
+    #[test]
+    fn smtp_test_missing_to_is_clap_error() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let result = Cli::try_parse_from(["jaunder", "smtp-test"]);
+        assert!(result.is_err());
     }
 }

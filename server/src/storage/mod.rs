@@ -206,11 +206,11 @@ async fn init_pool(opts: &DbConnectOptions, create_if_missing: bool) -> sqlx::Re
 
 async fn build_mailer(site_config: &SqliteSiteConfigStorage) -> Arc<dyn MailSender> {
     match load_smtp_config(site_config).await {
-        Some(cfg) => match crate::mailer::LettreMailSender::from_config(&cfg) {
+        Ok(Some(cfg)) => match crate::mailer::LettreMailSender::from_config(&cfg) {
             Ok(sender) => Arc::new(sender),
             Err(_) => Arc::new(NoopMailSender),
         },
-        None => Arc::new(NoopMailSender),
+        Ok(None) | Err(_) => Arc::new(NoopMailSender),
     }
 }
 
