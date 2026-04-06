@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "common",
   "hydrate",
   "server",
   "web"
@@ -12,7 +13,13 @@ codegen-units = 1
 lto = true
 opt-level = 'z'
 
+# Force web crate to a single CGU in test builds so inventory::submit! statics
+# are always linked when any web symbol is referenced.
+[profile.test.package.web]
+codegen-units = 1
+
 [workspace.dependencies]
+common = { path = "common" }
 leptos = { version = "0.8.2" }
 leptos_meta = { version = "0.8.2" }
 leptos_router = { version = "0.8.2" }
@@ -27,10 +34,17 @@ console_log = "1.0.0"
 http = "1.3.1"
 log = "0.4.27"
 simple_logger = "5.0.0"
-sqlx = { version = "0.8", features = ["sqlite", "migrate", "runtime-tokio"] }
+sqlx = { version = "0.8", features = ["sqlite", "migrate", "runtime-tokio", "chrono"] }
+chrono = "0.4"
 tempfile = "3"
 anyhow = "1"
+argon2 = { version = "0.5", features = ["std"] }
+base64 = "0.22"
+rand = "0.9"
+sha2 = "0.10"
+rpassword = "7"
 thiserror = "2.0.12"
+serde = { version = "1", features = ["derive"] }
 tokio = { version = "1.45.0", features = ["full"] }
 tower = { version = "0.5.2", features = ["full"] }
 tower-http = { version = "0.6.4", features = ["full"] }

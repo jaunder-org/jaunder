@@ -1,3 +1,12 @@
+pub mod auth;
+pub mod invites;
+pub mod profile;
+pub mod sessions;
+
+use crate::auth::{LoginPage, LogoutPage, RegisterPage};
+use crate::invites::InvitesPage;
+use crate::profile::ProfilePage;
+use crate::sessions::SessionsPage;
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
@@ -39,6 +48,12 @@ pub fn App() -> impl IntoView {
             <main>
                 <Routes fallback=|| "Page not found.".into_view()>
                     <Route path=StaticSegment("") view=HomePage />
+                    <Route path=StaticSegment("register") view=RegisterPage />
+                    <Route path=StaticSegment("login") view=LoginPage />
+                    <Route path=StaticSegment("logout") view=LogoutPage />
+                    <Route path=StaticSegment("profile") view=ProfilePage />
+                    <Route path=StaticSegment("sessions") view=SessionsPage />
+                    <Route path=StaticSegment("invites") view=InvitesPage />
                 </Routes>
             </main>
         </Router>

@@ -1,0 +1,14 @@
+---
+root: false
+targets:
+  - '*'
+---
+- **Build**: cargo build
+- **Run all unit and integration tests**: cargo nextest run
+- **Run a single unit or integration test**: cargo nextest run -E 'test(name)'
+- **Run end to end tests**: nix flake check
+- **Lint**: cargo clippy -- -D warnings
+- **Format rust, javascript and typescript**: scripts/format <file>
+- **Check coverage baseline**: scripts/check-coverage
+- **Examine coverage**: cargo llvm-cov nextest
+- **Get detailed coverage information**: cargo llvm-cov nextest
