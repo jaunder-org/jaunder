@@ -9,10 +9,10 @@ use sqlx::SqlitePool;
 // them without a circular dependency.  Re-export everything for
 // backward-compatibility with existing server-crate consumers.
 pub use common::storage::{
-    AppState, AtomicOps, CreateUserError, EmailVerificationStorage, InviteRecord, InviteStorage,
-    PasswordResetStorage, ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionRecord,
-    SessionStorage, SiteConfigStorage, UseEmailVerificationError, UseInviteError,
-    UsePasswordResetError, UserAuthError, UserRecord, UserStorage,
+    AppState, AtomicOps, ConfirmPasswordResetError, CreateUserError, EmailVerificationStorage,
+    InviteRecord, InviteStorage, PasswordResetStorage, ProfileUpdate, RegisterWithInviteError,
+    SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage, UseEmailVerificationError,
+    UseInviteError, UsePasswordResetError, UserAuthError, UserRecord, UserStorage,
 };
 
 use crate::mailer::FileMailSender;
@@ -123,6 +123,79 @@ impl AtomicOps for SqliteAtomicOps {
 
         Ok(user_id)
     }
+
+    async fn confirm_password_reset(
+        &self,
+        raw_token: &str,
+        new_password: &Password,
+    ) -> Result<(), ConfirmPasswordResetError> {
+        let token_hash =
+            crate::auth::hash_token(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
+
+        let password = new_password.clone();
+        let password_hash = tokio::task::spawn_blocking(move || password.hash())
+            .await
+            .map_err(|e| {
+                ConfirmPasswordResetError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
+            })?
+            .map_err(|e| {
+                ConfirmPasswordResetError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
+            })?;
+
+        let mut tx = self.pool.begin().await?;
+        let now = chrono::Utc::now();
+
+        let claimed = sqlx::query_as::<_, (i64,)>(
+            "UPDATE password_resets SET used_at = ?\n             WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?\n             RETURNING user_id",
+        )
+        .bind(now)
+        .bind(&token_hash)
+        .bind(now)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let user_id = if let Some((user_id,)) = claimed {
+            user_id
+        } else {
+            let row = sqlx::query_as::<
+                _,
+                (
+                    Option<chrono::DateTime<chrono::Utc>>,
+                    chrono::DateTime<chrono::Utc>,
+                ),
+            >(
+                "SELECT used_at, expires_at FROM password_resets WHERE token_hash = ?"
+            )
+            .bind(&token_hash)
+            .fetch_optional(&mut *tx)
+            .await?;
+
+            tx.rollback().await.ok();
+
+            return match row {
+                None => Err(ConfirmPasswordResetError::NotFound),
+                Some((Some(_), _)) => Err(ConfirmPasswordResetError::AlreadyUsed),
+                Some((None, expires_at)) if expires_at <= now => {
+                    Err(ConfirmPasswordResetError::Expired)
+                }
+                Some((None, _)) => Err(ConfirmPasswordResetError::Expired),
+            };
+        };
+
+        sqlx::query("UPDATE users SET password_hash = ? WHERE user_id = ?")
+            .bind(&password_hash)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -207,14 +280,14 @@ async fn init_pool(opts: &DbConnectOptions, create_if_missing: bool) -> sqlx::Re
 
 async fn build_mailer(site_config: &SqliteSiteConfigStorage) -> Arc<dyn MailSender> {
     if let Ok(path) = std::env::var("JAUNDER_MAIL_CAPTURE_FILE") {
-        return Arc::new(FileMailSender::new(path));
+        return Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>;
     }
     match load_smtp_config(site_config).await {
         Ok(Some(cfg)) => match crate::mailer::LettreMailSender::from_config(&cfg) {
-            Ok(sender) => Arc::new(sender),
-            Err(_) => Arc::new(NoopMailSender),
+            Ok(sender) => Arc::new(sender) as Arc<dyn MailSender>,
+            Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
         },
-        Ok(None) | Err(_) => Arc::new(NoopMailSender),
+        Ok(None) | Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
     }
 }
 
