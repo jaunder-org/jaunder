@@ -17,6 +17,7 @@ common = { workspace = true, optional = true }
 http.workspace = true
 cfg-if.workspace = true
 chrono = { workspace = true, optional = true }
+email_address = { workspace = true, optional = true }
 serde.workspace = true
 thiserror.workspace = true
 
@@ -34,5 +35,6 @@ ssr = [
     "dep:axum",
     "dep:chrono",
     "dep:common",
+    "dep:email_address",
 ]
 

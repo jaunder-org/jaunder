@@ -203,6 +203,7 @@
                     LEPTOS_PKG_DIR = "pkg";
                     LEPTOS_ENV = "PROD";
                     RUST_LOG = "info";
+                    JAUNDER_MAIL_CAPTURE_FILE = "/tmp/jaunder-mail.jsonl";
                   };
                   preStart = ''
                     mkdir -p /var/lib/jaunder
@@ -239,6 +240,7 @@
                 "cd /tmp/e2e"
                 + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
                 + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+                + " JAUNDER_MAIL_CAPTURE_FILE=/tmp/jaunder-mail.jsonl"
                 + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
                 + " --config playwright.nix.config.js"
               )

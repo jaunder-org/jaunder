@@ -15,6 +15,7 @@ pub use common::storage::{
     UsePasswordResetError, UserAuthError, UserRecord, UserStorage,
 };
 
+use crate::mailer::FileMailSender;
 use common::mailer::{MailSender, NoopMailSender};
 use common::password::Password;
 use common::smtp::load_smtp_config;
@@ -205,6 +206,9 @@ async fn init_pool(opts: &DbConnectOptions, create_if_missing: bool) -> sqlx::Re
 }
 
 async fn build_mailer(site_config: &SqliteSiteConfigStorage) -> Arc<dyn MailSender> {
+    if let Ok(path) = std::env::var("JAUNDER_MAIL_CAPTURE_FILE") {
+        return Arc::new(FileMailSender::new(path));
+    }
     match load_smtp_config(site_config).await {
         Ok(Some(cfg)) => match crate::mailer::LettreMailSender::from_config(&cfg) {
             Ok(sender) => Arc::new(sender),
