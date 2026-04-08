@@ -1,5 +1,6 @@
 use crate::auth::{get_registration_policy, Login, Logout, Register};
 use leptos::prelude::*;
+use leptos_router::components::Redirect;
 
 /// Registration page.
 #[component]
@@ -80,8 +81,10 @@ pub fn LoginPage() -> impl IntoView {
             login_action
                 .value()
                 .get()
-                .and_then(|r: Result<String, ServerFnError>| r.err())
-                .map(|e| view! { <p class="error">{e.to_string()}</p> })
+                .map(|r: Result<String, ServerFnError>| match r {
+                    Ok(_) => view! { <Redirect path="/" /> }.into_any(),
+                    Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                })
         }}
     }
 }

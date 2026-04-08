@@ -2,6 +2,7 @@ pub mod auth;
 pub mod email;
 pub mod home;
 pub mod invites;
+pub mod password_reset;
 pub mod profile;
 pub mod sessions;
 
@@ -9,6 +10,7 @@ use crate::pages::auth::{LoginPage, LogoutPage, RegisterPage};
 use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
 use crate::pages::invites::InvitesPage;
+use crate::pages::password_reset::{ForgotPasswordPage, ResetPasswordPage};
 use crate::pages::profile::ProfilePage;
 use crate::pages::sessions::SessionsPage;
 use leptos::prelude::*;
@@ -42,6 +44,8 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("invites") view=InvitesPage />
                     <Route path=(StaticSegment("profile"), StaticSegment("email")) view=EmailPage />
                     <Route path=StaticSegment("verify-email") view=VerifyEmailPage />
+                    <Route path=StaticSegment("forgot-password") view=ForgotPasswordPage />
+                    <Route path=StaticSegment("reset-password") view=ResetPasswordPage />
                 </Routes>
             </main>
         </Router>

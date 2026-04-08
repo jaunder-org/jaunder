@@ -186,6 +186,13 @@ mod tests {
         assert!("TLS".parse::<SmtpTlsMode>().is_err());
     }
 
+    #[test]
+    fn tls_mode_display_renders_expected_strings() {
+        assert_eq!(SmtpTlsMode::Plain.to_string(), "plain");
+        assert_eq!(SmtpTlsMode::StartTls.to_string(), "starttls");
+        assert_eq!(SmtpTlsMode::Tls.to_string(), "tls");
+    }
+
     // -- load_smtp_config tests --
 
     /// Minimal in-memory implementation of [`SiteConfigStorage`] for tests.
@@ -198,8 +205,14 @@ mod tests {
         }
 
         async fn set(&self, _key: &str, _value: &str) -> sqlx::Result<()> {
-            unimplemented!("not needed in tests")
+            Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn map_config_store_set_returns_ok() {
+        let store = MapConfigStore(HashMap::new());
+        store.set("smtp.host", "mail.example.com").await.unwrap();
     }
 
     #[tokio::test]

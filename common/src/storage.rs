@@ -196,6 +196,19 @@ pub enum RegisterWithInviteError {
     Internal(#[from] sqlx::Error),
 }
 
+/// Errors returned by an atomic password-reset confirmation.
+#[derive(Debug, Error)]
+pub enum ConfirmPasswordResetError {
+    #[error("token not found")]
+    NotFound,
+    #[error("token has expired")]
+    Expired,
+    #[error("token has already been used")]
+    AlreadyUsed,
+    #[error(transparent)]
+    Internal(#[from] sqlx::Error),
+}
+
 /// Cross-table operations that span multiple storage traits and must be
 /// executed atomically.
 ///
@@ -212,6 +225,14 @@ pub trait AtomicOps: Send + Sync {
         display_name: Option<&str>,
         invite_code: &str,
     ) -> Result<i64, RegisterWithInviteError>;
+
+    /// Atomically consumes a password-reset token, updates the password, and
+    /// revokes all sessions for the user.
+    async fn confirm_password_reset(
+        &self,
+        raw_token: &str,
+        new_password: &Password,
+    ) -> Result<(), ConfirmPasswordResetError>;
 }
 
 // ---------------------------------------------------------------------------
