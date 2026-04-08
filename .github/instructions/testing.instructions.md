@@ -8,3 +8,4 @@
 - **In-Memory Database:** For tests requiring a database, use `sqlite::memory:` and run migrations using `sqlx::migrate!("./migrations").run(&pool).await?` before creating the `AppState`.
 - **Unwrap in Tests:** While `.unwrap()` and `.expect()` are forbidden in production code, they are **permitted and encouraged** in test functions and test helpers to signal immediate failure on setup errors.
 - **E2E Hydration:** In Playwright tests, call `waitForHydration(page)` (defined in `end2end/tests/auth.spec.ts`) before filling any form fields. Leptos `prop:value` bindings reset input values during WASM hydration; filling before hydration completes sends empty fields to the server.
+- **Leptos Components:** All `#[component]` functions live in `web/src/pages/` and are excluded from coverage metrics (they require a rendering runtime to execute). Keep server functions in the feature modules (`web/src/auth.rs`, `web/src/email.rs`, etc.).

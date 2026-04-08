@@ -1,6 +1,6 @@
 - `common` contains code shared between other packages
 - `server` contains the back-end
-- `web` contains leptos components
+- `web` contains leptos server functions (in `web/src/*.rs`) and page components (in `web/src/pages/`)
 - `hydrate` contains the front-end driver
 - `end2end` contains the end-to-end tests
 - Use Rust's type system to make invalid states impossible using infallible types.

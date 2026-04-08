@@ -1,0 +1,5 @@
+- Use `sqlx` for database access.
+- Support `SQLite` and `PostgreSQL`, dynamically selected at runtime.
+- **Migrations:** Store all SQL migrations in `server/migrations`.
+- **Naming:** Follow the `000x_description.sql` numbering convention.
+- **Integrity:** Use `sqlx` unique violation checks (`is_unique_violation()`) to handle "already exists" errors (e.g., for usernames or invite codes) gracefully.
