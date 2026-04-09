@@ -6,7 +6,7 @@ Rename workspace crates to names that will age well, install git hooks for pre-c
 
 ## M1: Deployment bootstrap
 
-The `jaunder init` command: reads bootstrap config (bind address and storage path from CLI args or `JAUNDER_*` environment variables), runs the initial guided setup, creates the database, and applies the initial schema migrations. Without this milestone there is no runnable instance.
+The `jaunder init` command: reads bootstrap config (bind address and storage path from CLI args or `JAUNDER_*` environment variables), runs the initial guided setup, creates the database where supported by the selected backend, and applies the initial schema migrations. Without this milestone there is no runnable instance.
 
 ## M2: User management
 
