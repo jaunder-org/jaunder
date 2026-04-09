@@ -320,7 +320,7 @@ async fn open_sqlite_database(
         options = options.create_if_missing(true);
     }
     let pool = sqlx::SqlitePool::connect_with(options).await?;
-    sqlx::migrate!("./migrations").run(&pool).await?;
+    sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     let site_config = SqliteSiteConfigStorage::new(pool.clone());
     let mailer = build_mailer(&site_config).await;
     Ok(make_app_state(pool, mailer))
@@ -328,6 +328,7 @@ async fn open_sqlite_database(
 
 async fn open_postgres_database(options: &PgConnectOptions) -> sqlx::Result<Arc<AppState>> {
     let pool = PgPool::connect_with(options.clone()).await?;
+    sqlx::migrate!("./migrations/postgres").run(&pool).await?;
     let site_config = PostgresSiteConfigStorage::new(pool.clone());
     let mailer = build_mailer(&site_config).await;
     Ok(make_postgres_app_state(pool, mailer))

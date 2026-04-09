@@ -1,13 +1,15 @@
 use chrono::Utc;
 use jaunder::password::Password;
 use jaunder::storage::{
-    open_database, AtomicOps, CreateUserError, DbConnectOptions, EmailVerificationStorage,
-    InviteStorage, PasswordResetStorage, ProfileUpdate, RegisterWithInviteError, SessionAuthError,
-    SessionStorage, SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
-    SqlitePasswordResetStorage, SqliteSessionStorage, SqliteUserStorage, UseEmailVerificationError,
-    UseInviteError, UsePasswordResetError, UserAuthError, UserStorage,
+    open_database, open_existing_database, AtomicOps, CreateUserError, DbConnectOptions,
+    EmailVerificationStorage, InviteStorage, PasswordResetStorage, ProfileUpdate,
+    RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteAtomicOps,
+    SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
+    SqliteSessionStorage, SqliteUserStorage, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserAuthError, UserStorage,
 };
 use jaunder::username::Username;
+use sqlx::PgPool;
 use sqlx::SqlitePool;
 use tempfile::TempDir;
 
@@ -25,7 +27,10 @@ async fn open_pool(base: &TempDir) -> SqlitePool {
     let pool = SqlitePool::connect_with(opts.create_if_missing(true))
         .await
         .unwrap();
-    sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+    sqlx::migrate!("./migrations/sqlite")
+        .run(&pool)
+        .await
+        .unwrap();
     pool
 }
 
@@ -34,6 +39,21 @@ fn postgres_url() -> DbConnectOptions {
         .unwrap_or_else(|_| "postgres://jaunder@127.0.0.1:55432/jaunder".to_owned())
         .parse()
         .unwrap()
+}
+
+async fn reset_postgres_schema() {
+    let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
+        panic!("expected postgres options");
+    };
+    let pool = PgPool::connect_with(options).await.unwrap();
+    sqlx::query("DROP SCHEMA public CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("CREATE SCHEMA public")
+        .execute(&pool)
+        .await
+        .unwrap();
 }
 
 async fn user_storage(base: &TempDir) -> SqliteUserStorage {
@@ -145,7 +165,24 @@ fn unsupported_url_is_rejected_at_parse_time() {
 #[tokio::test]
 #[ignore = "requires PostgreSQL test VM"]
 async fn open_database_succeeds_on_postgres_test_vm() {
+    reset_postgres_schema().await;
     open_database(&postgres_url()).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn open_database_runs_postgres_migrations_on_existing_empty_db() {
+    reset_postgres_schema().await;
+    let state = open_database(&postgres_url()).await.unwrap();
+    assert!(state.site_config.get("missing").await.is_err());
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db() {
+    reset_postgres_schema().await;
+    let state = open_existing_database(&postgres_url()).await.unwrap();
+    assert!(state.site_config.get("missing").await.is_err());
 }
 
 // --- UserStorage integration tests ---
