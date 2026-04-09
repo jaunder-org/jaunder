@@ -4,12 +4,12 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use jaunder::cli::StorageArgs;
+use jaunder::commands::{cmd_init, cmd_serve, cmd_smtp_test, cmd_user_create, cmd_user_invite};
+use jaunder::password::Password;
+use jaunder::storage::{open_database, open_existing_database, DbConnectOptions};
+use jaunder::username::Username;
 use leptos::prelude::LeptosOptions;
-use server::cli::StorageArgs;
-use server::commands::{cmd_init, cmd_serve, cmd_smtp_test, cmd_user_create, cmd_user_invite};
-use server::password::Password;
-use server::storage::{open_database, open_existing_database, DbConnectOptions};
-use server::username::Username;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -77,7 +77,7 @@ async fn cmd_serve_fails_when_not_initialized() {
     let args = storage_args(&base);
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
 
-    let result = cmd_serve(&args, bind).await;
+    let result = cmd_serve(&args, bind, true).await;
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -97,7 +97,7 @@ async fn after_init_server_responds_to_health_check() {
 
     let db = open_existing_database(&args.db).await.unwrap();
     let leptos_options = LeptosOptions::builder().output_name("test").build();
-    let router = server::create_router(leptos_options, db);
+    let router = jaunder::create_router(leptos_options, db, true);
 
     let response = router
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
@@ -124,7 +124,7 @@ async fn cmd_serve_starts_and_accepts_connections() {
     let db = args.db.clone();
     let task = tokio::spawn(async move {
         let storage = StorageArgs { storage_path, db };
-        let _ = cmd_serve(&storage, bind).await;
+        let _ = cmd_serve(&storage, bind, true).await;
     });
 
     // Poll until the server accepts TCP connections (up to 1 s).
