@@ -20,6 +20,10 @@ SMTP site config (relay host, port, credentials, sender address). Optional email
 
 Adds PostgreSQL as a second database backend selectable at runtime. The backend is chosen via the `--db` bootstrap flag (or `JAUNDER_DB` environment variable), which accepts a URL encoding both engine and connection parameters (`sqlite:./data` or `postgres://...`); SQLite remains the default for small deployments. All M1–M3 application features are fully supported on both backends. The implementation uses separate SQLite and PostgreSQL storage implementations sharing traits, helper functions, and migration structure where practical, while each backend retains its own concrete pool type and native SQL types. A `jaunder migrate-db --to <url>` command transfers all data from the current backend to a new one, allowing operators to move between SQLite and PostgreSQL (or back) without data loss. Full-text search uses `tsvector` columns and GIN indexes on the PostgreSQL backend instead of SQLite FTS5.
 
+From M4 onward, persisted-feature milestones must maintain backend parity: ship both migration
+trees in the same change, implement storage-trait changes on both backends before merge, and add
+tests for both backends unless a temporary backend-specific deferral is documented explicitly.
+
 ## M5: Simple blog
 
 Users can write posts and read them back. Builds on the auth layer from M2: publishing (Markdown in, HTML out), cursor-paginated public local timeline at `/` and per-user timeline at `/~:username/`, and a basic web UI wired to all of the above.

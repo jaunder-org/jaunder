@@ -52,6 +52,13 @@ SKIP_E2E=1 git push
 - Commits reference the milestone item they address, e.g. `M0.1.1: Rename app/ to web/`.
 - Every commit must include appropriate tests; coverage must remain at 100%.
 
+## Backend parity rules
+
+- Any change that adds persisted state must include both a SQLite migration and a PostgreSQL migration in the same change.
+- Any change that alters a storage trait or persisted behavior must implement the change on both backends before merge.
+- New storage-backed tests must either cover both backends or state explicitly why one backend is intentionally deferred.
+- Backend-specific optimizations are allowed, but user-visible behavior differences must be documented explicitly up front.
+
 ## NixOS integration
 
 - The shared NixOS module is `nixosModules.jaunder`.
