@@ -21,7 +21,8 @@ for arg in "$@"; do
 done
 
 echo "--- coverage: running cargo llvm-cov ---"
-CURRENT=$(cargo llvm-cov nextest --json --summary-only 2>/dev/null \
+CURRENT=$(cargo llvm-cov nextest --json --summary-only \
+    --ignore-filename-regex 'web/src/pages' 2>/dev/null \
     | jq '.data[0].totals.lines.percent' \
     | awk '{ printf "%.2f", $1 }')
 

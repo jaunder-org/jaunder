@@ -203,6 +203,7 @@
                     LEPTOS_PKG_DIR = "pkg";
                     LEPTOS_ENV = "PROD";
                     RUST_LOG = "info";
+                    JAUNDER_MAIL_CAPTURE_FILE = "/tmp/jaunder-mail.jsonl";
                   };
                   preStart = ''
                     mkdir -p /var/lib/jaunder
@@ -239,6 +240,7 @@
                 "cd /tmp/e2e"
                 + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
                 + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+                + " JAUNDER_MAIL_CAPTURE_FILE=/tmp/jaunder-mail.jsonl"
                 + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
                 + " --config playwright.nix.config.js"
               )
@@ -259,6 +261,9 @@
           '';
           nextest = craneLib.cargoNextest (commonArgs // {
             inherit cargoArtifacts;
+            preCheck = ''
+              export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
+            '';
           });
           deny = craneLib.cargoDeny { inherit src; pname = "jaunder"; version = "0.1.0"; };
           prettier-check = pkgs.runCommand "prettier-check" {
@@ -294,6 +299,9 @@
             pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
           ];
           RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
+          shellHook = ''
+            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [pkgs.openssl]}:$LD_LIBRARY_PATH"
+          '';
         };
       }
     );
