@@ -33,6 +33,7 @@
     }:
     let
       interactiveTestingVmSystem = "x86_64-linux";
+      postgresTestingVmSystem = "x86_64-linux";
       mailCaptureEnv = {
         JAUNDER_MAIL_CAPTURE_FILE = "/var/lib/jaunder/mail.jsonl";
       };
@@ -168,10 +169,74 @@
         modules = [ interactiveTestingVmModule ];
       };
 
+      postgresTestingVmModule =
+        {
+          lib,
+          pkgs,
+          ...
+        }:
+        {
+          networking.hostName = "jaunder-postgres-testing";
+
+          virtualisation.vmVariant = {
+            virtualisation.graphics = false;
+            virtualisation.forwardPorts = [
+              {
+                from = "host";
+                host.port = 55432;
+                guest.port = 5432;
+              }
+            ];
+          };
+
+          boot.loader.grub.devices = [ "nodev" ];
+          fileSystems."/" = {
+            device = "tmpfs";
+            fsType = "tmpfs";
+          };
+
+          networking.firewall.allowedTCPPorts = [ 5432 ];
+
+          services.postgresql = {
+            enable = true;
+            package = pkgs.postgresql_16;
+            ensureDatabases = [ "jaunder" ];
+            ensureUsers = [
+              {
+                name = "jaunder";
+                ensureDBOwnership = true;
+              }
+            ];
+            authentication = ''
+              local all all trust
+              host all all 0.0.0.0/0 trust
+              host all all ::0/0 trust
+            '';
+            settings = {
+              listen_addresses = lib.mkForce "*";
+            };
+            initialScript = pkgs.writeText "jaunder-postgres-init.sql" ''
+              ALTER ROLE jaunder WITH LOGIN;
+            '';
+          };
+
+          environment.systemPackages = [
+            pkgs.postgresql_16
+          ];
+
+          system.stateVersion = "26.05";
+        };
+
+      postgresTestingVmConfiguration = nixpkgs.lib.nixosSystem {
+        system = postgresTestingVmSystem;
+        modules = [ postgresTestingVmModule ];
+      };
+
     in
     {
       nixosModules.jaunder = jaunderModule;
       nixosConfigurations.interactive-testing-vm = interactiveTestingVmConfiguration;
+      nixosConfigurations.postgres-testing-vm = postgresTestingVmConfiguration;
     }
     // flake-utils.lib.eachDefaultSystem (
       system:
@@ -331,6 +396,14 @@
           '';
         };
 
+        postgresTestingVmRunner = pkgs.writeShellApplication {
+          name = "postgres-testing-vm";
+          text = ''
+            echo "PostgreSQL: postgres://jaunder@127.0.0.1:55432/jaunder"
+            exec ${postgresTestingVmConfiguration.config.system.build.vm}/bin/run-jaunder-postgres-testing-vm "$@"
+          '';
+        };
+
       in
       {
         packages = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
@@ -345,6 +418,10 @@
               interactive-testing-vm = {
                 type = "app";
                 program = "${interactiveTestingVmRunner}/bin/interactive-testing-vm";
+              };
+              postgres-testing-vm = {
+                type = "app";
+                program = "${postgresTestingVmRunner}/bin/postgres-testing-vm";
               };
             };
 
