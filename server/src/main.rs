@@ -1,5 +1,5 @@
 use clap::Parser;
-use server::cli::{Cli, Commands};
+use jaunder::cli::{Cli, Commands};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -13,10 +13,14 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             storage,
             skip_if_exists,
         } => {
-            server::commands::cmd_init(&storage, skip_if_exists).await?;
+            jaunder::commands::cmd_init(&storage, skip_if_exists).await?;
         }
-        Commands::Serve { storage, bind } => {
-            server::commands::cmd_serve(&storage, bind).await?;
+        Commands::Serve {
+            storage,
+            bind,
+            environment,
+        } => {
+            jaunder::commands::cmd_serve(&storage, bind, environment.is_prod()).await?;
         }
         Commands::UserCreate {
             storage,
@@ -25,13 +29,13 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             display_name,
         } => {
             let username = username
-                .parse::<server::username::Username>()
+                .parse::<jaunder::username::Username>()
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             let password = password
-                .map(|p| p.parse::<server::password::Password>())
+                .map(|p| p.parse::<jaunder::password::Password>())
                 .transpose()
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
-            server::commands::cmd_user_create(
+            jaunder::commands::cmd_user_create(
                 &storage,
                 &username,
                 password,
@@ -43,7 +47,10 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             storage,
             expires_in,
         } => {
-            server::commands::cmd_user_invite(&storage, expires_in).await?;
+            jaunder::commands::cmd_user_invite(&storage, expires_in).await?;
+        }
+        Commands::SmtpTest { storage, to } => {
+            jaunder::commands::cmd_smtp_test(&storage, &to).await?;
         }
     }
     Ok(())
@@ -52,7 +59,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use server::cli::{Cli, Commands, StorageArgs};
+    use jaunder::cli::{Cli, Commands, StorageArgs};
     use tempfile::TempDir;
 
     fn test_storage_args(base: &TempDir) -> StorageArgs {
@@ -123,6 +130,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_smtp_test_fails_when_smtp_not_configured() {
+        let base = TempDir::new().unwrap();
+        let storage = test_storage_args(&base);
+        run(Cli {
+            command: Commands::Init {
+                storage: storage.clone(),
+                skip_if_exists: false,
+            },
+        })
+        .await
+        .unwrap();
+
+        let cli = Cli {
+            command: Commands::SmtpTest {
+                storage,
+                to: "alice@example.com".to_string(),
+            },
+        };
+        let result = run(cli).await;
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("SMTP is not configured"),
+            "expected 'SMTP is not configured', got: {msg}"
+        );
+    }
+
+    #[tokio::test]
     async fn run_serve() {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
@@ -137,7 +172,11 @@ mod tests {
 
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
         let cli = Cli {
-            command: Commands::Serve { storage, bind },
+            command: Commands::Serve {
+                storage,
+                bind,
+                environment: jaunder::cli::DeploymentEnv::Dev,
+            },
         };
 
         // We can't easily run the server indefinitely in a test that expects

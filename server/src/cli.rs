@@ -1,3 +1,4 @@
+use std::fmt;
 use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand};
@@ -23,6 +24,27 @@ pub struct StorageArgs {
     /// Only `sqlite:` URLs are supported until M20 adds PostgreSQL.
     #[arg(long, env = "JAUNDER_DB", default_value = "sqlite:./data/jaunder.db")]
     pub db: DbConnectOptions,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, clap::ValueEnum)]
+pub enum DeploymentEnv {
+    Dev,
+    Prod,
+}
+
+impl DeploymentEnv {
+    pub fn is_prod(self) -> bool {
+        matches!(self, DeploymentEnv::Prod)
+    }
+}
+
+impl fmt::Display for DeploymentEnv {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DeploymentEnv::Dev => write!(f, "dev"),
+            DeploymentEnv::Prod => write!(f, "prod"),
+        }
+    }
 }
 
 #[derive(Subcommand, Clone)]
@@ -51,6 +73,10 @@ pub enum Commands {
         /// Address and port to bind to.
         #[arg(long, env = "JAUNDER_BIND", default_value = "127.0.0.1:3000")]
         bind: SocketAddr,
+
+        /// Deployment environment.
+        #[arg(long, env = "JAUNDER_ENV", default_value_t = DeploymentEnv::Dev)]
+        environment: DeploymentEnv,
     },
 
     /// Create a user account directly, bypassing the registration policy.
@@ -85,6 +111,20 @@ pub enum Commands {
         /// Hours until the invite code expires. Defaults to 168 (7 days).
         #[arg(long)]
         expires_in: Option<u64>,
+    },
+
+    /// Send a test email via the configured SMTP relay.
+    ///
+    /// Loads SMTP configuration from the database and sends a test message to
+    /// the given address. Returns an error if SMTP is not configured.
+    /// The storage directory must already be initialized via `jaunder init`.
+    SmtpTest {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// Email address to send the test message to.
+        #[arg(long)]
+        to: String,
     },
 }
 
@@ -196,6 +236,38 @@ mod tests {
             panic!("wrong variant");
         };
         assert_eq!(bind, "0.0.0.0:9000".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
+    fn environment_defaults_dev() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let cli = parse(&["serve"]);
+        let Commands::Serve { environment, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(environment, DeploymentEnv::Dev);
+    }
+
+    #[test]
+    fn environment_from_flag() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let cli = parse(&["serve", "--environment", "prod"]);
+        let Commands::Serve { environment, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(environment, DeploymentEnv::Prod);
+    }
+
+    #[test]
+    fn environment_env_beats_default() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("JAUNDER_ENV", "prod");
+        let cli = parse(&["serve"]);
+        std::env::remove_var("JAUNDER_ENV");
+        let Commands::Serve { environment, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(environment, DeploymentEnv::Prod);
     }
 
     // --- skip_if_exists flag ---
@@ -346,5 +418,24 @@ mod tests {
             panic!("wrong variant");
         };
         assert_eq!(expires_in, None);
+    }
+
+    // --- smtp-test ---
+
+    #[test]
+    fn smtp_test_parses_to() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&["smtp-test", "--to", "alice@example.com"]);
+        let Commands::SmtpTest { to, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(to, "alice@example.com");
+    }
+
+    #[test]
+    fn smtp_test_missing_to_is_clap_error() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let result = Cli::try_parse_from(["jaunder", "smtp-test"]);
+        assert!(result.is_err());
     }
 }

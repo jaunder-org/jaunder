@@ -1,12 +1,15 @@
 use chrono::{DateTime, Utc};
+use email_address::EmailAddress;
 use sqlx::SqlitePool;
 
 use async_trait::async_trait;
 
 use common::password::Password;
 use common::storage::{
-    CreateUserError, InviteRecord, InviteStorage, ProfileUpdate, SessionAuthError, SessionRecord,
-    SessionStorage, SiteConfigStorage, UseInviteError, UserAuthError, UserRecord, UserStorage,
+    CreateUserError, EmailVerificationStorage, InviteRecord, InviteStorage, PasswordResetStorage,
+    ProfileUpdate, SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage,
+    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError, UserRecord,
+    UserStorage,
 };
 use common::username::Username;
 
@@ -59,21 +62,38 @@ type UserRow = (
     Option<String>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
+    Option<String>,
+    bool,
 );
 
 fn user_record_from_row(
-    (user_id, username, display_name, bio, created_at, last_authenticated_at): UserRow,
-) -> UserRecord {
-    UserRecord {
+    (
         user_id,
-        username: username
-            .parse()
-            .expect("username stored in database is always valid"),
+        username,
         display_name,
         bio,
         created_at,
         last_authenticated_at,
-    }
+        email,
+        email_verified,
+    ): UserRow,
+) -> sqlx::Result<UserRecord> {
+    let username = username
+        .parse()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let email = email
+        .map(|s| s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e))))
+        .transpose()?;
+    Ok(UserRecord {
+        user_id,
+        username,
+        display_name,
+        bio,
+        created_at,
+        last_authenticated_at,
+        email,
+        email_verified,
+    })
 }
 
 /// SQLite-backed [`UserStorage`].
@@ -139,9 +159,11 @@ impl UserStorage for SqliteUserStorage {
                 DateTime<Utc>,
                 Option<DateTime<Utc>>,
                 String,
+                Option<String>,
+                bool,
             ),
         >(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, password_hash
+            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, password_hash, email, email_verified
              FROM users WHERE username = ?",
         )
         .bind(username.as_str())
@@ -149,11 +171,20 @@ impl UserStorage for SqliteUserStorage {
         .await
         .map_err(|e| UserAuthError::Internal(e.to_string()))?;
 
-        let (user_id, username, display_name, bio, created_at, _last_authenticated_at, hash) =
-            match row {
-                Some(r) => r,
-                None => return Err(UserAuthError::InvalidCredentials),
-            };
+        let (
+            user_id,
+            username,
+            display_name,
+            bio,
+            created_at,
+            _last_authenticated_at,
+            hash,
+            email,
+            email_verified,
+        ) = match row {
+            Some(r) => r,
+            None => return Err(UserAuthError::InvalidCredentials),
+        };
 
         let password = password.clone();
         let valid = tokio::task::spawn_blocking(move || password.verify(&hash))
@@ -177,41 +208,78 @@ impl UserStorage for SqliteUserStorage {
         Ok(UserRecord {
             user_id,
             username: username
-                .parse()
-                .expect("username stored in database is always valid"),
+                .parse::<Username>()
+                .map_err(|e| UserAuthError::Internal(e.to_string()))?,
             display_name,
             bio,
             created_at,
             last_authenticated_at: Some(now),
+            email: email
+                .map(|s| {
+                    s.parse::<EmailAddress>()
+                        .map_err(|e| UserAuthError::Internal(e.to_string()))
+                })
+                .transpose()?,
+            email_verified,
         })
     }
 
     async fn get_user(&self, user_id: i64) -> sqlx::Result<Option<UserRecord>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at
+            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, email, email_verified
              FROM users WHERE user_id = ?",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(user_record_from_row))
+        Ok(row.map(user_record_from_row).transpose()?)
     }
 
     async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at
+            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, email, email_verified
              FROM users WHERE username = ?",
         )
         .bind(username.as_str())
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(user_record_from_row))
+        Ok(row.map(user_record_from_row).transpose()?)
+    }
+
+    async fn set_email(
+        &self,
+        user_id: i64,
+        email: Option<&EmailAddress>,
+        verified: bool,
+    ) -> sqlx::Result<()> {
+        sqlx::query("UPDATE users SET email = ?, email_verified = ? WHERE user_id = ?")
+            .bind(email.map(EmailAddress::as_str))
+            .bind(verified)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     async fn update_profile(&self, user_id: i64, update: &ProfileUpdate<'_>) -> sqlx::Result<()> {
         sqlx::query("UPDATE users SET display_name = ?, bio = ? WHERE user_id = ?")
             .bind(update.display_name)
             .bind(update.bio)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn set_password(&self, user_id: i64, new_password: &Password) -> sqlx::Result<()> {
+        let password = new_password.clone();
+        let password_hash = tokio::task::spawn_blocking(move || password.hash())
+            .await
+            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?
+            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
+
+        sqlx::query("UPDATE users SET password_hash = ? WHERE user_id = ?")
+            .bind(&password_hash)
             .bind(user_id)
             .execute(&self.pool)
             .await?;
@@ -234,17 +302,17 @@ type SessionRow = (
 
 fn session_record_from_row(
     (token_hash, user_id, username, label, created_at, last_used_at): SessionRow,
-) -> SessionRecord {
-    SessionRecord {
+) -> Result<SessionRecord, sqlx::Error> {
+    Ok(SessionRecord {
         token_hash,
         user_id,
         username: username
-            .parse()
-            .expect("username stored in database is always valid"),
+            .parse::<Username>()
+            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e.to_string())))?,
         label,
         created_at,
         last_used_at,
-    }
+    })
 }
 
 /// SQLite-backed [`SessionStorage`].
@@ -307,7 +375,7 @@ impl SessionStorage for SqliteSessionStorage {
 
         tx.commit().await?;
 
-        let mut record = session_record_from_row(row);
+        let mut record = session_record_from_row(row)?;
         record.last_used_at = now;
         Ok(record)
     }
@@ -330,7 +398,7 @@ impl SessionStorage for SqliteSessionStorage {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows.into_iter().map(session_record_from_row).collect())
+        rows.into_iter().map(session_record_from_row).collect()
     }
 }
 
@@ -434,5 +502,187 @@ impl InviteStorage for SqliteInviteStorage {
         .await?;
 
         Ok(rows.into_iter().map(invite_record_from_row).collect())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EmailVerifications
+// ---------------------------------------------------------------------------
+
+/// SQLite-backed [`EmailVerificationStorage`].
+pub struct SqliteEmailVerificationStorage {
+    pool: SqlitePool,
+}
+
+impl SqliteEmailVerificationStorage {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl EmailVerificationStorage for SqliteEmailVerificationStorage {
+    async fn create_email_verification(
+        &self,
+        user_id: i64,
+        email: &str,
+        expires_at: DateTime<Utc>,
+    ) -> sqlx::Result<String> {
+        let raw_token = crate::auth::generate_token();
+        let token_hash = crate::auth::hash_token(&raw_token)
+            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
+        let now = Utc::now();
+
+        let mut tx = self.pool.begin().await?;
+
+        // Supersede any existing pending token for this user by setting its
+        // expires_at to its created_at, making it appear immediately expired.
+        sqlx::query(
+            "UPDATE email_verifications
+             SET expires_at = created_at
+             WHERE user_id = ? AND used_at IS NULL AND expires_at > ?",
+        )
+        .bind(user_id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO email_verifications
+             (token_hash, user_id, email, created_at, expires_at)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&token_hash)
+        .bind(user_id)
+        .bind(email)
+        .bind(now)
+        .bind(expires_at)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(raw_token)
+    }
+
+    async fn use_email_verification(
+        &self,
+        raw_token: &str,
+    ) -> Result<(i64, String), UseEmailVerificationError> {
+        let token_hash =
+            crate::auth::hash_token(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
+
+        let now = Utc::now();
+
+        // Atomically claim the token: the UPDATE succeeds only when the token
+        // exists, has not yet been used, and has not expired.  This single
+        // statement is the "claim" — no separate read is needed first, so two
+        // concurrent requests cannot both succeed.  RETURNING gives us the
+        // data we need without a second round-trip.
+        let claimed = sqlx::query_as::<_, (i64, String)>(
+            "UPDATE email_verifications SET used_at = ?
+             WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
+             RETURNING user_id, email",
+        )
+        .bind(now)
+        .bind(&token_hash)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some((user_id, email)) = claimed {
+            return Ok((user_id, email));
+        }
+
+        // Zero rows affected — inspect the row to return the right error.
+        let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
+            "SELECT used_at, expires_at FROM email_verifications WHERE token_hash = ?",
+        )
+        .bind(&token_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            None => Err(UseEmailVerificationError::NotFound),
+            Some((Some(_), _)) => Err(UseEmailVerificationError::AlreadyUsed),
+            Some((None, _)) => Err(UseEmailVerificationError::Expired),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PasswordResets
+// ---------------------------------------------------------------------------
+
+/// SQLite-backed [`PasswordResetStorage`].
+pub struct SqlitePasswordResetStorage {
+    pool: SqlitePool,
+}
+
+impl SqlitePasswordResetStorage {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl PasswordResetStorage for SqlitePasswordResetStorage {
+    async fn create_password_reset(
+        &self,
+        user_id: i64,
+        expires_at: DateTime<Utc>,
+    ) -> sqlx::Result<String> {
+        let raw_token = crate::auth::generate_token();
+        let token_hash = crate::auth::hash_token(&raw_token)
+            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
+        let now = Utc::now();
+
+        sqlx::query(
+            "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(&token_hash)
+        .bind(user_id)
+        .bind(now)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(raw_token)
+    }
+
+    async fn use_password_reset(&self, raw_token: &str) -> Result<i64, UsePasswordResetError> {
+        let token_hash =
+            crate::auth::hash_token(raw_token).map_err(|_| UsePasswordResetError::NotFound)?;
+
+        let now = Utc::now();
+
+        let claimed = sqlx::query_as::<_, (i64,)>(
+            "UPDATE password_resets SET used_at = ?
+             WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
+             RETURNING user_id",
+        )
+        .bind(now)
+        .bind(&token_hash)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some((user_id,)) = claimed {
+            return Ok(user_id);
+        }
+
+        let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
+            "SELECT used_at, expires_at FROM password_resets WHERE token_hash = ?",
+        )
+        .bind(&token_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            None => Err(UsePasswordResetError::NotFound),
+            Some((Some(_), _)) => Err(UsePasswordResetError::AlreadyUsed),
+            Some((None, _)) => Err(UsePasswordResetError::Expired),
+        }
     }
 }

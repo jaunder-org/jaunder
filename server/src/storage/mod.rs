@@ -9,17 +9,22 @@ use sqlx::SqlitePool;
 // them without a circular dependency.  Re-export everything for
 // backward-compatibility with existing server-crate consumers.
 pub use common::storage::{
-    AppState, AtomicOps, CreateUserError, InviteRecord, InviteStorage, ProfileUpdate,
-    RegisterWithInviteError, SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage,
-    UseInviteError, UserAuthError, UserRecord, UserStorage,
+    AppState, AtomicOps, ConfirmPasswordResetError, CreateUserError, EmailVerificationStorage,
+    InviteRecord, InviteStorage, PasswordResetStorage, ProfileUpdate, RegisterWithInviteError,
+    SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage, UseEmailVerificationError,
+    UseInviteError, UsePasswordResetError, UserAuthError, UserRecord, UserStorage,
 };
 
+use crate::mailer::FileMailSender;
+use common::mailer::{MailSender, NoopMailSender};
 use common::password::Password;
+use common::smtp::load_smtp_config;
 use common::username::Username;
 
 mod sqlite;
 pub use sqlite::{
-    SqliteInviteStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
+    SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
+    SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
 };
 
 // ---------------------------------------------------------------------------
@@ -118,6 +123,79 @@ impl AtomicOps for SqliteAtomicOps {
 
         Ok(user_id)
     }
+
+    async fn confirm_password_reset(
+        &self,
+        raw_token: &str,
+        new_password: &Password,
+    ) -> Result<(), ConfirmPasswordResetError> {
+        let token_hash =
+            crate::auth::hash_token(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
+
+        let password = new_password.clone();
+        let password_hash = tokio::task::spawn_blocking(move || password.hash())
+            .await
+            .map_err(|e| {
+                ConfirmPasswordResetError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
+            })?
+            .map_err(|e| {
+                ConfirmPasswordResetError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
+            })?;
+
+        let mut tx = self.pool.begin().await?;
+        let now = chrono::Utc::now();
+
+        let claimed = sqlx::query_as::<_, (i64,)>(
+            "UPDATE password_resets SET used_at = ?\n             WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?\n             RETURNING user_id",
+        )
+        .bind(now)
+        .bind(&token_hash)
+        .bind(now)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let user_id = if let Some((user_id,)) = claimed {
+            user_id
+        } else {
+            let row = sqlx::query_as::<
+                _,
+                (
+                    Option<chrono::DateTime<chrono::Utc>>,
+                    chrono::DateTime<chrono::Utc>,
+                ),
+            >(
+                "SELECT used_at, expires_at FROM password_resets WHERE token_hash = ?"
+            )
+            .bind(&token_hash)
+            .fetch_optional(&mut *tx)
+            .await?;
+
+            tx.rollback().await.ok();
+
+            return match row {
+                None => Err(ConfirmPasswordResetError::NotFound),
+                Some((Some(_), _)) => Err(ConfirmPasswordResetError::AlreadyUsed),
+                Some((None, expires_at)) if expires_at <= now => {
+                    Err(ConfirmPasswordResetError::Expired)
+                }
+                Some((None, _)) => Err(ConfirmPasswordResetError::Expired),
+            };
+        };
+
+        sqlx::query("UPDATE users SET password_hash = ? WHERE user_id = ?")
+            .bind(&password_hash)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -173,13 +251,16 @@ pub fn init_storage(path: &Path) -> io::Result<()> {
 // Database helpers
 // ---------------------------------------------------------------------------
 
-fn make_app_state(pool: SqlitePool) -> Arc<AppState> {
+fn make_app_state(pool: SqlitePool, mailer: Arc<dyn MailSender>) -> Arc<AppState> {
     Arc::new(AppState {
         site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
         users: Arc::new(SqliteUserStorage::new(pool.clone())),
         sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
         invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
-        atomic: Arc::new(SqliteAtomicOps::new(pool)),
+        atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
+        email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
+        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool)),
+        mailer,
     })
 }
 
@@ -197,11 +278,26 @@ async fn init_pool(opts: &DbConnectOptions, create_if_missing: bool) -> sqlx::Re
     }
 }
 
+async fn build_mailer(site_config: &SqliteSiteConfigStorage) -> Arc<dyn MailSender> {
+    if let Ok(path) = std::env::var("JAUNDER_MAIL_CAPTURE_FILE") {
+        return Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>;
+    }
+    match load_smtp_config(site_config).await {
+        Ok(Some(cfg)) => match crate::mailer::LettreMailSender::from_config(&cfg) {
+            Ok(sender) => Arc::new(sender) as Arc<dyn MailSender>,
+            Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
+        },
+        Ok(None) | Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
+    }
+}
+
 /// Opens (or creates) the database described by `opts`, runs pending
 /// migrations, and returns an [`AppState`] bundling all storage handles.
 pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     let pool = init_pool(opts, true).await?;
-    Ok(make_app_state(pool))
+    let site_config = SqliteSiteConfigStorage::new(pool.clone());
+    let mailer = build_mailer(&site_config).await;
+    Ok(make_app_state(pool, mailer))
 }
 
 /// Opens an existing database described by `opts`, runs pending migrations.
@@ -209,7 +305,9 @@ pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState
 /// Unlike [`open_database`], fails if the database does not already exist.
 pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     let pool = init_pool(opts, false).await?;
-    Ok(make_app_state(pool))
+    let site_config = SqliteSiteConfigStorage::new(pool.clone());
+    let mailer = build_mailer(&site_config).await;
+    Ok(make_app_state(pool, mailer))
 }
 
 #[cfg(test)]

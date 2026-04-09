@@ -4,12 +4,12 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use jaunder::cli::StorageArgs;
+use jaunder::commands::{cmd_init, cmd_serve, cmd_smtp_test, cmd_user_create, cmd_user_invite};
+use jaunder::password::Password;
+use jaunder::storage::{open_database, open_existing_database, DbConnectOptions};
+use jaunder::username::Username;
 use leptos::prelude::LeptosOptions;
-use server::cli::StorageArgs;
-use server::commands::{cmd_init, cmd_serve, cmd_user_create, cmd_user_invite};
-use server::password::Password;
-use server::storage::{open_database, open_existing_database, DbConnectOptions};
-use server::username::Username;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -77,7 +77,7 @@ async fn cmd_serve_fails_when_not_initialized() {
     let args = storage_args(&base);
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
 
-    let result = cmd_serve(&args, bind).await;
+    let result = cmd_serve(&args, bind, true).await;
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -97,7 +97,7 @@ async fn after_init_server_responds_to_health_check() {
 
     let db = open_existing_database(&args.db).await.unwrap();
     let leptos_options = LeptosOptions::builder().output_name("test").build();
-    let router = server::create_router(leptos_options, db);
+    let router = jaunder::create_router(leptos_options, db, true);
 
     let response = router
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
@@ -124,7 +124,7 @@ async fn cmd_serve_starts_and_accepts_connections() {
     let db = args.db.clone();
     let task = tokio::spawn(async move {
         let storage = StorageArgs { storage_path, db };
-        let _ = cmd_serve(&storage, bind).await;
+        let _ = cmd_serve(&storage, bind, true).await;
     });
 
     // Poll until the server accepts TCP connections (up to 1 s).
@@ -199,4 +199,123 @@ async fn cmd_user_invite_too_large_expires_in_returns_error() {
     let result = cmd_user_invite(&args, Some(u64::MAX)).await;
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("too large"));
+}
+
+#[tokio::test]
+async fn cmd_smtp_test_fails_when_not_initialized() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base);
+
+    let result = cmd_smtp_test(&args, "alice@example.com").await;
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("jaunder init"),
+        "expected error to mention 'jaunder init', got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn cmd_smtp_test_fails_when_smtp_not_configured() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base);
+    cmd_init(&args, false).await.expect("init");
+
+    let result = cmd_smtp_test(&args, "alice@example.com").await;
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("SMTP is not configured"),
+        "expected 'SMTP is not configured', got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn cmd_smtp_test_succeeds_with_mock_server() {
+    let server = maik::MockServer::builder()
+        .no_verify_credentials()
+        .assert_after_n_emails(1)
+        .build();
+    server.start();
+
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base);
+    cmd_init(&args, false).await.expect("init");
+
+    let state = open_existing_database(&args.db).await.expect("open db");
+    state
+        .site_config
+        .set("smtp.host", &server.host().to_string())
+        .await
+        .expect("set host");
+    state
+        .site_config
+        .set("smtp.port", &server.port().to_string())
+        .await
+        .expect("set port");
+    state
+        .site_config
+        .set("smtp.tls_mode", "plain")
+        .await
+        .expect("set tls_mode");
+    state
+        .site_config
+        .set("smtp.sender", "noreply@example.com")
+        .await
+        .expect("set sender");
+    state
+        .site_config
+        .set("smtp.username", "user")
+        .await
+        .expect("set username");
+    state
+        .site_config
+        .set("smtp.password", "password")
+        .await
+        .expect("set password");
+
+    cmd_smtp_test(&args, "alice@example.com")
+        .await
+        .expect("smtp test should succeed");
+
+    let assertion = maik::MailAssertion::new().recipients_are(["alice@example.com"]);
+    assert!(server.assert(assertion));
+}
+
+#[tokio::test]
+async fn cmd_smtp_test_fails_on_invalid_to_address() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base);
+    cmd_init(&args, false).await.expect("init");
+
+    // Configure SMTP so we get past the "not configured" check.
+    let state = open_existing_database(&args.db).await.expect("open db");
+    state
+        .site_config
+        .set("smtp.host", "mail.example.com")
+        .await
+        .expect("set smtp.host");
+    state
+        .site_config
+        .set("smtp.port", "587")
+        .await
+        .expect("set smtp.port");
+    state
+        .site_config
+        .set("smtp.tls_mode", "plain")
+        .await
+        .expect("set smtp.tls_mode");
+    state
+        .site_config
+        .set("smtp.sender", "noreply@example.com")
+        .await
+        .expect("set smtp.sender");
+
+    let result = cmd_smtp_test(&args, "not-an-email").await;
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("Invalid email address"),
+        "expected 'Invalid email address', got: {msg}"
+    );
 }

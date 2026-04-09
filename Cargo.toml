@@ -43,23 +43,27 @@ base64 = "0.22"
 rand = "0.9"
 sha2 = "0.10"
 rpassword = "7"
+email_address = "0.2"
+lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder"] }
 thiserror = "2.0.12"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tokio = { version = "1.45.0", features = ["full"] }
 tower = { version = "0.5.2", features = ["full"] }
 tower-http = { version = "0.6.4", features = ["full"] }
 wasm-bindgen = "0.2.106"
+web-sys = "0.3.82"
 
 # See https://github.com/leptos-rs/cargo-leptos for documentation of all the parameters.
 
 # A leptos project defines which workspace members
-# that are used together frontend (lib) & server (bin)
+# that are used together frontend (lib) & jaunder (bin)
 [[workspace.metadata.leptos]]
 # this name is used for the wasm, js and css file names
 name = "jaunder"
 
-# the package in the workspace that contains the server binary (binary crate)
-bin-package = "server"
+# the package in the workspace that contains the jaunder binary (binary crate)
+bin-package = "jaunder"
 
 # the package in the workspace that contains the frontend wasm binary (library crate)
 lib-package = "hydrate"

@@ -4,6 +4,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
+use email_address::EmailAddress;
+
+use crate::mailer::MailSender;
 use crate::password::Password;
 use crate::username::Username;
 
@@ -37,6 +40,8 @@ pub struct UserRecord {
     pub bio: Option<String>,
     pub created_at: DateTime<Utc>,
     pub last_authenticated_at: Option<DateTime<Utc>>,
+    pub email: Option<EmailAddress>,
+    pub email_verified: bool,
 }
 
 /// Errors that can occur when creating a user.
@@ -86,6 +91,17 @@ pub trait UserStorage: Send + Sync {
     async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>>;
 
     async fn update_profile(&self, user_id: i64, update: &ProfileUpdate<'_>) -> sqlx::Result<()>;
+
+    async fn set_email(
+        &self,
+        user_id: i64,
+        email: Option<&EmailAddress>,
+        verified: bool,
+    ) -> sqlx::Result<()>;
+
+    /// Replaces the stored password hash for `user_id` with a hash of `new_password`.
+    /// Hashing is performed inside `spawn_blocking`, consistent with `create_user`.
+    async fn set_password(&self, user_id: i64, new_password: &Password) -> sqlx::Result<()>;
 }
 
 // ---------------------------------------------------------------------------
@@ -180,6 +196,19 @@ pub enum RegisterWithInviteError {
     Internal(#[from] sqlx::Error),
 }
 
+/// Errors returned by an atomic password-reset confirmation.
+#[derive(Debug, Error)]
+pub enum ConfirmPasswordResetError {
+    #[error("token not found")]
+    NotFound,
+    #[error("token has expired")]
+    Expired,
+    #[error("token has already been used")]
+    AlreadyUsed,
+    #[error(transparent)]
+    Internal(#[from] sqlx::Error),
+}
+
 /// Cross-table operations that span multiple storage traits and must be
 /// executed atomically.
 ///
@@ -196,6 +225,84 @@ pub trait AtomicOps: Send + Sync {
         display_name: Option<&str>,
         invite_code: &str,
     ) -> Result<i64, RegisterWithInviteError>;
+
+    /// Atomically consumes a password-reset token, updates the password, and
+    /// revokes all sessions for the user.
+    async fn confirm_password_reset(
+        &self,
+        raw_token: &str,
+        new_password: &Password,
+    ) -> Result<(), ConfirmPasswordResetError>;
+}
+
+// ---------------------------------------------------------------------------
+// EmailVerification (stub — full trait added in M3.7)
+// ---------------------------------------------------------------------------
+
+/// Errors returned by [`EmailVerificationStorage::use_email_verification`].
+#[derive(Debug, Error)]
+pub enum UseEmailVerificationError {
+    #[error("token not found")]
+    NotFound,
+    #[error("token has expired")]
+    Expired,
+    #[error("token has already been used")]
+    AlreadyUsed,
+    #[error(transparent)]
+    Internal(#[from] sqlx::Error),
+}
+
+/// Storage for email verification tokens.
+#[async_trait]
+pub trait EmailVerificationStorage: Send + Sync {
+    /// Stores a new verification token for `user_id` / `email` expiring at
+    /// `expires_at`.  Any existing pending token for the same user is
+    /// superseded (marked expired) so only one pending token exists at a time.
+    /// Returns the raw (un-hashed) token to be delivered to the user by email.
+    async fn create_email_verification(
+        &self,
+        user_id: i64,
+        email: &str,
+        expires_at: DateTime<Utc>,
+    ) -> sqlx::Result<String>;
+
+    /// Validates `raw_token`, marks it used, and returns `(user_id, email)`.
+    async fn use_email_verification(
+        &self,
+        raw_token: &str,
+    ) -> Result<(i64, String), UseEmailVerificationError>;
+}
+
+// ---------------------------------------------------------------------------
+// PasswordReset
+// ---------------------------------------------------------------------------
+
+/// Errors returned by [`PasswordResetStorage::use_password_reset`].
+#[derive(Debug, Error)]
+pub enum UsePasswordResetError {
+    #[error("token not found")]
+    NotFound,
+    #[error("token has expired")]
+    Expired,
+    #[error("token has already been used")]
+    AlreadyUsed,
+    #[error(transparent)]
+    Internal(#[from] sqlx::Error),
+}
+
+/// Storage for password-reset tokens.
+#[async_trait]
+pub trait PasswordResetStorage: Send + Sync {
+    /// Stores a new reset token for `user_id` expiring at `expires_at`.
+    /// Returns the raw (un-hashed) token to be delivered to the user by email.
+    async fn create_password_reset(
+        &self,
+        user_id: i64,
+        expires_at: DateTime<Utc>,
+    ) -> sqlx::Result<String>;
+
+    /// Validates `raw_token`, marks it used, and returns `user_id`.
+    async fn use_password_reset(&self, raw_token: &str) -> Result<i64, UsePasswordResetError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -212,4 +319,10 @@ pub struct AppState {
     /// `server` crate) holds the database pool so `common` and `web` stay
     /// free of SQLite implementation details.
     pub atomic: Arc<dyn AtomicOps>,
+    /// Email verification token storage (stub until Step 7).
+    pub email_verifications: Arc<dyn EmailVerificationStorage>,
+    /// Password reset token storage (stub until Step 8).
+    pub password_resets: Arc<dyn PasswordResetStorage>,
+    /// Outbound email sender.  `NoopMailSender` when SMTP is not configured.
+    pub mailer: Arc<dyn MailSender>,
 }

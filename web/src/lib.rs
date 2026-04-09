@@ -1,18 +1,15 @@
 pub mod auth;
+pub mod email;
 pub mod invites;
+pub mod pages;
+pub mod password_reset;
 pub mod profile;
 pub mod sessions;
 
-use crate::auth::{LoginPage, LogoutPage, RegisterPage};
-use crate::invites::InvitesPage;
-use crate::profile::ProfilePage;
-use crate::sessions::SessionsPage;
+pub use pages::App;
+
 use leptos::prelude::*;
-use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
-use leptos_router::{
-    components::{Route, Router, Routes},
-    StaticSegment,
-};
+use leptos_meta::MetaTags;
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
     view! {
@@ -29,46 +26,5 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
                 <App />
             </body>
         </html>
-    }
-}
-
-#[component]
-pub fn App() -> impl IntoView {
-    // Provides context that manages stylesheets, titles, meta tags, etc.
-    provide_meta_context();
-
-    view! {
-        <Stylesheet id="leptos" href="/pkg/jaunder.css" />
-
-        // sets the document title
-        <Title text="Welcome to Leptos" />
-
-        // content for this welcome page
-        <Router>
-            <main>
-                <Routes fallback=|| "Page not found.".into_view()>
-                    <Route path=StaticSegment("") view=HomePage />
-                    <Route path=StaticSegment("register") view=RegisterPage />
-                    <Route path=StaticSegment("login") view=LoginPage />
-                    <Route path=StaticSegment("logout") view=LogoutPage />
-                    <Route path=StaticSegment("profile") view=ProfilePage />
-                    <Route path=StaticSegment("sessions") view=SessionsPage />
-                    <Route path=StaticSegment("invites") view=InvitesPage />
-                </Routes>
-            </main>
-        </Router>
-    }
-}
-
-/// Renders the home page of your application.
-#[component]
-fn HomePage() -> impl IntoView {
-    // Creates a reactive value to update the button
-    let count = RwSignal::new(0);
-    let on_click = move |_| *count.write() += 1;
-
-    view! {
-        <h1>"Welcome to Leptos!"</h1>
-        <button on:click=on_click>"Click Me: " {count}</button>
     }
 }

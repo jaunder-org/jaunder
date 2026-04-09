@@ -41,3 +41,18 @@ SKIP_E2E=1 git push
 - Files containing Leptos `view!` macros are additionally formatted with `leptosfmt` (run it first, then `cargo fmt`).
 - Commits reference the milestone item they address, e.g. `M0.1.1: Rename app/ to web/`.
 - Every commit must include appropriate tests; coverage must remain at 100%.
+
+## NixOS integration
+
+- The shared NixOS module is `nixosModules.jaunder`.
+- Production imports should enable the service with `services.jaunder.enable = true;` and set `services.jaunder.bind` as needed.
+- Do not set `JAUNDER_MAIL_CAPTURE_FILE` in production. That is test-only and should stay in the interactive VM or e2e test node config.
+- The `jaunder` CLI is installed for the `jaunder` user via `users.users.jaunder.packages`.
+
+## Interactive testing VM
+
+- Start it with `nix run .#interactive-testing-vm`.
+- It auto-logs in as `jaunder` on the console.
+- The VM user password is `jaunder`.
+- `sudo` is passwordless for `wheel` in the VM only.
+- The VM does not use SSH; it is intended for local console interaction and app testing.
