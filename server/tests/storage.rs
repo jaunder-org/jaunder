@@ -194,7 +194,11 @@ async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db() {
 #[ignore = "requires PostgreSQL test VM"]
 async fn postgres_site_config_set_then_get_roundtrips() {
     let state = postgres_state().await;
-    state.site_config.set("site.name", "Postgres").await.unwrap();
+    state
+        .site_config
+        .set("site.name", "Postgres")
+        .await
+        .unwrap();
     assert_eq!(
         state.site_config.get("site.name").await.unwrap().as_deref(),
         Some("Postgres")
@@ -289,12 +293,7 @@ async fn postgres_invite_and_atomic_registration_work() {
 
     let err = state
         .atomic
-        .create_user_with_invite(
-            &username("carol2"),
-            &password("password123"),
-            None,
-            &code,
-        )
+        .create_user_with_invite(&username("carol2"), &password("password123"), None, &code)
         .await
         .unwrap_err();
     assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
@@ -338,7 +337,11 @@ async fn postgres_email_verification_and_password_reset_work() {
         .create_password_reset(user_id, Utc::now() + chrono::Duration::hours(1))
         .await
         .unwrap();
-    let claimed_user_id = state.password_resets.use_password_reset(&reset_token).await.unwrap();
+    let claimed_user_id = state
+        .password_resets
+        .use_password_reset(&reset_token)
+        .await
+        .unwrap();
     assert_eq!(claimed_user_id, user_id);
 
     let reset_token = state
