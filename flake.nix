@@ -62,6 +62,12 @@
               default = "127.0.0.1:3000";
             };
 
+            db = lib.mkOption {
+              type = lib.types.str;
+              default = "sqlite:./data/jaunder.db";
+              description = "Database URL passed to jaunder via JAUNDER_DB.";
+            };
+
             prod = lib.mkOption {
               type = lib.types.bool;
               default = false;
@@ -86,6 +92,7 @@
               after = [ "network.target" ];
               environment = {
                 JAUNDER_BIND = cfg.bind;
+                JAUNDER_DB = cfg.db;
               }
               // lib.optionalAttrs cfg.prod {
                 JAUNDER_ENV = "prod";
@@ -93,7 +100,7 @@
               preStart = ''
                 mkdir -p target
                 ln -sfn ${site} target/site
-                ${jaunderBin}/bin/jaunder init --skip-if-exists
+                ${jaunderBin}/bin/jaunder init --db "$JAUNDER_DB" --skip-if-exists
               '';
               serviceConfig = {
                 User = "jaunder";
@@ -159,7 +166,10 @@
 
           users.users.jaunder.extraGroups = [ "wheel" ];
           users.users.jaunder.initialPassword = "jaunder";
-          users.users.jaunder.packages = [ pkgs.sqlite ];
+          users.users.jaunder.packages = [
+            pkgs.postgresql_16
+            pkgs.sqlite
+          ];
 
           system.stateVersion = "26.05";
         };
@@ -529,6 +539,7 @@
             pkgs.nodejs
             pkgs.openssl
             pkgs.pkg-config
+            pkgs.postgresql_16
             pkgs.prettier
             pkgs.sqlx-cli
             pkgs.sqlite
