@@ -1,7 +1,9 @@
 use std::{fmt, io, path::Path, str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
+use sqlx::postgres::PgConnectOptions;
 use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::PgPool;
 use sqlx::SqlitePool;
 
 // Storage traits, records, error types, and AppState are defined in the
@@ -25,6 +27,12 @@ mod sqlite;
 pub use sqlite::{
     SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
     SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
+};
+mod postgres;
+pub use postgres::{
+    PostgresAtomicOps, PostgresEmailVerificationStorage, PostgresInviteStorage,
+    PostgresPasswordResetStorage, PostgresSessionStorage, PostgresSiteConfigStorage,
+    PostgresUserStorage,
 };
 
 // ---------------------------------------------------------------------------
@@ -209,6 +217,10 @@ impl AtomicOps for SqliteAtomicOps {
 #[derive(Clone, Debug)]
 pub enum DbConnectOptions {
     Sqlite(SqliteConnectOptions),
+    Postgres {
+        url: String,
+        options: PgConnectOptions,
+    },
 }
 
 impl fmt::Display for DbConnectOptions {
@@ -217,6 +229,7 @@ impl fmt::Display for DbConnectOptions {
             DbConnectOptions::Sqlite(opts) => {
                 write!(f, "sqlite:{}", opts.get_filename().display())
             }
+            DbConnectOptions::Postgres { url, .. } => f.write_str(url),
         }
     }
 }
@@ -227,9 +240,17 @@ impl FromStr for DbConnectOptions {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.starts_with("sqlite:") {
             Ok(DbConnectOptions::Sqlite(s.parse()?))
+        } else if s.starts_with("postgres://") || s.starts_with("postgresql://") {
+            Ok(DbConnectOptions::Postgres {
+                url: s.to_owned(),
+                options: s.parse()?,
+            })
         } else {
             Err(sqlx::Error::Configuration(
-                format!("unsupported database URL '{s}'; only sqlite: is supported").into(),
+                format!(
+                    "unsupported database URL '{s}'; supported schemes are sqlite: and postgres://"
+                )
+                .into(),
             ))
         }
     }
@@ -264,21 +285,20 @@ fn make_app_state(pool: SqlitePool, mailer: Arc<dyn MailSender>) -> Arc<AppState
     })
 }
 
-async fn init_pool(opts: &DbConnectOptions, create_if_missing: bool) -> sqlx::Result<SqlitePool> {
-    match opts {
-        DbConnectOptions::Sqlite(options) => {
-            let mut options = options.clone();
-            if create_if_missing {
-                options = options.create_if_missing(true);
-            }
-            let pool = sqlx::SqlitePool::connect_with(options).await?;
-            sqlx::migrate!("./migrations").run(&pool).await?;
-            Ok(pool)
-        }
-    }
+fn make_postgres_app_state(pool: PgPool, mailer: Arc<dyn MailSender>) -> Arc<AppState> {
+    Arc::new(AppState {
+        site_config: Arc::new(PostgresSiteConfigStorage::new(pool.clone())),
+        users: Arc::new(PostgresUserStorage::new(pool.clone())),
+        sessions: Arc::new(PostgresSessionStorage::new(pool.clone())),
+        invites: Arc::new(PostgresInviteStorage::new(pool.clone())),
+        atomic: Arc::new(PostgresAtomicOps::new(pool.clone())),
+        email_verifications: Arc::new(PostgresEmailVerificationStorage::new(pool.clone())),
+        password_resets: Arc::new(PostgresPasswordResetStorage::new(pool)),
+        mailer,
+    })
 }
 
-async fn build_mailer(site_config: &SqliteSiteConfigStorage) -> Arc<dyn MailSender> {
+async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender> {
     if let Ok(path) = std::env::var("JAUNDER_MAIL_CAPTURE_FILE") {
         return Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>;
     }
@@ -291,23 +311,45 @@ async fn build_mailer(site_config: &SqliteSiteConfigStorage) -> Arc<dyn MailSend
     }
 }
 
-/// Opens (or creates) the database described by `opts`, runs pending
-/// migrations, and returns an [`AppState`] bundling all storage handles.
-pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
-    let pool = init_pool(opts, true).await?;
+async fn open_sqlite_database(
+    options: &SqliteConnectOptions,
+    create_if_missing: bool,
+) -> sqlx::Result<Arc<AppState>> {
+    let mut options = options.clone();
+    if create_if_missing {
+        options = options.create_if_missing(true);
+    }
+    let pool = sqlx::SqlitePool::connect_with(options).await?;
+    sqlx::migrate!("./migrations").run(&pool).await?;
     let site_config = SqliteSiteConfigStorage::new(pool.clone());
     let mailer = build_mailer(&site_config).await;
     Ok(make_app_state(pool, mailer))
+}
+
+async fn open_postgres_database(options: &PgConnectOptions) -> sqlx::Result<Arc<AppState>> {
+    let pool = PgPool::connect_with(options.clone()).await?;
+    let site_config = PostgresSiteConfigStorage::new(pool.clone());
+    let mailer = build_mailer(&site_config).await;
+    Ok(make_postgres_app_state(pool, mailer))
+}
+
+/// Opens (or creates) the database described by `opts`, runs pending
+/// migrations, and returns an [`AppState`] bundling all storage handles.
+pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
+    match opts {
+        DbConnectOptions::Sqlite(options) => open_sqlite_database(options, true).await,
+        DbConnectOptions::Postgres { options, .. } => open_postgres_database(options).await,
+    }
 }
 
 /// Opens an existing database described by `opts`, runs pending migrations.
 ///
 /// Unlike [`open_database`], fails if the database does not already exist.
 pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
-    let pool = init_pool(opts, false).await?;
-    let site_config = SqliteSiteConfigStorage::new(pool.clone());
-    let mailer = build_mailer(&site_config).await;
-    Ok(make_app_state(pool, mailer))
+    match opts {
+        DbConnectOptions::Sqlite(options) => open_sqlite_database(options, false).await,
+        DbConnectOptions::Postgres { options, .. } => open_postgres_database(options).await,
+    }
 }
 
 #[cfg(test)]

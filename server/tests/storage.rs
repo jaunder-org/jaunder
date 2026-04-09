@@ -29,6 +29,13 @@ async fn open_pool(base: &TempDir) -> SqlitePool {
     pool
 }
 
+fn postgres_url() -> DbConnectOptions {
+    std::env::var("JAUNDER_PG_TEST_URL")
+        .unwrap_or_else(|_| "postgres://jaunder@127.0.0.1:55432/jaunder".to_owned())
+        .parse()
+        .unwrap()
+}
+
 async fn user_storage(base: &TempDir) -> SqliteUserStorage {
     SqliteUserStorage::new(open_pool(base).await)
 }
@@ -124,9 +131,21 @@ async fn second_open_on_migrated_database_succeeds() {
 }
 
 #[test]
-fn non_sqlite_url_is_rejected_at_parse_time() {
+fn postgres_url_is_accepted_at_parse_time() {
     let result = "postgres://localhost/test".parse::<DbConnectOptions>();
+    assert!(result.is_ok());
+}
+
+#[test]
+fn unsupported_url_is_rejected_at_parse_time() {
+    let result = "mysql://localhost/test".parse::<DbConnectOptions>();
     assert!(result.is_err());
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn open_database_succeeds_on_postgres_test_vm() {
+    open_database(&postgres_url()).await.unwrap();
 }
 
 // --- UserStorage integration tests ---

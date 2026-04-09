@@ -21,7 +21,7 @@ pub struct StorageArgs {
 
     /// Database URL.
     ///
-    /// Only `sqlite:` URLs are supported until M20 adds PostgreSQL.
+    /// Supports `sqlite:` and `postgres://` URLs.
     #[arg(long, env = "JAUNDER_DB", default_value = "sqlite:./data/jaunder.db")]
     pub db: DbConnectOptions,
 }
@@ -311,6 +311,19 @@ mod tests {
             panic!("wrong variant");
         };
         assert_eq!(storage.db.to_string(), "sqlite:/tmp/test.db");
+    }
+
+    #[test]
+    fn postgres_db_from_flag() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let cli = parse(&["init", "--db", "postgres://jaunder@localhost/testdb"]);
+        let Commands::Init { storage, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(
+            storage.db.to_string(),
+            "postgres://jaunder@localhost/testdb"
+        );
     }
 
     #[test]
