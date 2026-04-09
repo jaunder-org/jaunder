@@ -6,13 +6,16 @@ pub mod password_reset;
 pub mod profile;
 pub mod sessions;
 
-use crate::pages::auth::{LoginPage, LogoutPage, RegisterPage};
 use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
 use crate::pages::invites::InvitesPage;
 use crate::pages::password_reset::{ForgotPasswordPage, ResetPasswordPage};
 use crate::pages::profile::ProfilePage;
 use crate::pages::sessions::SessionsPage;
+use crate::{
+    auth::current_user,
+    pages::auth::{LoginPage, LogoutPage, RegisterPage},
+};
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, Stylesheet, Title};
 use leptos_router::{
@@ -24,25 +27,63 @@ use leptos_router::{
 pub fn App() -> impl IntoView {
     // Provides context that manages stylesheets, titles, meta tags, etc.
     provide_meta_context();
+    let user = Resource::new(|| (), |_| current_user());
 
     view! {
         <Stylesheet id="leptos" href="/pkg/jaunder.css" />
 
         // sets the document title
-        <Title text="Welcome to Leptos" />
+        <Title text="Jaunder" />
 
         // content for this welcome page
         <Router>
+            <header>
+                <Suspense fallback=|| {
+                    view! {
+                        <nav>
+                            <a href="/login">"Login"</a>
+                            " "
+                            <a href="/register">"Register"</a>
+                        </nav>
+                    }
+                }>
+                    {move || Suspend::new(async move {
+                        let user = user.await;
+                        match user {
+                            Ok(Some(username)) => {
+                                view! {
+                                    <nav>
+                                        <span>"Logged in as " {username}</span>
+                                        " "
+                                        <a href="/logout">"Logout"</a>
+                                    </nav>
+                                }
+                                    .into_any()
+                            }
+                            Ok(None) | Err(_) => {
+                                view! {
+                                    <nav>
+                                        <a href="/login">"Login"</a>
+                                        " "
+                                        <a href="/register">"Register"</a>
+                                    </nav>
+                                }
+                                    .into_any()
+                            }
+                        }
+                    })}
+                </Suspense>
+            </header>
             <main>
                 <Routes fallback=|| "Page not found.".into_view()>
                     <Route path=StaticSegment("") view=HomePage />
                     <Route path=StaticSegment("register") view=RegisterPage />
                     <Route path=StaticSegment("login") view=LoginPage />
                     <Route path=StaticSegment("logout") view=LogoutPage />
+                    <Route path=(StaticSegment("profile"), StaticSegment("email")) view=EmailPage />
                     <Route path=StaticSegment("profile") view=ProfilePage />
                     <Route path=StaticSegment("sessions") view=SessionsPage />
                     <Route path=StaticSegment("invites") view=InvitesPage />
-                    <Route path=(StaticSegment("profile"), StaticSegment("email")) view=EmailPage />
                     <Route path=StaticSegment("verify-email") view=VerifyEmailPage />
                     <Route path=StaticSegment("forgot-password") view=ForgotPasswordPage />
                     <Route path=StaticSegment("reset-password") view=ResetPasswordPage />
