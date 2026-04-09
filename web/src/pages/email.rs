@@ -22,21 +22,16 @@ pub fn EmailPage() -> impl IntoView {
                             (Some(ref e), false) => format!("{e} (unverified)"),
                             (None, _) => "No email set".to_string(),
                         };
-                        view! {
-                            <p>"Current email: " {email_status}</p>
-                            <ActionForm action=request_action>
-                                <label>
-                                    "New email address" <input type="email" name="email" />
-                                </label>
-                                <button type="submit">"Send verification link"</button>
-                            </ActionForm>
-                        }
-                            .into_any()
+                        view! { <p>"Current email: " {email_status}</p> }.into_any()
                     }
                     Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                 }
             })}
         </Suspense>
+        <ActionForm action=request_action>
+            <label>"New email address" <input type="email" name="email" /></label>
+            <button type="submit">"Send verification link"</button>
+        </ActionForm>
         {move || {
             request_action
                 .value()
