@@ -5,9 +5,9 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use common::storage::ProfileUpdate;
+use jaunder::storage::{open_database, DbConnectOptions};
+use jaunder::username::Username;
 use leptos::prelude::LeptosOptions;
-use server::storage::{open_database, DbConnectOptions};
-use server::username::Username;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -29,7 +29,7 @@ fn db_url(base: &TempDir) -> DbConnectOptions {
         .unwrap()
 }
 
-async fn test_state(base: &TempDir) -> Arc<server::storage::AppState> {
+async fn test_state(base: &TempDir) -> Arc<jaunder::storage::AppState> {
     open_database(&db_url(base)).await.unwrap()
 }
 
@@ -38,7 +38,7 @@ fn test_options() -> LeptosOptions {
 }
 
 async fn post_form(
-    state: Arc<server::storage::AppState>,
+    state: Arc<jaunder::storage::AppState>,
     uri: &str,
     body: impl Into<String>,
     cookie: Option<&str>,
@@ -54,7 +54,7 @@ async fn post_form(
     }
     let request = builder.body(Body::from(body.into())).unwrap();
 
-    let app = server::create_router(test_options(), state);
+    let app = jaunder::create_router(test_options(), state, true);
     let response = app.oneshot(request).await.unwrap();
 
     let status = response.status();

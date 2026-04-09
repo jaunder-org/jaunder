@@ -47,9 +47,11 @@ test("login with valid credentials succeeds", async ({ page }) => {
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "testpassword123");
   await page.click('button[type="submit"]');
-  await page.waitForLoadState("networkidle");
+  await page.waitForURL("http://localhost:3000/");
+  await waitForHydration(page);
 
-  await expect(page.locator(".error")).not.toBeVisible();
+  await expect(page.locator("header")).toContainText("Logged in as testlogin");
+  await expect(page.locator("header a[href='/logout']")).toBeVisible();
 });
 
 test("login with wrong password shows error", async ({ page }) => {
