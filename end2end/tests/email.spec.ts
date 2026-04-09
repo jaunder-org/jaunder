@@ -22,6 +22,19 @@ function readLatestEmail(): CapturedEmail | null {
   return JSON.parse(lines[lines.length - 1]) as CapturedEmail;
 }
 
+async function waitForLatestEmail(timeoutMs = 5000): Promise<CapturedEmail> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const email = readLatestEmail();
+    if (email) return email;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  throw new Error(
+    `timed out waiting for captured email at ${MAIL_CAPTURE_FILE}`,
+  );
+}
+
 async function waitForHydration(page: Page): Promise<void> {
   await page.waitForSelector("body[data-hydrated]");
 }
@@ -34,7 +47,8 @@ test("email verification flow completes successfully", async ({ page }) => {
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "testpassword123");
   await page.click('button[type="submit"]');
-  await page.waitForLoadState("networkidle");
+  await page.waitForURL("http://localhost:3000/");
+  await waitForHydration(page);
 
   // Navigate to email settings and submit an address
   await page.goto("http://localhost:3000/profile/email");
@@ -46,8 +60,7 @@ test("email verification flow completes successfully", async ({ page }) => {
   await expect(page.locator('p:has-text("Check your email")')).toBeVisible();
 
   // Extract the verification token from the captured mail file
-  const email = readLatestEmail();
-  expect(email).not.toBeNull();
+  const email = await waitForLatestEmail();
   const tokenMatch = email!.body_text.match(/token=([^\s]+)/);
   expect(tokenMatch).not.toBeNull();
   const token = tokenMatch![1];

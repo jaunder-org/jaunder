@@ -22,6 +22,19 @@ function readLatestEmail(): CapturedEmail | null {
   return JSON.parse(lines[lines.length - 1]) as CapturedEmail;
 }
 
+async function waitForLatestEmail(timeoutMs = 5000): Promise<CapturedEmail> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const email = readLatestEmail();
+    if (email) return email;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  throw new Error(
+    `timed out waiting for captured email at ${MAIL_CAPTURE_FILE}`,
+  );
+}
+
 async function waitForHydration(page: Page): Promise<void> {
   await page.waitForSelector("body[data-hydrated]");
 }
@@ -39,8 +52,7 @@ test("password reset flow completes successfully", async ({ page }) => {
   await expect(page.locator("p")).toContainText(/check|sent|email/i);
 
   // Extract the reset token from the captured mail file
-  const email = readLatestEmail();
-  expect(email).not.toBeNull();
+  const email = await waitForLatestEmail();
   const tokenMatch = email!.body_text.match(/token=([^\s]+)/);
   expect(tokenMatch).not.toBeNull();
   const token = tokenMatch![1];
@@ -59,6 +71,7 @@ test("password reset flow completes successfully", async ({ page }) => {
   await page.fill('input[name="password"]', "testpassword123");
   await page.click('button[type="submit"]');
   await page.waitForLoadState("networkidle");
+  await waitForHydration(page);
   await expect(page.locator(".error")).toBeVisible();
 
   // Login with new password should succeed
@@ -67,9 +80,10 @@ test("password reset flow completes successfully", async ({ page }) => {
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "resetpassword789");
   await page.click('button[type="submit"]');
-  await page.waitForLoadState("networkidle");
+  await page.waitForURL("http://localhost:3000/");
+  await waitForHydration(page);
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.locator("h1")).toHaveText("Welcome to Leptos!");
+  await expect(page.locator("h1")).toHaveText("Jaunder");
 });
 
 // M3.11.14: visiting /reset-password with an invalid token shows an error.
