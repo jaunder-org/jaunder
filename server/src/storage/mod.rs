@@ -1,6 +1,7 @@
 use std::{fmt, io, path::Path, str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use sqlx::postgres::PgConnectOptions;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::PgPool;
@@ -34,6 +35,97 @@ pub use postgres::{
     PostgresPasswordResetStorage, PostgresSessionStorage, PostgresSiteConfigStorage,
     PostgresUserStorage,
 };
+
+pub(super) type UserRecordParts = (
+    i64,
+    String,
+    Option<String>,
+    Option<String>,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+    Option<String>,
+    bool,
+);
+
+pub(super) fn build_user_record(
+    (
+        user_id,
+        username,
+        display_name,
+        bio,
+        created_at,
+        last_authenticated_at,
+        email,
+        email_verified,
+    ): UserRecordParts,
+) -> sqlx::Result<UserRecord> {
+    let username = username
+        .parse()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let email = email
+        .map(|s| s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e))))
+        .transpose()?;
+    Ok(UserRecord {
+        user_id,
+        username,
+        display_name,
+        bio,
+        created_at,
+        last_authenticated_at,
+        email,
+        email_verified,
+    })
+}
+
+pub(super) fn build_session_record(
+    token_hash: String,
+    user_id: i64,
+    username: String,
+    label: Option<String>,
+    created_at: DateTime<Utc>,
+    last_used_at: DateTime<Utc>,
+) -> sqlx::Result<SessionRecord> {
+    Ok(SessionRecord {
+        token_hash,
+        user_id,
+        username: username
+            .parse::<Username>()
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+        label,
+        created_at,
+        last_used_at,
+    })
+}
+
+pub(super) fn build_invite_record(
+    code: String,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    used_at: Option<DateTime<Utc>>,
+    used_by: Option<i64>,
+) -> InviteRecord {
+    InviteRecord {
+        code,
+        created_at,
+        expires_at,
+        used_at,
+        used_by,
+    }
+}
+
+pub(super) async fn hash_password(password: Password) -> io::Result<String> {
+    tokio::task::spawn_blocking(move || password.hash())
+        .await
+        .map_err(io::Error::other)?
+        .map_err(io::Error::other)
+}
+
+pub(super) async fn verify_password(password: Password, hash: String) -> io::Result<bool> {
+    tokio::task::spawn_blocking(move || password.verify(&hash))
+        .await
+        .map_err(io::Error::other)?
+        .map_err(io::Error::other)
+}
 
 // ---------------------------------------------------------------------------
 // SqliteAtomicOps
@@ -87,15 +179,9 @@ impl AtomicOps for SqliteAtomicOps {
         }
 
         // (b) Hash password outside the async executor
-        let password = password.clone();
-        let password_hash = tokio::task::spawn_blocking(move || password.hash())
+        let password_hash = hash_password(password.clone())
             .await
-            .map_err(|e| {
-                RegisterWithInviteError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
-            })?
-            .map_err(|e| {
-                RegisterWithInviteError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
-            })?;
+            .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;
 
         // (c) Insert user
         let result = sqlx::query_scalar::<_, i64>(
@@ -140,15 +226,9 @@ impl AtomicOps for SqliteAtomicOps {
         let token_hash =
             crate::auth::hash_token(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
 
-        let password = new_password.clone();
-        let password_hash = tokio::task::spawn_blocking(move || password.hash())
+        let password_hash = hash_password(new_password.clone())
             .await
-            .map_err(|e| {
-                ConfirmPasswordResetError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
-            })?
-            .map_err(|e| {
-                ConfirmPasswordResetError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
-            })?;
+            .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
 
         let mut tx = self.pool.begin().await?;
         let now = chrono::Utc::now();

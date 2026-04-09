@@ -76,13 +76,7 @@ fn user_record_from_row(
         email_verified,
     ): UserRow,
 ) -> sqlx::Result<UserRecord> {
-    let username = username
-        .parse()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    let email = email
-        .map(|s| s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e))))
-        .transpose()?;
-    Ok(UserRecord {
+    super::build_user_record((
         user_id,
         username,
         display_name,
@@ -91,7 +85,7 @@ fn user_record_from_row(
         last_authenticated_at,
         email,
         email_verified,
-    })
+    ))
 }
 
 pub struct PostgresUserStorage {
@@ -112,11 +106,9 @@ impl UserStorage for PostgresUserStorage {
         password: &Password,
         display_name: Option<&str>,
     ) -> Result<i64, CreateUserError> {
-        let password = password.clone();
-        let password_hash = tokio::task::spawn_blocking(move || password.hash())
+        let password_hash = super::hash_password(password.clone())
             .await
-            .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?
-            .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(std::io::Error::other(e))))?;
+            .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(e)))?;
 
         let now = Utc::now();
 
@@ -184,11 +176,9 @@ impl UserStorage for PostgresUserStorage {
             None => return Err(UserAuthError::InvalidCredentials),
         };
 
-        let password = password.clone();
-        let valid = tokio::task::spawn_blocking(move || password.verify(&hash))
+        let valid = super::verify_password(password.clone(), hash)
             .await
-            .map_err(|e| UserAuthError::Internal(e.to_string()))?
-            .map_err(UserAuthError::Internal)?;
+            .map_err(|e| UserAuthError::Internal(e.to_string()))?;
 
         if !valid {
             return Err(UserAuthError::InvalidCredentials);
@@ -202,23 +192,17 @@ impl UserStorage for PostgresUserStorage {
             .await
             .map_err(|e| UserAuthError::Internal(e.to_string()))?;
 
-        Ok(UserRecord {
+        super::build_user_record((
             user_id,
-            username: username
-                .parse::<Username>()
-                .map_err(|e| UserAuthError::Internal(e.to_string()))?,
+            username,
             display_name,
             bio,
             created_at,
-            last_authenticated_at: Some(now),
-            email: email
-                .map(|s| {
-                    s.parse::<EmailAddress>()
-                        .map_err(|e| UserAuthError::Internal(e.to_string()))
-                })
-                .transpose()?,
+            Some(now),
+            email,
             email_verified,
-        })
+        ))
+        .map_err(|e| UserAuthError::Internal(e.to_string()))
     }
 
     async fn get_user(&self, user_id: i64) -> sqlx::Result<Option<UserRecord>> {
@@ -271,11 +255,9 @@ impl UserStorage for PostgresUserStorage {
     }
 
     async fn set_password(&self, user_id: i64, new_password: &Password) -> sqlx::Result<()> {
-        let password = new_password.clone();
-        let password_hash = tokio::task::spawn_blocking(move || password.hash())
+        let password_hash = super::hash_password(new_password.clone())
             .await
-            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?
-            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
+            .map_err(sqlx::Error::Io)?;
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
             .bind(&password_hash)
@@ -302,16 +284,14 @@ type SessionRow = (
 fn session_record_from_row(
     (token_hash, user_id, username, label, created_at, last_used_at): SessionRow,
 ) -> sqlx::Result<SessionRecord> {
-    Ok(SessionRecord {
+    super::build_session_record(
         token_hash,
         user_id,
-        username: username
-            .parse::<Username>()
-            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e.to_string())))?,
+        username,
         label,
         created_at,
         last_used_at,
-    })
+    )
 }
 
 pub struct PostgresSessionStorage {
@@ -412,13 +392,7 @@ type InviteRow = (
 fn invite_record_from_row(
     (code, created_at, expires_at, used_at, used_by): InviteRow,
 ) -> InviteRecord {
-    InviteRecord {
-        code,
-        created_at,
-        expires_at,
-        used_at,
-        used_by,
-    }
+    super::build_invite_record(code, created_at, expires_at, used_at, used_by)
 }
 
 pub struct PostgresInviteStorage {
@@ -448,7 +422,11 @@ impl InviteStorage for PostgresInviteStorage {
     }
 
     async fn use_invite(&self, code: &str, user_id: i64) -> Result<(), UseInviteError> {
-        let mut tx = self.pool.begin().await.map_err(|_| UseInviteError::NotFound)?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| UseInviteError::NotFound)?;
         let row = sqlx::query_as::<_, InviteRow>(
             "SELECT code, created_at, expires_at, used_at, used_by
              FROM invites WHERE code = $1",
@@ -701,15 +679,9 @@ impl AtomicOps for PostgresAtomicOps {
             return Err(RegisterWithInviteError::InviteExpired);
         }
 
-        let password = password.clone();
-        let password_hash = tokio::task::spawn_blocking(move || password.hash())
+        let password_hash = super::hash_password(password.clone())
             .await
-            .map_err(|e| {
-                RegisterWithInviteError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
-            })?
-            .map_err(|e| {
-                RegisterWithInviteError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
-            })?;
+            .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;
 
         let result = sqlx::query_scalar::<_, i64>(
             "INSERT INTO users (username, password_hash, display_name, created_at)
@@ -750,15 +722,9 @@ impl AtomicOps for PostgresAtomicOps {
         let token_hash =
             crate::auth::hash_token(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
 
-        let password = new_password.clone();
-        let password_hash = tokio::task::spawn_blocking(move || password.hash())
+        let password_hash = super::hash_password(new_password.clone())
             .await
-            .map_err(|e| {
-                ConfirmPasswordResetError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
-            })?
-            .map_err(|e| {
-                ConfirmPasswordResetError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
-            })?;
+            .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
 
         let mut tx = self.pool.begin().await?;
         let now = Utc::now();
