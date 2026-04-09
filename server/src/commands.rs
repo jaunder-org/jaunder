@@ -1,9 +1,12 @@
 use std::{io, net::SocketAddr};
 
 use crate::cli::StorageArgs;
+use crate::mailer::LettreMailSender;
 use crate::password::Password;
 use crate::storage::{init_storage, open_database, open_existing_database};
 use crate::username::Username;
+use common::mailer::{EmailMessage, MailSender};
+use common::smtp::load_smtp_config;
 
 pub async fn cmd_init(storage: &StorageArgs, skip_if_exists: bool) -> anyhow::Result<()> {
     match init_storage(&storage.storage_path) {
@@ -64,6 +67,41 @@ pub async fn cmd_user_invite(storage: &StorageArgs, expires_in: Option<u64>) -> 
 
     let code = state.invites.create_invite(expires_at).await?;
     println!("{code}");
+    Ok(())
+}
+
+pub async fn cmd_smtp_test(storage: &StorageArgs, to: &str) -> anyhow::Result<()> {
+    let state = open_existing_database(&storage.db)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}; run `jaunder init` first"))?;
+
+    let smtp_config = load_smtp_config(state.site_config.as_ref())
+        .await
+        .map_err(|e| anyhow::anyhow!("SMTP misconfigured: {e}"))?
+        .ok_or_else(|| anyhow::anyhow!("SMTP is not configured"))?;
+
+    let mailer = LettreMailSender::from_config(&smtp_config)
+        .map_err(|e| anyhow::anyhow!("Failed to build SMTP transport: {e}"))?;
+
+    let to_addr: email_address::EmailAddress = to
+        .parse()
+        .map_err(|e| anyhow::anyhow!("Invalid email address '{to}': {e}"))?;
+
+    let message = EmailMessage {
+        from: None,
+        to: vec![to_addr],
+        subject: "Jaunder SMTP test".to_owned(),
+        body_text:
+            "This is a test message from Jaunder. If you received it, SMTP is working correctly."
+                .to_owned(),
+    };
+
+    mailer
+        .send_email(&message)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to send test email: {e}"))?;
+
+    println!("Test email sent successfully to {to}");
     Ok(())
 }
 

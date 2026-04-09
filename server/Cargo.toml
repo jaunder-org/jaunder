@@ -32,12 +32,17 @@ tower.workspace = true
 tower-http.workspace = true
 log.workspace = true
 sqlx.workspace = true
+lettre.workspace = true
 thiserror.workspace = true
+serde_json.workspace = true
 chrono.workspace = true
+email_address.workspace = true
 
 [dev-dependencies]
 axum = { workspace = true }
+common = { workspace = true, features = ["test-utils"] }
 leptos = { workspace = true, features = ["ssr"] }
+maik = "0.2.0"
 server_fn = { version = "0.8", features = ["axum-no-default"] }
 tempfile.workspace = true
 tower = { workspace = true }
