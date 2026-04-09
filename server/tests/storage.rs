@@ -56,6 +56,11 @@ async fn reset_postgres_schema() {
         .unwrap();
 }
 
+async fn postgres_state() -> std::sync::Arc<jaunder::storage::AppState> {
+    reset_postgres_schema().await;
+    open_database(&postgres_url()).await.unwrap()
+}
+
 async fn user_storage(base: &TempDir) -> SqliteUserStorage {
     SqliteUserStorage::new(open_pool(base).await)
 }
@@ -183,6 +188,176 @@ async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db() {
     reset_postgres_schema().await;
     let state = open_existing_database(&postgres_url()).await.unwrap();
     assert!(state.site_config.get("missing").await.is_err());
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_site_config_set_then_get_roundtrips() {
+    let state = postgres_state().await;
+    state.site_config.set("site.name", "Postgres").await.unwrap();
+    assert_eq!(
+        state.site_config.get("site.name").await.unwrap().as_deref(),
+        Some("Postgres")
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_create_user_duplicate_and_authenticate_work() {
+    let state = postgres_state().await;
+    let username = username("alice");
+    let initial_password = password("password123");
+
+    let user_id = state
+        .users
+        .create_user(&username, &initial_password, Some("Alice"))
+        .await
+        .unwrap();
+    let record = state
+        .users
+        .get_user_by_username(&username)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.user_id, user_id);
+
+    let duplicate = state
+        .users
+        .create_user(&username, &password("other_password"), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(duplicate, CreateUserError::UsernameTaken));
+
+    let authed = state
+        .users
+        .authenticate(&username, &initial_password)
+        .await
+        .unwrap();
+    assert_eq!(authed.username.as_str(), "alice");
+    assert!(authed.last_authenticated_at.is_some());
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_session_lifecycle_works() {
+    let state = postgres_state().await;
+    let user_id = state
+        .users
+        .create_user(&username("bob"), &password("secret_password"), None)
+        .await
+        .unwrap();
+
+    let raw_token = state
+        .sessions
+        .create_session(user_id, Some("Laptop"))
+        .await
+        .unwrap();
+    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    assert_eq!(record.user_id, user_id);
+    assert_eq!(record.username.as_str(), "bob");
+
+    let sessions = state.sessions.list_sessions(user_id).await.unwrap();
+    assert_eq!(sessions.len(), 1);
+    state
+        .sessions
+        .revoke_session(&record.token_hash)
+        .await
+        .unwrap();
+    let err = state.sessions.authenticate(&raw_token).await.unwrap_err();
+    assert!(matches!(err, SessionAuthError::SessionNotFound));
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_invite_and_atomic_registration_work() {
+    let state = postgres_state().await;
+    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let code = state.invites.create_invite(expires_at).await.unwrap();
+
+    let user_id = state
+        .atomic
+        .create_user_with_invite(
+            &username("carol"),
+            &password("password123"),
+            Some("Carol"),
+            &code,
+        )
+        .await
+        .unwrap();
+    let created = state.users.get_user(user_id).await.unwrap().unwrap();
+    assert_eq!(created.username.as_str(), "carol");
+
+    let err = state
+        .atomic
+        .create_user_with_invite(
+            &username("carol2"),
+            &password("password123"),
+            None,
+            &code,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_email_verification_and_password_reset_work() {
+    let state = postgres_state().await;
+    let user_id = state
+        .users
+        .create_user(&username("dave"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let verify_token = state
+        .email_verifications
+        .create_email_verification(
+            user_id,
+            "dave@example.com",
+            Utc::now() + chrono::Duration::hours(1),
+        )
+        .await
+        .unwrap();
+    let (verified_user_id, verified_email) = state
+        .email_verifications
+        .use_email_verification(&verify_token)
+        .await
+        .unwrap();
+    assert_eq!(verified_user_id, user_id);
+    assert_eq!(verified_email, "dave@example.com");
+
+    state
+        .users
+        .set_email(user_id, Some(&"dave@example.com".parse().unwrap()), true)
+        .await
+        .unwrap();
+
+    let reset_token = state
+        .password_resets
+        .create_password_reset(user_id, Utc::now() + chrono::Duration::hours(1))
+        .await
+        .unwrap();
+    let claimed_user_id = state.password_resets.use_password_reset(&reset_token).await.unwrap();
+    assert_eq!(claimed_user_id, user_id);
+
+    let reset_token = state
+        .password_resets
+        .create_password_reset(user_id, Utc::now() + chrono::Duration::hours(1))
+        .await
+        .unwrap();
+    state
+        .atomic
+        .confirm_password_reset(&reset_token, &password("new_password123"))
+        .await
+        .unwrap();
+
+    let authed = state
+        .users
+        .authenticate(&username("dave"), &password("new_password123"))
+        .await
+        .unwrap();
+    assert_eq!(authed.user_id, user_id);
 }
 
 // --- UserStorage integration tests ---
