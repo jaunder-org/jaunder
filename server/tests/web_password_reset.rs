@@ -32,7 +32,10 @@ async fn open_pool(base: &TempDir) -> SqlitePool {
     let pool = SqlitePool::connect_with(opts.create_if_missing(true))
         .await
         .unwrap();
-    sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+    sqlx::migrate!("./migrations/sqlite")
+        .run(&pool)
+        .await
+        .unwrap();
     pool
 }
 
