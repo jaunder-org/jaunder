@@ -6,12 +6,12 @@ use axum::{
 };
 use chrono::Utc;
 use common::mailer::{test_utils::CapturingMailSender, MailSender};
-use leptos::prelude::LeptosOptions;
-use server::storage::{
+use jaunder::storage::{
     AppState, SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
     SqlitePasswordResetStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
 };
-use server::username::Username;
+use jaunder::username::Username;
+use leptos::prelude::LeptosOptions;
 use sqlx::SqlitePool;
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -73,7 +73,7 @@ async fn post_form(
     }
     let request = builder.body(Body::from(body.into())).unwrap();
 
-    let app = server::create_router(test_options(), state);
+    let app = jaunder::create_router(test_options(), state, true);
     let response = app.oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)

@@ -15,7 +15,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     flake-utils.url = "github:numtide/flake-utils";
-    serena =  {
+    serena = {
       inputs.nixpkgs.follows = "nixpkgs";
       url = "github:oraios/serena";
     };
@@ -31,7 +31,149 @@
       serena,
       crane,
     }:
-    flake-utils.lib.eachDefaultSystem (
+    let
+      interactiveTestingVmSystem = "x86_64-linux";
+      mailCaptureEnv = {
+        JAUNDER_MAIL_CAPTURE_FILE = "/var/lib/jaunder/mail.jsonl";
+      };
+
+      jaunderModule =
+        {
+          lib,
+          pkgs,
+          config,
+          ...
+        }:
+        let
+          cfg = config.services.jaunder;
+        in
+        let
+          targetSystem = pkgs.stdenv.hostPlatform.system;
+          jaunderBin = self.packages.${targetSystem}.jaunder;
+          site = self.packages.${targetSystem}.site;
+        in
+        {
+          options.services.jaunder = {
+            enable = lib.mkEnableOption "the Jaunder service";
+
+            bind = lib.mkOption {
+              type = lib.types.str;
+              default = "127.0.0.1:3000";
+            };
+
+            prod = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+            };
+          };
+
+          config = lib.mkIf cfg.enable {
+            users.groups.jaunder = { };
+
+            users.users.jaunder = {
+              isNormalUser = true;
+              group = "jaunder";
+              home = "/var/lib/jaunder";
+              createHome = true;
+              packages = [ jaunderBin ];
+              shell = pkgs.bashInteractive;
+            };
+
+            systemd.services.jaunder = {
+              description = "Jaunder";
+              wantedBy = [ "multi-user.target" ];
+              after = [ "network.target" ];
+              environment = {
+                JAUNDER_BIND = cfg.bind;
+              }
+              // lib.optionalAttrs cfg.prod {
+                JAUNDER_ENV = "prod";
+              };
+              preStart = ''
+                mkdir -p target
+                ln -sfn ${site} target/site
+                ${jaunderBin}/bin/jaunder init --skip-if-exists
+              '';
+              serviceConfig = {
+                User = "jaunder";
+                Group = "jaunder";
+                StateDirectory = "jaunder";
+                WorkingDirectory = "%S/jaunder";
+                ExecStart = "${jaunderBin}/bin/jaunder serve";
+                Restart = "on-failure";
+                RestartSec = "2s";
+              };
+            };
+          };
+        };
+
+      interactiveTestingVmModule =
+        {
+          pkgs,
+          ...
+        }:
+        {
+          imports = [ self.nixosModules.jaunder ];
+
+          networking.hostName = "jaunder-interactive-testing";
+          boot.postBootCommands = ''
+            sleep 5
+            ${pkgs.systemd}/bin/systemctl --no-pager status jaunder.service || true
+            ${pkgs.systemd}/bin/journalctl -u jaunder.service -b --no-pager -n 100 || true
+          '';
+
+          virtualisation.vmVariant = {
+            virtualisation.graphics = false;
+            virtualisation.forwardPorts = [
+              {
+                from = "host";
+                host.port = 2222;
+                guest.port = 22;
+              }
+              {
+                from = "host";
+                host.port = 3000;
+                guest.port = 3000;
+              }
+            ];
+          };
+
+          boot.loader.grub.devices = [ "nodev" ];
+          fileSystems."/" = {
+            device = "tmpfs";
+            fsType = "tmpfs";
+          };
+
+          networking.firewall.allowedTCPPorts = [ 3000 ];
+
+          services.jaunder.enable = true;
+          services.jaunder.bind = "0.0.0.0:3000";
+
+          systemd.services.jaunder.environment = mailCaptureEnv // {
+            JAUNDER_BIND = "0.0.0.0:3000";
+          };
+
+          services.getty.autologinUser = "jaunder";
+          security.sudo.wheelNeedsPassword = false;
+
+          users.users.jaunder.extraGroups = [ "wheel" ];
+          users.users.jaunder.initialPassword = "jaunder";
+          users.users.jaunder.packages = [ pkgs.sqlite ];
+
+          system.stateVersion = "26.05";
+        };
+
+      interactiveTestingVmConfiguration = nixpkgs.lib.nixosSystem {
+        system = interactiveTestingVmSystem;
+        modules = [ interactiveTestingVmModule ];
+      };
+
+    in
+    {
+      nixosModules.jaunder = jaunderModule;
+      nixosConfigurations.interactive-testing-vm = interactiveTestingVmConfiguration;
+    }
+    // flake-utils.lib.eachDefaultSystem (
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
@@ -44,9 +186,7 @@
 
         src = pkgs.lib.cleanSourceWith {
           src = craneLib.path ./.;
-          filter =
-            path: type:
-            (pkgs.lib.hasSuffix ".sql" path) || (craneLib.filterCargoSources path type);
+          filter = path: type: (pkgs.lib.hasSuffix ".sql" path) || (craneLib.filterCargoSources path type);
         };
 
         commonArgs = {
@@ -54,6 +194,7 @@
           pname = "jaunder";
           version = "0.1.0";
           strictDeps = true;
+          RUST_MIN_STACK = "16777216";
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [
             pkgs.openssl
@@ -66,11 +207,11 @@
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-        serverBin = craneLib.buildPackage (
+        jaunderBin = craneLib.buildPackage (
           commonArgs
           // {
             inherit cargoArtifacts;
-            cargoExtraArgs = "-p server";
+            cargoExtraArgs = "-p jaunder";
             # Tests are covered by the separate `nextest` check, which runs
             # each test in its own process.  Disabling here avoids a duplicate
             # `cargo test` run that shares a process across async tests and can
@@ -182,97 +323,119 @@
           filter = path: _type: !(pkgs.lib.hasInfix "/node_modules" path);
         };
 
-      in
-      {
-        checks = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
-          e2e = pkgs.testers.nixosTest {
-            name = "jaunder-e2e";
-
-            nodes.machine =
-              { pkgs, ... }:
-              {
-                virtualisation.memorySize = 2048;
-                environment.systemPackages = [ pkgs.sqlite ];
-
-                systemd.services.jaunder = {
-                  wantedBy = [ "multi-user.target" ];
-                  environment = {
-                    LEPTOS_SITE_ROOT = "${site}";
-                    LEPTOS_SITE_ADDR = "127.0.0.1:3000";
-                    LEPTOS_OUTPUT_NAME = "jaunder";
-                    LEPTOS_PKG_DIR = "pkg";
-                    LEPTOS_ENV = "PROD";
-                    RUST_LOG = "info";
-                    JAUNDER_MAIL_CAPTURE_FILE = "/tmp/jaunder-mail.jsonl";
-                  };
-                  preStart = ''
-                    mkdir -p /var/lib/jaunder
-                    cat > /var/lib/jaunder/Leptos.toml <<'EOF'
-                    [leptos]
-                    output-name = "jaunder"
-                    site-root = "${site}"
-                    site-addr = "127.0.0.1:3000"
-                    env = "PROD"
-                    EOF
-                    ${serverBin}/bin/server init --skip-if-exists
-                  '';
-                  serviceConfig = {
-                    ExecStart = "${serverBin}/bin/server serve";
-                    WorkingDirectory = "/var/lib/jaunder";
-                    StateDirectory = "jaunder";
-                    Restart = "on-failure";
-                    RestartSec = "2s";
-                  };
-                };
-              };
-
-            testScript = ''
-              machine.start()
-              machine.wait_for_unit("jaunder.service", timeout=60)
-              machine.wait_for_open_port(3000, timeout=30)
-
-              machine.succeed("sqlite3 /var/lib/jaunder/data/jaunder.db \"INSERT OR REPLACE INTO site_config (key, value) VALUES ('site.registration_policy', 'open')\"")
-              machine.succeed("cd /var/lib/jaunder && ${serverBin}/bin/server user-create --username testlogin --password testpassword123")
-
-              machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
-              machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")
-              machine.succeed(
-                "cd /tmp/e2e"
-                + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
-                + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-                + " JAUNDER_MAIL_CAPTURE_FILE=/tmp/jaunder-mail.jsonl"
-                + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-                + " --config playwright.nix.config.js"
-              )
-            '';
-          };
-        } // {
-          clippy = craneLib.cargoClippy (commonArgs // {
-            inherit cargoArtifacts;
-            cargoClippyExtraArgs = "-- -D warnings";
-          });
-          rustfmt = craneLib.cargoFmt { inherit src; pname = "jaunder"; version = "0.1.0"; };
-          leptosfmt-check = pkgs.runCommand "leptosfmt-check" {
-            nativeBuildInputs = [ pkgs.leptosfmt ];
-          } ''
-            cd ${src}
-            leptosfmt -x .direnv -x .git -x target --check '**/*.rs'
-            touch $out
-          '';
-          nextest = craneLib.cargoNextest (commonArgs // {
-            inherit cargoArtifacts;
-            preCheck = ''
-              export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
-            '';
-          });
-          deny = craneLib.cargoDeny { inherit src; pname = "jaunder"; version = "0.1.0"; };
-          prettier-check = pkgs.runCommand "prettier-check" {
-            nativeBuildInputs = [ pkgs.prettier ];
-          } ''
-            prettier --check ${end2endSrc}
-            touch $out
+        interactiveTestingVmRunner = pkgs.writeShellApplication {
+          name = "interactive-testing-vm";
+          text = ''
+            echo "HTTP: http://localhost:3000"
+            exec ${interactiveTestingVmConfiguration.config.system.build.vm}/bin/run-jaunder-interactive-testing-vm "$@"
           '';
         };
+
+      in
+      {
+        packages = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          jaunder = jaunderBin;
+          site = site;
+        };
+
+        apps =
+          pkgs.lib.optionalAttrs
+            (pkgs.stdenv.isLinux && pkgs.stdenv.hostPlatform.system == interactiveTestingVmSystem)
+            {
+              interactive-testing-vm = {
+                type = "app";
+                program = "${interactiveTestingVmRunner}/bin/interactive-testing-vm";
+              };
+            };
+
+        checks =
+          pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+            e2e = pkgs.testers.nixosTest {
+              name = "jaunder-e2e";
+
+              nodes.machine =
+                { pkgs, ... }:
+                {
+                  imports = [ self.nixosModules.jaunder ];
+
+                  virtualisation.memorySize = 2048;
+                  environment.systemPackages = [ pkgs.sqlite ];
+
+                  services.jaunder.enable = true;
+                  services.jaunder.bind = "127.0.0.1:3000";
+                  systemd.services.jaunder.environment = mailCaptureEnv // {
+                    RUST_LOG = "info";
+                  };
+                };
+
+              testScript = ''
+                machine.start()
+                machine.wait_for_unit("jaunder.service", timeout=60)
+                machine.wait_for_open_port(3000, timeout=30)
+
+                machine.succeed("sqlite3 /var/lib/jaunder/data/jaunder.db \"INSERT OR REPLACE INTO site_config (key, value) VALUES ('site.registration_policy', 'open')\"")
+                machine.succeed("cd /var/lib/jaunder && ${jaunderBin}/bin/jaunder user-create --username testlogin --password testpassword123")
+
+                machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
+                machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")
+                machine.succeed(
+                  "cd /tmp/e2e"
+                  + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
+                  + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+                  + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                  + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
+                  + " --config playwright.nix.config.js"
+                )
+              '';
+            };
+          }
+          // {
+            clippy = craneLib.cargoClippy (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                cargoClippyExtraArgs = "-- -D warnings";
+              }
+            );
+            rustfmt = craneLib.cargoFmt {
+              inherit src;
+              pname = "jaunder";
+              version = "0.1.0";
+            };
+            leptosfmt-check =
+              pkgs.runCommand "leptosfmt-check"
+                {
+                  nativeBuildInputs = [ pkgs.leptosfmt ];
+                }
+                ''
+                  cd ${src}
+                  leptosfmt -x .direnv -x .git -x target --check '**/*.rs'
+                  touch $out
+                '';
+            nextest = craneLib.cargoNextest (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                preCheck = ''
+                  export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
+                '';
+              }
+            );
+            deny = craneLib.cargoDeny {
+              inherit src;
+              pname = "jaunder";
+              version = "0.1.0";
+            };
+            prettier-check =
+              pkgs.runCommand "prettier-check"
+                {
+                  nativeBuildInputs = [ pkgs.prettier ];
+                }
+                ''
+                  prettier --check ${end2endSrc}
+                  touch $out
+                '';
+          };
 
         devShells.default = pkgs.mkShell {
           buildInputs = [
@@ -300,7 +463,7 @@
           ];
           RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
           shellHook = ''
-            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [pkgs.openssl]}:$LD_LIBRARY_PATH"
+            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
           '';
         };
       }

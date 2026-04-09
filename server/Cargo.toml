@@ -1,11 +1,11 @@
 [package]
-name = "server"
+name = "jaunder"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
 
 [[bin]]
-name = "server"
+name = "jaunder"
 path = "src/main.rs"
 
 [lib]

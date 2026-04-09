@@ -1,13 +1,16 @@
 use leptos::prelude::*;
 
-/// Renders the home page of your application.
 #[component]
 pub fn HomePage() -> impl IntoView {
-    let count = RwSignal::new(0);
-    let on_click = move |_| *count.write() += 1;
-
     view! {
-        <h1>"Welcome to Leptos!"</h1>
-        <button on:click=on_click>"Click Me: " {count}</button>
+        <section>
+            <h1>"Jaunder"</h1>
+            <p>"A self-hosted social reader."</p>
+            <nav>
+                <a href="/login">"Login"</a>
+                " "
+                <a href="/register">"Register"</a>
+            </nav>
+        </section>
     }
 }

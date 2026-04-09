@@ -19,6 +19,7 @@ cfg-if.workspace = true
 chrono = { workspace = true, optional = true }
 email_address = { workspace = true, optional = true }
 serde.workspace = true
+web-sys = { workspace = true, features = ["Window", "Location"] }
 thiserror.workspace = true
 
 [dev-dependencies]
@@ -37,4 +38,3 @@ ssr = [
     "dep:common",
     "dep:email_address",
 ]
-

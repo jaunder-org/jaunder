@@ -5,9 +5,9 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use chrono::Utc;
+use jaunder::storage::{open_database, DbConnectOptions};
+use jaunder::username::Username;
 use leptos::prelude::LeptosOptions;
-use server::storage::{open_database, DbConnectOptions};
-use server::username::Username;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -17,6 +17,7 @@ use tower::ServiceExt;
 fn ensure_server_fns_registered() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
+        server_fn::axum::register_explicit::<web::auth::CurrentUser>();
         server_fn::axum::register_explicit::<web::auth::GetRegistrationPolicy>();
         server_fn::axum::register_explicit::<web::auth::Register>();
         server_fn::axum::register_explicit::<web::auth::Login>();
@@ -30,7 +31,7 @@ fn db_url(base: &TempDir) -> DbConnectOptions {
         .unwrap()
 }
 
-async fn test_state(base: &TempDir) -> Arc<server::storage::AppState> {
+async fn test_state(base: &TempDir) -> Arc<jaunder::storage::AppState> {
     open_database(&db_url(base)).await.unwrap()
 }
 
@@ -41,7 +42,7 @@ fn test_options() -> LeptosOptions {
 /// Sends a form-encoded POST request through a fresh router built from `state`.
 /// Returns (status, Set-Cookie header value, response body).
 async fn post_form(
-    state: Arc<server::storage::AppState>,
+    state: Arc<jaunder::storage::AppState>,
     uri: &str,
     body: impl Into<String>,
     cookie: Option<&str>,
@@ -57,7 +58,7 @@ async fn post_form(
     }
     let request = builder.body(Body::from(body.into())).unwrap();
 
-    let app = server::create_router(test_options(), state);
+    let app = jaunder::create_router(test_options(), state, true);
     let response = app.oneshot(request).await.unwrap();
 
     let status = response.status();
@@ -73,11 +74,34 @@ async fn post_form(
     (status, set_cookie, body_str)
 }
 
+async fn get_html(
+    state: Arc<jaunder::storage::AppState>,
+    uri: &str,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    let mut builder = Request::builder().method("GET").uri(uri);
+    if let Some(c) = cookie {
+        builder = builder.header(header::COOKIE, c);
+    }
+    let request = builder.body(Body::empty()).unwrap();
+
+    let app = jaunder::create_router(test_options(), state, true);
+    let response = app.oneshot(request).await.unwrap();
+
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(bytes.to_vec()).unwrap();
+
+    (status, body_str)
+}
+
 /// Sends a form-encoded POST request through a fresh router built from `state`,
 /// attaching an `Authorization: Bearer <token>` header instead of a cookie.
 /// Returns (status, Set-Cookie header value, response body).
 async fn post_form_with_bearer(
-    state: Arc<server::storage::AppState>,
+    state: Arc<jaunder::storage::AppState>,
     uri: &str,
     body: impl Into<String>,
     bearer_token: &str,
@@ -92,7 +116,7 @@ async fn post_form_with_bearer(
         .body(Body::from(body.into()))
         .expect("failed to build request with bearer token");
 
-    let app = server::create_router(test_options(), state);
+    let app = jaunder::create_router(test_options(), state, true);
     let response = app.oneshot(request).await.expect("router oneshot failed");
 
     let status = response.status();
@@ -365,6 +389,33 @@ async fn login_correct_password_sets_cookie_and_returns_token() {
     assert!(!token.is_empty());
     let cookie = set_cookie.expect("Set-Cookie header should be present on login");
     assert!(cookie.starts_with("session="), "cookie: {cookie}");
+}
+
+#[tokio::test]
+async fn authenticated_home_page_shows_logged_in_indicator() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    state
+        .site_config
+        .set("site.registration_policy", "open")
+        .await
+        .unwrap();
+
+    let (_, set_cookie, _) = post_form(
+        Arc::clone(&state),
+        "/api/register",
+        "username=alice&password=password123",
+        None,
+    )
+    .await;
+    let cookie = set_cookie.expect("register should set a session cookie");
+
+    let (status, body) = get_html(Arc::clone(&state), "/", Some(&cookie)).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Logged in as"), "body: {body}");
+    assert!(body.contains("alice"), "body: {body}");
+    assert!(body.contains("/logout"), "body: {body}");
 }
 
 #[tokio::test]

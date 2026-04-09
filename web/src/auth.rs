@@ -14,6 +14,13 @@ use common::username::Username;
 #[cfg(feature = "ssr")]
 use std::sync::Arc;
 
+/// Cookie settings derived from the public deployment scheme.
+#[cfg(feature = "ssr")]
+#[derive(Clone, Copy)]
+pub struct CookieSettings {
+    pub secure: bool,
+}
+
 // ---------------------------------------------------------------------------
 // AuthUser
 // ---------------------------------------------------------------------------
@@ -90,10 +97,20 @@ pub async fn require_auth() -> Result<AuthUser, leptos::prelude::ServerFnError> 
 fn set_session_cookie(raw_token: &str) {
     use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
+
+    let secure_attr = if use_context::<CookieSettings>()
+        .map(|settings| settings.secure)
+        .unwrap_or(true)
+    {
+        "; Secure"
+    } else {
+        ""
+    };
+
     if let Some(opts) = use_context::<ResponseOptions>() {
         let cookie = format!(
-            "session={}; HttpOnly; SameSite=Lax; Path=/; Secure",
-            raw_token
+            "session={}; HttpOnly; SameSite=Lax; Path=/{}",
+            raw_token, secure_attr
         );
         if let Ok(val) = axum::http::HeaderValue::from_str(&cookie) {
             opts.insert_header(axum::http::header::SET_COOKIE, val);
@@ -105,9 +122,22 @@ fn set_session_cookie(raw_token: &str) {
 fn clear_session_cookie() {
     use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
+
+    let secure_attr = if use_context::<CookieSettings>()
+        .map(|settings| settings.secure)
+        .unwrap_or(true)
+    {
+        "; Secure"
+    } else {
+        ""
+    };
+
     if let Some(opts) = use_context::<ResponseOptions>() {
-        let cookie = "session=; HttpOnly; SameSite=Lax; Path=/; Secure; Max-Age=0";
-        if let Ok(val) = axum::http::HeaderValue::from_str(cookie) {
+        let cookie = format!(
+            "session=; HttpOnly; SameSite=Lax; Path=/{}; Max-Age=0",
+            secure_attr
+        );
+        if let Ok(val) = axum::http::HeaderValue::from_str(&cookie) {
             opts.insert_header(axum::http::header::SET_COOKIE, val);
         }
     }
@@ -126,6 +156,15 @@ pub async fn get_registration_policy() -> Result<String, ServerFnError> {
     let state = expect_context::<Arc<AppState>>();
     let policy = load_registration_policy(&*state.site_config).await;
     Ok(policy.to_string())
+}
+
+/// Returns the current logged-in username, if any.
+#[server(endpoint = "/current_user")]
+pub async fn current_user() -> Result<Option<String>, ServerFnError> {
+    match require_auth().await {
+        Ok(auth) => Ok(Some(auth.username.to_string())),
+        Err(_) => Ok(None),
+    }
 }
 
 /// Registers a new user.  Returns the raw session token on success and sets

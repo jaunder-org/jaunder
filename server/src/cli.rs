@@ -1,3 +1,4 @@
+use std::fmt;
 use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand};
@@ -23,6 +24,27 @@ pub struct StorageArgs {
     /// Only `sqlite:` URLs are supported until M20 adds PostgreSQL.
     #[arg(long, env = "JAUNDER_DB", default_value = "sqlite:./data/jaunder.db")]
     pub db: DbConnectOptions,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, clap::ValueEnum)]
+pub enum DeploymentEnv {
+    Dev,
+    Prod,
+}
+
+impl DeploymentEnv {
+    pub fn is_prod(self) -> bool {
+        matches!(self, DeploymentEnv::Prod)
+    }
+}
+
+impl fmt::Display for DeploymentEnv {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DeploymentEnv::Dev => write!(f, "dev"),
+            DeploymentEnv::Prod => write!(f, "prod"),
+        }
+    }
 }
 
 #[derive(Subcommand, Clone)]
@@ -51,6 +73,10 @@ pub enum Commands {
         /// Address and port to bind to.
         #[arg(long, env = "JAUNDER_BIND", default_value = "127.0.0.1:3000")]
         bind: SocketAddr,
+
+        /// Deployment environment.
+        #[arg(long, env = "JAUNDER_ENV", default_value_t = DeploymentEnv::Dev)]
+        environment: DeploymentEnv,
     },
 
     /// Create a user account directly, bypassing the registration policy.
@@ -210,6 +236,38 @@ mod tests {
             panic!("wrong variant");
         };
         assert_eq!(bind, "0.0.0.0:9000".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
+    fn environment_defaults_dev() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let cli = parse(&["serve"]);
+        let Commands::Serve { environment, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(environment, DeploymentEnv::Dev);
+    }
+
+    #[test]
+    fn environment_from_flag() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let cli = parse(&["serve", "--environment", "prod"]);
+        let Commands::Serve { environment, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(environment, DeploymentEnv::Prod);
+    }
+
+    #[test]
+    fn environment_env_beats_default() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("JAUNDER_ENV", "prod");
+        let cli = parse(&["serve"]);
+        std::env::remove_var("JAUNDER_ENV");
+        let Commands::Serve { environment, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(environment, DeploymentEnv::Prod);
     }
 
     // --- skip_if_exists flag ---

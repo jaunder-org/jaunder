@@ -1,13 +1,13 @@
 use chrono::Utc;
-use server::password::Password;
-use server::storage::{
+use jaunder::password::Password;
+use jaunder::storage::{
     open_database, AtomicOps, CreateUserError, DbConnectOptions, EmailVerificationStorage,
     InviteStorage, PasswordResetStorage, ProfileUpdate, RegisterWithInviteError, SessionAuthError,
     SessionStorage, SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
     SqlitePasswordResetStorage, SqliteSessionStorage, SqliteUserStorage, UseEmailVerificationError,
     UseInviteError, UsePasswordResetError, UserAuthError, UserStorage,
 };
-use server::username::Username;
+use jaunder::username::Username;
 use sqlx::SqlitePool;
 use tempfile::TempDir;
 

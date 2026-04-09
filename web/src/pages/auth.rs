@@ -1,6 +1,5 @@
 use crate::auth::{get_registration_policy, Login, Logout, Register};
 use leptos::prelude::*;
-use leptos_router::components::Redirect;
 
 /// Registration page.
 #[component]
@@ -60,6 +59,17 @@ pub fn LoginPage() -> impl IntoView {
     let login_action = ServerAction::<Login>::new();
     let username = RwSignal::new(String::new());
 
+    Effect::new(move |_| {
+        if matches!(login_action.value().get(), Some(Ok(_))) {
+            #[cfg(target_arch = "wasm32")]
+            {
+                if let Some(window) = web_sys::window() {
+                    let _ = window.location().set_href("/");
+                }
+            }
+        }
+    });
+
     view! {
         <h1>"Login"</h1>
         <ActionForm action=login_action>
@@ -82,7 +92,7 @@ pub fn LoginPage() -> impl IntoView {
                 .value()
                 .get()
                 .map(|r: Result<String, ServerFnError>| match r {
-                    Ok(_) => view! { <Redirect path="/" /> }.into_any(),
+                    Ok(_) => view! { <p>"Logging in..."</p> }.into_any(),
                     Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                 })
         }}
