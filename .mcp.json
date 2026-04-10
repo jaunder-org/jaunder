@@ -20,7 +20,6 @@
     },
     "serena": {
       "args": [
-        "serena",
         "start-mcp-server",
         "--context",
         "ide-assistant",
@@ -29,7 +28,7 @@
         "--project",
         "."
       ],
-      "command": "nix",
+      "command": "serena",
       "env": {},
       "type": "stdio"
     }

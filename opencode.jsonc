@@ -1,0 +1,43 @@
+{
+  "mcp": {
+    "context7": {
+      "type": "local",
+      "command": [
+        "context7-mcp"
+      ],
+      "enabled": true,
+      "environment": {}
+    },
+    "git": {
+      "type": "local",
+      "command": [
+        "mcp-server-git"
+      ],
+      "enabled": true,
+      "environment": {}
+    },
+    "playwright": {
+      "type": "local",
+      "command": [
+        "mcp-server-playwright"
+      ],
+      "enabled": true,
+      "environment": {}
+    },
+    "serena": {
+      "type": "local",
+      "command": [
+        "serena",
+        "start-mcp-server",
+        "--context",
+        "ide-assistant",
+        "--enable-web-dashboard",
+        "false",
+        "--project",
+        "."
+      ],
+      "enabled": true,
+      "environment": {}
+    }
+  }
+}

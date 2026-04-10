@@ -5,7 +5,7 @@
             {
                 "type": "command",
                 "command": "./scripts/format",
-                "matcher": "Edit(*.rs)|Write(*.rs)|Edit(*.ts)|Write(*.ts)|Edit(*.js)|Write(*.js)"
+                "matcher": "Edit|Write"
             },
             {
                 "type": "command",

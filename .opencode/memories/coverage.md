@@ -1,0 +1,1 @@
+- NEVER update the coverage baseline without user approval.

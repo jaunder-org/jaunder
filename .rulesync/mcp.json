@@ -1,31 +1,37 @@
 {
-  "$schema": "https://github.com/dyoshikawa/rulesync/releases/latest/download/mcp-schema.json",
-  "mcpServers": {
-    "serena": {
-      "type": "stdio",
-      "command": "nix",
-      "args": [
-        "run",
-        "github:oraios/serena",
-        "--",
-        "start-mcp-server",
-        "--context",
-        "ide-assistant",
-        "--enable-web-dashboard",
-        "false",
-        "--project",
-        "."
-      ],
-      "env": {}
-    },
-    "context7": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@upstash/context7-mcp"
-      ],
-      "env": {}
+    "$schema": "https://github.com/dyoshikawa/rulesync/releases/latest/download/mcp-schema.json",
+    "mcpServers": {
+        "context7": {
+            "args": [],
+            "command": "context7-mcp",
+            "env": {},
+            "type": "stdio"
+        },
+        "git": {
+            "args": [],
+            "command": "mcp-server-git",
+            "env": {},
+            "type": "stdio"
+        },
+        "playwright": {
+            "args": [],
+            "command": "mcp-server-playwright",
+            "env": {},
+            "type": "stdio"
+        },
+        "serena": {
+            "args": [
+                "start-mcp-server",
+                "--context",
+                "ide-assistant",
+                "--enable-web-dashboard",
+                "false",
+                "--project",
+                "."
+            ],
+            "command": "serena",
+            "env": {},
+            "type": "stdio"
+        }
     }
-  }
 }

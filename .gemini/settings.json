@@ -1,12 +1,25 @@
 {
   "mcpServers": {
+    "context7": {
+      "args": [],
+      "command": "context7-mcp",
+      "env": {},
+      "type": "stdio"
+    },
+    "git": {
+      "args": [],
+      "command": "mcp-server-git",
+      "env": {},
+      "type": "stdio"
+    },
+    "playwright": {
+      "args": [],
+      "command": "mcp-server-playwright",
+      "env": {},
+      "type": "stdio"
+    },
     "serena": {
-      "type": "stdio",
-      "command": "nix",
       "args": [
-        "run",
-        "github:oraios/serena",
-        "--",
         "start-mcp-server",
         "--context",
         "ide-assistant",
@@ -15,32 +28,20 @@
         "--project",
         "."
       ],
-      "env": {}
-    },
-    "context7": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@upstash/context7-mcp"
-      ],
-      "env": {}
+      "command": "serena",
+      "env": {},
+      "type": "stdio"
     }
   },
   "hooks": {
     "AfterTool": [
       {
-        "matcher": "Edit(*.rs)|Write(*.rs)|Edit(*.ts)|Write(*.ts)|Edit(*.js)|Write(*.js)",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
             "command": "$GEMINI_PROJECT_DIR/scripts/format"
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
+          },
           {
             "type": "command",
             "command": "jq -r '.tool_input.file_path' | { read -r f; git add \"$f\"; } 2>/dev/null || true"

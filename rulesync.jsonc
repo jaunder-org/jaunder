@@ -4,7 +4,8 @@
     "claudecode",
     "codexcli",
     "copilotcli",
-    "geminicli"
+    "geminicli",
+    "opencode"
   ],
   "features": [
     "rules",
