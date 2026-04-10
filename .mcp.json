@@ -1,12 +1,26 @@
 {
   "mcpServers": {
+    "context7": {
+      "args": [],
+      "command": "context7-mcp",
+      "env": {},
+      "type": "stdio"
+    },
+    "git": {
+      "args": [],
+      "command": "mcp-server-git",
+      "env": {},
+      "type": "stdio"
+    },
+    "playwright": {
+      "args": [],
+      "command": "mcp-server-playwright",
+      "env": {},
+      "type": "stdio"
+    },
     "serena": {
-      "type": "stdio",
-      "command": "nix",
       "args": [
-        "run",
-        "github:oraios/serena",
-        "--",
+        "serena",
         "start-mcp-server",
         "--context",
         "ide-assistant",
@@ -15,16 +29,9 @@
         "--project",
         "."
       ],
-      "env": {}
-    },
-    "context7": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@upstash/context7-mcp"
-      ],
-      "env": {}
+      "command": "nix",
+      "env": {},
+      "type": "stdio"
     }
   }
 }
