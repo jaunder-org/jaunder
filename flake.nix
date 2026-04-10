@@ -398,6 +398,26 @@
           filter = path: _type: !(pkgs.lib.hasInfix "/node_modules" path);
         };
 
+        postgresIntegrationTests = craneLib.buildPackage (
+          commonArgs
+          // {
+            inherit cargoArtifacts;
+            cargoExtraArgs = "-p jaunder --test commands --test storage --test web_account --test web_auth --test web_email --test web_password_reset";
+            doCheck = false;
+            installPhaseCommand = ''
+              mkdir -p $out/lib $out/tests
+              ln -s ${pkgs.openssl.out}/lib/libssl.so.3 $out/lib/libssl.so.3
+              ln -s ${pkgs.openssl.out}/lib/libcrypto.so.3 $out/lib/libcrypto.so.3
+              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'commands-*' | head -n 1)" $out/tests/commands
+              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'storage-*' | head -n 1)" $out/tests/storage
+              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'web_account-*' | head -n 1)" $out/tests/web_account
+              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'web_auth-*' | head -n 1)" $out/tests/web_auth
+              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'web_email-*' | head -n 1)" $out/tests/web_email
+              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'web_password_reset-*' | head -n 1)" $out/tests/web_password_reset
+            '';
+          }
+        );
+
         interactiveTestingVmRunner = pkgs.writeShellApplication {
           name = "interactive-testing-vm";
           text = ''
@@ -413,6 +433,70 @@
             exec ${postgresTestingVmConfiguration.config.system.build.vm}/bin/run-jaunder-postgres-testing-vm "$@"
           '';
         };
+
+        # PostgreSQL-backed Rust integration tests need a live database service,
+        # so they run inside a NixOS VM instead of under the plain `nextest`
+        # check. We keep one VM check per test binary: that is coarse enough to
+        # avoid a derivation-per-test maintenance burden, but still fine-grained
+        # enough that failures and long poles are easy to localize.
+        postgresTestBinaryCheck =
+          {
+            checkName,
+            testBinary,
+            includeIgnored ? false,
+            extraEnv ? "",
+            filter ? "",
+          }:
+          pkgs.testers.nixosTest {
+            name = checkName;
+
+            nodes.machine =
+              { pkgs, lib, ... }:
+              {
+                virtualisation.memorySize = 4096;
+                virtualisation.diskSize = 4096;
+
+                services.postgresql = {
+                  enable = true;
+                  package = pkgs.postgresql_16;
+                  ensureDatabases = [ "jaunder" ];
+                  ensureUsers = [
+                    {
+                      name = "jaunder";
+                      ensureDBOwnership = true;
+                    }
+                  ];
+                  authentication = ''
+                    local all all trust
+                    host all all 0.0.0.0/0 trust
+                  '';
+                  settings = {
+                    listen_addresses = lib.mkForce "*";
+                  };
+                };
+
+                environment.systemPackages = [
+                  pkgs.postgresql_16
+                ];
+              };
+
+            testScript = ''
+              machine.start()
+              machine.wait_for_unit("postgresql.service", timeout=60)
+              machine.wait_until_succeeds(
+                "sudo -u postgres psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname = 'jaunder'\" | grep -q 1"
+              )
+              machine.wait_until_succeeds(
+                "sudo -u postgres psql -tAc \"SELECT 1 FROM pg_database WHERE datname = 'jaunder'\" | grep -q 1"
+              )
+              machine.succeed(
+                "${extraEnv}JAUNDER_PG_TEST_URL=postgres://jaunder@127.0.0.1/jaunder"
+                + " ${postgresIntegrationTests}/tests/${testBinary}"
+                + " ${if includeIgnored then "--include-ignored " else ""}--test-threads=1"
+                + " ${filter}"
+              )
+            '';
+          };
 
       in
       {
@@ -500,9 +584,12 @@
                   };
 
                   services.jaunder.enable = true;
-                  services.jaunder.db = "postgres://jaunder:testpassword@localhost/jaunder";
+                  services.jaunder.db = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
                   # We delay jaunder.service until we have run create-pg-db in the testScript.
                   systemd.services.jaunder.wantedBy = lib.mkForce [ ];
+                  systemd.services.jaunder.environment = mailCaptureEnv // {
+                    RUST_LOG = "info";
+                  };
                 };
 
               testScript = ''
@@ -512,8 +599,8 @@
                 # Exercise create-pg-db
                 machine.succeed(
                   "${jaunderBin}/bin/jaunder create-pg-db"
-                  + " --bootstrap-db postgres://postgres@localhost/postgres"
-                  + " --app-db postgres://jaunder@localhost/jaunder"
+                  + " --bootstrap-db postgres://postgres@127.0.0.1/postgres"
+                  + " --app-db postgres://jaunder@127.0.0.1/jaunder"
                   + " --app-role-password testpassword"
                 )
 
@@ -524,7 +611,13 @@
 
                 # Set registration policy via psql
                 machine.succeed("sudo -u postgres psql -d jaunder -c \"INSERT INTO site_config (key, value) VALUES ('site.registration_policy', 'open')\"")
-                machine.succeed("cd /var/lib/jaunder && ${jaunderBin}/bin/jaunder user-create --username testlogin --password testpassword123")
+                machine.succeed(
+                  "cd /var/lib/jaunder"
+                  + " && ${jaunderBin}/bin/jaunder user-create"
+                  + " --db postgres://jaunder:testpassword@127.0.0.1/jaunder"
+                  + " --username testlogin"
+                  + " --password testpassword123"
+                )
 
                 machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
                 machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")
@@ -539,51 +632,41 @@
               '';
             };
 
-            integration-postgres = pkgs.testers.nixosTest {
-              name = "jaunder-integration-postgres";
+            # `commands` includes PostgreSQL-only ignored bootstrap tests, so
+            # this VM check runs the full binary with `--include-ignored`.
+            postgres-commands = postgresTestBinaryCheck {
+              checkName = "jaunder-postgres-commands";
+              testBinary = "commands";
+              includeIgnored = true;
+              extraEnv = "JAUNDER_PG_BOOTSTRAP_TEST_URL=postgres://postgres@127.0.0.1/postgres ";
+            };
 
-              nodes.machine =
-                { pkgs, lib, ... }:
-                {
-                  virtualisation.memorySize = 4096;
-                  virtualisation.diskSize = 4096;
+            # `storage` also carries ignored PostgreSQL-only parity/migration
+            # tests, so it likewise includes ignored cases in the VM run.
+            postgres-storage = postgresTestBinaryCheck {
+              checkName = "jaunder-postgres-storage";
+              testBinary = "storage";
+              includeIgnored = true;
+            };
 
-                  services.postgresql = {
-                    enable = true;
-                    package = pkgs.postgresql_16;
-                    ensureDatabases = [ "jaunder" ];
-                    ensureUsers = [
-                      {
-                        name = "jaunder";
-                        ensureDBOwnership = true;
-                      }
-                    ];
-                    authentication = ''
-                      local all all trust
-                      host all all 0.0.0.0/0 trust
-                    '';
-                    settings = {
-                      listen_addresses = lib.mkForce "*";
-                    };
-                  };
+            postgres-web-account = postgresTestBinaryCheck {
+              checkName = "jaunder-postgres-web-account";
+              testBinary = "web_account";
+            };
 
-                  environment.systemPackages = [
-                    pkgs.cargo-nextest
-                    pkgs.postgresql_16
-                  ];
-                };
+            postgres-web-auth = postgresTestBinaryCheck {
+              checkName = "jaunder-postgres-web-auth";
+              testBinary = "web_auth";
+            };
 
-              testScript = ''
-                machine.start()
-                machine.wait_for_unit("postgresql.service", timeout=60)
-                machine.succeed(
-                  "cd ${src}"
-                  + " && JAUNDER_PG_TEST_URL=postgres://jaunder@localhost/jaunder"
-                  + " ${pkgs.cargo-nextest}/bin/cargo-nextest nextest run"
-                  + " --run-ignored all"
-                  + " --test-threads=1"
-                )
-              '';
+            postgres-web-email = postgresTestBinaryCheck {
+              checkName = "jaunder-postgres-web-email";
+              testBinary = "web_email";
+            };
+
+            postgres-web-password-reset = postgresTestBinaryCheck {
+              checkName = "jaunder-postgres-web-password-reset";
+              testBinary = "web_password_reset";
             };
           }
           // {

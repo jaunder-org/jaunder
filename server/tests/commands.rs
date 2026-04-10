@@ -11,19 +11,32 @@ use jaunder::commands::{
     cmd_create_pg_db, cmd_init, cmd_serve, cmd_smtp_test, cmd_user_create, cmd_user_invite,
 };
 use jaunder::password::Password;
-use jaunder::storage::{open_database, open_existing_database, DbConnectOptions};
+use jaunder::storage::{open_database, open_existing_database};
 use jaunder::username::Username;
 use leptos::prelude::LeptosOptions;
 use sqlx::Connection;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{postgres_url, sqlite_url, test_options};
+use helpers::{
+    nonexistent_postgres_url, postgres_bootstrap_url, postgres_test_authority,
+    postgres_testing_enabled, sqlite_url, unique_postgres_url,
+};
 
-fn storage_args(base: &TempDir) -> StorageArgs {
+async fn storage_args(base: &TempDir) -> StorageArgs {
     let storage_path = base.path().join("storage");
-    let db = if let Ok(url) = std::env::var("JAUNDER_PG_TEST_URL") {
-        url.parse().unwrap()
+    let db = if postgres_testing_enabled() {
+        unique_postgres_url().await
+    } else {
+        sqlite_url(base)
+    };
+    StorageArgs { storage_path, db }
+}
+
+fn uninitialized_storage_args(base: &TempDir) -> StorageArgs {
+    let storage_path = base.path().join("storage");
+    let db = if postgres_testing_enabled() {
+        nonexistent_postgres_url()
     } else {
         sqlite_url(base)
     };
@@ -33,7 +46,7 @@ fn storage_args(base: &TempDir) -> StorageArgs {
 #[tokio::test]
 async fn cmd_init_on_fresh_dir_creates_structure_and_valid_db() {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base);
+    let args = storage_args(&base).await;
 
     cmd_init(&args, false).await.unwrap();
 
@@ -46,7 +59,7 @@ async fn cmd_init_on_fresh_dir_creates_structure_and_valid_db() {
 #[tokio::test]
 async fn cmd_init_second_time_returns_error() {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base);
+    let args = storage_args(&base).await;
 
     cmd_init(&args, false).await.unwrap();
     let result = cmd_init(&args, false).await;
@@ -56,7 +69,7 @@ async fn cmd_init_second_time_returns_error() {
 #[tokio::test]
 async fn cmd_init_skip_if_exists_succeeds_on_already_initialized() {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base);
+    let args = storage_args(&base).await;
 
     cmd_init(&args, false).await.unwrap();
     cmd_init(&args, true).await.unwrap();
@@ -65,7 +78,7 @@ async fn cmd_init_skip_if_exists_succeeds_on_already_initialized() {
 #[tokio::test]
 async fn cmd_init_fails_on_invalid_path() {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base);
+    let args = storage_args(&base).await;
     // Create a file where the storage directory should be, so create_dir fails
     // with something other than AlreadyExists (actually it might be AlreadyExists or NotADirectory).
     // Actually, let's use a path in a non-existent directory.
@@ -100,13 +113,11 @@ async fn cmd_create_pg_db_provisions_role_and_database() {
     let role_name = format!("jaunder_role_{suffix}");
     let db_name = format!("jaunder_db_{suffix}");
 
-    let bootstrap = "postgres://postgres@127.0.0.1:55432/postgres".to_owned();
-    let app = format!("postgres://{role_name}@127.0.0.1:55432/{db_name}");
+    let bootstrap = postgres_bootstrap_url();
+    let authority = postgres_test_authority();
+    let app = format!("postgres://{role_name}@{authority}/{db_name}");
 
-    let mut admin_conn =
-        sqlx::PgConnection::connect("postgres://postgres@127.0.0.1:55432/postgres")
-            .await
-            .unwrap();
+    let mut admin_conn = sqlx::PgConnection::connect(&bootstrap).await.unwrap();
     sqlx::query(&format!("DROP DATABASE IF EXISTS \"{db_name}\""))
         .execute(&mut admin_conn)
         .await
@@ -168,13 +179,11 @@ async fn cmd_create_pg_db_fails_if_role_already_exists() {
     let role_name = format!("jaunder_role_{suffix}");
     let db_name = format!("jaunder_db_{suffix}");
 
-    let bootstrap = "postgres://postgres@127.0.0.1:55432/postgres".to_owned();
-    let app = format!("postgres://{role_name}@127.0.0.1:55432/{db_name}");
+    let bootstrap = postgres_bootstrap_url();
+    let authority = postgres_test_authority();
+    let app = format!("postgres://{role_name}@{authority}/{db_name}");
 
-    let mut admin_conn =
-        sqlx::PgConnection::connect("postgres://postgres@127.0.0.1:55432/postgres")
-            .await
-            .unwrap();
+    let mut admin_conn = sqlx::PgConnection::connect(&bootstrap).await.unwrap();
     sqlx::query(&format!("DROP DATABASE IF EXISTS \"{db_name}\""))
         .execute(&mut admin_conn)
         .await
@@ -213,7 +222,7 @@ async fn cmd_create_pg_db_fails_if_role_already_exists() {
 #[tokio::test]
 async fn cmd_serve_fails_when_not_initialized() {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base);
+    let args = uninitialized_storage_args(&base);
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
 
     let result = cmd_serve(&args, bind, true).await;
@@ -230,7 +239,7 @@ async fn cmd_serve_fails_when_not_initialized() {
 #[tokio::test]
 async fn after_init_server_responds_to_health_check() {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base);
+    let args = storage_args(&base).await;
 
     cmd_init(&args, false).await.unwrap();
 
@@ -250,7 +259,7 @@ async fn after_init_server_responds_to_health_check() {
 #[tokio::test]
 async fn cmd_serve_starts_and_accepts_connections() {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base);
+    let args = storage_args(&base).await;
     cmd_init(&args, false).await.unwrap();
 
     // Pre-bind port 0 to let the OS assign a free port, then release it so
@@ -283,7 +292,7 @@ async fn cmd_serve_starts_and_accepts_connections() {
 #[tokio::test]
 async fn cmd_user_create_creates_retrievable_user() {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base);
+    let args = storage_args(&base).await;
     cmd_init(&args, false).await.expect("init");
 
     let username: Username = "alice".parse().expect("valid username");
@@ -305,7 +314,7 @@ async fn cmd_user_create_creates_retrievable_user() {
 #[tokio::test]
 async fn cmd_user_invite_creates_retrievable_invite() {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base);
+    let args = storage_args(&base).await;
     cmd_init(&args, false).await.expect("init");
 
     cmd_user_invite(&args, Some(48)).await.expect("user invite");
@@ -318,7 +327,7 @@ async fn cmd_user_invite_creates_retrievable_invite() {
 #[tokio::test]
 async fn cmd_user_invite_default_expires_in() {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base);
+    let args = storage_args(&base).await;
     cmd_init(&args, false).await.expect("init");
 
     cmd_user_invite(&args, None).await.expect("user invite");
@@ -331,7 +340,7 @@ async fn cmd_user_invite_default_expires_in() {
 #[tokio::test]
 async fn cmd_user_invite_too_large_expires_in_returns_error() {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base);
+    let args = storage_args(&base).await;
     cmd_init(&args, false).await.expect("init");
 
     // u64::MAX is definitely too large for i64
@@ -343,7 +352,7 @@ async fn cmd_user_invite_too_large_expires_in_returns_error() {
 #[tokio::test]
 async fn cmd_smtp_test_fails_when_not_initialized() {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base);
+    let args = uninitialized_storage_args(&base);
 
     let result = cmd_smtp_test(&args, "alice@example.com").await;
     assert!(result.is_err());
@@ -357,7 +366,7 @@ async fn cmd_smtp_test_fails_when_not_initialized() {
 #[tokio::test]
 async fn cmd_smtp_test_fails_when_smtp_not_configured() {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base);
+    let args = storage_args(&base).await;
     cmd_init(&args, false).await.expect("init");
 
     let result = cmd_smtp_test(&args, "alice@example.com").await;
@@ -378,7 +387,7 @@ async fn cmd_smtp_test_succeeds_with_mock_server() {
     server.start();
 
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base);
+    let args = storage_args(&base).await;
     cmd_init(&args, false).await.expect("init");
 
     let state = open_existing_database(&args.db).await.expect("open db");
@@ -424,7 +433,7 @@ async fn cmd_smtp_test_succeeds_with_mock_server() {
 #[tokio::test]
 async fn cmd_smtp_test_fails_on_invalid_to_address() {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base);
+    let args = storage_args(&base).await;
     cmd_init(&args, false).await.expect("init");
 
     // Configure SMTP so we get past the "not configured" check.
