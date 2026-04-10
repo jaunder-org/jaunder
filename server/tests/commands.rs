@@ -1,3 +1,5 @@
+mod helpers;
+
 use std::net::SocketAddr;
 
 use axum::{
@@ -16,11 +18,15 @@ use sqlx::Connection;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+use helpers::{postgres_url, sqlite_url, test_options};
+
 fn storage_args(base: &TempDir) -> StorageArgs {
     let storage_path = base.path().join("storage");
-    let db: DbConnectOptions = format!("sqlite:{}", base.path().join("jaunder.db").display())
-        .parse()
-        .unwrap();
+    let db = if let Ok(url) = std::env::var("JAUNDER_PG_TEST_URL") {
+        url.parse().unwrap()
+    } else {
+        sqlite_url(base)
+    };
     StorageArgs { storage_path, db }
 }
 

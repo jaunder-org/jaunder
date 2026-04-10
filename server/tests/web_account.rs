@@ -1,41 +1,17 @@
-use std::sync::{Arc, OnceLock};
+mod helpers;
+
+use std::sync::Arc;
 
 use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
 use common::storage::ProfileUpdate;
-use jaunder::storage::{open_database, DbConnectOptions};
 use jaunder::username::Username;
-use leptos::prelude::LeptosOptions;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-fn ensure_server_fns_registered() {
-    static ONCE: OnceLock<()> = OnceLock::new();
-    ONCE.get_or_init(|| {
-        server_fn::axum::register_explicit::<web::profile::GetProfile>();
-        server_fn::axum::register_explicit::<web::profile::UpdateProfile>();
-        server_fn::axum::register_explicit::<web::sessions::ListSessions>();
-        server_fn::axum::register_explicit::<web::sessions::RevokeSession>();
-        server_fn::axum::register_explicit::<web::invites::CreateInvite>();
-        server_fn::axum::register_explicit::<web::invites::ListInvites>();
-    });
-}
-
-fn db_url(base: &TempDir) -> DbConnectOptions {
-    format!("sqlite:{}", base.path().join("test.db").display())
-        .parse()
-        .unwrap()
-}
-
-async fn test_state(base: &TempDir) -> Arc<jaunder::storage::AppState> {
-    open_database(&db_url(base)).await.unwrap()
-}
-
-fn test_options() -> LeptosOptions {
-    LeptosOptions::builder().output_name("test").build()
-}
+use helpers::{ensure_server_fns_registered, test_options, test_state};
 
 async fn post_form(
     state: Arc<jaunder::storage::AppState>,

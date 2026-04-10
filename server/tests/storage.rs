@@ -1,3 +1,5 @@
+mod helpers;
+
 use chrono::Utc;
 use jaunder::password::Password;
 use jaunder::storage::{
@@ -13,21 +15,16 @@ use sqlx::PgPool;
 use sqlx::SqlitePool;
 use tempfile::TempDir;
 
+use helpers::{postgres_url, reset_postgres_schema, sqlite_url};
+
 // PostgreSQL parity tests below share a single database URL and reset the
 // schema before each run. Run them individually, or with `-- --test-threads=1`,
 // against the test VM to avoid cross-test interference.
 
-fn sqlite_url(base: &TempDir) -> DbConnectOptions {
-    format!("sqlite:{}", base.path().join("jaunder.db").display())
-        .parse()
-        .unwrap()
-}
-
 async fn open_pool(base: &TempDir) -> SqlitePool {
-    let opts: sqlx::sqlite::SqliteConnectOptions =
-        format!("sqlite:{}", base.path().join("jaunder.db").display())
-            .parse()
-            .unwrap();
+    let DbConnectOptions::Sqlite(opts) = sqlite_url(base) else {
+        panic!("expected sqlite options");
+    };
     let pool = SqlitePool::connect_with(opts.create_if_missing(true))
         .await
         .unwrap();
@@ -36,28 +33,6 @@ async fn open_pool(base: &TempDir) -> SqlitePool {
         .await
         .unwrap();
     pool
-}
-
-fn postgres_url() -> DbConnectOptions {
-    std::env::var("JAUNDER_PG_TEST_URL")
-        .unwrap_or_else(|_| "postgres://jaunder@127.0.0.1:55432/jaunder".to_owned())
-        .parse()
-        .unwrap()
-}
-
-async fn reset_postgres_schema() {
-    let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
-        panic!("expected postgres options");
-    };
-    let pool = PgPool::connect_with(options).await.unwrap();
-    sqlx::query("DROP SCHEMA public CASCADE")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("CREATE SCHEMA public")
-        .execute(&pool)
-        .await
-        .unwrap();
 }
 
 async fn postgres_state() -> std::sync::Arc<jaunder::storage::AppState> {

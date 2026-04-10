@@ -1,43 +1,17 @@
-use std::sync::{Arc, OnceLock};
+mod helpers;
+
+use std::sync::Arc;
 
 use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
 use chrono::Utc;
-use jaunder::storage::{open_database, DbConnectOptions};
 use jaunder::username::Username;
-use leptos::prelude::LeptosOptions;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-/// Explicitly register server functions once per test binary.
-/// Inventory-based auto-registration is unreliable in Cargo test builds with
-/// multiple codegen-units, so we register explicitly instead.
-fn ensure_server_fns_registered() {
-    static ONCE: OnceLock<()> = OnceLock::new();
-    ONCE.get_or_init(|| {
-        server_fn::axum::register_explicit::<web::auth::CurrentUser>();
-        server_fn::axum::register_explicit::<web::auth::GetRegistrationPolicy>();
-        server_fn::axum::register_explicit::<web::auth::Register>();
-        server_fn::axum::register_explicit::<web::auth::Login>();
-        server_fn::axum::register_explicit::<web::auth::Logout>();
-    });
-}
-
-fn db_url(base: &TempDir) -> DbConnectOptions {
-    format!("sqlite:{}", base.path().join("test.db").display())
-        .parse()
-        .unwrap()
-}
-
-async fn test_state(base: &TempDir) -> Arc<jaunder::storage::AppState> {
-    open_database(&db_url(base)).await.unwrap()
-}
-
-fn test_options() -> LeptosOptions {
-    LeptosOptions::builder().output_name("test").build()
-}
+use helpers::{ensure_server_fns_registered, test_options, test_state};
 
 /// Sends a form-encoded POST request through a fresh router built from `state`.
 /// Returns (status, Set-Cookie header value, response body).
