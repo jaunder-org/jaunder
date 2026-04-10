@@ -15,6 +15,14 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         } => {
             jaunder::commands::cmd_init(&storage, skip_if_exists).await?;
         }
+        Commands::CreatePgDb { pg } => {
+            jaunder::commands::cmd_create_pg_db(
+                &pg.bootstrap_db,
+                &pg.app_db,
+                &pg.app_role_password,
+            )
+            .await?;
+        }
         Commands::Serve {
             storage,
             bind,
@@ -59,7 +67,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jaunder::cli::{Cli, Commands, StorageArgs};
+    use jaunder::cli::{Cli, Commands, PgBootstrapArgs, StorageArgs};
     use tempfile::TempDir;
 
     fn test_storage_args(base: &TempDir) -> StorageArgs {
@@ -189,5 +197,21 @@ mod tests {
         // Wait a bit for it to start.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         task.abort();
+    }
+
+    #[tokio::test]
+    async fn run_create_pg_db_rejects_non_postgres_urls() {
+        let cli = Cli {
+            command: Commands::CreatePgDb {
+                pg: PgBootstrapArgs {
+                    bootstrap_db: "sqlite:/tmp/bootstrap.db".to_owned(),
+                    app_db: "postgres://jaunder@localhost/jaunder".to_owned(),
+                    app_role_password: "secret".to_owned(),
+                },
+            },
+        };
+
+        let err = run(cli).await.unwrap_err();
+        assert!(err.to_string().contains("PostgreSQL URL"));
     }
 }

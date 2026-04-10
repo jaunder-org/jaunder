@@ -1,8 +1,11 @@
 use std::{io, net::SocketAddr};
 
+use sqlx::{postgres::PgConnectOptions, Connection, PgConnection};
+
 use crate::cli::StorageArgs;
 use crate::mailer::LettreMailSender;
 use crate::password::Password;
+use crate::storage::DbConnectOptions;
 use crate::storage::{init_storage, open_database, open_existing_database};
 use crate::username::Username;
 use common::mailer::{EmailMessage, MailSender};
@@ -20,6 +23,111 @@ pub async fn cmd_init(storage: &StorageArgs, skip_if_exists: bool) -> anyhow::Re
         "Initialized: storage={} db={}",
         storage.storage_path.display(),
         storage.db,
+    );
+    Ok(())
+}
+
+fn require_postgres_options(
+    opts: &DbConnectOptions,
+    label: &str,
+) -> anyhow::Result<PgConnectOptions> {
+    match opts {
+        DbConnectOptions::Postgres { options, .. } => Ok(options.clone()),
+        _ => Err(anyhow::anyhow!("{label} must be a PostgreSQL URL")),
+    }
+}
+
+fn quote_postgres_identifier(name: &str) -> String {
+    // PostgreSQL role/database names are identifiers, not data values, so they
+    // cannot be supplied through bind placeholders. Administrative utility
+    // statements such as CREATE ROLE and CREATE DATABASE therefore require
+    // validated identifier quoting when assembling SQL dynamically.
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+fn quote_postgres_literal(value: &str) -> String {
+    // PostgreSQL also rejects prepared/bound parameters in these utility
+    // statements. For example, PREPARE ... AS ALTER ROLE ... PASSWORD $1 fails
+    // with a syntax error at ALTER. Password literals therefore need explicit
+    // SQL quoting when used in CREATE ROLE statements.
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+async fn execute_postgres_utility(
+    conn: &mut PgConnection,
+    sql: &str,
+    expected_error_code: &str,
+    expected_error_message: String,
+) -> anyhow::Result<()> {
+    if let Err(error) = sqlx::query(sql).execute(conn).await {
+        return match error {
+            sqlx::Error::Database(db_error)
+                if db_error.code().as_deref() == Some(expected_error_code) =>
+            {
+                Err(anyhow::anyhow!(expected_error_message))
+            }
+            other => Err(other.into()),
+        };
+    }
+
+    Ok(())
+}
+
+pub async fn cmd_create_pg_db(
+    bootstrap_db: &str,
+    app_db_url: &str,
+    app_role_password: &str,
+) -> anyhow::Result<()> {
+    let bootstrap_options = require_postgres_options(&bootstrap_db.parse()?, "--bootstrap-db")?;
+    let app_options = require_postgres_options(&app_db_url.parse()?, "--app-db")?;
+    let app_role = app_options.get_username().to_owned();
+    let database_name = app_options
+        .get_database()
+        .ok_or_else(|| anyhow::anyhow!("--app-db must include a PostgreSQL database name"))?
+        .to_owned();
+
+    let mut admin_conn = PgConnection::connect_with(&bootstrap_options).await?;
+
+    // The role name is an identifier and the password appears in a
+    // PostgreSQL utility statement, so this SQL has to be assembled using
+    // the quoting helpers above rather than regular query placeholders.
+    let role_sql = format!(
+        "CREATE ROLE {} WITH LOGIN PASSWORD {}",
+        quote_postgres_identifier(&app_role),
+        quote_postgres_literal(app_role_password),
+    );
+    execute_postgres_utility(
+        &mut admin_conn,
+        &role_sql,
+        "42710",
+        format!(
+            "application role '{}' already exists; refusing to modify existing role state",
+            app_role
+        ),
+    )
+    .await?;
+
+    // CREATE DATABASE ... OWNER ... is another utility statement using
+    // identifiers, so placeholders are not usable here either.
+    let create_db_sql = format!(
+        "CREATE DATABASE {} OWNER {}",
+        quote_postgres_identifier(&database_name),
+        quote_postgres_identifier(&app_role),
+    );
+    execute_postgres_utility(
+        &mut admin_conn,
+        &create_db_sql,
+        "42P04",
+        format!(
+            "database '{}' already exists; refusing to modify existing database state",
+            database_name
+        ),
+    )
+    .await?;
+
+    println!(
+        "PostgreSQL ready: role='{}' database='{}' owner='{}'",
+        app_role, database_name, app_role
     );
     Ok(())
 }
