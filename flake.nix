@@ -734,6 +734,7 @@
             pkgs.pkg-config
             pkgs.postgresql_16
             pkgs.prettier
+            serena.packages.${pkgs.stdenv.hostPlatform.system}.serena
             pkgs.sqlx-cli
             pkgs.sqlite
             pkgs.typescript-language-server
