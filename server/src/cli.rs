@@ -22,6 +22,8 @@ pub struct StorageArgs {
     /// Database URL.
     ///
     /// Supports `sqlite:` and `postgres://` URLs.
+    /// PostgreSQL passwords may also be supplied via `JAUNDER_DB_PASSWORD` or
+    /// `JAUNDER_DB_PASSWORD_FILE`.
     #[arg(long, env = "JAUNDER_DB", default_value = "sqlite:./data/jaunder.db")]
     pub db: DbConnectOptions,
 }
@@ -52,8 +54,9 @@ pub enum Commands {
     /// Initialize the storage directory and database.
     ///
     /// Creates the storage directory, required subdirectories (media/, backups/),
-    /// and the SQLite database with the initial schema. Run this once before
-    /// starting the server for the first time.
+    /// creates the configured database where supported by the selected backend,
+    /// and applies the initial schema. Run this once before starting the
+    /// server for the first time.
     Init {
         #[command(flatten)]
         storage: StorageArgs,

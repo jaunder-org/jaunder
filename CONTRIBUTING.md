@@ -22,6 +22,18 @@ export JAUNDER_DB=postgres://jaunder@127.0.0.1:55432/jaunder
 With that environment set, `jaunder init`, `jaunder serve`, and targeted storage tests will use the
 PostgreSQL test VM instead of SQLite.
 
+If a PostgreSQL URL omits the password, `jaunder` also supports:
+
+```bash
+export JAUNDER_DB_PASSWORD=secret
+# or
+export JAUNDER_DB_PASSWORD_FILE=/run/secrets/jaunder-db-password
+```
+
+Those inputs are for steady-state connections. PostgreSQL database and role
+provisioning is expected to be handled separately by an experienced
+administrator; `jaunder init` still assumes the target database already exists.
+
 ### Git hooks
 
 The repository includes git hooks in `.githooks/` that enforce code quality standards. Configure git to use them after cloning:

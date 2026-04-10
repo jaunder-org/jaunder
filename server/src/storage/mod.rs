@@ -406,8 +406,25 @@ async fn open_sqlite_database(
     Ok(make_app_state(pool, mailer))
 }
 
+fn postgres_password_from_env() -> io::Result<Option<String>> {
+    if let Ok(path) = std::env::var("JAUNDER_DB_PASSWORD_FILE") {
+        return std::fs::read_to_string(path).map(|s| Some(s.trim_end().to_owned()));
+    }
+
+    Ok(std::env::var("JAUNDER_DB_PASSWORD").ok())
+}
+
+fn resolved_postgres_options(options: &PgConnectOptions) -> sqlx::Result<PgConnectOptions> {
+    let mut options = options.clone();
+    if let Some(password) = postgres_password_from_env().map_err(sqlx::Error::Io)? {
+        options = options.password(&password);
+    }
+    Ok(options)
+}
+
 async fn open_postgres_database(options: &PgConnectOptions) -> sqlx::Result<Arc<AppState>> {
-    let pool = PgPool::connect_with(options.clone()).await?;
+    let options = resolved_postgres_options(options)?;
+    let pool = PgPool::connect_with(options).await?;
     sqlx::migrate!("./migrations/postgres").run(&pool).await?;
     let site_config = PostgresSiteConfigStorage::new(pool.clone());
     let mailer = build_mailer(&site_config).await;
@@ -436,7 +453,10 @@ pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn new_path_created_with_subdirs() {
@@ -466,5 +486,33 @@ mod tests {
         let storage = std::path::Path::new("/nonexistent/path/to/storage");
         let result = init_storage(storage);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn postgres_password_prefers_file_over_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("JAUNDER_DB_PASSWORD", "from-env");
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("db-password");
+        std::fs::write(&path, "from-file\n").unwrap();
+        std::env::set_var("JAUNDER_DB_PASSWORD_FILE", &path);
+
+        let password = postgres_password_from_env().unwrap();
+
+        std::env::remove_var("JAUNDER_DB_PASSWORD");
+        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
+        assert_eq!(password.as_deref(), Some("from-file"));
+    }
+
+    #[test]
+    fn postgres_password_uses_env_when_file_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
+        std::env::set_var("JAUNDER_DB_PASSWORD", "from-env");
+
+        let password = postgres_password_from_env().unwrap();
+
+        std::env::remove_var("JAUNDER_DB_PASSWORD");
+        assert_eq!(password.as_deref(), Some("from-env"));
     }
 }
