@@ -437,8 +437,8 @@
 
         checks =
           pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
-            e2e = pkgs.testers.nixosTest {
-              name = "jaunder-e2e";
+            e2e-sqlite = pkgs.testers.nixosTest {
+              name = "jaunder-e2e-sqlite";
 
               nodes.machine =
                 { pkgs, ... }:
@@ -472,6 +472,116 @@
                   + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
                   + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
                   + " --config playwright.nix.config.js"
+                )
+              '';
+            };
+
+            e2e-postgres = pkgs.testers.nixosTest {
+              name = "jaunder-e2e-postgres";
+
+              nodes.machine =
+                { pkgs, lib, ... }:
+                {
+                  imports = [ self.nixosModules.jaunder ];
+
+                  virtualisation.memorySize = 2048;
+                  environment.systemPackages = [ pkgs.postgresql_16 ];
+
+                  services.postgresql = {
+                    enable = true;
+                    package = pkgs.postgresql_16;
+                    authentication = ''
+                      local all all trust
+                      host all all 0.0.0.0/0 trust
+                    '';
+                    settings = {
+                      listen_addresses = lib.mkForce "*";
+                    };
+                  };
+
+                  services.jaunder.enable = true;
+                  services.jaunder.db = "postgres://jaunder:testpassword@localhost/jaunder";
+                  # We delay jaunder.service until we have run create-pg-db in the testScript.
+                  systemd.services.jaunder.wantedBy = lib.mkForce [ ];
+                };
+
+              testScript = ''
+                machine.start()
+                machine.wait_for_unit("postgresql.service", timeout=60)
+
+                # Exercise create-pg-db
+                machine.succeed(
+                  "${jaunderBin}/bin/jaunder create-pg-db"
+                  + " --bootstrap-db postgres://postgres@localhost/postgres"
+                  + " --app-db postgres://jaunder@localhost/jaunder"
+                  + " --app-role-password testpassword"
+                )
+
+                # Now start and wait for jaunder.service
+                machine.succeed("systemctl start jaunder.service")
+                machine.wait_for_unit("jaunder.service", timeout=60)
+                machine.wait_for_open_port(3000, timeout=30)
+
+                # Set registration policy via psql
+                machine.succeed("sudo -u postgres psql -d jaunder -c \"INSERT INTO site_config (key, value) VALUES ('site.registration_policy', 'open')\"")
+                machine.succeed("cd /var/lib/jaunder && ${jaunderBin}/bin/jaunder user-create --username testlogin --password testpassword123")
+
+                machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
+                machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")
+                machine.succeed(
+                  "cd /tmp/e2e"
+                  + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
+                  + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+                  + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                  + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
+                  + " --config playwright.nix.config.js"
+                )
+              '';
+            };
+
+            integration-postgres = pkgs.testers.nixosTest {
+              name = "jaunder-integration-postgres";
+
+              nodes.machine =
+                { pkgs, lib, ... }:
+                {
+                  virtualisation.memorySize = 4096;
+                  virtualisation.diskSize = 4096;
+
+                  services.postgresql = {
+                    enable = true;
+                    package = pkgs.postgresql_16;
+                    ensureDatabases = [ "jaunder" ];
+                    ensureUsers = [
+                      {
+                        name = "jaunder";
+                        ensureDBOwnership = true;
+                      }
+                    ];
+                    authentication = ''
+                      local all all trust
+                      host all all 0.0.0.0/0 trust
+                    '';
+                    settings = {
+                      listen_addresses = lib.mkForce "*";
+                    };
+                  };
+
+                  environment.systemPackages = [
+                    pkgs.cargo-nextest
+                    pkgs.postgresql_16
+                  ];
+                };
+
+              testScript = ''
+                machine.start()
+                machine.wait_for_unit("postgresql.service", timeout=60)
+                machine.succeed(
+                  "cd ${src}"
+                  + " && JAUNDER_PG_TEST_URL=postgres://jaunder@localhost/jaunder"
+                  + " ${pkgs.cargo-nextest}/bin/cargo-nextest nextest run"
+                  + " --run-ignored all"
+                  + " --test-threads=1"
                 )
               '';
             };
