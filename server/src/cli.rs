@@ -28,6 +28,23 @@ pub struct StorageArgs {
     pub db: DbConnectOptions,
 }
 
+#[derive(Args, Clone)]
+pub struct PgBootstrapArgs {
+    /// PostgreSQL URL for a bootstrap/superuser role.
+    ///
+    /// This command only supports PostgreSQL URLs.
+    #[arg(long)]
+    pub bootstrap_db: String,
+
+    /// PostgreSQL URL for the long-term application role and target database.
+    #[arg(long = "app-db")]
+    pub app_db: String,
+
+    /// Password to set on the application role being created.
+    #[arg(long)]
+    pub app_role_password: String,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, clap::ValueEnum)]
 pub enum DeploymentEnv {
     Dev,
@@ -65,6 +82,16 @@ pub enum Commands {
         /// Useful in scripts and container entrypoints.
         #[arg(long)]
         skip_if_exists: bool,
+    },
+    /// Create a PostgreSQL application role and database using bootstrap credentials.
+    ///
+    /// Intended for one-time administrative provisioning. This is separate from
+    /// `jaunder init`, which assumes the target database already exists and only
+    /// initializes storage plus schema state. Fails if the requested role or
+    /// database already exists rather than trying to repair or modify them.
+    CreatePgDb {
+        #[command(flatten)]
+        pg: PgBootstrapArgs,
     },
     /// Start the HTTP server.
     ///
@@ -148,6 +175,25 @@ mod tests {
     }
 
     // --- storage_path precedence ---
+
+    #[test]
+    fn create_pg_db_parses_bootstrap_and_target_urls() {
+        let cli = parse(&[
+            "create-pg-db",
+            "--bootstrap-db",
+            "postgres://postgres@localhost/postgres",
+            "--app-db",
+            "postgres://jaunder@localhost/jaunder",
+            "--app-role-password",
+            "secret",
+        ]);
+        let Commands::CreatePgDb { pg } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(pg.bootstrap_db, "postgres://postgres@localhost/postgres");
+        assert_eq!(pg.app_db, "postgres://jaunder@localhost/jaunder");
+        assert_eq!(pg.app_role_password, "secret");
+    }
 
     #[test]
     fn storage_path_default() {
