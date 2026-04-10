@@ -31,8 +31,16 @@ export JAUNDER_DB_PASSWORD_FILE=/run/secrets/jaunder-db-password
 ```
 
 Those inputs are for steady-state connections. PostgreSQL database and role
-provisioning is expected to be handled separately by an experienced
-administrator; `jaunder init` still assumes the target database already exists.
+provisioning is handled separately by `jaunder create-pg-db`, which is intended
+for one-time administrative bootstrap before `jaunder init` runs migrations.
+Because `create-pg-db` is meant to be run manually by an experienced
+administrator, it takes its inputs explicitly via command-line flags rather than
+via `JAUNDER_*` environment variables.
+The command is intentionally simple: bootstrap URL, application database URL,
+and a separate application-role password. It fails if the requested role or
+database already exists.
+Use `--bootstrap-db` for the elevated connection and `--app-db` for the
+long-term application connection details.
 
 ### Git hooks
 
