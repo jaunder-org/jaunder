@@ -7,7 +7,6 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use chrono::Utc;
-use common::mailer::test_utils::CapturingMailSender;
 use jaunder::storage::AppState;
 use jaunder::username::Username;
 use tempfile::TempDir;

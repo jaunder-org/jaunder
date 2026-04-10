@@ -18,11 +18,9 @@ SMTP site config (relay host, port, credentials, sender address). Optional email
 
 ## M4: PostgreSQL backend
 
-Adds PostgreSQL as a second database backend selectable at runtime. The backend is chosen via the `--db` bootstrap flag (or `JAUNDER_DB` environment variable), which accepts a URL encoding both engine and connection parameters (`sqlite:./data` or `postgres://...`); SQLite remains the default for small deployments. All M1–M3 application features are fully supported on both backends. The implementation uses separate SQLite and PostgreSQL storage implementations sharing traits, helper functions, and migration structure where practical, while each backend retains its own concrete pool type and native SQL types. A `jaunder migrate-db --to <url>` command transfers all data from the current backend to a new one, allowing operators to move between SQLite and PostgreSQL (or back) without data loss. Full-text search uses `tsvector` columns and GIN indexes on the PostgreSQL backend instead of SQLite FTS5.
+Adds PostgreSQL as a second database backend selectable at runtime. The backend is chosen via the `--db` bootstrap flag (or `JAUNDER_DB` environment variable), which accepts a URL encoding both engine and connection parameters (`sqlite:./data` or `postgres://...`); SQLite remains the default for small deployments. All M1–M3 application features are fully supported on both backends. The implementation uses separate SQLite and PostgreSQL storage implementations sharing traits, helper functions, and migration structure where practical, while each backend retains its own concrete pool type and native SQL types. PostgreSQL bootstrap is handled explicitly via `jaunder create-pg-db`, while normal `jaunder init` and runtime operations use the steady-state application database credentials. 
 
-From M4 onward, persisted-feature milestones must maintain backend parity: ship both migration
-trees in the same change, implement storage-trait changes on both backends before merge, and add
-tests for both backends unless a temporary backend-specific deferral is documented explicitly.
+From M4 onward, persisted-feature milestones must maintain backend parity: ship both migration trees in the same change, implement storage-trait changes on both backends before merge, and add tests for both backends unless a temporary backend-specific deferral is documented explicitly.
 
 ## M5: Simple blog
 
@@ -91,3 +89,7 @@ Implements the Mastodon client REST API as a compatibility shim, allowing existi
 ## M21: OAuth 2.0
 
 Jaunder acts as an OAuth 2.0 authorization server, allowing first-party and third-party clients to request scoped tokens via the standard authorization code flow. Also satisfies the AT Protocol OAuth profile required for authenticating external AT clients against the PDS.
+
+## Not yet scheduled
+- Cross-backend data migration
+- Full-text search

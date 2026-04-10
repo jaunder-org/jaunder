@@ -732,7 +732,7 @@ async fn auth_user_extraction_fails_with_invalid_token() {
     // logout() requires AuthUser. If we provide an invalid token, it should fail.
     let cookie_header = "session=invalidtoken";
     let (status, _, _) =
-        post_form(Arc::clone(&state), "/api/logout", "", Some(&cookie_header)).await;
+        post_form(Arc::clone(&state), "/api/logout", "", Some(cookie_header)).await;
 
     // Leptos server functions return 500 for ServerFnError.
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);

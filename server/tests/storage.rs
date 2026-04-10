@@ -11,7 +11,6 @@ use jaunder::storage::{
     UsePasswordResetError, UserAuthError, UserStorage,
 };
 use jaunder::username::Username;
-use sqlx::PgPool;
 use sqlx::SqlitePool;
 use tempfile::TempDir;
 
@@ -357,7 +356,7 @@ async fn open_database_succeeds_on_postgres_test_vm() {
 async fn open_database_runs_postgres_migrations_on_existing_empty_db() {
     reset_postgres_schema().await;
     let state = open_database(&postgres_url()).await.unwrap();
-    assert!(state.site_config.get("missing").await.is_err());
+    assert_eq!(state.site_config.get("missing").await.unwrap(), None);
 }
 
 #[tokio::test]
@@ -365,7 +364,7 @@ async fn open_database_runs_postgres_migrations_on_existing_empty_db() {
 async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db() {
     reset_postgres_schema().await;
     let state = open_existing_database(&postgres_url()).await.unwrap();
-    assert!(state.site_config.get("missing").await.is_err());
+    assert_eq!(state.site_config.get("missing").await.unwrap(), None);
 }
 
 #[tokio::test]
