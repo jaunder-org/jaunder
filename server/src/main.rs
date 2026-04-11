@@ -214,4 +214,77 @@ mod tests {
         let err = run(cli).await.unwrap_err();
         assert!(err.to_string().contains("PostgreSQL URL"));
     }
+
+    #[tokio::test]
+    async fn run_user_create_rejects_invalid_username() {
+        let base = TempDir::new().unwrap();
+        let storage = test_storage_args(&base);
+        let cli = Cli {
+            command: Commands::UserCreate {
+                storage,
+                username: "invalid username".to_string(),
+                password: Some("password123".to_string()),
+                display_name: None,
+            },
+        };
+        let err = run(cli).await.unwrap_err();
+        assert!(err.to_string().contains("username must be non-empty"));
+    }
+
+    #[tokio::test]
+    async fn run_user_create_rejects_invalid_password() {
+        let base = TempDir::new().unwrap();
+        let storage = test_storage_args(&base);
+        let cli = Cli {
+            command: Commands::UserCreate {
+                storage,
+                username: "alice".to_string(),
+                password: Some("short".to_string()),
+                display_name: None,
+            },
+        };
+        let err = run(cli).await.unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("password must be at least 8 characters"));
+    }
+
+    #[tokio::test]
+    async fn run_init_fails_on_invalid_path() {
+        let base = TempDir::new().unwrap();
+        // Create a file where the storage directory should be
+        let storage_path = base.path().join("file");
+        std::fs::write(&storage_path, "not a dir").unwrap();
+
+        let cli = Cli {
+            command: Commands::Init {
+                storage: StorageArgs {
+                    storage_path: storage_path.clone(),
+                    db: format!("sqlite:{}", base.path().join("test.db").display())
+                        .parse()
+                        .unwrap(),
+                },
+                skip_if_exists: false,
+            },
+        };
+        let err = run(cli).await.unwrap_err();
+        assert!(
+            err.to_string().contains("Not a directory") || err.to_string().contains("File exists")
+        );
+    }
+
+    #[tokio::test]
+    async fn run_serve_fails_when_uninitialized() {
+        let base = TempDir::new().unwrap();
+        let storage = test_storage_args(&base);
+        let cli = Cli {
+            command: Commands::Serve {
+                storage,
+                bind: "127.0.0.1:0".parse().unwrap(),
+                environment: jaunder::cli::DeploymentEnv::Dev,
+            },
+        };
+        let err = run(cli).await.unwrap_err();
+        assert!(err.to_string().contains("run `jaunder init` first"));
+    }
 }

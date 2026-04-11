@@ -170,3 +170,46 @@ async fn verify_email_with_unknown_token_returns_error() {
 
     assert_ne!(status, StatusCode::OK);
 }
+
+#[tokio::test]
+async fn request_email_verification_unauthorized_returns_error() {
+    let base = TempDir::new().unwrap();
+    let (state, _) = test_state_with_mailer(&base).await;
+
+    // No cookie provided
+    let (status, _) = post_form(
+        state,
+        "/api/request_email_verification",
+        "email=alice@example.com",
+        None,
+    )
+    .await;
+
+    // Leptos server functions return 500 for ServerFnError (which require_auth returns).
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn request_email_verification_invalid_email_returns_error() {
+    let base = TempDir::new().unwrap();
+    let (state, _) = test_state_with_mailer(&base).await;
+
+    // Create user and session
+    let username: Username = "alice".parse().unwrap();
+    let user_id = state
+        .users
+        .create_user(&username, &"password123".parse().unwrap(), None)
+        .await
+        .unwrap();
+    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie_header = format!("session={raw_token}");
+
+    let (status, _) = post_form(
+        state,
+        "/api/request_email_verification",
+        "email=invalid",
+        Some(&cookie_header),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}

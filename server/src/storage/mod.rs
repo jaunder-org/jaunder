@@ -515,4 +515,101 @@ mod tests {
         std::env::remove_var("JAUNDER_DB_PASSWORD");
         assert_eq!(password.as_deref(), Some("from-env"));
     }
+
+    #[test]
+    fn test_build_user_record() {
+        let now = Utc::now();
+        let parts: UserRecordParts = (
+            1,
+            "alice".to_string(),
+            Some("Alice".to_string()),
+            Some("Bio".to_string()),
+            now,
+            Some(now),
+            Some("alice@example.com".to_string()),
+            true,
+        );
+        let record = build_user_record(parts).unwrap();
+        assert_eq!(record.user_id, 1);
+        assert_eq!(record.username.as_str(), "alice");
+        assert_eq!(record.email.as_ref().unwrap().as_str(), "alice@example.com");
+    }
+
+    #[test]
+    fn test_build_session_record() {
+        let now = Utc::now();
+        let record = build_session_record(
+            "hash".to_string(),
+            1,
+            "alice".to_string(),
+            Some("label".to_string()),
+            now,
+            now,
+        )
+        .unwrap();
+        assert_eq!(record.token_hash, "hash");
+        assert_eq!(record.username.as_str(), "alice");
+    }
+
+    #[test]
+    fn test_db_connect_options_parsing() {
+        let sqlite = "sqlite:jaunder.db".parse::<DbConnectOptions>().unwrap();
+        assert!(matches!(sqlite, DbConnectOptions::Sqlite(_)));
+        assert_eq!(sqlite.to_string(), "sqlite:jaunder.db");
+
+        let pg = "postgres://user:pass@localhost/db"
+            .parse::<DbConnectOptions>()
+            .unwrap();
+        assert!(matches!(pg, DbConnectOptions::Postgres { .. }));
+        assert_eq!(pg.to_string(), "postgres://user:pass@localhost/db");
+
+        let pgs = "postgresql://user:pass@localhost/db"
+            .parse::<DbConnectOptions>()
+            .unwrap();
+        assert!(matches!(pgs, DbConnectOptions::Postgres { .. }));
+
+        let invalid = "mysql://localhost".parse::<DbConnectOptions>();
+        assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn test_db_connect_options_invalid_sqlite() {
+        // Starts with sqlite: but is invalid
+        let invalid = "sqlite:??invalid??".parse::<DbConnectOptions>();
+        assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn test_db_connect_options_invalid_postgres() {
+        let invalid = "postgres://[invalid]".parse::<DbConnectOptions>();
+        assert!(invalid.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_make_postgres_app_state() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/db").unwrap();
+        let mailer = Arc::new(common::mailer::NoopMailSender);
+        let _ = make_postgres_app_state(pool, mailer);
+    }
+
+    #[tokio::test]
+    async fn test_open_database_postgres() {
+        let opts = "postgres://localhost:1/db"
+            .parse::<DbConnectOptions>()
+            .unwrap();
+        let _ =
+            tokio::time::timeout(std::time::Duration::from_millis(50), open_database(&opts)).await;
+    }
+
+    #[tokio::test]
+    async fn test_open_existing_database_postgres() {
+        let opts = "postgres://localhost:1/db"
+            .parse::<DbConnectOptions>()
+            .unwrap();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            open_existing_database(&opts),
+        )
+        .await;
+    }
 }
