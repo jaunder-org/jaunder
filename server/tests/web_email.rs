@@ -1,60 +1,18 @@
-use std::sync::{Arc, OnceLock};
+mod helpers;
+
+use std::sync::Arc;
 
 use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
 use chrono::Utc;
-use common::mailer::{test_utils::CapturingMailSender, MailSender};
-use jaunder::storage::{
-    AppState, SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
-    SqlitePasswordResetStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
-};
+use jaunder::storage::AppState;
 use jaunder::username::Username;
-use leptos::prelude::LeptosOptions;
-use sqlx::SqlitePool;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-fn ensure_server_fns_registered() {
-    static ONCE: OnceLock<()> = OnceLock::new();
-    ONCE.get_or_init(|| {
-        server_fn::axum::register_explicit::<web::email::RequestEmailVerification>();
-        server_fn::axum::register_explicit::<web::email::VerifyEmail>();
-    });
-}
-
-async fn open_pool(base: &TempDir) -> SqlitePool {
-    let opts: sqlx::sqlite::SqliteConnectOptions =
-        format!("sqlite:{}", base.path().join("test.db").display())
-            .parse()
-            .unwrap();
-    let pool = SqlitePool::connect_with(opts.create_if_missing(true))
-        .await
-        .unwrap();
-    sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-    pool
-}
-
-async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<CapturingMailSender>) {
-    let pool = open_pool(base).await;
-    let mailer = Arc::new(CapturingMailSender::new());
-    let state = Arc::new(AppState {
-        site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
-        users: Arc::new(SqliteUserStorage::new(pool.clone())),
-        sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
-        invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
-        atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
-        email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
-        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool)),
-        mailer: Arc::clone(&mailer) as Arc<dyn MailSender>,
-    });
-    (state, mailer)
-}
-
-fn test_options() -> LeptosOptions {
-    LeptosOptions::builder().output_name("test").build()
-}
+use helpers::{ensure_server_fns_registered, test_options, test_state_with_mailer};
 
 async fn post_form(
     state: Arc<AppState>,
@@ -211,4 +169,47 @@ async fn verify_email_with_unknown_token_returns_error() {
     .await;
 
     assert_ne!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn request_email_verification_unauthorized_returns_error() {
+    let base = TempDir::new().unwrap();
+    let (state, _) = test_state_with_mailer(&base).await;
+
+    // No cookie provided
+    let (status, _) = post_form(
+        state,
+        "/api/request_email_verification",
+        "email=alice@example.com",
+        None,
+    )
+    .await;
+
+    // Leptos server functions return 500 for ServerFnError (which require_auth returns).
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn request_email_verification_invalid_email_returns_error() {
+    let base = TempDir::new().unwrap();
+    let (state, _) = test_state_with_mailer(&base).await;
+
+    // Create user and session
+    let username: Username = "alice".parse().unwrap();
+    let user_id = state
+        .users
+        .create_user(&username, &"password123".parse().unwrap(), None)
+        .await
+        .unwrap();
+    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie_header = format!("session={raw_token}");
+
+    let (status, _) = post_form(
+        state,
+        "/api/request_email_verification",
+        "email=invalid",
+        Some(&cookie_header),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }

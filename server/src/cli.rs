@@ -21,9 +21,28 @@ pub struct StorageArgs {
 
     /// Database URL.
     ///
-    /// Only `sqlite:` URLs are supported until M20 adds PostgreSQL.
+    /// Supports `sqlite:` and `postgres://` URLs.
+    /// PostgreSQL passwords may also be supplied via `JAUNDER_DB_PASSWORD` or
+    /// `JAUNDER_DB_PASSWORD_FILE`.
     #[arg(long, env = "JAUNDER_DB", default_value = "sqlite:./data/jaunder.db")]
     pub db: DbConnectOptions,
+}
+
+#[derive(Args, Clone)]
+pub struct PgBootstrapArgs {
+    /// PostgreSQL URL for a bootstrap/superuser role.
+    ///
+    /// This command only supports PostgreSQL URLs.
+    #[arg(long)]
+    pub bootstrap_db: String,
+
+    /// PostgreSQL URL for the long-term application role and target database.
+    #[arg(long = "app-db")]
+    pub app_db: String,
+
+    /// Password to set on the application role being created.
+    #[arg(long)]
+    pub app_role_password: String,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -52,8 +71,9 @@ pub enum Commands {
     /// Initialize the storage directory and database.
     ///
     /// Creates the storage directory, required subdirectories (media/, backups/),
-    /// and the SQLite database with the initial schema. Run this once before
-    /// starting the server for the first time.
+    /// creates the configured database where supported by the selected backend,
+    /// and applies the initial schema. Run this once before starting the
+    /// server for the first time.
     Init {
         #[command(flatten)]
         storage: StorageArgs,
@@ -62,6 +82,16 @@ pub enum Commands {
         /// Useful in scripts and container entrypoints.
         #[arg(long)]
         skip_if_exists: bool,
+    },
+    /// Create a PostgreSQL application role and database using bootstrap credentials.
+    ///
+    /// Intended for one-time administrative provisioning. This is separate from
+    /// `jaunder init`, which assumes the target database already exists and only
+    /// initializes storage plus schema state. Fails if the requested role or
+    /// database already exists rather than trying to repair or modify them.
+    CreatePgDb {
+        #[command(flatten)]
+        pg: PgBootstrapArgs,
     },
     /// Start the HTTP server.
     ///
@@ -145,6 +175,25 @@ mod tests {
     }
 
     // --- storage_path precedence ---
+
+    #[test]
+    fn create_pg_db_parses_bootstrap_and_target_urls() {
+        let cli = parse(&[
+            "create-pg-db",
+            "--bootstrap-db",
+            "postgres://postgres@localhost/postgres",
+            "--app-db",
+            "postgres://jaunder@localhost/jaunder",
+            "--app-role-password",
+            "secret",
+        ]);
+        let Commands::CreatePgDb { pg } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(pg.bootstrap_db, "postgres://postgres@localhost/postgres");
+        assert_eq!(pg.app_db, "postgres://jaunder@localhost/jaunder");
+        assert_eq!(pg.app_role_password, "secret");
+    }
 
     #[test]
     fn storage_path_default() {
@@ -314,6 +363,19 @@ mod tests {
     }
 
     #[test]
+    fn postgres_db_from_flag() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let cli = parse(&["init", "--db", "postgres://jaunder@localhost/testdb"]);
+        let Commands::Init { storage, .. } = cli.command else {
+            panic!("wrong variant");
+        };
+        assert_eq!(
+            storage.db.to_string(),
+            "postgres://jaunder@localhost/testdb"
+        );
+    }
+
+    #[test]
     fn db_flag_beats_env() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("JAUNDER_DB", "sqlite:/tmp/from_env.db");
@@ -437,5 +499,13 @@ mod tests {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let result = Cli::try_parse_from(["jaunder", "smtp-test"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deployment_env() {
+        assert!(!DeploymentEnv::Dev.is_prod());
+        assert!(DeploymentEnv::Prod.is_prod());
+        assert_eq!(DeploymentEnv::Dev.to_string(), "dev");
+        assert_eq!(DeploymentEnv::Prod.to_string(), "prod");
     }
 }

@@ -15,6 +15,14 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         } => {
             jaunder::commands::cmd_init(&storage, skip_if_exists).await?;
         }
+        Commands::CreatePgDb { pg } => {
+            jaunder::commands::cmd_create_pg_db(
+                &pg.bootstrap_db,
+                &pg.app_db,
+                &pg.app_role_password,
+            )
+            .await?;
+        }
         Commands::Serve {
             storage,
             bind,
@@ -59,7 +67,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jaunder::cli::{Cli, Commands, StorageArgs};
+    use jaunder::cli::{Cli, Commands, PgBootstrapArgs, StorageArgs};
     use tempfile::TempDir;
 
     fn test_storage_args(base: &TempDir) -> StorageArgs {
@@ -189,5 +197,94 @@ mod tests {
         // Wait a bit for it to start.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         task.abort();
+    }
+
+    #[tokio::test]
+    async fn run_create_pg_db_rejects_non_postgres_urls() {
+        let cli = Cli {
+            command: Commands::CreatePgDb {
+                pg: PgBootstrapArgs {
+                    bootstrap_db: "sqlite:/tmp/bootstrap.db".to_owned(),
+                    app_db: "postgres://jaunder@localhost/jaunder".to_owned(),
+                    app_role_password: "secret".to_owned(),
+                },
+            },
+        };
+
+        let err = run(cli).await.unwrap_err();
+        assert!(err.to_string().contains("PostgreSQL URL"));
+    }
+
+    #[tokio::test]
+    async fn run_user_create_rejects_invalid_username() {
+        let base = TempDir::new().unwrap();
+        let storage = test_storage_args(&base);
+        let cli = Cli {
+            command: Commands::UserCreate {
+                storage,
+                username: "invalid username".to_string(),
+                password: Some("password123".to_string()),
+                display_name: None,
+            },
+        };
+        let err = run(cli).await.unwrap_err();
+        assert!(err.to_string().contains("username must be non-empty"));
+    }
+
+    #[tokio::test]
+    async fn run_user_create_rejects_invalid_password() {
+        let base = TempDir::new().unwrap();
+        let storage = test_storage_args(&base);
+        let cli = Cli {
+            command: Commands::UserCreate {
+                storage,
+                username: "alice".to_string(),
+                password: Some("short".to_string()),
+                display_name: None,
+            },
+        };
+        let err = run(cli).await.unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("password must be at least 8 characters"));
+    }
+
+    #[tokio::test]
+    async fn run_init_fails_on_invalid_path() {
+        let base = TempDir::new().unwrap();
+        // Create a file where the storage directory should be
+        let storage_path = base.path().join("file");
+        std::fs::write(&storage_path, "not a dir").unwrap();
+
+        let cli = Cli {
+            command: Commands::Init {
+                storage: StorageArgs {
+                    storage_path: storage_path.clone(),
+                    db: format!("sqlite:{}", base.path().join("test.db").display())
+                        .parse()
+                        .unwrap(),
+                },
+                skip_if_exists: false,
+            },
+        };
+        let err = run(cli).await.unwrap_err();
+        assert!(
+            err.to_string().contains("Not a directory") || err.to_string().contains("File exists")
+        );
+    }
+
+    #[tokio::test]
+    async fn run_serve_fails_when_uninitialized() {
+        let base = TempDir::new().unwrap();
+        let storage = test_storage_args(&base);
+        let cli = Cli {
+            command: Commands::Serve {
+                storage,
+                bind: "127.0.0.1:0".parse().unwrap(),
+                environment: jaunder::cli::DeploymentEnv::Dev,
+            },
+        };
+        let err = run(cli).await.unwrap_err();
+        assert!(err.to_string().contains("run `jaunder init` first"));
     }
 }

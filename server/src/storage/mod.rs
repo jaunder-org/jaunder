@@ -1,7 +1,10 @@
 use std::{fmt, io, path::Path, str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use sqlx::postgres::PgConnectOptions;
 use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::PgPool;
 use sqlx::SqlitePool;
 
 // Storage traits, records, error types, and AppState are defined in the
@@ -26,6 +29,103 @@ pub use sqlite::{
     SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
     SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
 };
+mod postgres;
+pub use postgres::{
+    PostgresAtomicOps, PostgresEmailVerificationStorage, PostgresInviteStorage,
+    PostgresPasswordResetStorage, PostgresSessionStorage, PostgresSiteConfigStorage,
+    PostgresUserStorage,
+};
+
+pub(super) type UserRecordParts = (
+    i64,
+    String,
+    Option<String>,
+    Option<String>,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+    Option<String>,
+    bool,
+);
+
+pub(super) fn build_user_record(
+    (
+        user_id,
+        username,
+        display_name,
+        bio,
+        created_at,
+        last_authenticated_at,
+        email,
+        email_verified,
+    ): UserRecordParts,
+) -> sqlx::Result<UserRecord> {
+    let username = username
+        .parse()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let email = email
+        .map(|s| s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e))))
+        .transpose()?;
+    Ok(UserRecord {
+        user_id,
+        username,
+        display_name,
+        bio,
+        created_at,
+        last_authenticated_at,
+        email,
+        email_verified,
+    })
+}
+
+pub(super) fn build_session_record(
+    token_hash: String,
+    user_id: i64,
+    username: String,
+    label: Option<String>,
+    created_at: DateTime<Utc>,
+    last_used_at: DateTime<Utc>,
+) -> sqlx::Result<SessionRecord> {
+    Ok(SessionRecord {
+        token_hash,
+        user_id,
+        username: username
+            .parse::<Username>()
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+        label,
+        created_at,
+        last_used_at,
+    })
+}
+
+pub(super) fn build_invite_record(
+    code: String,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    used_at: Option<DateTime<Utc>>,
+    used_by: Option<i64>,
+) -> InviteRecord {
+    InviteRecord {
+        code,
+        created_at,
+        expires_at,
+        used_at,
+        used_by,
+    }
+}
+
+pub(super) async fn hash_password(password: Password) -> io::Result<String> {
+    tokio::task::spawn_blocking(move || password.hash())
+        .await
+        .map_err(io::Error::other)?
+        .map_err(io::Error::other)
+}
+
+pub(super) async fn verify_password(password: Password, hash: String) -> io::Result<bool> {
+    tokio::task::spawn_blocking(move || password.verify(&hash))
+        .await
+        .map_err(io::Error::other)?
+        .map_err(io::Error::other)
+}
 
 // ---------------------------------------------------------------------------
 // SqliteAtomicOps
@@ -79,15 +179,9 @@ impl AtomicOps for SqliteAtomicOps {
         }
 
         // (b) Hash password outside the async executor
-        let password = password.clone();
-        let password_hash = tokio::task::spawn_blocking(move || password.hash())
+        let password_hash = hash_password(password.clone())
             .await
-            .map_err(|e| {
-                RegisterWithInviteError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
-            })?
-            .map_err(|e| {
-                RegisterWithInviteError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
-            })?;
+            .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;
 
         // (c) Insert user
         let result = sqlx::query_scalar::<_, i64>(
@@ -132,15 +226,9 @@ impl AtomicOps for SqliteAtomicOps {
         let token_hash =
             crate::auth::hash_token(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
 
-        let password = new_password.clone();
-        let password_hash = tokio::task::spawn_blocking(move || password.hash())
+        let password_hash = hash_password(new_password.clone())
             .await
-            .map_err(|e| {
-                ConfirmPasswordResetError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
-            })?
-            .map_err(|e| {
-                ConfirmPasswordResetError::Internal(sqlx::Error::Io(std::io::Error::other(e)))
-            })?;
+            .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
 
         let mut tx = self.pool.begin().await?;
         let now = chrono::Utc::now();
@@ -209,6 +297,10 @@ impl AtomicOps for SqliteAtomicOps {
 #[derive(Clone, Debug)]
 pub enum DbConnectOptions {
     Sqlite(SqliteConnectOptions),
+    Postgres {
+        url: String,
+        options: PgConnectOptions,
+    },
 }
 
 impl fmt::Display for DbConnectOptions {
@@ -217,6 +309,7 @@ impl fmt::Display for DbConnectOptions {
             DbConnectOptions::Sqlite(opts) => {
                 write!(f, "sqlite:{}", opts.get_filename().display())
             }
+            DbConnectOptions::Postgres { url, .. } => f.write_str(url),
         }
     }
 }
@@ -227,9 +320,17 @@ impl FromStr for DbConnectOptions {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.starts_with("sqlite:") {
             Ok(DbConnectOptions::Sqlite(s.parse()?))
+        } else if s.starts_with("postgres://") || s.starts_with("postgresql://") {
+            Ok(DbConnectOptions::Postgres {
+                url: s.to_owned(),
+                options: s.parse()?,
+            })
         } else {
             Err(sqlx::Error::Configuration(
-                format!("unsupported database URL '{s}'; only sqlite: is supported").into(),
+                format!(
+                    "unsupported database URL '{s}'; supported schemes are sqlite: and postgres://"
+                )
+                .into(),
             ))
         }
     }
@@ -264,21 +365,20 @@ fn make_app_state(pool: SqlitePool, mailer: Arc<dyn MailSender>) -> Arc<AppState
     })
 }
 
-async fn init_pool(opts: &DbConnectOptions, create_if_missing: bool) -> sqlx::Result<SqlitePool> {
-    match opts {
-        DbConnectOptions::Sqlite(options) => {
-            let mut options = options.clone();
-            if create_if_missing {
-                options = options.create_if_missing(true);
-            }
-            let pool = sqlx::SqlitePool::connect_with(options).await?;
-            sqlx::migrate!("./migrations").run(&pool).await?;
-            Ok(pool)
-        }
-    }
+fn make_postgres_app_state(pool: PgPool, mailer: Arc<dyn MailSender>) -> Arc<AppState> {
+    Arc::new(AppState {
+        site_config: Arc::new(PostgresSiteConfigStorage::new(pool.clone())),
+        users: Arc::new(PostgresUserStorage::new(pool.clone())),
+        sessions: Arc::new(PostgresSessionStorage::new(pool.clone())),
+        invites: Arc::new(PostgresInviteStorage::new(pool.clone())),
+        atomic: Arc::new(PostgresAtomicOps::new(pool.clone())),
+        email_verifications: Arc::new(PostgresEmailVerificationStorage::new(pool.clone())),
+        password_resets: Arc::new(PostgresPasswordResetStorage::new(pool)),
+        mailer,
+    })
 }
 
-async fn build_mailer(site_config: &SqliteSiteConfigStorage) -> Arc<dyn MailSender> {
+async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender> {
     if let Ok(path) = std::env::var("JAUNDER_MAIL_CAPTURE_FILE") {
         return Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>;
     }
@@ -291,29 +391,72 @@ async fn build_mailer(site_config: &SqliteSiteConfigStorage) -> Arc<dyn MailSend
     }
 }
 
-/// Opens (or creates) the database described by `opts`, runs pending
-/// migrations, and returns an [`AppState`] bundling all storage handles.
-pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
-    let pool = init_pool(opts, true).await?;
+async fn open_sqlite_database(
+    options: &SqliteConnectOptions,
+    create_if_missing: bool,
+) -> sqlx::Result<Arc<AppState>> {
+    let mut options = options.clone();
+    if create_if_missing {
+        options = options.create_if_missing(true);
+    }
+    let pool = sqlx::SqlitePool::connect_with(options).await?;
+    sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     let site_config = SqliteSiteConfigStorage::new(pool.clone());
     let mailer = build_mailer(&site_config).await;
     Ok(make_app_state(pool, mailer))
+}
+
+fn postgres_password_from_env() -> io::Result<Option<String>> {
+    if let Ok(path) = std::env::var("JAUNDER_DB_PASSWORD_FILE") {
+        return std::fs::read_to_string(path).map(|s| Some(s.trim_end().to_owned()));
+    }
+
+    Ok(std::env::var("JAUNDER_DB_PASSWORD").ok())
+}
+
+fn resolved_postgres_options(options: &PgConnectOptions) -> sqlx::Result<PgConnectOptions> {
+    let mut options = options.clone();
+    if let Some(password) = postgres_password_from_env().map_err(sqlx::Error::Io)? {
+        options = options.password(&password);
+    }
+    Ok(options)
+}
+
+async fn open_postgres_database(options: &PgConnectOptions) -> sqlx::Result<Arc<AppState>> {
+    let options = resolved_postgres_options(options)?;
+    let pool = PgPool::connect_with(options).await?;
+    sqlx::migrate!("./migrations/postgres").run(&pool).await?;
+    let site_config = PostgresSiteConfigStorage::new(pool.clone());
+    let mailer = build_mailer(&site_config).await;
+    Ok(make_postgres_app_state(pool, mailer))
+}
+
+/// Opens (or creates) the database described by `opts`, runs pending
+/// migrations, and returns an [`AppState`] bundling all storage handles.
+pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
+    match opts {
+        DbConnectOptions::Sqlite(options) => open_sqlite_database(options, true).await,
+        DbConnectOptions::Postgres { options, .. } => open_postgres_database(options).await,
+    }
 }
 
 /// Opens an existing database described by `opts`, runs pending migrations.
 ///
 /// Unlike [`open_database`], fails if the database does not already exist.
 pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
-    let pool = init_pool(opts, false).await?;
-    let site_config = SqliteSiteConfigStorage::new(pool.clone());
-    let mailer = build_mailer(&site_config).await;
-    Ok(make_app_state(pool, mailer))
+    match opts {
+        DbConnectOptions::Sqlite(options) => open_sqlite_database(options, false).await,
+        DbConnectOptions::Postgres { options, .. } => open_postgres_database(options).await,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn new_path_created_with_subdirs() {
@@ -343,5 +486,130 @@ mod tests {
         let storage = std::path::Path::new("/nonexistent/path/to/storage");
         let result = init_storage(storage);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn postgres_password_prefers_file_over_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("JAUNDER_DB_PASSWORD", "from-env");
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("db-password");
+        std::fs::write(&path, "from-file\n").unwrap();
+        std::env::set_var("JAUNDER_DB_PASSWORD_FILE", &path);
+
+        let password = postgres_password_from_env().unwrap();
+
+        std::env::remove_var("JAUNDER_DB_PASSWORD");
+        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
+        assert_eq!(password.as_deref(), Some("from-file"));
+    }
+
+    #[test]
+    fn postgres_password_uses_env_when_file_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
+        std::env::set_var("JAUNDER_DB_PASSWORD", "from-env");
+
+        let password = postgres_password_from_env().unwrap();
+
+        std::env::remove_var("JAUNDER_DB_PASSWORD");
+        assert_eq!(password.as_deref(), Some("from-env"));
+    }
+
+    #[test]
+    fn test_build_user_record() {
+        let now = Utc::now();
+        let parts: UserRecordParts = (
+            1,
+            "alice".to_string(),
+            Some("Alice".to_string()),
+            Some("Bio".to_string()),
+            now,
+            Some(now),
+            Some("alice@example.com".to_string()),
+            true,
+        );
+        let record = build_user_record(parts).unwrap();
+        assert_eq!(record.user_id, 1);
+        assert_eq!(record.username.as_str(), "alice");
+        assert_eq!(record.email.as_ref().unwrap().as_str(), "alice@example.com");
+    }
+
+    #[test]
+    fn test_build_session_record() {
+        let now = Utc::now();
+        let record = build_session_record(
+            "hash".to_string(),
+            1,
+            "alice".to_string(),
+            Some("label".to_string()),
+            now,
+            now,
+        )
+        .unwrap();
+        assert_eq!(record.token_hash, "hash");
+        assert_eq!(record.username.as_str(), "alice");
+    }
+
+    #[test]
+    fn test_db_connect_options_parsing() {
+        let sqlite = "sqlite:jaunder.db".parse::<DbConnectOptions>().unwrap();
+        assert!(matches!(sqlite, DbConnectOptions::Sqlite(_)));
+        assert_eq!(sqlite.to_string(), "sqlite:jaunder.db");
+
+        let pg = "postgres://user:pass@localhost/db"
+            .parse::<DbConnectOptions>()
+            .unwrap();
+        assert!(matches!(pg, DbConnectOptions::Postgres { .. }));
+        assert_eq!(pg.to_string(), "postgres://user:pass@localhost/db");
+
+        let pgs = "postgresql://user:pass@localhost/db"
+            .parse::<DbConnectOptions>()
+            .unwrap();
+        assert!(matches!(pgs, DbConnectOptions::Postgres { .. }));
+
+        let invalid = "mysql://localhost".parse::<DbConnectOptions>();
+        assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn test_db_connect_options_invalid_sqlite() {
+        // Starts with sqlite: but is invalid
+        let invalid = "sqlite:??invalid??".parse::<DbConnectOptions>();
+        assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn test_db_connect_options_invalid_postgres() {
+        let invalid = "postgres://[invalid]".parse::<DbConnectOptions>();
+        assert!(invalid.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_make_postgres_app_state() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/db").unwrap();
+        let mailer = Arc::new(common::mailer::NoopMailSender);
+        let _ = make_postgres_app_state(pool, mailer);
+    }
+
+    #[tokio::test]
+    async fn test_open_database_postgres() {
+        let opts = "postgres://localhost:1/db"
+            .parse::<DbConnectOptions>()
+            .unwrap();
+        let _ =
+            tokio::time::timeout(std::time::Duration::from_millis(50), open_database(&opts)).await;
+    }
+
+    #[tokio::test]
+    async fn test_open_existing_database_postgres() {
+        let opts = "postgres://localhost:1/db"
+            .parse::<DbConnectOptions>()
+            .unwrap();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            open_existing_database(&opts),
+        )
+        .await;
     }
 }
