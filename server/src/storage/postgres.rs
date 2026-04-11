@@ -1,18 +1,19 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use email_address::EmailAddress;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 
 use common::password::Password;
 use common::slug::Slug;
 use common::storage::{
     AtomicOps, ConfirmPasswordResetError, CreatePostError, CreatePostInput, CreateUserError,
-    EmailVerificationStorage, InviteRecord, InviteStorage, PasswordResetStorage, PostCursor,
-    PostRecord, PostStorage, ProfileUpdate, RegisterWithInviteError, SessionAuthError,
-    SessionRecord, SessionStorage, SiteConfigStorage, UpdatePostError, UpdatePostInput,
-    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError, UserRecord,
-    UserStorage,
+    EmailVerificationStorage, InviteRecord, InviteStorage, ListByTagError, PasswordResetStorage,
+    PostCursor, PostRecord, PostStorage, PostTag, ProfileUpdate, RegisterWithInviteError,
+    SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage, TaggingError,
+    UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserAuthError, UserRecord, UserStorage,
 };
+use common::tag::Tag;
 use common::username::Username;
 
 // ---------------------------------------------------------------------------
@@ -1073,6 +1074,238 @@ impl PostStorage for PostgresPostStorage {
             .await?
         };
         rows.into_iter().map(post_record_from_row).collect()
+    }
+
+    async fn tag_post(&self, post_id: i64, tag_display: &str) -> Result<(), TaggingError> {
+        // Parse and normalize tag
+        let tag: Tag = tag_display.parse().map_err(|_| {
+            TaggingError::Internal(sqlx::Error::Decode("invalid tag format".into()))
+        })?;
+
+        let mut tx = self.pool.begin().await?;
+
+        // Check if post exists
+        let post_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM posts WHERE post_id = $1)")
+                .bind(post_id)
+                .fetch_one(&mut *tx)
+                .await?;
+
+        if !post_exists {
+            tx.rollback().await.ok();
+            return Err(TaggingError::PostNotFound);
+        }
+
+        // Insert or get tag
+        sqlx::query("INSERT INTO tags (tag_slug) VALUES ($1) ON CONFLICT (tag_slug) DO NOTHING")
+            .bind(tag.as_str())
+            .execute(&mut *tx)
+            .await?;
+
+        let tag_id: i64 =
+            sqlx::query_scalar::<_, i64>("SELECT tag_id FROM tags WHERE tag_slug = $1")
+                .bind(tag.as_str())
+                .fetch_one(&mut *tx)
+                .await?;
+
+        // Insert post_tags link
+        let result =
+            sqlx::query("INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3)")
+                .bind(post_id)
+                .bind(tag_id)
+                .bind(tag_display)
+                .execute(&mut *tx)
+                .await;
+
+        match result {
+            Ok(_) => {
+                tx.commit().await?;
+                Ok(())
+            }
+            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+                tx.rollback().await.ok();
+                Err(TaggingError::AlreadyTagged)
+            }
+            Err(e) => {
+                tx.rollback().await.ok();
+                Err(TaggingError::Internal(e))
+            }
+        }
+    }
+
+    async fn untag_post(&self, post_id: i64, tag_slug: &Tag) -> Result<(), TaggingError> {
+        let rows_deleted = sqlx::query(
+            "DELETE FROM post_tags
+             WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)",
+        )
+        .bind(post_id)
+        .bind(tag_slug.as_str())
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        if rows_deleted == 0 {
+            Err(TaggingError::TagNotFound)
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn get_tags_for_post(&self, post_id: i64) -> sqlx::Result<Vec<PostTag>> {
+        let rows = sqlx::query(
+            "SELECT pt.post_id, pt.tag_id, t.tag_slug, pt.tag_display
+             FROM post_tags pt
+             JOIN tags t ON pt.tag_id = t.tag_id
+             WHERE pt.post_id = $1
+             ORDER BY t.tag_slug",
+        )
+        .bind(post_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let tag_slug_str: String = row.get("tag_slug");
+                let tag_slug: Tag = tag_slug_str
+                    .parse()
+                    .map_err(|_| sqlx::Error::Decode("invalid tag format".into()))?;
+                Ok(PostTag {
+                    post_id: row.get("post_id"),
+                    tag_id: row.get("tag_id"),
+                    tag_slug,
+                    tag_display: row.get("tag_display"),
+                })
+            })
+            .collect()
+    }
+
+    async fn list_posts_by_tag(
+        &self,
+        tag_slug: &Tag,
+        cursor: Option<&PostCursor>,
+        limit: u32,
+    ) -> Result<Vec<PostRecord>, ListByTagError> {
+        // Check tag exists
+        let tag_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tags WHERE tag_slug = $1)")
+                .bind(tag_slug.as_str())
+                .fetch_one(&self.pool)
+                .await?;
+
+        if !tag_exists {
+            return Err(ListByTagError::TagNotFound);
+        }
+
+        let rows = if let Some(cursor) = cursor {
+            sqlx::query_as::<_, PostRow>(
+                "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                 FROM posts p
+                 JOIN post_tags pt ON p.post_id = pt.post_id
+                 JOIN tags t ON pt.tag_id = t.tag_id
+                 WHERE t.tag_slug = $1
+                   AND p.published_at IS NOT NULL
+                   AND p.deleted_at IS NULL
+                   AND (p.created_at < $2 OR (p.created_at = $2 AND p.post_id < $3))
+                 ORDER BY p.created_at DESC, p.post_id DESC
+                 LIMIT $4",
+            )
+            .bind(tag_slug.as_str())
+            .bind(cursor.created_at)
+            .bind(cursor.post_id)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, PostRow>(
+                "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                 FROM posts p
+                 JOIN post_tags pt ON p.post_id = pt.post_id
+                 JOIN tags t ON pt.tag_id = t.tag_id
+                 WHERE t.tag_slug = $1
+                   AND p.published_at IS NOT NULL
+                   AND p.deleted_at IS NULL
+                 ORDER BY p.created_at DESC, p.post_id DESC
+                 LIMIT $2",
+            )
+            .bind(tag_slug.as_str())
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        rows.into_iter()
+            .map(post_record_from_row)
+            .collect::<sqlx::Result<_>>()
+            .map_err(ListByTagError::Internal)
+    }
+
+    async fn list_user_posts_by_tag(
+        &self,
+        user_id: i64,
+        tag_slug: &Tag,
+        cursor: Option<&PostCursor>,
+        limit: u32,
+    ) -> Result<Vec<PostRecord>, ListByTagError> {
+        // Check tag exists
+        let tag_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tags WHERE tag_slug = $1)")
+                .bind(tag_slug.as_str())
+                .fetch_one(&self.pool)
+                .await?;
+
+        if !tag_exists {
+            return Err(ListByTagError::TagNotFound);
+        }
+
+        let rows = if let Some(cursor) = cursor {
+            sqlx::query_as::<_, PostRow>(
+                "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                 FROM posts p
+                 JOIN post_tags pt ON p.post_id = pt.post_id
+                 JOIN tags t ON pt.tag_id = t.tag_id
+                 WHERE p.user_id = $1
+                   AND t.tag_slug = $2
+                   AND p.published_at IS NOT NULL
+                   AND p.deleted_at IS NULL
+                   AND (p.created_at < $3 OR (p.created_at = $3 AND p.post_id < $4))
+                 ORDER BY p.created_at DESC, p.post_id DESC
+                 LIMIT $5",
+            )
+            .bind(user_id)
+            .bind(tag_slug.as_str())
+            .bind(cursor.created_at)
+            .bind(cursor.post_id)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, PostRow>(
+                "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                 FROM posts p
+                 JOIN post_tags pt ON p.post_id = pt.post_id
+                 JOIN tags t ON pt.tag_id = t.tag_id
+                 WHERE p.user_id = $1
+                   AND t.tag_slug = $2
+                   AND p.published_at IS NOT NULL
+                   AND p.deleted_at IS NULL
+                 ORDER BY p.created_at DESC, p.post_id DESC
+                 LIMIT $3",
+            )
+            .bind(user_id)
+            .bind(tag_slug.as_str())
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        rows.into_iter()
+            .map(post_record_from_row)
+            .collect::<sqlx::Result<_>>()
+            .map_err(ListByTagError::Internal)
     }
 }
 

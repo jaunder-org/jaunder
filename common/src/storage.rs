@@ -9,6 +9,7 @@ use email_address::EmailAddress;
 use crate::mailer::MailSender;
 use crate::password::Password;
 use crate::slug::Slug;
+use crate::tag::Tag;
 use crate::username::Username;
 
 // ---------------------------------------------------------------------------
@@ -421,6 +422,44 @@ pub struct UpdatePostInput {
     pub published_at: Option<DateTime<Utc>>,
 }
 
+/// A tag record returned by [`PostStorage`] tag queries.
+#[derive(Clone, Debug)]
+pub struct TagRecord {
+    pub tag_id: i64,
+    pub tag_slug: Tag,
+}
+
+/// A post-tag association returned by [`PostStorage`] tag queries.
+#[derive(Clone, Debug)]
+pub struct PostTag {
+    pub post_id: i64,
+    pub tag_id: i64,
+    pub tag_slug: Tag,
+    pub tag_display: String,
+}
+
+/// Errors that can occur when tagging a post.
+#[derive(Debug, Error)]
+pub enum TaggingError {
+    #[error("post not found")]
+    PostNotFound,
+    #[error("tag not found")]
+    TagNotFound,
+    #[error("post is already tagged with this tag")]
+    AlreadyTagged,
+    #[error(transparent)]
+    Internal(#[from] sqlx::Error),
+}
+
+/// Errors that can occur when listing posts by tag.
+#[derive(Debug, Error)]
+pub enum ListByTagError {
+    #[error("tag not found")]
+    TagNotFound,
+    #[error(transparent)]
+    Internal(#[from] sqlx::Error),
+}
+
 /// Async operations on the `posts` and `post_revisions` tables.
 #[async_trait]
 pub trait PostStorage: Send + Sync {
@@ -465,6 +504,32 @@ pub trait PostStorage: Send + Sync {
         cursor: Option<&PostCursor>,
         limit: u32,
     ) -> sqlx::Result<Vec<PostRecord>>;
+
+    /// Associates a post with a tag. If the tag doesn't exist, creates it.
+    async fn tag_post(&self, post_id: i64, tag_display: &str) -> Result<(), TaggingError>;
+
+    /// Removes a tag association from a post.
+    async fn untag_post(&self, post_id: i64, tag_slug: &Tag) -> Result<(), TaggingError>;
+
+    /// Returns all tags on a post.
+    async fn get_tags_for_post(&self, post_id: i64) -> sqlx::Result<Vec<PostTag>>;
+
+    /// Returns published, non-deleted posts with a tag.
+    async fn list_posts_by_tag(
+        &self,
+        tag_slug: &Tag,
+        cursor: Option<&PostCursor>,
+        limit: u32,
+    ) -> Result<Vec<PostRecord>, ListByTagError>;
+
+    /// Returns published, non-deleted posts by user with a tag.
+    async fn list_user_posts_by_tag(
+        &self,
+        user_id: i64,
+        tag_slug: &Tag,
+        cursor: Option<&PostCursor>,
+        limit: u32,
+    ) -> Result<Vec<PostRecord>, ListByTagError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -489,4 +554,78 @@ pub struct AppState {
     pub posts: Arc<dyn PostStorage>,
     /// Outbound email sender.  `NoopMailSender` when SMTP is not configured.
     pub mailer: Arc<dyn MailSender>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tagging_error_display_post_not_found() {
+        let err = TaggingError::PostNotFound;
+        assert_eq!(err.to_string(), "post not found");
+    }
+
+    #[test]
+    fn tagging_error_display_tag_not_found() {
+        let err = TaggingError::TagNotFound;
+        assert_eq!(err.to_string(), "tag not found");
+    }
+
+    #[test]
+    fn tagging_error_display_already_tagged() {
+        let err = TaggingError::AlreadyTagged;
+        assert_eq!(err.to_string(), "post is already tagged with this tag");
+    }
+
+    #[test]
+    fn tagging_error_debug() {
+        let err = TaggingError::PostNotFound;
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("PostNotFound"));
+
+        let err2 = TaggingError::TagNotFound;
+        let debug_str2 = format!("{:?}", err2);
+        assert!(debug_str2.contains("TagNotFound"));
+
+        let err3 = TaggingError::AlreadyTagged;
+        let debug_str3 = format!("{:?}", err3);
+        assert!(debug_str3.contains("AlreadyTagged"));
+    }
+
+    #[test]
+    fn list_by_tag_error_display_tag_not_found() {
+        let err = ListByTagError::TagNotFound;
+        assert_eq!(err.to_string(), "tag not found");
+    }
+
+    #[test]
+    fn list_by_tag_error_debug() {
+        let err = ListByTagError::TagNotFound;
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("TagNotFound"));
+    }
+
+    #[test]
+    fn post_format_markdown_variant() {
+        let fmt = PostFormat::Markdown;
+        assert_eq!(fmt, PostFormat::Markdown);
+    }
+
+    #[test]
+    fn post_format_org_variant() {
+        let fmt = PostFormat::Org;
+        assert_eq!(fmt, PostFormat::Org);
+    }
+
+    #[test]
+    fn post_format_debug() {
+        let fmt = PostFormat::Markdown;
+        let debug_str = format!("{:?}", fmt);
+        assert_eq!(debug_str, "Markdown");
+
+        let fmt2 = PostFormat::Org;
+        let debug_str2 = format!("{:?}", fmt2);
+        assert_eq!(debug_str2, "Org");
+    }
 }

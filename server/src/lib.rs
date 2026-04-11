@@ -4,6 +4,7 @@ pub mod commands;
 pub mod mailer;
 pub mod password;
 pub mod storage;
+pub mod tag;
 pub mod username;
 
 use std::sync::Arc;
