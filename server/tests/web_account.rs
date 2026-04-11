@@ -84,6 +84,33 @@ async fn get_profile_returns_display_name_and_bio() {
     assert!(body.contains("Hello world"), "bio missing: {body}");
 }
 
+#[tokio::test]
+async fn get_profile_with_email_returns_email() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    // Create user with email and session
+    let username: Username = "emailuser".parse().unwrap();
+    let user_id = state
+        .users
+        .create_user(&username, &"password123".parse().unwrap(), None)
+        .await
+        .unwrap();
+    let email = "user@example.com".parse().unwrap();
+    state
+        .users
+        .set_email(user_id, Some(&email), true)
+        .await
+        .unwrap();
+
+    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie_header = format!("session={raw_token}");
+
+    let (status, _, body) = post_form(state, "/api/get_profile", "", Some(&cookie_header)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("user@example.com"));
+}
+
 // M2.10.6: update_profile persists changes visible in a subsequent get_profile.
 #[tokio::test]
 async fn update_profile_persists_changes() {
@@ -418,4 +445,69 @@ async fn list_invites_returns_error_when_policy_not_invite_only() {
         StatusCode::OK,
         "list_invites should fail when policy is not invite_only"
     );
+}
+
+#[tokio::test]
+async fn get_profile_unauthorized_returns_error() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, _, _) = post_form(state, "/api/get_profile", "", None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn update_profile_unauthorized_returns_error() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, _, _) = post_form(
+        state,
+        "/api/update_profile",
+        "display_name=New&bio=Bio",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn update_profile_with_empty_fields_sets_to_none() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    // Create user and session
+    let username: Username = "empty".parse().unwrap();
+    let user_id = state
+        .users
+        .create_user(&username, &"password123".parse().unwrap(), Some("Initial"))
+        .await
+        .unwrap();
+    state
+        .users
+        .update_profile(
+            user_id,
+            &ProfileUpdate {
+                display_name: Some("Initial"),
+                bio: Some("Initial Bio"),
+            },
+        )
+        .await
+        .unwrap();
+
+    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie_header = format!("session={raw_token}");
+
+    let (status, _, _) = post_form(
+        Arc::clone(&state),
+        "/api/update_profile",
+        "display_name=&bio=",
+        Some(&cookie_header),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let user = state.users.get_user(user_id).await.unwrap().unwrap();
+    assert!(user.display_name.is_none());
+    assert!(user.bio.is_none());
 }

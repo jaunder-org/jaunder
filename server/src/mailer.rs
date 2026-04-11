@@ -294,4 +294,23 @@ mod tests {
             assert_eq!(record["subject"], format!("msg{i}"));
         }
     }
+
+    #[tokio::test]
+    async fn file_mail_sender_fails_on_directory_path() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let sender = FileMailSender::new(dir.path()); // dir.path() exists as a directory
+
+        let msg = EmailMessage {
+            from: None,
+            to: vec!["bob@example.com".parse().unwrap()],
+            subject: "Hello".to_string(),
+            body_text: "World".to_string(),
+        };
+        let result = sender.send_email(&msg).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("failed to send email"));
+    }
 }
