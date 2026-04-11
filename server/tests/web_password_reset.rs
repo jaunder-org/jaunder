@@ -121,6 +121,21 @@ async fn request_password_reset_returns_error_for_user_without_verified_email() 
     assert_ne!(status, StatusCode::OK);
 }
 
+#[tokio::test]
+async fn request_password_reset_invalid_username_returns_error() {
+    let base = TempDir::new().unwrap();
+    let (state, _) = test_state_with_mailer(&base).await;
+
+    let (status, _) = post_form(
+        state,
+        "/api/request_password_reset",
+        "username=invalid username",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 // M3.11.9: request_password_reset for an unknown username returns an error.
 #[tokio::test]
 async fn request_password_reset_returns_error_for_unknown_username() {

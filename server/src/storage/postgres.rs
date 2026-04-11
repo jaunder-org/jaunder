@@ -775,3 +775,151 @@ impl AtomicOps for PostgresAtomicOps {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{future::Future, time::Duration};
+
+    fn lazy_pool() -> PgPool {
+        sqlx::PgPool::connect_lazy("postgres://localhost:1/jaunder").unwrap()
+    }
+
+    async fn exercise<F: Future>(future: F) {
+        let _ = tokio::time::timeout(Duration::from_millis(50), future).await;
+    }
+
+    #[test]
+    fn test_user_record_from_row() {
+        let now = Utc::now();
+        let row: UserRow = (
+            1,
+            "alice".to_string(),
+            Some("Alice".to_string()),
+            Some("Bio".to_string()),
+            now,
+            Some(now),
+            Some("alice@example.com".to_string()),
+            true,
+        );
+        let record = user_record_from_row(row).unwrap();
+        assert_eq!(record.user_id, 1);
+        assert_eq!(record.username.as_str(), "alice");
+        assert_eq!(record.display_name, Some("Alice".to_string()));
+        assert_eq!(record.bio, Some("Bio".to_string()));
+        assert_eq!(record.created_at, now);
+        assert_eq!(record.last_authenticated_at, Some(now));
+        assert_eq!(record.email.as_ref().unwrap().as_str(), "alice@example.com");
+        assert!(record.email_verified);
+    }
+
+    #[test]
+    fn test_session_record_from_row() {
+        let now = Utc::now();
+        let row: SessionRow = (
+            "hash".to_string(),
+            1,
+            "alice".to_string(),
+            Some("label".to_string()),
+            now,
+            now,
+        );
+        let record = session_record_from_row(row).unwrap();
+        assert_eq!(record.token_hash, "hash");
+        assert_eq!(record.user_id, 1);
+        assert_eq!(record.username.as_str(), "alice");
+        assert_eq!(record.label, Some("label".to_string()));
+        assert_eq!(record.created_at, now);
+        assert_eq!(record.last_used_at, now);
+    }
+
+    #[test]
+    fn test_invite_record_from_row() {
+        let now = Utc::now();
+        let row: InviteRow = ("code".to_string(), now, now, Some(now), Some(1));
+        let record = invite_record_from_row(row);
+        assert_eq!(record.code, "code");
+        assert_eq!(record.created_at, now);
+        assert_eq!(record.expires_at, now);
+        assert_eq!(record.used_at, Some(now));
+        assert_eq!(record.used_by, Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_storage_constructors() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/db").unwrap();
+        let _ = PostgresSiteConfigStorage::new(pool.clone());
+        let _ = PostgresUserStorage::new(pool.clone());
+        let _ = PostgresSessionStorage::new(pool.clone());
+        let _ = PostgresInviteStorage::new(pool.clone());
+        let _ = PostgresEmailVerificationStorage::new(pool.clone());
+        let _ = PostgresPasswordResetStorage::new(pool.clone());
+        let _ = PostgresAtomicOps::new(pool);
+    }
+
+    #[tokio::test]
+    async fn test_storage_methods_with_lazy_pool_cover_error_paths() {
+        let pool = lazy_pool();
+        let username: Username = "alice".parse().unwrap();
+        let password: Password = "password123".parse().unwrap();
+        let email: EmailAddress = "alice@example.com".parse().unwrap();
+        let now = Utc::now();
+
+        let site_config = PostgresSiteConfigStorage::new(pool.clone());
+        exercise(site_config.get("site.registration_policy")).await;
+        exercise(site_config.set("site.registration_policy", "open")).await;
+
+        let users = PostgresUserStorage::new(pool.clone());
+        exercise(users.create_user(&username, &password, Some("Alice"))).await;
+        exercise(users.authenticate(&username, &password)).await;
+        exercise(users.get_user(1)).await;
+        exercise(users.get_user_by_username(&username)).await;
+        exercise(users.update_profile(
+            1,
+            &ProfileUpdate {
+                display_name: Some("Alice"),
+                bio: Some("Bio"),
+            },
+        ))
+        .await;
+        exercise(users.set_email(1, Some(&email), true)).await;
+        exercise(users.set_password(1, &password)).await;
+
+        let sessions = PostgresSessionStorage::new(pool.clone());
+        exercise(sessions.create_session(1, Some("device"))).await;
+        assert!(matches!(
+            sessions.authenticate("not-base64").await,
+            Err(SessionAuthError::InvalidToken)
+        ));
+        exercise(sessions.revoke_session("token-hash")).await;
+        exercise(sessions.list_sessions(1)).await;
+
+        let invites = PostgresInviteStorage::new(pool.clone());
+        exercise(invites.create_invite(now)).await;
+        exercise(invites.use_invite("invite-code", 1)).await;
+        exercise(invites.list_invites()).await;
+
+        let email_verifications = PostgresEmailVerificationStorage::new(pool.clone());
+        exercise(email_verifications.create_email_verification(1, "alice@example.com", now)).await;
+        assert!(matches!(
+            email_verifications
+                .use_email_verification("not-base64")
+                .await,
+            Err(UseEmailVerificationError::NotFound)
+        ));
+
+        let password_resets = PostgresPasswordResetStorage::new(pool.clone());
+        exercise(password_resets.create_password_reset(1, now)).await;
+        assert!(matches!(
+            password_resets.use_password_reset("not-base64").await,
+            Err(UsePasswordResetError::NotFound)
+        ));
+
+        let atomic = PostgresAtomicOps::new(pool);
+        exercise(atomic.create_user_with_invite(&username, &password, Some("Alice"), "code")).await;
+        assert!(matches!(
+            atomic.confirm_password_reset("not-base64", &password).await,
+            Err(ConfirmPasswordResetError::NotFound)
+        ));
+    }
+}

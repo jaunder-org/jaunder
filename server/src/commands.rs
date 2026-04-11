@@ -232,3 +232,63 @@ pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> a
     axum::serve(listener, router).await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::DbConnectOptions;
+
+    #[test]
+    fn test_quote_postgres_identifier() {
+        assert_eq!(quote_postgres_identifier("users"), "\"users\"");
+        assert_eq!(quote_postgres_identifier("user\"name"), "\"user\"\"name\"");
+    }
+
+    #[test]
+    fn test_quote_postgres_literal() {
+        assert_eq!(quote_postgres_literal("password"), "'password'");
+        assert_eq!(quote_postgres_literal("can't"), "'can''t'");
+    }
+
+    #[test]
+    fn test_require_postgres_options() {
+        let pg_url = "postgres://user:pass@localhost/db";
+        let opts: DbConnectOptions = pg_url.parse().unwrap();
+        assert!(require_postgres_options(&opts, "test").is_ok());
+
+        let sqlite_url = "sqlite:test.db";
+        let opts: DbConnectOptions = sqlite_url.parse().unwrap();
+        let err = require_postgres_options(&opts, "test").unwrap_err();
+        assert!(err.to_string().contains("test must be a PostgreSQL URL"));
+    }
+
+    #[tokio::test]
+    async fn cmd_create_pg_db_rejects_non_postgres_app_db() {
+        let err = cmd_create_pg_db(
+            "postgres://bootstrap:secret@localhost/postgres",
+            "sqlite:/tmp/jaunder.db",
+            "secret",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("--app-db must be a PostgreSQL URL"));
+    }
+
+    #[tokio::test]
+    async fn cmd_create_pg_db_requires_database_name() {
+        let err = cmd_create_pg_db(
+            "postgres://bootstrap:secret@localhost/postgres",
+            "postgres://app:secret@localhost",
+            "secret",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("--app-db must include a PostgreSQL database name"));
+    }
+}

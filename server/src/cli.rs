@@ -500,4 +500,12 @@ mod tests {
         let result = Cli::try_parse_from(["jaunder", "smtp-test"]);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_deployment_env() {
+        assert!(!DeploymentEnv::Dev.is_prod());
+        assert!(DeploymentEnv::Prod.is_prod());
+        assert_eq!(DeploymentEnv::Dev.to_string(), "dev");
+        assert_eq!(DeploymentEnv::Prod.to_string(), "prod");
+    }
 }
