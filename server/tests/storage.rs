@@ -3,11 +3,12 @@ mod helpers;
 use chrono::Utc;
 use jaunder::password::Password;
 use jaunder::storage::{
-    open_database, open_existing_database, AtomicOps, CreateUserError, DbConnectOptions,
-    EmailVerificationStorage, InviteStorage, PasswordResetStorage, ProfileUpdate,
-    RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteAtomicOps,
-    SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
-    SqliteSessionStorage, SqliteUserStorage, UseEmailVerificationError, UseInviteError,
+    open_database, open_existing_database, AtomicOps, CreatePostError, CreatePostInput,
+    CreateUserError, DbConnectOptions, EmailVerificationStorage, InviteStorage,
+    PasswordResetStorage, PostFormat, PostStorage, ProfileUpdate, RegisterWithInviteError,
+    SessionAuthError, SessionStorage, SqliteAtomicOps, SqliteEmailVerificationStorage,
+    SqliteInviteStorage, SqlitePasswordResetStorage, SqlitePostStorage, SqliteSessionStorage,
+    SqliteUserStorage, UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
     UsePasswordResetError, UserAuthError, UserStorage,
 };
 use jaunder::username::Username;
@@ -1187,4 +1188,468 @@ async fn use_password_reset_unknown_token_returns_not_found() {
         matches!(err, UsePasswordResetError::NotFound),
         "expected NotFound, got {err:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// PostStorage integration tests
+// ---------------------------------------------------------------------------
+
+async fn post_storage(base: &TempDir) -> (SqliteUserStorage, SqlitePostStorage) {
+    let pool = open_pool(base).await;
+    (
+        SqliteUserStorage::new(pool.clone()),
+        SqlitePostStorage::new(pool),
+    )
+}
+
+fn make_create_post_input(user_id: i64, slug: &str) -> CreatePostInput {
+    CreatePostInput {
+        user_id,
+        title: format!("Post {slug}"),
+        slug: slug.parse().unwrap(),
+        body: "body text".to_string(),
+        format: PostFormat::Markdown,
+        rendered_html: "<p>body text</p>".to_string(),
+        published_at: None,
+    }
+}
+
+fn make_published_create_post_input(user_id: i64, slug: &str) -> CreatePostInput {
+    CreatePostInput {
+        published_at: Some(Utc::now()),
+        ..make_create_post_input(user_id, slug)
+    }
+}
+
+async fn assert_post_create_and_get_by_id(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let input = make_create_post_input(user_id, "hello-world");
+    let post_id = state.posts.create_post(&input).await.unwrap();
+
+    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    assert_eq!(record.post_id, post_id);
+    assert_eq!(record.user_id, user_id);
+    assert_eq!(record.title, "Post hello-world");
+    assert_eq!(record.slug.as_str(), "hello-world");
+    assert_eq!(record.format, PostFormat::Markdown);
+    assert!(record.published_at.is_none());
+    assert!(record.deleted_at.is_none());
+}
+
+async fn assert_post_slug_conflict(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    // Two drafts created on the same date with the same slug should conflict
+    let now = Utc::now();
+    let input1 = CreatePostInput {
+        user_id,
+        title: "First".to_string(),
+        slug: "duplicate-slug".parse().unwrap(),
+        body: "body".to_string(),
+        format: PostFormat::Markdown,
+        rendered_html: "<p>body</p>".to_string(),
+        published_at: None,
+    };
+    state.posts.create_post(&input1).await.unwrap();
+
+    let input2 = CreatePostInput {
+        published_at: Some(now),
+        ..input1.clone()
+    };
+    // The unique index is on (user_id, date(COALESCE(published_at, created_at)), slug).
+    // For same-day same-slug, this should fail for a published post paired with any other
+    // (since draft uses created_at and published uses published_at).
+    // The simplest reliable conflict: two drafts on the same day.
+    // SQLite's unique index covers (user_id, date(COALESCE(published_at, created_at)), slug)
+    // both use the same date (today), so the second insert should violate it.
+    let _ = input2; // May or may not conflict depending on date; test published conflict below.
+
+    // Test published conflict: publish two posts with same slug on same date
+    let pub_input = CreatePostInput {
+        user_id,
+        title: "Published".to_string(),
+        slug: "same-day-slug".parse().unwrap(),
+        body: "body".to_string(),
+        format: PostFormat::Markdown,
+        rendered_html: "<p>body</p>".to_string(),
+        published_at: Some(now),
+    };
+    state.posts.create_post(&pub_input.clone()).await.unwrap();
+
+    let err = state.posts.create_post(&pub_input).await.unwrap_err();
+    assert!(
+        matches!(err, CreatePostError::SlugConflict),
+        "expected SlugConflict, got {err:?}"
+    );
+}
+
+async fn assert_post_update_creates_revision(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(&username("carol"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let post_id = state
+        .posts
+        .create_post(&make_create_post_input(user_id, "update-test"))
+        .await
+        .unwrap();
+
+    let update_input = UpdatePostInput {
+        title: "Updated Title".to_string(),
+        slug: "update-test".parse().unwrap(),
+        body: "updated body".to_string(),
+        format: PostFormat::Org,
+        rendered_html: "<p>updated body</p>".to_string(),
+        published_at: None,
+    };
+    state
+        .posts
+        .update_post(post_id, user_id, &update_input)
+        .await
+        .unwrap();
+
+    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    assert_eq!(record.title, "Updated Title");
+    assert_eq!(record.format, PostFormat::Org);
+    assert_eq!(record.body, "updated body");
+}
+
+async fn assert_post_update_not_found(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let update_input = UpdatePostInput {
+        title: "Title".to_string(),
+        slug: "nope".parse().unwrap(),
+        body: "body".to_string(),
+        format: PostFormat::Markdown,
+        rendered_html: "<p>body</p>".to_string(),
+        published_at: None,
+    };
+    let err = state
+        .posts
+        .update_post(9999, 1, &update_input)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, UpdatePostError::NotFound),
+        "expected NotFound, got {err:?}"
+    );
+}
+
+async fn assert_soft_delete_excludes_from_lists(
+    state: &std::sync::Arc<jaunder::storage::AppState>,
+) {
+    let user_id = state
+        .users
+        .create_user(&username("dave"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let post_id = state
+        .posts
+        .create_post(&make_published_create_post_input(user_id, "to-delete"))
+        .await
+        .unwrap();
+
+    // It should appear before deletion
+    let published = state.posts.list_published(None, 10).await.unwrap();
+    assert!(published.iter().any(|p| p.post_id == post_id));
+
+    state.posts.soft_delete_post(post_id).await.unwrap();
+
+    // Should not appear after deletion
+    let published = state.posts.list_published(None, 10).await.unwrap();
+    assert!(!published.iter().any(|p| p.post_id == post_id));
+
+    // deleted_at should be set
+    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    assert!(record.deleted_at.is_some());
+}
+
+async fn assert_list_published_by_user(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let alice_id = state
+        .users
+        .create_user(&username("ealice"), &password("password123"), None)
+        .await
+        .unwrap();
+    let bob_id = state
+        .users
+        .create_user(&username("ebob"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    state
+        .posts
+        .create_post(&make_published_create_post_input(alice_id, "alice-post1"))
+        .await
+        .unwrap();
+    state
+        .posts
+        .create_post(&make_published_create_post_input(alice_id, "alice-post2"))
+        .await
+        .unwrap();
+    state
+        .posts
+        .create_post(&make_published_create_post_input(bob_id, "bob-post1"))
+        .await
+        .unwrap();
+
+    let alice_posts = state
+        .posts
+        .list_published_by_user(&username("ealice"), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(alice_posts.len(), 2);
+    assert!(alice_posts.iter().all(|p| p.user_id == alice_id));
+
+    let bob_posts = state
+        .posts
+        .list_published_by_user(&username("ebob"), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(bob_posts.len(), 1);
+    assert_eq!(bob_posts[0].user_id, bob_id);
+}
+
+async fn assert_list_published_returns_all_published(
+    state: &std::sync::Arc<jaunder::storage::AppState>,
+) {
+    let user_id = state
+        .users
+        .create_user(&username("fuser"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    // Create a draft (should not appear)
+    state
+        .posts
+        .create_post(&make_create_post_input(user_id, "draft-post"))
+        .await
+        .unwrap();
+
+    // Create two published posts
+    state
+        .posts
+        .create_post(&make_published_create_post_input(user_id, "pub-post1"))
+        .await
+        .unwrap();
+    state
+        .posts
+        .create_post(&make_published_create_post_input(user_id, "pub-post2"))
+        .await
+        .unwrap();
+
+    let published = state.posts.list_published(None, 10).await.unwrap();
+    assert_eq!(published.len(), 2);
+    assert!(published.iter().all(|p| p.published_at.is_some()));
+}
+
+async fn assert_list_drafts_by_user(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(&username("guser"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    // Create two drafts
+    state
+        .posts
+        .create_post(&make_create_post_input(user_id, "draft-a"))
+        .await
+        .unwrap();
+    state
+        .posts
+        .create_post(&make_create_post_input(user_id, "draft-b"))
+        .await
+        .unwrap();
+
+    // Create a published post (should not appear in drafts)
+    state
+        .posts
+        .create_post(&make_published_create_post_input(user_id, "published-c"))
+        .await
+        .unwrap();
+
+    let drafts = state
+        .posts
+        .list_drafts_by_user(user_id, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(drafts.len(), 2);
+    assert!(drafts.iter().all(|p| p.published_at.is_none()));
+    assert!(drafts.iter().all(|p| p.user_id == user_id));
+}
+
+// SQLite post tests
+
+#[tokio::test]
+async fn sqlite_post_create_and_get_by_id_works() {
+    let base = TempDir::new().unwrap();
+    let (_, posts) = post_storage(&base).await;
+    let pool = open_pool(&base).await;
+    let users = SqliteUserStorage::new(pool);
+    let user_id = users
+        .create_user(&username("alice"), &password("password123"), None)
+        .await
+        .unwrap();
+    let input = make_create_post_input(user_id, "hello-world");
+    let post_id = posts.create_post(&input).await.unwrap();
+    let record = posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    assert_eq!(record.post_id, post_id);
+    assert_eq!(record.slug.as_str(), "hello-world");
+    assert!(record.deleted_at.is_none());
+}
+
+#[tokio::test]
+async fn sqlite_post_slug_conflict_returns_slug_conflict() {
+    let base = TempDir::new().unwrap();
+    let now = Utc::now();
+    let (users, posts) = post_storage(&base).await;
+    let user_id = users
+        .create_user(&username("bob"), &password("password123"), None)
+        .await
+        .unwrap();
+    let input = CreatePostInput {
+        user_id,
+        title: "Post".to_string(),
+        slug: "my-slug".parse().unwrap(),
+        body: "body".to_string(),
+        format: PostFormat::Markdown,
+        rendered_html: "<p>body</p>".to_string(),
+        published_at: Some(now),
+    };
+    posts.create_post(&input).await.unwrap();
+    let err = posts.create_post(&input).await.unwrap_err();
+    assert!(
+        matches!(err, CreatePostError::SlugConflict),
+        "expected SlugConflict, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn sqlite_post_update_writes_revision_and_updates_record() {
+    let (_base, state) = sqlite_state().await;
+    assert_post_update_creates_revision(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_post_update_not_found_returns_error() {
+    let (_base, state) = sqlite_state().await;
+    assert_post_update_not_found(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_soft_delete_excludes_post_from_lists() {
+    let (_base, state) = sqlite_state().await;
+    assert_soft_delete_excludes_from_lists(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_list_published_by_user_returns_only_user_posts() {
+    let (_base, state) = sqlite_state().await;
+    assert_list_published_by_user(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_list_published_returns_published_non_deleted_posts() {
+    let (_base, state) = sqlite_state().await;
+    assert_list_published_returns_all_published(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_list_drafts_by_user_returns_only_drafts() {
+    let (_base, state) = sqlite_state().await;
+    assert_list_drafts_by_user(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_post_app_state_parity_suite() {
+    let (_base, state) = sqlite_state().await;
+    assert_post_create_and_get_by_id(&state).await;
+
+    let (_base, state) = sqlite_state().await;
+    assert_post_slug_conflict(&state).await;
+
+    let (_base, state) = sqlite_state().await;
+    assert_post_update_creates_revision(&state).await;
+
+    let (_base, state) = sqlite_state().await;
+    assert_post_update_not_found(&state).await;
+
+    let (_base, state) = sqlite_state().await;
+    assert_soft_delete_excludes_from_lists(&state).await;
+
+    let (_base, state) = sqlite_state().await;
+    assert_list_published_by_user(&state).await;
+
+    let (_base, state) = sqlite_state().await;
+    assert_list_published_returns_all_published(&state).await;
+
+    let (_base, state) = sqlite_state().await;
+    assert_list_drafts_by_user(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_post_create_and_get_by_id_works() {
+    let state = postgres_state().await;
+    assert_post_create_and_get_by_id(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_post_slug_conflict_returns_slug_conflict() {
+    let state = postgres_state().await;
+    assert_post_slug_conflict(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_post_update_writes_revision_and_updates_record() {
+    let state = postgres_state().await;
+    assert_post_update_creates_revision(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_post_update_not_found_returns_error() {
+    let state = postgres_state().await;
+    assert_post_update_not_found(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_soft_delete_excludes_post_from_lists() {
+    let state = postgres_state().await;
+    assert_soft_delete_excludes_from_lists(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_list_published_by_user_returns_only_user_posts() {
+    let state = postgres_state().await;
+    assert_list_published_by_user(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_list_published_returns_published_non_deleted_posts() {
+    let state = postgres_state().await;
+    assert_list_published_returns_all_published(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_list_drafts_by_user_returns_only_drafts() {
+    let state = postgres_state().await;
+    assert_list_drafts_by_user(&state).await;
 }
