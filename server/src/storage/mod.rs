@@ -13,11 +13,12 @@ use sqlx::SqlitePool;
 // backward-compatibility with existing server-crate consumers.
 pub use common::storage::{
     AppState, AtomicOps, ConfirmPasswordResetError, CreatePostError, CreatePostInput,
-    CreateUserError, EmailVerificationStorage, InviteRecord, InviteStorage, PasswordResetStorage,
-    PostCursor, PostFormat, PostRecord, PostRevisionRecord, PostStorage, ProfileUpdate,
-    RegisterWithInviteError, SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage,
-    UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
-    UsePasswordResetError, UserAuthError, UserRecord, UserStorage,
+    CreateUserError, EmailVerificationStorage, InviteRecord, InviteStorage, ListByTagError,
+    PasswordResetStorage, PostCursor, PostFormat, PostRecord, PostRevisionRecord, PostStorage,
+    PostTag, ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionRecord,
+    SessionStorage, SiteConfigStorage, TaggingError, UpdatePostError, UpdatePostInput,
+    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError, UserRecord,
+    UserStorage,
 };
 
 use crate::mailer::FileMailSender;
