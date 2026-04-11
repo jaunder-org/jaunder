@@ -3,10 +3,10 @@
 use common::mailer::{test_utils::CapturingMailSender, MailSender};
 use jaunder::storage::{
     open_database, AppState, DbConnectOptions, PostgresAtomicOps, PostgresEmailVerificationStorage,
-    PostgresInviteStorage, PostgresPasswordResetStorage, PostgresSessionStorage,
-    PostgresSiteConfigStorage, PostgresUserStorage, SqliteAtomicOps,
+    PostgresInviteStorage, PostgresPasswordResetStorage, PostgresPostStorage,
+    PostgresSessionStorage, PostgresSiteConfigStorage, PostgresUserStorage, SqliteAtomicOps,
     SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
-    SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
+    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
 };
 use leptos::prelude::LeptosOptions;
 use sqlx::Connection;
@@ -189,7 +189,8 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             invites: Arc::new(PostgresInviteStorage::new(pool.clone())),
             atomic: Arc::new(PostgresAtomicOps::new(pool.clone())),
             email_verifications: Arc::new(PostgresEmailVerificationStorage::new(pool.clone())),
-            password_resets: Arc::new(PostgresPasswordResetStorage::new(pool)),
+            password_resets: Arc::new(PostgresPasswordResetStorage::new(pool.clone())),
+            posts: Arc::new(PostgresPostStorage::new(pool)),
             mailer: mailer.clone() as Arc<dyn MailSender>,
         })
     } else {
@@ -212,7 +213,8 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
             atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
             email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
-            password_resets: Arc::new(SqlitePasswordResetStorage::new(pool)),
+            password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
+            posts: Arc::new(SqlitePostStorage::new(pool)),
             mailer: mailer.clone() as Arc<dyn MailSender>,
         })
     };

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fmt, str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -8,6 +8,7 @@ use email_address::EmailAddress;
 
 use crate::mailer::MailSender;
 use crate::password::Password;
+use crate::slug::Slug;
 use crate::username::Username;
 
 // ---------------------------------------------------------------------------
@@ -306,6 +307,167 @@ pub trait PasswordResetStorage: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
+// Posts
+// ---------------------------------------------------------------------------
+
+/// The format/markup language used to author a post body.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PostFormat {
+    Markdown,
+    Org,
+}
+
+/// Error returned when a string cannot be parsed as a [`PostFormat`].
+#[derive(Debug, Error)]
+#[error("post format must be \"markdown\" or \"org\"")]
+pub struct InvalidPostFormat;
+
+impl fmt::Display for PostFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PostFormat::Markdown => f.write_str("markdown"),
+            PostFormat::Org => f.write_str("org"),
+        }
+    }
+}
+
+impl FromStr for PostFormat {
+    type Err = InvalidPostFormat;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "markdown" => Ok(PostFormat::Markdown),
+            "org" => Ok(PostFormat::Org),
+            _ => Err(InvalidPostFormat),
+        }
+    }
+}
+
+/// A post record returned by [`PostStorage`] queries.
+#[derive(Clone, Debug)]
+pub struct PostRecord {
+    pub post_id: i64,
+    pub user_id: i64,
+    pub title: String,
+    pub slug: Slug,
+    pub body: String,
+    pub format: PostFormat,
+    pub rendered_html: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub published_at: Option<DateTime<Utc>>,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// A post revision record returned by [`PostStorage`] queries.
+#[derive(Clone, Debug)]
+pub struct PostRevisionRecord {
+    pub revision_id: i64,
+    pub post_id: i64,
+    pub user_id: i64,
+    pub title: String,
+    pub slug: Slug,
+    pub body: String,
+    pub format: PostFormat,
+    pub rendered_html: String,
+    pub edited_at: DateTime<Utc>,
+}
+
+/// Errors that can occur when creating a post.
+#[derive(Debug, Error)]
+pub enum CreatePostError {
+    #[error("slug already taken for this user on this date")]
+    SlugConflict,
+    #[error(transparent)]
+    Internal(#[from] sqlx::Error),
+}
+
+/// Errors that can occur when updating a post.
+#[derive(Debug, Error)]
+pub enum UpdatePostError {
+    #[error("post not found")]
+    NotFound,
+    #[error(transparent)]
+    Internal(#[from] sqlx::Error),
+}
+
+/// Cursor for keyset pagination of post listings.
+pub struct PostCursor {
+    pub created_at: DateTime<Utc>,
+    pub post_id: i64,
+}
+
+/// Input for creating a new post.
+#[derive(Clone)]
+pub struct CreatePostInput {
+    pub user_id: i64,
+    pub title: String,
+    pub slug: Slug,
+    pub body: String,
+    pub format: PostFormat,
+    pub rendered_html: String,
+    pub published_at: Option<DateTime<Utc>>,
+}
+
+/// Input for updating an existing post.
+#[derive(Clone)]
+pub struct UpdatePostInput {
+    pub title: String,
+    /// Ignored if the post is already published.
+    pub slug: Slug,
+    pub body: String,
+    pub format: PostFormat,
+    pub rendered_html: String,
+    pub published_at: Option<DateTime<Utc>>,
+}
+
+/// Async operations on the `posts` and `post_revisions` tables.
+#[async_trait]
+pub trait PostStorage: Send + Sync {
+    async fn create_post(&self, input: &CreatePostInput) -> Result<i64, CreatePostError>;
+
+    async fn get_post_by_id(&self, post_id: i64) -> sqlx::Result<Option<PostRecord>>;
+
+    async fn get_post_by_permalink(
+        &self,
+        username: &Username,
+        year: i32,
+        month: u32,
+        day: u32,
+        slug: &Slug,
+    ) -> sqlx::Result<Option<PostRecord>>;
+
+    async fn update_post(
+        &self,
+        post_id: i64,
+        editor_user_id: i64,
+        input: &UpdatePostInput,
+    ) -> Result<(), UpdatePostError>;
+
+    async fn soft_delete_post(&self, post_id: i64) -> sqlx::Result<()>;
+
+    async fn list_published_by_user(
+        &self,
+        username: &Username,
+        cursor: Option<&PostCursor>,
+        limit: u32,
+    ) -> sqlx::Result<Vec<PostRecord>>;
+
+    async fn list_published(
+        &self,
+        cursor: Option<&PostCursor>,
+        limit: u32,
+    ) -> sqlx::Result<Vec<PostRecord>>;
+
+    async fn list_drafts_by_user(
+        &self,
+        user_id: i64,
+        cursor: Option<&PostCursor>,
+        limit: u32,
+    ) -> sqlx::Result<Vec<PostRecord>>;
+}
+
+// ---------------------------------------------------------------------------
 // AppState
 // ---------------------------------------------------------------------------
 
@@ -323,6 +485,8 @@ pub struct AppState {
     pub email_verifications: Arc<dyn EmailVerificationStorage>,
     /// Password reset token storage (stub until Step 8).
     pub password_resets: Arc<dyn PasswordResetStorage>,
+    /// Post storage.
+    pub posts: Arc<dyn PostStorage>,
     /// Outbound email sender.  `NoopMailSender` when SMTP is not configured.
     pub mailer: Arc<dyn MailSender>,
 }

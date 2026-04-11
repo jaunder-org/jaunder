@@ -12,10 +12,12 @@ use sqlx::SqlitePool;
 // them without a circular dependency.  Re-export everything for
 // backward-compatibility with existing server-crate consumers.
 pub use common::storage::{
-    AppState, AtomicOps, ConfirmPasswordResetError, CreateUserError, EmailVerificationStorage,
-    InviteRecord, InviteStorage, PasswordResetStorage, ProfileUpdate, RegisterWithInviteError,
-    SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage, UseEmailVerificationError,
-    UseInviteError, UsePasswordResetError, UserAuthError, UserRecord, UserStorage,
+    AppState, AtomicOps, ConfirmPasswordResetError, CreatePostError, CreatePostInput,
+    CreateUserError, EmailVerificationStorage, InviteRecord, InviteStorage, PasswordResetStorage,
+    PostCursor, PostFormat, PostRecord, PostRevisionRecord, PostStorage, ProfileUpdate,
+    RegisterWithInviteError, SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage,
+    UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserAuthError, UserRecord, UserStorage,
 };
 
 use crate::mailer::FileMailSender;
@@ -27,13 +29,13 @@ use common::username::Username;
 mod sqlite;
 pub use sqlite::{
     SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
-    SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
+    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
 };
 mod postgres;
 pub use postgres::{
     PostgresAtomicOps, PostgresEmailVerificationStorage, PostgresInviteStorage,
-    PostgresPasswordResetStorage, PostgresSessionStorage, PostgresSiteConfigStorage,
-    PostgresUserStorage,
+    PostgresPasswordResetStorage, PostgresPostStorage, PostgresSessionStorage,
+    PostgresSiteConfigStorage, PostgresUserStorage,
 };
 
 pub(super) type UserRecordParts = (
@@ -111,6 +113,57 @@ pub(super) fn build_invite_record(
         used_at,
         used_by,
     }
+}
+
+pub(super) type PostRecordParts = (
+    i64,                   // post_id
+    i64,                   // user_id
+    String,                // title
+    String,                // slug
+    String,                // body
+    String,                // format
+    String,                // rendered_html
+    DateTime<Utc>,         // created_at
+    DateTime<Utc>,         // updated_at
+    Option<DateTime<Utc>>, // published_at
+    Option<DateTime<Utc>>, // deleted_at
+);
+
+pub(super) fn build_post_record(
+    (
+        post_id,
+        user_id,
+        title,
+        slug,
+        body,
+        format,
+        rendered_html,
+        created_at,
+        updated_at,
+        published_at,
+        deleted_at,
+    ): PostRecordParts,
+) -> sqlx::Result<PostRecord> {
+    use common::slug::Slug;
+    let slug = slug
+        .parse::<Slug>()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let format = format
+        .parse::<PostFormat>()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    Ok(PostRecord {
+        post_id,
+        user_id,
+        title,
+        slug,
+        body,
+        format,
+        rendered_html,
+        created_at,
+        updated_at,
+        published_at,
+        deleted_at,
+    })
 }
 
 pub(super) async fn hash_password(password: Password) -> io::Result<String> {
@@ -360,7 +413,8 @@ fn make_app_state(pool: SqlitePool, mailer: Arc<dyn MailSender>) -> Arc<AppState
         invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
         atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
         email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
-        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool)),
+        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
+        posts: Arc::new(SqlitePostStorage::new(pool)),
         mailer,
     })
 }
@@ -373,7 +427,8 @@ fn make_postgres_app_state(pool: PgPool, mailer: Arc<dyn MailSender>) -> Arc<App
         invites: Arc::new(PostgresInviteStorage::new(pool.clone())),
         atomic: Arc::new(PostgresAtomicOps::new(pool.clone())),
         email_verifications: Arc::new(PostgresEmailVerificationStorage::new(pool.clone())),
-        password_resets: Arc::new(PostgresPasswordResetStorage::new(pool)),
+        password_resets: Arc::new(PostgresPasswordResetStorage::new(pool.clone())),
+        posts: Arc::new(PostgresPostStorage::new(pool)),
         mailer,
     })
 }

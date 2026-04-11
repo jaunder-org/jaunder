@@ -4,11 +4,14 @@ use email_address::EmailAddress;
 use sqlx::PgPool;
 
 use common::password::Password;
+use common::slug::Slug;
 use common::storage::{
-    AtomicOps, ConfirmPasswordResetError, CreateUserError, EmailVerificationStorage, InviteRecord,
-    InviteStorage, PasswordResetStorage, ProfileUpdate, RegisterWithInviteError, SessionAuthError,
-    SessionRecord, SessionStorage, SiteConfigStorage, UseEmailVerificationError, UseInviteError,
-    UsePasswordResetError, UserAuthError, UserRecord, UserStorage,
+    AtomicOps, ConfirmPasswordResetError, CreatePostError, CreatePostInput, CreateUserError,
+    EmailVerificationStorage, InviteRecord, InviteStorage, PasswordResetStorage, PostCursor,
+    PostRecord, PostStorage, ProfileUpdate, RegisterWithInviteError, SessionAuthError,
+    SessionRecord, SessionStorage, SiteConfigStorage, UpdatePostError, UpdatePostInput,
+    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError, UserRecord,
+    UserStorage,
 };
 use common::username::Username;
 
@@ -776,6 +779,303 @@ impl AtomicOps for PostgresAtomicOps {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Posts
+// ---------------------------------------------------------------------------
+
+type PostRow = (
+    i64,
+    i64,
+    String,
+    String,
+    String,
+    String,
+    String,
+    DateTime<Utc>,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+    Option<DateTime<Utc>>,
+);
+
+fn post_record_from_row(row: PostRow) -> sqlx::Result<PostRecord> {
+    super::build_post_record(row)
+}
+
+/// PostgreSQL-backed [`PostStorage`].
+pub struct PostgresPostStorage {
+    pool: PgPool,
+}
+
+impl PostgresPostStorage {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl PostStorage for PostgresPostStorage {
+    async fn create_post(&self, input: &CreatePostInput) -> Result<i64, CreatePostError> {
+        let now = Utc::now();
+
+        let result = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             RETURNING post_id",
+        )
+        .bind(input.user_id)
+        .bind(&input.title)
+        .bind(input.slug.as_str())
+        .bind(&input.body)
+        .bind(input.format.to_string())
+        .bind(&input.rendered_html)
+        .bind(now)
+        .bind(now)
+        .bind(input.published_at)
+        .fetch_one(&self.pool)
+        .await;
+
+        match result {
+            Ok(id) => Ok(id),
+            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+                Err(CreatePostError::SlugConflict)
+            }
+            Err(e) => Err(CreatePostError::Internal(e)),
+        }
+    }
+
+    async fn get_post_by_id(&self, post_id: i64) -> sqlx::Result<Option<PostRecord>> {
+        let row = sqlx::query_as::<_, PostRow>(
+            "SELECT post_id, user_id, title, slug, body, format, rendered_html,
+                    created_at, updated_at, published_at, deleted_at
+             FROM posts WHERE post_id = $1",
+        )
+        .bind(post_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(post_record_from_row).transpose()?)
+    }
+
+    async fn get_post_by_permalink(
+        &self,
+        username: &Username,
+        year: i32,
+        month: u32,
+        day: u32,
+        slug: &Slug,
+    ) -> sqlx::Result<Option<PostRecord>> {
+        let date_str = format!("{year:04}-{month:02}-{day:02}");
+        let row = sqlx::query_as::<_, PostRow>(
+            "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
+                    p.created_at, p.updated_at, p.published_at, p.deleted_at
+             FROM posts p
+             JOIN users u ON p.user_id = u.user_id
+             WHERE u.username = $1
+               AND p.slug = $2
+               AND date(p.published_at AT TIME ZONE 'UTC') = $3::date
+               AND p.deleted_at IS NULL",
+        )
+        .bind(username.as_str())
+        .bind(slug.as_str())
+        .bind(&date_str)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(post_record_from_row).transpose()?)
+    }
+
+    async fn update_post(
+        &self,
+        post_id: i64,
+        editor_user_id: i64,
+        input: &UpdatePostInput,
+    ) -> Result<(), UpdatePostError> {
+        let mut tx = self.pool.begin().await?;
+        let now = Utc::now();
+
+        // Save a revision of current state
+        let rows_affected = sqlx::query(
+            "INSERT INTO post_revisions (post_id, user_id, title, slug, body, format, rendered_html, edited_at)
+             SELECT post_id, user_id, title, slug, body, format, rendered_html, $1
+             FROM posts WHERE post_id = $2",
+        )
+        .bind(now)
+        .bind(post_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+        if rows_affected == 0 {
+            tx.rollback().await.ok();
+            return Err(UpdatePostError::NotFound);
+        }
+
+        // Update the post; only update slug if not yet published
+        sqlx::query(
+            "UPDATE posts
+             SET title = $1,
+                 slug = CASE WHEN published_at IS NULL THEN $2 ELSE slug END,
+                 body = $3,
+                 format = $4,
+                 rendered_html = $5,
+                 published_at = $6,
+                 updated_at = $7
+             WHERE post_id = $8",
+        )
+        .bind(&input.title)
+        .bind(input.slug.as_str())
+        .bind(&input.body)
+        .bind(input.format.to_string())
+        .bind(&input.rendered_html)
+        .bind(input.published_at)
+        .bind(now)
+        .bind(post_id)
+        .execute(&mut *tx)
+        .await?;
+
+        // suppress unused variable warning for editor_user_id (available for
+        // future audit logging)
+        let _ = editor_user_id;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn soft_delete_post(&self, post_id: i64) -> sqlx::Result<()> {
+        let now = Utc::now();
+        sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
+            .bind(now)
+            .bind(post_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn list_published_by_user(
+        &self,
+        username: &Username,
+        cursor: Option<&PostCursor>,
+        limit: u32,
+    ) -> sqlx::Result<Vec<PostRecord>> {
+        let rows = if let Some(cursor) = cursor {
+            sqlx::query_as::<_, PostRow>(
+                "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                 FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 WHERE u.username = $1
+                   AND p.published_at IS NOT NULL
+                   AND p.deleted_at IS NULL
+                   AND (p.created_at < $2 OR (p.created_at = $2 AND p.post_id < $3))
+                 ORDER BY p.created_at DESC, p.post_id DESC
+                 LIMIT $4",
+            )
+            .bind(username.as_str())
+            .bind(cursor.created_at)
+            .bind(cursor.post_id)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, PostRow>(
+                "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                 FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 WHERE u.username = $1
+                   AND p.published_at IS NOT NULL
+                   AND p.deleted_at IS NULL
+                 ORDER BY p.created_at DESC, p.post_id DESC
+                 LIMIT $2",
+            )
+            .bind(username.as_str())
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?
+        };
+        rows.into_iter().map(post_record_from_row).collect()
+    }
+
+    async fn list_published(
+        &self,
+        cursor: Option<&PostCursor>,
+        limit: u32,
+    ) -> sqlx::Result<Vec<PostRecord>> {
+        let rows = if let Some(cursor) = cursor {
+            sqlx::query_as::<_, PostRow>(
+                "SELECT post_id, user_id, title, slug, body, format, rendered_html,
+                        created_at, updated_at, published_at, deleted_at
+                 FROM posts
+                 WHERE published_at IS NOT NULL
+                   AND deleted_at IS NULL
+                   AND (created_at < $1 OR (created_at = $1 AND post_id < $2))
+                 ORDER BY created_at DESC, post_id DESC
+                 LIMIT $3",
+            )
+            .bind(cursor.created_at)
+            .bind(cursor.post_id)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, PostRow>(
+                "SELECT post_id, user_id, title, slug, body, format, rendered_html,
+                        created_at, updated_at, published_at, deleted_at
+                 FROM posts
+                 WHERE published_at IS NOT NULL
+                   AND deleted_at IS NULL
+                 ORDER BY created_at DESC, post_id DESC
+                 LIMIT $1",
+            )
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?
+        };
+        rows.into_iter().map(post_record_from_row).collect()
+    }
+
+    async fn list_drafts_by_user(
+        &self,
+        user_id: i64,
+        cursor: Option<&PostCursor>,
+        limit: u32,
+    ) -> sqlx::Result<Vec<PostRecord>> {
+        let rows = if let Some(cursor) = cursor {
+            sqlx::query_as::<_, PostRow>(
+                "SELECT post_id, user_id, title, slug, body, format, rendered_html,
+                        created_at, updated_at, published_at, deleted_at
+                 FROM posts
+                 WHERE user_id = $1
+                   AND published_at IS NULL
+                   AND deleted_at IS NULL
+                   AND (created_at < $2 OR (created_at = $2 AND post_id < $3))
+                 ORDER BY created_at DESC, post_id DESC
+                 LIMIT $4",
+            )
+            .bind(user_id)
+            .bind(cursor.created_at)
+            .bind(cursor.post_id)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, PostRow>(
+                "SELECT post_id, user_id, title, slug, body, format, rendered_html,
+                        created_at, updated_at, published_at, deleted_at
+                 FROM posts
+                 WHERE user_id = $1
+                   AND published_at IS NULL
+                   AND deleted_at IS NULL
+                 ORDER BY created_at DESC, post_id DESC
+                 LIMIT $2",
+            )
+            .bind(user_id)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?
+        };
+        rows.into_iter().map(post_record_from_row).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -854,7 +1154,8 @@ mod tests {
         let _ = PostgresInviteStorage::new(pool.clone());
         let _ = PostgresEmailVerificationStorage::new(pool.clone());
         let _ = PostgresPasswordResetStorage::new(pool.clone());
-        let _ = PostgresAtomicOps::new(pool);
+        let _ = PostgresAtomicOps::new(pool.clone());
+        let _ = PostgresPostStorage::new(pool);
     }
 
     #[tokio::test]
@@ -915,11 +1216,43 @@ mod tests {
             Err(UsePasswordResetError::NotFound)
         ));
 
-        let atomic = PostgresAtomicOps::new(pool);
+        let atomic = PostgresAtomicOps::new(pool.clone());
         exercise(atomic.create_user_with_invite(&username, &password, Some("Alice"), "code")).await;
         assert!(matches!(
             atomic.confirm_password_reset("not-base64", &password).await,
             Err(ConfirmPasswordResetError::NotFound)
         ));
+
+        let slug: common::slug::Slug = "hello-world".parse().unwrap();
+        let posts = PostgresPostStorage::new(pool);
+        exercise(posts.create_post(&common::storage::CreatePostInput {
+            user_id: 1,
+            title: "Test".to_string(),
+            slug: slug.clone(),
+            body: "body".to_string(),
+            format: common::storage::PostFormat::Markdown,
+            rendered_html: "<p>body</p>".to_string(),
+            published_at: None,
+        }))
+        .await;
+        exercise(posts.get_post_by_id(1)).await;
+        exercise(posts.get_post_by_permalink(&username, 2024, 1, 1, &slug)).await;
+        exercise(posts.update_post(
+            1,
+            1,
+            &common::storage::UpdatePostInput {
+                title: "Updated".to_string(),
+                slug: slug.clone(),
+                body: "body".to_string(),
+                format: common::storage::PostFormat::Markdown,
+                rendered_html: "<p>body</p>".to_string(),
+                published_at: None,
+            },
+        ))
+        .await;
+        exercise(posts.soft_delete_post(1)).await;
+        exercise(posts.list_published_by_user(&username, None, 10)).await;
+        exercise(posts.list_published(None, 10)).await;
+        exercise(posts.list_drafts_by_user(1, None, 10)).await;
     }
 }
