@@ -1,43 +1,17 @@
-use std::sync::{Arc, OnceLock};
+mod helpers;
+
+use std::sync::Arc;
 
 use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
 use chrono::Utc;
-use jaunder::storage::{open_database, DbConnectOptions};
 use jaunder::username::Username;
-use leptos::prelude::LeptosOptions;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-/// Explicitly register server functions once per test binary.
-/// Inventory-based auto-registration is unreliable in Cargo test builds with
-/// multiple codegen-units, so we register explicitly instead.
-fn ensure_server_fns_registered() {
-    static ONCE: OnceLock<()> = OnceLock::new();
-    ONCE.get_or_init(|| {
-        server_fn::axum::register_explicit::<web::auth::CurrentUser>();
-        server_fn::axum::register_explicit::<web::auth::GetRegistrationPolicy>();
-        server_fn::axum::register_explicit::<web::auth::Register>();
-        server_fn::axum::register_explicit::<web::auth::Login>();
-        server_fn::axum::register_explicit::<web::auth::Logout>();
-    });
-}
-
-fn db_url(base: &TempDir) -> DbConnectOptions {
-    format!("sqlite:{}", base.path().join("test.db").display())
-        .parse()
-        .unwrap()
-}
-
-async fn test_state(base: &TempDir) -> Arc<jaunder::storage::AppState> {
-    open_database(&db_url(base)).await.unwrap()
-}
-
-fn test_options() -> LeptosOptions {
-    LeptosOptions::builder().output_name("test").build()
-}
+use helpers::{ensure_server_fns_registered, test_options, test_state};
 
 /// Sends a form-encoded POST request through a fresh router built from `state`.
 /// Returns (status, Set-Cookie header value, response body).
@@ -46,6 +20,7 @@ async fn post_form(
     uri: &str,
     body: impl Into<String>,
     cookie: Option<&str>,
+    secure_cookies: bool,
 ) -> (StatusCode, Option<String>, String) {
     ensure_server_fns_registered();
 
@@ -58,7 +33,7 @@ async fn post_form(
     }
     let request = builder.body(Body::from(body.into())).unwrap();
 
-    let app = jaunder::create_router(test_options(), state, true);
+    let app = jaunder::create_router(test_options(), state, secure_cookies);
     let response = app.oneshot(request).await.unwrap();
 
     let status = response.status();
@@ -160,6 +135,7 @@ async fn register_open_creates_user_sets_cookie_returns_token() {
         "/api/register",
         "username=alice&password=password123",
         None,
+        true,
     )
     .await;
 
@@ -194,6 +170,7 @@ async fn register_duplicate_username_returns_error() {
         "/api/register",
         "username=alice&password=password123",
         None,
+        true,
     )
     .await;
 
@@ -203,6 +180,7 @@ async fn register_duplicate_username_returns_error() {
         "/api/register",
         "username=alice&password=otherpassword",
         None,
+        true,
     )
     .await;
 
@@ -227,6 +205,7 @@ async fn register_invite_only_valid_code_creates_user_marks_invite_used() {
         "/api/register",
         format!("username=bob&password=password123&invite_code={code}"),
         None,
+        true,
     )
     .await;
 
@@ -265,6 +244,7 @@ async fn register_invite_only_missing_code_returns_error() {
         "/api/register",
         "username=carol&password=password123",
         None,
+        true,
     )
     .await;
 
@@ -297,6 +277,7 @@ async fn register_invite_only_invalid_code_returns_error() {
         "/api/register",
         "username=alice&password=password123&invite_code=invalid-code",
         None,
+        true,
     )
     .await;
 
@@ -323,6 +304,7 @@ async fn register_invite_only_expired_code_returns_error() {
         "/api/register",
         format!("username=alice&password=password123&invite_code={code}"),
         None,
+        true,
     )
     .await;
 
@@ -341,6 +323,7 @@ async fn register_closed_policy_returns_error() {
         "/api/register",
         "username=dave&password=password123",
         None,
+        true,
     )
     .await;
 
@@ -373,6 +356,7 @@ async fn login_correct_password_sets_cookie_and_returns_token() {
         "/api/register",
         "username=eve&password=password123",
         None,
+        true,
     )
     .await;
 
@@ -381,6 +365,7 @@ async fn login_correct_password_sets_cookie_and_returns_token() {
         "/api/login",
         "username=eve&password=password123",
         None,
+        true,
     )
     .await;
 
@@ -406,6 +391,7 @@ async fn authenticated_home_page_shows_logged_in_indicator() {
         "/api/register",
         "username=alice&password=password123",
         None,
+        true,
     )
     .await;
     let cookie = set_cookie.expect("register should set a session cookie");
@@ -428,6 +414,7 @@ async fn login_unknown_user_returns_error() {
         "/api/login",
         "username=nobody&password=password123",
         None,
+        true,
     )
     .await;
 
@@ -449,6 +436,7 @@ async fn login_with_label_creates_session_with_label() {
         "/api/register",
         "username=alice&password=password123",
         None,
+        true,
     )
     .await;
 
@@ -458,6 +446,7 @@ async fn login_with_label_creates_session_with_label() {
         "/api/login",
         "username=alice&password=password123&label=my-device",
         None,
+        true,
     )
     .await;
 
@@ -481,6 +470,7 @@ async fn login_with_empty_label_creates_session_without_label() {
         "/api/register",
         "username=alice&password=password123",
         None,
+        true,
     )
     .await;
 
@@ -490,6 +480,7 @@ async fn login_with_empty_label_creates_session_without_label() {
         "/api/login",
         "username=alice&password=password123&label=",
         None,
+        true,
     )
     .await;
 
@@ -514,6 +505,7 @@ async fn login_wrong_password_returns_error() {
         "/api/register",
         "username=frank&password=correctpassword",
         None,
+        true,
     )
     .await;
 
@@ -522,6 +514,7 @@ async fn login_wrong_password_returns_error() {
         "/api/login",
         "username=frank&password=wrongpassword",
         None,
+        true,
     )
     .await;
 
@@ -554,8 +547,14 @@ async fn logout_revokes_session_and_clears_cookie() {
     );
 
     let cookie_header = format!("session={raw_token}");
-    let (status, set_cookie, _body) =
-        post_form(Arc::clone(&state), "/api/logout", "", Some(&cookie_header)).await;
+    let (status, set_cookie, _body) = post_form(
+        Arc::clone(&state),
+        "/api/logout",
+        "",
+        Some(&cookie_header),
+        true,
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -590,6 +589,7 @@ async fn register_invalid_username_returns_error() {
         "/api/register",
         "username=alice%20doe&password=password123",
         None,
+        true,
     )
     .await;
 
@@ -616,6 +616,7 @@ async fn register_short_password_returns_error() {
         "/api/register",
         "username=alice&password=short",
         None,
+        true,
     )
     .await;
 
@@ -647,6 +648,7 @@ async fn login_invalid_username_returns_error() {
         "/api/login",
         "username=alice%20doe&password=password123",
         None,
+        true,
     )
     .await;
 
@@ -724,7 +726,7 @@ async fn debug_api_routes_exist() {
 
     // Send a request with no body to /api/register — if route exists we get
     // something other than 404 (probably a 400/422 for missing fields).
-    let (status, _, _) = post_form(Arc::clone(&state), "/api/register", "", None).await;
+    let (status, _, _) = post_form(Arc::clone(&state), "/api/register", "", None, true).await;
     assert_ne!(
         status,
         StatusCode::NOT_FOUND,
@@ -743,8 +745,14 @@ async fn get_registration_policy_returns_correct_value() {
         .unwrap();
 
     // Server functions are POST by default.
-    let (status, _, body) =
-        post_form(Arc::clone(&state), "/api/get_registration_policy", "", None).await;
+    let (status, _, body) = post_form(
+        Arc::clone(&state),
+        "/api/get_registration_policy",
+        "",
+        None,
+        true,
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.trim(), "\"invite_only\"");
@@ -757,8 +765,14 @@ async fn auth_user_extraction_fails_with_invalid_token() {
 
     // logout() requires AuthUser. If we provide an invalid token, it should fail.
     let cookie_header = "session=invalidtoken";
-    let (status, _, _) =
-        post_form(Arc::clone(&state), "/api/logout", "", Some(&cookie_header)).await;
+    let (status, _, _) = post_form(
+        Arc::clone(&state),
+        "/api/logout",
+        "",
+        Some(cookie_header),
+        true,
+    )
+    .await;
 
     // Leptos server functions return 500 for ServerFnError.
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -770,7 +784,79 @@ async fn auth_user_extraction_fails_when_missing() {
     let state = test_state(&base).await;
 
     // logout() requires AuthUser. If we provide no token, it should fail.
-    let (status, _, _) = post_form(Arc::clone(&state), "/api/logout", "", None).await;
+    let (status, _, _) = post_form(Arc::clone(&state), "/api/logout", "", None, true).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn auth_user_extraction_fails_without_app_state_extension() {
+    use axum::extract::FromRequestParts;
+    ensure_server_fns_registered();
+
+    let request = Request::builder()
+        .header(header::COOKIE, "session=some-token")
+        .body(Body::empty())
+        .unwrap();
+    let (mut parts, _) = request.into_parts();
+
+    // Attempt to extract AuthUser without AppState in extensions
+    let result = web::auth::AuthUser::from_request_parts(&mut parts, &()).await;
+    assert_eq!(result.unwrap_err(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn logout_clears_cookie_without_secure_attribute_when_disabled() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"insecure".parse::<Username>().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+
+    let cookie_header = format!("session={raw_token}");
+    let (status, set_cookie, _) = post_form(
+        Arc::clone(&state),
+        "/api/logout",
+        "",
+        Some(&cookie_header),
+        false,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let clear_cookie = set_cookie.expect("Set-Cookie header should be present");
+    assert!(clear_cookie.contains("Max-Age=0"));
+    assert!(!clear_cookie.contains("Secure"));
+}
+
+#[tokio::test]
+async fn register_sets_cookie_without_secure_attribute_when_disabled() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    state
+        .site_config
+        .set("site.registration_policy", "open")
+        .await
+        .unwrap();
+
+    let (status, set_cookie, _) = post_form(
+        Arc::clone(&state),
+        "/api/register",
+        "username=insecure&password=password123",
+        None,
+        false,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let cookie = set_cookie.expect("Set-Cookie header should be present");
+    assert!(cookie.contains("session="));
+    assert!(!cookie.contains("Secure"));
 }

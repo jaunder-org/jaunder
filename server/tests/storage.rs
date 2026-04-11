@@ -1,32 +1,48 @@
+mod helpers;
+
 use chrono::Utc;
 use jaunder::password::Password;
 use jaunder::storage::{
-    open_database, AtomicOps, CreateUserError, DbConnectOptions, EmailVerificationStorage,
-    InviteStorage, PasswordResetStorage, ProfileUpdate, RegisterWithInviteError, SessionAuthError,
-    SessionStorage, SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
-    SqlitePasswordResetStorage, SqliteSessionStorage, SqliteUserStorage, UseEmailVerificationError,
-    UseInviteError, UsePasswordResetError, UserAuthError, UserStorage,
+    open_database, open_existing_database, AtomicOps, CreateUserError, DbConnectOptions,
+    EmailVerificationStorage, InviteStorage, PasswordResetStorage, ProfileUpdate,
+    RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteAtomicOps,
+    SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
+    SqliteSessionStorage, SqliteUserStorage, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserAuthError, UserStorage,
 };
 use jaunder::username::Username;
 use sqlx::SqlitePool;
 use tempfile::TempDir;
 
-fn sqlite_url(base: &TempDir) -> DbConnectOptions {
-    format!("sqlite:{}", base.path().join("jaunder.db").display())
-        .parse()
-        .unwrap()
-}
+use helpers::{postgres_url, reset_postgres_schema, sqlite_url};
+
+// PostgreSQL parity tests below share a single database URL and reset the
+// schema before each run. Run them individually, or with `-- --test-threads=1`,
+// against the test VM to avoid cross-test interference.
 
 async fn open_pool(base: &TempDir) -> SqlitePool {
-    let opts: sqlx::sqlite::SqliteConnectOptions =
-        format!("sqlite:{}", base.path().join("jaunder.db").display())
-            .parse()
-            .unwrap();
+    let DbConnectOptions::Sqlite(opts) = sqlite_url(base) else {
+        panic!("expected sqlite options");
+    };
     let pool = SqlitePool::connect_with(opts.create_if_missing(true))
         .await
         .unwrap();
-    sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+    sqlx::migrate!("./migrations/sqlite")
+        .run(&pool)
+        .await
+        .unwrap();
     pool
+}
+
+async fn postgres_state() -> std::sync::Arc<jaunder::storage::AppState> {
+    reset_postgres_schema().await;
+    open_database(&postgres_url()).await.unwrap()
+}
+
+async fn sqlite_state() -> (TempDir, std::sync::Arc<jaunder::storage::AppState>) {
+    let base = TempDir::new().unwrap();
+    let state = open_database(&sqlite_url(&base)).await.unwrap();
+    (base, state)
 }
 
 async fn user_storage(base: &TempDir) -> SqliteUserStorage {
@@ -70,21 +86,172 @@ fn password(s: &str) -> Password {
     s.parse().unwrap()
 }
 
-#[tokio::test]
-async fn set_then_get_roundtrips() {
-    let base = TempDir::new().unwrap();
-    let state = open_database(&sqlite_url(&base)).await.unwrap();
-
+async fn assert_site_config_roundtrip(state: &std::sync::Arc<jaunder::storage::AppState>) {
     state
         .site_config
-        .set("site.name", "Test Site")
+        .set("site.name", "Parity Site")
+        .await
+        .unwrap();
+    assert_eq!(
+        state.site_config.get("site.name").await.unwrap().as_deref(),
+        Some("Parity Site")
+    );
+}
+
+async fn assert_user_duplicate_and_authenticate(
+    state: &std::sync::Arc<jaunder::storage::AppState>,
+) {
+    let username = username("alice");
+    let initial_password = password("password123");
+
+    let user_id = state
+        .users
+        .create_user(&username, &initial_password, Some("Alice"))
+        .await
+        .unwrap();
+    let record = state
+        .users
+        .get_user_by_username(&username)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.user_id, user_id);
+
+    let duplicate = state
+        .users
+        .create_user(&username, &password("other_password"), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(duplicate, CreateUserError::UsernameTaken));
+
+    let authed = state
+        .users
+        .authenticate(&username, &initial_password)
+        .await
+        .unwrap();
+    assert_eq!(authed.username.as_str(), "alice");
+    assert!(authed.last_authenticated_at.is_some());
+}
+
+async fn assert_session_lifecycle(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(&username("bob"), &password("secret_password"), None)
         .await
         .unwrap();
 
-    assert_eq!(
-        state.site_config.get("site.name").await.unwrap().as_deref(),
-        Some("Test Site")
-    );
+    let raw_token = state
+        .sessions
+        .create_session(user_id, Some("Laptop"))
+        .await
+        .unwrap();
+    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    assert_eq!(record.user_id, user_id);
+    assert_eq!(record.username.as_str(), "bob");
+
+    let sessions = state.sessions.list_sessions(user_id).await.unwrap();
+    assert_eq!(sessions.len(), 1);
+    state
+        .sessions
+        .revoke_session(&record.token_hash)
+        .await
+        .unwrap();
+    let err = state.sessions.authenticate(&raw_token).await.unwrap_err();
+    assert!(matches!(err, SessionAuthError::SessionNotFound));
+}
+
+async fn assert_invite_and_atomic_registration(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let code = state.invites.create_invite(expires_at).await.unwrap();
+
+    let user_id = state
+        .atomic
+        .create_user_with_invite(
+            &username("carol"),
+            &password("password123"),
+            Some("Carol"),
+            &code,
+        )
+        .await
+        .unwrap();
+    let created = state.users.get_user(user_id).await.unwrap().unwrap();
+    assert_eq!(created.username.as_str(), "carol");
+
+    let err = state
+        .atomic
+        .create_user_with_invite(&username("carol2"), &password("password123"), None, &code)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
+}
+
+async fn assert_email_verification_and_password_reset(
+    state: &std::sync::Arc<jaunder::storage::AppState>,
+) {
+    let user_id = state
+        .users
+        .create_user(&username("dave"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let verify_token = state
+        .email_verifications
+        .create_email_verification(
+            user_id,
+            "dave@example.com",
+            Utc::now() + chrono::Duration::hours(1),
+        )
+        .await
+        .unwrap();
+    let (verified_user_id, verified_email) = state
+        .email_verifications
+        .use_email_verification(&verify_token)
+        .await
+        .unwrap();
+    assert_eq!(verified_user_id, user_id);
+    assert_eq!(verified_email, "dave@example.com");
+
+    state
+        .users
+        .set_email(user_id, Some(&"dave@example.com".parse().unwrap()), true)
+        .await
+        .unwrap();
+
+    let reset_token = state
+        .password_resets
+        .create_password_reset(user_id, Utc::now() + chrono::Duration::hours(1))
+        .await
+        .unwrap();
+    let claimed_user_id = state
+        .password_resets
+        .use_password_reset(&reset_token)
+        .await
+        .unwrap();
+    assert_eq!(claimed_user_id, user_id);
+
+    let reset_token = state
+        .password_resets
+        .create_password_reset(user_id, Utc::now() + chrono::Duration::hours(1))
+        .await
+        .unwrap();
+    state
+        .atomic
+        .confirm_password_reset(&reset_token, &password("new_password123"))
+        .await
+        .unwrap();
+
+    let authed = state
+        .users
+        .authenticate(&username("dave"), &password("new_password123"))
+        .await
+        .unwrap();
+    assert_eq!(authed.user_id, user_id);
+}
+
+#[tokio::test]
+async fn set_then_get_roundtrips() {
+    let (_base, state) = sqlite_state().await;
+    assert_site_config_roundtrip(&state).await;
 }
 
 #[tokio::test]
@@ -123,10 +290,135 @@ async fn second_open_on_migrated_database_succeeds() {
     open_database(&sqlite_url(&base)).await.unwrap();
 }
 
+#[tokio::test]
+async fn sqlite_app_state_parity_suite() {
+    let (_base, state) = sqlite_state().await;
+    assert_site_config_roundtrip(&state).await;
+
+    let (_base, state) = sqlite_state().await;
+    assert_user_duplicate_and_authenticate(&state).await;
+
+    let (_base, state) = sqlite_state().await;
+    assert_session_lifecycle(&state).await;
+
+    let (_base, state) = sqlite_state().await;
+    assert_invite_and_atomic_registration(&state).await;
+
+    let (_base, state) = sqlite_state().await;
+    assert_email_verification_and_password_reset(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_create_user_duplicate_and_authenticate_work() {
+    let (_base, state) = sqlite_state().await;
+    assert_user_duplicate_and_authenticate(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_session_lifecycle_works() {
+    let (_base, state) = sqlite_state().await;
+    assert_session_lifecycle(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_invite_and_atomic_registration_work() {
+    let (_base, state) = sqlite_state().await;
+    assert_invite_and_atomic_registration(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_email_verification_and_password_reset_work() {
+    let (_base, state) = sqlite_state().await;
+    assert_email_verification_and_password_reset(&state).await;
+}
+
 #[test]
-fn non_sqlite_url_is_rejected_at_parse_time() {
+fn postgres_url_is_accepted_at_parse_time() {
     let result = "postgres://localhost/test".parse::<DbConnectOptions>();
+    assert!(result.is_ok());
+}
+
+#[test]
+fn unsupported_url_is_rejected_at_parse_time() {
+    let result = "mysql://localhost/test".parse::<DbConnectOptions>();
     assert!(result.is_err());
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn open_database_succeeds_on_postgres_test_vm() {
+    reset_postgres_schema().await;
+    open_database(&postgres_url()).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn open_database_runs_postgres_migrations_on_existing_empty_db() {
+    reset_postgres_schema().await;
+    let state = open_database(&postgres_url()).await.unwrap();
+    assert_eq!(state.site_config.get("missing").await.unwrap(), None);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db() {
+    reset_postgres_schema().await;
+    let state = open_existing_database(&postgres_url()).await.unwrap();
+    assert_eq!(state.site_config.get("missing").await.unwrap(), None);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_app_state_parity_suite() {
+    let state = postgres_state().await;
+    assert_site_config_roundtrip(&state).await;
+
+    let state = postgres_state().await;
+    assert_user_duplicate_and_authenticate(&state).await;
+
+    let state = postgres_state().await;
+    assert_session_lifecycle(&state).await;
+
+    let state = postgres_state().await;
+    assert_invite_and_atomic_registration(&state).await;
+
+    let state = postgres_state().await;
+    assert_email_verification_and_password_reset(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_site_config_set_then_get_roundtrips() {
+    let state = postgres_state().await;
+    assert_site_config_roundtrip(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_create_user_duplicate_and_authenticate_work() {
+    let state = postgres_state().await;
+    assert_user_duplicate_and_authenticate(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_session_lifecycle_works() {
+    let state = postgres_state().await;
+    assert_session_lifecycle(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_invite_and_atomic_registration_work() {
+    let state = postgres_state().await;
+    assert_invite_and_atomic_registration(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_email_verification_and_password_reset_work() {
+    let state = postgres_state().await;
+    assert_email_verification_and_password_reset(&state).await;
 }
 
 // --- UserStorage integration tests ---

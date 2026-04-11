@@ -27,6 +27,7 @@ pub struct CookieSettings {
 
 /// The authenticated user extracted from a valid session cookie or Bearer token.
 #[cfg(feature = "ssr")]
+#[derive(Debug)]
 pub struct AuthUser {
     pub user_id: i64,
     pub username: Username,
@@ -261,4 +262,26 @@ pub async fn logout() -> Result<(), ServerFnError> {
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     clear_session_cookie();
     Ok(())
+}
+
+#[cfg(all(test, feature = "ssr"))]
+mod tests {
+    use super::*;
+    use leptos::prelude::{provide_context, Owner};
+
+    #[test]
+    fn set_session_cookie_without_response_options_context_is_noop() {
+        Owner::new().with(|| {
+            provide_context(CookieSettings { secure: true });
+            set_session_cookie("token");
+        });
+    }
+
+    #[test]
+    fn clear_session_cookie_without_response_options_context_is_noop() {
+        Owner::new().with(|| {
+            provide_context(CookieSettings { secure: true });
+            clear_session_cookie();
+        });
+    }
 }

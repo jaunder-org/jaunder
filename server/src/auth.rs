@@ -94,7 +94,7 @@ mod tests {
         let pool = sqlx::SqlitePool::connect(":memory:")
             .await
             .expect("in-memory SQLite pool should open");
-        sqlx::migrate!("./migrations")
+        sqlx::migrate!("./migrations/sqlite")
             .run(&pool)
             .await
             .expect("migrations should run on in-memory pool");
