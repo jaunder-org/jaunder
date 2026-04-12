@@ -9,6 +9,8 @@ argon2 = { workspace = true }
 async-trait.workspace = true
 email_address.workspace = true
 chrono.workspace = true
+orgize.workspace = true
+pulldown-cmark.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 

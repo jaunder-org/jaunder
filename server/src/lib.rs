@@ -3,6 +3,9 @@ pub mod cli;
 pub mod commands;
 pub mod mailer;
 pub mod password;
+pub mod render {
+    pub use common::render::*;
+}
 pub mod storage;
 pub mod tag;
 pub mod username;

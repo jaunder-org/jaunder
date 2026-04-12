@@ -2,6 +2,7 @@ mod helpers;
 
 use chrono::{Datelike, Utc};
 use jaunder::password::Password;
+use jaunder::render::{create_rendered_post, update_rendered_post};
 use jaunder::storage::{
     open_database, open_existing_database, AtomicOps, CreatePostError, CreatePostInput,
     CreateUserError, DbConnectOptions, EmailVerificationStorage, InviteStorage, ListByTagError,
@@ -4907,4 +4908,289 @@ async fn postgres_session_list_operations() {
 async fn postgres_invite_list_operations() {
     let state = postgres_state().await;
     assert_invite_list_operations(&state).await;
+}
+
+// =============================================================================
+// create_rendered_post / update_rendered_post integration tests
+// =============================================================================
+
+async fn assert_create_rendered_post_markdown(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(&username("render_alice"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let post_id = create_rendered_post(
+        state.posts.as_ref(),
+        user_id,
+        "Rendered Markdown".to_string(),
+        "rendered-markdown".parse().unwrap(),
+        "**bold**".to_string(),
+        PostFormat::Markdown,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    assert_eq!(record.title, "Rendered Markdown");
+    assert!(
+        record.rendered_html.contains("<strong>bold</strong>"),
+        "expected rendered HTML, got: {}",
+        record.rendered_html
+    );
+}
+
+async fn assert_create_rendered_post_org(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(&username("render_bob"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let post_id = create_rendered_post(
+        state.posts.as_ref(),
+        user_id,
+        "Rendered Org".to_string(),
+        "rendered-org".parse().unwrap(),
+        "*bold*".to_string(),
+        PostFormat::Org,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    assert_eq!(record.title, "Rendered Org");
+    assert!(
+        record.rendered_html.contains("<b>bold</b>"),
+        "expected rendered HTML, got: {}",
+        record.rendered_html
+    );
+}
+
+async fn assert_create_rendered_post_slug_conflict(
+    state: &std::sync::Arc<jaunder::storage::AppState>,
+) {
+    use jaunder::render::CreateRenderedPostError;
+
+    let user_id = state
+        .users
+        .create_user(&username("render_carol"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+
+    // First create succeeds
+    create_rendered_post(
+        state.posts.as_ref(),
+        user_id,
+        "First Post".to_string(),
+        "conflict-slug".parse().unwrap(),
+        "body".to_string(),
+        PostFormat::Markdown,
+        Some(now),
+    )
+    .await
+    .unwrap();
+
+    // Second create with same slug+date conflicts
+    let err = create_rendered_post(
+        state.posts.as_ref(),
+        user_id,
+        "Second Post".to_string(),
+        "conflict-slug".parse().unwrap(),
+        "body".to_string(),
+        PostFormat::Markdown,
+        Some(now),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        matches!(err, CreateRenderedPostError::Storage(_)),
+        "expected Storage error, got {err:?}"
+    );
+    assert!(
+        err.to_string().contains("slug"),
+        "expected slug conflict message, got: {}",
+        err
+    );
+}
+
+async fn assert_update_rendered_post_markdown(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(&username("render_dave"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let post_id = state
+        .posts
+        .create_post(&make_create_post_input(user_id, "update-render-md"))
+        .await
+        .unwrap();
+
+    update_rendered_post(
+        state.posts.as_ref(),
+        post_id,
+        user_id,
+        "Updated Title".to_string(),
+        "update-render-md".parse().unwrap(),
+        "**updated**".to_string(),
+        PostFormat::Markdown,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    assert_eq!(record.title, "Updated Title");
+    assert!(
+        record.rendered_html.contains("<strong>updated</strong>"),
+        "expected rendered HTML, got: {}",
+        record.rendered_html
+    );
+}
+
+async fn assert_update_rendered_post_org(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(&username("render_eve"), &password("password123"), None)
+        .await
+        .unwrap();
+
+    let post_id = state
+        .posts
+        .create_post(&make_create_post_input(user_id, "update-render-org"))
+        .await
+        .unwrap();
+
+    update_rendered_post(
+        state.posts.as_ref(),
+        post_id,
+        user_id,
+        "Updated Org Title".to_string(),
+        "update-render-org".parse().unwrap(),
+        "*bold org*".to_string(),
+        PostFormat::Org,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    assert_eq!(record.title, "Updated Org Title");
+    assert!(
+        record.rendered_html.contains("<b>bold org</b>"),
+        "expected rendered HTML, got: {}",
+        record.rendered_html
+    );
+}
+
+async fn assert_update_rendered_post_not_found(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    use jaunder::render::UpdateRenderedPostError;
+
+    let err = update_rendered_post(
+        state.posts.as_ref(),
+        99999,
+        1,
+        "No Post".to_string(),
+        "no-post".parse().unwrap(),
+        "body".to_string(),
+        PostFormat::Markdown,
+        None,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        matches!(err, UpdateRenderedPostError::Storage(_)),
+        "expected Storage error, got {err:?}"
+    );
+    assert!(
+        err.to_string().contains("not found"),
+        "expected 'not found' message, got: {}",
+        err
+    );
+}
+
+#[tokio::test]
+async fn sqlite_create_rendered_post_markdown_renders_and_stores() {
+    let (_base, state) = sqlite_state().await;
+    assert_create_rendered_post_markdown(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_create_rendered_post_org_renders_and_stores() {
+    let (_base, state) = sqlite_state().await;
+    assert_create_rendered_post_org(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_create_rendered_post_slug_conflict_returns_storage_error() {
+    let (_base, state) = sqlite_state().await;
+    assert_create_rendered_post_slug_conflict(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_update_rendered_post_markdown_renders_and_updates() {
+    let (_base, state) = sqlite_state().await;
+    assert_update_rendered_post_markdown(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_update_rendered_post_org_renders_and_updates() {
+    let (_base, state) = sqlite_state().await;
+    assert_update_rendered_post_org(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_update_rendered_post_not_found_returns_storage_error() {
+    let (_base, state) = sqlite_state().await;
+    assert_update_rendered_post_not_found(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_create_rendered_post_markdown_renders_and_stores() {
+    let state = postgres_state().await;
+    assert_create_rendered_post_markdown(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_create_rendered_post_org_renders_and_stores() {
+    let state = postgres_state().await;
+    assert_create_rendered_post_org(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_create_rendered_post_slug_conflict_returns_storage_error() {
+    let state = postgres_state().await;
+    assert_create_rendered_post_slug_conflict(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_update_rendered_post_markdown_renders_and_updates() {
+    let state = postgres_state().await;
+    assert_update_rendered_post_markdown(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_update_rendered_post_org_renders_and_updates() {
+    let state = postgres_state().await;
+    assert_update_rendered_post_org(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_update_rendered_post_not_found_returns_storage_error() {
+    let state = postgres_state().await;
+    assert_update_rendered_post_not_found(&state).await;
 }
