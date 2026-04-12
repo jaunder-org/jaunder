@@ -33,8 +33,8 @@ test("authenticated user can create a post through the UI", async ({
   await page.click('button[name="publish"][value="true"]');
   await page.waitForLoadState("networkidle");
 
-  await expect(page.locator(".success")).toHaveText("Post published.");
-  await expect(page.locator("body")).toContainText("Slug: playwright-post");
+  await expect(page.locator(".success")).toContainText("Post published.");
+  await expect(page.locator(".success")).toContainText("Slug: playwright-post");
 });
 
 test("authenticated user can save a draft through the UI", async ({ page }) => {
@@ -50,6 +50,39 @@ test("authenticated user can save a draft through the UI", async ({ page }) => {
   await page.click('button[name="publish"][value="false"]');
   await page.waitForLoadState("networkidle");
 
-  await expect(page.locator(".success")).toHaveText("Draft saved.");
-  await expect(page.locator("body")).toContainText("Slug: draft-slug");
+  await expect(page.locator(".success")).toContainText("Draft saved.");
+  await expect(page.locator(".success")).toContainText("Slug: draft-slug");
+});
+
+test("published post renders at permalink", async ({ page }) => {
+  await register(page);
+
+  await page.goto("http://localhost:3000/posts/new");
+  await waitForHydration(page);
+  await page.fill('input[name="title"]', "Permalink Story");
+  await page.fill('textarea[name="body"]', "**hello permalink**");
+  await page.selectOption('select[name="format"]', "markdown");
+  await page.click('button[name="publish"][value="true"]');
+  await page.waitForSelector(".success");
+
+  const success = page.locator(".success");
+  await expect(success).toContainText("Post published.");
+
+  const slugAttr = await success
+    .locator('[data-test="slug-value"]')
+    .getAttribute("data-slug");
+  expect(slugAttr).toBeTruthy();
+
+  const permalinkLink = success.locator('[data-test="permalink-link"]');
+  await expect(permalinkLink).toBeVisible();
+  const permalinkHref = await permalinkLink.getAttribute("href");
+  expect(permalinkHref).toBeTruthy();
+
+  const targetUrl = new URL(permalinkHref!, "http://localhost:3000").toString();
+
+  await page.goto(targetUrl);
+  await waitForHydration(page);
+
+  await expect(page.locator("article h1")).toHaveText("Permalink Story");
+  await expect(page.locator(".content")).toContainText("hello permalink");
 });

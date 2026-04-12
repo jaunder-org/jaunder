@@ -6,6 +6,7 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
+use chrono::Datelike;
 use common::storage::PostFormat;
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -40,6 +41,19 @@ async fn post_form(
     let body_str = String::from_utf8(bytes.to_vec()).unwrap();
 
     (status, body_str)
+}
+
+async fn get_post_form(
+    state: Arc<jaunder::storage::AppState>,
+    username: &str,
+    year: i32,
+    month: u32,
+    day: u32,
+    slug: &str,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    let body = format!("username={username}&year={year}&month={month}&day={day}&slug={slug}");
+    post_form(state, "/api/get_post", body, cookie).await
 }
 
 #[tokio::test]
@@ -297,4 +311,218 @@ async fn create_post_rejects_title_without_ascii_slug_characters() {
         body.contains("title must contain at least one ASCII letter or digit"),
         "body: {body}"
     );
+}
+
+#[tokio::test]
+async fn get_post_returns_published_post() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Permalink&body=%2A%2Abold%2A%2A&format=markdown&publish=true",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let created_at = state
+        .posts
+        .get_post_by_id(created.post_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .created_at;
+    let (status, body) = get_post_form(
+        Arc::clone(&state),
+        "author",
+        created_at.year(),
+        created_at.month(),
+        created_at.day(),
+        &created.slug,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.contains("Permalink"));
+    assert!(body.contains("rendered_html"));
+}
+
+#[tokio::test]
+async fn get_post_hides_drafts_from_other_users() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let author_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let stranger_id = state
+        .users
+        .create_user(
+            &"stranger".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let author_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(author_id, None)
+            .await
+            .unwrap()
+    );
+    let stranger_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(stranger_id, None)
+            .await
+            .unwrap()
+    );
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Draft&body=draft&format=markdown&publish=false",
+        Some(&author_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let record = state
+        .posts
+        .get_post_by_id(created.post_id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let (status, body) = get_post_form(
+        Arc::clone(&state),
+        "author",
+        record.created_at.year(),
+        record.created_at.month(),
+        record.created_at.day(),
+        &created.slug,
+        Some(&stranger_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+
+    let (status, body) = get_post_form(
+        state,
+        "author",
+        record.created_at.year(),
+        record.created_at.month(),
+        record.created_at.day(),
+        &created.slug,
+        Some(&author_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "author should see draft: {body}");
+}
+
+#[tokio::test]
+async fn get_post_hides_drafts_from_guests() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let author_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let author_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(author_id, None)
+            .await
+            .unwrap()
+    );
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Draft&body=draft&format=markdown&publish=false",
+        Some(&author_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let record = state
+        .posts
+        .get_post_by_id(created.post_id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let (status, body) = get_post_form(
+        Arc::clone(&state),
+        "author",
+        record.created_at.year(),
+        record.created_at.month(),
+        record.created_at.day(),
+        &created.slug,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+}
+
+#[tokio::test]
+async fn get_post_rejects_invalid_username() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, body) = get_post_form(state, "Invalid Name", 2024, 1, 1, "missing", None).await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("username"), "body: {body}");
+}
+
+#[tokio::test]
+async fn get_post_rejects_invalid_slug() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, body) = get_post_form(state, "author", 2024, 1, 1, "Invalid Slug", None).await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("slug"), "body: {body}");
+}
+
+#[tokio::test]
+async fn get_post_returns_not_found_for_missing_post() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, body) = get_post_form(state, "author", 2024, 1, 1, "missing", None).await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
 }

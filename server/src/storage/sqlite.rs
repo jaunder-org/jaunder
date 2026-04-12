@@ -756,7 +756,7 @@ impl PostStorage for SqlitePostStorage {
              JOIN users u ON p.user_id = u.user_id
              WHERE u.username = ?
                AND p.slug = ?
-               AND date(p.published_at) = ?
+               AND date(p.created_at) = ?
                AND p.deleted_at IS NULL",
         )
         .bind(username.as_str())
