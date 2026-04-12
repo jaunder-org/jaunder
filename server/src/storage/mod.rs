@@ -608,6 +608,116 @@ mod tests {
     }
 
     #[test]
+    fn test_build_invite_record() {
+        let created_at = Utc::now();
+        let expires_at = created_at + chrono::Duration::days(7);
+        let used_at = created_at + chrono::Duration::hours(1);
+        let record = build_invite_record(
+            "invite-code".to_string(),
+            created_at,
+            expires_at,
+            Some(used_at),
+            Some(7),
+        );
+
+        assert_eq!(record.code, "invite-code");
+        assert_eq!(record.created_at, created_at);
+        assert_eq!(record.expires_at, expires_at);
+        assert_eq!(record.used_at, Some(used_at));
+        assert_eq!(record.used_by, Some(7));
+    }
+
+    #[test]
+    fn test_build_post_record() {
+        let now = Utc::now();
+        let record = build_post_record((
+            10,
+            20,
+            "Hello".to_string(),
+            "hello-world".to_string(),
+            "Body".to_string(),
+            "markdown".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            Some(now),
+            None,
+        ))
+        .unwrap();
+
+        assert_eq!(record.post_id, 10);
+        assert_eq!(record.user_id, 20);
+        assert_eq!(record.slug.as_str(), "hello-world");
+        assert_eq!(record.format, PostFormat::Markdown);
+        assert_eq!(record.published_at, Some(now));
+        assert_eq!(record.deleted_at, None);
+    }
+
+    #[test]
+    fn test_build_post_record_rejects_invalid_slug() {
+        let now = Utc::now();
+        let err = build_post_record((
+            10,
+            20,
+            "Hello".to_string(),
+            "not a slug".to_string(),
+            "Body".to_string(),
+            "markdown".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            None,
+            None,
+        ))
+        .unwrap_err();
+
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[test]
+    fn test_build_post_record_rejects_invalid_format() {
+        let now = Utc::now();
+        let err = build_post_record((
+            10,
+            20,
+            "Hello".to_string(),
+            "hello-world".to_string(),
+            "Body".to_string(),
+            "html".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            None,
+            None,
+        ))
+        .unwrap_err();
+
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[tokio::test]
+    async fn test_hash_and_verify_password() {
+        let password: Password = "password123".parse().unwrap();
+        let hash = hash_password(password.clone()).await.unwrap();
+
+        assert!(verify_password(password.clone(), hash.clone())
+            .await
+            .unwrap());
+        assert!(!verify_password("other-pass".parse().unwrap(), hash)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_verify_password_rejects_invalid_hash() {
+        let err = verify_password("password123".parse().unwrap(), "not-a-hash".to_string())
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+    }
+
+    #[test]
     fn test_db_connect_options_parsing() {
         let sqlite = "sqlite:jaunder.db".parse::<DbConnectOptions>().unwrap();
         assert!(matches!(sqlite, DbConnectOptions::Sqlite(_)));
@@ -639,6 +749,17 @@ mod tests {
     fn test_db_connect_options_invalid_postgres() {
         let invalid = "postgres://[invalid]".parse::<DbConnectOptions>();
         assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn postgres_password_returns_none_when_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("JAUNDER_DB_PASSWORD");
+        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
+
+        let password = postgres_password_from_env().unwrap();
+
+        assert_eq!(password, None);
     }
 
     #[tokio::test]
