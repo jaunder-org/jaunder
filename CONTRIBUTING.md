@@ -73,6 +73,7 @@ matches the change first, then move up to the broader checks before pushing.
 
 ### Fast local checks
 
+- `scripts/verify` runs the full local verification sequence in the preferred order: formatting, build, tests, lint, coverage, then `nix flake check`.
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that contain Leptos `view!` macros.
 - `prettier --check end2end` checks Playwright and other frontend test assets.
