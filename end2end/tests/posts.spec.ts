@@ -4,7 +4,7 @@ async function waitForHydration(page: Page): Promise<void> {
   await page.waitForSelector("body[data-hydrated]");
 }
 
-async function register(page: Page): Promise<void> {
+async function register(page: Page): Promise<string> {
   const username = `postuser${Date.now()}`;
 
   await page.goto("http://localhost:3000/register");
@@ -14,35 +14,42 @@ async function register(page: Page): Promise<void> {
   await page.click('button[type="submit"]');
   await page.waitForLoadState("networkidle");
   await expect(page.locator(".error")).not.toBeVisible();
+
+  return username;
 }
 
-test("authenticated user can create a post through the server function", async ({
+test("authenticated user can create a post through the UI", async ({
   page,
 }) => {
   await register(page);
 
-  const result = await page.evaluate(async () => {
-    const response = await fetch("/api/create_post", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        title: "Playwright Post",
-        body: "**browser**",
-        format: "markdown",
-        publish: "true",
-      }),
-    });
+  await page.goto("http://localhost:3000/posts/new");
+  await waitForHydration(page);
 
-    return {
-      status: response.status,
-      text: await response.text(),
-    };
-  });
+  await expect(page.locator("h1")).toHaveText("New Post");
+  await page.fill('input[name="title"]', "Playwright Post");
+  await page.fill('textarea[name="body"]', "**browser**");
+  await page.selectOption('select[name="format"]', "markdown");
+  await page.click('button[name="publish"][value="true"]');
+  await page.waitForLoadState("networkidle");
 
-  expect(result.status).toBe(200);
-  const created = JSON.parse(result.text);
-  expect(created.slug).toBe("playwright-post");
-  expect(created.published_at).not.toBeNull();
+  await expect(page.locator(".success")).toHaveText("Post published.");
+  await expect(page.locator("body")).toContainText("Slug: playwright-post");
+});
+
+test("authenticated user can save a draft through the UI", async ({ page }) => {
+  await register(page);
+
+  await page.goto("http://localhost:3000/posts/new");
+  await waitForHydration(page);
+
+  await page.fill('input[name="title"]', "Playwright Draft");
+  await page.fill('textarea[name="body"]', "*draft*");
+  await page.selectOption('select[name="format"]', "org");
+  await page.fill('input[name="slug_override"]', "Draft-Slug");
+  await page.click('button[name="publish"][value="false"]');
+  await page.waitForLoadState("networkidle");
+
+  await expect(page.locator(".success")).toHaveText("Draft saved.");
+  await expect(page.locator("body")).toContainText("Slug: draft-slug");
 });

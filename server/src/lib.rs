@@ -118,6 +118,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_post_route_returns_ok() {
+        ensure_server_fns_registered();
+        let app = create_router(test_options(), test_state().await, true);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/posts/new")
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
+            .await
+            .expect("failed to get response");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn register_route_returns_ok() {
         ensure_server_fns_registered();
         let app = create_router(test_options(), test_state().await, true);
