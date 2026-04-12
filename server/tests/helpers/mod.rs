@@ -34,6 +34,7 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::invites::ListInvites>();
         server_fn::axum::register_explicit::<web::password_reset::RequestPasswordReset>();
         server_fn::axum::register_explicit::<web::password_reset::ConfirmPasswordReset>();
+        server_fn::axum::register_explicit::<web::posts::CreatePost>();
     });
 }
 

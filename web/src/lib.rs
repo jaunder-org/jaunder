@@ -3,6 +3,7 @@ pub mod email;
 pub mod invites;
 pub mod pages;
 pub mod password_reset;
+pub mod posts;
 pub mod profile;
 pub mod sessions;
 
