@@ -619,6 +619,26 @@ mod tests {
     }
 
     #[test]
+    fn post_format_display_round_trips() {
+        assert_eq!(PostFormat::Markdown.to_string(), "markdown");
+        assert_eq!(PostFormat::Org.to_string(), "org");
+        assert_eq!(
+            "markdown".parse::<PostFormat>().unwrap(),
+            PostFormat::Markdown
+        );
+        assert_eq!("org".parse::<PostFormat>().unwrap(), PostFormat::Org);
+    }
+
+    #[test]
+    fn post_format_rejects_invalid_value() {
+        let err = "html".parse::<PostFormat>().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "post format must be \"markdown\" or \"org\""
+        );
+    }
+
+    #[test]
     fn post_format_debug() {
         let fmt = PostFormat::Markdown;
         let debug_str = format!("{:?}", fmt);
