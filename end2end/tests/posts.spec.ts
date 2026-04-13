@@ -5,7 +5,7 @@ async function waitForHydration(page: Page): Promise<void> {
 }
 
 async function register(page: Page): Promise<string> {
-  const username = `postuser${Date.now()}`;
+  const username = `postuser${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
 
   await page.goto("http://localhost:3000/register");
   await waitForHydration(page);

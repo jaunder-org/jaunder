@@ -56,6 +56,15 @@ async fn get_post_form(
     post_form(state, "/api/get_post", body, cookie).await
 }
 
+async fn get_post_preview_form(
+    state: Arc<jaunder::storage::AppState>,
+    post_id: i64,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    let body = format!("post_id={post_id}");
+    post_form(state, "/api/get_post_preview", body, cookie).await
+}
+
 #[tokio::test]
 async fn create_post_persists_rendered_published_post() {
     let base = TempDir::new().unwrap();
@@ -339,19 +348,21 @@ async fn get_post_returns_published_post() {
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
-    let created_at = state
+    let record = state
         .posts
         .get_post_by_id(created.post_id)
         .await
         .unwrap()
-        .unwrap()
-        .created_at;
+        .expect("post should exist");
+    let published_at = record
+        .published_at
+        .expect("published post should have published_at");
     let (status, body) = get_post_form(
         Arc::clone(&state),
         "author",
-        created_at.year(),
-        created_at.month(),
-        created_at.day(),
+        published_at.year(),
+        published_at.month(),
+        published_at.day(),
         &created.slug,
         None,
     )
@@ -359,6 +370,7 @@ async fn get_post_returns_published_post() {
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(body.contains("Permalink"));
     assert!(body.contains("rendered_html"));
+    assert!(body.contains("published_at"));
 }
 
 #[tokio::test]
@@ -423,14 +435,27 @@ async fn get_post_hides_drafts_from_other_users() {
         record.created_at.month(),
         record.created_at.day(),
         &created.slug,
-        Some(&stranger_cookie),
+        None,
     )
     .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 
     let (status, body) = get_post_form(
-        state,
+        Arc::clone(&state),
+        "author",
+        record.created_at.year(),
+        record.created_at.month(),
+        record.created_at.day(),
+        &created.slug,
+        Some(&stranger_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+
+    let (status, body) = get_post_form(
+        Arc::clone(&state),
         "author",
         record.created_at.year(),
         record.created_at.month(),
@@ -439,7 +464,81 @@ async fn get_post_hides_drafts_from_other_users() {
         Some(&author_cookie),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "author should see draft: {body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+
+    let (status, body) =
+        get_post_preview_form(Arc::clone(&state), created.post_id, Some(&author_cookie)).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "author preview should succeed: {body}"
+    );
+    assert!(body.contains("Draft"), "body: {body}");
+}
+
+#[tokio::test]
+async fn get_post_preview_shows_draft_to_author_only() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let author_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let stranger_id = state
+        .users
+        .create_user(
+            &"stranger".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let author_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(author_id, None)
+            .await
+            .unwrap()
+    );
+    let stranger_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(stranger_id, None)
+            .await
+            .unwrap()
+    );
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Preview+Draft&body=draft&format=markdown&publish=false",
+        Some(&author_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let (status, body) =
+        get_post_preview_form(Arc::clone(&state), created.post_id, Some(&author_cookie)).await;
+    assert_eq!(status, StatusCode::OK, "author preview failed: {body}");
+    assert!(body.contains("Preview Draft"), "body: {body}");
+
+    let (status, body) =
+        get_post_preview_form(Arc::clone(&state), created.post_id, Some(&stranger_cookie)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+
+    let (status, body) = get_post_preview_form(state, created.post_id, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
 }
 
 #[tokio::test]
@@ -490,7 +589,7 @@ async fn get_post_hides_drafts_from_guests() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
 
@@ -523,6 +622,6 @@ async fn get_post_returns_not_found_for_missing_post() {
 
     let (status, body) = get_post_form(state, "author", 2024, 1, 1, "missing", None).await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }

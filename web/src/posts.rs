@@ -9,7 +9,7 @@ use chrono::{Datelike, NaiveDate, Utc};
 use common::{
     render::create_rendered_post,
     slug::Slug,
-    storage::{AppState, CreatePostError, PostFormat},
+    storage::{AppState, CreatePostError, PostFormat, PostRecord},
     username::Username,
 };
 #[cfg(feature = "ssr")]
@@ -120,38 +120,88 @@ pub async fn get_post(
             .get_post_by_permalink(&username_parsed, year, month, day, &slug_parsed)
             .await
             .map_err(|e| ServerFnError::new(e.to_string()))?
-            .ok_or_else(|| ServerFnError::new("Post not found"))?;
+            .ok_or_else(not_found_error)?;
 
-        // Exclude soft-deleted posts
-        if post.deleted_at.is_some() {
-            return Err(ServerFnError::new("Post not found"));
-        }
-
-        if post.published_at.is_none() {
-            let auth = match require_auth().await {
-                Ok(auth) => auth,
-                Err(_) => return Err(ServerFnError::new("Post not found")),
-            };
-            if auth.user_id != post.user_id {
-                return Err(ServerFnError::new("Post not found"));
-            }
-        }
+        let PostRecord {
+            post_id,
+            title,
+            slug,
+            body,
+            format,
+            rendered_html,
+            created_at,
+            published_at,
+            deleted_at: _,
+            ..
+        } = post;
 
         Ok(PostResponse {
-            post_id: post.post_id,
+            post_id,
             username: username_parsed.to_string(),
-            title: post.title,
-            slug: post.slug.to_string(),
-            body: post.body,
-            format: post.format.to_string(),
-            rendered_html: post.rendered_html,
-            created_at: post.created_at.to_rfc3339(),
-            published_at: post.published_at.map(|t| t.to_rfc3339()),
+            title,
+            slug: slug.to_string(),
+            body,
+            format: format.to_string(),
+            rendered_html,
+            created_at: created_at.to_rfc3339(),
+            published_at: published_at.map(|t| t.to_rfc3339()),
         })
     }
     #[cfg(not(feature = "ssr"))]
     {
         let _ = (username, year, month, day, slug);
+        Err(ServerFnError::new("Not implemented"))
+    }
+}
+
+/// Retrieves a draft preview for the authenticated author.
+#[server(endpoint = "/get_post_preview")]
+pub async fn get_post_preview(post_id: i64) -> Result<PostResponse, ServerFnError> {
+    #[cfg(feature = "ssr")]
+    {
+        let auth = require_auth().await.map_err(|_| not_found_error())?;
+        let state = expect_context::<Arc<AppState>>();
+
+        let post = state
+            .posts
+            .get_post_by_id(post_id)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?
+            .ok_or_else(not_found_error)?;
+
+        let PostRecord {
+            post_id,
+            user_id,
+            title,
+            slug,
+            body,
+            format,
+            rendered_html,
+            created_at,
+            published_at,
+            deleted_at,
+            ..
+        } = post;
+
+        if deleted_at.is_some() || user_id != auth.user_id {
+            return Err(not_found_error());
+        }
+
+        Ok(PostResponse {
+            post_id,
+            username: auth.username.to_string(),
+            title,
+            slug: slug.to_string(),
+            body,
+            format: format.to_string(),
+            rendered_html,
+            created_at: created_at.to_rfc3339(),
+            published_at: published_at.map(|t| t.to_rfc3339()),
+        })
+    }
+    #[cfg(not(feature = "ssr"))]
+    {
+        let _ = post_id;
         Err(ServerFnError::new("Not implemented"))
     }
 }
@@ -246,6 +296,18 @@ fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
     } else {
         format!("{slug_seed}-{}", attempt + 1)
     }
+}
+
+#[cfg(feature = "ssr")]
+fn not_found_error() -> ServerFnError {
+    use leptos::context::use_context;
+    use leptos_axum::ResponseOptions;
+
+    if let Some(opts) = use_context::<ResponseOptions>() {
+        opts.set_status(axum::http::StatusCode::NOT_FOUND);
+    }
+
+    ServerFnError::new("Post not found")
 }
 
 #[cfg(feature = "ssr")]

@@ -872,8 +872,9 @@ impl PostStorage for PostgresPostStorage {
              JOIN users u ON p.user_id = u.user_id
              WHERE u.username = $1
                AND p.slug = $2
-               AND date(p.created_at AT TIME ZONE 'UTC') = $3::date
-               AND p.deleted_at IS NULL",
+               AND p.published_at IS NOT NULL
+               AND p.deleted_at IS NULL
+               AND date(p.published_at AT TIME ZONE 'UTC') = $3::date",
         )
         .bind(username.as_str())
         .bind(slug.as_str())
