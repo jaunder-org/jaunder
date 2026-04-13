@@ -22,6 +22,7 @@ pub struct CreatePostResult {
     pub slug: String,
     pub created_at: String,
     pub published_at: Option<String>,
+    pub preview_url: String,
     pub permalink: Option<String>,
 }
 
@@ -249,11 +250,14 @@ async fn create_post_with_unique_slug(
                     .published_at
                     .map(|ts| build_permalink(username, ts, &record.slug));
 
+                let preview_url = format!("/draft/{post_id}/preview");
+
                 return Ok(CreatePostResult {
                     post_id,
-                    slug: slug_string,
+                    slug: record.slug.to_string(),
                     created_at,
                     published_at,
+                    preview_url,
                     permalink,
                 });
             }
