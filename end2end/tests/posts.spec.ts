@@ -73,10 +73,22 @@ test("published post renders at permalink", async ({ page }) => {
     .getAttribute("data-slug");
   expect(slugAttr).toBeTruthy();
 
+  const previewLink = success.locator('[data-test="preview-link"]');
+  await expect(previewLink).toBeVisible();
+  const previewHref = await previewLink.getAttribute("href");
+  expect(previewHref).toBeTruthy();
+
   const permalinkLink = success.locator('[data-test="permalink-link"]');
   await expect(permalinkLink).toBeVisible();
   const permalinkHref = await permalinkLink.getAttribute("href");
   expect(permalinkHref).toBeTruthy();
+
+  const previewUrl = new URL(previewHref!, "http://localhost:3000").toString();
+  await page.goto(previewUrl);
+  await waitForHydration(page);
+  await expect(page.locator(".draft-banner")).toContainText("Draft preview");
+  await expect(page.locator("article h1")).toHaveText("Permalink Story");
+  await expect(page.locator(".content")).toContainText("hello permalink");
 
   const targetUrl = new URL(permalinkHref!, "http://localhost:3000").toString();
 

@@ -1,6 +1,6 @@
 use crate::{
     auth::current_user,
-    posts::{get_post, CreatePost, CreatePostResult},
+    posts::{get_post, get_post_preview, CreatePost, CreatePostResult, PostResponse},
 };
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
@@ -78,6 +78,9 @@ pub fn CreatePostPage() -> impl IntoView {
                                     "Slug: "
                                     {slug_value}
                                 </p>
+                                <a data-test="preview-link" href=created.preview_url.clone()>
+                                    "Preview draft"
+                                </a>
                                 {created
                                     .permalink
                                     .as_ref()
@@ -141,28 +144,63 @@ pub fn PostPage() -> impl IntoView {
         }>
             {move || Suspend::new(async move {
                 match post.await {
-                    Ok(fetched_post) => {
-                        let fetched_post = fetched_post.clone();
-                        let title = fetched_post.title;
-                        let username = fetched_post.username;
-                        let rendered_html = fetched_post.rendered_html;
-                        let created_at = fetched_post.created_at;
-                        let profile_href = format!("/~{}/", username);
-
-                        view! {
-                            <article>
-                                <h1>{title}</h1>
-                                <p class="metadata">
-                                    "By " <a href=profile_href>{username}</a> " on " {created_at}
-                                </p>
-                                <div class="content" inner_html=rendered_html></div>
-                            </article>
-                        }
-                            .into_any()
-                    }
+                    Ok(fetched_post) => render_post_article(fetched_post, None),
                     Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 }
             })}
         </Suspense>
     }
+}
+
+#[component]
+pub fn DraftPreviewPage() -> impl IntoView {
+    let params = use_params_map();
+
+    let preview = Resource::new(
+        move || params.get(),
+        |params| async move {
+            let post_id = params
+                .get("post_id")
+                .and_then(|v| v.parse::<i64>().ok())
+                .ok_or_else(|| ServerFnError::new("Invalid preview"))?;
+            get_post_preview(post_id).await
+        },
+    );
+
+    view! {
+        <Suspense fallback=|| {
+            view! { <p>"Loading..."</p> }
+        }>
+            {move || Suspend::new(async move {
+                match preview.await {
+                    Ok(post) => render_post_article(post, Some("Draft preview – visible only to you")),
+                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                }
+            })}
+        </Suspense>
+    }
+}
+
+fn render_post_article(post: PostResponse, banner: Option<&'static str>) -> AnyView {
+    let PostResponse {
+        title,
+        username,
+        rendered_html,
+        created_at,
+        ..
+    } = post;
+    let profile_href = format!("/~{}/", username);
+    let username_display = username.clone();
+
+    view! {
+        <article>
+            <h1>{title}</h1>
+            <p class="metadata">
+                "By " <a href=profile_href>{username_display}</a> " on " {created_at}
+            </p>
+            {banner.map(|text| view! { <p class="draft-banner">{text}</p> })}
+            <div class="content" inner_html=rendered_html></div>
+        </article>
+    }
+        .into_any()
 }
