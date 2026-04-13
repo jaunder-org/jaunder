@@ -22,8 +22,8 @@
 - Rendering for public posts stays minimal: `<article>` with title, metadata linking to `/~username/` and showing `published_at`, the rendered HTML body, plus a "Home" link to avoid dead ends.
 - After publishing, the create-post success UI shows:
   - Slug text (`<p data-test="slug-value" data-slug=...>`)
-  - A "Draft preview" link pointing to `/draft/:post_id/preview` (always available to the author)
-  - The canonical permalink link (only when `published_at` is set so the slug has a `published_at`-backed route)
+  - A "Draft preview" link pointing to `/draft/:post_id/preview` (always available to the author via `CreatePostResult.preview_url`)
+  - The canonical permalink link (`CreatePostResult.permalink`) only when `published_at` is set
 - Drafts no longer hit the public route, so the old inline draft badge there is removed.
 
 ## 4. Testing Strategy
@@ -32,7 +32,7 @@
   - Draft gating: the public permalink always returns HTTP 404 (`"Post not found"`) for draft posts, while the authenticated author can view drafts exclusively through `get_post_preview(post_id)`; tests cover both endpoints to ensure strangers/anonymous see 404s and the preview route works for the owner.
   - Soft-delete exclusion: ensure `deleted_at` posts return 404.
 - **E2E (`end2end/tests/posts.spec.ts`)**
-  - Extend the existing create-post flow: after publishing, navigate to the permalink and assert the rendered HTML shows.
+  - Extend the existing create-post flow: after publishing, use the success banner's `data-test="preview-link"` to visit the draft preview (expect the draft badge) and `data-test="permalink-link"` to visit the canonical permalink (expect published content).
   - Add a second test (when multi-user fixture available) verifying that a draft permalink is visible to the author but not when logged out; until we can create multiple accounts in one test, document that part as pending.
 - Continue running the full verification suite (`cargo build`, `cargo nextest run`, `cargo clippy -- -D warnings`, `scripts/check-coverage`, `nix flake check`) after implementing.
 

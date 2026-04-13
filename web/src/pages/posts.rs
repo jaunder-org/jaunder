@@ -202,5 +202,5 @@ fn render_post_article(post: PostResponse, banner: Option<&'static str>) -> AnyV
             <div class="content" inner_html=rendered_html></div>
         </article>
     }
-        .into_any()
+    .into_any()
 }
