@@ -93,6 +93,11 @@ async fn create_post_persists_rendered_published_post() {
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     assert_eq!(created.slug, "hello-world");
     assert!(created.published_at.is_some());
+    assert_eq!(
+        created.preview_url,
+        format!("/draft/{}/preview", created.post_id)
+    );
+    assert!(created.permalink.is_some());
 
     let record = state
         .posts
@@ -108,6 +113,18 @@ async fn create_post_persists_rendered_published_post() {
         record.rendered_html.contains("<strong>bold</strong>"),
         "rendered_html: {}",
         record.rendered_html
+    );
+    let published_at = record.published_at.expect("published post");
+    let expected_permalink = format!(
+        "/~author/{:04}/{:02}/{:02}/{}",
+        published_at.year(),
+        published_at.month(),
+        published_at.day(),
+        record.slug.as_str()
+    );
+    assert_eq!(
+        created.permalink.as_deref(),
+        Some(expected_permalink.as_str())
     );
 }
 
@@ -194,6 +211,11 @@ async fn create_post_accepts_slug_override_and_saves_draft() {
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     assert_eq!(created.slug, "custom-slug");
     assert!(created.published_at.is_none());
+    assert_eq!(
+        created.preview_url,
+        format!("/draft/{}/preview", created.post_id)
+    );
+    assert!(created.permalink.is_none());
 
     let record = state
         .posts
