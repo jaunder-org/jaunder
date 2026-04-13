@@ -173,7 +173,9 @@ pub fn DraftPreviewPage() -> impl IntoView {
         }>
             {move || Suspend::new(async move {
                 match preview.await {
-                    Ok(post) => render_post_article(post, Some("Draft preview – visible only to you")),
+                    Ok(post) => {
+                        render_post_article(post, Some("Draft preview – visible only to you"))
+                    }
                     Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 }
             })}
