@@ -98,3 +98,83 @@ test("published post renders at permalink", async ({ page }) => {
   await expect(page.locator("article h1")).toHaveText("Permalink Story");
   await expect(page.locator(".content")).toContainText("hello permalink");
 });
+
+test("authenticated user can edit a draft post", async ({ page }) => {
+  await register(page);
+
+  // Create a draft
+  await page.goto("http://localhost:3000/posts/new");
+  await waitForHydration(page);
+  await page.fill('input[name="title"]', "Original Draft");
+  await page.fill('textarea[name="body"]', "original body");
+  await page.selectOption('select[name="format"]', "markdown");
+  await page.click('button[name="publish"][value="false"]');
+  await page.waitForSelector(".success");
+
+  const success = page.locator(".success");
+  const postIdMatch = (await success
+    .locator('[data-test="preview-link"]')
+    .getAttribute("href"))!.match(/\/draft\/(\d+)\/preview/);
+  expect(postIdMatch).toBeTruthy();
+  const postId = postIdMatch![1];
+
+  // Navigate to edit page
+  await page.goto(`http://localhost:3000/posts/${postId}/edit`);
+  await waitForHydration(page);
+
+  await expect(page.locator("h1")).toHaveText("Edit Post");
+
+  // Update the draft
+  await page.fill('input[name="title"]', "Edited Draft");
+  await page.fill('textarea[name="body"]', "**edited content**");
+  await page.click('button[name="publish"][value="false"]');
+  await page.waitForLoadState("networkidle");
+
+  await expect(page.locator(".success")).toContainText("Draft saved.");
+  await expect(page.locator(".success")).toContainText(
+    "Draft saved.Slug: original-draftPreview draft",
+  );
+});
+
+test("editing a published post freezes the slug", async ({ page }) => {
+  await register(page);
+
+  // Create and publish a post
+  await page.goto("http://localhost:3000/posts/new");
+  await waitForHydration(page);
+  await page.fill('input[name="title"]', "Published Article");
+  await page.fill('textarea[name="body"]', "original content");
+  await page.selectOption('select[name="format"]', "markdown");
+  await page.click('button[name="publish"][value="true"]');
+  await page.waitForSelector(".success");
+
+  const success = page.locator(".success");
+  const originalSlug = await success
+    .locator('[data-test="slug-value"]')
+    .getAttribute("data-slug");
+  expect(originalSlug).toBeTruthy();
+
+  const postIdMatch = (await success
+    .locator('[data-test="preview-link"]')
+    .getAttribute("href"))!.match(/\/draft\/(\d+)\/preview/);
+  expect(postIdMatch).toBeTruthy();
+  const postId = postIdMatch![1];
+
+  // Navigate to edit page
+  await page.goto(`http://localhost:3000/posts/${postId}/edit`);
+  await waitForHydration(page);
+
+  // Published post should not have a slug_override input
+  await expect(page.locator('input[name="slug_override"]')).not.toBeVisible();
+
+  // Save the published post
+  await page.fill('input[name="title"]', "Updated Article");
+  await page.click('button[name="publish"][value="true"]');
+  await page.waitForLoadState("networkidle");
+
+  await expect(page.locator(".success")).toContainText("Post updated.");
+  const updatedSlug = await page
+    .locator('[data-test="slug-value"]')
+    .getAttribute("data-slug");
+  expect(updatedSlug).toBe(originalSlug);
+});

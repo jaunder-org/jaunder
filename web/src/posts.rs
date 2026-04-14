@@ -7,8 +7,8 @@ use crate::auth::require_auth;
 use chrono::{Datelike, NaiveDate, Utc};
 #[cfg(feature = "ssr")]
 use common::{
-    render::create_rendered_post,
-    slug::Slug,
+    render::{create_rendered_post, perform_post_update, PerformUpdateError},
+    slug::{slugify_title, Slug},
     storage::{AppState, CreatePostError, PostFormat, PostRecord},
     username::Username,
 };
@@ -21,6 +21,16 @@ pub struct CreatePostResult {
     pub post_id: i64,
     pub slug: String,
     pub created_at: String,
+    pub published_at: Option<String>,
+    pub preview_url: String,
+    pub permalink: Option<String>,
+}
+
+/// Result returned by [`update_post`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdatePostResult {
+    pub post_id: i64,
+    pub slug: String,
     pub published_at: Option<String>,
     pub preview_url: String,
     pub permalink: Option<String>,
@@ -207,6 +217,55 @@ pub async fn get_post_preview(post_id: i64) -> Result<PostResponse, ServerFnErro
     }
 }
 
+/// Updates an existing post for the authenticated author.
+#[server(endpoint = "/update_post")]
+pub async fn update_post(
+    post_id: i64,
+    title: String,
+    body: String,
+    format: String,
+    slug_override: Option<String>,
+    publish: bool,
+) -> Result<UpdatePostResult, ServerFnError> {
+    let auth = require_auth().await?;
+    let state = expect_context::<Arc<AppState>>();
+
+    let format = format
+        .parse::<PostFormat>()
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let record = perform_post_update(
+        state.posts.as_ref(),
+        post_id,
+        auth.user_id,
+        title,
+        body,
+        format,
+        slug_override.as_deref(),
+        publish,
+    )
+    .await
+    .map_err(|e| match e {
+        PerformUpdateError::NotFound | PerformUpdateError::Unauthorized => {
+            ServerFnError::new("Post not found")
+        }
+        other => ServerFnError::new(other.to_string()),
+    })?;
+
+    let published_at_str = record.published_at.map(|t| t.to_rfc3339());
+    let permalink = record
+        .published_at
+        .map(|ts| build_permalink(&auth.username, ts, &record.slug));
+
+    Ok(UpdatePostResult {
+        post_id,
+        slug: record.slug.to_string(),
+        published_at: published_at_str,
+        preview_url: format!("/draft/{post_id}/preview"),
+        permalink,
+    })
+}
+
 #[cfg(feature = "ssr")]
 #[allow(clippy::too_many_arguments)]
 async fn create_post_with_unique_slug(
@@ -273,27 +332,6 @@ async fn create_post_with_unique_slug(
     ))
 }
 
-fn slugify_title(title: &str) -> Option<String> {
-    let mut slug = String::new();
-    let mut previous_was_dash = false;
-
-    for ch in title.chars() {
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch.to_ascii_lowercase());
-            previous_was_dash = false;
-        } else if !slug.is_empty() && !previous_was_dash {
-            slug.push('-');
-            previous_was_dash = true;
-        }
-    }
-
-    while slug.ends_with('-') {
-        slug.pop();
-    }
-
-    (!slug.is_empty()).then_some(slug)
-}
-
 fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
     if attempt == 0 {
         slug_seed.to_owned()
@@ -328,7 +366,7 @@ fn build_permalink(username: &Username, timestamp: chrono::DateTime<Utc>, slug: 
 
 #[cfg(test)]
 mod tests {
-    use super::{candidate_slug, slugify_title};
+    use super::candidate_slug;
 
     #[cfg(feature = "ssr")]
     use super::build_permalink;
@@ -336,24 +374,6 @@ mod tests {
     use chrono::{TimeZone, Utc};
     #[cfg(feature = "ssr")]
     use common::{slug::Slug, username::Username};
-
-    #[test]
-    fn slugify_title_lowercases_and_separates_words() {
-        assert_eq!(
-            slugify_title("Hello, World from Rust"),
-            Some("hello-world-from-rust".to_string())
-        );
-    }
-
-    #[test]
-    fn slugify_title_trims_non_alphanumeric_boundaries() {
-        assert_eq!(slugify_title("  ---Hello!!!  "), Some("hello".to_string()));
-    }
-
-    #[test]
-    fn slugify_title_rejects_titles_without_ascii_alphanumerics() {
-        assert_eq!(slugify_title("!!!"), None);
-    }
 
     #[test]
     fn candidate_slug_returns_seed_for_first_attempt() {

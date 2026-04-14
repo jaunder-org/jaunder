@@ -1314,15 +1314,14 @@ async fn assert_post_update_creates_revision(state: &std::sync::Arc<jaunder::sto
         body: "updated body".to_string(),
         format: PostFormat::Org,
         rendered_html: "<p>updated body</p>".to_string(),
-        published_at: None,
+        publish: false,
     };
-    state
+    let record = state
         .posts
         .update_post(post_id, user_id, &update_input)
         .await
         .unwrap();
 
-    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
     assert_eq!(record.title, "Updated Title");
     assert_eq!(record.format, PostFormat::Org);
     assert_eq!(record.body, "updated body");
@@ -1335,7 +1334,7 @@ async fn assert_post_update_not_found(state: &std::sync::Arc<jaunder::storage::A
         body: "body".to_string(),
         format: PostFormat::Markdown,
         rendered_html: "<p>body</p>".to_string(),
-        published_at: None,
+        publish: false,
     };
     let err = state
         .posts
@@ -3725,7 +3724,7 @@ async fn assert_post_update_invalid_slug(state: &std::sync::Arc<jaunder::storage
                 body: "Updated content".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Updated</p>".to_string(),
-                published_at: None,
+                publish: false,
             },
         )
         .await;
@@ -4311,7 +4310,7 @@ async fn assert_update_soft_deleted_post(state: &std::sync::Arc<jaunder::storage
                 body: "New content".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>New</p>".to_string(),
-                published_at: Some(Utc::now()),
+                publish: true,
             },
         )
         .await;
@@ -4539,7 +4538,7 @@ async fn assert_post_revisions_created(state: &std::sync::Arc<jaunder::storage::
         .expect("post creation failed");
 
     // Update the post
-    state
+    let result = state
         .posts
         .update_post(
             post_id,
@@ -4550,23 +4549,16 @@ async fn assert_post_revisions_created(state: &std::sync::Arc<jaunder::storage::
                 body: "Updated content".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Updated</p>".to_string(),
-                published_at: Some(Utc::now()),
+                publish: true,
             },
         )
         .await
         .expect("update_post failed");
 
-    // Verify post was updated
-    let post = state
-        .posts
-        .get_post_by_id(post_id)
-        .await
-        .expect("get_post_by_id failed");
-    assert!(post.is_some());
-    let post = post.unwrap();
-    assert_eq!(post.title, "Updated");
-    assert_eq!(post.body, "Updated content");
-    assert!(post.published_at.is_some());
+    // Verify post was updated (result returned directly from update_post)
+    assert_eq!(result.title, "Updated");
+    assert_eq!(result.body, "Updated content");
+    assert!(result.published_at.is_some());
 }
 
 // Test display preservation of tags
@@ -5033,7 +5025,7 @@ async fn assert_update_rendered_post_markdown(state: &std::sync::Arc<jaunder::st
         .await
         .unwrap();
 
-    update_rendered_post(
+    let record = update_rendered_post(
         state.posts.as_ref(),
         post_id,
         user_id,
@@ -5041,12 +5033,11 @@ async fn assert_update_rendered_post_markdown(state: &std::sync::Arc<jaunder::st
         "update-render-md".parse().unwrap(),
         "**updated**".to_string(),
         PostFormat::Markdown,
-        None,
+        false,
     )
     .await
     .unwrap();
 
-    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
     assert_eq!(record.title, "Updated Title");
     assert!(
         record.rendered_html.contains("<strong>updated</strong>"),
@@ -5068,7 +5059,7 @@ async fn assert_update_rendered_post_org(state: &std::sync::Arc<jaunder::storage
         .await
         .unwrap();
 
-    update_rendered_post(
+    let record = update_rendered_post(
         state.posts.as_ref(),
         post_id,
         user_id,
@@ -5076,12 +5067,11 @@ async fn assert_update_rendered_post_org(state: &std::sync::Arc<jaunder::storage
         "update-render-org".parse().unwrap(),
         "*bold org*".to_string(),
         PostFormat::Org,
-        None,
+        false,
     )
     .await
     .unwrap();
 
-    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
     assert_eq!(record.title, "Updated Org Title");
     assert!(
         record.rendered_html.contains("<b>bold org</b>"),
@@ -5101,7 +5091,7 @@ async fn assert_update_rendered_post_not_found(state: &std::sync::Arc<jaunder::s
         "no-post".parse().unwrap(),
         "body".to_string(),
         PostFormat::Markdown,
-        None,
+        false,
     )
     .await
     .unwrap_err();
