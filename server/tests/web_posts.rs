@@ -10,7 +10,7 @@ use chrono::Datelike;
 use common::storage::PostFormat;
 use tempfile::TempDir;
 use tower::ServiceExt;
-use web::posts::CreatePostResult;
+use web::posts::{CreatePostResult, UpdatePostResult};
 
 use helpers::{ensure_server_fns_registered, test_options, test_state};
 
@@ -646,4 +646,416 @@ async fn get_post_returns_not_found_for_missing_post() {
 
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
+}
+
+async fn update_post_form(
+    state: Arc<jaunder::storage::AppState>,
+    post_id: i64,
+    extra_params: &str,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    let body = format!("post_id={}&{}", post_id, extra_params);
+    post_form(state, "/api/update_post", body, cookie).await
+}
+
+#[tokio::test]
+async fn update_post_updates_draft_content_and_slug() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Original+Title&body=original&format=markdown&publish=false",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let post_id = created.post_id;
+
+    let (status, body) = update_post_form(
+        Arc::clone(&state),
+        post_id,
+        "title=Updated+Title&body=%2A%2Anew+body%2A%2A&format=markdown&slug_override=updated-slug&publish=false",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "update body: {body}");
+    let updated: UpdatePostResult = serde_json::from_str(&body).unwrap();
+    assert_eq!(updated.slug, "updated-slug");
+    assert!(updated.published_at.is_none());
+
+    let record = state
+        .posts
+        .get_post_by_id(post_id)
+        .await
+        .unwrap()
+        .expect("post should exist");
+    assert_eq!(record.title, "Updated Title");
+    assert_eq!(record.slug.to_string(), "updated-slug");
+    assert!(record.rendered_html.contains("<strong>new body</strong>"));
+}
+
+#[tokio::test]
+async fn update_post_freezes_slug_when_published() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Published+Post&body=body&format=markdown&publish=true",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let post_id = created.post_id;
+    let original_slug = created.slug.clone();
+
+    let (status, body) = update_post_form(
+        Arc::clone(&state),
+        post_id,
+        "title=Changed+Title&body=new+body&format=markdown&slug_override=new-slug&publish=true",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "update body: {body}");
+    let updated: UpdatePostResult = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        updated.slug, original_slug,
+        "slug must not change after publication"
+    );
+    assert!(updated.published_at.is_some());
+}
+
+#[tokio::test]
+async fn update_post_publishes_draft() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Draft+Post&body=draft+body&format=markdown&publish=false",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    assert!(created.published_at.is_none());
+    let post_id = created.post_id;
+
+    let (status, body) = update_post_form(
+        Arc::clone(&state),
+        post_id,
+        "title=Draft+Post&body=draft+body&format=markdown&publish=true",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "update body: {body}");
+    let updated: UpdatePostResult = serde_json::from_str(&body).unwrap();
+    assert!(updated.published_at.is_some());
+    assert!(updated.permalink.is_some());
+}
+
+#[tokio::test]
+async fn update_post_rejects_non_author() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let author_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let stranger_id = state
+        .users
+        .create_user(
+            &"stranger".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let author_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(author_id, None)
+            .await
+            .unwrap()
+    );
+    let stranger_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(stranger_id, None)
+            .await
+            .unwrap()
+    );
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Authors+Post&body=body&format=markdown&publish=false",
+        Some(&author_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let (status, body) = update_post_form(
+        Arc::clone(&state),
+        created.post_id,
+        "title=Stolen+Title&body=hacked&format=markdown&publish=false",
+        Some(&stranger_cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+}
+
+#[tokio::test]
+async fn update_post_rejects_unauthenticated() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, body) = update_post_form(
+        state,
+        42,
+        "title=Unauthorized&body=body&format=markdown&publish=false",
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("unauthorized"), "body: {body}");
+}
+
+#[tokio::test]
+async fn update_post_rejects_empty_title() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Original&body=body&format=markdown&publish=false",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let (status, body) = update_post_form(
+        state,
+        created.post_id,
+        "title=+++&body=body&format=markdown&publish=false",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("title is required"), "body: {body}");
+}
+
+#[tokio::test]
+async fn update_post_rejects_invalid_format() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Original&body=body&format=markdown&publish=false",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let (status, body) = update_post_form(
+        state,
+        created.post_id,
+        "title=Updated&body=body&format=html&publish=false",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("post format must be"), "body: {body}");
+}
+
+#[tokio::test]
+async fn update_post_returns_not_found_for_missing_post() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = update_post_form(
+        state,
+        99999,
+        "title=Does+Not+Exist&body=body&format=markdown&publish=false",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+}
+
+#[tokio::test]
+async fn update_post_returns_not_found_for_deleted_post() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Delete+Me&body=body&format=markdown&publish=false",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    state.posts.soft_delete_post(created.post_id).await.unwrap();
+
+    let (status, body) = update_post_form(
+        state,
+        created.post_id,
+        "title=Delete+Me&body=body&format=markdown&publish=false",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+}
+
+#[tokio::test]
+async fn update_post_rejects_title_without_ascii_slug_characters() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Original&body=body&format=markdown&publish=false",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    // em-dash-only title passes the empty check but cannot produce a slug
+    let (status, body) = update_post_form(
+        state,
+        created.post_id,
+        "title=%E2%80%94%E2%80%94%E2%80%94&body=body&format=markdown&publish=false",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(
+        body.contains("title must contain at least one ASCII letter or digit"),
+        "body: {body}"
+    );
 }

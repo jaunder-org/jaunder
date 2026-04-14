@@ -1,9 +1,10 @@
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
-use crate::slug::Slug;
+use crate::slug::{slugify_title, Slug};
 use crate::storage::{
-    CreatePostError, CreatePostInput, PostFormat, PostStorage, UpdatePostError, UpdatePostInput,
+    CreatePostError, CreatePostInput, PostFormat, PostRecord, PostStorage, UpdatePostError,
+    UpdatePostInput,
 };
 
 // ---------------------------------------------------------------------------
@@ -111,8 +112,8 @@ pub async fn update_rendered_post(
     slug: Slug,
     body: String,
     format: PostFormat,
-    published_at: Option<DateTime<Utc>>,
-) -> Result<(), UpdateRenderedPostError> {
+    publish: bool,
+) -> Result<PostRecord, UpdateRenderedPostError> {
     let rendered_html = render(&body, &format)?;
     let input = UpdatePostInput {
         title,
@@ -120,9 +121,89 @@ pub async fn update_rendered_post(
         body,
         format,
         rendered_html,
-        published_at,
+        publish,
     };
     Ok(storage.update_post(post_id, editor_user_id, &input).await?)
+}
+
+// ---------------------------------------------------------------------------
+// High-level post-update orchestration
+// ---------------------------------------------------------------------------
+
+/// Errors that can occur during a high-level post update.
+#[derive(Debug, Error)]
+pub enum PerformUpdateError {
+    #[error("title is required")]
+    EmptyTitle,
+    #[error("title must contain at least one ASCII letter or digit")]
+    NoSlugFromTitle,
+    #[error("invalid slug")]
+    InvalidSlug,
+    #[error(transparent)]
+    Render(#[from] RenderError),
+    #[error("post not found")]
+    NotFound,
+    #[error("not authorized")]
+    Unauthorized,
+    #[error(transparent)]
+    Storage(sqlx::Error),
+}
+
+impl From<UpdatePostError> for PerformUpdateError {
+    fn from(e: UpdatePostError) -> Self {
+        match e {
+            UpdatePostError::NotFound => Self::NotFound,
+            UpdatePostError::Unauthorized => Self::Unauthorized,
+            UpdatePostError::Internal(e) => Self::Storage(e),
+        }
+    }
+}
+
+/// Validates inputs, computes the slug, renders the body, and atomically
+/// updates the post via storage.
+///
+/// The storage layer freezes the slug if the post is already published.
+/// Ownership and deletion checks are also performed atomically in storage.
+#[allow(clippy::too_many_arguments)]
+pub async fn perform_post_update(
+    storage: &dyn PostStorage,
+    post_id: i64,
+    editor_user_id: i64,
+    title: String,
+    body: String,
+    format: PostFormat,
+    slug_override: Option<&str>,
+    publish: bool,
+) -> Result<PostRecord, PerformUpdateError> {
+    let title = title.trim().to_owned();
+    if title.is_empty() {
+        return Err(PerformUpdateError::EmptyTitle);
+    }
+
+    let slug = match slug_override.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(raw) => raw
+            .to_ascii_lowercase()
+            .parse::<Slug>()
+            .map_err(|_| PerformUpdateError::InvalidSlug)?,
+        None => slugify_title(&title)
+            .ok_or(PerformUpdateError::NoSlugFromTitle)?
+            .parse::<Slug>()
+            .map_err(|_| PerformUpdateError::NoSlugFromTitle)?,
+    };
+
+    let rendered_html = render(&body, &format)?;
+    let input = UpdatePostInput {
+        title,
+        slug,
+        body,
+        format,
+        rendered_html,
+        publish,
+    };
+    storage
+        .update_post(post_id, editor_user_id, &input)
+        .await
+        .map_err(PerformUpdateError::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -359,5 +440,64 @@ mod tests {
         let err: UpdateRenderedPostError = UpdatePostError::NotFound.into();
         let debug = format!("{:?}", err);
         assert!(debug.contains("Storage"));
+    }
+
+    // -- PerformUpdateError tests --
+
+    #[test]
+    fn perform_update_error_empty_title_display() {
+        let err = PerformUpdateError::EmptyTitle;
+        assert_eq!(err.to_string(), "title is required");
+    }
+
+    #[test]
+    fn perform_update_error_no_slug_from_title_display() {
+        let err = PerformUpdateError::NoSlugFromTitle;
+        assert!(err.to_string().contains("ASCII"));
+    }
+
+    #[test]
+    fn perform_update_error_invalid_slug_display() {
+        let err = PerformUpdateError::InvalidSlug;
+        assert_eq!(err.to_string(), "invalid slug");
+    }
+
+    #[test]
+    fn perform_update_error_not_found_display() {
+        let err = PerformUpdateError::NotFound;
+        assert_eq!(err.to_string(), "post not found");
+    }
+
+    #[test]
+    fn perform_update_error_unauthorized_display() {
+        let err = PerformUpdateError::Unauthorized;
+        assert_eq!(err.to_string(), "not authorized");
+    }
+
+    #[test]
+    fn perform_update_error_from_render() {
+        let err: PerformUpdateError = RenderError::OrgRender("bad".to_string()).into();
+        assert!(err.to_string().contains("org-mode render error"));
+    }
+
+    #[test]
+    fn perform_update_error_from_update_post_not_found() {
+        use crate::storage::UpdatePostError;
+        let err: PerformUpdateError = UpdatePostError::NotFound.into();
+        assert!(matches!(err, PerformUpdateError::NotFound));
+    }
+
+    #[test]
+    fn perform_update_error_from_update_post_unauthorized() {
+        use crate::storage::UpdatePostError;
+        let err: PerformUpdateError = UpdatePostError::Unauthorized.into();
+        assert!(matches!(err, PerformUpdateError::Unauthorized));
+    }
+
+    #[test]
+    fn perform_update_error_debug() {
+        let err = PerformUpdateError::EmptyTitle;
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("EmptyTitle"));
     }
 }

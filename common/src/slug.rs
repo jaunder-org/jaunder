@@ -47,6 +47,31 @@ impl fmt::Display for Slug {
     }
 }
 
+/// Converts a title to a slug candidate by lowercasing ASCII alphanumeric
+/// characters and collapsing runs of non-alphanumeric characters into hyphens.
+///
+/// Returns `None` if the title contains no ASCII alphanumeric characters.
+pub fn slugify_title(title: &str) -> Option<String> {
+    let mut slug = String::new();
+    let mut previous_was_dash = false;
+
+    for ch in title.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            previous_was_dash = false;
+        } else if !slug.is_empty() && !previous_was_dash {
+            slug.push('-');
+            previous_was_dash = true;
+        }
+    }
+
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+
+    (!slug.is_empty()).then_some(slug)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,5 +106,29 @@ mod tests {
         let s: Slug = "my-post".parse().unwrap();
         assert_eq!(s.to_string(), "my-post");
         assert_eq!(s.as_str(), "my-post");
+    }
+
+    #[test]
+    fn slugify_title_lowercases_and_separates_words() {
+        assert_eq!(
+            slugify_title("Hello, World from Rust"),
+            Some("hello-world-from-rust".to_string())
+        );
+    }
+
+    #[test]
+    fn slugify_title_trims_non_alphanumeric_boundaries() {
+        assert_eq!(slugify_title("  ---Hello!!!  "), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn slugify_title_rejects_titles_without_ascii_alphanumerics() {
+        assert_eq!(slugify_title("!!!"), None);
+        assert_eq!(slugify_title("—"), None);
+    }
+
+    #[test]
+    fn slugify_title_single_word() {
+        assert_eq!(slugify_title("Rust"), Some("rust".to_string()));
     }
 }

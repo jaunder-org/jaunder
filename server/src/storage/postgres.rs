@@ -889,12 +889,32 @@ impl PostStorage for PostgresPostStorage {
         post_id: i64,
         editor_user_id: i64,
         input: &UpdatePostInput,
-    ) -> Result<(), UpdatePostError> {
+    ) -> Result<PostRecord, UpdatePostError> {
         let mut tx = self.pool.begin().await?;
         let now = Utc::now();
 
-        // Save a revision of current state
-        let rows_affected = sqlx::query(
+        // Lock and read current ownership within the transaction to prevent races.
+        let existing = sqlx::query_as::<_, (i64, Option<DateTime<Utc>>)>(
+            "SELECT user_id, deleted_at FROM posts WHERE post_id = $1 FOR UPDATE",
+        )
+        .bind(post_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        match existing {
+            None => {
+                tx.rollback().await.ok();
+                return Err(UpdatePostError::NotFound);
+            }
+            Some((owner_id, deleted_at)) if owner_id != editor_user_id || deleted_at.is_some() => {
+                tx.rollback().await.ok();
+                return Err(UpdatePostError::Unauthorized);
+            }
+            Some(_) => {}
+        }
+
+        // Save a revision of current state.
+        sqlx::query(
             "INSERT INTO post_revisions (post_id, user_id, title, slug, body, format, rendered_html, edited_at)
              SELECT post_id, user_id, title, slug, body, format, rendered_html, $1
              FROM posts WHERE post_id = $2",
@@ -902,43 +922,39 @@ impl PostStorage for PostgresPostStorage {
         .bind(now)
         .bind(post_id)
         .execute(&mut *tx)
-        .await?
-        .rows_affected();
+        .await?;
 
-        if rows_affected == 0 {
-            tx.rollback().await.ok();
-            return Err(UpdatePostError::NotFound);
-        }
-
-        // Update the post; only update slug if not yet published
-        sqlx::query(
+        // Update the post:
+        //   - slug frozen once published (CASE WHEN published_at IS NULL)
+        //   - publish=true  → COALESCE(published_at, now)  (preserves existing date)
+        //   - publish=false → NULL                          (un-publish)
+        let row = sqlx::query_as::<_, PostRow>(
             "UPDATE posts
              SET title = $1,
                  slug = CASE WHEN published_at IS NULL THEN $2 ELSE slug END,
                  body = $3,
                  format = $4,
                  rendered_html = $5,
-                 published_at = $6,
-                 updated_at = $7
-             WHERE post_id = $8",
+                 published_at = CASE WHEN $6 THEN COALESCE(published_at, $7) ELSE NULL END,
+                 updated_at = $8
+             WHERE post_id = $9
+             RETURNING post_id, user_id, title, slug, body, format, rendered_html,
+                       created_at, updated_at, published_at, deleted_at",
         )
         .bind(&input.title)
         .bind(input.slug.as_str())
         .bind(&input.body)
         .bind(input.format.to_string())
         .bind(&input.rendered_html)
-        .bind(input.published_at)
+        .bind(input.publish)
+        .bind(now)
         .bind(now)
         .bind(post_id)
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await?;
 
-        // suppress unused variable warning for editor_user_id (available for
-        // future audit logging)
-        let _ = editor_user_id;
-
         tx.commit().await?;
-        Ok(())
+        post_record_from_row(row).map_err(UpdatePostError::Internal)
     }
 
     async fn soft_delete_post(&self, post_id: i64) -> sqlx::Result<()> {
@@ -1480,7 +1496,7 @@ mod tests {
                 body: "body".to_string(),
                 format: common::storage::PostFormat::Markdown,
                 rendered_html: "<p>body</p>".to_string(),
-                published_at: None,
+                publish: false,
             },
         ))
         .await;

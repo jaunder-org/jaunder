@@ -388,6 +388,8 @@ pub enum CreatePostError {
 pub enum UpdatePostError {
     #[error("post not found")]
     NotFound,
+    #[error("not authorized")]
+    Unauthorized,
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
 }
@@ -419,7 +421,9 @@ pub struct UpdatePostInput {
     pub body: String,
     pub format: PostFormat,
     pub rendered_html: String,
-    pub published_at: Option<DateTime<Utc>>,
+    /// If `true`, publish the post (sets `published_at` to now if not already set).
+    /// If `false`, un-publish the post (clears `published_at`).
+    pub publish: bool,
 }
 
 /// A tag record returned by [`PostStorage`] tag queries.
@@ -481,7 +485,7 @@ pub trait PostStorage: Send + Sync {
         post_id: i64,
         editor_user_id: i64,
         input: &UpdatePostInput,
-    ) -> Result<(), UpdatePostError>;
+    ) -> Result<PostRecord, UpdatePostError>;
 
     async fn soft_delete_post(&self, post_id: i64) -> sqlx::Result<()>;
 
