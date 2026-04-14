@@ -3,7 +3,11 @@ pub mod cli;
 pub mod commands;
 pub mod mailer;
 pub mod password;
+pub mod render {
+    pub use common::render::*;
+}
 pub mod storage;
+pub mod tag;
 pub mod username;
 
 use std::sync::Arc;
@@ -105,6 +109,22 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/sessions")
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
+            .await
+            .expect("failed to get response");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn create_post_route_returns_ok() {
+        ensure_server_fns_registered();
+        let app = create_router(test_options(), test_state().await, true);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/posts/new")
                     .body(Body::empty())
                     .expect("failed to build request"),
             )

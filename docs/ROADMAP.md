@@ -93,3 +93,5 @@ Jaunder acts as an OAuth 2.0 authorization server, allowing first-party and thir
 ## Not yet scheduled
 - Cross-backend data migration
 - Full-text search
+- Tag discovery (tag cloud, trending tags, tag autocomplete)
+- Evaluate Org-mode parser options (orgize limitations, tree-sitter-org, custom parser)
