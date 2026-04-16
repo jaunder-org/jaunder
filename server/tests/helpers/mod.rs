@@ -35,6 +35,11 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::password_reset::RequestPasswordReset>();
         server_fn::axum::register_explicit::<web::password_reset::ConfirmPasswordReset>();
         server_fn::axum::register_explicit::<web::posts::CreatePost>();
+        server_fn::axum::register_explicit::<web::posts::GetPost>();
+        server_fn::axum::register_explicit::<web::posts::GetPostPreview>();
+        server_fn::axum::register_explicit::<web::posts::UpdatePost>();
+        server_fn::axum::register_explicit::<web::posts::ListDrafts>();
+        server_fn::axum::register_explicit::<web::posts::PublishPost>();
     });
 }
 

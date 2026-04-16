@@ -181,3 +181,84 @@ test("editing a published post freezes the slug", async ({ page }) => {
     .getAttribute("data-slug");
   expect(updatedSlug).toBe(originalSlug);
 });
+
+test("draft lifecycle: create, view, edit, and publish", async ({
+  page,
+  context,
+}) => {
+  test.setTimeout(30_000);
+  await register(page);
+
+  await page.goto("http://localhost:3000/posts/new");
+  await waitForHydration(page);
+  await page.fill('input[name="title"]', "Lifecycle Draft");
+  await page.fill('textarea[name="body"]', "initial draft body");
+  await page.selectOption('select[name="format"]', "markdown");
+  await page.click('button[name="publish"][value="false"]');
+  await page.waitForSelector(".success");
+
+  const success = page.locator(".success");
+  const previewHref = await success
+    .locator('[data-test="preview-link"]')
+    .getAttribute("href");
+  expect(previewHref).toBeTruthy();
+
+  const postIdMatch = previewHref!.match(/\/draft\/(\d+)\/preview/);
+  expect(postIdMatch).toBeTruthy();
+  const postId = postIdMatch![1];
+
+  await page.goto("http://localhost:3000/drafts");
+  await waitForHydration(page);
+  const initialDraftRow = page.locator("li", { hasText: "Lifecycle Draft" });
+  await expect(initialDraftRow).toBeVisible();
+  const permalinkHref = await initialDraftRow
+    .locator('a:has-text("Permalink")')
+    .getAttribute("href");
+  expect(permalinkHref).toBeTruthy();
+  const permalinkUrl = new URL(
+    permalinkHref!,
+    "http://localhost:3000",
+  ).toString();
+
+  await page.goto(permalinkUrl);
+  await waitForHydration(page);
+  await expect(page.locator(".draft-banner")).toContainText(
+    "Draft - visible only to you",
+  );
+  await expect(page.locator(".content")).toContainText("initial draft body");
+
+  await page.goto(`http://localhost:3000/posts/${postId}/edit`);
+  await waitForHydration(page);
+  await page.fill('textarea[name="body"]', "edited draft body");
+  await page.click('button[name="publish"][value="false"]');
+  await page.waitForSelector(".success");
+
+  await page.goto(permalinkUrl);
+  await waitForHydration(page);
+  await expect(page.locator(".content")).toContainText("edited draft body");
+  await expect(page.locator(".draft-banner")).toContainText(
+    "Draft - visible only to you",
+  );
+
+  const guestContext = await context.browser()!.newContext();
+  const guestPage = await guestContext.newPage();
+  await guestPage.goto(permalinkUrl);
+  await waitForHydration(guestPage);
+  await expect(guestPage.locator("body")).not.toContainText(
+    "edited draft body",
+  );
+  await guestContext.close();
+
+  await page.goto("http://localhost:3000/drafts");
+  await waitForHydration(page);
+  const draftRow = page.locator("li", { hasText: "Lifecycle Draft" });
+  await expect(draftRow).toBeVisible();
+  await draftRow.locator('button:has-text("Publish")').click();
+  await page.waitForLoadState("networkidle");
+  await expect(page.locator(".success")).toContainText("Post published.");
+
+  await page.goto(permalinkUrl);
+  await waitForHydration(page);
+  await expect(page.locator(".content")).toContainText("edited draft body");
+  await expect(page.locator(".draft-banner")).toHaveCount(0);
+});
