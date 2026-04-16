@@ -3,7 +3,7 @@ use std::{fmt, io, path::Path, str::FromStr, sync::Arc};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgConnectOptions;
-use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use sqlx::PgPool;
 use sqlx::SqlitePool;
 
@@ -455,6 +455,13 @@ async fn open_sqlite_database(
     if create_if_missing {
         options = options.create_if_missing(true);
     }
+    // WAL mode allows concurrent readers while a writer is active, dramatically
+    // reducing SQLITE_BUSY errors under load.  The 5-second busy timeout lets
+    // SQLite retry automatically instead of failing immediately when it cannot
+    // obtain a lock.
+    options = options
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(std::time::Duration::from_secs(5));
     let pool = sqlx::SqlitePool::connect_with(options).await?;
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     let site_config = SqliteSiteConfigStorage::new(pool.clone());
