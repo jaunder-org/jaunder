@@ -1,8 +1,8 @@
 use crate::{
     auth::current_user,
     posts::{
-        get_post, get_post_preview, CreatePost, CreatePostResult, PostResponse, UpdatePost,
-        UpdatePostResult,
+        get_post, get_post_preview, list_drafts, CreatePost, CreatePostResult, DraftSummary,
+        PostResponse, PublishPost, PublishPostResult, UpdatePost, UpdatePostResult,
     },
 };
 use leptos::prelude::*;
@@ -147,7 +147,10 @@ pub fn PostPage() -> impl IntoView {
         }>
             {move || Suspend::new(async move {
                 match post.await {
-                    Ok(fetched_post) => render_post_article(fetched_post, None),
+                    Ok(fetched_post) => {
+                        let banner = fetched_post.is_draft.then_some("Draft - visible only to you");
+                        render_post_article(fetched_post, banner)
+                    }
                     Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 }
             })}
@@ -321,6 +324,84 @@ pub fn EditPostPage() -> impl IntoView {
                     Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 })
         }}
+    }
+}
+
+#[component]
+pub fn DraftsPage() -> impl IntoView {
+    let publish_action = ServerAction::<PublishPost>::new();
+    let drafts = Resource::new(
+        move || publish_action.version().get(),
+        |_| list_drafts(None, None, Some(50)),
+    );
+
+    view! {
+        <h1>"Drafts"</h1>
+        <Suspense fallback=|| {
+            view! { <p>"Loading..."</p> }
+        }>
+            {move || Suspend::new(async move {
+                match drafts.await {
+                    Ok(list) => {
+                        if list.is_empty() {
+                            return view! { <p>"You have no drafts."</p> }.into_any();
+                        }
+
+                        view! {
+                            <ul>
+                                {list
+                                    .into_iter()
+                                    .map(|draft| render_draft_row(draft, publish_action))
+                                    .collect::<Vec<_>>()}
+                            </ul>
+                        }
+                            .into_any()
+                    }
+                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                }
+            })}
+        </Suspense>
+        {move || {
+            publish_action
+                .value()
+                .get()
+                .map(|result: Result<PublishPostResult, ServerFnError>| match result {
+                    Ok(published) => {
+                        view! {
+                            <p class="success">
+                                "Post published. " <a href=published.permalink>"View permalink"</a>
+                            </p>
+                        }
+                            .into_any()
+                    }
+                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                })
+        }}
+    }
+}
+
+fn render_draft_row(
+    draft: DraftSummary,
+    publish_action: ServerAction<PublishPost>,
+) -> impl IntoView {
+    let post_id = draft.post_id;
+    view! {
+        <li>
+            <strong>{draft.title}</strong>
+            " ("
+            {draft.slug}
+            ") "
+            <a href=draft.preview_url>"Preview"</a>
+            " "
+            <a href=draft.edit_url>"Edit"</a>
+            " "
+            <a href=draft.permalink>"Permalink"</a>
+            " "
+            <ActionForm action=publish_action>
+                <input type="hidden" name="post_id" value=post_id />
+                <button type="submit">"Publish"</button>
+            </ActionForm>
+        </li>
     }
 }
 

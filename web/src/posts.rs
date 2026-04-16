@@ -9,7 +9,7 @@ use chrono::{Datelike, NaiveDate, Utc};
 use common::{
     render::{create_rendered_post, perform_post_update, PerformUpdateError},
     slug::{slugify_title, Slug},
-    storage::{AppState, CreatePostError, PostFormat, PostRecord},
+    storage::{AppState, CreatePostError, PostCursor, PostFormat, PostRecord, UpdatePostInput},
     username::Username,
 };
 #[cfg(feature = "ssr")]
@@ -36,6 +36,28 @@ pub struct UpdatePostResult {
     pub permalink: Option<String>,
 }
 
+/// A draft row returned by [`list_drafts`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DraftSummary {
+    pub post_id: i64,
+    pub title: String,
+    pub slug: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub preview_url: String,
+    pub edit_url: String,
+    pub permalink: String,
+}
+
+/// Result returned by [`publish_post`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PublishPostResult {
+    pub post_id: i64,
+    pub slug: String,
+    pub published_at: String,
+    pub permalink: String,
+}
+
 /// Details of a post returned by [`get_post`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PostResponse {
@@ -48,6 +70,7 @@ pub struct PostResponse {
     pub rendered_html: String,
     pub created_at: String,
     pub published_at: Option<String>,
+    pub is_draft: bool,
 }
 
 /// Creates a post for the authenticated user.
@@ -126,37 +149,32 @@ pub async fn get_post(
         NaiveDate::from_ymd_opt(year, month, day)
             .ok_or_else(|| ServerFnError::new("Invalid permalink"))?;
 
-        let post = state
+        if let Some(post) = state
             .posts
             .get_post_by_permalink(&username_parsed, year, month, day, &slug_parsed)
             .await
             .map_err(|e| ServerFnError::new(e.to_string()))?
-            .ok_or_else(not_found_error)?;
+        {
+            return Ok(post_response(post, username_parsed.to_string()));
+        }
 
-        let PostRecord {
-            post_id,
-            title,
-            slug,
-            body,
-            format,
-            rendered_html,
-            created_at,
-            published_at,
-            deleted_at: _,
-            ..
-        } = post;
+        let auth = require_auth().await.map_err(|_| not_found_error())?;
+        if auth.username != username_parsed {
+            return Err(not_found_error());
+        }
 
-        Ok(PostResponse {
-            post_id,
-            username: username_parsed.to_string(),
-            title,
-            slug: slug.to_string(),
-            body,
-            format: format.to_string(),
-            rendered_html,
-            created_at: created_at.to_rfc3339(),
-            published_at: published_at.map(|t| t.to_rfc3339()),
-        })
+        let draft = find_draft_by_permalink_for_user(
+            state.as_ref(),
+            auth.user_id,
+            year,
+            month,
+            day,
+            &slug_parsed,
+        )
+        .await?
+        .ok_or_else(not_found_error)?;
+
+        Ok(post_response(draft, auth.username.to_string()))
     }
     #[cfg(not(feature = "ssr"))]
     {
@@ -207,6 +225,7 @@ pub async fn get_post_preview(post_id: i64) -> Result<PostResponse, ServerFnErro
             format: format.to_string(),
             rendered_html,
             created_at: created_at.to_rfc3339(),
+            is_draft: published_at.is_none(),
             published_at: published_at.map(|t| t.to_rfc3339()),
         })
     }
@@ -263,6 +282,94 @@ pub async fn update_post(
         published_at: published_at_str,
         preview_url: format!("/draft/{post_id}/preview"),
         permalink,
+    })
+}
+
+/// Lists drafts for the authenticated user.
+#[server(endpoint = "/list_drafts")]
+pub async fn list_drafts(
+    cursor_created_at: Option<String>,
+    cursor_post_id: Option<i64>,
+    limit: Option<u32>,
+) -> Result<Vec<DraftSummary>, ServerFnError> {
+    let auth = require_auth().await?;
+    let state = expect_context::<Arc<AppState>>();
+
+    let parsed_cursor = parse_draft_cursor(cursor_created_at, cursor_post_id)?;
+    let page_size = limit.unwrap_or(50).clamp(1, 50);
+    let drafts = state
+        .posts
+        .list_drafts_by_user(auth.user_id, parsed_cursor.as_ref(), page_size)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(drafts
+        .into_iter()
+        .map(|draft| {
+            let permalink = build_permalink(&auth.username, draft.created_at, &draft.slug);
+            DraftSummary {
+                post_id: draft.post_id,
+                title: draft.title,
+                slug: draft.slug.to_string(),
+                created_at: draft.created_at.to_rfc3339(),
+                updated_at: draft.updated_at.to_rfc3339(),
+                preview_url: format!("/draft/{}/preview", draft.post_id),
+                edit_url: format!("/posts/{}/edit", draft.post_id),
+                permalink,
+            }
+        })
+        .collect())
+}
+
+/// Publishes an existing draft owned by the authenticated user.
+#[server(endpoint = "/publish_post")]
+pub async fn publish_post(post_id: i64) -> Result<PublishPostResult, ServerFnError> {
+    let auth = require_auth().await?;
+    let state = expect_context::<Arc<AppState>>();
+
+    let existing = state
+        .posts
+        .get_post_by_id(post_id)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+        .ok_or_else(|| ServerFnError::new("Post not found"))?;
+
+    if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
+        return Err(ServerFnError::new("Post not found"));
+    }
+
+    let updated = state
+        .posts
+        .update_post(
+            post_id,
+            auth.user_id,
+            &UpdatePostInput {
+                title: existing.title,
+                slug: existing.slug,
+                body: existing.body,
+                format: existing.format,
+                rendered_html: existing.rendered_html,
+                publish: true,
+            },
+        )
+        .await
+        .map_err(|e| match e {
+            common::storage::UpdatePostError::NotFound
+            | common::storage::UpdatePostError::Unauthorized => {
+                ServerFnError::new("Post not found")
+            }
+            other => ServerFnError::new(other.to_string()),
+        })?;
+
+    let published_at = updated
+        .published_at
+        .ok_or_else(|| ServerFnError::new("Post not found"))?;
+
+    Ok(PublishPostResult {
+        post_id: updated.post_id,
+        slug: updated.slug.to_string(),
+        published_at: published_at.to_rfc3339(),
+        permalink: build_permalink(&auth.username, published_at, &updated.slug),
     })
 }
 
@@ -341,6 +448,99 @@ fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
 }
 
 #[cfg(feature = "ssr")]
+fn post_response(post: PostRecord, username: String) -> PostResponse {
+    let PostRecord {
+        post_id,
+        title,
+        slug,
+        body,
+        format,
+        rendered_html,
+        created_at,
+        published_at,
+        ..
+    } = post;
+    PostResponse {
+        post_id,
+        username,
+        title,
+        slug: slug.to_string(),
+        body,
+        format: format.to_string(),
+        rendered_html,
+        created_at: created_at.to_rfc3339(),
+        is_draft: published_at.is_none(),
+        published_at: published_at.map(|t| t.to_rfc3339()),
+    }
+}
+
+#[cfg(feature = "ssr")]
+fn parse_draft_cursor(
+    cursor_created_at: Option<String>,
+    cursor_post_id: Option<i64>,
+) -> Result<Option<PostCursor>, ServerFnError> {
+    match (cursor_created_at, cursor_post_id) {
+        (None, None) => Ok(None),
+        (Some(created_at), Some(post_id)) => {
+            let created_at = chrono::DateTime::parse_from_rfc3339(created_at.trim())
+                .map_err(|_| ServerFnError::new("invalid cursor_created_at"))?
+                .with_timezone(&Utc);
+            Ok(Some(PostCursor {
+                created_at,
+                post_id,
+            }))
+        }
+        _ => Err(ServerFnError::new(
+            "cursor_created_at and cursor_post_id must be provided together",
+        )),
+    }
+}
+
+#[cfg(feature = "ssr")]
+async fn find_draft_by_permalink_for_user(
+    state: &AppState,
+    user_id: i64,
+    year: i32,
+    month: u32,
+    day: u32,
+    slug: &Slug,
+) -> Result<Option<PostRecord>, ServerFnError> {
+    let mut cursor = None;
+
+    for _ in 0..200 {
+        let drafts = state
+            .posts
+            .list_drafts_by_user(user_id, cursor.as_ref(), 50)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+        if drafts.is_empty() {
+            return Ok(None);
+        }
+
+        let next_cursor = drafts.last().map(|post| PostCursor {
+            created_at: post.created_at,
+            post_id: post.post_id,
+        });
+
+        if let Some(found) = drafts.into_iter().find(|post| {
+            post.slug == *slug
+                && post.created_at.year() == year
+                && post.created_at.month() == month
+                && post.created_at.day() == day
+        }) {
+            return Ok(Some(found));
+        }
+
+        let Some(next_cursor) = next_cursor else {
+            return Ok(None);
+        };
+        cursor = Some(next_cursor);
+    }
+
+    Ok(None)
+}
+
+#[cfg(feature = "ssr")]
 fn not_found_error() -> ServerFnError {
     use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
@@ -369,11 +569,15 @@ mod tests {
     use super::candidate_slug;
 
     #[cfg(feature = "ssr")]
-    use super::build_permalink;
+    use super::{build_permalink, parse_draft_cursor, post_response};
     #[cfg(feature = "ssr")]
     use chrono::{TimeZone, Utc};
     #[cfg(feature = "ssr")]
-    use common::{slug::Slug, username::Username};
+    use common::{
+        slug::Slug,
+        storage::{PostFormat, PostRecord},
+        username::Username,
+    };
 
     #[test]
     fn candidate_slug_returns_seed_for_first_attempt() {
@@ -396,5 +600,81 @@ mod tests {
         let permalink = build_permalink(&username, timestamp, &slug);
 
         assert_eq!(permalink, "/~author/2026/04/12/hello-world");
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn parse_draft_cursor_accepts_valid_cursor() {
+        let cursor = parse_draft_cursor(Some("2026-04-16T10:11:12+00:00".to_string()), Some(42))
+            .unwrap()
+            .unwrap();
+        assert_eq!(cursor.post_id, 42);
+        assert_eq!(
+            cursor.created_at,
+            Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap()
+        );
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn parse_draft_cursor_rejects_partial_cursor() {
+        let err = parse_draft_cursor(Some("2026-04-16T10:11:12+00:00".to_string()), None)
+            .err()
+            .expect("cursor should reject partial values");
+        assert!(err.to_string().contains("must be provided together"));
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn parse_draft_cursor_rejects_invalid_timestamp() {
+        let err = parse_draft_cursor(Some("not-a-time".to_string()), Some(1))
+            .err()
+            .expect("cursor should reject invalid timestamp");
+        assert!(err.to_string().contains("invalid cursor_created_at"));
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn post_response_marks_draft_state_from_published_at() {
+        let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
+        let slug = "hello-world".parse::<Slug>().unwrap();
+
+        let draft = post_response(
+            PostRecord {
+                post_id: 1,
+                user_id: 2,
+                title: "Draft".to_string(),
+                slug: slug.clone(),
+                body: "body".to_string(),
+                format: PostFormat::Markdown,
+                rendered_html: "<p>body</p>".to_string(),
+                created_at: base_time,
+                updated_at: base_time,
+                published_at: None,
+                deleted_at: None,
+            },
+            "author".to_string(),
+        );
+        assert!(draft.is_draft);
+        assert!(draft.published_at.is_none());
+
+        let published = post_response(
+            PostRecord {
+                post_id: 2,
+                user_id: 2,
+                title: "Published".to_string(),
+                slug,
+                body: "body".to_string(),
+                format: PostFormat::Markdown,
+                rendered_html: "<p>body</p>".to_string(),
+                created_at: base_time,
+                updated_at: base_time,
+                published_at: Some(base_time),
+                deleted_at: None,
+            },
+            "author".to_string(),
+        );
+        assert!(!published.is_draft);
+        assert!(published.published_at.is_some());
     }
 }
