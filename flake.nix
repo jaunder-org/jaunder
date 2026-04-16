@@ -736,6 +736,7 @@
             pkgs.sqlx-cli
             pkgs.sqlite
             pkgs.typescript-language-server
+            pkgs.vscode-langservers-extracted
             pkgs.wasm-bindgen-cli
           ]
           ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
