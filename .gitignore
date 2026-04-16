@@ -33,3 +33,4 @@ playwright/.cache/
 /opencode.jsonc
 /rulesync.jsonc
 /.side-tracked
+/result
