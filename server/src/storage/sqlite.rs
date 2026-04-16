@@ -336,30 +336,28 @@ impl SessionStorage for SqliteSessionStorage {
         let token_hash =
             crate::auth::hash_token(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
 
-        let mut tx = self.pool.begin().await?;
+        let now = Utc::now();
 
+        // Perform an atomic update and read in a single statement. This
+        // avoids the need for a multi-statement transaction, which can
+        // cause SQLITE_BUSY contention in high-concurrency environments.
+        //
+        // Note: SQLite's RETURNING clause is used with a correlated subquery
+        // here because SQLite does not support data-modifying CTEs (WITH
+        // UPDATE ...).
         let row = sqlx::query_as::<_, SessionRow>(
-            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
-             FROM sessions s JOIN users u ON s.user_id = u.user_id
-             WHERE s.token_hash = ?",
+            "UPDATE sessions
+             SET last_used_at = ?
+             WHERE token_hash = ?
+             RETURNING token_hash, user_id, (SELECT username FROM users WHERE user_id = sessions.user_id), label, created_at, last_used_at",
         )
+        .bind(now)
         .bind(&token_hash)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&self.pool)
         .await?
         .ok_or(SessionAuthError::SessionNotFound)?;
 
-        let now = Utc::now();
-
-        sqlx::query("UPDATE sessions SET last_used_at = ? WHERE token_hash = ?")
-            .bind(now)
-            .bind(&token_hash)
-            .execute(&mut *tx)
-            .await?;
-
-        tx.commit().await?;
-
-        let mut record = session_record_from_row(row)?;
-        record.last_used_at = now;
+        let record = session_record_from_row(row)?;
         Ok(record)
     }
 
