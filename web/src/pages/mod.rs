@@ -11,7 +11,9 @@ use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
 use crate::pages::invites::InvitesPage;
 use crate::pages::password_reset::{ForgotPasswordPage, ResetPasswordPage};
-use crate::pages::posts::{CreatePostPage, DraftPreviewPage, DraftsPage, EditPostPage, PostPage};
+use crate::pages::posts::{
+    CreatePostPage, DraftPreviewPage, DraftsPage, EditPostPage, PostPage, UserTimelinePage,
+};
 use crate::pages::profile::ProfilePage;
 use crate::pages::sessions::SessionsPage;
 use crate::{
@@ -127,6 +129,7 @@ pub fn App() -> impl IntoView {
                         )
                         view=DraftPreviewPage
                     />
+                    <Route path=ParamSegment("username") view=UserTimelinePage />
                     <Route
                         path=(
                             ParamSegment("username"),

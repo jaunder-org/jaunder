@@ -10,7 +10,9 @@ use chrono::Datelike;
 use common::storage::PostFormat;
 use tempfile::TempDir;
 use tower::ServiceExt;
-use web::posts::{CreatePostResult, DraftSummary, PublishPostResult, UpdatePostResult};
+use web::posts::{
+    CreatePostResult, DraftSummary, PublishPostResult, TimelinePage, UpdatePostResult,
+};
 
 use helpers::{ensure_server_fns_registered, test_options, test_state};
 
@@ -689,6 +691,25 @@ async fn publish_post_form(
         cookie,
     )
     .await
+}
+
+async fn list_user_posts_form(
+    state: Arc<jaunder::storage::AppState>,
+    username: &str,
+    cursor_created_at: Option<&str>,
+    cursor_post_id: Option<i64>,
+    limit: u32,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    let mut parts = vec![format!("username={username}"), format!("limit={limit}")];
+    if let (Some(created_at), Some(post_id)) = (cursor_created_at, cursor_post_id) {
+        parts.push(format!(
+            "cursor_created_at={}",
+            created_at.replace('+', "%2B")
+        ));
+        parts.push(format!("cursor_post_id={post_id}"));
+    }
+    post_form(state, "/api/list_user_posts", parts.join("&"), cookie).await
 }
 
 #[tokio::test]
@@ -1465,4 +1486,142 @@ async fn get_post_finds_author_draft_across_multiple_pages() {
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(body.contains("\"is_draft\":true"), "body: {body}");
+}
+
+#[tokio::test]
+async fn list_user_posts_returns_published_posts_with_cursor_pagination() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let author_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let other_id = state
+        .users
+        .create_user(
+            &"other".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let author_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(author_id, None)
+            .await
+            .unwrap()
+    );
+    let other_cookie = format!(
+        "session={}",
+        state.sessions.create_session(other_id, None).await.unwrap()
+    );
+
+    for i in 0..51 {
+        let (status, body) = post_form(
+            Arc::clone(&state),
+            "/api/create_post",
+            format!("title=Author+Published+{i}&body=body&format=markdown&publish=true"),
+            Some(&author_cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "create body: {body}");
+    }
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Author+Draft&body=private&format=markdown&publish=false",
+        Some(&author_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Other+Published&body=body&format=markdown&publish=true",
+        Some(&other_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+
+    let (status, body) =
+        list_user_posts_form(Arc::clone(&state), "author", None, None, 50, None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let first_page: TimelinePage = serde_json::from_str(&body).unwrap();
+    assert_eq!(first_page.posts.len(), 50, "body: {body}");
+    assert!(first_page.has_more, "body: {body}");
+    assert!(first_page.next_cursor_created_at.is_some(), "body: {body}");
+    assert!(first_page.next_cursor_post_id.is_some(), "body: {body}");
+    assert!(
+        first_page
+            .posts
+            .iter()
+            .all(|post| post.permalink.starts_with("/~author/")),
+        "body: {body}"
+    );
+    assert!(
+        first_page
+            .posts
+            .iter()
+            .all(|post| !post.title.contains("Draft")),
+        "body: {body}"
+    );
+
+    let (status, body) = list_user_posts_form(
+        Arc::clone(&state),
+        "author",
+        first_page.next_cursor_created_at.as_deref(),
+        first_page.next_cursor_post_id,
+        50,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let second_page: TimelinePage = serde_json::from_str(&body).unwrap();
+    assert_eq!(second_page.posts.len(), 1, "body: {body}");
+    assert!(!second_page.has_more, "body: {body}");
+}
+
+#[tokio::test]
+async fn list_user_posts_rejects_invalid_username() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, body) = list_user_posts_form(state, "Invalid Name", None, None, 50, None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("username"), "body: {body}");
+}
+
+#[tokio::test]
+async fn list_user_posts_rejects_invalid_cursor_inputs() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/list_user_posts",
+        "username=author&cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("must be provided together"), "body: {body}");
+
+    let (status, body) = post_form(
+        state,
+        "/api/list_user_posts",
+        "username=author&cursor_created_at=bad-time&cursor_post_id=12&limit=10",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("invalid cursor_created_at"), "body: {body}");
 }

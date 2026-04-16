@@ -21,6 +21,24 @@ async function register(page: Page): Promise<string> {
   return username;
 }
 
+async function createPublishedPostViaApi(
+  page: Page,
+  title: string,
+): Promise<void> {
+  const response = await page.request.post(
+    "http://localhost:3000/api/create_post",
+    {
+      form: {
+        title,
+        body: `Body for ${title}`,
+        format: "markdown",
+        publish: "true",
+      },
+    },
+  );
+  expect(response.ok()).toBeTruthy();
+}
+
 test("authenticated user can create a post through the UI", async ({
   page,
 }) => {
@@ -261,4 +279,29 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   await waitForHydration(page);
   await expect(page.locator(".content")).toContainText("edited draft body");
   await expect(page.locator(".draft-banner")).toHaveCount(0);
+});
+
+test("per-user timeline lists published posts with pagination", async ({
+  page,
+}) => {
+  const username = await register(page);
+
+  for (let i = 0; i < 55; i += 1) {
+    await createPublishedPostViaApi(page, `Timeline Post ${i}`);
+  }
+
+  await page.goto(`http://localhost:3000/~${username}`);
+  await waitForHydration(page);
+
+  await expect(page.locator("h1")).toContainText(`Posts by ${username}`);
+  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(50);
+  await expect(
+    page.locator('[data-test="timeline-item"]').first(),
+  ).toContainText("Timeline Post 54");
+
+  await page.click('button:has-text("Load more")');
+  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(55);
+  await expect(
+    page.locator('[data-test="timeline-item"]').last(),
+  ).toContainText("Timeline Post 0");
 });
