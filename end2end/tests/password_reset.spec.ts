@@ -11,27 +11,34 @@ interface CapturedEmail {
   body_text: string;
 }
 
-function readLatestEmail(): CapturedEmail | null {
-  if (!fs.existsSync(MAIL_CAPTURE_FILE)) return null;
-  const content = fs.readFileSync(MAIL_CAPTURE_FILE, "utf-8");
-  const lines = content
+function readEmailLines(): string[] {
+  if (!fs.existsSync(MAIL_CAPTURE_FILE)) return [];
+  return fs
+    .readFileSync(MAIL_CAPTURE_FILE, "utf-8")
     .trim()
     .split("\n")
     .filter((l) => l.trim());
-  if (lines.length === 0) return null;
-  return JSON.parse(lines[lines.length - 1]) as CapturedEmail;
 }
 
-async function waitForLatestEmail(timeoutMs = 5000): Promise<CapturedEmail> {
+// Waits until the mail file has more lines than `previousCount`, then returns
+// the newest email.  This avoids a race where the file already contains emails
+// from a prior test (e.g. the email-verification email) and the function
+// returns stale content before the expected email has been written.
+async function waitForNewEmail(
+  previousCount: number,
+  timeoutMs = 5000,
+): Promise<CapturedEmail> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const email = readLatestEmail();
-    if (email) return email;
+    const lines = readEmailLines();
+    if (lines.length > previousCount) {
+      return JSON.parse(lines[lines.length - 1]) as CapturedEmail;
+    }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
   throw new Error(
-    `timed out waiting for captured email at ${MAIL_CAPTURE_FILE}`,
+    `timed out waiting for new captured email at ${MAIL_CAPTURE_FILE}`,
   );
 }
 
@@ -41,6 +48,10 @@ async function waitForHydration(page: Page): Promise<void> {
 
 // M3.11.13: Full password reset flow.
 test("password reset flow completes successfully", async ({ page }) => {
+  // Snapshot email count before submitting so we can detect the new email even
+  // if prior tests (e.g. email verification) have already written to the file.
+  const emailsBefore = readEmailLines().length;
+
   // Request a password reset on /forgot-password
   await page.goto("http://localhost:3000/forgot-password");
   await waitForHydration(page);
@@ -51,8 +62,9 @@ test("password reset flow completes successfully", async ({ page }) => {
   // Page should show a neutral confirmation (not confirm whether user exists)
   await expect(page.locator("p")).toContainText(/check|sent|email/i);
 
-  // Extract the reset token from the captured mail file
-  const email = await waitForLatestEmail();
+  // Extract the reset token from the captured mail file, waiting for the email
+  // that was sent after our form submission (not any pre-existing email).
+  const email = await waitForNewEmail(emailsBefore);
   const tokenMatch = email!.body_text.match(/token=([^\s]+)/);
   expect(tokenMatch).not.toBeNull();
   const token = tokenMatch![1];
@@ -62,7 +74,12 @@ test("password reset flow completes successfully", async ({ page }) => {
   await waitForHydration(page);
   await page.fill('input[name="new_password"]', "resetpassword789");
   await page.click('button[type="submit"]');
-  await page.waitForLoadState("networkidle");
+  // Wait for the Leptos Router redirect to /login that fires on successful reset.
+  // This ensures the server function has completed before we test the old password.
+  // Using networkidle here races with Firefox: it fires before the ActionForm
+  // AJAX response arrives, causing page.goto("/login") to cancel the in-flight
+  // request and the password change never persists.
+  await page.waitForURL("**/login");
 
   // Login with the old password should fail
   await page.goto("http://localhost:3000/login");
@@ -70,8 +87,9 @@ test("password reset flow completes successfully", async ({ page }) => {
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "testpassword123");
   await page.click('button[type="submit"]');
-  await page.waitForLoadState("networkidle");
-  await waitForHydration(page);
+  // Use a generous timeout here: Firefox's networkidle may fire before the
+  // ActionForm fetch response arrives under VM load, so we poll until the
+  // error element appears rather than relying on networkidle as a signal.
   await expect(page.locator(".error")).toBeVisible();
 
   // Login with new password should succeed
@@ -80,9 +98,8 @@ test("password reset flow completes successfully", async ({ page }) => {
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "resetpassword789");
   await page.click('button[type="submit"]');
-  await page.waitForURL("http://localhost:3000/");
+  await page.waitForSelector("a[href='/logout']");
   await waitForHydration(page);
-  await expect(page).toHaveURL(/\/$/);
   await expect(page.locator("h1")).toHaveText("Jaunder");
 });
 

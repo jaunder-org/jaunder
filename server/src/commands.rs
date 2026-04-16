@@ -215,9 +215,23 @@ pub async fn cmd_smtp_test(storage: &StorageArgs, to: &str) -> anyhow::Result<()
 }
 
 pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> anyhow::Result<()> {
-    let db = open_existing_database(&storage.db)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}; run `jaunder init` first"))?;
+    let db = match open_existing_database(&storage.db).await {
+        Ok(db) => db,
+        Err(_) if !prod => {
+            // Dev mode: auto-initialize so `cargo leptos end-to-end` and
+            // `cargo leptos serve` work without a manual `jaunder init`.
+            eprintln!(
+                "Database not found — auto-initializing (dev mode): storage={} db={}",
+                storage.storage_path.display(),
+                storage.db,
+            );
+            cmd_init(storage, true).await?;
+            open_existing_database(&storage.db)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}; auto-init failed"))?
+        }
+        Err(e) => return Err(anyhow::anyhow!("{e}; run `jaunder init` first")),
+    };
 
     let leptos_options = LeptosOptions::builder()
         .output_name("jaunder")

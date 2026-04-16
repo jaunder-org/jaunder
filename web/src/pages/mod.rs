@@ -29,6 +29,23 @@ use leptos_router::{
 pub fn App() -> impl IntoView {
     // Provides context that manages stylesheets, titles, meta tags, etc.
     provide_meta_context();
+
+    // Override the router's SPA-navigation redirect hook with a full-page reload.
+    // The Router component installs a hook via the same OnceLock (first caller wins),
+    // so we must register ours here — before the view! tree renders and instantiates
+    // Router.  Using window.location.replace() instead of use_navigate() ensures:
+    // - the browser performs a real page load, refreshing all server-rendered state
+    //   (including the auth header that reads from the `user` Resource), and
+    // - Playwright's waitForURL() reliably detects the navigation in all browsers.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = leptos::server_fn::redirect::set_redirect_hook(|loc: &str| {
+            if let Some(window) = web_sys::window() {
+                let _ = window.location().replace(loc);
+            }
+        });
+    }
+
     let user = Resource::new(|| (), |_| current_user());
 
     view! {

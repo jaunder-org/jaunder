@@ -12,8 +12,11 @@ async function register(page: Page): Promise<string> {
   await page.fill('input[name="username"]', username);
   await page.fill('input[name="password"]', "testpassword123");
   await page.click('button[type="submit"]');
-  await page.waitForLoadState("networkidle");
-  await expect(page.locator(".error")).not.toBeVisible();
+  // waitForLoadState("networkidle") resolves before Firefox's location.replace()
+  // navigation fires, causing a race with subsequent page.goto() calls.  Wait
+  // for the logout link instead — it only appears after a successful registration
+  // and a full-page reload to the home page with the new session cookie.
+  await page.waitForSelector("a[href='/logout']");
 
   return username;
 }

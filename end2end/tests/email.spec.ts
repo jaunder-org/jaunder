@@ -47,7 +47,9 @@ test("email verification flow completes successfully", async ({ page }) => {
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "testpassword123");
   await page.click('button[type="submit"]');
-  await page.waitForURL("http://localhost:3000/");
+  // waitForURL is unreliable in Firefox for location.replace() navigations; wait
+  // for the logout link that SSR renders on the home page after successful auth.
+  await page.waitForSelector("a[href='/logout']");
   await waitForHydration(page);
 
   // Navigate to email settings and submit an address
