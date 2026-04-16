@@ -14,3 +14,5 @@ node_modules/
 test-results/
 end2end/playwright-report/
 playwright/.cache/
+
+/result
