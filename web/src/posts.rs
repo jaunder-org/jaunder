@@ -58,6 +58,27 @@ pub struct PublishPostResult {
     pub permalink: String,
 }
 
+/// A published post row returned by timeline listing endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelinePostSummary {
+    pub post_id: i64,
+    pub title: String,
+    pub slug: String,
+    pub rendered_html: String,
+    pub created_at: String,
+    pub published_at: String,
+    pub permalink: String,
+}
+
+/// A cursor-paginated page of timeline posts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelinePage {
+    pub posts: Vec<TimelinePostSummary>,
+    pub next_cursor_created_at: Option<String>,
+    pub next_cursor_post_id: Option<i64>,
+    pub has_more: bool,
+}
+
 /// Details of a post returned by [`get_post`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PostResponse {
@@ -373,6 +394,49 @@ pub async fn publish_post(post_id: i64) -> Result<PublishPostResult, ServerFnErr
     })
 }
 
+/// Lists published, non-deleted posts for a user using cursor pagination.
+#[server(endpoint = "/list_user_posts")]
+pub async fn list_user_posts(
+    username: String,
+    cursor_created_at: Option<String>,
+    cursor_post_id: Option<i64>,
+    limit: Option<u32>,
+) -> Result<TimelinePage, ServerFnError> {
+    let state = expect_context::<Arc<AppState>>();
+
+    let username = username
+        .trim()
+        .parse::<Username>()
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
+
+    let page_size = limit.unwrap_or(50).clamp(1, 50);
+    let fetch_limit = page_size.saturating_add(1);
+
+    let mut rows = state
+        .posts
+        .list_published_by_user(&username, cursor.as_ref(), fetch_limit)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let has_more = rows.len() > page_size as usize;
+    rows.truncate(page_size as usize);
+
+    let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
+
+    let posts = rows
+        .into_iter()
+        .filter_map(|post| timeline_post_summary(&username, post))
+        .collect();
+
+    Ok(TimelinePage {
+        posts,
+        next_cursor_created_at: next_cursor.as_ref().map(|c| c.created_at.to_rfc3339()),
+        next_cursor_post_id: next_cursor.as_ref().map(|c| c.post_id),
+        has_more,
+    })
+}
+
 #[cfg(feature = "ssr")]
 #[allow(clippy::too_many_arguments)]
 async fn create_post_with_unique_slug(
@@ -448,6 +512,38 @@ fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
 }
 
 #[cfg(feature = "ssr")]
+fn timeline_post_summary(username: &Username, post: PostRecord) -> Option<TimelinePostSummary> {
+    let PostRecord {
+        post_id,
+        title,
+        slug,
+        rendered_html,
+        created_at,
+        published_at,
+        ..
+    } = post;
+    let published_at = published_at?;
+    let permalink = build_permalink(username, published_at, &slug);
+    Some(TimelinePostSummary {
+        post_id,
+        title,
+        slug: slug.to_string(),
+        rendered_html,
+        created_at: created_at.to_rfc3339(),
+        published_at: published_at.to_rfc3339(),
+        permalink,
+    })
+}
+
+#[cfg(feature = "ssr")]
+fn to_post_cursor(post: &PostRecord) -> PostCursor {
+    PostCursor {
+        created_at: post.created_at,
+        post_id: post.post_id,
+    }
+}
+
+#[cfg(feature = "ssr")]
 fn post_response(post: PostRecord, username: String) -> PostResponse {
     let PostRecord {
         post_id,
@@ -475,7 +571,7 @@ fn post_response(post: PostRecord, username: String) -> PostResponse {
 }
 
 #[cfg(feature = "ssr")]
-fn parse_draft_cursor(
+fn parse_post_cursor(
     cursor_created_at: Option<String>,
     cursor_post_id: Option<i64>,
 ) -> Result<Option<PostCursor>, ServerFnError> {
@@ -494,6 +590,14 @@ fn parse_draft_cursor(
             "cursor_created_at and cursor_post_id must be provided together",
         )),
     }
+}
+
+#[cfg(feature = "ssr")]
+fn parse_draft_cursor(
+    cursor_created_at: Option<String>,
+    cursor_post_id: Option<i64>,
+) -> Result<Option<PostCursor>, ServerFnError> {
+    parse_post_cursor(cursor_created_at, cursor_post_id)
 }
 
 #[cfg(feature = "ssr")]
@@ -517,10 +621,7 @@ async fn find_draft_by_permalink_for_user(
             return Ok(None);
         }
 
-        let next_cursor = drafts.last().map(|post| PostCursor {
-            created_at: post.created_at,
-            post_id: post.post_id,
-        });
+        let next_cursor = drafts.last().map(to_post_cursor);
 
         if let Some(found) = drafts.into_iter().find(|post| {
             post.slug == *slug
@@ -569,7 +670,7 @@ mod tests {
     use super::candidate_slug;
 
     #[cfg(feature = "ssr")]
-    use super::{build_permalink, parse_draft_cursor, post_response};
+    use super::{build_permalink, parse_draft_cursor, parse_post_cursor, post_response};
     #[cfg(feature = "ssr")]
     use chrono::{TimeZone, Utc};
     #[cfg(feature = "ssr")]
@@ -631,6 +732,13 @@ mod tests {
             .err()
             .expect("cursor should reject invalid timestamp");
         assert!(err.to_string().contains("invalid cursor_created_at"));
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn parse_post_cursor_accepts_empty_cursor() {
+        let cursor = parse_post_cursor(None, None).unwrap();
+        assert!(cursor.is_none());
     }
 
     #[cfg(feature = "ssr")]

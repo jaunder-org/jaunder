@@ -1,8 +1,9 @@
 use crate::{
     auth::current_user,
     posts::{
-        get_post, get_post_preview, list_drafts, CreatePost, CreatePostResult, DraftSummary,
-        PostResponse, PublishPost, PublishPostResult, UpdatePost, UpdatePostResult,
+        get_post, get_post_preview, list_drafts, list_user_posts, CreatePost, CreatePostResult,
+        DraftSummary, ListUserPosts, PostResponse, PublishPost, PublishPostResult,
+        TimelinePostSummary, UpdatePost, UpdatePostResult,
     },
 };
 use leptos::prelude::*;
@@ -155,6 +156,126 @@ pub fn PostPage() -> impl IntoView {
                 }
             })}
         </Suspense>
+    }
+}
+
+#[component]
+pub fn UserTimelinePage() -> impl IntoView {
+    let params = use_params_map();
+    let username = Memo::new(move |_| {
+        params
+            .get()
+            .get("username")
+            .unwrap_or_default()
+            .strip_prefix('~')
+            .unwrap_or_default()
+            .to_string()
+    });
+
+    let initial_page = Resource::new(
+        move || username.get(),
+        |username| async move {
+            if username.is_empty() {
+                return Err(ServerFnError::new("Invalid username"));
+            }
+            list_user_posts(username, None, None, Some(50)).await
+        },
+    );
+
+    let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());
+    let next_cursor_created_at = RwSignal::new(None::<String>);
+    let next_cursor_post_id = RwSignal::new(None::<i64>);
+    let has_more = RwSignal::new(false);
+    let error = RwSignal::new(None::<String>);
+
+    let load_more_action = ServerAction::<ListUserPosts>::new();
+
+    Effect::new(move |_| {
+        if let Some(result) = initial_page.get() {
+            match result {
+                Ok(page) => {
+                    timeline.set(page.posts);
+                    next_cursor_created_at.set(page.next_cursor_created_at);
+                    next_cursor_post_id.set(page.next_cursor_post_id);
+                    has_more.set(page.has_more);
+                    error.set(None);
+                }
+                Err(err) => {
+                    error.set(Some(err.to_string()));
+                    timeline.set(Vec::new());
+                    has_more.set(false);
+                }
+            }
+        }
+    });
+
+    Effect::new(move |_| {
+        if let Some(result) = load_more_action.value().get() {
+            match result {
+                Ok(page) => {
+                    timeline.update(|rows| rows.extend(page.posts));
+                    next_cursor_created_at.set(page.next_cursor_created_at);
+                    next_cursor_post_id.set(page.next_cursor_post_id);
+                    has_more.set(page.has_more);
+                    error.set(None);
+                }
+                Err(err) => error.set(Some(err.to_string())),
+            }
+        }
+    });
+
+    let on_load_more = move |_| {
+        let username = username.get_untracked();
+        if username.is_empty() || !has_more.get_untracked() {
+            return;
+        }
+        load_more_action.dispatch(ListUserPosts {
+            username,
+            cursor_created_at: next_cursor_created_at.get_untracked(),
+            cursor_post_id: next_cursor_post_id.get_untracked(),
+            limit: Some(50),
+        });
+    };
+
+    view! {
+        <h1>{move || format!("Posts by {}", username.get())}</h1>
+        {move || {
+            if let Some(err) = error.get() {
+                return view! { <p class="error">{err}</p> }.into_any();
+            }
+            if initial_page.get().is_none() {
+                return view! { <p>"Loading..."</p> }.into_any();
+            }
+            let rows = timeline.get();
+            if rows.is_empty() {
+                return view! { <p>"No posts yet."</p> }.into_any();
+            }
+
+            view! {
+                <ul>{rows.into_iter().map(render_timeline_post_row).collect::<Vec<_>>()}</ul>
+                {move || {
+                    has_more
+                        .get()
+                        .then(|| {
+                            view! {
+                                <button
+                                    on:click=on_load_more
+                                    disabled=move || load_more_action.pending().get()
+                                >
+                                    {move || {
+                                        if load_more_action.pending().get() {
+                                            "Loading..."
+                                        } else {
+                                            "Load more"
+                                        }
+                                    }}
+                                </button>
+                            }
+                        })
+                }}
+            }
+                .into_any()
+        }}
     }
 }
 
@@ -401,6 +522,18 @@ fn render_draft_row(
                 <input type="hidden" name="post_id" value=post_id />
                 <button type="submit">"Publish"</button>
             </ActionForm>
+        </li>
+    }
+}
+
+fn render_timeline_post_row(post: TimelinePostSummary) -> impl IntoView {
+    view! {
+        <li data-test="timeline-item">
+            <h2>
+                <a href=post.permalink.clone()>{post.title}</a>
+            </h2>
+            <p class="metadata">"Published on " {post.published_at}</p>
+            <div class="content" inner_html=post.rendered_html></div>
         </li>
     }
 }
