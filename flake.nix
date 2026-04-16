@@ -157,9 +157,7 @@
           services.jaunder.enable = true;
           services.jaunder.bind = "0.0.0.0:3000";
 
-          systemd.services.jaunder.environment = mailCaptureEnv // {
-            JAUNDER_BIND = "0.0.0.0:3000";
-          };
+          systemd.services.jaunder.environment = mailCaptureEnv;
 
           services.getty.autologinUser = "jaunder";
           security.sudo.wheelNeedsPassword = false;
