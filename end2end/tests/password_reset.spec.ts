@@ -48,6 +48,8 @@ async function waitForHydration(page: Page): Promise<void> {
 
 // M3.11.13: Full password reset flow.
 test("password reset flow completes successfully", async ({ page }) => {
+  test.setTimeout(15_000);
+
   // Snapshot email count before submitting so we can detect the new email even
   // if prior tests (e.g. email verification) have already written to the file.
   const emailsBefore = readEmailLines().length;
@@ -90,7 +92,7 @@ test("password reset flow completes successfully", async ({ page }) => {
   // Use a generous timeout here: Firefox's networkidle may fire before the
   // ActionForm fetch response arrives under VM load, so we poll until the
   // error element appears rather than relying on networkidle as a signal.
-  await expect(page.locator(".error")).toBeVisible();
+  await expect(page.locator(".error")).toBeVisible({ timeout: 10_000 });
 
   // Login with new password should succeed
   await page.goto("http://localhost:3000/login");
@@ -98,9 +100,9 @@ test("password reset flow completes successfully", async ({ page }) => {
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "resetpassword789");
   await page.click('button[type="submit"]');
-  await page.waitForSelector("a[href='/logout']");
+  await page.waitForSelector("a[href='/logout']", { timeout: 10_000 });
   await waitForHydration(page);
-  await expect(page.locator("h1")).toHaveText("Jaunder");
+  await expect(page.locator("h1")).toHaveText("Jaunder", { timeout: 10_000 });
 });
 
 // M3.11.14: visiting /reset-password with an invalid token shows an error.

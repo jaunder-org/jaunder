@@ -41,6 +41,8 @@ async function waitForHydration(page: Page): Promise<void> {
 
 // M3.10.11: Full email verification flow.
 test("email verification flow completes successfully", async ({ page }) => {
+  test.setTimeout(15_000);
+
   // Log in
   await page.goto("http://localhost:3000/login");
   await waitForHydration(page);
@@ -57,9 +59,10 @@ test("email verification flow completes successfully", async ({ page }) => {
   await waitForHydration(page);
   await page.fill('input[name="email"]', "testlogin@example.com");
   await page.click('button[type="submit"]');
-  await page.waitForLoadState("networkidle");
 
-  await expect(page.locator('p:has-text("Check your email")')).toBeVisible();
+  await expect(page.locator('p:has-text("Check your email")')).toBeVisible({
+    timeout: 10_000,
+  });
 
   // Extract the verification token from the captured mail file
   const email = await waitForLatestEmail();
@@ -69,13 +72,17 @@ test("email verification flow completes successfully", async ({ page }) => {
 
   // Visit the verification link
   await page.goto(`http://localhost:3000/verify-email?token=${token}`);
-  await page.waitForLoadState("networkidle");
-  await expect(page.locator('p:has-text("verified")')).toBeVisible();
+  await waitForHydration(page);
+  await expect(page.locator('p:has-text("verified")')).toBeVisible({
+    timeout: 10_000,
+  });
 
   // Confirm email is shown as verified on the profile page
   await page.goto("http://localhost:3000/profile/email");
-  await page.waitForLoadState("networkidle");
-  await expect(page.locator("p")).toContainText("verified");
+  await waitForHydration(page);
+  await expect(page.locator("p")).toContainText("verified", {
+    timeout: 10_000,
+  });
 });
 
 // M3.10.12: Invalid token shows an error.

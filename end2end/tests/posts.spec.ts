@@ -13,10 +13,21 @@ async function register(page: Page): Promise<string> {
   await page.fill('input[name="password"]', "testpassword123");
   await page.click('button[type="submit"]');
   // waitForLoadState("networkidle") resolves before Firefox's location.replace()
-  // navigation fires, causing a race with subsequent page.goto() calls.  Wait
-  // for the logout link instead — it only appears after a successful registration
-  // and a full-page reload to the home page with the new session cookie.
-  await page.waitForSelector("a[href='/logout']");
+  // navigation fires, causing a race with subsequent page.goto() calls.
+  // Wait for either the success marker or an explicit server error so we
+  // fail fast on misconfiguration instead of burning the full test timeout.
+  const outcome = await Promise.race([
+    page
+      .waitForSelector("a[href='/logout']", { timeout: 10_000 })
+      .then(() => "ok"),
+    page.waitForSelector(".error", { timeout: 10_000 }).then(() => "error"),
+  ]);
+  if (outcome == "error") {
+    const errorText = (
+      await page.locator(".error").first().textContent()
+    )?.trim();
+    throw new Error(`registration failed: ${errorText ?? "unknown error"}`);
+  }
 
   return username;
 }
@@ -284,7 +295,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
 test("per-user timeline lists published posts with pagination", async ({
   page,
 }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(20_000);
   const username = await register(page);
 
   for (let i = 0; i < 55; i += 1) {
@@ -296,7 +307,7 @@ test("per-user timeline lists published posts with pagination", async ({
 
   await expect(page.locator("h1")).toContainText(`Posts by ${username}`);
   await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(50, {
-    timeout: 20_000,
+    timeout: 10_000,
   });
   await expect(
     page.locator('[data-test="timeline-item"]').first(),
@@ -304,18 +315,18 @@ test("per-user timeline lists published posts with pagination", async ({
 
   await page.click('button:has-text("Load more")');
   await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(55, {
-    timeout: 20_000,
+    timeout: 10_000,
   });
   await expect(
     page.locator('[data-test="timeline-item"]').last(),
-  ).toContainText("Timeline Post 0", { timeout: 20_000 });
+  ).toContainText("Timeline Post 0", { timeout: 10_000 });
 });
 
 test("home page shows local timeline for unauthenticated users", async ({
   page,
   browser,
 }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(20_000);
   await register(page);
   for (let i = 0; i < 30; i += 1) {
     await createPublishedPostViaApi(page, `Local Author One ${i}`);
@@ -334,12 +345,12 @@ test("home page shows local timeline for unauthenticated users", async ({
   await waitForHydration(guestPage);
 
   await expect(guestPage.locator("h2")).toHaveText("Local Timeline", {
-    timeout: 20_000,
+    timeout: 10_000,
   });
   await expect(guestPage.locator('[data-test="timeline-item"]')).toHaveCount(
     50,
     {
-      timeout: 20_000,
+      timeout: 10_000,
     },
   );
 
@@ -347,7 +358,7 @@ test("home page shows local timeline for unauthenticated users", async ({
   await expect(guestPage.locator('[data-test="timeline-item"]')).toHaveCount(
     100,
     {
-      timeout: 20_000,
+      timeout: 10_000,
     },
   );
 
@@ -359,7 +370,7 @@ test("home page shows authenticated home feed with pagination", async ({
   page,
   browser,
 }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(20_000);
   await register(page);
   for (let i = 0; i < 55; i += 1) {
     await createPublishedPostViaApi(page, `Home Feed Mine ${i}`);
@@ -376,10 +387,10 @@ test("home page shows authenticated home feed with pagination", async ({
   await waitForHydration(page);
 
   await expect(page.locator("h2")).toContainText("Your Home Feed", {
-    timeout: 20_000,
+    timeout: 10_000,
   });
   await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(50, {
-    timeout: 20_000,
+    timeout: 10_000,
   });
   await expect(
     page.locator('[data-test="timeline-item"]').first(),
@@ -388,7 +399,7 @@ test("home page shows authenticated home feed with pagination", async ({
 
   await page.click('button:has-text("Load more")');
   await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(55, {
-    timeout: 20_000,
+    timeout: 10_000,
   });
   await expect(page.locator("body")).not.toContainText("Home Feed Other");
 
