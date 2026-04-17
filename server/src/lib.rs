@@ -19,7 +19,8 @@ use leptos::prelude::*;
 use leptos_axum::{generate_route_list, LeptosRoutes};
 use tower::ServiceBuilder;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 use web::{shell, App};
 
 use crate::storage::AppState;
@@ -36,7 +37,15 @@ pub fn create_router(
             MakeRequestUuid,
         ))
         .layer(PropagateRequestIdLayer::new(request_id_header))
-        .layer(TraceLayer::new_for_http());
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(
+                    DefaultMakeSpan::new()
+                        .include_headers(true)
+                        .level(Level::INFO),
+                )
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        );
 
     let routes = generate_route_list(App);
     let extension_state = state.clone();

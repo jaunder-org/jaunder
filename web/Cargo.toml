@@ -21,6 +21,7 @@ email_address = { workspace = true, optional = true }
 serde.workspace = true
 web-sys = { workspace = true, features = ["Window", "Location"] }
 thiserror.workspace = true
+tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 common = { workspace = true, features = ["test-utils"] }
@@ -37,4 +38,5 @@ ssr = [
     "dep:chrono",
     "dep:common",
     "dep:email_address",
+    "dep:tracing",
 ]
