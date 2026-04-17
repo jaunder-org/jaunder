@@ -62,6 +62,7 @@ pub struct PublishPostResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TimelinePostSummary {
     pub post_id: i64,
+    pub username: String,
     pub title: String,
     pub slug: String,
     pub rendered_html: String,
@@ -437,6 +438,88 @@ pub async fn list_user_posts(
     })
 }
 
+/// Lists published, non-deleted posts across all users using cursor pagination.
+#[server(endpoint = "/list_local_timeline")]
+pub async fn list_local_timeline(
+    cursor_created_at: Option<String>,
+    cursor_post_id: Option<i64>,
+    limit: Option<u32>,
+) -> Result<TimelinePage, ServerFnError> {
+    let state = expect_context::<Arc<AppState>>();
+
+    let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
+    let page_size = limit.unwrap_or(50).clamp(1, 50);
+    let fetch_limit = page_size.saturating_add(1);
+
+    let mut rows = state
+        .posts
+        .list_published(cursor.as_ref(), fetch_limit)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let has_more = rows.len() > page_size as usize;
+    rows.truncate(page_size as usize);
+
+    let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
+    let mut posts = Vec::with_capacity(rows.len());
+
+    for post in rows {
+        let author = state
+            .users
+            .get_user(post.user_id)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?
+            .ok_or_else(|| ServerFnError::new("post author not found"))?;
+        if let Some(summary) = timeline_post_summary(&author.username, post) {
+            posts.push(summary);
+        }
+    }
+
+    Ok(TimelinePage {
+        posts,
+        next_cursor_created_at: next_cursor.as_ref().map(|c| c.created_at.to_rfc3339()),
+        next_cursor_post_id: next_cursor.as_ref().map(|c| c.post_id),
+        has_more,
+    })
+}
+
+/// Lists published, non-deleted posts by the authenticated user using cursor pagination.
+#[server(endpoint = "/list_home_feed")]
+pub async fn list_home_feed(
+    cursor_created_at: Option<String>,
+    cursor_post_id: Option<i64>,
+    limit: Option<u32>,
+) -> Result<TimelinePage, ServerFnError> {
+    let auth = require_auth().await?;
+    let state = expect_context::<Arc<AppState>>();
+
+    let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
+    let page_size = limit.unwrap_or(50).clamp(1, 50);
+    let fetch_limit = page_size.saturating_add(1);
+
+    let mut rows = state
+        .posts
+        .list_published_by_user(&auth.username, cursor.as_ref(), fetch_limit)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let has_more = rows.len() > page_size as usize;
+    rows.truncate(page_size as usize);
+
+    let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
+    let posts = rows
+        .into_iter()
+        .filter_map(|post| timeline_post_summary(&auth.username, post))
+        .collect();
+
+    Ok(TimelinePage {
+        posts,
+        next_cursor_created_at: next_cursor.as_ref().map(|c| c.created_at.to_rfc3339()),
+        next_cursor_post_id: next_cursor.as_ref().map(|c| c.post_id),
+        has_more,
+    })
+}
+
 #[cfg(feature = "ssr")]
 #[allow(clippy::too_many_arguments)]
 async fn create_post_with_unique_slug(
@@ -526,6 +609,7 @@ fn timeline_post_summary(username: &Username, post: PostRecord) -> Option<Timeli
     let permalink = build_permalink(username, published_at, &slug);
     Some(TimelinePostSummary {
         post_id,
+        username: username.to_string(),
         title,
         slug: slug.to_string(),
         rendered_html,
