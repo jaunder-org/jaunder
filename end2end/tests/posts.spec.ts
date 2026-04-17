@@ -284,6 +284,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
 test("per-user timeline lists published posts with pagination", async ({
   page,
 }) => {
+  test.setTimeout(60_000);
   const username = await register(page);
 
   for (let i = 0; i < 55; i += 1) {
@@ -294,14 +295,102 @@ test("per-user timeline lists published posts with pagination", async ({
   await waitForHydration(page);
 
   await expect(page.locator("h1")).toContainText(`Posts by ${username}`);
-  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(50);
+  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(50, {
+    timeout: 20_000,
+  });
   await expect(
     page.locator('[data-test="timeline-item"]').first(),
   ).toContainText("Timeline Post 54");
 
   await page.click('button:has-text("Load more")');
-  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(55);
+  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(55, {
+    timeout: 20_000,
+  });
   await expect(
     page.locator('[data-test="timeline-item"]').last(),
-  ).toContainText("Timeline Post 0");
+  ).toContainText("Timeline Post 0", { timeout: 20_000 });
+});
+
+test("home page shows local timeline for unauthenticated users", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(60_000);
+  await register(page);
+  for (let i = 0; i < 30; i += 1) {
+    await createPublishedPostViaApi(page, `Local Author One ${i}`);
+  }
+
+  const secondContext = await browser.newContext();
+  const secondPage = await secondContext.newPage();
+  await register(secondPage);
+  for (let i = 0; i < 30; i += 1) {
+    await createPublishedPostViaApi(secondPage, `Local Author Two ${i}`);
+  }
+
+  const guestContext = await browser.newContext();
+  const guestPage = await guestContext.newPage();
+  await guestPage.goto("http://localhost:3000/");
+  await waitForHydration(guestPage);
+
+  await expect(guestPage.locator("h2")).toHaveText("Local Timeline", {
+    timeout: 20_000,
+  });
+  await expect(guestPage.locator('[data-test="timeline-item"]')).toHaveCount(
+    50,
+    {
+      timeout: 20_000,
+    },
+  );
+
+  await guestPage.click('button:has-text("Load more")');
+  await expect(guestPage.locator('[data-test="timeline-item"]')).toHaveCount(
+    100,
+    {
+      timeout: 20_000,
+    },
+  );
+
+  await guestContext.close();
+  await secondContext.close();
+});
+
+test("home page shows authenticated home feed with pagination", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(60_000);
+  await register(page);
+  for (let i = 0; i < 55; i += 1) {
+    await createPublishedPostViaApi(page, `Home Feed Mine ${i}`);
+  }
+
+  const secondContext = await browser.newContext();
+  const secondPage = await secondContext.newPage();
+  await register(secondPage);
+  for (let i = 0; i < 5; i += 1) {
+    await createPublishedPostViaApi(secondPage, `Home Feed Other ${i}`);
+  }
+
+  await page.goto("http://localhost:3000/");
+  await waitForHydration(page);
+
+  await expect(page.locator("h2")).toContainText("Your Home Feed", {
+    timeout: 20_000,
+  });
+  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(50, {
+    timeout: 20_000,
+  });
+  await expect(
+    page.locator('[data-test="timeline-item"]').first(),
+  ).toContainText("Home Feed Mine 54");
+  await expect(page.locator("body")).not.toContainText("Home Feed Other");
+
+  await page.click('button:has-text("Load more")');
+  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(55, {
+    timeout: 20_000,
+  });
+  await expect(page.locator("body")).not.toContainText("Home Feed Other");
+
+  await secondContext.close();
 });
