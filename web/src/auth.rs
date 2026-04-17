@@ -214,6 +214,7 @@ pub async fn register(
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     set_session_cookie(&raw_token);
+    leptos_axum::redirect("/");
     Ok(raw_token)
 }
 
@@ -247,19 +248,21 @@ pub async fn login(
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     set_session_cookie(&raw_token);
+    leptos_axum::redirect("/");
     Ok(raw_token)
 }
 
 /// Revokes the current session and clears the `session` cookie.
 #[server(endpoint = "/logout")]
 pub async fn logout() -> Result<(), ServerFnError> {
-    let auth = require_auth().await?;
-    let state = expect_context::<Arc<AppState>>();
-    state
-        .sessions
-        .revoke_session(&auth.token_hash)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    if let Ok(auth) = require_auth().await {
+        let state = expect_context::<Arc<AppState>>();
+        state
+            .sessions
+            .revoke_session(&auth.token_hash)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+    }
     clear_session_cookie();
     Ok(())
 }

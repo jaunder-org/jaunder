@@ -11,7 +11,9 @@ use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
 use crate::pages::invites::InvitesPage;
 use crate::pages::password_reset::{ForgotPasswordPage, ResetPasswordPage};
-use crate::pages::posts::{CreatePostPage, DraftPreviewPage, EditPostPage, PostPage};
+use crate::pages::posts::{
+    CreatePostPage, DraftPreviewPage, DraftsPage, EditPostPage, PostPage, UserTimelinePage,
+};
 use crate::pages::profile::ProfilePage;
 use crate::pages::sessions::SessionsPage;
 use crate::{
@@ -29,6 +31,23 @@ use leptos_router::{
 pub fn App() -> impl IntoView {
     // Provides context that manages stylesheets, titles, meta tags, etc.
     provide_meta_context();
+
+    // Override the router's SPA-navigation redirect hook with a full-page reload.
+    // The Router component installs a hook via the same OnceLock (first caller wins),
+    // so we must register ours here — before the view! tree renders and instantiates
+    // Router.  Using window.location.replace() instead of use_navigate() ensures:
+    // - the browser performs a real page load, refreshing all server-rendered state
+    //   (including the auth header that reads from the `user` Resource), and
+    // - Playwright's waitForURL() reliably detects the navigation in all browsers.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = leptos::server_fn::redirect::set_redirect_hook(|loc: &str| {
+            if let Some(window) = web_sys::window() {
+                let _ = window.location().replace(loc);
+            }
+        });
+    }
+
     let user = Resource::new(|| (), |_| current_user());
 
     view! {
@@ -90,6 +109,7 @@ pub fn App() -> impl IntoView {
                         path=(StaticSegment("posts"), StaticSegment("new"))
                         view=CreatePostPage
                     />
+                    <Route path=StaticSegment("drafts") view=DraftsPage />
                     <Route
                         path=(
                             StaticSegment("posts"),
@@ -109,6 +129,7 @@ pub fn App() -> impl IntoView {
                         )
                         view=DraftPreviewPage
                     />
+                    <Route path=ParamSegment("username") view=UserTimelinePage />
                     <Route
                         path=(
                             ParamSegment("username"),

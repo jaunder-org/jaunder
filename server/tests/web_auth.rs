@@ -60,14 +60,20 @@ async fn get_html(
     }
     let request = builder.body(Body::empty()).unwrap();
 
-    let app = jaunder::create_router(test_options(), state, true);
-    let response = app.oneshot(request).await.unwrap();
+    let local = tokio::task::LocalSet::new();
+    let (status, body_str) = local
+        .run_until(async {
+            let app = jaunder::create_router(test_options(), state, true);
+            let response = app.oneshot(request).await.unwrap();
 
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body_str = String::from_utf8(bytes.to_vec()).unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body_str = String::from_utf8(bytes.to_vec()).unwrap();
+            (status, body_str)
+        })
+        .await;
 
     (status, body_str)
 }
@@ -763,11 +769,11 @@ async fn auth_user_extraction_fails_with_invalid_token() {
     let base = TempDir::new().unwrap();
     let state = test_state(&base).await;
 
-    // logout() requires AuthUser. If we provide an invalid token, it should fail.
+    // get_profile() requires AuthUser. If we provide an invalid token, it should fail.
     let cookie_header = "session=invalidtoken";
     let (status, _, _) = post_form(
         Arc::clone(&state),
-        "/api/logout",
+        "/api/get_profile",
         "",
         Some(cookie_header),
         true,
@@ -783,8 +789,8 @@ async fn auth_user_extraction_fails_when_missing() {
     let base = TempDir::new().unwrap();
     let state = test_state(&base).await;
 
-    // logout() requires AuthUser. If we provide no token, it should fail.
-    let (status, _, _) = post_form(Arc::clone(&state), "/api/logout", "", None, true).await;
+    // get_profile() requires AuthUser. If we provide no token, it should fail.
+    let (status, _, _) = post_form(Arc::clone(&state), "/api/get_profile", "", None, true).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }

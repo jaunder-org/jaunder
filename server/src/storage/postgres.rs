@@ -335,28 +335,30 @@ impl SessionStorage for PostgresSessionStorage {
         let token_hash =
             crate::auth::hash_token(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
 
-        let mut tx = self.pool.begin().await?;
+        let now = Utc::now();
+
+        // Perform an atomic update and read in a single statement.
+        // PostgreSQL's data-modifying CTEs (WITH UPDATE ...) are used
+        // here to achievement atomicity while joining the results with
+        // another table.
         let row = sqlx::query_as::<_, SessionRow>(
-            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
-             FROM sessions s JOIN users u ON s.user_id = u.user_id
-             WHERE s.token_hash = $1",
+            "WITH updated AS (
+                UPDATE sessions
+                SET last_used_at = $1
+                WHERE token_hash = $2
+                RETURNING token_hash, user_id, label, created_at, last_used_at
+             )
+             SELECT updated.token_hash, updated.user_id, u.username, updated.label, updated.created_at, updated.last_used_at
+             FROM updated
+             JOIN users u ON updated.user_id = u.user_id",
         )
+        .bind(now)
         .bind(&token_hash)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&self.pool)
         .await?
         .ok_or(SessionAuthError::SessionNotFound)?;
 
-        let now = Utc::now();
-        sqlx::query("UPDATE sessions SET last_used_at = $1 WHERE token_hash = $2")
-            .bind(now)
-            .bind(&token_hash)
-            .execute(&mut *tx)
-            .await?;
-
-        tx.commit().await?;
-
-        let mut record = session_record_from_row(row)?;
-        record.last_used_at = now;
+        let record = session_record_from_row(row)?;
         Ok(record)
     }
 

@@ -21,10 +21,11 @@ test("register page shows form", async ({ page }) => {
 });
 
 test("register with open policy succeeds", async ({ page }) => {
+  const username = `newuser${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
   await page.goto("http://localhost:3000/register");
   await waitForHydration(page);
 
-  await page.fill('input[name="username"]', "newuser");
+  await page.fill('input[name="username"]', username);
   await page.fill('input[name="password"]', "newpassword123");
   await page.click('button[type="submit"]');
   await page.waitForLoadState("networkidle");
@@ -47,7 +48,9 @@ test("login with valid credentials succeeds", async ({ page }) => {
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "testpassword123");
   await page.click('button[type="submit"]');
-  await page.waitForURL("http://localhost:3000/");
+  // waitForURL is unreliable in Firefox for location.replace() navigations; wait
+  // for the logout link that SSR renders on the home page after successful auth.
+  await page.waitForSelector("a[href='/logout']");
   await waitForHydration(page);
 
   await expect(page.locator("header")).toContainText("Logged in as testlogin");

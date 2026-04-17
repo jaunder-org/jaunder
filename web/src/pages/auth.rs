@@ -59,17 +59,6 @@ pub fn LoginPage() -> impl IntoView {
     let login_action = ServerAction::<Login>::new();
     let username = RwSignal::new(String::new());
 
-    Effect::new(move |_| {
-        if matches!(login_action.value().get(), Some(Ok(_))) {
-            #[cfg(target_arch = "wasm32")]
-            {
-                if let Some(window) = web_sys::window() {
-                    let _ = window.location().set_href("/");
-                }
-            }
-        }
-    });
-
     view! {
         <h1>"Login"</h1>
         <ActionForm action=login_action>
