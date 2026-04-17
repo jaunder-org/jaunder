@@ -215,12 +215,16 @@ pub async fn cmd_smtp_test(storage: &StorageArgs, to: &str) -> anyhow::Result<()
 }
 
 pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> anyhow::Result<()> {
+    crate::observability::init_tracing();
+
     let db = match open_existing_database(&storage.db).await {
         Ok(db) => db,
         Err(_) if !prod => {
             // Dev mode: auto-initialize so `cargo leptos end-to-end` and
             // `cargo leptos serve` work without a manual `jaunder init`.
-            eprintln!(
+            tracing::warn!(
+                storage_path = %storage.storage_path.display(),
+                db = %storage.db,
                 "Database not found — auto-initializing (dev mode): storage={} db={}",
                 storage.storage_path.display(),
                 storage.db,
@@ -243,6 +247,7 @@ pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> a
 
     let router = crate::create_router(leptos_options, db, prod);
     let listener = tokio::net::TcpListener::bind(bind).await?;
+    tracing::info!(bind = %bind, prod, "starting HTTP server");
     axum::serve(listener, router).await?;
     Ok(())
 }

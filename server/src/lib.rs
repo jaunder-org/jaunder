@@ -2,6 +2,7 @@ pub mod auth;
 pub mod cli;
 pub mod commands;
 pub mod mailer;
+pub mod observability;
 pub mod password;
 pub mod render {
     pub use common::render::*;
@@ -12,9 +13,13 @@ pub mod username;
 
 use std::sync::Arc;
 
+use axum::http::HeaderName;
 use axum::Router;
 use leptos::prelude::*;
 use leptos_axum::{generate_route_list, LeptosRoutes};
+use tower::ServiceBuilder;
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
+use tower_http::trace::TraceLayer;
 use web::{shell, App};
 
 use crate::storage::AppState;
@@ -24,6 +29,15 @@ pub fn create_router(
     state: Arc<AppState>,
     secure_cookies: bool,
 ) -> Router {
+    let request_id_header = HeaderName::from_static("x-request-id");
+    let http_observability = ServiceBuilder::new()
+        .layer(SetRequestIdLayer::new(
+            request_id_header.clone(),
+            MakeRequestUuid,
+        ))
+        .layer(PropagateRequestIdLayer::new(request_id_header))
+        .layer(TraceLayer::new_for_http());
+
     let routes = generate_route_list(App);
     let extension_state = state.clone();
     let server_fn_state = state.clone();
@@ -59,6 +73,7 @@ pub fn create_router(
         )
         .fallback(leptos_axum::file_and_error_handler(shell))
         .layer(axum::Extension(extension_state))
+        .layer(http_observability)
         .with_state(leptos_options)
 }
 
