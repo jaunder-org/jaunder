@@ -104,6 +104,11 @@ impl PostgresUserStorage {
 
 #[async_trait]
 impl UserStorage for PostgresUserStorage {
+    #[tracing::instrument(
+        name = "storage.postgres.user.create_user",
+        skip(self, password, display_name),
+        fields(username = %username.as_str())
+    )]
     async fn create_user(
         &self,
         username: &Username,
@@ -137,6 +142,11 @@ impl UserStorage for PostgresUserStorage {
         }
     }
 
+    #[tracing::instrument(
+        name = "storage.postgres.user.authenticate",
+        skip(self, password),
+        fields(username = %username.as_str())
+    )]
     async fn authenticate(
         &self,
         username: &Username,
@@ -310,6 +320,11 @@ impl PostgresSessionStorage {
 
 #[async_trait]
 impl SessionStorage for PostgresSessionStorage {
+    #[tracing::instrument(
+        name = "storage.postgres.session.create",
+        skip(self, label),
+        fields(user_id)
+    )]
     async fn create_session(&self, user_id: i64, label: Option<&str>) -> sqlx::Result<String> {
         let raw_token = crate::auth::generate_token();
         let token_hash = crate::auth::hash_token(&raw_token)
@@ -331,6 +346,7 @@ impl SessionStorage for PostgresSessionStorage {
         Ok(raw_token)
     }
 
+    #[tracing::instrument(name = "storage.postgres.session.authenticate", skip(self, raw_token))]
     async fn authenticate(&self, raw_token: &str) -> Result<SessionRecord, SessionAuthError> {
         let token_hash =
             crate::auth::hash_token(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;

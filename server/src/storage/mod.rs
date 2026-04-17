@@ -167,6 +167,7 @@ pub(super) fn build_post_record(
     })
 }
 
+#[tracing::instrument(name = "crypto.password.hash", skip(password))]
 pub(super) async fn hash_password(password: Password) -> io::Result<String> {
     tokio::task::spawn_blocking(move || password.hash())
         .await
@@ -174,6 +175,7 @@ pub(super) async fn hash_password(password: Password) -> io::Result<String> {
         .map_err(io::Error::other)
 }
 
+#[tracing::instrument(name = "crypto.password.verify", skip(password, hash))]
 pub(super) async fn verify_password(password: Password, hash: String) -> io::Result<bool> {
     tokio::task::spawn_blocking(move || password.verify(&hash))
         .await
@@ -434,6 +436,7 @@ fn make_postgres_app_state(pool: PgPool, mailer: Arc<dyn MailSender>) -> Arc<App
     })
 }
 
+#[tracing::instrument(name = "storage.mailer.build", skip(site_config))]
 async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender> {
     if let Ok(path) = std::env::var("JAUNDER_MAIL_CAPTURE_FILE") {
         return Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>;
@@ -447,6 +450,11 @@ async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender
     }
 }
 
+#[tracing::instrument(
+    name = "storage.sqlite.open_database",
+    skip(options),
+    fields(create_if_missing)
+)]
 async fn open_sqlite_database(
     options: &SqliteConnectOptions,
     create_if_missing: bool,
@@ -485,6 +493,7 @@ fn resolved_postgres_options(options: &PgConnectOptions) -> sqlx::Result<PgConne
     Ok(options)
 }
 
+#[tracing::instrument(name = "storage.postgres.open_database", skip(options))]
 async fn open_postgres_database(options: &PgConnectOptions) -> sqlx::Result<Arc<AppState>> {
     let options = resolved_postgres_options(options)?;
     let pool = PgPool::connect_with(options).await?;
@@ -496,6 +505,7 @@ async fn open_postgres_database(options: &PgConnectOptions) -> sqlx::Result<Arc<
 
 /// Opens (or creates) the database described by `opts`, runs pending
 /// migrations, and returns an [`AppState`] bundling all storage handles.
+#[tracing::instrument(name = "storage.open_database", skip(opts))]
 pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     match opts {
         DbConnectOptions::Sqlite(options) => open_sqlite_database(options, true).await,
@@ -506,6 +516,7 @@ pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState
 /// Opens an existing database described by `opts`, runs pending migrations.
 ///
 /// Unlike [`open_database`], fails if the database does not already exist.
+#[tracing::instrument(name = "storage.open_existing_database", skip(opts))]
 pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     match opts {
         DbConnectOptions::Sqlite(options) => open_sqlite_database(options, false).await,

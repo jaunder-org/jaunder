@@ -84,6 +84,7 @@ where
 /// Extracts the authenticated user inside a Leptos server function.
 /// Returns `ServerFnError` when no valid session is present.
 #[cfg(feature = "ssr")]
+#[tracing::instrument(name = "web.auth.require_auth")]
 pub async fn require_auth() -> Result<AuthUser, leptos::prelude::ServerFnError> {
     leptos_axum::extract::<AuthUser>()
         .await
@@ -171,6 +172,10 @@ pub async fn current_user() -> Result<Option<String>, ServerFnError> {
 /// Registers a new user.  Returns the raw session token on success and sets
 /// the `session` cookie.
 #[server(endpoint = "/register")]
+#[cfg_attr(
+    feature = "ssr",
+    tracing::instrument(name = "web.auth.register", skip(password, invite_code))
+)]
 pub async fn register(
     username: String,
     password: String,
@@ -221,6 +226,10 @@ pub async fn register(
 /// Authenticates a user.  Returns the raw session token on success and sets
 /// the `session` cookie.
 #[server(endpoint = "/login")]
+#[cfg_attr(
+    feature = "ssr",
+    tracing::instrument(name = "web.auth.login", skip(password, label))
+)]
 pub async fn login(
     username: String,
     password: String,
@@ -254,6 +263,7 @@ pub async fn login(
 
 /// Revokes the current session and clears the `session` cookie.
 #[server(endpoint = "/logout")]
+#[cfg_attr(feature = "ssr", tracing::instrument(name = "web.auth.logout"))]
 pub async fn logout() -> Result<(), ServerFnError> {
     if let Ok(auth) = require_auth().await {
         let state = expect_context::<Arc<AppState>>();
