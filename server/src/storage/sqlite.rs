@@ -15,6 +15,7 @@ use common::storage::{
 };
 use common::tag::Tag;
 use common::username::Username;
+use tracing::Instrument;
 
 // ---------------------------------------------------------------------------
 // SiteConfig
@@ -118,6 +119,9 @@ impl UserStorage for SqliteUserStorage {
         display_name: Option<&str>,
     ) -> Result<i64, CreateUserError> {
         let password_hash = super::hash_password(password.clone())
+            .instrument(tracing::info_span!(
+                "storage.sqlite.user.create_user.hash_password"
+            ))
             .await
             .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(e)))?;
 
@@ -133,6 +137,9 @@ impl UserStorage for SqliteUserStorage {
         .bind(display_name)
         .bind(now)
         .fetch_one(&self.pool)
+        .instrument(tracing::info_span!(
+            "storage.sqlite.user.create_user.insert_user_row"
+        ))
         .await;
 
         match result {
@@ -173,6 +180,9 @@ impl UserStorage for SqliteUserStorage {
         )
         .bind(username.as_str())
         .fetch_optional(&self.pool)
+        .instrument(tracing::info_span!(
+            "storage.sqlite.user.authenticate.lookup_user"
+        ))
         .await
         .map_err(|e| UserAuthError::Internal(e.to_string()))?;
 
@@ -192,6 +202,9 @@ impl UserStorage for SqliteUserStorage {
         };
 
         let valid = super::verify_password(password.clone(), hash)
+            .instrument(tracing::info_span!(
+                "storage.sqlite.user.authenticate.verify_password"
+            ))
             .await
             .map_err(|e| UserAuthError::Internal(e.to_string()))?;
 
@@ -205,6 +218,9 @@ impl UserStorage for SqliteUserStorage {
             .bind(now)
             .bind(user_id)
             .execute(&self.pool)
+            .instrument(tracing::info_span!(
+                "storage.sqlite.user.authenticate.update_last_authenticated_at"
+            ))
             .await
             .map_err(|e| UserAuthError::Internal(e.to_string()))?;
 
@@ -377,6 +393,7 @@ impl SessionStorage for SqliteSessionStorage {
         Ok(record)
     }
 
+    #[tracing::instrument(name = "storage.sqlite.session.revoke", skip(self, token_hash))]
     async fn revoke_session(&self, token_hash: &str) -> sqlx::Result<()> {
         sqlx::query("DELETE FROM sessions WHERE token_hash = ?")
             .bind(token_hash)
