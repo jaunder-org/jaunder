@@ -1,9 +1,12 @@
+use std::time::Duration;
 use std::{fmt, io, path::Path, str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use log::LevelFilter;
 use sqlx::postgres::PgConnectOptions;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
+use sqlx::ConnectOptions;
 use sqlx::PgPool;
 use sqlx::SqlitePool;
 
@@ -469,7 +472,8 @@ async fn open_sqlite_database(
     // obtain a lock.
     options = options
         .journal_mode(SqliteJournalMode::Wal)
-        .busy_timeout(std::time::Duration::from_secs(5));
+        .busy_timeout(Duration::from_secs(5))
+        .log_slow_statements(LevelFilter::Warn, sql_slow_query_threshold());
     let pool = sqlx::SqlitePool::connect_with(options).await?;
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     let site_config = SqliteSiteConfigStorage::new(pool.clone());
@@ -485,11 +489,20 @@ fn postgres_password_from_env() -> io::Result<Option<String>> {
     Ok(std::env::var("JAUNDER_DB_PASSWORD").ok())
 }
 
+fn sql_slow_query_threshold() -> Duration {
+    std::env::var("JAUNDER_SQL_SLOW_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_millis(100))
+}
+
 fn resolved_postgres_options(options: &PgConnectOptions) -> sqlx::Result<PgConnectOptions> {
     let mut options = options.clone();
     if let Some(password) = postgres_password_from_env().map_err(sqlx::Error::Io)? {
         options = options.password(&password);
     }
+    options = options.log_slow_statements(LevelFilter::Warn, sql_slow_query_threshold());
     Ok(options)
 }
 
@@ -588,6 +601,21 @@ mod tests {
 
         std::env::remove_var("JAUNDER_DB_PASSWORD");
         assert_eq!(password.as_deref(), Some("from-env"));
+    }
+
+    #[test]
+    fn sql_slow_query_threshold_defaults_to_100ms() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("JAUNDER_SQL_SLOW_MS");
+        assert_eq!(sql_slow_query_threshold(), Duration::from_millis(100));
+    }
+
+    #[test]
+    fn sql_slow_query_threshold_uses_env_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("JAUNDER_SQL_SLOW_MS", "250");
+        assert_eq!(sql_slow_query_threshold(), Duration::from_millis(250));
+        std::env::remove_var("JAUNDER_SQL_SLOW_MS");
     }
 
     #[test]
