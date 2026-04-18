@@ -1,0 +1,230 @@
+#!/usr/bin/env node
+
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+function usage() {
+  console.log(`Analyze OpenTelemetry JSONL traces exported by the VM e2e collector.
+
+Usage:
+  scripts/analyze-otel-traces [--top N] [--trace TRACE_ID] <otel-traces.jsonl>...
+
+Examples:
+  scripts/analyze-otel-traces /nix/store/.../otel-traces.jsonl
+  scripts/analyze-otel-traces --top 40 --trace 11111111111111111111111111111111 /nix/store/.../otel-traces.jsonl`);
+}
+
+function parseArgs(argv) {
+  let top = 25;
+  let traceFilter = '';
+  const inputs = [];
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--top') {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error('--top requires a value');
+      }
+      const parsed = Number.parseInt(argv[i], 10);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error('--top must be a positive integer');
+      }
+      top = parsed;
+      continue;
+    }
+    if (arg === '--trace') {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error('--trace requires a value');
+      }
+      traceFilter = argv[i];
+      continue;
+    }
+    if (arg === '--help' || arg === '-h') {
+      usage();
+      process.exit(0);
+    }
+    inputs.push(arg);
+  }
+
+  if (inputs.length === 0) {
+    throw new Error('at least one input file is required');
+  }
+
+  return { top, traceFilter, inputs };
+}
+
+function getAttr(span, key) {
+  const attrs = Array.isArray(span.attributes) ? span.attributes : [];
+  const attr = attrs.find((entry) => entry && entry.key === key);
+  if (!attr || !attr.value) {
+    return '';
+  }
+  if (typeof attr.value.stringValue === 'string') {
+    return attr.value.stringValue;
+  }
+  if (attr.value.intValue !== undefined && attr.value.intValue !== null) {
+    return String(attr.value.intValue);
+  }
+  return '';
+}
+
+function parseDurationMs(span) {
+  const start = BigInt(span.startTimeUnixNano);
+  const end = BigInt(span.endTimeUnixNano);
+  const nanos = end - start;
+  return Number(nanos) / 1_000_000;
+}
+
+function readSpans(filePath, traceFilter) {
+  const raw = fs.readFileSync(filePath, 'utf8');
+  const lines = raw.split('\n').filter((line) => line.trim().length > 0);
+  const spans = [];
+
+  for (const line of lines) {
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch (error) {
+      throw new Error(`failed to parse JSON line in ${filePath}: ${error.message}`);
+    }
+
+    const resourceSpans = Array.isArray(record.resourceSpans) ? record.resourceSpans : [];
+    for (const resourceSpan of resourceSpans) {
+      const scopeSpans = Array.isArray(resourceSpan.scopeSpans) ? resourceSpan.scopeSpans : [];
+      for (const scopeSpan of scopeSpans) {
+        const nestedSpans = Array.isArray(scopeSpan.spans) ? scopeSpan.spans : [];
+        for (const span of nestedSpans) {
+          if (traceFilter && span.traceId !== traceFilter) {
+            continue;
+          }
+          spans.push({
+            source: filePath,
+            traceId: span.traceId || '',
+            spanId: span.spanId || '',
+            parentSpanId: span.parentSpanId || '',
+            name: span.name || '',
+            method: getAttr(span, 'method'),
+            uri: getAttr(span, 'uri'),
+            busyNs: getAttr(span, 'busy_ns'),
+            idleNs: getAttr(span, 'idle_ns'),
+            durationMs: parseDurationMs(span),
+          });
+        }
+      }
+    }
+  }
+
+  return spans;
+}
+
+function padRight(value, width) {
+  const stringValue = String(value);
+  if (stringValue.length >= width) {
+    return stringValue;
+  }
+  return stringValue + ' '.repeat(width - stringValue.length);
+}
+
+function padLeft(value, width) {
+  const stringValue = String(value);
+  if (stringValue.length >= width) {
+    return stringValue;
+  }
+  return ' '.repeat(width - stringValue.length) + stringValue;
+}
+
+function truncate(value, width) {
+  const stringValue = String(value);
+  if (stringValue.length <= width) {
+    return stringValue;
+  }
+  return stringValue.slice(0, width - 1) + '…';
+}
+
+function printSlowest(spans, top) {
+  const sorted = [...spans].sort((a, b) => b.durationMs - a.durationMs).slice(0, top);
+
+  console.log(`Top ${top} slowest spans`);
+  console.log('duration_ms  trace_id                           span                                method  uri                       busy_ns     idle_ns     source');
+
+  for (const span of sorted) {
+    const row = [
+      padLeft(span.durationMs.toFixed(3), 10),
+      padRight(truncate(span.traceId, 32), 32),
+      padRight(truncate(span.name || '-', 34), 34),
+      padRight(truncate(span.method || '-', 6), 6),
+      padRight(truncate(span.uri || '-', 25), 25),
+      padLeft(span.busyNs || '-', 10),
+      padLeft(span.idleNs || '-', 10),
+      span.source,
+    ];
+    console.log(row.join('  '));
+  }
+
+  console.log('');
+}
+
+function printTraceTotals(spans, top) {
+  const totals = new Map();
+
+  for (const span of spans) {
+    const current = totals.get(span.traceId) || { totalMs: 0, spans: 0 };
+    current.totalMs += span.durationMs;
+    current.spans += 1;
+    totals.set(span.traceId, current);
+  }
+
+  const rows = [...totals.entries()]
+    .map(([traceId, info]) => ({ traceId, totalMs: info.totalMs, spans: info.spans }))
+    .sort((a, b) => b.totalMs - a.totalMs)
+    .slice(0, top);
+
+  console.log('Trace totals (sum of span durations)');
+  console.log('total_ms     spans  trace_id');
+  for (const row of rows) {
+    console.log(`${padLeft(row.totalMs.toFixed(3), 10)}  ${padLeft(row.spans, 5)}  ${row.traceId}`);
+  }
+}
+
+function main() {
+  let parsed;
+  try {
+    parsed = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(`error: ${error.message}`);
+    usage();
+    process.exit(1);
+  }
+
+  const allSpans = [];
+
+  for (const input of parsed.inputs) {
+    const resolved = path.resolve(input);
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      console.error(`error: file not found: ${input}`);
+      process.exit(1);
+    }
+
+    try {
+      const spans = readSpans(resolved, parsed.traceFilter);
+      allSpans.push(...spans);
+    } catch (error) {
+      console.error(`error: ${error.message}`);
+      process.exit(1);
+    }
+  }
+
+  if (allSpans.length === 0) {
+    console.log('No spans found in the provided trace files.');
+    return;
+  }
+
+  printSlowest(allSpans, parsed.top);
+  printTraceTotals(allSpans, parsed.top);
+}
+
+main();
