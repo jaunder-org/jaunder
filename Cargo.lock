@@ -1561,6 +1561,7 @@ dependencies = [
  "leptos",
  "leptos_axum",
  "lettre",
+ "log",
  "maik",
  "rand 0.9.2",
  "rpassword",
