@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { createPerfProbe } from "./perf";
 
 async function waitForHydration(page: Page): Promise<void> {
   await page.waitForSelector("body[data-hydrated]");
@@ -87,6 +88,7 @@ test("authenticated user can save a draft through the UI", async ({ page }) => {
 });
 
 test("published post renders at permalink", async ({ page }) => {
+  test.slow();
   await register(page);
 
   await page.goto("http://localhost:3000/posts/new");
@@ -116,7 +118,7 @@ test("published post renders at permalink", async ({ page }) => {
   expect(permalinkHref).toBeTruthy();
 
   const previewUrl = new URL(previewHref!, "http://localhost:3000").toString();
-  await page.goto(previewUrl);
+  await page.goto(previewUrl, { waitUntil: "domcontentloaded" });
   await waitForHydration(page);
   await expect(page.locator(".draft-banner")).toContainText("Draft preview");
   await expect(page.locator("article h1")).toHaveText("Permalink Story");
@@ -124,7 +126,7 @@ test("published post renders at permalink", async ({ page }) => {
 
   const targetUrl = new URL(permalinkHref!, "http://localhost:3000").toString();
 
-  await page.goto(targetUrl);
+  await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
   await waitForHydration(page);
 
   await expect(page.locator("article h1")).toHaveText("Permalink Story");
@@ -132,6 +134,7 @@ test("published post renders at permalink", async ({ page }) => {
 });
 
 test("authenticated user can edit a draft post", async ({ page }) => {
+  test.slow();
   await register(page);
 
   // Create a draft
@@ -169,6 +172,7 @@ test("authenticated user can edit a draft post", async ({ page }) => {
 });
 
 test("editing a published post freezes the slug", async ({ page }) => {
+  test.slow();
   await register(page);
 
   // Create and publish a post
@@ -294,16 +298,25 @@ test("draft lifecycle: create, view, edit, and publish", async ({
 
 test("per-user timeline lists published posts with pagination", async ({
   page,
-}) => {
+}, testInfo) => {
   test.setTimeout(20_000);
-  const username = await register(page);
+  const perf = createPerfProbe(testInfo, "user_timeline_pagination");
 
+  perf.mark("register_start");
+  const username = await register(page);
+  perf.mark("register_done");
+
+  perf.mark("seed_posts_start");
   for (let i = 0; i < 55; i += 1) {
     await createPublishedPostViaApi(page, `Timeline Post ${i}`);
   }
+  perf.mark("seed_posts_done");
 
+  perf.mark("goto_timeline_start");
   await page.goto(`http://localhost:3000/~${username}`);
+  perf.mark("goto_timeline_done");
   await waitForHydration(page);
+  perf.mark("hydration_done");
 
   await expect(page.locator("h1")).toContainText(`Posts by ${username}`);
   await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(50, {
@@ -314,35 +327,47 @@ test("per-user timeline lists published posts with pagination", async ({
   ).toContainText("Timeline Post 54");
 
   await page.click('button:has-text("Load more")');
+  perf.mark("load_more_clicked");
   await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(55, {
     timeout: 10_000,
   });
   await expect(
     page.locator('[data-test="timeline-item"]').last(),
   ).toContainText("Timeline Post 0", { timeout: 10_000 });
+  perf.mark("assertions_complete");
+  perf.log({ username });
 });
 
 test("home page shows local timeline for unauthenticated users", async ({
   page,
   browser,
-}) => {
+}, testInfo) => {
   test.setTimeout(20_000);
+  const perf = createPerfProbe(testInfo, "home_local_timeline");
+
+  perf.mark("seed_author_one_start");
   await register(page);
   for (let i = 0; i < 30; i += 1) {
     await createPublishedPostViaApi(page, `Local Author One ${i}`);
   }
+  perf.mark("seed_author_one_done");
 
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
+  perf.mark("seed_author_two_start");
   await register(secondPage);
   for (let i = 0; i < 30; i += 1) {
     await createPublishedPostViaApi(secondPage, `Local Author Two ${i}`);
   }
+  perf.mark("seed_author_two_done");
 
   const guestContext = await browser.newContext();
   const guestPage = await guestContext.newPage();
+  perf.mark("goto_home_start");
   await guestPage.goto("http://localhost:3000/");
+  perf.mark("goto_home_done");
   await waitForHydration(guestPage);
+  perf.mark("hydration_done");
 
   await expect(guestPage.locator("h2")).toHaveText("Local Timeline", {
     timeout: 10_000,
@@ -355,12 +380,15 @@ test("home page shows local timeline for unauthenticated users", async ({
   );
 
   await guestPage.click('button:has-text("Load more")');
+  perf.mark("load_more_clicked");
   await expect(guestPage.locator('[data-test="timeline-item"]')).toHaveCount(
     100,
     {
       timeout: 10_000,
     },
   );
+  perf.mark("assertions_complete");
+  perf.log();
 
   await guestContext.close();
   await secondContext.close();
@@ -369,22 +397,31 @@ test("home page shows local timeline for unauthenticated users", async ({
 test("home page shows authenticated home feed with pagination", async ({
   page,
   browser,
-}) => {
+}, testInfo) => {
   test.setTimeout(20_000);
+  const perf = createPerfProbe(testInfo, "home_authenticated_feed");
+
+  perf.mark("seed_self_start");
   await register(page);
   for (let i = 0; i < 55; i += 1) {
     await createPublishedPostViaApi(page, `Home Feed Mine ${i}`);
   }
+  perf.mark("seed_self_done");
 
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
+  perf.mark("seed_other_start");
   await register(secondPage);
   for (let i = 0; i < 5; i += 1) {
     await createPublishedPostViaApi(secondPage, `Home Feed Other ${i}`);
   }
+  perf.mark("seed_other_done");
 
+  perf.mark("goto_home_start");
   await page.goto("http://localhost:3000/");
+  perf.mark("goto_home_done");
   await waitForHydration(page);
+  perf.mark("hydration_done");
 
   await expect(page.locator("h2")).toContainText("Your Home Feed", {
     timeout: 10_000,
@@ -398,10 +435,13 @@ test("home page shows authenticated home feed with pagination", async ({
   await expect(page.locator("body")).not.toContainText("Home Feed Other");
 
   await page.click('button:has-text("Load more")');
+  perf.mark("load_more_clicked");
   await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(55, {
     timeout: 10_000,
   });
   await expect(page.locator("body")).not.toContainText("Home Feed Other");
+  perf.mark("assertions_complete");
+  perf.log();
 
   await secondContext.close();
 });

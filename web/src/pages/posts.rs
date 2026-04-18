@@ -1,5 +1,6 @@
 use crate::{
     auth::current_user,
+    pages::signal_read::read_signal,
     posts::{
         get_post, get_post_preview, list_drafts, list_user_posts, CreatePost, CreatePostResult,
         DraftSummary, ListUserPosts, PostResponse, PublishPost, PublishPostResult,
@@ -187,11 +188,12 @@ pub fn UserTimelinePage() -> impl IntoView {
     let next_cursor_post_id = RwSignal::new(None::<i64>);
     let has_more = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
+    let initial_loaded = RwSignal::new(false);
 
     let load_more_action = ServerAction::<ListUserPosts>::new();
 
     Effect::new_isomorphic(move |_| {
-        if let Some(result) = initial_page.get() {
+        if let Some(result) = initial_page.try_get().flatten() {
             match result {
                 Ok(page) => {
                     timeline.set(page.posts);
@@ -199,11 +201,13 @@ pub fn UserTimelinePage() -> impl IntoView {
                     next_cursor_post_id.set(page.next_cursor_post_id);
                     has_more.set(page.has_more);
                     error.set(None);
+                    initial_loaded.set(true);
                 }
                 Err(err) => {
                     error.set(Some(err.to_string()));
                     timeline.set(Vec::new());
                     has_more.set(false);
+                    initial_loaded.set(true);
                 }
             }
         }
@@ -237,16 +241,23 @@ pub fn UserTimelinePage() -> impl IntoView {
         });
     };
 
+    let display_username = move || read_signal!(username);
+    let read_error = move || read_signal!(error);
+    let read_initial_loaded = move || read_signal!(initial_loaded);
+    let read_timeline = move || read_signal!(timeline);
+    let read_has_more = move || read_signal!(has_more);
+    let read_pending = move || read_signal!(load_more_action.pending());
+
     view! {
-        <h1>{move || format!("Posts by {}", username.get())}</h1>
+        <h1>{move || format!("Posts by {}", display_username())}</h1>
         {move || {
-            if let Some(err) = error.get() {
+            if let Some(err) = read_error() {
                 return view! { <p class="error">{err}</p> }.into_any();
             }
-            if initial_page.get().is_none() {
+            if !read_initial_loaded() {
                 return view! { <p>"Loading..."</p> }.into_any();
             }
-            let rows = timeline.get();
+            let rows = read_timeline();
             if rows.is_empty() {
                 return view! { <p>"No posts yet."</p> }.into_any();
             }
@@ -254,20 +265,12 @@ pub fn UserTimelinePage() -> impl IntoView {
             view! {
                 <ul>{rows.into_iter().map(render_timeline_post_row).collect::<Vec<_>>()}</ul>
                 {move || {
-                    has_more
-                        .get()
+                    read_has_more()
                         .then(|| {
                             view! {
-                                <button
-                                    on:click=on_load_more
-                                    disabled=move || load_more_action.pending().get()
-                                >
+                                <button on:click=on_load_more disabled=read_pending>
                                     {move || {
-                                        if load_more_action.pending().get() {
-                                            "Loading..."
-                                        } else {
-                                            "Load more"
-                                        }
+                                        if read_pending() { "Loading..." } else { "Load more" }
                                     }}
                                 </button>
                             }
