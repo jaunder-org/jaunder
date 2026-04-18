@@ -1,5 +1,7 @@
 import { devices, defineConfig } from "@playwright/test";
 
+const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
+
 /**
  * Read environment variables from file.
  * https://github.com/motdotla/dotenv
@@ -34,6 +36,13 @@ export default defineConfig({
   use: {
     /* Maximum time each action such as `click()` can take. Defaults to 0 (no limit). */
     actionTimeout: 0,
+    ...(traceParent
+      ? {
+          extraHTTPHeaders: {
+            traceparent: traceParent,
+          },
+        }
+      : {}),
     /* Base URL to use in actions like `await page.goto('/')`. */
     // baseURL: 'http://localhost:3000',
 

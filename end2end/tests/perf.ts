@@ -35,6 +35,8 @@ export function createPerfProbe(testInfo: TestInfo, flow: string) {
         file: testInfo.file,
         test: testInfo.title,
         flow,
+        trace_id: process.env.JAUNDER_E2E_TRACE_ID ?? null,
+        traceparent: process.env.JAUNDER_E2E_TRACEPARENT ?? null,
         total_ms: Date.now() - startMs,
         marks: sorted,
         phases,
