@@ -1,9 +1,12 @@
+use std::time::Duration;
 use std::{fmt, io, path::Path, str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use log::LevelFilter;
 use sqlx::postgres::PgConnectOptions;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
+use sqlx::ConnectOptions;
 use sqlx::PgPool;
 use sqlx::SqlitePool;
 
@@ -167,6 +170,7 @@ pub(super) fn build_post_record(
     })
 }
 
+#[tracing::instrument(name = "crypto.password.hash", skip(password))]
 pub(super) async fn hash_password(password: Password) -> io::Result<String> {
     tokio::task::spawn_blocking(move || password.hash())
         .await
@@ -174,6 +178,7 @@ pub(super) async fn hash_password(password: Password) -> io::Result<String> {
         .map_err(io::Error::other)
 }
 
+#[tracing::instrument(name = "crypto.password.verify", skip(password, hash))]
 pub(super) async fn verify_password(password: Password, hash: String) -> io::Result<bool> {
     tokio::task::spawn_blocking(move || password.verify(&hash))
         .await
@@ -434,6 +439,7 @@ fn make_postgres_app_state(pool: PgPool, mailer: Arc<dyn MailSender>) -> Arc<App
     })
 }
 
+#[tracing::instrument(name = "storage.mailer.build", skip(site_config))]
 async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender> {
     if let Ok(path) = std::env::var("JAUNDER_MAIL_CAPTURE_FILE") {
         return Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>;
@@ -447,6 +453,11 @@ async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender
     }
 }
 
+#[tracing::instrument(
+    name = "storage.sqlite.open_database",
+    skip(options),
+    fields(create_if_missing)
+)]
 async fn open_sqlite_database(
     options: &SqliteConnectOptions,
     create_if_missing: bool,
@@ -461,7 +472,8 @@ async fn open_sqlite_database(
     // obtain a lock.
     options = options
         .journal_mode(SqliteJournalMode::Wal)
-        .busy_timeout(std::time::Duration::from_secs(5));
+        .busy_timeout(Duration::from_secs(5))
+        .log_slow_statements(LevelFilter::Warn, sql_slow_query_threshold());
     let pool = sqlx::SqlitePool::connect_with(options).await?;
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     let site_config = SqliteSiteConfigStorage::new(pool.clone());
@@ -477,14 +489,24 @@ fn postgres_password_from_env() -> io::Result<Option<String>> {
     Ok(std::env::var("JAUNDER_DB_PASSWORD").ok())
 }
 
+fn sql_slow_query_threshold() -> Duration {
+    std::env::var("JAUNDER_SQL_SLOW_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_millis(100))
+}
+
 fn resolved_postgres_options(options: &PgConnectOptions) -> sqlx::Result<PgConnectOptions> {
     let mut options = options.clone();
     if let Some(password) = postgres_password_from_env().map_err(sqlx::Error::Io)? {
         options = options.password(&password);
     }
+    options = options.log_slow_statements(LevelFilter::Warn, sql_slow_query_threshold());
     Ok(options)
 }
 
+#[tracing::instrument(name = "storage.postgres.open_database", skip(options))]
 async fn open_postgres_database(options: &PgConnectOptions) -> sqlx::Result<Arc<AppState>> {
     let options = resolved_postgres_options(options)?;
     let pool = PgPool::connect_with(options).await?;
@@ -496,6 +518,7 @@ async fn open_postgres_database(options: &PgConnectOptions) -> sqlx::Result<Arc<
 
 /// Opens (or creates) the database described by `opts`, runs pending
 /// migrations, and returns an [`AppState`] bundling all storage handles.
+#[tracing::instrument(name = "storage.open_database", skip(opts))]
 pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     match opts {
         DbConnectOptions::Sqlite(options) => open_sqlite_database(options, true).await,
@@ -506,6 +529,7 @@ pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState
 /// Opens an existing database described by `opts`, runs pending migrations.
 ///
 /// Unlike [`open_database`], fails if the database does not already exist.
+#[tracing::instrument(name = "storage.open_existing_database", skip(opts))]
 pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     match opts {
         DbConnectOptions::Sqlite(options) => open_sqlite_database(options, false).await,
@@ -577,6 +601,21 @@ mod tests {
 
         std::env::remove_var("JAUNDER_DB_PASSWORD");
         assert_eq!(password.as_deref(), Some("from-env"));
+    }
+
+    #[test]
+    fn sql_slow_query_threshold_defaults_to_100ms() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("JAUNDER_SQL_SLOW_MS");
+        assert_eq!(sql_slow_query_threshold(), Duration::from_millis(100));
+    }
+
+    #[test]
+    fn sql_slow_query_threshold_uses_env_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("JAUNDER_SQL_SLOW_MS", "250");
+        assert_eq!(sql_slow_query_threshold(), Duration::from_millis(250));
+        std::env::remove_var("JAUNDER_SQL_SLOW_MS");
     }
 
     #[test]
