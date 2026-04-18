@@ -190,7 +190,7 @@ pub fn UserTimelinePage() -> impl IntoView {
 
     let load_more_action = ServerAction::<ListUserPosts>::new();
 
-    Effect::new(move |_| {
+    Effect::new_isomorphic(move |_| {
         if let Some(result) = initial_page.get() {
             match result {
                 Ok(page) => {
@@ -209,7 +209,7 @@ pub fn UserTimelinePage() -> impl IntoView {
         }
     });
 
-    Effect::new(move |_| {
+    Effect::new_isomorphic(move |_| {
         if let Some(result) = load_more_action.value().get() {
             match result {
                 Ok(page) => {
