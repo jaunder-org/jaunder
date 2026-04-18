@@ -17,10 +17,12 @@ use axum::http::HeaderName;
 use axum::Router;
 use leptos::prelude::*;
 use leptos_axum::{generate_route_list, LeptosRoutes};
+use opentelemetry::propagation::Extractor;
 use tower::ServiceBuilder;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
-use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use web::{shell, App};
 
 use crate::storage::AppState;
@@ -32,6 +34,7 @@ pub fn create_router(
 ) -> Router {
     let request_id_header = HeaderName::from_static("x-request-id");
     let http_observability = ServiceBuilder::new()
+        .layer(axum::middleware::from_fn(extract_trace_context))
         .layer(SetRequestIdLayer::new(
             request_id_header.clone(),
             MakeRequestUuid,
@@ -39,11 +42,20 @@ pub fn create_router(
         .layer(PropagateRequestIdLayer::new(request_id_header))
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(
-                    DefaultMakeSpan::new()
-                        .include_headers(true)
-                        .level(Level::INFO),
-                )
+                .make_span_with(|request: &axum::extract::Request| {
+                    let span = tracing::span!(
+                        Level::INFO,
+                        "request",
+                        method = %request.method(),
+                        uri = %request.uri(),
+                        version = ?request.version(),
+                        headers = ?request.headers(),
+                    );
+                    if let Some(parent) = request.extensions().get::<ExtractedTraceContext>() {
+                        span.set_parent(parent.0.clone());
+                    }
+                    span
+                })
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         );
 
@@ -86,12 +98,40 @@ pub fn create_router(
         .with_state(leptos_options)
 }
 
+#[derive(Clone)]
+struct ExtractedTraceContext(opentelemetry::Context);
+
+struct HeaderExtractor<'a>(&'a axum::http::HeaderMap);
+
+impl Extractor for HeaderExtractor<'_> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key).and_then(|value| value.to_str().ok())
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        self.0.keys().map(|name| name.as_str()).collect()
+    }
+}
+
+async fn extract_trace_context(
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let context = opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.extract(&HeaderExtractor(request.headers()))
+    });
+    request
+        .extensions_mut()
+        .insert(ExtractedTraceContext(context));
+    next.run(request).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::{
         body::Body,
-        http::{Request, StatusCode},
+        http::{HeaderMap, Request, StatusCode},
     };
     use leptos::prelude::LeptosOptions;
     use tower::ServiceExt;
@@ -348,6 +388,84 @@ mod tests {
                     .unwrap();
                 let html = String::from_utf8(body.to_vec()).unwrap();
                 assert!(html.contains("Jaunder"));
+            })
+            .await;
+    }
+
+    #[test]
+    fn header_extractor_reads_known_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "traceparent",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+                .parse()
+                .expect("valid traceparent header"),
+        );
+
+        let extractor = HeaderExtractor(&headers);
+        assert_eq!(
+            extractor.get("traceparent"),
+            Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+        );
+        assert!(extractor.keys().contains(&"traceparent"));
+    }
+
+    #[tokio::test]
+    async fn trace_context_middleware_inserts_extension() {
+        let app = Router::new()
+            .route(
+                "/",
+                axum::routing::get(|req: axum::extract::Request| async move {
+                    if req.extensions().get::<ExtractedTraceContext>().is_some() {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn(extract_trace_context));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(
+                        "traceparent",
+                        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                    )
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
+            .await
+            .expect("failed to get response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn current_user_api_route_returns_ok() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                ensure_server_fns_registered();
+                let app = create_router(test_options(), test_state().await, true);
+                let response = app
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/api/current_user")
+                            .header("content-type", "application/x-www-form-urlencoded")
+                            .header(
+                                "traceparent",
+                                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                            )
+                            .body(Body::empty())
+                            .expect("failed to build request"),
+                    )
+                    .await
+                    .expect("failed to get response");
+
+                assert_eq!(response.status(), StatusCode::OK);
             })
             .await;
     }

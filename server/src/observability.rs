@@ -1,6 +1,8 @@
 use std::sync::Once;
 use std::time::{Duration, Instant};
 
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_otlp::WithExportConfig;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -24,6 +26,28 @@ fn use_json_format() -> bool {
             .as_str(),
         "json" | "JSON"
     )
+}
+
+fn otel_exporter_otlp_endpoint() -> Option<String> {
+    std::env::var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT")
+        .ok()
+        .or_else(|| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn build_otel_tracer(endpoint: &str) -> Result<opentelemetry_sdk::trace::Tracer, String> {
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint)
+        .build()
+        .map_err(|error| format!("failed to build OTLP span exporter: {error}"))?;
+    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .build();
+    let tracer = provider.tracer("jaunder");
+    opentelemetry::global::set_tracer_provider(provider);
+    Ok(tracer)
 }
 
 pub fn slow_op_threshold() -> Duration {
@@ -94,24 +118,73 @@ fn slow_span_values(elapsed: Duration, threshold: Duration) -> Option<(u64, u64)
     }
 }
 
-pub fn init_tracing() {
-    INIT_TRACING.call_once(|| {
-        // Forward any existing `log` macros to tracing so we can migrate in
-        // phases without duplicate logging calls.
-        let _ = tracing_log::LogTracer::init();
+fn init_tracing_impl() {
+    // Forward any existing `log` macros to tracing so we can migrate in
+    // phases without duplicate logging calls.
+    let _ = tracing_log::LogTracer::init();
+    opentelemetry::global::set_text_map_propagator(
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
 
-        let env_filter = resolved_filter();
-        let slow_span_layer = SlowSpanLayer::new(slow_op_threshold());
-        let registry = tracing_subscriber::registry()
-            .with(env_filter)
-            .with(slow_span_layer);
+    let env_filter = resolved_filter();
+    let slow_span_layer = SlowSpanLayer::new(slow_op_threshold());
+    let use_json = use_json_format();
 
-        if use_json_format() {
-            let _ = registry.with(fmt::layer().json()).try_init();
-        } else {
-            let _ = registry.with(fmt::layer()).try_init();
+    if let Some(endpoint) = otel_exporter_otlp_endpoint() {
+        match build_otel_tracer(&endpoint) {
+            Ok(tracer) => {
+                if use_json {
+                    let _ = tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(slow_span_layer)
+                        .with(fmt::layer().json())
+                        .with(tracing_opentelemetry::layer().with_tracer(tracer))
+                        .try_init();
+                } else {
+                    let _ = tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(slow_span_layer)
+                        .with(fmt::layer())
+                        .with(tracing_opentelemetry::layer().with_tracer(tracer))
+                        .try_init();
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "OTel disabled because exporter setup failed (endpoint {endpoint}): {error}"
+                );
+                if use_json {
+                    let _ = tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(slow_span_layer)
+                        .with(fmt::layer().json())
+                        .try_init();
+                } else {
+                    let _ = tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(slow_span_layer)
+                        .with(fmt::layer())
+                        .try_init();
+                }
+            }
         }
-    });
+    } else if use_json {
+        let _ = tracing_subscriber::registry()
+            .with(env_filter)
+            .with(slow_span_layer)
+            .with(fmt::layer().json())
+            .try_init();
+    } else {
+        let _ = tracing_subscriber::registry()
+            .with(env_filter)
+            .with(slow_span_layer)
+            .with(fmt::layer())
+            .try_init();
+    }
+}
+
+pub fn init_tracing() {
+    INIT_TRACING.call_once(init_tracing_impl);
 }
 
 #[cfg(test)]
@@ -156,5 +229,117 @@ mod tests {
         std::env::set_var("JAUNDER_SLOW_OP_MS", "1234");
         assert_eq!(slow_op_threshold(), Duration::from_millis(1234));
         std::env::remove_var("JAUNDER_SLOW_OP_MS");
+    }
+
+    #[test]
+    fn otlp_endpoint_prefers_jaunder_specific_setting() {
+        let _guard = lock_env();
+        std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://fallback:4317");
+        std::env::set_var(
+            "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+            "http://preferred:4317",
+        );
+
+        assert_eq!(
+            otel_exporter_otlp_endpoint().as_deref(),
+            Some("http://preferred:4317")
+        );
+
+        std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
+        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+    }
+
+    #[test]
+    fn otlp_endpoint_falls_back_to_standard_env_var() {
+        let _guard = lock_env();
+        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+        std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://fallback:4317");
+
+        assert_eq!(
+            otel_exporter_otlp_endpoint().as_deref(),
+            Some("http://fallback:4317")
+        );
+
+        std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
+    }
+
+    #[test]
+    fn use_json_format_defaults_to_pretty() {
+        let _guard = lock_env();
+        std::env::remove_var("JAUNDER_LOG_FORMAT");
+        assert!(!use_json_format());
+    }
+
+    #[test]
+    fn use_json_format_accepts_json() {
+        let _guard = lock_env();
+        std::env::set_var("JAUNDER_LOG_FORMAT", "json");
+        assert!(use_json_format());
+        std::env::remove_var("JAUNDER_LOG_FORMAT");
+    }
+
+    #[tokio::test]
+    async fn build_otel_tracer_accepts_valid_endpoint() {
+        let tracer = build_otel_tracer("http://127.0.0.1:4317");
+        assert!(tracer.is_ok());
+    }
+
+    #[test]
+    fn init_tracing_impl_handles_invalid_otel_endpoint() {
+        let _guard = lock_env();
+        std::env::set_var(
+            "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+            "not a valid endpoint",
+        );
+        init_tracing_impl();
+        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+    }
+
+    #[test]
+    fn init_tracing_impl_handles_invalid_otel_endpoint_with_json_output() {
+        let _guard = lock_env();
+        std::env::set_var(
+            "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+            "still not a valid endpoint",
+        );
+        std::env::set_var("JAUNDER_LOG_FORMAT", "json");
+        init_tracing_impl();
+        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+        std::env::remove_var("JAUNDER_LOG_FORMAT");
+    }
+
+    #[test]
+    fn init_tracing_impl_handles_no_otel_endpoint_with_json_output() {
+        let _guard = lock_env();
+        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+        std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
+        std::env::set_var("JAUNDER_LOG_FORMAT", "json");
+        init_tracing_impl();
+        std::env::remove_var("JAUNDER_LOG_FORMAT");
+    }
+
+    #[tokio::test]
+    async fn init_tracing_impl_handles_valid_otel_endpoint_with_pretty_output() {
+        let _guard = lock_env();
+        std::env::set_var(
+            "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+            "http://127.0.0.1:4317",
+        );
+        std::env::remove_var("JAUNDER_LOG_FORMAT");
+        init_tracing_impl();
+        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+    }
+
+    #[tokio::test]
+    async fn init_tracing_impl_handles_valid_otel_endpoint_with_json_output() {
+        let _guard = lock_env();
+        std::env::set_var(
+            "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+            "http://127.0.0.1:4317",
+        );
+        std::env::set_var("JAUNDER_LOG_FORMAT", "json");
+        init_tracing_impl();
+        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+        std::env::remove_var("JAUNDER_LOG_FORMAT");
     }
 }
