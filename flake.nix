@@ -359,11 +359,16 @@
         # the NixOS VM, filling the disk with coredumps.
         nixPlaywrightConfig = pkgs.writeText "playwright.nix.config.js" ''
           const { defineConfig, devices } = require('@playwright/test');
+          const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
           module.exports = defineConfig({
             testDir: './tests',
             timeout: 5 * 1000,
             expect: { timeout: 5000 },
             reporter: 'line',
+            use: {
+              actionTimeout: 0,
+              ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
+            },
             // Run spec files sequentially to avoid SQLite write contention.
             // Each browser project is already run in isolation (separate seed_db()
             // calls), so one worker is sufficient and prevents locking errors.
@@ -390,6 +395,25 @@
               },
             ],
           });
+        '';
+
+        e2eOtelCollectorConfig = pkgs.writeText "jaunder-otel-collector.yaml" ''
+          receivers:
+            otlp:
+              protocols:
+                grpc:
+                  endpoint: 127.0.0.1:4317
+          processors:
+            batch: {}
+          exporters:
+            file:
+              path: /var/lib/jaunder/otel-traces.jsonl
+          service:
+            pipelines:
+              traces:
+                receivers: [otlp]
+                processors: [batch]
+                exporters: [file]
         '';
 
         e2ePackage = pkgs.buildNpmPackage {
@@ -540,12 +564,30 @@
                   imports = [ self.nixosModules.jaunder ];
 
                   virtualisation.memorySize = 2048;
-                  environment.systemPackages = [ pkgs.sqlite ];
+                  environment.systemPackages = [
+                    pkgs.sqlite
+                    pkgs.opentelemetry-collector-contrib
+                  ];
+                  environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
+
+                  systemd.services.otel-collector = {
+                    description = "Jaunder e2e OTel Collector";
+                    wantedBy = [ "multi-user.target" ];
+                    after = [ "network.target" ];
+                    serviceConfig = {
+                      ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml";
+                      Restart = "on-failure";
+                      RestartSec = "2s";
+                    };
+                  };
 
                   services.jaunder.enable = true;
                   services.jaunder.bind = "127.0.0.1:3000";
+                  systemd.services.jaunder.after = [ "otel-collector.service" ];
+                  systemd.services.jaunder.requires = [ "otel-collector.service" ];
                   systemd.services.jaunder.environment = mailCaptureEnv // {
                     RUST_LOG = "info";
+                    JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317";
                   };
                 };
 
@@ -558,6 +600,7 @@
                   machine.succeed("rm -f /var/lib/jaunder/mail.jsonl")
 
                 machine.start()
+                machine.wait_for_unit("otel-collector.service", timeout=60)
                 machine.wait_for_unit("jaunder.service", timeout=60)
                 machine.wait_for_open_port(3000, timeout=30)
 
@@ -573,6 +616,8 @@
                   + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
                   + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
                   + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                  + " JAUNDER_E2E_TRACE_ID=11111111111111111111111111111111"
+                  + " JAUNDER_E2E_TRACEPARENT=00-11111111111111111111111111111111-1111111111111111-01"
                   + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
                   + " --config playwright.nix.config.js --project chromium"
                 )
@@ -583,9 +628,15 @@
                   + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
                   + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
                   + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                  + " JAUNDER_E2E_TRACE_ID=22222222222222222222222222222222"
+                  + " JAUNDER_E2E_TRACEPARENT=00-22222222222222222222222222222222-2222222222222222-01"
                   + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
                   + " --config playwright.nix.config.js --project firefox"
                 )
+
+                machine.succeed("systemctl stop otel-collector.service")
+                machine.succeed("test -s /var/lib/jaunder/otel-traces.jsonl")
+                machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-sqlite.jsonl")
               '';
             };
 
@@ -598,7 +649,22 @@
                   imports = [ self.nixosModules.jaunder ];
 
                   virtualisation.memorySize = 2048;
-                  environment.systemPackages = [ pkgs.postgresql_16 ];
+                  environment.systemPackages = [
+                    pkgs.postgresql_16
+                    pkgs.opentelemetry-collector-contrib
+                  ];
+                  environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
+
+                  systemd.services.otel-collector = {
+                    description = "Jaunder e2e OTel Collector";
+                    wantedBy = [ "multi-user.target" ];
+                    after = [ "network.target" ];
+                    serviceConfig = {
+                      ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml";
+                      Restart = "on-failure";
+                      RestartSec = "2s";
+                    };
+                  };
 
                   services.postgresql = {
                     enable = true;
@@ -616,13 +682,17 @@
                   services.jaunder.db = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
                   # We delay jaunder.service until we have run create-pg-db in the testScript.
                   systemd.services.jaunder.wantedBy = lib.mkForce [ ];
+                  systemd.services.jaunder.after = [ "otel-collector.service" ];
+                  systemd.services.jaunder.requires = [ "otel-collector.service" ];
                   systemd.services.jaunder.environment = mailCaptureEnv // {
                     RUST_LOG = "info";
+                    JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317";
                   };
                 };
 
               testScript = ''
                 machine.start()
+                machine.wait_for_unit("otel-collector.service", timeout=60)
                 machine.wait_for_unit("postgresql.service", timeout=60)
 
                 # Exercise create-pg-db
@@ -669,6 +739,8 @@
                   + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
                   + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
                   + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                  + " JAUNDER_E2E_TRACE_ID=33333333333333333333333333333333"
+                  + " JAUNDER_E2E_TRACEPARENT=00-33333333333333333333333333333333-3333333333333333-01"
                   + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
                   + " --config playwright.nix.config.js --project chromium"
                 )
@@ -679,9 +751,15 @@
                   + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
                   + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
                   + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                  + " JAUNDER_E2E_TRACE_ID=44444444444444444444444444444444"
+                  + " JAUNDER_E2E_TRACEPARENT=00-44444444444444444444444444444444-4444444444444444-01"
                   + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
                   + " --config playwright.nix.config.js --project firefox"
                 )
+
+                machine.succeed("systemctl stop otel-collector.service")
+                machine.succeed("test -s /var/lib/jaunder/otel-traces.jsonl")
+                machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-postgres.jsonl")
               '';
             };
 
