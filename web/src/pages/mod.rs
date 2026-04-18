@@ -6,6 +6,7 @@ pub mod password_reset;
 pub mod posts;
 pub mod profile;
 pub mod sessions;
+pub(crate) mod signal_read;
 
 use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;

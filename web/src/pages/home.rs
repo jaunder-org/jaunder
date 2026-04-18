@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 
+use crate::pages::signal_read::read_signal;
 use crate::posts::TimelinePostSummary;
 
 #[cfg(target_arch = "wasm32")]
@@ -117,6 +118,12 @@ pub fn HomePage() -> impl IntoView {
         }
     };
 
+    let read_error = move || read_signal!(error);
+    let read_timeline_mode = move || read_signal!(timeline_mode);
+    let read_timeline_rows = move || read_signal!(timeline);
+    let read_has_more = move || read_signal!(has_more);
+    let read_loading_more = move || read_signal!(loading_more);
+
     view! {
         <section>
             <h1>"Jaunder"</h1>
@@ -127,17 +134,17 @@ pub fn HomePage() -> impl IntoView {
                 <a href="/register">"Register"</a>
             </nav>
             {move || {
-                if let Some(err) = error.get() {
+                if let Some(err) = read_error() {
                     return view! { <p class="error">{err}</p> }.into_any();
                 }
-                let Some(mode) = timeline_mode.get() else {
+                let Some(mode) = read_timeline_mode() else {
                     return view! { <p>"Loading timeline..."</p> }.into_any();
                 };
                 let heading = match mode {
                     TimelineMode::Local => "Local Timeline".to_string(),
                     TimelineMode::Feed(ref username) => format!("Your Home Feed ({username})"),
                 };
-                let rows = timeline.get();
+                let rows = read_timeline_rows();
                 let empty_message = match mode {
                     TimelineMode::Local => "No posts yet.",
                     TimelineMode::Feed(_) => "You have no published posts yet.",
@@ -154,16 +161,12 @@ pub fn HomePage() -> impl IntoView {
                     <h2>{heading}</h2>
                     <ul>{rows.into_iter().map(render_timeline_post_row).collect::<Vec<_>>()}</ul>
                     {move || {
-                        has_more
-                            .get()
+                        read_has_more()
                             .then(|| {
                                 view! {
-                                    <button
-                                        on:click=on_load_more
-                                        disabled=move || loading_more.get()
-                                    >
+                                    <button on:click=on_load_more disabled=read_loading_more>
                                         {move || {
-                                            if loading_more.get() { "Loading..." } else { "Load more" }
+                                            if read_loading_more() { "Loading..." } else { "Load more" }
                                         }}
                                     </button>
                                 }
