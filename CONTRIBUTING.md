@@ -74,6 +74,10 @@ matches the change first, then move up to the broader checks before pushing.
 ### Fast local checks
 
 - `scripts/verify` runs the full local verification sequence in the preferred order: formatting, build, tests, lint, coverage, then `nix flake check`.
+  - By default it prints only `--- verify: ... ---` progress markers and captures step output.
+  - Set `VERIFY_PASSTHROUGH=1` to stream full tool output directly.
+  - Set `VERIFY_SHOW_STEP_OUTPUT=1` to print captured output for successful steps.
+  - Set `VERIFY_SHOW_FAILURE_LOG=0` to suppress failed-step logs, or `VERIFY_FAILURE_LOG_LINES=<n>` to change the failure tail length (default `200` lines).
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that contain Leptos `view!` macros.
 - `prettier --check end2end` checks Playwright and other frontend test assets.
