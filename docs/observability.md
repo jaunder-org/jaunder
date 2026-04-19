@@ -19,7 +19,9 @@ E2E tracing currently has two complementary layers:
 - `e2e.test` (automatic, from `end2end/tests/fixtures.ts`)
   - one span per test
   - request timing summary
-  - navigation/resource summaries
+  - navigation lifecycle summary (`e2e.navigation_top_json`)
+  - includes `commit -> hydration` timing when hydration is observed
+  - resource summary
   - timed action summary (`e2e.action_top_json`)
 - `e2e.flow.*` (manual semantic phases, from `end2end/tests/perf.ts`)
   - opt-in for selected scenarios
@@ -43,4 +45,6 @@ The analyzer reports:
 - slowest spans overall
 - slowest `e2e.test` spans
 - top e2e action hotspots
+- top navigation phase hotspots and slow targets
+- per-project/browser e2e duration breakdown
 - per-trace duration totals

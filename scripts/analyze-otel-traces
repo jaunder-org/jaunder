@@ -283,6 +283,195 @@ function printE2eActionHotspots(spans, top) {
     console.log("");
 }
 
+function toUrlPath(value) {
+    if (typeof value !== "string" || value.length === 0) {
+        return "";
+    }
+    try {
+        const parsed = new URL(value);
+        return `${parsed.host}${parsed.pathname}`;
+    } catch (_error) {
+        return value;
+    }
+}
+
+function asFiniteNumber(value) {
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function printE2eNavigationHotspots(spans, top) {
+    const phaseTotals = new Map();
+    const urlTotals = new Map();
+    const e2eTests = spans.filter((span) => span.name === "e2e.test");
+
+    const addPhase = (name, value) => {
+        if (!Number.isFinite(value) || value < 0) {
+            return;
+        }
+        const current = phaseTotals.get(name) || {
+            count: 0,
+            totalMs: 0,
+            maxMs: 0,
+        };
+        current.count += 1;
+        current.totalMs += value;
+        current.maxMs = Math.max(current.maxMs, value);
+        phaseTotals.set(name, current);
+    };
+
+    for (const span of e2eTests) {
+        const topNavigations = parseJsonAttr(
+            span.raw,
+            "e2e.navigation_top_json",
+            [],
+        );
+        if (!Array.isArray(topNavigations)) {
+            continue;
+        }
+
+        for (const navigation of topNavigations) {
+            const totalMs = asFiniteNumber(navigation.totalMs);
+            const requestMs = asFiniteNumber(navigation.requestMs);
+            const commitToDomContentLoadedMs = asFiniteNumber(
+                navigation.commitToDomContentLoadedMs,
+            );
+            const commitToHydrationMs = asFiniteNumber(
+                navigation.commitToHydrationMs,
+            );
+            const domContentLoadedToLoadMs = asFiniteNumber(
+                navigation.domContentLoadedToLoadMs,
+            );
+            const loadToHydrationMs = asFiniteNumber(
+                navigation.loadToHydrationMs,
+            );
+
+            addPhase("navigation.total", totalMs);
+            addPhase("navigation.request", requestMs);
+            addPhase(
+                "navigation.commit_to_domcontentloaded",
+                commitToDomContentLoadedMs,
+            );
+            addPhase("navigation.commit_to_hydration", commitToHydrationMs);
+            addPhase(
+                "navigation.domcontentloaded_to_load",
+                domContentLoadedToLoadMs,
+            );
+            addPhase("navigation.load_to_hydration", loadToHydrationMs);
+
+            const urlPath = toUrlPath(navigation.url);
+            if (!urlPath || totalMs === null || totalMs < 0) {
+                continue;
+            }
+            const currentUrl = urlTotals.get(urlPath) || {
+                count: 0,
+                totalMs: 0,
+                maxMs: 0,
+            };
+            currentUrl.count += 1;
+            currentUrl.totalMs += totalMs;
+            currentUrl.maxMs = Math.max(currentUrl.maxMs, totalMs);
+            urlTotals.set(urlPath, currentUrl);
+        }
+    }
+
+    const phaseRows = [...phaseTotals.entries()]
+        .map(([name, stats]) => ({
+            name,
+            count: stats.count,
+            avgMs: stats.totalMs / stats.count,
+            maxMs: stats.maxMs,
+            totalMs: stats.totalMs,
+        }))
+        .sort((a, b) => b.maxMs - a.maxMs)
+        .slice(0, top);
+    if (phaseRows.length > 0) {
+        console.log(
+            `Top ${top} navigation phase hotspots (from e2e.navigation_top_json)`,
+        );
+        console.log("max_ms      avg_ms      total_ms     count  phase");
+        for (const row of phaseRows) {
+            console.log(
+                `${padLeft(row.maxMs.toFixed(3), 10)}  ${padLeft(row.avgMs.toFixed(3), 10)}  ${padLeft(row.totalMs.toFixed(3), 10)}  ${padLeft(row.count, 5)}  ${row.name}`,
+            );
+        }
+        console.log("");
+    }
+
+    const urlRows = [...urlTotals.entries()]
+        .map(([path, stats]) => ({
+            path,
+            count: stats.count,
+            avgMs: stats.totalMs / stats.count,
+            maxMs: stats.maxMs,
+            totalMs: stats.totalMs,
+        }))
+        .sort((a, b) => b.maxMs - a.maxMs)
+        .slice(0, top);
+    if (urlRows.length > 0) {
+        console.log(`Top ${top} slow navigation targets`);
+        console.log("max_ms      avg_ms      total_ms     count  target");
+        for (const row of urlRows) {
+            console.log(
+                `${padLeft(row.maxMs.toFixed(3), 10)}  ${padLeft(row.avgMs.toFixed(3), 10)}  ${padLeft(row.totalMs.toFixed(3), 10)}  ${padLeft(row.count, 5)}  ${row.path}`,
+            );
+        }
+        console.log("");
+    }
+}
+
+function printE2eByProject(spans) {
+    const tests = spans.filter((span) => span.name === "e2e.test");
+    if (tests.length === 0) {
+        return;
+    }
+
+    const totals = new Map();
+    for (const span of tests) {
+        const project = getAttr(span.raw, "e2e.project") || "-";
+        const actionCount = Number(
+            getAttr(span.raw, "e2e.action_count") || "0",
+        );
+        const requestCount = Number(
+            getAttr(span.raw, "e2e.request_count") || "0",
+        );
+        const current = totals.get(project) || {
+            count: 0,
+            totalMs: 0,
+            maxMs: 0,
+            actions: 0,
+            requests: 0,
+        };
+        current.count += 1;
+        current.totalMs += span.durationMs;
+        current.maxMs = Math.max(current.maxMs, span.durationMs);
+        current.actions += Number.isFinite(actionCount) ? actionCount : 0;
+        current.requests += Number.isFinite(requestCount) ? requestCount : 0;
+        totals.set(project, current);
+    }
+
+    const rows = [...totals.entries()]
+        .map(([project, stats]) => ({
+            project,
+            count: stats.count,
+            avgMs: stats.totalMs / stats.count,
+            maxMs: stats.maxMs,
+            avgActions: stats.actions / stats.count,
+            avgRequests: stats.requests / stats.count,
+        }))
+        .sort((a, b) => b.avgMs - a.avgMs);
+
+    console.log("E2E test duration by project");
+    console.log(
+        "project     tests     avg_ms      max_ms      avg_actions  avg_requests",
+    );
+    for (const row of rows) {
+        console.log(
+            `${padRight(truncate(row.project, 9), 9)}  ${padLeft(row.count, 5)}  ${padLeft(row.avgMs.toFixed(3), 10)}  ${padLeft(row.maxMs.toFixed(3), 10)}  ${padLeft(row.avgActions.toFixed(2), 11)}  ${padLeft(row.avgRequests.toFixed(2), 12)}`,
+        );
+    }
+    console.log("");
+}
+
 function printTraceTotals(spans, top) {
     const totals = new Map();
 
@@ -347,6 +536,8 @@ function main() {
     printSlowest(allSpans, parsed.top);
     printSlowestE2eTests(allSpans, parsed.top);
     printE2eActionHotspots(allSpans, parsed.top);
+    printE2eNavigationHotspots(allSpans, parsed.top);
+    printE2eByProject(allSpans);
     printTraceTotals(allSpans, parsed.top);
 }
 
