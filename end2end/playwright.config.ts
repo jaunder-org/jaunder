@@ -1,6 +1,11 @@
 import { devices, defineConfig } from "@playwright/test";
 
 const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
+const hydrationHeavyTimeoutScale = 1.9;
+const chromiumProjectTimeoutMs = 30 * 1000;
+const hydrationHeavyProjectTimeoutMs = Math.ceil(
+  chromiumProjectTimeoutMs * hydrationHeavyTimeoutScale,
+);
 
 /**
  * Read environment variables from file.
@@ -54,6 +59,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
+      timeout: chromiumProjectTimeoutMs,
       use: {
         ...devices["Desktop Chrome"],
       },
@@ -61,6 +67,7 @@ export default defineConfig({
 
     {
       name: "firefox",
+      timeout: hydrationHeavyProjectTimeoutMs,
       use: {
         ...devices["Desktop Firefox"],
       },
@@ -68,6 +75,7 @@ export default defineConfig({
 
     {
       name: "webkit",
+      timeout: hydrationHeavyProjectTimeoutMs,
       use: {
         ...devices["Desktop Safari"],
       },

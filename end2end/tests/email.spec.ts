@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures";
+import { test, expect, hydrationHeavyTimeoutMs } from "./fixtures";
 import * as fs from "fs";
 import { waitForHydration } from "./hydration";
 
@@ -37,8 +37,10 @@ async function waitForLatestEmail(timeoutMs = 5000): Promise<CapturedEmail> {
 }
 
 // M3.10.11: Full email verification flow.
-test("email verification flow completes successfully", async ({ page }) => {
-  test.setTimeout(15_000);
+test("email verification flow completes successfully", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
 
   // Log in
   await page.goto("http://localhost:3000/login");

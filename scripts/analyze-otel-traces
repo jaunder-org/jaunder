@@ -9,16 +9,18 @@ function usage() {
     console.log(`Analyze OpenTelemetry JSONL traces exported by the VM e2e collector.
 
 Usage:
-  scripts/analyze-otel-traces [--top N] [--trace TRACE_ID] <otel-traces.jsonl>...
+  scripts/analyze-otel-traces [--top N] [--trace TRACE_ID] [--project NAME] <otel-traces.jsonl>...
 
 Examples:
   scripts/analyze-otel-traces /nix/store/.../otel-traces.jsonl
-  scripts/analyze-otel-traces --top 40 --trace 11111111111111111111111111111111 /nix/store/.../otel-traces.jsonl`);
+  scripts/analyze-otel-traces --top 40 --trace 11111111111111111111111111111111 /nix/store/.../otel-traces.jsonl
+  scripts/analyze-otel-traces --project firefox /nix/store/.../otel-traces.jsonl`);
 }
 
 function parseArgs(argv) {
     let top = 25;
     let traceFilter = "";
+    let projectFilter = "";
     const inputs = [];
 
     for (let i = 0; i < argv.length; i += 1) {
@@ -43,6 +45,14 @@ function parseArgs(argv) {
             traceFilter = argv[i];
             continue;
         }
+        if (arg === "--project") {
+            i += 1;
+            if (i >= argv.length) {
+                throw new Error("--project requires a value");
+            }
+            projectFilter = argv[i];
+            continue;
+        }
         if (arg === "--help" || arg === "-h") {
             usage();
             process.exit(0);
@@ -54,7 +64,7 @@ function parseArgs(argv) {
         throw new Error("at least one input file is required");
     }
 
-    return { top, traceFilter, inputs };
+    return { top, traceFilter, projectFilter, inputs };
 }
 
 function getAttr(span, key) {
@@ -91,7 +101,7 @@ function parseDurationMs(span) {
     return Number(nanos) / 1_000_000;
 }
 
-function readSpans(filePath, traceFilter) {
+function readSpans(filePath, traceFilter, projectFilter) {
     const raw = fs.readFileSync(filePath, "utf8");
     const lines = raw.split("\n").filter((line) => line.trim().length > 0);
     const spans = [];
@@ -121,6 +131,15 @@ function readSpans(filePath, traceFilter) {
                     if (traceFilter && span.traceId !== traceFilter) {
                         continue;
                     }
+                    const project = getAttr(span, "e2e.project");
+                    if (
+                        projectFilter &&
+                        span.name &&
+                        span.name.startsWith("e2e.") &&
+                        project !== projectFilter
+                    ) {
+                        continue;
+                    }
                     spans.push({
                         raw: span,
                         source: filePath,
@@ -130,6 +149,7 @@ function readSpans(filePath, traceFilter) {
                         name: span.name || "",
                         method: getAttr(span, "method"),
                         uri: getAttr(span, "uri"),
+                        project,
                         busyNs: getAttr(span, "busy_ns"),
                         idleNs: getAttr(span, "idle_ns"),
                         durationMs: parseDurationMs(span),
@@ -690,6 +710,247 @@ function printE2eHydrationVsApi(spans, top) {
     console.log("");
 }
 
+function printNavigationPhaseComponentHotspots(spans, top) {
+    const phases = [
+        {
+            field: "commitToHydrationMs",
+            label: "commit_to_hydration",
+        },
+        { field: "wasmInitMs", label: "wasm_init" },
+        { field: "leptosHydrateMs", label: "leptos_hydrate" },
+        {
+            field: "postHydrateEffectsMs",
+            label: "post_hydrate_effects",
+        },
+    ];
+    const e2eTests = spans.filter((span) => span.name === "e2e.test");
+    if (e2eTests.length === 0) {
+        return;
+    }
+
+    const samples = [];
+    const targetTotals = new Map();
+    const phaseProjectTotals = new Map();
+
+    for (const span of e2eTests) {
+        const project = span.project || "-";
+        const test = getAttr(span.raw, "e2e.test") || "-";
+        const navigations = parseJsonAttr(
+            span.raw,
+            "e2e.navigation_top_json",
+            [],
+        );
+        if (!Array.isArray(navigations)) {
+            continue;
+        }
+
+        for (const navigation of navigations) {
+            const target = toUrlPath(navigation.url || "-");
+            for (const phase of phases) {
+                const value = asFiniteNumber(navigation[phase.field]);
+                if (value === null || value < 0) {
+                    continue;
+                }
+
+                samples.push({
+                    phase: phase.label,
+                    project,
+                    target,
+                    traceId: span.traceId,
+                    test,
+                    value,
+                });
+
+                const targetKey = `${phase.label}\n${project}\n${target}`;
+                const targetCurrent = targetTotals.get(targetKey) || {
+                    phase: phase.label,
+                    project,
+                    target,
+                    count: 0,
+                    totalMs: 0,
+                    maxMs: 0,
+                };
+                targetCurrent.count += 1;
+                targetCurrent.totalMs += value;
+                targetCurrent.maxMs = Math.max(targetCurrent.maxMs, value);
+                targetTotals.set(targetKey, targetCurrent);
+
+                const phaseProjectKey = `${phase.label}\n${project}`;
+                const phaseProjectCurrent = phaseProjectTotals.get(
+                    phaseProjectKey,
+                ) || {
+                    phase: phase.label,
+                    project,
+                    count: 0,
+                    totalMs: 0,
+                    maxMs: 0,
+                };
+                phaseProjectCurrent.count += 1;
+                phaseProjectCurrent.totalMs += value;
+                phaseProjectCurrent.maxMs = Math.max(
+                    phaseProjectCurrent.maxMs,
+                    value,
+                );
+                phaseProjectTotals.set(phaseProjectKey, phaseProjectCurrent);
+            }
+        }
+    }
+
+    const slowSamples = samples.sort((a, b) => b.value - a.value).slice(0, top);
+    if (slowSamples.length > 0) {
+        console.log(`Top ${top} navigation phase component samples`);
+        console.log(
+            "phase                project    ms          trace_id                           target",
+        );
+        for (const row of slowSamples) {
+            console.log(
+                `${padRight(truncate(row.phase, 20), 20)}  ${padRight(truncate(row.project, 9), 9)}  ${padLeft(row.value.toFixed(3), 10)}  ${padRight(truncate(row.traceId, 32), 32)}  ${truncate(row.target, 65)}`,
+            );
+        }
+        console.log("");
+    }
+
+    const slowTargets = [...targetTotals.values()]
+        .map((stats) => ({
+            phase: stats.phase,
+            project: stats.project,
+            target: stats.target,
+            count: stats.count,
+            avgMs: stats.totalMs / stats.count,
+            maxMs: stats.maxMs,
+        }))
+        .sort((a, b) => b.maxMs - a.maxMs)
+        .slice(0, top);
+    if (slowTargets.length > 0) {
+        console.log(`Top ${top} navigation phase component targets`);
+        console.log(
+            "phase                project    max_ms      avg_ms      count  target",
+        );
+        for (const row of slowTargets) {
+            console.log(
+                `${padRight(truncate(row.phase, 20), 20)}  ${padRight(truncate(row.project, 9), 9)}  ${padLeft(row.maxMs.toFixed(3), 10)}  ${padLeft(row.avgMs.toFixed(3), 10)}  ${padLeft(row.count, 5)}  ${truncate(row.target, 55)}`,
+            );
+        }
+        console.log("");
+    }
+
+    const phaseProjectRows = [...phaseProjectTotals.values()]
+        .map((stats) => ({
+            phase: stats.phase,
+            project: stats.project,
+            count: stats.count,
+            avgMs: stats.totalMs / stats.count,
+            maxMs: stats.maxMs,
+        }))
+        .sort((a, b) => b.avgMs - a.avgMs)
+        .slice(0, top);
+    if (phaseProjectRows.length > 0) {
+        console.log("Navigation phase components by project");
+        console.log(
+            "phase                project    avg_ms      max_ms      count",
+        );
+        for (const row of phaseProjectRows) {
+            console.log(
+                `${padRight(truncate(row.phase, 20), 20)}  ${padRight(truncate(row.project, 9), 9)}  ${padLeft(row.avgMs.toFixed(3), 10)}  ${padLeft(row.maxMs.toFixed(3), 10)}  ${padLeft(row.count, 5)}`,
+            );
+        }
+        console.log("");
+    }
+}
+
+function printHydrationRuntimeComponents(spans, top) {
+    const components = [
+        { field: "hydrationMs", label: "hydration" },
+        { field: "wasmResourceMs", label: "wasm_resource" },
+        { field: "wasmInitMs", label: "wasm_init" },
+        { field: "leptosHydrateMs", label: "leptos_hydrate" },
+        { field: "postHydrateEffectsMs", label: "post_hydrate_effects" },
+    ];
+    const e2eTests = spans.filter((span) => span.name === "e2e.test");
+    if (e2eTests.length === 0) {
+        return;
+    }
+
+    const rows = [];
+    const projectTotals = new Map();
+
+    for (const span of e2eTests) {
+        const project = span.project || "-";
+        const test = getAttr(span.raw, "e2e.test") || "-";
+        const runtime = parseJsonAttr(
+            span.raw,
+            "e2e.hydration_runtime_json",
+            {},
+        );
+        if (!runtime || typeof runtime !== "object") {
+            continue;
+        }
+        for (const component of components) {
+            const value = asFiniteNumber(runtime[component.field]);
+            if (value === null || value < 0) {
+                continue;
+            }
+            rows.push({
+                component: component.label,
+                project,
+                value,
+                traceId: span.traceId,
+                test,
+            });
+
+            const key = `${component.label}\n${project}`;
+            const current = projectTotals.get(key) || {
+                component: component.label,
+                project,
+                count: 0,
+                totalMs: 0,
+                maxMs: 0,
+            };
+            current.count += 1;
+            current.totalMs += value;
+            current.maxMs = Math.max(current.maxMs, value);
+            projectTotals.set(key, current);
+        }
+    }
+
+    const topRows = rows.sort((a, b) => b.value - a.value).slice(0, top);
+    if (topRows.length > 0) {
+        console.log(`Top ${top} hydration runtime component samples`);
+        console.log(
+            "component            project    ms          trace_id                           test",
+        );
+        for (const row of topRows) {
+            console.log(
+                `${padRight(truncate(row.component, 20), 20)}  ${padRight(truncate(row.project, 9), 9)}  ${padLeft(row.value.toFixed(3), 10)}  ${padRight(truncate(row.traceId, 32), 32)}  ${truncate(row.test, 38)}`,
+            );
+        }
+        console.log("");
+    }
+
+    const projectRows = [...projectTotals.values()]
+        .map((stats) => ({
+            component: stats.component,
+            project: stats.project,
+            count: stats.count,
+            avgMs: stats.totalMs / stats.count,
+            maxMs: stats.maxMs,
+        }))
+        .sort((a, b) => b.avgMs - a.avgMs)
+        .slice(0, top);
+    if (projectRows.length > 0) {
+        console.log("Hydration runtime components by project");
+        console.log(
+            "component            project    avg_ms      max_ms      count",
+        );
+        for (const row of projectRows) {
+            console.log(
+                `${padRight(truncate(row.component, 20), 20)}  ${padRight(truncate(row.project, 9), 9)}  ${padLeft(row.avgMs.toFixed(3), 10)}  ${padLeft(row.maxMs.toFixed(3), 10)}  ${padLeft(row.count, 5)}`,
+            );
+        }
+        console.log("");
+    }
+}
+
 function printE2eByProject(spans) {
     const tests = spans.filter((span) => span.name === "e2e.test");
     if (tests.length === 0) {
@@ -791,7 +1052,11 @@ function main() {
         }
 
         try {
-            const spans = readSpans(resolved, parsed.traceFilter);
+            const spans = readSpans(
+                resolved,
+                parsed.traceFilter,
+                parsed.projectFilter,
+            );
             allSpans.push(...spans);
         } catch (error) {
             console.error(`error: ${error.message}`);
@@ -803,6 +1068,10 @@ function main() {
         console.log("No spans found in the provided trace files.");
         return;
     }
+    if (parsed.projectFilter) {
+        console.log(`Project filter: ${parsed.projectFilter}`);
+        console.log("");
+    }
 
     printSlowest(allSpans, parsed.top);
     printSlowestE2eTests(allSpans, parsed.top);
@@ -811,6 +1080,8 @@ function main() {
     printE2eLongTaskHotspots(allSpans, parsed.top);
     printE2eResourceHotspots(allSpans, parsed.top);
     printE2eHydrationVsApi(allSpans, parsed.top);
+    printNavigationPhaseComponentHotspots(allSpans, parsed.top);
+    printHydrationRuntimeComponents(allSpans, parsed.top);
     printE2eByProject(allSpans);
     printTraceTotals(allSpans, parsed.top);
 }

@@ -1,4 +1,9 @@
-import { expect, test as base, type Request } from "@playwright/test";
+import {
+  expect,
+  test as base,
+  type Request,
+  type TestInfo,
+} from "@playwright/test";
 import { drainActionsForTest, setCurrentActionTestKey } from "./actions";
 import {
   buildSpan,
@@ -83,6 +88,18 @@ type NavigationSummary = {
   postHydrateEffectsMs: number | null;
 };
 
+const hydrationHeavyTimeoutScale = 1.9;
+
+export function hydrationHeavyTimeoutMs(
+  testInfo: TestInfo,
+  chromiumBudgetMs: number,
+): number {
+  if (testInfo.project.name === "chromium") {
+    return chromiumBudgetMs;
+  }
+  return Math.ceil(chromiumBudgetMs * hydrationHeavyTimeoutScale);
+}
+
 const test = base.extend<{ _autoPerfSpan: void }>({
   _autoPerfSpan: [
     async ({ page }, use, testInfo) => {
@@ -135,6 +152,7 @@ const test = base.extend<{ _autoPerfSpan: void }>({
           }>;
           __jaunder_perf?: unknown;
           __jaunderHydrationNotified?: boolean;
+          __jaunderHydrationNotifyRetries?: number;
           __jaunderRecordHydration?: (payload: {
             href: string;
             perf?: unknown;
@@ -142,16 +160,30 @@ const test = base.extend<{ _autoPerfSpan: void }>({
         };
         globalScope.__jaunderLongTasks = [];
         globalScope.__jaunderHydrationNotified = false;
+        globalScope.__jaunderHydrationNotifyRetries = 0;
 
         const notifyHydration = () => {
           if (globalScope.__jaunderHydrationNotified) return;
           const body = document.body;
           if (!body || !body.hasAttribute("data-hydrated")) return;
+          const perf = globalScope.__jaunder_perf;
+          if (!perf || typeof perf !== "object") {
+            const retries = globalScope.__jaunderHydrationNotifyRetries ?? 0;
+            if (retries < 20) {
+              globalScope.__jaunderHydrationNotifyRetries = retries + 1;
+              setTimeout(notifyHydration, 25);
+              return;
+            }
+          }
           globalScope.__jaunderHydrationNotified = true;
           try {
             globalScope.__jaunderRecordHydration?.({
               href: location.href,
-              perf: globalScope.__jaunder_perf,
+              perf:
+                globalScope.__jaunder_perf &&
+                typeof globalScope.__jaunder_perf === "object"
+                  ? globalScope.__jaunder_perf
+                  : undefined,
             });
           } catch {
             // Ignore cross-context bridge errors while collecting diagnostics.

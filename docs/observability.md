@@ -47,6 +47,10 @@ The analyzer reports:
 - top e2e action hotspots
 - top navigation phase hotspots and slow targets
 - per-project/browser e2e duration breakdown
+- per-navigation hydration component hotspots (`wasm_init`, `leptos_hydrate`,
+  `post_hydrate_effects`, `commit_to_hydration`) by sample, target, and project
+- hydration runtime component hotspots from `e2e.hydration_runtime_json` (per
+  test and per project)
 - per-trace duration totals
 
 To run both e2e VM checks and immediately analyze the produced traces, use:
@@ -59,6 +63,18 @@ Optional filters:
 
 - `--top N` controls how many rows each section prints.
 - `--trace TRACE_ID` restricts analysis to one trace id.
+- `--project NAME` focuses e2e analysis for one browser/project (for example
+  `--project firefox` when debugging timeout pressure).
+
+## Timeout Budgeting
+
+E2E tests that are hydration-heavy should use
+`hydrationHeavyTimeoutMs(testInfo, chromiumBudgetMs)` from
+`end2end/tests/fixtures.ts` instead of hard-coded timeout numbers.
+
+This applies a project-aware multiplier derived from observed p90 hydration
+latency so Firefox/WebKit runs get realistic budgets without increasing
+Chromium timeouts unnecessarily.
 
 ## WASM Bundle Audit
 
