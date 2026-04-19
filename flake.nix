@@ -403,6 +403,8 @@
               protocols:
                 grpc:
                   endpoint: 127.0.0.1:4317
+                http:
+                  endpoint: 127.0.0.1:4318
           processors:
             batch: {}
           exporters:
@@ -618,6 +620,7 @@
                   + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
                   + " JAUNDER_E2E_TRACE_ID=11111111111111111111111111111111"
                   + " JAUNDER_E2E_TRACEPARENT=00-11111111111111111111111111111111-1111111111111111-01"
+                  + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
                   + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
                   + " --config playwright.nix.config.js --project chromium"
                 )
@@ -630,6 +633,7 @@
                   + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
                   + " JAUNDER_E2E_TRACE_ID=22222222222222222222222222222222"
                   + " JAUNDER_E2E_TRACEPARENT=00-22222222222222222222222222222222-2222222222222222-01"
+                  + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
                   + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
                   + " --config playwright.nix.config.js --project firefox"
                 )
@@ -741,6 +745,7 @@
                   + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
                   + " JAUNDER_E2E_TRACE_ID=33333333333333333333333333333333"
                   + " JAUNDER_E2E_TRACEPARENT=00-33333333333333333333333333333333-3333333333333333-01"
+                  + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
                   + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
                   + " --config playwright.nix.config.js --project chromium"
                 )
@@ -753,6 +758,7 @@
                   + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
                   + " JAUNDER_E2E_TRACE_ID=44444444444444444444444444444444"
                   + " JAUNDER_E2E_TRACEPARENT=00-44444444444444444444444444444444-4444444444444444-01"
+                  + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
                   + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
                   + " --config playwright.nix.config.js --project firefox"
                 )
