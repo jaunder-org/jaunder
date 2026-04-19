@@ -1,0 +1,171 @@
+#!/usr/bin/env node
+
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+const zlib = require("zlib");
+const { spawnSync } = require("child_process");
+
+function usage() {
+  console.log(`Audit built WASM bundle sizes for the Leptos site package.
+
+Usage:
+  scripts/audit-wasm-bundle [--site-path PATH] [--json]
+
+Examples:
+  scripts/audit-wasm-bundle
+  scripts/audit-wasm-bundle --site-path /nix/store/...-jaunder-site
+  scripts/audit-wasm-bundle --json`);
+}
+
+function parseArgs(argv) {
+  let sitePath = "";
+  let outputJson = false;
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--site-path") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--site-path requires a value");
+      }
+      sitePath = argv[i];
+      continue;
+    }
+    if (arg === "--json") {
+      outputJson = true;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      usage();
+      process.exit(0);
+    }
+    throw new Error(`unknown argument: ${arg}`);
+  }
+
+  return { sitePath, outputJson };
+}
+
+function runAndCapture(command, args) {
+  const result = spawnSync(command, args, { encoding: "utf8" });
+  if (result.status !== 0) {
+    if (result.stdout) {
+      process.stdout.write(result.stdout);
+    }
+    if (result.stderr) {
+      process.stderr.write(result.stderr);
+    }
+    throw new Error(
+      `${command} ${args.join(" ")} failed with exit code ${result.status}`,
+    );
+  }
+
+  return [result.stdout, result.stderr]
+    .filter((value) => typeof value === "string" && value.length > 0)
+    .join("\n");
+}
+
+function resolveSitePath(explicitPath) {
+  if (explicitPath) {
+    return explicitPath;
+  }
+
+  const output = runAndCapture("nix", [
+    "build",
+    ".#site",
+    "--no-link",
+    "--print-out-paths",
+  ]);
+
+  const storePath = output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("/nix/store/"))
+    .at(-1);
+
+  if (!storePath) {
+    throw new Error("could not parse output path from `nix build .#site`");
+  }
+
+  return storePath;
+}
+
+function formatBytes(bytes) {
+  const units = ["B", "KiB", "MiB", "GiB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function fileMetrics(filePath) {
+  const bytes = fs.readFileSync(filePath);
+  const gzip = zlib.gzipSync(bytes, { level: zlib.constants.Z_BEST_COMPRESSION });
+  const brotli = zlib.brotliCompressSync(bytes, {
+    params: {
+      [zlib.constants.BROTLI_PARAM_QUALITY]: 11,
+    },
+  });
+
+  return {
+    path: filePath,
+    rawBytes: bytes.length,
+    gzipBytes: gzip.length,
+    brotliBytes: brotli.length,
+  };
+}
+
+function printTable(report) {
+  console.log("WASM bundle audit");
+  console.log(`site output: ${report.sitePath}`);
+  console.log("");
+  console.log("artifact          raw        gzip       brotli");
+  for (const row of report.artifacts) {
+    const name = path.relative(report.sitePath, row.path).padEnd(16, " ");
+    const raw = formatBytes(row.rawBytes).padStart(9, " ");
+    const gzip = formatBytes(row.gzipBytes).padStart(9, " ");
+    const brotli = formatBytes(row.brotliBytes).padStart(9, " ");
+    console.log(`${name}  ${raw}  ${gzip}  ${brotli}`);
+  }
+}
+
+function main() {
+  let args;
+  try {
+    args = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(`error: ${error.message}`);
+    usage();
+    process.exit(1);
+  }
+
+  const sitePath = resolveSitePath(args.sitePath);
+  const artifacts = [
+    path.join(sitePath, "pkg", "jaunder_bg.wasm"),
+    path.join(sitePath, "pkg", "jaunder.js"),
+  ];
+
+  for (const artifact of artifacts) {
+    if (!fs.existsSync(artifact)) {
+      throw new Error(`artifact not found: ${artifact}`);
+    }
+  }
+
+  const report = {
+    sitePath,
+    artifacts: artifacts.map(fileMetrics),
+  };
+
+  if (args.outputJson) {
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
+
+  printTable(report);
+}
+
+main();
