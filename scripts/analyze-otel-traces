@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
-'use strict';
+"use strict";
 
-const fs = require('fs');
-const path = require('path');
+const fs = require("fs");
+const path = require("path");
 
 function usage() {
-  console.log(`Analyze OpenTelemetry JSONL traces exported by the VM e2e collector.
+    console.log(`Analyze OpenTelemetry JSONL traces exported by the VM e2e collector.
 
 Usage:
   scripts/analyze-otel-traces [--top N] [--trace TRACE_ID] <otel-traces.jsonl>...
@@ -17,214 +17,337 @@ Examples:
 }
 
 function parseArgs(argv) {
-  let top = 25;
-  let traceFilter = '';
-  const inputs = [];
+    let top = 25;
+    let traceFilter = "";
+    const inputs = [];
 
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--top') {
-      i += 1;
-      if (i >= argv.length) {
-        throw new Error('--top requires a value');
-      }
-      const parsed = Number.parseInt(argv[i], 10);
-      if (!Number.isInteger(parsed) || parsed <= 0) {
-        throw new Error('--top must be a positive integer');
-      }
-      top = parsed;
-      continue;
+    for (let i = 0; i < argv.length; i += 1) {
+        const arg = argv[i];
+        if (arg === "--top") {
+            i += 1;
+            if (i >= argv.length) {
+                throw new Error("--top requires a value");
+            }
+            const parsed = Number.parseInt(argv[i], 10);
+            if (!Number.isInteger(parsed) || parsed <= 0) {
+                throw new Error("--top must be a positive integer");
+            }
+            top = parsed;
+            continue;
+        }
+        if (arg === "--trace") {
+            i += 1;
+            if (i >= argv.length) {
+                throw new Error("--trace requires a value");
+            }
+            traceFilter = argv[i];
+            continue;
+        }
+        if (arg === "--help" || arg === "-h") {
+            usage();
+            process.exit(0);
+        }
+        inputs.push(arg);
     }
-    if (arg === '--trace') {
-      i += 1;
-      if (i >= argv.length) {
-        throw new Error('--trace requires a value');
-      }
-      traceFilter = argv[i];
-      continue;
-    }
-    if (arg === '--help' || arg === '-h') {
-      usage();
-      process.exit(0);
-    }
-    inputs.push(arg);
-  }
 
-  if (inputs.length === 0) {
-    throw new Error('at least one input file is required');
-  }
+    if (inputs.length === 0) {
+        throw new Error("at least one input file is required");
+    }
 
-  return { top, traceFilter, inputs };
+    return { top, traceFilter, inputs };
 }
 
 function getAttr(span, key) {
-  const attrs = Array.isArray(span.attributes) ? span.attributes : [];
-  const attr = attrs.find((entry) => entry && entry.key === key);
-  if (!attr || !attr.value) {
-    return '';
-  }
-  if (typeof attr.value.stringValue === 'string') {
-    return attr.value.stringValue;
-  }
-  if (attr.value.intValue !== undefined && attr.value.intValue !== null) {
-    return String(attr.value.intValue);
-  }
-  return '';
+    const attrs = Array.isArray(span.attributes) ? span.attributes : [];
+    const attr = attrs.find((entry) => entry && entry.key === key);
+    if (!attr || !attr.value) {
+        return "";
+    }
+    if (typeof attr.value.stringValue === "string") {
+        return attr.value.stringValue;
+    }
+    if (attr.value.intValue !== undefined && attr.value.intValue !== null) {
+        return String(attr.value.intValue);
+    }
+    return "";
+}
+
+function parseJsonAttr(span, key, fallback) {
+    const raw = getAttr(span, key);
+    if (!raw) {
+        return fallback;
+    }
+    try {
+        return JSON.parse(raw);
+    } catch (_error) {
+        return fallback;
+    }
 }
 
 function parseDurationMs(span) {
-  const start = BigInt(span.startTimeUnixNano);
-  const end = BigInt(span.endTimeUnixNano);
-  const nanos = end - start;
-  return Number(nanos) / 1_000_000;
+    const start = BigInt(span.startTimeUnixNano);
+    const end = BigInt(span.endTimeUnixNano);
+    const nanos = end - start;
+    return Number(nanos) / 1_000_000;
 }
 
 function readSpans(filePath, traceFilter) {
-  const raw = fs.readFileSync(filePath, 'utf8');
-  const lines = raw.split('\n').filter((line) => line.trim().length > 0);
-  const spans = [];
+    const raw = fs.readFileSync(filePath, "utf8");
+    const lines = raw.split("\n").filter((line) => line.trim().length > 0);
+    const spans = [];
 
-  for (const line of lines) {
-    let record;
-    try {
-      record = JSON.parse(line);
-    } catch (error) {
-      throw new Error(`failed to parse JSON line in ${filePath}: ${error.message}`);
-    }
-
-    const resourceSpans = Array.isArray(record.resourceSpans) ? record.resourceSpans : [];
-    for (const resourceSpan of resourceSpans) {
-      const scopeSpans = Array.isArray(resourceSpan.scopeSpans) ? resourceSpan.scopeSpans : [];
-      for (const scopeSpan of scopeSpans) {
-        const nestedSpans = Array.isArray(scopeSpan.spans) ? scopeSpan.spans : [];
-        for (const span of nestedSpans) {
-          if (traceFilter && span.traceId !== traceFilter) {
-            continue;
-          }
-          spans.push({
-            source: filePath,
-            traceId: span.traceId || '',
-            spanId: span.spanId || '',
-            parentSpanId: span.parentSpanId || '',
-            name: span.name || '',
-            method: getAttr(span, 'method'),
-            uri: getAttr(span, 'uri'),
-            busyNs: getAttr(span, 'busy_ns'),
-            idleNs: getAttr(span, 'idle_ns'),
-            durationMs: parseDurationMs(span),
-          });
+    for (const line of lines) {
+        let record;
+        try {
+            record = JSON.parse(line);
+        } catch (error) {
+            throw new Error(
+                `failed to parse JSON line in ${filePath}: ${error.message}`,
+            );
         }
-      }
-    }
-  }
 
-  return spans;
+        const resourceSpans = Array.isArray(record.resourceSpans)
+            ? record.resourceSpans
+            : [];
+        for (const resourceSpan of resourceSpans) {
+            const scopeSpans = Array.isArray(resourceSpan.scopeSpans)
+                ? resourceSpan.scopeSpans
+                : [];
+            for (const scopeSpan of scopeSpans) {
+                const nestedSpans = Array.isArray(scopeSpan.spans)
+                    ? scopeSpan.spans
+                    : [];
+                for (const span of nestedSpans) {
+                    if (traceFilter && span.traceId !== traceFilter) {
+                        continue;
+                    }
+                    spans.push({
+                        raw: span,
+                        source: filePath,
+                        traceId: span.traceId || "",
+                        spanId: span.spanId || "",
+                        parentSpanId: span.parentSpanId || "",
+                        name: span.name || "",
+                        method: getAttr(span, "method"),
+                        uri: getAttr(span, "uri"),
+                        busyNs: getAttr(span, "busy_ns"),
+                        idleNs: getAttr(span, "idle_ns"),
+                        durationMs: parseDurationMs(span),
+                    });
+                }
+            }
+        }
+    }
+
+    return spans;
 }
 
 function padRight(value, width) {
-  const stringValue = String(value);
-  if (stringValue.length >= width) {
-    return stringValue;
-  }
-  return stringValue + ' '.repeat(width - stringValue.length);
+    const stringValue = String(value);
+    if (stringValue.length >= width) {
+        return stringValue;
+    }
+    return stringValue + " ".repeat(width - stringValue.length);
 }
 
 function padLeft(value, width) {
-  const stringValue = String(value);
-  if (stringValue.length >= width) {
-    return stringValue;
-  }
-  return ' '.repeat(width - stringValue.length) + stringValue;
+    const stringValue = String(value);
+    if (stringValue.length >= width) {
+        return stringValue;
+    }
+    return " ".repeat(width - stringValue.length) + stringValue;
 }
 
 function truncate(value, width) {
-  const stringValue = String(value);
-  if (stringValue.length <= width) {
-    return stringValue;
-  }
-  return stringValue.slice(0, width - 1) + '…';
+    const stringValue = String(value);
+    if (stringValue.length <= width) {
+        return stringValue;
+    }
+    return stringValue.slice(0, width - 1) + "…";
 }
 
 function printSlowest(spans, top) {
-  const sorted = [...spans].sort((a, b) => b.durationMs - a.durationMs).slice(0, top);
+    const sorted = [...spans]
+        .sort((a, b) => b.durationMs - a.durationMs)
+        .slice(0, top);
 
-  console.log(`Top ${top} slowest spans`);
-  console.log('duration_ms  trace_id                           span                                method  uri                       busy_ns     idle_ns     source');
+    console.log(`Top ${top} slowest spans`);
+    console.log(
+        "duration_ms  trace_id                           span                                method  uri                       busy_ns     idle_ns     source",
+    );
 
-  for (const span of sorted) {
-    const row = [
-      padLeft(span.durationMs.toFixed(3), 10),
-      padRight(truncate(span.traceId, 32), 32),
-      padRight(truncate(span.name || '-', 34), 34),
-      padRight(truncate(span.method || '-', 6), 6),
-      padRight(truncate(span.uri || '-', 25), 25),
-      padLeft(span.busyNs || '-', 10),
-      padLeft(span.idleNs || '-', 10),
-      span.source,
-    ];
-    console.log(row.join('  '));
-  }
+    for (const span of sorted) {
+        const row = [
+            padLeft(span.durationMs.toFixed(3), 10),
+            padRight(truncate(span.traceId, 32), 32),
+            padRight(truncate(span.name || "-", 34), 34),
+            padRight(truncate(span.method || "-", 6), 6),
+            padRight(truncate(span.uri || "-", 25), 25),
+            padLeft(span.busyNs || "-", 10),
+            padLeft(span.idleNs || "-", 10),
+            span.source,
+        ];
+        console.log(row.join("  "));
+    }
 
-  console.log('');
+    console.log("");
+}
+
+function printSlowestE2eTests(spans, top) {
+    const e2eTests = spans
+        .filter((span) => span.name === "e2e.test")
+        .map((span) => ({
+            durationMs: span.durationMs,
+            traceId: span.traceId,
+            project: getAttr(span.raw, "e2e.project") || "-",
+            test: getAttr(span.raw, "e2e.test") || "-",
+            actionCount: getAttr(span.raw, "e2e.action_count") || "0",
+            requestCount: getAttr(span.raw, "e2e.request_count") || "0",
+        }))
+        .sort((a, b) => b.durationMs - a.durationMs)
+        .slice(0, top);
+
+    if (e2eTests.length === 0) {
+        return;
+    }
+
+    console.log(`Top ${top} slowest e2e.test spans`);
+    console.log(
+        "duration_ms  project    actions  requests  trace_id                           test",
+    );
+    for (const row of e2eTests) {
+        const values = [
+            padLeft(row.durationMs.toFixed(3), 10),
+            padRight(truncate(row.project, 9), 9),
+            padLeft(row.actionCount, 7),
+            padLeft(row.requestCount, 8),
+            padRight(truncate(row.traceId, 32), 32),
+            truncate(row.test, 50),
+        ];
+        console.log(values.join("  "));
+    }
+    console.log("");
+}
+
+function printE2eActionHotspots(spans, top) {
+    const totals = new Map();
+    const e2eTests = spans.filter((span) => span.name === "e2e.test");
+
+    for (const span of e2eTests) {
+        const topActions = parseJsonAttr(span.raw, "e2e.action_top_json", []);
+        if (!Array.isArray(topActions)) {
+            continue;
+        }
+
+        for (const action of topActions) {
+            const name = typeof action.name === "string" ? action.name : "";
+            const durationMs = Number(action.durationMs);
+            if (!name || !Number.isFinite(durationMs)) {
+                continue;
+            }
+
+            const existing = totals.get(name) || {
+                count: 0,
+                totalMs: 0,
+                maxMs: 0,
+            };
+            existing.count += 1;
+            existing.totalMs += durationMs;
+            existing.maxMs = Math.max(existing.maxMs, durationMs);
+            totals.set(name, existing);
+        }
+    }
+
+    const rows = [...totals.entries()]
+        .map(([name, stats]) => ({
+            name,
+            count: stats.count,
+            avgMs: stats.totalMs / stats.count,
+            maxMs: stats.maxMs,
+            totalMs: stats.totalMs,
+        }))
+        .sort((a, b) => b.maxMs - a.maxMs)
+        .slice(0, top);
+
+    if (rows.length === 0) {
+        return;
+    }
+
+    console.log(`Top ${top} e2e action hotspots (from e2e.action_top_json)`);
+    console.log("max_ms      avg_ms      total_ms     count  action");
+    for (const row of rows) {
+        console.log(
+            `${padLeft(row.maxMs.toFixed(3), 10)}  ${padLeft(row.avgMs.toFixed(3), 10)}  ${padLeft(row.totalMs.toFixed(3), 10)}  ${padLeft(row.count, 5)}  ${row.name}`,
+        );
+    }
+    console.log("");
 }
 
 function printTraceTotals(spans, top) {
-  const totals = new Map();
+    const totals = new Map();
 
-  for (const span of spans) {
-    const current = totals.get(span.traceId) || { totalMs: 0, spans: 0 };
-    current.totalMs += span.durationMs;
-    current.spans += 1;
-    totals.set(span.traceId, current);
-  }
+    for (const span of spans) {
+        const current = totals.get(span.traceId) || { totalMs: 0, spans: 0 };
+        current.totalMs += span.durationMs;
+        current.spans += 1;
+        totals.set(span.traceId, current);
+    }
 
-  const rows = [...totals.entries()]
-    .map(([traceId, info]) => ({ traceId, totalMs: info.totalMs, spans: info.spans }))
-    .sort((a, b) => b.totalMs - a.totalMs)
-    .slice(0, top);
+    const rows = [...totals.entries()]
+        .map(([traceId, info]) => ({
+            traceId,
+            totalMs: info.totalMs,
+            spans: info.spans,
+        }))
+        .sort((a, b) => b.totalMs - a.totalMs)
+        .slice(0, top);
 
-  console.log('Trace totals (sum of span durations)');
-  console.log('total_ms     spans  trace_id');
-  for (const row of rows) {
-    console.log(`${padLeft(row.totalMs.toFixed(3), 10)}  ${padLeft(row.spans, 5)}  ${row.traceId}`);
-  }
+    console.log("Trace totals (sum of span durations)");
+    console.log("total_ms     spans  trace_id");
+    for (const row of rows) {
+        console.log(
+            `${padLeft(row.totalMs.toFixed(3), 10)}  ${padLeft(row.spans, 5)}  ${row.traceId}`,
+        );
+    }
 }
 
 function main() {
-  let parsed;
-  try {
-    parsed = parseArgs(process.argv.slice(2));
-  } catch (error) {
-    console.error(`error: ${error.message}`);
-    usage();
-    process.exit(1);
-  }
-
-  const allSpans = [];
-
-  for (const input of parsed.inputs) {
-    const resolved = path.resolve(input);
-    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
-      console.error(`error: file not found: ${input}`);
-      process.exit(1);
-    }
-
+    let parsed;
     try {
-      const spans = readSpans(resolved, parsed.traceFilter);
-      allSpans.push(...spans);
+        parsed = parseArgs(process.argv.slice(2));
     } catch (error) {
-      console.error(`error: ${error.message}`);
-      process.exit(1);
+        console.error(`error: ${error.message}`);
+        usage();
+        process.exit(1);
     }
-  }
 
-  if (allSpans.length === 0) {
-    console.log('No spans found in the provided trace files.');
-    return;
-  }
+    const allSpans = [];
 
-  printSlowest(allSpans, parsed.top);
-  printTraceTotals(allSpans, parsed.top);
+    for (const input of parsed.inputs) {
+        const resolved = path.resolve(input);
+        if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+            console.error(`error: file not found: ${input}`);
+            process.exit(1);
+        }
+
+        try {
+            const spans = readSpans(resolved, parsed.traceFilter);
+            allSpans.push(...spans);
+        } catch (error) {
+            console.error(`error: ${error.message}`);
+            process.exit(1);
+        }
+    }
+
+    if (allSpans.length === 0) {
+        console.log("No spans found in the provided trace files.");
+        return;
+    }
+
+    printSlowest(allSpans, parsed.top);
+    printSlowestE2eTests(allSpans, parsed.top);
+    printE2eActionHotspots(allSpans, parsed.top);
+    printTraceTotals(allSpans, parsed.top);
 }
 
 main();

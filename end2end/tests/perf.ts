@@ -13,10 +13,10 @@ type MarkEntry = {
 };
 
 /**
- * Lightweight per-test timing probe for Playwright flows.
+ * Lightweight semantic flow probe for Playwright tests.
  *
- * Logs a single JSON line so timings are easy to parse in CI output:
- * `[e2e-perf] {...}`
+ * This emits an OTEL span (`e2e.flow.*`) with mark-to-mark phase timings.
+ * It complements the automatic coarse-grained `e2e.test` span in fixtures.ts.
  */
 export function createPerfProbe(testInfo: TestInfo, flow: string) {
   const startMs = Date.now();
