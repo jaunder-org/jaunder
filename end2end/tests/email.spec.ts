@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures";
-import type { Page } from "@playwright/test";
 import * as fs from "fs";
+import { waitForHydration } from "./hydration";
 
 const MAIL_CAPTURE_FILE =
   process.env.JAUNDER_MAIL_CAPTURE_FILE ?? "/tmp/jaunder-mail.jsonl";
@@ -34,10 +34,6 @@ async function waitForLatestEmail(timeoutMs = 5000): Promise<CapturedEmail> {
   throw new Error(
     `timed out waiting for captured email at ${MAIL_CAPTURE_FILE}`,
   );
-}
-
-async function waitForHydration(page: Page): Promise<void> {
-  await page.waitForSelector("body[data-hydrated]");
 }
 
 // M3.10.11: Full email verification flow.
