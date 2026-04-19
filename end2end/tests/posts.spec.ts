@@ -30,15 +30,6 @@ async function waitForSelector(
   });
 }
 
-async function waitForLoadState(
-  page: Page,
-  state: Parameters<Page["waitForLoadState"]>[0],
-): Promise<void> {
-  await withTimedAction(page, `wait.load_state.${state}`, () =>
-    page.waitForLoadState(state),
-  );
-}
-
 async function click(page: Page, selector: string): Promise<void> {
   await withTimedAction(page, "ui.click", () => page.click(selector));
 }
@@ -105,7 +96,7 @@ test("authenticated user can create a post through the UI", async ({
   await page.fill('textarea[name="body"]', "**browser**");
   await page.selectOption('select[name="format"]', "markdown");
   await click(page, 'button[name="publish"][value="true"]');
-  await waitForLoadState(page, "networkidle");
+  await waitForSelector(page, ".success");
 
   await expect(page.locator(".success")).toContainText("Post published.");
   await expect(page.locator(".success")).toContainText("Slug: playwright-post");
@@ -122,7 +113,7 @@ test("authenticated user can save a draft through the UI", async ({ page }) => {
   await page.selectOption('select[name="format"]', "org");
   await page.fill('input[name="slug_override"]', "Draft-Slug");
   await click(page, 'button[name="publish"][value="false"]');
-  await waitForLoadState(page, "networkidle");
+  await waitForSelector(page, ".success");
 
   await expect(page.locator(".success")).toContainText("Draft saved.");
   await expect(page.locator(".success")).toContainText("Slug: draft-slug");
@@ -204,7 +195,7 @@ test("authenticated user can edit a draft post", async ({ page }) => {
   await page.fill('input[name="title"]', "Edited Draft");
   await page.fill('textarea[name="body"]', "**edited content**");
   await click(page, 'button[name="publish"][value="false"]');
-  await waitForLoadState(page, "networkidle");
+  await waitForSelector(page, ".success");
 
   await expect(page.locator(".success")).toContainText("Draft saved.");
   await expect(page.locator(".success")).toContainText(
@@ -247,7 +238,7 @@ test("editing a published post freezes the slug", async ({ page }) => {
   // Save the published post
   await page.fill('input[name="title"]', "Updated Article");
   await click(page, 'button[name="publish"][value="true"]');
-  await waitForLoadState(page, "networkidle");
+  await waitForSelector(page, ".success");
 
   await expect(page.locator(".success")).toContainText("Post updated.");
   const updatedSlug = await page
@@ -328,7 +319,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   const draftRow = page.locator("li", { hasText: "Lifecycle Draft" });
   await expect(draftRow).toBeVisible();
   await draftRow.locator('button:has-text("Publish")').click();
-  await waitForLoadState(page, "networkidle");
+  await waitForSelector(page, ".success");
   await expect(page.locator(".success")).toContainText("Post published.");
 
   await goto(page, permalinkUrl);
