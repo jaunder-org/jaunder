@@ -1,4 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "./fixtures";
+import type { Page } from "@playwright/test";
 import { createPerfProbe } from "./perf";
 
 /** Wait for Leptos WASM hydration to complete before interacting with forms.
@@ -68,7 +69,7 @@ test("login with valid credentials succeeds", async ({ page }, testInfo) => {
   await expect(page.locator("header")).toContainText("Logged in as testlogin");
   await expect(page.locator("header a[href='/logout']")).toBeVisible();
   perf.mark("assertions_complete");
-  perf.log();
+  await perf.log();
 });
 
 test("login with wrong password shows error", async ({ page }) => {

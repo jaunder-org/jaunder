@@ -1,4 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "./fixtures";
+import type { Page } from "@playwright/test";
 import { createPerfProbe } from "./perf";
 
 async function waitForHydration(page: Page): Promise<void> {
@@ -335,7 +336,7 @@ test("per-user timeline lists published posts with pagination", async ({
     page.locator('[data-test="timeline-item"]').last(),
   ).toContainText("Timeline Post 0", { timeout: 10_000 });
   perf.mark("assertions_complete");
-  perf.log({ username });
+  await perf.log({ username });
 });
 
 test("home page shows local timeline for unauthenticated users", async ({
@@ -388,7 +389,7 @@ test("home page shows local timeline for unauthenticated users", async ({
     },
   );
   perf.mark("assertions_complete");
-  perf.log();
+  await perf.log();
 
   await guestContext.close();
   await secondContext.close();
@@ -441,7 +442,7 @@ test("home page shows authenticated home feed with pagination", async ({
   });
   await expect(page.locator("body")).not.toContainText("Home Feed Other");
   perf.mark("assertions_complete");
-  perf.log();
+  await perf.log();
 
   await secondContext.close();
 });
