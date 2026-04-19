@@ -1,13 +1,8 @@
 import { test, expect } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
+import { waitForHydration } from "./hydration";
 import { createPerfProbe } from "./perf";
-
-async function waitForHydration(page: Page): Promise<void> {
-  await withTimedAction(page, "wait.hydration", () =>
-    page.waitForSelector("body[data-hydrated]"),
-  );
-}
 
 async function goto(
   page: Page,

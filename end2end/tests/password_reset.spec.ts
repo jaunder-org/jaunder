@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures";
-import type { Page } from "@playwright/test";
 import * as fs from "fs";
+import { waitForHydration } from "./hydration";
 
 const MAIL_CAPTURE_FILE =
   process.env.JAUNDER_MAIL_CAPTURE_FILE ?? "/tmp/jaunder-mail.jsonl";
@@ -41,10 +41,6 @@ async function waitForNewEmail(
   throw new Error(
     `timed out waiting for new captured email at ${MAIL_CAPTURE_FILE}`,
   );
-}
-
-async function waitForHydration(page: Page): Promise<void> {
-  await page.waitForSelector("body[data-hydrated]");
 }
 
 // M3.11.13: Full password reset flow.

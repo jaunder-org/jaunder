@@ -33,6 +33,31 @@ type PagePerfSummary = {
   longTasks: Array<{ startTime: number; duration: number; name: string }>;
 };
 
+type NavigationRecord = {
+  id: number;
+  url: string;
+  startedMs: number;
+  committedMs: number | null;
+  domContentLoadedMs: number | null;
+  loadMs: number | null;
+  hydratedMs: number | null;
+  requestFinishedMs: number | null;
+  requestFailed: boolean;
+  requestFailureText?: string;
+};
+
+type NavigationSummary = {
+  id: number;
+  url: string;
+  totalMs: number;
+  requestMs: number | null;
+  commitToDomContentLoadedMs: number | null;
+  commitToHydrationMs: number | null;
+  domContentLoadedToLoadMs: number | null;
+  loadToHydrationMs: number | null;
+  requestFailed: boolean;
+};
+
 const test = base.extend<{ _autoPerfSpan: void }>({
   _autoPerfSpan: [
     async ({ page }, use, testInfo) => {
@@ -41,6 +66,27 @@ const test = base.extend<{ _autoPerfSpan: void }>({
       const testKey = `${testInfo.file}::${testInfo.title}::${testInfo.project.name}::${testInfo.retry}`;
       const requestStarts = new Map<Request, number>();
       const requests: RequestRecord[] = [];
+      const navigationRequestIds = new Map<Request, number>();
+      const pendingNavigationIds: number[] = [];
+      const navigations: NavigationRecord[] = [];
+      let activeNavigationId: number | null = null;
+      let nextNavigationId = 1;
+
+      await page.exposeBinding("__jaunderRecordHydration", (_source, value) => {
+        if (!value || typeof value !== "object") return;
+        const payload = value as { href?: unknown };
+        const href = typeof payload.href === "string" ? payload.href : null;
+        const nowMs = Date.now();
+
+        // Hydration should be attributed to the most recent matching navigation.
+        for (let index = navigations.length - 1; index >= 0; index -= 1) {
+          const navigation = navigations[index];
+          if (navigation.hydratedMs !== null) continue;
+          if (href !== null && navigation.url !== href) continue;
+          navigation.hydratedMs = nowMs;
+          return;
+        }
+      });
 
       await page.addInitScript(() => {
         const globalScope = globalThis as typeof globalThis & {
@@ -49,8 +95,42 @@ const test = base.extend<{ _autoPerfSpan: void }>({
             duration: number;
             name: string;
           }>;
+          __jaunderHydrationNotified?: boolean;
+          __jaunderRecordHydration?: (payload: { href: string }) => void;
         };
         globalScope.__jaunderLongTasks = [];
+        globalScope.__jaunderHydrationNotified = false;
+
+        const notifyHydration = () => {
+          if (globalScope.__jaunderHydrationNotified) return;
+          const body = document.body;
+          if (!body || !body.hasAttribute("data-hydrated")) return;
+          globalScope.__jaunderHydrationNotified = true;
+          try {
+            globalScope.__jaunderRecordHydration?.({ href: location.href });
+          } catch {
+            // Ignore cross-context bridge errors while collecting diagnostics.
+          }
+        };
+
+        notifyHydration();
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", notifyHydration, {
+            once: true,
+          });
+        }
+        try {
+          const hydrationObserver = new MutationObserver(() =>
+            notifyHydration(),
+          );
+          hydrationObserver.observe(document.documentElement, {
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["data-hydrated"],
+          });
+        } catch {
+          // MutationObserver should always exist in browsers, but keep this defensive.
+        }
 
         if (typeof PerformanceObserver === "undefined") return;
         try {
@@ -72,6 +152,27 @@ const test = base.extend<{ _autoPerfSpan: void }>({
 
       page.on("request", (request) => {
         requestStarts.set(request, Date.now());
+        if (
+          request.isNavigationRequest() &&
+          request.resourceType() === "document" &&
+          request.frame() === page.mainFrame()
+        ) {
+          const navigationId = nextNavigationId;
+          nextNavigationId += 1;
+          navigationRequestIds.set(request, navigationId);
+          pendingNavigationIds.push(navigationId);
+          navigations.push({
+            id: navigationId,
+            url: request.url(),
+            startedMs: Date.now(),
+            committedMs: null,
+            domContentLoadedMs: null,
+            loadMs: null,
+            hydratedMs: null,
+            requestFinishedMs: null,
+            requestFailed: false,
+          });
+        }
       });
 
       page.on("requestfinished", (request) => {
@@ -86,6 +187,17 @@ const test = base.extend<{ _autoPerfSpan: void }>({
           durationMs: endedMs - startedMs,
           failed: false,
         });
+
+        const navigationId = navigationRequestIds.get(request);
+        if (navigationId !== undefined) {
+          const navigation = navigations.find(
+            (entry) => entry.id === navigationId,
+          );
+          if (navigation) {
+            navigation.requestFinishedMs = endedMs;
+            navigation.url = request.url();
+          }
+        }
       });
 
       page.on("requestfailed", (request) => {
@@ -101,6 +213,54 @@ const test = base.extend<{ _autoPerfSpan: void }>({
           failed: true,
           failureText: request.failure()?.errorText,
         });
+
+        const navigationId = navigationRequestIds.get(request);
+        if (navigationId !== undefined) {
+          const navigation = navigations.find(
+            (entry) => entry.id === navigationId,
+          );
+          if (navigation) {
+            navigation.requestFinishedMs = endedMs;
+            navigation.requestFailed = true;
+            navigation.requestFailureText = request.failure()?.errorText;
+            navigation.url = request.url();
+          }
+        }
+      });
+
+      page.on("framenavigated", (frame) => {
+        if (frame !== page.mainFrame()) return;
+        const navigationId = pendingNavigationIds.shift() ?? null;
+        if (navigationId === null) return;
+        activeNavigationId = navigationId;
+        const navigation = navigations.find(
+          (entry) => entry.id === navigationId,
+        );
+        if (!navigation) return;
+        navigation.committedMs = Date.now();
+        navigation.url = frame.url();
+      });
+
+      page.on("domcontentloaded", () => {
+        if (activeNavigationId === null) return;
+        const navigation = navigations.find(
+          (entry) => entry.id === activeNavigationId,
+        );
+        if (!navigation) return;
+        if (navigation.domContentLoadedMs === null) {
+          navigation.domContentLoadedMs = Date.now();
+        }
+      });
+
+      page.on("load", () => {
+        if (activeNavigationId === null) return;
+        const navigation = navigations.find(
+          (entry) => entry.id === activeNavigationId,
+        );
+        if (!navigation) return;
+        if (navigation.loadMs === null) {
+          navigation.loadMs = Date.now();
+        }
       });
 
       setCurrentActionTestKey(testKey);
@@ -184,6 +344,50 @@ const test = base.extend<{ _autoPerfSpan: void }>({
       const topActions = [...actions]
         .sort((left, right) => right.durationMs - left.durationMs)
         .slice(0, 30);
+      const navigationSummary: NavigationSummary[] = navigations
+        .map((navigation) => {
+          const endMs =
+            navigation.hydratedMs ??
+            navigation.loadMs ??
+            navigation.domContentLoadedMs ??
+            navigation.requestFinishedMs ??
+            navigation.committedMs ??
+            navigation.startedMs;
+          const requestMs =
+            navigation.committedMs !== null
+              ? navigation.committedMs - navigation.startedMs
+              : null;
+          const commitToDomContentLoadedMs =
+            navigation.committedMs !== null &&
+            navigation.domContentLoadedMs !== null
+              ? navigation.domContentLoadedMs - navigation.committedMs
+              : null;
+          const commitToHydrationMs =
+            navigation.committedMs !== null && navigation.hydratedMs !== null
+              ? navigation.hydratedMs - navigation.committedMs
+              : null;
+          const domContentLoadedToLoadMs =
+            navigation.domContentLoadedMs !== null && navigation.loadMs !== null
+              ? navigation.loadMs - navigation.domContentLoadedMs
+              : null;
+          const loadToHydrationMs =
+            navigation.loadMs !== null && navigation.hydratedMs !== null
+              ? navigation.hydratedMs - navigation.loadMs
+              : null;
+          return {
+            id: navigation.id,
+            url: navigation.url,
+            totalMs: endMs - navigation.startedMs,
+            requestMs,
+            commitToDomContentLoadedMs,
+            commitToHydrationMs,
+            domContentLoadedToLoadMs,
+            loadToHydrationMs,
+            requestFailed: navigation.requestFailed,
+          };
+        })
+        .sort((left, right) => right.totalMs - left.totalMs);
+      const topNavigations = navigationSummary.slice(0, 20);
 
       const attributes = [
         otlpAttribute("e2e.file", testInfo.file),
@@ -218,6 +422,11 @@ const test = base.extend<{ _autoPerfSpan: void }>({
         ),
         otlpAttribute("e2e.action_count", actions.length),
         otlpAttribute("e2e.action_top_json", JSON.stringify(topActions)),
+        otlpAttribute("e2e.navigation_count", navigations.length),
+        otlpAttribute(
+          "e2e.navigation_top_json",
+          JSON.stringify(topNavigations),
+        ),
       ].filter(
         (attribute): attribute is NonNullable<typeof attribute> =>
           attribute !== null,
@@ -256,6 +465,31 @@ const test = base.extend<{ _autoPerfSpan: void }>({
           ),
         ),
       );
+      const navigationEvents = topNavigations.map((navigation) =>
+        makeEvent("navigation.lifecycle", endMs, [
+          otlpAttribute("navigation.id", navigation.id),
+          otlpAttribute("url.full", navigation.url),
+          otlpAttribute("duration_ms", navigation.totalMs),
+          otlpAttribute("navigation.request_ms", navigation.requestMs),
+          otlpAttribute(
+            "navigation.commit_to_domcontentloaded_ms",
+            navigation.commitToDomContentLoadedMs,
+          ),
+          otlpAttribute(
+            "navigation.commit_to_hydration_ms",
+            navigation.commitToHydrationMs,
+          ),
+          otlpAttribute(
+            "navigation.domcontentloaded_to_load_ms",
+            navigation.domContentLoadedToLoadMs,
+          ),
+          otlpAttribute(
+            "navigation.load_to_hydration_ms",
+            navigation.loadToHydrationMs,
+          ),
+          otlpAttribute("navigation.request_failed", navigation.requestFailed),
+        ]),
+      );
 
       const span = buildSpan({
         traceContext,
@@ -264,7 +498,7 @@ const test = base.extend<{ _autoPerfSpan: void }>({
         startMs: testStartMs,
         endMs,
         attributes,
-        events: [...requestEvents, ...actionEvents],
+        events: [...requestEvents, ...actionEvents, ...navigationEvents],
       });
 
       try {

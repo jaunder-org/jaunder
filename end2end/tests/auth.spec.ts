@@ -1,18 +1,6 @@
 import { test, expect } from "./fixtures";
-import type { Page } from "@playwright/test";
 import { createPerfProbe } from "./perf";
-
-/** Wait for Leptos WASM hydration to complete before interacting with forms.
- *
- * Leptos sets `prop:value` bindings on controlled inputs during hydration,
- * which resets any values filled before hydration completes. Waiting for
- * `data-hydrated` (set by the WASM `hydrate()` function after
- * `hydrate_body()` returns) ensures all reactive effects have run before
- * Playwright fills form fields.
- */
-async function waitForHydration(page: Page): Promise<void> {
-  await page.waitForSelector("body[data-hydrated]");
-}
+import { waitForHydration } from "./hydration";
 
 test("register page shows form", async ({ page }) => {
   test.slow();
