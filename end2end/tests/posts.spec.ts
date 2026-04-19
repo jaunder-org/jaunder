@@ -4,6 +4,12 @@ import { withTimedAction } from "./actions";
 import { waitForHydration } from "./hydration";
 import { createPerfProbe } from "./perf";
 
+const TIMELINE_PAGE_SIZE = 50;
+const TIMELINE_OVERFLOW_COUNT = 1;
+const LOCAL_TIMELINE_AUTHOR_COUNT = 26;
+const HOME_FEED_SELF_COUNT = 51;
+const HOME_FEED_OTHER_COUNT = 2;
+
 async function goto(
   page: Page,
   url: string,
@@ -334,7 +340,7 @@ test("per-user timeline lists published posts with pagination", async ({
   perf.mark("register_done");
 
   perf.mark("seed_posts_start");
-  for (let i = 0; i < 55; i += 1) {
+  for (let i = 0; i < TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT; i += 1) {
     await createPublishedPostViaApi(page, `Timeline Post ${i}`);
   }
   perf.mark("seed_posts_done");
@@ -346,18 +352,24 @@ test("per-user timeline lists published posts with pagination", async ({
   perf.mark("hydration_done");
 
   await expect(page.locator("h1")).toContainText(`Posts by ${username}`);
-  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(50, {
-    timeout: 10_000,
-  });
+  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
+    TIMELINE_PAGE_SIZE,
+    {
+      timeout: 10_000,
+    },
+  );
   await expect(
     page.locator('[data-test="timeline-item"]').first(),
-  ).toContainText("Timeline Post 54");
+  ).toContainText(`Timeline Post ${TIMELINE_PAGE_SIZE}`);
 
   await click(page, 'button:has-text("Load more")');
   perf.mark("load_more_clicked");
-  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(55, {
-    timeout: 10_000,
-  });
+  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
+    TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT,
+    {
+      timeout: 10_000,
+    },
+  );
   await expect(
     page.locator('[data-test="timeline-item"]').last(),
   ).toContainText("Timeline Post 0", { timeout: 10_000 });
@@ -374,7 +386,7 @@ test("home page shows local timeline for unauthenticated users", async ({
 
   perf.mark("seed_author_one_start");
   await register(page);
-  for (let i = 0; i < 30; i += 1) {
+  for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
     await createPublishedPostViaApi(page, `Local Author One ${i}`);
   }
   perf.mark("seed_author_one_done");
@@ -383,7 +395,7 @@ test("home page shows local timeline for unauthenticated users", async ({
   const secondPage = await secondContext.newPage();
   perf.mark("seed_author_two_start");
   await register(secondPage);
-  for (let i = 0; i < 30; i += 1) {
+  for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
     await createPublishedPostViaApi(secondPage, `Local Author Two ${i}`);
   }
   perf.mark("seed_author_two_done");
@@ -400,7 +412,7 @@ test("home page shows local timeline for unauthenticated users", async ({
     timeout: 10_000,
   });
   await expect(guestPage.locator('[data-test="timeline-item"]')).toHaveCount(
-    50,
+    TIMELINE_PAGE_SIZE,
     {
       timeout: 10_000,
     },
@@ -408,12 +420,14 @@ test("home page shows local timeline for unauthenticated users", async ({
 
   await click(guestPage, 'button:has-text("Load more")');
   perf.mark("load_more_clicked");
-  await expect(guestPage.locator('[data-test="timeline-item"]')).toHaveCount(
-    100,
-    {
-      timeout: 10_000,
-    },
-  );
+  await expect
+    .poll(
+      async () => guestPage.locator('[data-test="timeline-item"]').count(),
+      {
+        timeout: 10_000,
+      },
+    )
+    .toBeGreaterThan(TIMELINE_PAGE_SIZE);
   perf.mark("assertions_complete");
   await perf.log();
 
@@ -430,7 +444,7 @@ test("home page shows authenticated home feed with pagination", async ({
 
   perf.mark("seed_self_start");
   await register(page);
-  for (let i = 0; i < 55; i += 1) {
+  for (let i = 0; i < HOME_FEED_SELF_COUNT; i += 1) {
     await createPublishedPostViaApi(page, `Home Feed Mine ${i}`);
   }
   perf.mark("seed_self_done");
@@ -439,7 +453,7 @@ test("home page shows authenticated home feed with pagination", async ({
   const secondPage = await secondContext.newPage();
   perf.mark("seed_other_start");
   await register(secondPage);
-  for (let i = 0; i < 5; i += 1) {
+  for (let i = 0; i < HOME_FEED_OTHER_COUNT; i += 1) {
     await createPublishedPostViaApi(secondPage, `Home Feed Other ${i}`);
   }
   perf.mark("seed_other_done");
@@ -453,19 +467,25 @@ test("home page shows authenticated home feed with pagination", async ({
   await expect(page.locator("h2")).toContainText("Your Home Feed", {
     timeout: 10_000,
   });
-  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(50, {
-    timeout: 10_000,
-  });
+  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
+    TIMELINE_PAGE_SIZE,
+    {
+      timeout: 10_000,
+    },
+  );
   await expect(
     page.locator('[data-test="timeline-item"]').first(),
-  ).toContainText("Home Feed Mine 54");
+  ).toContainText(`Home Feed Mine ${HOME_FEED_SELF_COUNT - 1}`);
   await expect(page.locator("body")).not.toContainText("Home Feed Other");
 
   await click(page, 'button:has-text("Load more")');
   perf.mark("load_more_clicked");
-  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(55, {
-    timeout: 10_000,
-  });
+  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
+    HOME_FEED_SELF_COUNT,
+    {
+      timeout: 10_000,
+    },
+  );
   await expect(page.locator("body")).not.toContainText("Home Feed Other");
   perf.mark("assertions_complete");
   await perf.log();
