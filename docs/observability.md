@@ -48,3 +48,14 @@ The analyzer reports:
 - top navigation phase hotspots and slow targets
 - per-project/browser e2e duration breakdown
 - per-trace duration totals
+
+To run both e2e VM checks and immediately analyze the produced traces, use:
+
+```bash
+scripts/run-e2e-trace-analysis --top 25
+```
+
+Optional filters:
+
+- `--top N` controls how many rows each section prints.
+- `--trace TRACE_ID` restricts analysis to one trace id.
