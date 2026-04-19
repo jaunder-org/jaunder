@@ -1,4 +1,5 @@
 import { expect, test as base, type Request } from "@playwright/test";
+import { drainActionsForTest, setCurrentActionTestKey } from "./actions";
 import {
   buildSpan,
   exportSpans,
@@ -37,6 +38,7 @@ const test = base.extend<{ _autoPerfSpan: void }>({
     async ({ page }, use, testInfo) => {
       const traceContext = traceContextFromEnvironment();
       const testStartMs = Date.now();
+      const testKey = `${testInfo.file}::${testInfo.title}::${testInfo.project.name}::${testInfo.retry}`;
       const requestStarts = new Map<Request, number>();
       const requests: RequestRecord[] = [];
 
@@ -101,9 +103,15 @@ const test = base.extend<{ _autoPerfSpan: void }>({
         });
       });
 
-      await use();
+      setCurrentActionTestKey(testKey);
+      try {
+        await use();
+      } finally {
+        setCurrentActionTestKey(null);
+      }
 
       const endMs = Date.now();
+      const actions = drainActionsForTest(testKey);
       let pagePerfSummary: PagePerfSummary = {
         navigation: null,
         resources: { count: 0, totalDurationMs: 0, topSlow: [] },
@@ -173,6 +181,9 @@ const test = base.extend<{ _autoPerfSpan: void }>({
         (request) => request.durationMs >= 500,
       );
       const topSlowRequests = sortedRequests.slice(0, 20);
+      const topActions = [...actions]
+        .sort((left, right) => right.durationMs - left.durationMs)
+        .slice(0, 30);
 
       const attributes = [
         otlpAttribute("e2e.file", testInfo.file),
@@ -205,6 +216,8 @@ const test = base.extend<{ _autoPerfSpan: void }>({
           "e2e.long_tasks_json",
           JSON.stringify(pagePerfSummary.longTasks),
         ),
+        otlpAttribute("e2e.action_count", actions.length),
+        otlpAttribute("e2e.action_top_json", JSON.stringify(topActions)),
       ].filter(
         (attribute): attribute is NonNullable<typeof attribute> =>
           attribute !== null,
@@ -227,6 +240,22 @@ const test = base.extend<{ _autoPerfSpan: void }>({
           ),
         ),
       );
+      const actionEvents = topActions.map((action) =>
+        makeEvent(
+          action.ok ? "action.timed" : "action.failed",
+          action.endedMs,
+          [
+            otlpAttribute("action.name", action.name),
+            otlpAttribute("duration_ms", action.durationMs),
+            otlpAttribute("action.ok", action.ok),
+            otlpAttribute("page.url", action.pageUrl ?? null),
+            otlpAttribute("action.error", action.error ?? null),
+          ].filter(
+            (attribute): attribute is NonNullable<typeof attribute> =>
+              attribute !== null,
+          ),
+        ),
+      );
 
       const span = buildSpan({
         traceContext,
@@ -235,7 +264,7 @@ const test = base.extend<{ _autoPerfSpan: void }>({
         startMs: testStartMs,
         endMs,
         attributes,
-        events: requestEvents,
+        events: [...requestEvents, ...actionEvents],
       });
 
       try {
