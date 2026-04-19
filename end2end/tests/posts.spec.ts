@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures";
+import { test, expect, hydrationHeavyTimeoutMs } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
 import { waitForHydration } from "./hydration";
@@ -245,8 +245,8 @@ test("editing a published post freezes the slug", async ({ page }) => {
 test("draft lifecycle: create, view, edit, and publish", async ({
   page,
   context,
-}) => {
-  test.setTimeout(30_000);
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
   await register(page);
 
   await goto(page, "http://localhost:3000/posts/new");
@@ -326,7 +326,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
 test("per-user timeline lists published posts with pagination", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(20_000);
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
   const perf = createPerfProbe(testInfo, "user_timeline_pagination");
 
   perf.mark("register_start");
@@ -369,7 +369,7 @@ test("home page shows local timeline for unauthenticated users", async ({
   page,
   browser,
 }, testInfo) => {
-  test.setTimeout(20_000);
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
   const perf = createPerfProbe(testInfo, "home_local_timeline");
 
   perf.mark("seed_author_one_start");
@@ -425,7 +425,7 @@ test("home page shows authenticated home feed with pagination", async ({
   page,
   browser,
 }, testInfo) => {
-  test.setTimeout(20_000);
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
   const perf = createPerfProbe(testInfo, "home_authenticated_feed");
 
   perf.mark("seed_self_start");

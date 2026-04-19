@@ -125,8 +125,17 @@
                     return entry ? entry.duration : null;
                 })(),
                 post_hydrate_effects_ms: (() => {
-                    const entry = performance.getEntriesByName('jaunder_phase_post_hydrate_effects').slice(-1)[0];
-                    return entry ? entry.duration : null;
+                    const measure = performance.getEntriesByName('jaunder_phase_post_hydrate_effects').slice(-1)[0];
+                    if (measure) {
+                        return measure.duration;
+                    }
+                    // mark_hydrated runs before the post_hydrate_effects phase ends,
+                    // so the measure may not exist yet. Fall back to elapsed time from
+                    // the phase start mark to avoid reporting null.
+                    const start = performance
+                        .getEntriesByName('jaunder_phase_post_hydrate_effects_start')
+                        .slice(-1)[0];
+                    return start ? performance.now() - start.startTime : null;
                 })(),
             };
 

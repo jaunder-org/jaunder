@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures";
+import { test, expect, hydrationHeavyTimeoutMs } from "./fixtures";
 import * as fs from "fs";
 import { waitForHydration } from "./hydration";
 
@@ -44,8 +44,10 @@ async function waitForNewEmail(
 }
 
 // M3.11.13: Full password reset flow.
-test("password reset flow completes successfully", async ({ page }) => {
-  test.setTimeout(15_000);
+test("password reset flow completes successfully", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
 
   // Snapshot email count before submitting so we can detect the new email even
   // if prior tests (e.g. email verification) have already written to the file.
