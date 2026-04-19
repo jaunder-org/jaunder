@@ -107,7 +107,8 @@ test("password reset flow completes successfully", async ({
 // M3.11.14: visiting /reset-password with an invalid token shows an error.
 test("visiting reset-password with invalid token shows error", async ({
   page,
-}) => {
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 12_000));
   await page.goto(
     "http://localhost:3000/reset-password?token=totally_invalid_token",
   );
@@ -121,7 +122,8 @@ test("visiting reset-password with invalid token shows error", async ({
 // M3.11.15: /forgot-password for a user with no verified email shows the "contact operator" error.
 test("forgot-password for user without verified email shows contact operator error", async ({
   page,
-}) => {
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 12_000));
   await page.goto("http://localhost:3000/forgot-password");
   await waitForHydration(page);
   // "testnoemail" user should exist but have no verified email

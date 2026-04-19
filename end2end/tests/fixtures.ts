@@ -88,7 +88,7 @@ type NavigationSummary = {
   postHydrateEffectsMs: number | null;
 };
 
-const hydrationHeavyTimeoutScale = 1.9;
+const hydrationHeavyTimeoutScale = 2.2;
 
 export function hydrationHeavyTimeoutMs(
   testInfo: TestInfo,

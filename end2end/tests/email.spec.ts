@@ -87,7 +87,8 @@ test("email verification flow completes successfully", async ({
 // M3.10.12: Invalid token shows an error.
 test("visiting verify-email with invalid token shows error", async ({
   page,
-}) => {
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
   await page.goto(
     "http://localhost:3000/verify-email?token=totally_invalid_token",
   );

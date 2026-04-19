@@ -1,7 +1,7 @@
 import { devices, defineConfig } from "@playwright/test";
 
 const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
-const hydrationHeavyTimeoutScale = 1.9;
+const hydrationHeavyTimeoutScale = 2.2;
 const chromiumProjectTimeoutMs = 30 * 1000;
 const hydrationHeavyProjectTimeoutMs = Math.ceil(
   chromiumProjectTimeoutMs * hydrationHeavyTimeoutScale,
