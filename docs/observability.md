@@ -59,3 +59,22 @@ Optional filters:
 
 - `--top N` controls how many rows each section prints.
 - `--trace TRACE_ID` restricts analysis to one trace id.
+
+## WASM Bundle Audit
+
+Use `scripts/audit-wasm-bundle` to measure frontend bundle size from the
+deterministic Nix `site` build output:
+
+```bash
+scripts/audit-wasm-bundle
+```
+
+This reports raw, gzip, and brotli sizes for:
+
+- `pkg/jaunder_bg.wasm`
+- `pkg/jaunder.js`
+
+Useful options:
+
+- `--json` for machine-readable output
+- `--site-path /nix/store/...-jaunder-site` to reuse a previously built site output
