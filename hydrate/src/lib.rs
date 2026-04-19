@@ -1,4 +1,26 @@
 #[wasm_bindgen::prelude::wasm_bindgen(inline_js = "
+    export function mark_phase_start(name) {
+        if (typeof performance === 'undefined') {
+            return;
+        }
+        performance.mark(`jaunder_phase_${name}_start`);
+    }
+
+    export function mark_phase_end(name) {
+        if (typeof performance === 'undefined') {
+            return;
+        }
+        const endMark = `jaunder_phase_${name}_end`;
+        const startMark = `jaunder_phase_${name}_start`;
+        const measureName = `jaunder_phase_${name}`;
+        performance.mark(endMark);
+        try {
+            performance.measure(measureName, startMark, endMark);
+        } catch (_err) {
+            // Ignore if marks are missing or unsupported.
+        }
+    }
+
     export function install_fetch_timing() {
         if (typeof window === 'undefined' || typeof window.fetch !== 'function') {
             return;
@@ -61,44 +83,64 @@
     }
 
     export function mark_hydrated() {
-        document.body.setAttribute('data-hydrated', 'true');
+        if (document && document.body) {
+            document.body.setAttribute('data-hydrated', 'true');
+        }
 
         if (typeof performance === 'undefined') {
             return;
         }
 
-        performance.mark('jaunder_hydration_end');
         try {
-            performance.measure(
-                'jaunder_hydration',
-                'jaunder_hydration_start',
-                'jaunder_hydration_end'
-            );
+            performance.mark('jaunder_hydration_end');
+            try {
+                performance.measure(
+                    'jaunder_hydration',
+                    'jaunder_hydration_start',
+                    'jaunder_hydration_end'
+                );
+            } catch (_err) {
+                // Ignore if marks are missing or unsupported.
+            }
+
+            const hydrationMeasure = performance
+                .getEntriesByName('jaunder_hydration')
+                .slice(-1)[0];
+            const navigationEntry = performance.getEntriesByType('navigation')[0];
+            const wasmEntry = performance
+                .getEntriesByType('resource')
+                .find((entry) => entry.name.includes('jaunder_bg.wasm'));
+
+            const payload = {
+                hydration_ms: hydrationMeasure ? hydrationMeasure.duration : null,
+                navigation_ms: navigationEntry ? navigationEntry.duration : null,
+                wasm_transfer_bytes: wasmEntry ? wasmEntry.transferSize : null,
+                wasm_resource_ms: wasmEntry ? wasmEntry.duration : null,
+                wasm_init_ms: (() => {
+                    const entry = performance.getEntriesByName('jaunder_phase_wasm_init').slice(-1)[0];
+                    return entry ? entry.duration : null;
+                })(),
+                leptos_hydrate_ms: (() => {
+                    const entry = performance.getEntriesByName('jaunder_phase_leptos_hydrate').slice(-1)[0];
+                    return entry ? entry.duration : null;
+                })(),
+                post_hydrate_effects_ms: (() => {
+                    const entry = performance.getEntriesByName('jaunder_phase_post_hydrate_effects').slice(-1)[0];
+                    return entry ? entry.duration : null;
+                })(),
+            };
+
+            window.__jaunder_perf = payload;
+            console.info('[jaunder-perf]', JSON.stringify(payload));
         } catch (_err) {
-            // Ignore if marks are missing or unsupported.
+            // Never let instrumentation break hydration signaling.
         }
-
-        const hydrationMeasure = performance
-            .getEntriesByName('jaunder_hydration')
-            .slice(-1)[0];
-        const navigationEntry = performance.getEntriesByType('navigation')[0];
-        const wasmEntry = performance
-            .getEntriesByType('resource')
-            .find((entry) => entry.name.includes('jaunder_bg.wasm'));
-
-        const payload = {
-            hydration_ms: hydrationMeasure ? hydrationMeasure.duration : null,
-            navigation_ms: navigationEntry ? navigationEntry.duration : null,
-            wasm_transfer_bytes: wasmEntry ? wasmEntry.transferSize : null,
-            wasm_resource_ms: wasmEntry ? wasmEntry.duration : null,
-        };
-
-        window.__jaunder_perf = payload;
-        console.info('[jaunder-perf]', JSON.stringify(payload));
     }
 ")]
 extern "C" {
     fn install_fetch_timing();
+    fn mark_phase_start(name: &str);
+    fn mark_phase_end(name: &str);
     fn mark_hydration_start();
     fn mark_hydrated();
 }
@@ -106,15 +148,21 @@ extern "C" {
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn hydrate() {
     use web::*;
+    mark_phase_start("wasm_init");
     // initializes logging using the `log` crate
     _ = console_log::init_with_level(log::Level::Debug);
     console_error_panic_hook::set_once();
+    mark_phase_end("wasm_init");
 
     install_fetch_timing();
     mark_hydration_start();
+    mark_phase_start("leptos_hydrate");
     leptos::mount::hydrate_body(App);
+    mark_phase_end("leptos_hydrate");
 
     // Signal to e2e tests that hydration (including all initial reactive
     // effects such as `prop:value` bindings) has completed.
+    mark_phase_start("post_hydrate_effects");
     mark_hydrated();
+    mark_phase_end("post_hydrate_effects");
 }

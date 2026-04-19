@@ -344,6 +344,11 @@ function printE2eNavigationHotspots(spans, top) {
             const loadToHydrationMs = asFiniteNumber(
                 navigation.loadToHydrationMs,
             );
+            const wasmInitMs = asFiniteNumber(navigation.wasmInitMs);
+            const leptosHydrateMs = asFiniteNumber(navigation.leptosHydrateMs);
+            const postHydrateEffectsMs = asFiniteNumber(
+                navigation.postHydrateEffectsMs,
+            );
 
             addPhase("navigation.total", totalMs);
             addPhase("navigation.request", requestMs);
@@ -357,6 +362,9 @@ function printE2eNavigationHotspots(spans, top) {
                 domContentLoadedToLoadMs,
             );
             addPhase("navigation.load_to_hydration", loadToHydrationMs);
+            addPhase("navigation.wasm_init", wasmInitMs);
+            addPhase("navigation.leptos_hydrate", leptosHydrateMs);
+            addPhase("navigation.post_hydrate_effects", postHydrateEffectsMs);
 
             const urlPath = toUrlPath(navigation.url);
             if (!urlPath || totalMs === null || totalMs < 0) {
@@ -417,6 +425,269 @@ function printE2eNavigationHotspots(spans, top) {
         }
         console.log("");
     }
+}
+
+function printE2eLongTaskHotspots(spans, top) {
+    const totals = new Map();
+    const byProject = new Map();
+    const e2eTests = spans.filter((span) => span.name === "e2e.test");
+
+    for (const span of e2eTests) {
+        const project = getAttr(span.raw, "e2e.project") || "-";
+        const tasks = parseJsonAttr(span.raw, "e2e.long_tasks_json", []);
+        if (!Array.isArray(tasks)) {
+            continue;
+        }
+        const currentProject = byProject.get(project) || {
+            tests: 0,
+            taskCount: 0,
+            totalMs: 0,
+            maxMs: 0,
+        };
+        currentProject.tests += 1;
+        byProject.set(project, currentProject);
+
+        for (const task of tasks) {
+            const durationMs = Number(task.duration);
+            if (!Number.isFinite(durationMs) || durationMs < 0) {
+                continue;
+            }
+            const name =
+                typeof task.name === "string" && task.name.length > 0
+                    ? task.name
+                    : "longtask";
+            const current = totals.get(name) || {
+                count: 0,
+                totalMs: 0,
+                maxMs: 0,
+            };
+            current.count += 1;
+            current.totalMs += durationMs;
+            current.maxMs = Math.max(current.maxMs, durationMs);
+            totals.set(name, current);
+
+            currentProject.taskCount += 1;
+            currentProject.totalMs += durationMs;
+            currentProject.maxMs = Math.max(currentProject.maxMs, durationMs);
+        }
+    }
+
+    const rows = [...totals.entries()]
+        .map(([name, stats]) => ({
+            name,
+            count: stats.count,
+            avgMs: stats.totalMs / stats.count,
+            maxMs: stats.maxMs,
+            totalMs: stats.totalMs,
+        }))
+        .sort((a, b) => b.maxMs - a.maxMs)
+        .slice(0, top);
+
+    if (rows.length > 0) {
+        console.log(`Top ${top} long-task hotspots (from e2e.long_tasks_json)`);
+        console.log("max_ms      avg_ms      total_ms     count  task_name");
+        for (const row of rows) {
+            console.log(
+                `${padLeft(row.maxMs.toFixed(3), 10)}  ${padLeft(row.avgMs.toFixed(3), 10)}  ${padLeft(row.totalMs.toFixed(3), 10)}  ${padLeft(row.count, 5)}  ${row.name}`,
+            );
+        }
+        console.log("");
+    }
+
+    const projectRows = [...byProject.entries()]
+        .map(([project, stats]) => ({
+            project,
+            tests: stats.tests,
+            taskCount: stats.taskCount,
+            avgPerTestMs: stats.tests > 0 ? stats.totalMs / stats.tests : 0,
+            maxMs: stats.maxMs,
+        }))
+        .sort((a, b) => b.avgPerTestMs - a.avgPerTestMs);
+
+    if (projectRows.length > 0) {
+        console.log("Long-task totals by project");
+        console.log(
+            "project     tests     tasks     avg_ms_per_test  max_task_ms",
+        );
+        for (const row of projectRows) {
+            console.log(
+                `${padRight(truncate(row.project, 9), 9)}  ${padLeft(row.tests, 5)}  ${padLeft(row.taskCount, 7)}  ${padLeft(row.avgPerTestMs.toFixed(3), 15)}  ${padLeft(row.maxMs.toFixed(3), 11)}`,
+            );
+        }
+        console.log("");
+    }
+}
+
+function printE2eResourceHotspots(spans, top) {
+    const initiatorTotals = new Map();
+    const assetTotals = new Map();
+    const e2eTests = spans.filter((span) => span.name === "e2e.test");
+
+    for (const span of e2eTests) {
+        const summary = parseJsonAttr(
+            span.raw,
+            "e2e.resource_summary_json",
+            {},
+        );
+        if (!summary || typeof summary !== "object") {
+            continue;
+        }
+        const topSlow = Array.isArray(summary.topSlow) ? summary.topSlow : [];
+        for (const item of topSlow) {
+            const durationMs = Number(item.durationMs);
+            if (!Number.isFinite(durationMs) || durationMs < 0) {
+                continue;
+            }
+            const initiator =
+                typeof item.initiatorType === "string" &&
+                item.initiatorType.length > 0
+                    ? item.initiatorType
+                    : "unknown";
+            const name =
+                typeof item.name === "string" && item.name.length > 0
+                    ? toUrlPath(item.name)
+                    : "unknown";
+
+            const byInitiator = initiatorTotals.get(initiator) || {
+                count: 0,
+                totalMs: 0,
+                maxMs: 0,
+            };
+            byInitiator.count += 1;
+            byInitiator.totalMs += durationMs;
+            byInitiator.maxMs = Math.max(byInitiator.maxMs, durationMs);
+            initiatorTotals.set(initiator, byInitiator);
+
+            const byAsset = assetTotals.get(name) || {
+                count: 0,
+                totalMs: 0,
+                maxMs: 0,
+                initiator,
+            };
+            byAsset.count += 1;
+            byAsset.totalMs += durationMs;
+            byAsset.maxMs = Math.max(byAsset.maxMs, durationMs);
+            assetTotals.set(name, byAsset);
+        }
+    }
+
+    const initiatorRows = [...initiatorTotals.entries()]
+        .map(([initiator, stats]) => ({
+            initiator,
+            count: stats.count,
+            avgMs: stats.totalMs / stats.count,
+            maxMs: stats.maxMs,
+            totalMs: stats.totalMs,
+        }))
+        .sort((a, b) => b.maxMs - a.maxMs)
+        .slice(0, top);
+    if (initiatorRows.length > 0) {
+        console.log(
+            `Top ${top} resource initiator hotspots (from e2e.resource_summary_json)`,
+        );
+        console.log("max_ms      avg_ms      total_ms     count  initiator");
+        for (const row of initiatorRows) {
+            console.log(
+                `${padLeft(row.maxMs.toFixed(3), 10)}  ${padLeft(row.avgMs.toFixed(3), 10)}  ${padLeft(row.totalMs.toFixed(3), 10)}  ${padLeft(row.count, 5)}  ${row.initiator}`,
+            );
+        }
+        console.log("");
+    }
+
+    const assetRows = [...assetTotals.entries()]
+        .map(([name, stats]) => ({
+            name,
+            initiator: stats.initiator,
+            count: stats.count,
+            avgMs: stats.totalMs / stats.count,
+            maxMs: stats.maxMs,
+            totalMs: stats.totalMs,
+        }))
+        .sort((a, b) => b.maxMs - a.maxMs)
+        .slice(0, top);
+    if (assetRows.length > 0) {
+        console.log(`Top ${top} slow resource assets`);
+        console.log(
+            "max_ms      avg_ms      total_ms     count  initiator  asset",
+        );
+        for (const row of assetRows) {
+            console.log(
+                `${padLeft(row.maxMs.toFixed(3), 10)}  ${padLeft(row.avgMs.toFixed(3), 10)}  ${padLeft(row.totalMs.toFixed(3), 10)}  ${padLeft(row.count, 5)}  ${padRight(truncate(row.initiator, 9), 9)}  ${truncate(row.name, 80)}`,
+            );
+        }
+        console.log("");
+    }
+}
+
+function printE2eHydrationVsApi(spans, top) {
+    const rows = spans
+        .filter((span) => span.name === "e2e.test")
+        .map((span) => {
+            const project = getAttr(span.raw, "e2e.project") || "-";
+            const testName = getAttr(span.raw, "e2e.test") || "-";
+            const traceId = span.traceId || "-";
+            const navigations = parseJsonAttr(
+                span.raw,
+                "e2e.navigation_top_json",
+                [],
+            );
+            const requests = parseJsonAttr(
+                span.raw,
+                "e2e.request_top_slow_json",
+                [],
+            );
+            let hydrationMs = 0;
+            if (Array.isArray(navigations)) {
+                for (const navigation of navigations) {
+                    const value = Number(navigation.commitToHydrationMs);
+                    if (Number.isFinite(value) && value > 0) {
+                        hydrationMs += value;
+                    }
+                }
+            }
+            let apiMs = 0;
+            if (Array.isArray(requests)) {
+                for (const request of requests) {
+                    const url =
+                        typeof request.url === "string" ? request.url : "";
+                    if (!url.includes("/api/")) {
+                        continue;
+                    }
+                    const value = Number(request.durationMs);
+                    if (Number.isFinite(value) && value > 0) {
+                        apiMs += value;
+                    }
+                }
+            }
+            const ratio = apiMs > 0 ? hydrationMs / apiMs : null;
+            return {
+                project,
+                testName,
+                traceId,
+                hydrationMs,
+                apiMs,
+                ratio,
+            };
+        })
+        .sort((a, b) => b.hydrationMs - a.hydrationMs)
+        .slice(0, top);
+
+    if (rows.length === 0) {
+        return;
+    }
+
+    console.log(
+        `Top ${top} tests by navigation hydration budget vs API budget`,
+    );
+    console.log(
+        "hydration_ms  api_ms      hyd/api   project    trace_id                           test",
+    );
+    for (const row of rows) {
+        console.log(
+            `${padLeft(row.hydrationMs.toFixed(3), 12)}  ${padLeft(row.apiMs.toFixed(3), 10)}  ${padLeft(row.ratio === null ? "-" : row.ratio.toFixed(2), 7)}  ${padRight(truncate(row.project, 9), 9)}  ${padRight(truncate(row.traceId, 32), 32)}  ${truncate(row.testName, 42)}`,
+        );
+    }
+    console.log("");
 }
 
 function printE2eByProject(spans) {
@@ -537,6 +808,9 @@ function main() {
     printSlowestE2eTests(allSpans, parsed.top);
     printE2eActionHotspots(allSpans, parsed.top);
     printE2eNavigationHotspots(allSpans, parsed.top);
+    printE2eLongTaskHotspots(allSpans, parsed.top);
+    printE2eResourceHotspots(allSpans, parsed.top);
+    printE2eHydrationVsApi(allSpans, parsed.top);
     printE2eByProject(allSpans);
     printTraceTotals(allSpans, parsed.top);
 }
