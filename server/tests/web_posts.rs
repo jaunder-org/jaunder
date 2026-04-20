@@ -1965,3 +1965,269 @@ async fn list_home_feed_rejects_invalid_cursor_inputs() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("invalid cursor_created_at"), "body: {body}");
 }
+
+async fn delete_post_form(
+    state: Arc<jaunder::storage::AppState>,
+    post_id: i64,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    post_form(
+        state,
+        "/api/delete_post",
+        format!("post_id={post_id}"),
+        cookie,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn delete_post_soft_deletes_post() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let author_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(author_id, None)
+            .await
+            .unwrap()
+    );
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=To+Delete&body=gone&format=markdown&publish=true",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let (status, body) = delete_post_form(Arc::clone(&state), created.post_id, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    // The post should now be gone from storage (deleted_at is set)
+    let post = state
+        .posts
+        .get_post_by_id(created.post_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(post.deleted_at.is_some(), "expected deleted_at to be set");
+}
+
+#[tokio::test]
+async fn delete_post_rejects_non_author() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let author_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let stranger_id = state
+        .users
+        .create_user(
+            &"stranger".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let author_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(author_id, None)
+            .await
+            .unwrap()
+    );
+    let stranger_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(stranger_id, None)
+            .await
+            .unwrap()
+    );
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Owned+Post&body=mine&format=markdown&publish=true",
+        Some(&author_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let (status, body) =
+        delete_post_form(Arc::clone(&state), created.post_id, Some(&stranger_cookie)).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+}
+
+#[tokio::test]
+async fn delete_post_rejects_unauthenticated() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let author_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(author_id, None)
+            .await
+            .unwrap()
+    );
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Protected&body=body&format=markdown&publish=true",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let (status, body) = delete_post_form(state, created.post_id, None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("unauthorized"), "body: {body}");
+}
+
+#[tokio::test]
+async fn delete_post_returns_not_found_for_already_deleted_post() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let author_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(author_id, None)
+            .await
+            .unwrap()
+    );
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Once+Only&body=body&format=markdown&publish=true",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let (status, body) = delete_post_form(Arc::clone(&state), created.post_id, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "first delete body: {body}");
+
+    let (status, body) = delete_post_form(state, created.post_id, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+}
+
+#[tokio::test]
+async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let author_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(author_id, None)
+            .await
+            .unwrap()
+    );
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=Deletable+Post&body=body&format=markdown&publish=true",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let permalink = created.permalink.unwrap();
+
+    // Verify post appears in user timeline before deletion
+    let (status, body) =
+        list_user_posts_form(Arc::clone(&state), "author", None, None, 10, None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.contains("Deletable Post"), "expected post in timeline");
+
+    // Delete the post
+    let (status, body) = delete_post_form(Arc::clone(&state), created.post_id, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "delete body: {body}");
+
+    // Verify excluded from user timeline
+    let (status, body) =
+        list_user_posts_form(Arc::clone(&state), "author", None, None, 10, None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(
+        !body.contains("Deletable Post"),
+        "expected post excluded from timeline: {body}"
+    );
+
+    // Verify excluded from local timeline
+    let (status, body) = list_local_timeline_form(Arc::clone(&state), None, None, 10, None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(
+        !body.contains("Deletable Post"),
+        "expected post excluded from local timeline: {body}"
+    );
+
+    // Extract year/month/day/slug from permalink for get_post call
+    // permalink format: /~username/year/month/day/slug
+    let parts: Vec<&str> = permalink.trim_start_matches('/').split('/').collect();
+    // parts: ["~author", "year", "month", "day", "slug"]
+    let year: i32 = parts[1].parse().unwrap();
+    let month: u32 = parts[2].parse().unwrap();
+    let day: u32 = parts[3].parse().unwrap();
+    let slug = parts[4];
+
+    let (status, body) =
+        get_post_form(Arc::clone(&state), "author", year, month, day, slug, None).await;
+    assert_eq!(StatusCode::NOT_FOUND, status, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+}

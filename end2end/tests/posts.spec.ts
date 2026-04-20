@@ -527,3 +527,91 @@ test("home page shows authenticated home feed with pagination", async ({
 
   await secondContext.close();
 });
+
+test("authenticated user can delete a published post", async ({
+  page,
+}, testInfo) => {
+  test.slow();
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  // Create a published post
+  await goto(page, "http://localhost:3000/posts/new");
+  await waitForHydration(page);
+  await page.fill('input[name="title"]', "Post To Delete");
+  await page.fill('textarea[name="body"]', "this will be deleted");
+  await page.selectOption('select[name="format"]', "markdown");
+  await click(page, 'button[name="publish"][value="true"]');
+  await waitForSelector(page, ".success");
+
+  const permalinkLink = page.locator('[data-test="permalink-link"]');
+  const permalinkHref = await permalinkLink.getAttribute("href");
+  expect(permalinkHref).toBeTruthy();
+  const permalinkUrl = new URL(
+    permalinkHref!,
+    "http://localhost:3000",
+  ).toString();
+
+  // Navigate to permalink page
+  await goto(page, permalinkUrl, { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
+  await expect(page.locator("article h1")).toHaveText("Post To Delete");
+
+  // Delete button should be visible for the author
+  await expect(page.locator('button:has-text("Delete")')).toBeVisible();
+
+  // Accept the confirm dialog and click delete
+  page.once("dialog", (dialog) => dialog.accept());
+  await click(page, 'button:has-text("Delete")');
+  await waitForSelector(page, ".success");
+  await expect(page.locator(".success")).toContainText("Post deleted.");
+
+  // Verify the permalink now returns a not-found error
+  await goto(page, permalinkUrl, { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
+  await expect(page.locator(".error")).toContainText("Post not found");
+
+  // Verify excluded from user timeline
+  const username = permalinkUrl.match(/\/~([^/]+)\//)?.[1];
+  expect(username).toBeTruthy();
+  await goto(page, `http://localhost:3000/~${username}`, {
+    waitUntil: "domcontentloaded",
+  });
+  await waitForHydration(page);
+  await expect(page.locator("body")).not.toContainText("Post To Delete");
+});
+
+test("authenticated user can delete a draft from the drafts page", async ({
+  page,
+}, testInfo) => {
+  test.slow();
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  // Create a draft
+  await goto(page, "http://localhost:3000/posts/new");
+  await waitForHydration(page);
+  await page.fill('input[name="title"]', "Draft To Delete");
+  await page.fill('textarea[name="body"]', "draft content");
+  await page.selectOption('select[name="format"]', "markdown");
+  await click(page, 'button[name="publish"][value="false"]');
+  await waitForSelector(page, ".success");
+
+  // Navigate to drafts page
+  await goto(page, "http://localhost:3000/drafts", {
+    waitUntil: "domcontentloaded",
+  });
+  await waitForHydration(page);
+  await expect(page.locator("body")).toContainText("Draft To Delete");
+
+  // Delete the draft
+  page.once("dialog", (dialog) => dialog.accept());
+  await click(page, 'button:has-text("Delete")');
+  await waitForSelector(page, ".success");
+  await expect(page.locator(".success")).toContainText("Draft deleted.");
+  await expect(page.locator("body")).not.toContainText("Draft To Delete");
+});

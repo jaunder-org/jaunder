@@ -3,7 +3,7 @@ use crate::{
     pages::signal_read::read_signal,
     posts::{
         get_post, get_post_preview, list_drafts, list_user_posts, CreatePost, CreatePostResult,
-        DraftSummary, ListUserPosts, PostResponse, PublishPost, PublishPostResult,
+        DeletePost, DraftSummary, ListUserPosts, PostResponse, PublishPost, PublishPostResult,
         TimelinePostSummary, UpdatePost, UpdatePostResult,
     },
 };
@@ -108,6 +108,7 @@ pub fn CreatePostPage() -> impl IntoView {
 
 #[component]
 pub fn PostPage() -> impl IntoView {
+    let delete_action = ServerAction::<DeletePost>::new();
     let params = use_params_map();
 
     let post_data = move || {
@@ -151,12 +152,25 @@ pub fn PostPage() -> impl IntoView {
                 match post.await {
                     Ok(fetched_post) => {
                         let banner = fetched_post.is_draft.then_some("Draft - visible only to you");
-                        render_post_article(fetched_post, banner)
+                        let post_id = fetched_post.post_id;
+                        let is_author = fetched_post.is_author;
+                        let article = render_post_article(fetched_post, banner);
+                        view! {
+                            {article}
+                            {is_author
+                                .then(|| render_delete_form(
+                                    delete_action,
+                                    post_id,
+                                    "Delete this post?",
+                                ))}
+                        }
+                            .into_any()
                     }
                     Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 }
             })}
         </Suspense>
+        {render_delete_result(delete_action, "Post deleted.", "/", "Go to home")}
     }
 }
 
@@ -284,6 +298,7 @@ pub fn UserTimelinePage() -> impl IntoView {
 
 #[component]
 pub fn DraftPreviewPage() -> impl IntoView {
+    let delete_action = ServerAction::<DeletePost>::new();
     let params = use_params_map();
 
     let preview = Resource::new(
@@ -304,12 +319,22 @@ pub fn DraftPreviewPage() -> impl IntoView {
             {move || Suspend::new(async move {
                 match preview.await {
                     Ok(post) => {
-                        render_post_article(post, Some("Draft preview – visible only to you"))
+                        let post_id = post.post_id;
+                        let article = render_post_article(
+                            post,
+                            Some("Draft preview – visible only to you"),
+                        );
+                        view! {
+                            {article}
+                            {render_delete_form(delete_action, post_id, "Delete this draft?")}
+                        }
+                            .into_any()
                     }
                     Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 }
             })}
         </Suspense>
+        {render_delete_result(delete_action, "Draft deleted.", "/drafts", "Go to drafts")}
     }
 }
 
@@ -454,8 +479,14 @@ pub fn EditPostPage() -> impl IntoView {
 #[component]
 pub fn DraftsPage() -> impl IntoView {
     let publish_action = ServerAction::<PublishPost>::new();
+    let delete_action = ServerAction::<DeletePost>::new();
     let drafts = Resource::new(
-        move || publish_action.version().get(),
+        move || {
+            (
+                publish_action.version().get(),
+                delete_action.version().get(),
+            )
+        },
         |_| list_drafts(None, None, Some(50)),
     );
 
@@ -475,7 +506,11 @@ pub fn DraftsPage() -> impl IntoView {
                             <ul>
                                 {list
                                     .into_iter()
-                                    .map(|draft| render_draft_row(draft, publish_action))
+                                    .map(|draft| render_draft_row(
+                                        draft,
+                                        publish_action,
+                                        delete_action,
+                                    ))
                                     .collect::<Vec<_>>()}
                             </ul>
                         }
@@ -501,12 +536,22 @@ pub fn DraftsPage() -> impl IntoView {
                     Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 })
         }}
+        {move || {
+            delete_action
+                .value()
+                .get()
+                .map(|result| match result {
+                    Ok(()) => view! { <p class="success">"Draft deleted."</p> }.into_any(),
+                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                })
+        }}
     }
 }
 
 fn render_draft_row(
     draft: DraftSummary,
     publish_action: ServerAction<PublishPost>,
+    delete_action: ServerAction<DeletePost>,
 ) -> impl IntoView {
     let post_id = draft.post_id;
     view! {
@@ -524,6 +569,13 @@ fn render_draft_row(
             <ActionForm action=publish_action>
                 <input type="hidden" name="post_id" value=post_id />
                 <button type="submit">"Publish"</button>
+            </ActionForm>
+            " "
+            <ActionForm action=delete_action>
+                <input type="hidden" name="post_id" value=post_id />
+                <button type="submit" onclick="return confirm('Delete this draft?')">
+                    "Delete"
+                </button>
             </ActionForm>
         </li>
     }
@@ -563,4 +615,34 @@ fn render_post_article(post: PostResponse, banner: Option<&'static str>) -> AnyV
         </article>
     }
     .into_any()
+}
+
+fn render_delete_form(
+    delete_action: ServerAction<DeletePost>,
+    post_id: i64,
+    confirm_msg: &'static str,
+) -> impl IntoView {
+    view! {
+        <ActionForm action=delete_action>
+            <input type="hidden" name="post_id" value=post_id />
+            <button type="submit" onclick=format!("return confirm('{confirm_msg}')")>
+                "Delete"
+            </button>
+        </ActionForm>
+    }
+}
+
+fn render_delete_result(
+    delete_action: ServerAction<DeletePost>,
+    success_msg: &'static str,
+    success_href: &'static str,
+    success_link_text: &'static str,
+) -> impl IntoView {
+    move || {
+        delete_action.value().get().map(|result| match result {
+            Ok(()) => view! { <p class="success">{success_msg} " " <a href=success_href>{success_link_text}</a></p> }
+            .into_any(),
+            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+        })
+    }
 }
