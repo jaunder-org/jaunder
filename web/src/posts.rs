@@ -93,6 +93,7 @@ pub struct PostResponse {
     pub created_at: String,
     pub published_at: Option<String>,
     pub is_draft: bool,
+    pub is_author: bool,
 }
 
 /// Creates a post for the authenticated user.
@@ -177,7 +178,11 @@ pub async fn get_post(
             .await
             .map_err(|e| ServerFnError::new(e.to_string()))?
         {
-            return Ok(post_response(post, username_parsed.to_string()));
+            let is_author = require_auth()
+                .await
+                .map(|auth| auth.user_id == post.user_id)
+                .unwrap_or(false);
+            return Ok(post_response(post, username_parsed.to_string(), is_author));
         }
 
         let auth = require_auth().await.map_err(|_| not_found_error())?;
@@ -196,7 +201,7 @@ pub async fn get_post(
         .await?
         .ok_or_else(not_found_error)?;
 
-        Ok(post_response(draft, auth.username.to_string()))
+        Ok(post_response(draft, auth.username.to_string(), true))
     }
     #[cfg(not(feature = "ssr"))]
     {
@@ -249,6 +254,7 @@ pub async fn get_post_preview(post_id: i64) -> Result<PostResponse, ServerFnErro
             created_at: created_at.to_rfc3339(),
             is_draft: published_at.is_none(),
             published_at: published_at.map(|t| t.to_rfc3339()),
+            is_author: true,
         })
     }
     #[cfg(not(feature = "ssr"))]
@@ -628,7 +634,7 @@ fn to_post_cursor(post: &PostRecord) -> PostCursor {
 }
 
 #[cfg(feature = "ssr")]
-fn post_response(post: PostRecord, username: String) -> PostResponse {
+fn post_response(post: PostRecord, username: String, is_author: bool) -> PostResponse {
     let PostRecord {
         post_id,
         title,
@@ -651,6 +657,7 @@ fn post_response(post: PostRecord, username: String) -> PostResponse {
         created_at: created_at.to_rfc3339(),
         is_draft: published_at.is_none(),
         published_at: published_at.map(|t| t.to_rfc3339()),
+        is_author,
     }
 }
 
@@ -735,6 +742,38 @@ fn not_found_error() -> ServerFnError {
     }
 
     ServerFnError::new("Post not found")
+}
+
+/// Soft-deletes a post owned by the authenticated user.
+#[server(endpoint = "/delete_post")]
+pub async fn delete_post(post_id: i64) -> Result<(), ServerFnError> {
+    #[cfg(feature = "ssr")]
+    {
+        let auth = require_auth().await?;
+        let state = expect_context::<Arc<AppState>>();
+
+        let existing = state
+            .posts
+            .get_post_by_id(post_id)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?
+            .ok_or_else(|| ServerFnError::new("Post not found"))?;
+
+        if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
+            return Err(ServerFnError::new("Post not found"));
+        }
+
+        state
+            .posts
+            .soft_delete_post(post_id)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))
+    }
+    #[cfg(not(feature = "ssr"))]
+    {
+        let _ = post_id;
+        Err(ServerFnError::new("Not implemented"))
+    }
 }
 
 #[cfg(feature = "ssr")]
@@ -846,6 +885,7 @@ mod tests {
                 deleted_at: None,
             },
             "author".to_string(),
+            true,
         );
         assert!(draft.is_draft);
         assert!(draft.published_at.is_none());
@@ -865,6 +905,7 @@ mod tests {
                 deleted_at: None,
             },
             "author".to_string(),
+            false,
         );
         assert!(!published.is_draft);
         assert!(published.published_at.is_some());
