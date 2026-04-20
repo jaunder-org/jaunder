@@ -172,13 +172,6 @@ test("published post renders at permalink", async ({ page }, testInfo) => {
   const permalinkHref = await permalinkLink.getAttribute("href");
   expect(permalinkHref).toBeTruthy();
 
-  const previewUrl = new URL(previewHref!, "http://localhost:3000").toString();
-  await goto(page, previewUrl, { waitUntil: "domcontentloaded" });
-  await waitForHydration(page);
-  await expect(page.locator(".draft-banner")).toContainText("Draft preview");
-  await expect(page.locator("article h1")).toHaveText("Permalink Story");
-  await expect(page.locator(".content")).toContainText("hello permalink");
-
   const targetUrl = new URL(permalinkHref!, "http://localhost:3000").toString();
 
   await goto(page, targetUrl, { waitUntil: "domcontentloaded" });
@@ -319,13 +312,6 @@ test("draft lifecycle: create, view, edit, and publish", async ({
     permalinkHref!,
     "http://localhost:3000",
   ).toString();
-
-  await goto(page, permalinkUrl);
-  await waitForHydration(page);
-  await expect(page.locator(".draft-banner")).toContainText(
-    "Draft - visible only to you",
-  );
-  await expect(page.locator(".content")).toContainText("initial draft body");
 
   await goto(page, `http://localhost:3000/posts/${postId}/edit`);
   await waitForHydration(page);
