@@ -54,7 +54,9 @@ test("password reset flow completes successfully", async ({
   const emailsBefore = readEmailLines().length;
 
   // Request a password reset on /forgot-password
-  await page.goto("http://localhost:3000/forgot-password");
+  await page.goto("http://localhost:3000/forgot-password", {
+    waitUntil: "domcontentloaded",
+  });
   await waitForHydration(page);
   await page.fill('input[name="username"]', "testlogin");
   await page.click('button[type="submit"]');
@@ -71,7 +73,9 @@ test("password reset flow completes successfully", async ({
   const token = tokenMatch![1];
 
   // Visit the reset link and submit a new password
-  await page.goto(`http://localhost:3000/reset-password?token=${token}`);
+  await page.goto(`http://localhost:3000/reset-password?token=${token}`, {
+    waitUntil: "domcontentloaded",
+  });
   await waitForHydration(page);
   await page.fill('input[name="new_password"]', "resetpassword789");
   await page.click('button[type="submit"]');
@@ -83,7 +87,9 @@ test("password reset flow completes successfully", async ({
   await page.waitForURL("**/login");
 
   // Login with the old password should fail
-  await page.goto("http://localhost:3000/login");
+  await page.goto("http://localhost:3000/login", {
+    waitUntil: "domcontentloaded",
+  });
   await waitForHydration(page);
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "testpassword123");
@@ -93,9 +99,9 @@ test("password reset flow completes successfully", async ({
   // error element appears rather than relying on networkidle as a signal.
   await expect(page.locator(".error")).toBeVisible({ timeout: 10_000 });
 
-  // Login with new password should succeed
-  await page.goto("http://localhost:3000/login");
-  await waitForHydration(page);
+  // Login with new password should succeed from the same hydrated login page.
+  await page.fill('input[name="username"]', "");
+  await page.fill('input[name="password"]', "");
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "resetpassword789");
   await page.click('button[type="submit"]');
@@ -111,6 +117,9 @@ test("visiting reset-password with invalid token shows error", async ({
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 12_000));
   await page.goto(
     "http://localhost:3000/reset-password?token=totally_invalid_token",
+    {
+      waitUntil: "domcontentloaded",
+    },
   );
   await waitForHydration(page);
   await page.fill('input[name="new_password"]', "somepassword123");
@@ -124,7 +133,9 @@ test("forgot-password for user without verified email shows contact operator err
   page,
 }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 12_000));
-  await page.goto("http://localhost:3000/forgot-password");
+  await page.goto("http://localhost:3000/forgot-password", {
+    waitUntil: "domcontentloaded",
+  });
   await waitForHydration(page);
   // "testnoemail" user should exist but have no verified email
   await page.fill('input[name="username"]', "testnoemail");

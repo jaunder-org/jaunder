@@ -148,6 +148,13 @@ async function warmupPageContext(
   }
 }
 
+export async function maybeWarmupPage(
+  page: Page,
+  testInfo: TestInfo,
+): Promise<void> {
+  await warmupPageContext(page, testInfo);
+}
+
 export function hydrationHeavyTimeoutMs(
   testInfo: TestInfo,
   chromiumBudgetMs: number,
