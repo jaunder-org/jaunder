@@ -785,20 +785,20 @@
           pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
             e2e-sqlite = mkE2eSqliteCheck {
               checkName = "jaunder-e2e-sqlite";
+              warmupEnv = " JAUNDER_E2E_WARMUP=1";
             };
 
-            e2e-sqlite-warmup = mkE2eSqliteCheck {
-              checkName = "jaunder-e2e-sqlite-warmup";
-              warmupEnv = " JAUNDER_E2E_WARMUP=1";
+            e2e-sqlite-cold = mkE2eSqliteCheck {
+              checkName = "jaunder-e2e-sqlite-cold";
             };
 
             e2e-postgres = mkE2ePostgresCheck {
               checkName = "jaunder-e2e-postgres";
+              warmupEnv = " JAUNDER_E2E_WARMUP=1";
             };
 
-            e2e-postgres-warmup = mkE2ePostgresCheck {
-              checkName = "jaunder-e2e-postgres-warmup";
-              warmupEnv = " JAUNDER_E2E_WARMUP=1";
+            e2e-postgres-cold = mkE2ePostgresCheck {
+              checkName = "jaunder-e2e-postgres-cold";
             };
 
             # `commands` includes PostgreSQL-only ignored bootstrap tests, so

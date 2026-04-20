@@ -60,7 +60,7 @@ git config core.hooksPath .githooks
 
 - `cargo deny check` — dependency and advisory policy
 - `scripts/check-coverage` — coverage gate
-- `nix flake check` — end-to-end tests
+- `nix flake check` — full check suite (with warmup e2e checks by default)
 
 To skip e2e tests on a WIP push:
 
@@ -75,7 +75,7 @@ matches the change first, then move up to the broader checks before pushing.
 
 ### Fast local checks
 
-- `scripts/verify` runs the full local verification sequence in the preferred order: formatting, build, tests, lint, coverage, then `nix flake check`.
+- `scripts/verify` runs the full local verification sequence in the preferred order: formatting, build, tests, lint, coverage, then `nix flake check` (with warmup e2e checks by default).
   - By default it prints only `--- verify: ... ---` progress markers and captures step output.
   - Set `VERIFY_PASSTHROUGH=1` to stream full tool output directly.
   - Set `VERIFY_SHOW_STEP_OUTPUT=1` to print captured output for successful steps.
@@ -147,10 +147,10 @@ them individually or with `--test-threads=1`.
 - `checks.x86_64-linux.leptosfmt-check` — leptosfmt
 - `checks.x86_64-linux.prettier-check` — prettier for `end2end/`
 - `checks.x86_64-linux.deny` — cargo-deny
-- `checks.x86_64-linux.e2e-sqlite` — Playwright end-to-end flow against SQLite
-- `checks.x86_64-linux.e2e-postgres` — Playwright end-to-end flow against PostgreSQL
-- `checks.x86_64-linux.e2e-sqlite-warmup` — Playwright end-to-end flow against SQLite with `JAUNDER_E2E_WARMUP=1`
-- `checks.x86_64-linux.e2e-postgres-warmup` — Playwright end-to-end flow against PostgreSQL with `JAUNDER_E2E_WARMUP=1`
+- `checks.x86_64-linux.e2e-sqlite` — Playwright end-to-end flow against SQLite with `JAUNDER_E2E_WARMUP=1` (default)
+- `checks.x86_64-linux.e2e-postgres` — Playwright end-to-end flow against PostgreSQL with `JAUNDER_E2E_WARMUP=1` (default)
+- `checks.x86_64-linux.e2e-sqlite-cold` — Playwright end-to-end flow against SQLite without warmup
+- `checks.x86_64-linux.e2e-postgres-cold` — Playwright end-to-end flow against PostgreSQL without warmup
 - `checks.x86_64-linux.postgres-commands` — `server/tests/commands.rs` against PostgreSQL, including ignored PostgreSQL-only cases
 - `checks.x86_64-linux.postgres-storage` — `server/tests/storage.rs` against PostgreSQL, including ignored PostgreSQL-only cases
 - `checks.x86_64-linux.postgres-web-account` — `server/tests/web_account.rs` against PostgreSQL
@@ -167,8 +167,8 @@ If you only need one of the VM-backed checks, you can run it directly:
 ```bash
 nix build .#checks.x86_64-linux.e2e-sqlite
 nix build .#checks.x86_64-linux.e2e-postgres
-nix build .#checks.x86_64-linux.e2e-sqlite-warmup
-nix build .#checks.x86_64-linux.e2e-postgres-warmup
+nix build .#checks.x86_64-linux.e2e-sqlite-cold
+nix build .#checks.x86_64-linux.e2e-postgres-cold
 nix build .#checks.x86_64-linux.postgres-commands
 nix build .#checks.x86_64-linux.postgres-storage
 nix build .#checks.x86_64-linux.postgres-web-auth

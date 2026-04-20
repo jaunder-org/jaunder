@@ -62,18 +62,18 @@ To run both e2e VM checks and immediately analyze the produced traces, use:
 scripts/run-e2e-trace-analysis --top 25
 ```
 
-For warm-cache diagnostics (sets `JAUNDER_E2E_WARMUP=1` in the VM checks), use:
+For cold-cache diagnostics (without `JAUNDER_E2E_WARMUP=1` in the VM checks), use:
 
 ```bash
-scripts/run-e2e-trace-analysis --warmup --top 25
+scripts/run-e2e-trace-analysis --cold --top 25
 ```
 
 Optional filters:
 
 - `--top N` controls how many rows each section prints.
 - `--trace TRACE_ID` restricts analysis to one trace id.
-- `--warmup` runs `e2e-sqlite-warmup` and `e2e-postgres-warmup` instead of the
-  default e2e checks.
+- `--cold` runs `e2e-sqlite-cold` and `e2e-postgres-cold` instead of the
+  default warmup e2e checks.
 - `--project NAME` focuses e2e analysis for one browser/project (for example
   `--project firefox` when debugging timeout pressure).
 

@@ -10,19 +10,19 @@ function usage() {
     console.log(`Run e2e VM checks and analyze OTEL traces.
 
 Usage:
-  scripts/run-e2e-trace-analysis [--top N] [--trace TRACE_ID] [--warmup]
+  scripts/run-e2e-trace-analysis [--top N] [--trace TRACE_ID] [--cold]
 
 Examples:
   scripts/run-e2e-trace-analysis
   scripts/run-e2e-trace-analysis --top 40
   scripts/run-e2e-trace-analysis --trace 11111111111111111111111111111111
-  scripts/run-e2e-trace-analysis --warmup`);
+  scripts/run-e2e-trace-analysis --cold`);
 }
 
 function parseArgs(argv) {
     let top = 25;
     let traceId = "";
-    let warmup = false;
+    let cold = false;
 
     for (let i = 0; i < argv.length; i += 1) {
         const arg = argv[i];
@@ -46,8 +46,8 @@ function parseArgs(argv) {
             traceId = argv[i];
             continue;
         }
-        if (arg === "--warmup") {
-            warmup = true;
+        if (arg === "--cold") {
+            cold = true;
             continue;
         }
         if (arg === "--help" || arg === "-h") {
@@ -57,7 +57,7 @@ function parseArgs(argv) {
         throw new Error(`unknown argument: ${arg}`);
     }
 
-    return { top, traceId, warmup };
+    return { top, traceId, cold };
 }
 
 function runAndCapture(command, args) {
@@ -93,7 +93,9 @@ function buildCheck(checkName) {
     const storePath = output
         .split("\n")
         .map((line) => line.trim())
-        .filter((line) => line.startsWith("/nix/store/"))
+        .filter(
+            (line) => line.startsWith("/nix/store/") && !line.endsWith(".drv"),
+        )
         .at(-1);
 
     if (!storePath) {
@@ -114,10 +116,8 @@ function main() {
         process.exit(1);
     }
 
-    const sqliteCheck = parsed.warmup ? "e2e-sqlite-warmup" : "e2e-sqlite";
-    const postgresCheck = parsed.warmup
-        ? "e2e-postgres-warmup"
-        : "e2e-postgres";
+    const sqliteCheck = parsed.cold ? "e2e-sqlite-cold" : "e2e-sqlite";
+    const postgresCheck = parsed.cold ? "e2e-postgres-cold" : "e2e-postgres";
     const sqliteOut = buildCheck(sqliteCheck);
     const postgresOut = buildCheck(postgresCheck);
 
