@@ -447,6 +447,69 @@ function printE2eNavigationHotspots(spans, top) {
     }
 }
 
+function printE2eNavigationCacheWarmth(spans) {
+    const totals = new Map();
+    const e2eTests = spans.filter((span) => span.name === "e2e.test");
+
+    for (const span of e2eTests) {
+        const project = getAttr(span.raw, "e2e.project") || "-";
+        const topNavigations = parseJsonAttr(
+            span.raw,
+            "e2e.navigation_top_json",
+            [],
+        );
+        if (!Array.isArray(topNavigations)) {
+            continue;
+        }
+
+        for (const navigation of topNavigations) {
+            const commitToHydrationMs = asFiniteNumber(
+                navigation.commitToHydrationMs,
+            );
+            if (commitToHydrationMs === null || commitToHydrationMs < 0) {
+                continue;
+            }
+            const cacheWarmth =
+                navigation.cacheWarmth === "warm" ? "warm" : "cold";
+            const key = `${cacheWarmth}\n${project}`;
+            const current = totals.get(key) || {
+                cacheWarmth,
+                project,
+                count: 0,
+                totalMs: 0,
+                maxMs: 0,
+            };
+            current.count += 1;
+            current.totalMs += commitToHydrationMs;
+            current.maxMs = Math.max(current.maxMs, commitToHydrationMs);
+            totals.set(key, current);
+        }
+    }
+
+    const rows = [...totals.values()]
+        .map((stats) => ({
+            cacheWarmth: stats.cacheWarmth,
+            project: stats.project,
+            count: stats.count,
+            avgMs: stats.totalMs / stats.count,
+            maxMs: stats.maxMs,
+        }))
+        .sort((a, b) => b.avgMs - a.avgMs);
+
+    if (rows.length === 0) {
+        return;
+    }
+
+    console.log("Navigation commit->hydration by cache warmth");
+    console.log("warmth     project    avg_ms      max_ms      count");
+    for (const row of rows) {
+        console.log(
+            `${padRight(truncate(row.cacheWarmth, 9), 9)}  ${padRight(truncate(row.project, 9), 9)}  ${padLeft(row.avgMs.toFixed(3), 10)}  ${padLeft(row.maxMs.toFixed(3), 10)}  ${padLeft(row.count, 5)}`,
+        );
+    }
+    console.log("");
+}
+
 function printE2eLongTaskHotspots(spans, top) {
     const totals = new Map();
     const byProject = new Map();
@@ -1077,6 +1140,7 @@ function main() {
     printSlowestE2eTests(allSpans, parsed.top);
     printE2eActionHotspots(allSpans, parsed.top);
     printE2eNavigationHotspots(allSpans, parsed.top);
+    printE2eNavigationCacheWarmth(allSpans);
     printE2eLongTaskHotspots(allSpans, parsed.top);
     printE2eResourceHotspots(allSpans, parsed.top);
     printE2eHydrationVsApi(allSpans, parsed.top);

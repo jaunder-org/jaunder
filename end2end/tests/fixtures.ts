@@ -1,6 +1,7 @@
 import {
   expect,
   test as base,
+  type Page,
   type Request,
   type TestInfo,
 } from "@playwright/test";
@@ -76,6 +77,7 @@ type NavigationRecord = {
 type NavigationSummary = {
   id: number;
   url: string;
+  cacheWarmth: "cold" | "warm";
   totalMs: number;
   requestMs: number | null;
   commitToDomContentLoadedMs: number | null;
@@ -89,6 +91,62 @@ type NavigationSummary = {
 };
 
 const hydrationHeavyTimeoutScale = 2.2;
+const hydrationHeavyFirstNavigationScale = 2.6;
+const defaultWarmupUrl = "http://localhost:3000/";
+const defaultWarmupTimeoutMs = 10_000;
+
+function parseBooleanFlag(raw: string | undefined): boolean {
+  if (raw === undefined) {
+    return false;
+  }
+  const normalized = raw.trim().toLowerCase();
+  return (
+    normalized === "1" ||
+    normalized === "true" ||
+    normalized === "yes" ||
+    normalized === "on"
+  );
+}
+
+function parseWarmupTimeoutMs(raw: string | undefined): number {
+  if (raw === undefined) {
+    return defaultWarmupTimeoutMs;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return defaultWarmupTimeoutMs;
+  }
+  return parsed;
+}
+
+async function warmupPageContext(
+  page: Page,
+  testInfo: TestInfo,
+): Promise<void> {
+  if (!parseBooleanFlag(process.env.JAUNDER_E2E_WARMUP)) {
+    return;
+  }
+
+  const warmupUrl = process.env.JAUNDER_E2E_WARMUP_URL ?? defaultWarmupUrl;
+  const timeoutMs = parseWarmupTimeoutMs(
+    process.env.JAUNDER_E2E_WARMUP_TIMEOUT_MS,
+  );
+
+  try {
+    await page.goto(warmupUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: timeoutMs,
+    });
+    await page.waitForSelector("body[data-hydrated]", {
+      timeout: timeoutMs,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[e2e-warmup] ${testInfo.project.name}: warmup failed for ${warmupUrl}: ${message}`,
+    );
+  }
+}
 
 export function hydrationHeavyTimeoutMs(
   testInfo: TestInfo,
@@ -100,9 +158,22 @@ export function hydrationHeavyTimeoutMs(
   return Math.ceil(chromiumBudgetMs * hydrationHeavyTimeoutScale);
 }
 
+export function hydrationHeavyFirstNavigationTimeoutMs(
+  testInfo: TestInfo,
+  chromiumBudgetMs: number,
+): number {
+  if (testInfo.project.name === "chromium") {
+    return chromiumBudgetMs;
+  }
+  return Math.ceil(chromiumBudgetMs * hydrationHeavyFirstNavigationScale);
+}
+
 const test = base.extend<{ _autoPerfSpan: void }>({
   _autoPerfSpan: [
     async ({ page }, use, testInfo) => {
+      // Optional experiment mode: warm the same browser context before tracing starts.
+      await warmupPageContext(page, testInfo);
+
       const traceContext = traceContextFromEnvironment();
       const testStartMs = Date.now();
       const testKey = `${testInfo.file}::${testInfo.title}::${testInfo.project.name}::${testInfo.retry}`;
@@ -494,6 +565,7 @@ const test = base.extend<{ _autoPerfSpan: void }>({
           return {
             id: navigation.id,
             url: navigation.url,
+            cacheWarmth: navigation.id === 1 ? "cold" : "warm",
             totalMs: endMs - navigation.startedMs,
             requestMs,
             commitToDomContentLoadedMs,
@@ -593,6 +665,7 @@ const test = base.extend<{ _autoPerfSpan: void }>({
         makeEvent("navigation.lifecycle", endMs, [
           otlpAttribute("navigation.id", navigation.id),
           otlpAttribute("url.full", navigation.url),
+          otlpAttribute("navigation.cache_warmth", navigation.cacheWarmth),
           otlpAttribute("duration_ms", navigation.totalMs),
           otlpAttribute("navigation.request_ms", navigation.requestMs),
           otlpAttribute(

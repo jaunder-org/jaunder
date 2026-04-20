@@ -534,6 +534,232 @@
             '';
           };
 
+        mkE2eSqliteCheck =
+          {
+            checkName,
+            warmupEnv ? "",
+          }:
+          pkgs.testers.nixosTest {
+            name = checkName;
+
+            nodes.machine =
+              { pkgs, ... }:
+              {
+                imports = [ self.nixosModules.jaunder ];
+
+                virtualisation.memorySize = 2048;
+                environment.systemPackages = [
+                  pkgs.sqlite
+                  pkgs.opentelemetry-collector-contrib
+                ];
+                environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
+
+                systemd.services.otel-collector = {
+                  description = "Jaunder e2e OTel Collector";
+                  wantedBy = [ "multi-user.target" ];
+                  after = [ "network.target" ];
+                  serviceConfig = {
+                    ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml";
+                    Restart = "on-failure";
+                    RestartSec = "2s";
+                  };
+                };
+
+                services.jaunder.enable = true;
+                services.jaunder.bind = "127.0.0.1:3000";
+                systemd.services.jaunder.after = [ "otel-collector.service" ];
+                systemd.services.jaunder.requires = [ "otel-collector.service" ];
+                systemd.services.jaunder.environment = mailCaptureEnv // {
+                  RUST_LOG = "info";
+                  JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317";
+                };
+              };
+
+            testScript = ''
+              def seed_db():
+                machine.succeed("sqlite3 /var/lib/jaunder/data/jaunder.db \"DELETE FROM users; DELETE FROM sessions; DELETE FROM invites; DELETE FROM email_verifications; DELETE FROM password_resets; DELETE FROM posts; DELETE FROM tags; DELETE FROM site_config;\"")
+                machine.succeed("sqlite3 /var/lib/jaunder/data/jaunder.db \"INSERT OR REPLACE INTO site_config (key, value) VALUES ('site.registration_policy', 'open')\"")
+                machine.succeed("cd /var/lib/jaunder && ${jaunderBin}/bin/jaunder user-create --username testlogin --password testpassword123")
+                machine.succeed("cd /var/lib/jaunder && ${jaunderBin}/bin/jaunder user-create --username testnoemail --password testpassword123")
+                machine.succeed("rm -f /var/lib/jaunder/mail.jsonl")
+
+              machine.start()
+              machine.wait_for_unit("otel-collector.service", timeout=60)
+              machine.wait_for_unit("jaunder.service", timeout=60)
+              machine.wait_for_open_port(3000, timeout=30)
+
+              machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
+              machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")
+
+              # Run Chromium and Firefox against separate fresh databases so that
+              # state mutations in one browser's tests (e.g. password resets) do
+              # not interfere with the other browser's tests.
+              seed_db()
+              machine.succeed(
+                "cd /tmp/e2e"
+                + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
+                + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+                + "${warmupEnv}"
+                + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                + " JAUNDER_E2E_TRACE_ID=11111111111111111111111111111111"
+                + " JAUNDER_E2E_TRACEPARENT=00-11111111111111111111111111111111-1111111111111111-01"
+                + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
+                + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
+                + " --config playwright.nix.config.js --project chromium"
+              )
+
+              seed_db()
+              machine.succeed(
+                "cd /tmp/e2e"
+                + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
+                + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+                + "${warmupEnv}"
+                + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                + " JAUNDER_E2E_TRACE_ID=22222222222222222222222222222222"
+                + " JAUNDER_E2E_TRACEPARENT=00-22222222222222222222222222222222-2222222222222222-01"
+                + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
+                + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
+                + " --config playwright.nix.config.js --project firefox"
+              )
+
+              machine.succeed("systemctl stop otel-collector.service")
+              machine.succeed("test -s /var/lib/jaunder/otel-traces.jsonl")
+              machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-sqlite.jsonl")
+            '';
+          };
+
+        mkE2ePostgresCheck =
+          {
+            checkName,
+            warmupEnv ? "",
+          }:
+          pkgs.testers.nixosTest {
+            name = checkName;
+
+            nodes.machine =
+              { pkgs, lib, ... }:
+              {
+                imports = [ self.nixosModules.jaunder ];
+
+                virtualisation.memorySize = 2048;
+                environment.systemPackages = [
+                  pkgs.postgresql_16
+                  pkgs.opentelemetry-collector-contrib
+                ];
+                environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
+
+                systemd.services.otel-collector = {
+                  description = "Jaunder e2e OTel Collector";
+                  wantedBy = [ "multi-user.target" ];
+                  after = [ "network.target" ];
+                  serviceConfig = {
+                    ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml";
+                    Restart = "on-failure";
+                    RestartSec = "2s";
+                  };
+                };
+
+                services.postgresql = {
+                  enable = true;
+                  package = pkgs.postgresql_16;
+                  authentication = ''
+                    local all all trust
+                    host all all 0.0.0.0/0 trust
+                  '';
+                  settings = {
+                    listen_addresses = lib.mkForce "*";
+                  };
+                };
+
+                services.jaunder.enable = true;
+                services.jaunder.db = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
+                # We delay jaunder.service until we have run create-pg-db in the testScript.
+                systemd.services.jaunder.wantedBy = lib.mkForce [ ];
+                systemd.services.jaunder.after = [ "otel-collector.service" ];
+                systemd.services.jaunder.requires = [ "otel-collector.service" ];
+                systemd.services.jaunder.environment = mailCaptureEnv // {
+                  RUST_LOG = "info";
+                  JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317";
+                };
+              };
+
+            testScript = ''
+              machine.start()
+              machine.wait_for_unit("otel-collector.service", timeout=60)
+              machine.wait_for_unit("postgresql.service", timeout=60)
+
+              # Exercise create-pg-db
+              machine.succeed(
+                "${jaunderBin}/bin/jaunder create-pg-db"
+                + " --bootstrap-db postgres://postgres@127.0.0.1/postgres"
+                + " --app-db postgres://jaunder@127.0.0.1/jaunder"
+                + " --app-role-password testpassword"
+              )
+
+              # Now start and wait for jaunder.service
+              machine.succeed("systemctl start jaunder.service")
+              machine.wait_for_unit("jaunder.service", timeout=60)
+              machine.wait_for_open_port(3000, timeout=30)
+
+              machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
+              machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")
+
+              def seed_db():
+                machine.succeed("sudo -u postgres psql -d jaunder -c \"TRUNCATE users, sessions, invites, email_verifications, password_resets, posts, tags, site_config CASCADE\"")
+                machine.succeed("sudo -u postgres psql -d jaunder -c \"INSERT INTO site_config (key, value) VALUES ('site.registration_policy', 'open')\"")
+                machine.succeed(
+                  "cd /var/lib/jaunder"
+                  + " && ${jaunderBin}/bin/jaunder user-create"
+                  + " --db postgres://jaunder:testpassword@127.0.0.1/jaunder"
+                  + " --username testlogin"
+                  + " --password testpassword123"
+                )
+                machine.succeed(
+                  "cd /var/lib/jaunder"
+                  + " && ${jaunderBin}/bin/jaunder user-create"
+                  + " --db postgres://jaunder:testpassword@127.0.0.1/jaunder"
+                  + " --username testnoemail"
+                  + " --password testpassword123"
+                )
+                machine.succeed("rm -f /var/lib/jaunder/mail.jsonl")
+
+              # Run Chromium and Firefox against separate fresh databases so that
+              # state mutations in one browser's tests (e.g. password resets) do
+              # not interfere with the other browser's tests.
+              seed_db()
+              machine.succeed(
+                "cd /tmp/e2e"
+                + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
+                + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+                + "${warmupEnv}"
+                + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                + " JAUNDER_E2E_TRACE_ID=33333333333333333333333333333333"
+                + " JAUNDER_E2E_TRACEPARENT=00-33333333333333333333333333333333-3333333333333333-01"
+                + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
+                + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
+                + " --config playwright.nix.config.js --project chromium"
+              )
+
+              seed_db()
+              machine.succeed(
+                "cd /tmp/e2e"
+                + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
+                + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+                + "${warmupEnv}"
+                + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                + " JAUNDER_E2E_TRACE_ID=44444444444444444444444444444444"
+                + " JAUNDER_E2E_TRACEPARENT=00-44444444444444444444444444444444-4444444444444444-01"
+                + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
+                + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
+                + " --config playwright.nix.config.js --project firefox"
+              )
+
+              machine.succeed("systemctl stop otel-collector.service")
+              machine.succeed("test -s /var/lib/jaunder/otel-traces.jsonl")
+              machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-postgres.jsonl")
+            '';
+          };
+
       in
       {
         packages = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
@@ -557,216 +783,22 @@
 
         checks =
           pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
-            e2e-sqlite = pkgs.testers.nixosTest {
-              name = "jaunder-e2e-sqlite";
-
-              nodes.machine =
-                { pkgs, ... }:
-                {
-                  imports = [ self.nixosModules.jaunder ];
-
-                  virtualisation.memorySize = 2048;
-                  environment.systemPackages = [
-                    pkgs.sqlite
-                    pkgs.opentelemetry-collector-contrib
-                  ];
-                  environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
-
-                  systemd.services.otel-collector = {
-                    description = "Jaunder e2e OTel Collector";
-                    wantedBy = [ "multi-user.target" ];
-                    after = [ "network.target" ];
-                    serviceConfig = {
-                      ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml";
-                      Restart = "on-failure";
-                      RestartSec = "2s";
-                    };
-                  };
-
-                  services.jaunder.enable = true;
-                  services.jaunder.bind = "127.0.0.1:3000";
-                  systemd.services.jaunder.after = [ "otel-collector.service" ];
-                  systemd.services.jaunder.requires = [ "otel-collector.service" ];
-                  systemd.services.jaunder.environment = mailCaptureEnv // {
-                    RUST_LOG = "info";
-                    JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317";
-                  };
-                };
-
-              testScript = ''
-                def seed_db():
-                  machine.succeed("sqlite3 /var/lib/jaunder/data/jaunder.db \"DELETE FROM users; DELETE FROM sessions; DELETE FROM invites; DELETE FROM email_verifications; DELETE FROM password_resets; DELETE FROM posts; DELETE FROM tags; DELETE FROM site_config;\"")
-                  machine.succeed("sqlite3 /var/lib/jaunder/data/jaunder.db \"INSERT OR REPLACE INTO site_config (key, value) VALUES ('site.registration_policy', 'open')\"")
-                  machine.succeed("cd /var/lib/jaunder && ${jaunderBin}/bin/jaunder user-create --username testlogin --password testpassword123")
-                  machine.succeed("cd /var/lib/jaunder && ${jaunderBin}/bin/jaunder user-create --username testnoemail --password testpassword123")
-                  machine.succeed("rm -f /var/lib/jaunder/mail.jsonl")
-
-                machine.start()
-                machine.wait_for_unit("otel-collector.service", timeout=60)
-                machine.wait_for_unit("jaunder.service", timeout=60)
-                machine.wait_for_open_port(3000, timeout=30)
-
-                machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
-                machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")
-
-                # Run Chromium and Firefox against separate fresh databases so that
-                # state mutations in one browser's tests (e.g. password resets) do
-                # not interfere with the other browser's tests.
-                seed_db()
-                machine.succeed(
-                  "cd /tmp/e2e"
-                  + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
-                  + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-                  + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
-                  + " JAUNDER_E2E_TRACE_ID=11111111111111111111111111111111"
-                  + " JAUNDER_E2E_TRACEPARENT=00-11111111111111111111111111111111-1111111111111111-01"
-                  + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
-                  + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-                  + " --config playwright.nix.config.js --project chromium"
-                )
-
-                seed_db()
-                machine.succeed(
-                  "cd /tmp/e2e"
-                  + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
-                  + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-                  + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
-                  + " JAUNDER_E2E_TRACE_ID=22222222222222222222222222222222"
-                  + " JAUNDER_E2E_TRACEPARENT=00-22222222222222222222222222222222-2222222222222222-01"
-                  + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
-                  + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-                  + " --config playwright.nix.config.js --project firefox"
-                )
-
-                machine.succeed("systemctl stop otel-collector.service")
-                machine.succeed("test -s /var/lib/jaunder/otel-traces.jsonl")
-                machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-sqlite.jsonl")
-              '';
+            e2e-sqlite = mkE2eSqliteCheck {
+              checkName = "jaunder-e2e-sqlite";
             };
 
-            e2e-postgres = pkgs.testers.nixosTest {
-              name = "jaunder-e2e-postgres";
+            e2e-sqlite-warmup = mkE2eSqliteCheck {
+              checkName = "jaunder-e2e-sqlite-warmup";
+              warmupEnv = " JAUNDER_E2E_WARMUP=1";
+            };
 
-              nodes.machine =
-                { pkgs, lib, ... }:
-                {
-                  imports = [ self.nixosModules.jaunder ];
+            e2e-postgres = mkE2ePostgresCheck {
+              checkName = "jaunder-e2e-postgres";
+            };
 
-                  virtualisation.memorySize = 2048;
-                  environment.systemPackages = [
-                    pkgs.postgresql_16
-                    pkgs.opentelemetry-collector-contrib
-                  ];
-                  environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
-
-                  systemd.services.otel-collector = {
-                    description = "Jaunder e2e OTel Collector";
-                    wantedBy = [ "multi-user.target" ];
-                    after = [ "network.target" ];
-                    serviceConfig = {
-                      ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml";
-                      Restart = "on-failure";
-                      RestartSec = "2s";
-                    };
-                  };
-
-                  services.postgresql = {
-                    enable = true;
-                    package = pkgs.postgresql_16;
-                    authentication = ''
-                      local all all trust
-                      host all all 0.0.0.0/0 trust
-                    '';
-                    settings = {
-                      listen_addresses = lib.mkForce "*";
-                    };
-                  };
-
-                  services.jaunder.enable = true;
-                  services.jaunder.db = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
-                  # We delay jaunder.service until we have run create-pg-db in the testScript.
-                  systemd.services.jaunder.wantedBy = lib.mkForce [ ];
-                  systemd.services.jaunder.after = [ "otel-collector.service" ];
-                  systemd.services.jaunder.requires = [ "otel-collector.service" ];
-                  systemd.services.jaunder.environment = mailCaptureEnv // {
-                    RUST_LOG = "info";
-                    JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317";
-                  };
-                };
-
-              testScript = ''
-                machine.start()
-                machine.wait_for_unit("otel-collector.service", timeout=60)
-                machine.wait_for_unit("postgresql.service", timeout=60)
-
-                # Exercise create-pg-db
-                machine.succeed(
-                  "${jaunderBin}/bin/jaunder create-pg-db"
-                  + " --bootstrap-db postgres://postgres@127.0.0.1/postgres"
-                  + " --app-db postgres://jaunder@127.0.0.1/jaunder"
-                  + " --app-role-password testpassword"
-                )
-
-                # Now start and wait for jaunder.service
-                machine.succeed("systemctl start jaunder.service")
-                machine.wait_for_unit("jaunder.service", timeout=60)
-                machine.wait_for_open_port(3000, timeout=30)
-
-                machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
-                machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")
-
-                def seed_db():
-                  machine.succeed("sudo -u postgres psql -d jaunder -c \"TRUNCATE users, sessions, invites, email_verifications, password_resets, posts, tags, site_config CASCADE\"")
-                  machine.succeed("sudo -u postgres psql -d jaunder -c \"INSERT INTO site_config (key, value) VALUES ('site.registration_policy', 'open')\"")
-                  machine.succeed(
-                    "cd /var/lib/jaunder"
-                    + " && ${jaunderBin}/bin/jaunder user-create"
-                    + " --db postgres://jaunder:testpassword@127.0.0.1/jaunder"
-                    + " --username testlogin"
-                    + " --password testpassword123"
-                  )
-                  machine.succeed(
-                    "cd /var/lib/jaunder"
-                    + " && ${jaunderBin}/bin/jaunder user-create"
-                    + " --db postgres://jaunder:testpassword@127.0.0.1/jaunder"
-                    + " --username testnoemail"
-                    + " --password testpassword123"
-                  )
-                  machine.succeed("rm -f /var/lib/jaunder/mail.jsonl")
-
-                # Run Chromium and Firefox against separate fresh databases so that
-                # state mutations in one browser's tests (e.g. password resets) do
-                # not interfere with the other browser's tests.
-                seed_db()
-                machine.succeed(
-                  "cd /tmp/e2e"
-                  + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
-                  + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-                  + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
-                  + " JAUNDER_E2E_TRACE_ID=33333333333333333333333333333333"
-                  + " JAUNDER_E2E_TRACEPARENT=00-33333333333333333333333333333333-3333333333333333-01"
-                  + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
-                  + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-                  + " --config playwright.nix.config.js --project chromium"
-                )
-
-                seed_db()
-                machine.succeed(
-                  "cd /tmp/e2e"
-                  + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
-                  + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-                  + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
-                  + " JAUNDER_E2E_TRACE_ID=44444444444444444444444444444444"
-                  + " JAUNDER_E2E_TRACEPARENT=00-44444444444444444444444444444444-4444444444444444-01"
-                  + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
-                  + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-                  + " --config playwright.nix.config.js --project firefox"
-                )
-
-                machine.succeed("systemctl stop otel-collector.service")
-                machine.succeed("test -s /var/lib/jaunder/otel-traces.jsonl")
-                machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-postgres.jsonl")
-              '';
+            e2e-postgres-warmup = mkE2ePostgresCheck {
+              checkName = "jaunder-e2e-postgres-warmup";
+              warmupEnv = " JAUNDER_E2E_WARMUP=1";
             };
 
             # `commands` includes PostgreSQL-only ignored bootstrap tests, so

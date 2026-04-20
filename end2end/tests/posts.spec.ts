@@ -1,4 +1,9 @@
-import { test, expect, hydrationHeavyTimeoutMs } from "./fixtures";
+import {
+  test,
+  expect,
+  hydrationHeavyFirstNavigationTimeoutMs,
+  hydrationHeavyTimeoutMs,
+} from "./fixtures";
 import type { Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
 import { waitForHydration } from "./hydration";
@@ -35,11 +40,16 @@ async function click(page: Page, selector: string): Promise<void> {
   await withTimedAction(page, "ui.click", () => page.click(selector));
 }
 
-async function register(page: Page): Promise<string> {
+async function register(
+  page: Page,
+  firstNavigationTimeoutMs: number,
+): Promise<string> {
   const username = `postuser${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
 
-  await goto(page, "http://localhost:3000/register");
-  await waitForHydration(page);
+  await goto(page, "http://localhost:3000/register", {
+    timeout: firstNavigationTimeoutMs,
+  });
+  await waitForHydration(page, firstNavigationTimeoutMs);
   await withTimedAction(page, "ui.fill.username", () =>
     page.fill('input[name="username"]', username),
   );
@@ -86,8 +96,11 @@ async function createPublishedPostViaApi(
 
 test("authenticated user can create a post through the UI", async ({
   page,
-}) => {
-  await register(page);
+}, testInfo) => {
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
 
   await goto(page, "http://localhost:3000/posts/new");
   await waitForHydration(page);
@@ -103,8 +116,13 @@ test("authenticated user can create a post through the UI", async ({
   await expect(page.locator(".success")).toContainText("Slug: playwright-post");
 });
 
-test("authenticated user can save a draft through the UI", async ({ page }) => {
-  await register(page);
+test("authenticated user can save a draft through the UI", async ({
+  page,
+}, testInfo) => {
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
 
   await goto(page, "http://localhost:3000/posts/new");
   await waitForHydration(page);
@@ -120,9 +138,12 @@ test("authenticated user can save a draft through the UI", async ({ page }) => {
   await expect(page.locator(".success")).toContainText("Slug: draft-slug");
 });
 
-test("published post renders at permalink", async ({ page }) => {
+test("published post renders at permalink", async ({ page }, testInfo) => {
   test.slow();
-  await register(page);
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
 
   await goto(page, "http://localhost:3000/posts/new");
   await waitForHydration(page);
@@ -166,9 +187,12 @@ test("published post renders at permalink", async ({ page }) => {
   await expect(page.locator(".content")).toContainText("hello permalink");
 });
 
-test("authenticated user can edit a draft post", async ({ page }) => {
+test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
   test.slow();
-  await register(page);
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
 
   // Create a draft
   await goto(page, "http://localhost:3000/posts/new");
@@ -204,9 +228,14 @@ test("authenticated user can edit a draft post", async ({ page }) => {
   );
 });
 
-test("editing a published post freezes the slug", async ({ page }) => {
+test("editing a published post freezes the slug", async ({
+  page,
+}, testInfo) => {
   test.slow();
-  await register(page);
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
 
   // Create and publish a post
   await goto(page, "http://localhost:3000/posts/new");
@@ -253,7 +282,11 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   context,
 }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
-  await register(page);
+  const firstNavigationTimeoutMs = hydrationHeavyFirstNavigationTimeoutMs(
+    testInfo,
+    12_000,
+  );
+  await register(page, firstNavigationTimeoutMs);
 
   await goto(page, "http://localhost:3000/posts/new");
   await waitForHydration(page);
@@ -309,7 +342,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   const guestContext = await context.browser()!.newContext();
   const guestPage = await guestContext.newPage();
   await goto(guestPage, permalinkUrl);
-  await waitForHydration(guestPage);
+  await waitForHydration(guestPage, firstNavigationTimeoutMs);
   await expect(guestPage.locator("body")).not.toContainText(
     "edited draft body",
   );
@@ -334,9 +367,13 @@ test("per-user timeline lists published posts with pagination", async ({
 }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
   const perf = createPerfProbe(testInfo, "user_timeline_pagination");
+  const firstNavigationTimeoutMs = hydrationHeavyFirstNavigationTimeoutMs(
+    testInfo,
+    10_000,
+  );
 
   perf.mark("register_start");
-  const username = await register(page);
+  const username = await register(page, firstNavigationTimeoutMs);
   perf.mark("register_done");
 
   perf.mark("seed_posts_start");
@@ -348,7 +385,7 @@ test("per-user timeline lists published posts with pagination", async ({
   perf.mark("goto_timeline_start");
   await goto(page, `http://localhost:3000/~${username}`);
   perf.mark("goto_timeline_done");
-  await waitForHydration(page);
+  await waitForHydration(page, firstNavigationTimeoutMs);
   perf.mark("hydration_done");
 
   await expect(page.locator("h1")).toContainText(`Posts by ${username}`);
@@ -383,9 +420,13 @@ test("home page shows local timeline for unauthenticated users", async ({
 }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
   const perf = createPerfProbe(testInfo, "home_local_timeline");
+  const firstNavigationTimeoutMs = hydrationHeavyFirstNavigationTimeoutMs(
+    testInfo,
+    10_000,
+  );
 
   perf.mark("seed_author_one_start");
-  await register(page);
+  await register(page, firstNavigationTimeoutMs);
   for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
     await createPublishedPostViaApi(page, `Local Author One ${i}`);
   }
@@ -394,7 +435,7 @@ test("home page shows local timeline for unauthenticated users", async ({
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
   perf.mark("seed_author_two_start");
-  await register(secondPage);
+  await register(secondPage, firstNavigationTimeoutMs);
   for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
     await createPublishedPostViaApi(secondPage, `Local Author Two ${i}`);
   }
@@ -403,9 +444,11 @@ test("home page shows local timeline for unauthenticated users", async ({
   const guestContext = await browser.newContext();
   const guestPage = await guestContext.newPage();
   perf.mark("goto_home_start");
-  await goto(guestPage, "http://localhost:3000/");
+  await goto(guestPage, "http://localhost:3000/", {
+    timeout: firstNavigationTimeoutMs,
+  });
   perf.mark("goto_home_done");
-  await waitForHydration(guestPage);
+  await waitForHydration(guestPage, firstNavigationTimeoutMs);
   perf.mark("hydration_done");
 
   await expect(guestPage.locator("h2")).toHaveText("Local Timeline", {
@@ -441,9 +484,13 @@ test("home page shows authenticated home feed with pagination", async ({
 }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
   const perf = createPerfProbe(testInfo, "home_authenticated_feed");
+  const firstNavigationTimeoutMs = hydrationHeavyFirstNavigationTimeoutMs(
+    testInfo,
+    10_000,
+  );
 
   perf.mark("seed_self_start");
-  await register(page);
+  await register(page, firstNavigationTimeoutMs);
   for (let i = 0; i < HOME_FEED_SELF_COUNT; i += 1) {
     await createPublishedPostViaApi(page, `Home Feed Mine ${i}`);
   }
@@ -452,16 +499,18 @@ test("home page shows authenticated home feed with pagination", async ({
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
   perf.mark("seed_other_start");
-  await register(secondPage);
+  await register(secondPage, firstNavigationTimeoutMs);
   for (let i = 0; i < HOME_FEED_OTHER_COUNT; i += 1) {
     await createPublishedPostViaApi(secondPage, `Home Feed Other ${i}`);
   }
   perf.mark("seed_other_done");
 
   perf.mark("goto_home_start");
-  await goto(page, "http://localhost:3000/");
+  await goto(page, "http://localhost:3000/", {
+    timeout: firstNavigationTimeoutMs,
+  });
   perf.mark("goto_home_done");
-  await waitForHydration(page);
+  await waitForHydration(page, firstNavigationTimeoutMs);
   perf.mark("hydration_done");
 
   await expect(page.locator("h2")).toContainText("Your Home Feed", {
