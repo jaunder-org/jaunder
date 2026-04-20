@@ -3,7 +3,6 @@ import {
   expect,
   hydrationHeavyFirstNavigationTimeoutMs,
   hydrationHeavyTimeoutMs,
-  maybeWarmupPage,
 } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
@@ -328,7 +327,6 @@ test("draft lifecycle: create, view, edit, and publish", async ({
 
   const guestContext = await context.browser()!.newContext();
   const guestPage = await guestContext.newPage();
-  await maybeWarmupPage(guestPage, testInfo);
   await goto(guestPage, permalinkUrl);
   await waitForHydration(guestPage, firstNavigationTimeoutMs);
   await expect(guestPage.locator("body")).not.toContainText(
@@ -422,7 +420,6 @@ test("home page shows local timeline for unauthenticated users", async ({
 
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
-  await maybeWarmupPage(secondPage, testInfo);
   perf.mark("seed_author_two_start");
   await register(secondPage, firstNavigationTimeoutMs);
   for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
@@ -432,7 +429,6 @@ test("home page shows local timeline for unauthenticated users", async ({
 
   const guestContext = await browser.newContext();
   const guestPage = await guestContext.newPage();
-  await maybeWarmupPage(guestPage, testInfo);
   perf.mark("goto_home_start");
   await goto(guestPage, "http://localhost:3000/", {
     timeout: firstNavigationTimeoutMs,
@@ -488,7 +484,6 @@ test("home page shows authenticated home feed with pagination", async ({
 
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
-  await maybeWarmupPage(secondPage, testInfo);
   perf.mark("seed_other_start");
   await register(secondPage, firstNavigationTimeoutMs);
   for (let i = 0; i < HOME_FEED_OTHER_COUNT; i += 1) {
