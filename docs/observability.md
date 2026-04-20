@@ -20,6 +20,8 @@ E2E tracing currently has two complementary layers:
   - one span per test
   - request timing summary
   - navigation lifecycle summary (`e2e.navigation_top_json`)
+  - each navigation record includes `cacheWarmth` (`cold` for first document
+    navigation in the test, `warm` for subsequent ones)
   - includes `commit -> hydration` timing when hydration is observed
   - resource summary
   - timed action summary (`e2e.action_top_json`)
@@ -46,6 +48,7 @@ The analyzer reports:
 - slowest `e2e.test` spans
 - top e2e action hotspots
 - top navigation phase hotspots and slow targets
+- navigation `commit -> hydration` split by `cacheWarmth`
 - per-project/browser e2e duration breakdown
 - per-navigation hydration component hotspots (`wasm_init`, `leptos_hydrate`,
   `post_hydrate_effects`, `commit_to_hydration`) by sample, target, and project
@@ -59,10 +62,18 @@ To run both e2e VM checks and immediately analyze the produced traces, use:
 scripts/run-e2e-trace-analysis --top 25
 ```
 
+For warm-cache diagnostics (sets `JAUNDER_E2E_WARMUP=1` in the VM checks), use:
+
+```bash
+scripts/run-e2e-trace-analysis --warmup --top 25
+```
+
 Optional filters:
 
 - `--top N` controls how many rows each section prints.
 - `--trace TRACE_ID` restricts analysis to one trace id.
+- `--warmup` runs `e2e-sqlite-warmup` and `e2e-postgres-warmup` instead of the
+  default e2e checks.
 - `--project NAME` focuses e2e analysis for one browser/project (for example
   `--project firefox` when debugging timeout pressure).
 
@@ -72,9 +83,28 @@ E2E tests that are hydration-heavy should use
 `hydrationHeavyTimeoutMs(testInfo, chromiumBudgetMs)` from
 `end2end/tests/fixtures.ts` instead of hard-coded timeout numbers.
 
+For first document navigation in a test (typically the coldest path), use
+`hydrationHeavyFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)`.
+
 This applies a project-aware multiplier derived from observed p90 hydration
 latency so Firefox/WebKit runs get realistic budgets without increasing
 Chromium timeouts unnecessarily.
+
+For diagnostics, you can optionally warm each Playwright test page context
+before instrumentation starts:
+
+```bash
+JAUNDER_E2E_WARMUP=1 playwright test
+```
+
+Optional controls:
+
+- `JAUNDER_E2E_WARMUP_URL` (default `http://localhost:3000/`)
+- `JAUNDER_E2E_WARMUP_TIMEOUT_MS` (default `10000`)
+
+This warmup runs on the same test page/context and waits for
+`body[data-hydrated]`, so subsequent navigations within that test are measured
+as warm-cache behavior.
 
 ## WASM Bundle Audit
 

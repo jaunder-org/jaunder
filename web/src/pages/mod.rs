@@ -25,41 +25,34 @@ use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, Stylesheet, Title};
 use leptos_router::{
     components::{Route, Router, Routes},
+    hooks::use_location,
     ParamSegment, StaticSegment,
 };
 
 #[component]
-pub fn App() -> impl IntoView {
-    // Provides context that manages stylesheets, titles, meta tags, etc.
-    provide_meta_context();
-
-    // Override the router's SPA-navigation redirect hook with a full-page reload.
-    // The Router component installs a hook via the same OnceLock (first caller wins),
-    // so we must register ours here — before the view! tree renders and instantiates
-    // Router.  Using window.location.replace() instead of use_navigate() ensures:
-    // - the browser performs a real page load, refreshing all server-rendered state
-    //   (including the auth header that reads from the `user` Resource), and
-    // - Playwright's waitForURL() reliably detects the navigation in all browsers.
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = leptos::server_fn::redirect::set_redirect_hook(|loc: &str| {
-            if let Some(window) = web_sys::window() {
-                let _ = window.location().replace(loc);
-            }
-        });
-    }
-
+fn HeaderNav() -> impl IntoView {
+    let location = use_location();
     let user = Resource::new(|| (), |_| current_user());
 
+    let skip_user_fetch = move || {
+        let path = location.pathname.get();
+        path == "/login" || path == "/register" || path == "/posts/new"
+    };
+
     view! {
-        <Stylesheet id="leptos" href="/pkg/jaunder.css" />
+        {move || {
+            if skip_user_fetch() {
+                return view! {
+                    <nav>
+                        <a href="/login">"Login"</a>
+                        " "
+                        <a href="/register">"Register"</a>
+                    </nav>
+                }
+                    .into_any();
+            }
 
-        // sets the document title
-        <Title text="Jaunder" />
-
-        // content for this welcome page
-        <Router>
-            <header>
+            view! {
                 <Suspense fallback=|| {
                     view! {
                         <nav>
@@ -95,6 +88,43 @@ pub fn App() -> impl IntoView {
                         }
                     })}
                 </Suspense>
+            }
+                .into_any()
+        }}
+    }
+}
+
+#[component]
+pub fn App() -> impl IntoView {
+    // Provides context that manages stylesheets, titles, meta tags, etc.
+    provide_meta_context();
+
+    // Override the router's SPA-navigation redirect hook with a full-page reload.
+    // The Router component installs a hook via the same OnceLock (first caller wins),
+    // so we must register ours here — before the view! tree renders and instantiates
+    // Router.  Using window.location.replace() instead of use_navigate() ensures:
+    // - the browser performs a real page load, refreshing all server-rendered state
+    //   (including the auth header that reads from the `user` Resource), and
+    // - Playwright's waitForURL() reliably detects the navigation in all browsers.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = leptos::server_fn::redirect::set_redirect_hook(|loc: &str| {
+            if let Some(window) = web_sys::window() {
+                let _ = window.location().replace(loc);
+            }
+        });
+    }
+
+    view! {
+        <Stylesheet id="leptos" href="/pkg/jaunder.css" />
+
+        // sets the document title
+        <Title text="Jaunder" />
+
+        // content for this welcome page
+        <Router>
+            <header>
+                <HeaderNav />
             </header>
             <main>
                 <Routes fallback=|| "Page not found.".into_view()>

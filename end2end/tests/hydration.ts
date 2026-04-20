@@ -8,9 +8,14 @@ type GlobalWithHydrationRecorder = typeof globalThis & {
 };
 
 /** Wait for Leptos WASM hydration and explicitly mark completion for OTEL capture. */
-export async function waitForHydration(page: Page): Promise<void> {
+export async function waitForHydration(
+  page: Page,
+  timeoutMs?: number,
+): Promise<void> {
   await withTimedAction(page, "wait.hydration", () =>
-    page.waitForSelector("body[data-hydrated]"),
+    page.waitForSelector("body[data-hydrated]", {
+      timeout: timeoutMs,
+    }),
   );
 
   await page.evaluate(() => {
