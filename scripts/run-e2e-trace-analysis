@@ -1,0 +1,158 @@
+#!/usr/bin/env node
+
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+const { spawnSync } = require("child_process");
+
+function usage() {
+    console.log(`Run e2e VM checks and analyze OTEL traces.
+
+Usage:
+  scripts/run-e2e-trace-analysis [--top N] [--trace TRACE_ID] [--cold]
+
+Examples:
+  scripts/run-e2e-trace-analysis
+  scripts/run-e2e-trace-analysis --top 40
+  scripts/run-e2e-trace-analysis --trace 11111111111111111111111111111111
+  scripts/run-e2e-trace-analysis --cold`);
+}
+
+function parseArgs(argv) {
+    let top = 25;
+    let traceId = "";
+    let cold = false;
+
+    for (let i = 0; i < argv.length; i += 1) {
+        const arg = argv[i];
+        if (arg === "--top") {
+            i += 1;
+            if (i >= argv.length) {
+                throw new Error("--top requires a value");
+            }
+            const parsed = Number.parseInt(argv[i], 10);
+            if (!Number.isInteger(parsed) || parsed <= 0) {
+                throw new Error("--top must be a positive integer");
+            }
+            top = parsed;
+            continue;
+        }
+        if (arg === "--trace") {
+            i += 1;
+            if (i >= argv.length) {
+                throw new Error("--trace requires a value");
+            }
+            traceId = argv[i];
+            continue;
+        }
+        if (arg === "--cold") {
+            cold = true;
+            continue;
+        }
+        if (arg === "--help" || arg === "-h") {
+            usage();
+            process.exit(0);
+        }
+        throw new Error(`unknown argument: ${arg}`);
+    }
+
+    return { top, traceId, cold };
+}
+
+function runAndCapture(command, args) {
+    const result = spawnSync(command, args, { encoding: "utf8" });
+    if (result.status !== 0) {
+        if (result.stdout) {
+            process.stdout.write(result.stdout);
+        }
+        if (result.stderr) {
+            process.stderr.write(result.stderr);
+        }
+        throw new Error(
+            `${command} ${args.join(" ")} failed with exit code ${result.status}`,
+        );
+    }
+
+    const output = [result.stdout, result.stderr]
+        .filter((value) => typeof value === "string" && value.length > 0)
+        .join("\n");
+
+    return output;
+}
+
+function buildCheck(checkName) {
+    console.log(`\n==> Running ${checkName}`);
+    const output = runAndCapture("nix", [
+        "build",
+        `.#checks.x86_64-linux.${checkName}`,
+        "--no-link",
+        "--print-out-paths",
+    ]);
+
+    const storePath = output
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(
+            (line) => line.startsWith("/nix/store/") && !line.endsWith(".drv"),
+        )
+        .at(-1);
+
+    if (!storePath) {
+        throw new Error(`could not parse output path for ${checkName}`);
+    }
+
+    console.log(`    output: ${storePath}`);
+    return storePath;
+}
+
+function main() {
+    let parsed;
+    try {
+        parsed = parseArgs(process.argv.slice(2));
+    } catch (error) {
+        console.error(`error: ${error.message}`);
+        usage();
+        process.exit(1);
+    }
+
+    const sqliteCheck = parsed.cold ? "e2e-sqlite-cold" : "e2e-sqlite";
+    const postgresCheck = parsed.cold ? "e2e-postgres-cold" : "e2e-postgres";
+    const sqliteOut = buildCheck(sqliteCheck);
+    const postgresOut = buildCheck(postgresCheck);
+
+    const sqliteTrace = path.join(
+        sqliteOut,
+        "otel-traces-sqlite.jsonl",
+        "otel-traces.jsonl",
+    );
+    const postgresTrace = path.join(
+        postgresOut,
+        "otel-traces-postgres.jsonl",
+        "otel-traces.jsonl",
+    );
+
+    for (const traceFile of [sqliteTrace, postgresTrace]) {
+        if (!fs.existsSync(traceFile)) {
+            throw new Error(`trace file not found: ${traceFile}`);
+        }
+    }
+
+    console.log("\n==> Running trace analyzer");
+    const analyzer = path.join(process.cwd(), "scripts", "analyze-otel-traces");
+    const analyzerArgs = ["--top", String(parsed.top)];
+    if (parsed.traceId) {
+        analyzerArgs.push("--trace", parsed.traceId);
+    }
+    analyzerArgs.push(sqliteTrace, postgresTrace);
+
+    const result = spawnSync(analyzer, analyzerArgs, {
+        stdio: "inherit",
+        encoding: "utf8",
+    });
+    if (result.status !== 0) {
+        process.exit(result.status ?? 1);
+    }
+}
+
+main();
