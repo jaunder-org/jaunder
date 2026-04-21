@@ -3,13 +3,18 @@ pub mod email;
 pub mod home;
 pub mod invites;
 pub mod password_reset;
+pub mod posts;
 pub mod profile;
 pub mod sessions;
+pub(crate) mod signal_read;
 
 use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
 use crate::pages::invites::InvitesPage;
 use crate::pages::password_reset::{ForgotPasswordPage, ResetPasswordPage};
+use crate::pages::posts::{
+    CreatePostPage, DraftPreviewPage, DraftsPage, EditPostPage, PostPage, UserTimelinePage,
+};
 use crate::pages::profile::ProfilePage;
 use crate::pages::sessions::SessionsPage;
 use crate::{
@@ -20,24 +25,34 @@ use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, Stylesheet, Title};
 use leptos_router::{
     components::{Route, Router, Routes},
-    StaticSegment,
+    hooks::use_location,
+    ParamSegment, StaticSegment,
 };
 
 #[component]
-pub fn App() -> impl IntoView {
-    // Provides context that manages stylesheets, titles, meta tags, etc.
-    provide_meta_context();
+fn HeaderNav() -> impl IntoView {
+    let location = use_location();
     let user = Resource::new(|| (), |_| current_user());
 
+    let skip_user_fetch = move || {
+        let path = location.pathname.get();
+        path == "/login" || path == "/register" || path == "/posts/new"
+    };
+
     view! {
-        <Stylesheet id="leptos" href="/pkg/jaunder.css" />
+        {move || {
+            if skip_user_fetch() {
+                return view! {
+                    <nav>
+                        <a href="/login">"Login"</a>
+                        " "
+                        <a href="/register">"Register"</a>
+                    </nav>
+                }
+                    .into_any();
+            }
 
-        // sets the document title
-        <Title text="Jaunder" />
-
-        // content for this welcome page
-        <Router>
-            <header>
+            view! {
                 <Suspense fallback=|| {
                     view! {
                         <nav>
@@ -73,6 +88,43 @@ pub fn App() -> impl IntoView {
                         }
                     })}
                 </Suspense>
+            }
+                .into_any()
+        }}
+    }
+}
+
+#[component]
+pub fn App() -> impl IntoView {
+    // Provides context that manages stylesheets, titles, meta tags, etc.
+    provide_meta_context();
+
+    // Override the router's SPA-navigation redirect hook with a full-page reload.
+    // The Router component installs a hook via the same OnceLock (first caller wins),
+    // so we must register ours here — before the view! tree renders and instantiates
+    // Router.  Using window.location.replace() instead of use_navigate() ensures:
+    // - the browser performs a real page load, refreshing all server-rendered state
+    //   (including the auth header that reads from the `user` Resource), and
+    // - Playwright's waitForURL() reliably detects the navigation in all browsers.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = leptos::server_fn::redirect::set_redirect_hook(|loc: &str| {
+            if let Some(window) = web_sys::window() {
+                let _ = window.location().replace(loc);
+            }
+        });
+    }
+
+    view! {
+        <Stylesheet id="leptos" href="/pkg/jaunder.css" />
+
+        // sets the document title
+        <Title text="Jaunder" />
+
+        // content for this welcome page
+        <Router>
+            <header>
+                <HeaderNav />
             </header>
             <main>
                 <Routes fallback=|| "Page not found.".into_view()>
@@ -84,9 +136,41 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("profile") view=ProfilePage />
                     <Route path=StaticSegment("sessions") view=SessionsPage />
                     <Route path=StaticSegment("invites") view=InvitesPage />
+                    <Route
+                        path=(StaticSegment("posts"), StaticSegment("new"))
+                        view=CreatePostPage
+                    />
+                    <Route path=StaticSegment("drafts") view=DraftsPage />
+                    <Route
+                        path=(
+                            StaticSegment("posts"),
+                            ParamSegment("post_id"),
+                            StaticSegment("edit"),
+                        )
+                        view=EditPostPage
+                    />
                     <Route path=StaticSegment("verify-email") view=VerifyEmailPage />
                     <Route path=StaticSegment("forgot-password") view=ForgotPasswordPage />
                     <Route path=StaticSegment("reset-password") view=ResetPasswordPage />
+                    <Route
+                        path=(
+                            StaticSegment("draft"),
+                            ParamSegment("post_id"),
+                            StaticSegment("preview"),
+                        )
+                        view=DraftPreviewPage
+                    />
+                    <Route path=ParamSegment("username") view=UserTimelinePage />
+                    <Route
+                        path=(
+                            ParamSegment("username"),
+                            ParamSegment("year"),
+                            ParamSegment("month"),
+                            ParamSegment("day"),
+                            ParamSegment("slug"),
+                        )
+                        view=PostPage
+                    />
                 </Routes>
             </main>
         </Router>

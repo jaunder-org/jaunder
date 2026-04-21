@@ -51,14 +51,16 @@ git config core.hooksPath .githooks
 ```
 
 **`pre-commit`** runs on every commit:
+
 - `cargo fmt --check` — formatting
 - `cargo clippy -- -D warnings` — linting
 - `cargo nextest run` — unit and integration tests
 
 **`pre-push`** runs on every push:
+
 - `cargo deny check` — dependency and advisory policy
 - `scripts/check-coverage` — coverage gate
-- `nix flake check` — end-to-end tests
+- `nix flake check` — full check suite (with warmup e2e checks by default)
 
 To skip e2e tests on a WIP push:
 
@@ -73,11 +75,24 @@ matches the change first, then move up to the broader checks before pushing.
 
 ### Fast local checks
 
+- `scripts/verify` runs the full local verification sequence in the preferred order: formatting, build, tests, lint, coverage, then `nix flake check` (with warmup e2e checks by default).
+  - By default it prints only `--- verify: ... ---` progress markers and captures step output.
+  - Set `VERIFY_PASSTHROUGH=1` to stream full tool output directly.
+  - Set `VERIFY_SHOW_STEP_OUTPUT=1` to print captured output for successful steps.
+  - Set `VERIFY_SHOW_FAILURE_LOG=0` to suppress failed-step logs, or `VERIFY_FAILURE_LOG_LINES=<n>` to change the failure tail length (default `200` lines).
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that contain Leptos `view!` macros.
 - `prettier --check end2end` checks Playwright and other frontend test assets.
 - `cargo clippy -- -D warnings` checks the main workspace for lint errors.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
+- For e2e perf diagnostics, set `JAUNDER_E2E_WARMUP=1` before `playwright test`
+  to warm each test page context before test instrumentation; tune with
+  `JAUNDER_E2E_WARMUP_URL` and
+  `JAUNDER_E2E_WARMUP_TIMEOUT_MS`.
+- In hydration-heavy e2e tests, use
+  `hydrationHeavyTimeoutMs(testInfo, chromiumBudgetMs)` for whole-test budgets
+  and `hydrationHeavyFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)` for
+  first navigation waits.
 
 ### Targeted Rust tests
 
@@ -132,8 +147,10 @@ them individually or with `--test-threads=1`.
 - `checks.x86_64-linux.leptosfmt-check` — leptosfmt
 - `checks.x86_64-linux.prettier-check` — prettier for `end2end/`
 - `checks.x86_64-linux.deny` — cargo-deny
-- `checks.x86_64-linux.e2e-sqlite` — Playwright end-to-end flow against SQLite
-- `checks.x86_64-linux.e2e-postgres` — Playwright end-to-end flow against PostgreSQL
+- `checks.x86_64-linux.e2e-sqlite` — Playwright end-to-end flow against SQLite with `JAUNDER_E2E_WARMUP=1` (default)
+- `checks.x86_64-linux.e2e-postgres` — Playwright end-to-end flow against PostgreSQL with `JAUNDER_E2E_WARMUP=1` (default)
+- `checks.x86_64-linux.e2e-sqlite-cold` — Playwright end-to-end flow against SQLite without warmup
+- `checks.x86_64-linux.e2e-postgres-cold` — Playwright end-to-end flow against PostgreSQL without warmup
 - `checks.x86_64-linux.postgres-commands` — `server/tests/commands.rs` against PostgreSQL, including ignored PostgreSQL-only cases
 - `checks.x86_64-linux.postgres-storage` — `server/tests/storage.rs` against PostgreSQL, including ignored PostgreSQL-only cases
 - `checks.x86_64-linux.postgres-web-account` — `server/tests/web_account.rs` against PostgreSQL
@@ -150,6 +167,8 @@ If you only need one of the VM-backed checks, you can run it directly:
 ```bash
 nix build .#checks.x86_64-linux.e2e-sqlite
 nix build .#checks.x86_64-linux.e2e-postgres
+nix build .#checks.x86_64-linux.e2e-sqlite-cold
+nix build .#checks.x86_64-linux.e2e-postgres-cold
 nix build .#checks.x86_64-linux.postgres-commands
 nix build .#checks.x86_64-linux.postgres-storage
 nix build .#checks.x86_64-linux.postgres-web-auth

@@ -3,10 +3,10 @@
 use common::mailer::{test_utils::CapturingMailSender, MailSender};
 use jaunder::storage::{
     open_database, AppState, DbConnectOptions, PostgresAtomicOps, PostgresEmailVerificationStorage,
-    PostgresInviteStorage, PostgresPasswordResetStorage, PostgresSessionStorage,
-    PostgresSiteConfigStorage, PostgresUserStorage, SqliteAtomicOps,
+    PostgresInviteStorage, PostgresPasswordResetStorage, PostgresPostStorage,
+    PostgresSessionStorage, PostgresSiteConfigStorage, PostgresUserStorage, SqliteAtomicOps,
     SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
-    SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
+    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
 };
 use leptos::prelude::LeptosOptions;
 use sqlx::Connection;
@@ -34,6 +34,15 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::invites::ListInvites>();
         server_fn::axum::register_explicit::<web::password_reset::RequestPasswordReset>();
         server_fn::axum::register_explicit::<web::password_reset::ConfirmPasswordReset>();
+        server_fn::axum::register_explicit::<web::posts::CreatePost>();
+        server_fn::axum::register_explicit::<web::posts::GetPost>();
+        server_fn::axum::register_explicit::<web::posts::GetPostPreview>();
+        server_fn::axum::register_explicit::<web::posts::UpdatePost>();
+        server_fn::axum::register_explicit::<web::posts::ListDrafts>();
+        server_fn::axum::register_explicit::<web::posts::PublishPost>();
+        server_fn::axum::register_explicit::<web::posts::ListUserPosts>();
+        server_fn::axum::register_explicit::<web::posts::ListLocalTimeline>();
+        server_fn::axum::register_explicit::<web::posts::ListHomeFeed>();
     });
 }
 
@@ -189,7 +198,8 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             invites: Arc::new(PostgresInviteStorage::new(pool.clone())),
             atomic: Arc::new(PostgresAtomicOps::new(pool.clone())),
             email_verifications: Arc::new(PostgresEmailVerificationStorage::new(pool.clone())),
-            password_resets: Arc::new(PostgresPasswordResetStorage::new(pool)),
+            password_resets: Arc::new(PostgresPasswordResetStorage::new(pool.clone())),
+            posts: Arc::new(PostgresPostStorage::new(pool)),
             mailer: mailer.clone() as Arc<dyn MailSender>,
         })
     } else {
@@ -212,7 +222,8 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
             atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
             email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
-            password_resets: Arc::new(SqlitePasswordResetStorage::new(pool)),
+            password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
+            posts: Arc::new(SqlitePostStorage::new(pool)),
             mailer: mailer.clone() as Arc<dyn MailSender>,
         })
     };

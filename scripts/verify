@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Run the standard project verification sequence.
+#
+# Usage:
+#   scripts/verify
+# Optional env:
+#   VERIFY_PASSTHROUGH=1         Stream each step output directly (old behavior).
+#   VERIFY_SHOW_STEP_OUTPUT=1    Print captured output for successful steps.
+#   VERIFY_SHOW_FAILURE_LOG=1    Print captured output when a step fails (default: 1).
+#   VERIFY_FAILURE_LOG_LINES=200 Number of failure log lines to print.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+run_step() {
+    local label="$1"
+    shift
+
+    echo "--- verify: ${label} ---"
+
+    if [[ "${VERIFY_PASSTHROUGH:-0}" == "1" ]]; then
+        "$@"
+        return 0
+    fi
+
+    local step_log
+    step_log="$(mktemp)"
+    if "$@" >"$step_log" 2>&1; then
+        if [[ "${VERIFY_SHOW_STEP_OUTPUT:-0}" == "1" ]]; then
+            cat "$step_log"
+        fi
+        rm -f "$step_log"
+        return 0
+    fi
+
+    echo "--- verify: failed: ${label} ---"
+    if [[ "${VERIFY_SHOW_FAILURE_LOG:-1}" == "1" ]]; then
+        local failure_lines="${VERIFY_FAILURE_LOG_LINES:-200}"
+        echo "--- verify: failure output (last ${failure_lines} lines): ${label} ---"
+        tail -n "$failure_lines" "$step_log"
+    fi
+    rm -f "$step_log"
+    return 1
+}
+
+run_step "cargo fmt --check" cargo fmt --check
+run_step "leptosfmt --check" leptosfmt -x .direnv -x .git -x target --check '**/*.rs'
+run_step "prettier --check end2end" prettier --check end2end
+run_step "cargo clippy -- -D warnings" cargo clippy -- -D warnings
+run_step "cargo build" cargo build
+run_step "cargo nextest run" cargo nextest run
+
+run_step "scripts/check-coverage" scripts/check-coverage
+run_step "nix flake check" nix flake check
+
+echo "--- verify: all checks passed ---"

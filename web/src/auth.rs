@@ -13,6 +13,8 @@ use common::storage::AppState;
 use common::username::Username;
 #[cfg(feature = "ssr")]
 use std::sync::Arc;
+#[cfg(feature = "ssr")]
+use tracing::Instrument;
 
 /// Cookie settings derived from the public deployment scheme.
 #[cfg(feature = "ssr")]
@@ -84,6 +86,7 @@ where
 /// Extracts the authenticated user inside a Leptos server function.
 /// Returns `ServerFnError` when no valid session is present.
 #[cfg(feature = "ssr")]
+#[tracing::instrument(name = "web.auth.require_auth")]
 pub async fn require_auth() -> Result<AuthUser, leptos::prelude::ServerFnError> {
     leptos_axum::extract::<AuthUser>()
         .await
@@ -171,25 +174,42 @@ pub async fn current_user() -> Result<Option<String>, ServerFnError> {
 /// Registers a new user.  Returns the raw session token on success and sets
 /// the `session` cookie.
 #[server(endpoint = "/register")]
+#[cfg_attr(
+    feature = "ssr",
+    tracing::instrument(name = "web.auth.register", skip(password, invite_code))
+)]
 pub async fn register(
     username: String,
     password: String,
     invite_code: Option<String>,
 ) -> Result<String, ServerFnError> {
     let state = expect_context::<Arc<AppState>>();
-    let username = username
-        .to_lowercase()
-        .parse::<Username>()
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    let password = password
-        .parse::<Password>()
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    let policy = load_registration_policy(&*state.site_config).await;
+    let username = {
+        #[cfg(feature = "ssr")]
+        let _phase = tracing::info_span!("web.auth.register.parse_username").entered();
+        username
+            .to_lowercase()
+            .parse::<Username>()
+            .map_err(|e| ServerFnError::new(e.to_string()))?
+    };
+    let password = {
+        #[cfg(feature = "ssr")]
+        let _phase = tracing::info_span!("web.auth.register.parse_password").entered();
+        password
+            .parse::<Password>()
+            .map_err(|e| ServerFnError::new(e.to_string()))?
+    };
+    let policy = load_registration_policy(&*state.site_config)
+        .instrument(tracing::info_span!(
+            "web.auth.register.load_registration_policy"
+        ))
+        .await;
 
     let user_id = match policy {
         RegistrationPolicy::Open => state
             .users
             .create_user(&username, &password, None)
+            .instrument(tracing::info_span!("web.auth.register.create_user_open"))
             .await
             .map_err(|e| ServerFnError::new(e.to_string()))?,
         RegistrationPolicy::InviteOnly => {
@@ -199,6 +219,7 @@ pub async fn register(
             state
                 .atomic
                 .create_user_with_invite(&username, &password, None, &code)
+                .instrument(tracing::info_span!("web.auth.register.create_user_invite"))
                 .await
                 .map_err(|e| ServerFnError::new(e.to_string()))?
         }
@@ -210,32 +231,47 @@ pub async fn register(
     let raw_token = state
         .sessions
         .create_session(user_id, None)
+        .instrument(tracing::info_span!("web.auth.register.create_session"))
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     set_session_cookie(&raw_token);
+    leptos_axum::redirect("/");
     Ok(raw_token)
 }
 
 /// Authenticates a user.  Returns the raw session token on success and sets
 /// the `session` cookie.
 #[server(endpoint = "/login")]
+#[cfg_attr(
+    feature = "ssr",
+    tracing::instrument(name = "web.auth.login", skip(password, label))
+)]
 pub async fn login(
     username: String,
     password: String,
     label: Option<String>,
 ) -> Result<String, ServerFnError> {
     let state = expect_context::<Arc<AppState>>();
-    let username = username
-        .to_lowercase()
-        .parse::<Username>()
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    let password = password
-        .parse::<Password>()
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let username = {
+        #[cfg(feature = "ssr")]
+        let _phase = tracing::info_span!("web.auth.login.parse_username").entered();
+        username
+            .to_lowercase()
+            .parse::<Username>()
+            .map_err(|e| ServerFnError::new(e.to_string()))?
+    };
+    let password = {
+        #[cfg(feature = "ssr")]
+        let _phase = tracing::info_span!("web.auth.login.parse_password").entered();
+        password
+            .parse::<Password>()
+            .map_err(|e| ServerFnError::new(e.to_string()))?
+    };
     let record = state
         .users
         .authenticate(&username, &password)
+        .instrument(tracing::info_span!("web.auth.login.authenticate_user"))
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
@@ -243,23 +279,27 @@ pub async fn login(
     let raw_token = state
         .sessions
         .create_session(record.user_id, label.as_deref())
+        .instrument(tracing::info_span!("web.auth.login.create_session"))
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     set_session_cookie(&raw_token);
+    leptos_axum::redirect("/");
     Ok(raw_token)
 }
 
 /// Revokes the current session and clears the `session` cookie.
 #[server(endpoint = "/logout")]
+#[cfg_attr(feature = "ssr", tracing::instrument(name = "web.auth.logout"))]
 pub async fn logout() -> Result<(), ServerFnError> {
-    let auth = require_auth().await?;
-    let state = expect_context::<Arc<AppState>>();
-    state
-        .sessions
-        .revoke_session(&auth.token_hash)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    if let Ok(auth) = require_auth().await {
+        let state = expect_context::<Arc<AppState>>();
+        state
+            .sessions
+            .revoke_session(&auth.token_hash)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+    }
     clear_session_cookie();
     Ok(())
 }

@@ -8,7 +8,28 @@ async fn main() -> anyhow::Result<()> {
 }
 
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
-    match cli.command {
+    let command = match cli.command {
+        Some(cmd) => cmd,
+        None => {
+            // cargo-leptos sets LEPTOS_OUTPUT_NAME when running the server
+            // binary.  When present, default to `serve` so that
+            // `cargo leptos end-to-end` (and `cargo leptos serve`) work
+            // without requiring the user to pass `-- serve`.
+            if std::env::var_os("LEPTOS_OUTPUT_NAME").is_some() {
+                // Re-parse as if the user typed `jaunder serve`, which
+                // picks up env-var overrides and clap defaults for all
+                // StorageArgs / bind / environment fields.
+                let implicit = Cli::parse_from(["jaunder", "serve"]);
+                implicit.command.expect("serve subcommand present")
+            } else {
+                // No subcommand and not under cargo-leptos — re-parse to
+                // trigger clap's built-in "missing subcommand" error/help.
+                Cli::parse_from(["jaunder", "--help"]);
+                unreachable!()
+            }
+        }
+    };
+    match command {
         Commands::Init {
             storage,
             skip_if_exists,
@@ -83,10 +104,10 @@ mod tests {
     async fn run_init() {
         let base = TempDir::new().unwrap();
         let cli = Cli {
-            command: Commands::Init {
+            command: Some(Commands::Init {
                 storage: test_storage_args(&base),
                 skip_if_exists: false,
-            },
+            }),
         };
         run(cli).await.unwrap();
     }
@@ -96,21 +117,21 @@ mod tests {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
         run(Cli {
-            command: Commands::Init {
+            command: Some(Commands::Init {
                 storage: storage.clone(),
                 skip_if_exists: false,
-            },
+            }),
         })
         .await
         .unwrap();
 
         let cli = Cli {
-            command: Commands::UserCreate {
+            command: Some(Commands::UserCreate {
                 storage,
                 username: "alice".to_string(),
                 password: Some("password123".to_string()),
                 display_name: None,
-            },
+            }),
         };
         run(cli).await.unwrap();
     }
@@ -120,19 +141,19 @@ mod tests {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
         run(Cli {
-            command: Commands::Init {
+            command: Some(Commands::Init {
                 storage: storage.clone(),
                 skip_if_exists: false,
-            },
+            }),
         })
         .await
         .unwrap();
 
         let cli = Cli {
-            command: Commands::UserInvite {
+            command: Some(Commands::UserInvite {
                 storage,
                 expires_in: None,
-            },
+            }),
         };
         run(cli).await.unwrap();
     }
@@ -142,19 +163,19 @@ mod tests {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
         run(Cli {
-            command: Commands::Init {
+            command: Some(Commands::Init {
                 storage: storage.clone(),
                 skip_if_exists: false,
-            },
+            }),
         })
         .await
         .unwrap();
 
         let cli = Cli {
-            command: Commands::SmtpTest {
+            command: Some(Commands::SmtpTest {
                 storage,
                 to: "alice@example.com".to_string(),
-            },
+            }),
         };
         let result = run(cli).await;
         assert!(result.is_err());
@@ -170,21 +191,21 @@ mod tests {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
         run(Cli {
-            command: Commands::Init {
+            command: Some(Commands::Init {
                 storage: storage.clone(),
                 skip_if_exists: false,
-            },
+            }),
         })
         .await
         .unwrap();
 
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
         let cli = Cli {
-            command: Commands::Serve {
+            command: Some(Commands::Serve {
                 storage,
                 bind,
                 environment: jaunder::cli::DeploymentEnv::Dev,
-            },
+            }),
         };
 
         // We can't easily run the server indefinitely in a test that expects
@@ -202,13 +223,13 @@ mod tests {
     #[tokio::test]
     async fn run_create_pg_db_rejects_non_postgres_urls() {
         let cli = Cli {
-            command: Commands::CreatePgDb {
+            command: Some(Commands::CreatePgDb {
                 pg: PgBootstrapArgs {
                     bootstrap_db: "sqlite:/tmp/bootstrap.db".to_owned(),
                     app_db: "postgres://jaunder@localhost/jaunder".to_owned(),
                     app_role_password: "secret".to_owned(),
                 },
-            },
+            }),
         };
 
         let err = run(cli).await.unwrap_err();
@@ -220,12 +241,12 @@ mod tests {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
         let cli = Cli {
-            command: Commands::UserCreate {
+            command: Some(Commands::UserCreate {
                 storage,
                 username: "invalid username".to_string(),
                 password: Some("password123".to_string()),
                 display_name: None,
-            },
+            }),
         };
         let err = run(cli).await.unwrap_err();
         assert!(err.to_string().contains("username must be non-empty"));
@@ -236,12 +257,12 @@ mod tests {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
         let cli = Cli {
-            command: Commands::UserCreate {
+            command: Some(Commands::UserCreate {
                 storage,
                 username: "alice".to_string(),
                 password: Some("short".to_string()),
                 display_name: None,
-            },
+            }),
         };
         let err = run(cli).await.unwrap_err();
         assert!(err
@@ -257,7 +278,7 @@ mod tests {
         std::fs::write(&storage_path, "not a dir").unwrap();
 
         let cli = Cli {
-            command: Commands::Init {
+            command: Some(Commands::Init {
                 storage: StorageArgs {
                     storage_path: storage_path.clone(),
                     db: format!("sqlite:{}", base.path().join("test.db").display())
@@ -265,7 +286,7 @@ mod tests {
                         .unwrap(),
                 },
                 skip_if_exists: false,
-            },
+            }),
         };
         let err = run(cli).await.unwrap_err();
         assert!(
@@ -274,17 +295,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_serve_fails_when_uninitialized() {
+    async fn run_serve_prod_fails_when_uninitialized() {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
         let cli = Cli {
-            command: Commands::Serve {
+            command: Some(Commands::Serve {
                 storage,
                 bind: "127.0.0.1:0".parse().unwrap(),
-                environment: jaunder::cli::DeploymentEnv::Dev,
-            },
+                environment: jaunder::cli::DeploymentEnv::Prod,
+            }),
         };
         let err = run(cli).await.unwrap_err();
         assert!(err.to_string().contains("run `jaunder init` first"));
+    }
+
+    #[tokio::test]
+    async fn run_serve_dev_auto_inits() {
+        let base = TempDir::new().unwrap();
+        let storage = test_storage_args(&base);
+        let bind: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let cli = Cli {
+            command: Some(Commands::Serve {
+                storage,
+                bind,
+                environment: jaunder::cli::DeploymentEnv::Dev,
+            }),
+        };
+
+        let task = tokio::spawn(async move {
+            let _ = run(cli).await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        task.abort();
+
+        // Verify that the database was created by auto-init.
+        assert!(base.path().join("test.db").exists());
     }
 }

@@ -1,5 +1,6 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, hydrationHeavyTimeoutMs } from "./fixtures";
 import * as fs from "fs";
+import { waitForHydration } from "./hydration";
 
 const MAIL_CAPTURE_FILE =
   process.env.JAUNDER_MAIL_CAPTURE_FILE ?? "/tmp/jaunder-mail.jsonl";
@@ -35,29 +36,36 @@ async function waitForLatestEmail(timeoutMs = 5000): Promise<CapturedEmail> {
   );
 }
 
-async function waitForHydration(page: Page): Promise<void> {
-  await page.waitForSelector("body[data-hydrated]");
-}
-
 // M3.10.11: Full email verification flow.
-test("email verification flow completes successfully", async ({ page }) => {
+test("email verification flow completes successfully", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
+
   // Log in
-  await page.goto("http://localhost:3000/login");
+  await page.goto("http://localhost:3000/login", {
+    waitUntil: "domcontentloaded",
+  });
   await waitForHydration(page);
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "testpassword123");
   await page.click('button[type="submit"]');
-  await page.waitForURL("http://localhost:3000/");
+  // waitForURL is unreliable in Firefox for location.replace() navigations; wait
+  // for the logout link that SSR renders on the home page after successful auth.
+  await page.waitForSelector("a[href='/logout']");
   await waitForHydration(page);
 
   // Navigate to email settings and submit an address
-  await page.goto("http://localhost:3000/profile/email");
+  await page.goto("http://localhost:3000/profile/email", {
+    waitUntil: "domcontentloaded",
+  });
   await waitForHydration(page);
   await page.fill('input[name="email"]', "testlogin@example.com");
   await page.click('button[type="submit"]');
-  await page.waitForLoadState("networkidle");
 
-  await expect(page.locator('p:has-text("Check your email")')).toBeVisible();
+  await expect(page.locator('p:has-text("Check your email")')).toBeVisible({
+    timeout: 10_000,
+  });
 
   // Extract the verification token from the captured mail file
   const email = await waitForLatestEmail();
@@ -66,22 +74,34 @@ test("email verification flow completes successfully", async ({ page }) => {
   const token = tokenMatch![1];
 
   // Visit the verification link
-  await page.goto(`http://localhost:3000/verify-email?token=${token}`);
-  await page.waitForLoadState("networkidle");
-  await expect(page.locator('p:has-text("verified")')).toBeVisible();
+  await page.goto(`http://localhost:3000/verify-email?token=${token}`, {
+    waitUntil: "domcontentloaded",
+  });
+  await waitForHydration(page);
+  await expect(page.locator('p:has-text("verified")')).toBeVisible({
+    timeout: 10_000,
+  });
 
   // Confirm email is shown as verified on the profile page
-  await page.goto("http://localhost:3000/profile/email");
-  await page.waitForLoadState("networkidle");
-  await expect(page.locator("p")).toContainText("verified");
+  await page.goto("http://localhost:3000/profile/email", {
+    waitUntil: "domcontentloaded",
+  });
+  await waitForHydration(page);
+  await expect(page.locator("p")).toContainText("verified", {
+    timeout: 10_000,
+  });
 });
 
 // M3.10.12: Invalid token shows an error.
 test("visiting verify-email with invalid token shows error", async ({
   page,
-}) => {
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
   await page.goto(
     "http://localhost:3000/verify-email?token=totally_invalid_token",
+    {
+      waitUntil: "domcontentloaded",
+    },
   );
   await page.waitForLoadState("networkidle");
   await expect(page.locator(".error")).toBeVisible();

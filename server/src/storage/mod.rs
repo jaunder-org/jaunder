@@ -1,9 +1,12 @@
+use std::time::Duration;
 use std::{fmt, io, path::Path, str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use log::LevelFilter;
 use sqlx::postgres::PgConnectOptions;
-use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
+use sqlx::ConnectOptions;
 use sqlx::PgPool;
 use sqlx::SqlitePool;
 
@@ -12,10 +15,13 @@ use sqlx::SqlitePool;
 // them without a circular dependency.  Re-export everything for
 // backward-compatibility with existing server-crate consumers.
 pub use common::storage::{
-    AppState, AtomicOps, ConfirmPasswordResetError, CreateUserError, EmailVerificationStorage,
-    InviteRecord, InviteStorage, PasswordResetStorage, ProfileUpdate, RegisterWithInviteError,
-    SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage, UseEmailVerificationError,
-    UseInviteError, UsePasswordResetError, UserAuthError, UserRecord, UserStorage,
+    AppState, AtomicOps, ConfirmPasswordResetError, CreatePostError, CreatePostInput,
+    CreateUserError, EmailVerificationStorage, InviteRecord, InviteStorage, ListByTagError,
+    PasswordResetStorage, PostCursor, PostFormat, PostRecord, PostRevisionRecord, PostStorage,
+    PostTag, ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionRecord,
+    SessionStorage, SiteConfigStorage, TaggingError, UpdatePostError, UpdatePostInput,
+    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError, UserRecord,
+    UserStorage,
 };
 
 use crate::mailer::FileMailSender;
@@ -27,13 +33,13 @@ use common::username::Username;
 mod sqlite;
 pub use sqlite::{
     SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
-    SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
+    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
 };
 mod postgres;
 pub use postgres::{
     PostgresAtomicOps, PostgresEmailVerificationStorage, PostgresInviteStorage,
-    PostgresPasswordResetStorage, PostgresSessionStorage, PostgresSiteConfigStorage,
-    PostgresUserStorage,
+    PostgresPasswordResetStorage, PostgresPostStorage, PostgresSessionStorage,
+    PostgresSiteConfigStorage, PostgresUserStorage,
 };
 
 pub(super) type UserRecordParts = (
@@ -113,6 +119,58 @@ pub(super) fn build_invite_record(
     }
 }
 
+pub(super) type PostRecordParts = (
+    i64,                   // post_id
+    i64,                   // user_id
+    String,                // title
+    String,                // slug
+    String,                // body
+    String,                // format
+    String,                // rendered_html
+    DateTime<Utc>,         // created_at
+    DateTime<Utc>,         // updated_at
+    Option<DateTime<Utc>>, // published_at
+    Option<DateTime<Utc>>, // deleted_at
+);
+
+pub(super) fn build_post_record(
+    (
+        post_id,
+        user_id,
+        title,
+        slug,
+        body,
+        format,
+        rendered_html,
+        created_at,
+        updated_at,
+        published_at,
+        deleted_at,
+    ): PostRecordParts,
+) -> sqlx::Result<PostRecord> {
+    use common::slug::Slug;
+    let slug = slug
+        .parse::<Slug>()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let format = format
+        .parse::<PostFormat>()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    Ok(PostRecord {
+        post_id,
+        user_id,
+        title,
+        slug,
+        body,
+        format,
+        rendered_html,
+        created_at,
+        updated_at,
+        published_at,
+        deleted_at,
+    })
+}
+
+#[tracing::instrument(name = "crypto.password.hash", skip(password))]
 pub(super) async fn hash_password(password: Password) -> io::Result<String> {
     tokio::task::spawn_blocking(move || password.hash())
         .await
@@ -120,6 +178,7 @@ pub(super) async fn hash_password(password: Password) -> io::Result<String> {
         .map_err(io::Error::other)
 }
 
+#[tracing::instrument(name = "crypto.password.verify", skip(password, hash))]
 pub(super) async fn verify_password(password: Password, hash: String) -> io::Result<bool> {
     tokio::task::spawn_blocking(move || password.verify(&hash))
         .await
@@ -360,7 +419,8 @@ fn make_app_state(pool: SqlitePool, mailer: Arc<dyn MailSender>) -> Arc<AppState
         invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
         atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
         email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
-        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool)),
+        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
+        posts: Arc::new(SqlitePostStorage::new(pool)),
         mailer,
     })
 }
@@ -373,11 +433,13 @@ fn make_postgres_app_state(pool: PgPool, mailer: Arc<dyn MailSender>) -> Arc<App
         invites: Arc::new(PostgresInviteStorage::new(pool.clone())),
         atomic: Arc::new(PostgresAtomicOps::new(pool.clone())),
         email_verifications: Arc::new(PostgresEmailVerificationStorage::new(pool.clone())),
-        password_resets: Arc::new(PostgresPasswordResetStorage::new(pool)),
+        password_resets: Arc::new(PostgresPasswordResetStorage::new(pool.clone())),
+        posts: Arc::new(PostgresPostStorage::new(pool)),
         mailer,
     })
 }
 
+#[tracing::instrument(name = "storage.mailer.build", skip(site_config))]
 async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender> {
     if let Ok(path) = std::env::var("JAUNDER_MAIL_CAPTURE_FILE") {
         return Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>;
@@ -391,6 +453,11 @@ async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender
     }
 }
 
+#[tracing::instrument(
+    name = "storage.sqlite.open_database",
+    skip(options),
+    fields(create_if_missing)
+)]
 async fn open_sqlite_database(
     options: &SqliteConnectOptions,
     create_if_missing: bool,
@@ -399,6 +466,14 @@ async fn open_sqlite_database(
     if create_if_missing {
         options = options.create_if_missing(true);
     }
+    // WAL mode allows concurrent readers while a writer is active, dramatically
+    // reducing SQLITE_BUSY errors under load.  The 5-second busy timeout lets
+    // SQLite retry automatically instead of failing immediately when it cannot
+    // obtain a lock.
+    options = options
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(Duration::from_secs(5))
+        .log_slow_statements(LevelFilter::Warn, sql_slow_query_threshold());
     let pool = sqlx::SqlitePool::connect_with(options).await?;
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     let site_config = SqliteSiteConfigStorage::new(pool.clone());
@@ -414,14 +489,24 @@ fn postgres_password_from_env() -> io::Result<Option<String>> {
     Ok(std::env::var("JAUNDER_DB_PASSWORD").ok())
 }
 
+fn sql_slow_query_threshold() -> Duration {
+    std::env::var("JAUNDER_SQL_SLOW_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_millis(100))
+}
+
 fn resolved_postgres_options(options: &PgConnectOptions) -> sqlx::Result<PgConnectOptions> {
     let mut options = options.clone();
     if let Some(password) = postgres_password_from_env().map_err(sqlx::Error::Io)? {
         options = options.password(&password);
     }
+    options = options.log_slow_statements(LevelFilter::Warn, sql_slow_query_threshold());
     Ok(options)
 }
 
+#[tracing::instrument(name = "storage.postgres.open_database", skip(options))]
 async fn open_postgres_database(options: &PgConnectOptions) -> sqlx::Result<Arc<AppState>> {
     let options = resolved_postgres_options(options)?;
     let pool = PgPool::connect_with(options).await?;
@@ -433,6 +518,7 @@ async fn open_postgres_database(options: &PgConnectOptions) -> sqlx::Result<Arc<
 
 /// Opens (or creates) the database described by `opts`, runs pending
 /// migrations, and returns an [`AppState`] bundling all storage handles.
+#[tracing::instrument(name = "storage.open_database", skip(opts))]
 pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     match opts {
         DbConnectOptions::Sqlite(options) => open_sqlite_database(options, true).await,
@@ -443,6 +529,7 @@ pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState
 /// Opens an existing database described by `opts`, runs pending migrations.
 ///
 /// Unlike [`open_database`], fails if the database does not already exist.
+#[tracing::instrument(name = "storage.open_existing_database", skip(opts))]
 pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     match opts {
         DbConnectOptions::Sqlite(options) => open_sqlite_database(options, false).await,
@@ -517,6 +604,21 @@ mod tests {
     }
 
     #[test]
+    fn sql_slow_query_threshold_defaults_to_100ms() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("JAUNDER_SQL_SLOW_MS");
+        assert_eq!(sql_slow_query_threshold(), Duration::from_millis(100));
+    }
+
+    #[test]
+    fn sql_slow_query_threshold_uses_env_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("JAUNDER_SQL_SLOW_MS", "250");
+        assert_eq!(sql_slow_query_threshold(), Duration::from_millis(250));
+        std::env::remove_var("JAUNDER_SQL_SLOW_MS");
+    }
+
+    #[test]
     fn test_build_user_record() {
         let now = Utc::now();
         let parts: UserRecordParts = (
@@ -552,6 +654,116 @@ mod tests {
     }
 
     #[test]
+    fn test_build_invite_record() {
+        let created_at = Utc::now();
+        let expires_at = created_at + chrono::Duration::days(7);
+        let used_at = created_at + chrono::Duration::hours(1);
+        let record = build_invite_record(
+            "invite-code".to_string(),
+            created_at,
+            expires_at,
+            Some(used_at),
+            Some(7),
+        );
+
+        assert_eq!(record.code, "invite-code");
+        assert_eq!(record.created_at, created_at);
+        assert_eq!(record.expires_at, expires_at);
+        assert_eq!(record.used_at, Some(used_at));
+        assert_eq!(record.used_by, Some(7));
+    }
+
+    #[test]
+    fn test_build_post_record() {
+        let now = Utc::now();
+        let record = build_post_record((
+            10,
+            20,
+            "Hello".to_string(),
+            "hello-world".to_string(),
+            "Body".to_string(),
+            "markdown".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            Some(now),
+            None,
+        ))
+        .unwrap();
+
+        assert_eq!(record.post_id, 10);
+        assert_eq!(record.user_id, 20);
+        assert_eq!(record.slug.as_str(), "hello-world");
+        assert_eq!(record.format, PostFormat::Markdown);
+        assert_eq!(record.published_at, Some(now));
+        assert_eq!(record.deleted_at, None);
+    }
+
+    #[test]
+    fn test_build_post_record_rejects_invalid_slug() {
+        let now = Utc::now();
+        let err = build_post_record((
+            10,
+            20,
+            "Hello".to_string(),
+            "not a slug".to_string(),
+            "Body".to_string(),
+            "markdown".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            None,
+            None,
+        ))
+        .unwrap_err();
+
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[test]
+    fn test_build_post_record_rejects_invalid_format() {
+        let now = Utc::now();
+        let err = build_post_record((
+            10,
+            20,
+            "Hello".to_string(),
+            "hello-world".to_string(),
+            "Body".to_string(),
+            "html".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            None,
+            None,
+        ))
+        .unwrap_err();
+
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[tokio::test]
+    async fn test_hash_and_verify_password() {
+        let password: Password = "password123".parse().unwrap();
+        let hash = hash_password(password.clone()).await.unwrap();
+
+        assert!(verify_password(password.clone(), hash.clone())
+            .await
+            .unwrap());
+        assert!(!verify_password("other-pass".parse().unwrap(), hash)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_verify_password_rejects_invalid_hash() {
+        let err = verify_password("password123".parse().unwrap(), "not-a-hash".to_string())
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+    }
+
+    #[test]
     fn test_db_connect_options_parsing() {
         let sqlite = "sqlite:jaunder.db".parse::<DbConnectOptions>().unwrap();
         assert!(matches!(sqlite, DbConnectOptions::Sqlite(_)));
@@ -583,6 +795,17 @@ mod tests {
     fn test_db_connect_options_invalid_postgres() {
         let invalid = "postgres://[invalid]".parse::<DbConnectOptions>();
         assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn postgres_password_returns_none_when_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("JAUNDER_DB_PASSWORD");
+        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
+
+        let password = postgres_password_from_env().unwrap();
+
+        assert_eq!(password, None);
     }
 
     #[tokio::test]

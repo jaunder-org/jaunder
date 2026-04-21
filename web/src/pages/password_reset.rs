@@ -41,15 +41,19 @@ pub fn ForgotPasswordPage() -> impl IntoView {
 pub fn ResetPasswordPage() -> impl IntoView {
     use leptos_router::hooks::use_query_map;
 
-    let query = use_query_map();
-    let token = move || query.with(|q| q.get("token").unwrap_or_default());
+    // Read the token once, non-reactively, at component-initialization time.
+    // Using a reactive `prop:value` closure here creates a race: the closure
+    // can fire with an empty query map during WASM hydration (before the
+    // router has finished parsing the URL), resetting the hidden input to ""
+    // and causing the reset submission to fail silently.
+    let token = use_query_map().with_untracked(|q| q.get("token").unwrap_or_default());
 
     let confirm_action = ServerAction::<ConfirmPasswordReset>::new();
 
     view! {
         <h1>"Reset Password"</h1>
         <ActionForm action=confirm_action>
-            <input type="hidden" name="token" prop:value=token />
+            <input type="hidden" name="token" value=token />
             <label>"New password" <input type="password" name="new_password" /></label>
             <button type="submit">"Set new password"</button>
         </ActionForm>
