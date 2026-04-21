@@ -259,7 +259,7 @@
 
         src = pkgs.lib.cleanSourceWith {
           src = craneLib.path ./.;
-          filter = path: type: (pkgs.lib.hasSuffix ".sql" path) || (craneLib.filterCargoSources path type);
+          filter = path: type: (pkgs.lib.hasSuffix ".sql" path) || (pkgs.lib.hasSuffix ".css" path) || (craneLib.filterCargoSources path type);
         };
 
         commonArgs = {
