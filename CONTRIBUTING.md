@@ -149,14 +149,17 @@ them individually or with `--test-threads=1`.
 - `checks.x86_64-linux.deny` — cargo-deny
 - `checks.x86_64-linux.e2e-sqlite` — Playwright end-to-end flow against SQLite with `JAUNDER_E2E_WARMUP=1` (default)
 - `checks.x86_64-linux.e2e-postgres` — Playwright end-to-end flow against PostgreSQL with `JAUNDER_E2E_WARMUP=1` (default)
-- `checks.x86_64-linux.e2e-sqlite-cold` — Playwright end-to-end flow against SQLite without warmup
-- `checks.x86_64-linux.e2e-postgres-cold` — Playwright end-to-end flow against PostgreSQL without warmup
 - `checks.x86_64-linux.postgres-commands` — `server/tests/commands.rs` against PostgreSQL, including ignored PostgreSQL-only cases
 - `checks.x86_64-linux.postgres-storage` — `server/tests/storage.rs` against PostgreSQL, including ignored PostgreSQL-only cases
 - `checks.x86_64-linux.postgres-web-account` — `server/tests/web_account.rs` against PostgreSQL
 - `checks.x86_64-linux.postgres-web-auth` — `server/tests/web_auth.rs` against PostgreSQL
 - `checks.x86_64-linux.postgres-web-email` — `server/tests/web_email.rs` against PostgreSQL
 - `checks.x86_64-linux.postgres-web-password-reset` — `server/tests/web_password_reset.rs` against PostgreSQL
+
+Additional Nix-backed checks available as packages (not run by default):
+
+- `packages.x86_64-linux.e2e-sqlite-cold` — Playwright end-to-end flow against SQLite without warmup
+- `packages.x86_64-linux.e2e-postgres-cold` — Playwright end-to-end flow against PostgreSQL without warmup
 
 The PostgreSQL VM checks are split by Rust test binary rather than by
 individual test case. That keeps the flake readable while still making slow
@@ -167,8 +170,8 @@ If you only need one of the VM-backed checks, you can run it directly:
 ```bash
 nix build .#checks.x86_64-linux.e2e-sqlite
 nix build .#checks.x86_64-linux.e2e-postgres
-nix build .#checks.x86_64-linux.e2e-sqlite-cold
-nix build .#checks.x86_64-linux.e2e-postgres-cold
+nix build .#packages.x86_64-linux.e2e-sqlite-cold
+nix build .#packages.x86_64-linux.e2e-postgres-cold
 nix build .#checks.x86_64-linux.postgres-commands
 nix build .#checks.x86_64-linux.postgres-storage
 nix build .#checks.x86_64-linux.postgres-web-auth
