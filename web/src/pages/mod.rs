@@ -8,6 +8,12 @@ pub mod profile;
 pub mod sessions;
 pub(crate) mod signal_read;
 
+/// Default theme identifier. This selects the CSS variable pack applied via
+/// `data-theme` on the root element. "studio" is the pragmatic default chosen
+/// during initial UI import; to make this per-server-configurable, replace this
+/// constant with a value from server configuration.
+pub const DEFAULT_THEME: &str = "studio";
+
 use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
 use crate::pages::invites::InvitesPage;
@@ -115,6 +121,34 @@ pub fn App() -> impl IntoView {
         });
     }
 
+    let theme = RwSignal::new(DEFAULT_THEME.to_string());
+
+    // On WASM: restore theme from localStorage on startup.
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+            if let Ok(Some(val)) = storage.get_item("jaunder_theme") {
+                if !val.is_empty() {
+                    theme.set(val);
+                }
+            }
+        }
+    }
+
+    provide_context(theme);
+
+    // On WASM: persist theme to localStorage whenever it changes.
+    #[cfg(target_arch = "wasm32")]
+    {
+        Effect::new(move |_| {
+            let val = theme.get();
+            if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten())
+            {
+                let _ = storage.set_item("jaunder_theme", &val);
+            }
+        });
+    }
+
     view! {
         <Stylesheet id="leptos" href="/pkg/jaunder.css" />
 
@@ -122,57 +156,72 @@ pub fn App() -> impl IntoView {
         <Title text="Jaunder" />
 
         // content for this welcome page
-        <Router>
-            <header>
-                <HeaderNav />
-            </header>
-            <main>
-                <Routes fallback=|| "Page not found.".into_view()>
-                    <Route path=StaticSegment("") view=HomePage />
-                    <Route path=StaticSegment("register") view=RegisterPage />
-                    <Route path=StaticSegment("login") view=LoginPage />
-                    <Route path=StaticSegment("logout") view=LogoutPage />
-                    <Route path=(StaticSegment("profile"), StaticSegment("email")) view=EmailPage />
-                    <Route path=StaticSegment("profile") view=ProfilePage />
-                    <Route path=StaticSegment("sessions") view=SessionsPage />
-                    <Route path=StaticSegment("invites") view=InvitesPage />
-                    <Route
-                        path=(StaticSegment("posts"), StaticSegment("new"))
-                        view=CreatePostPage
-                    />
-                    <Route path=StaticSegment("drafts") view=DraftsPage />
-                    <Route
-                        path=(
-                            StaticSegment("posts"),
-                            ParamSegment("post_id"),
-                            StaticSegment("edit"),
-                        )
-                        view=EditPostPage
-                    />
-                    <Route path=StaticSegment("verify-email") view=VerifyEmailPage />
-                    <Route path=StaticSegment("forgot-password") view=ForgotPasswordPage />
-                    <Route path=StaticSegment("reset-password") view=ResetPasswordPage />
-                    <Route
-                        path=(
-                            StaticSegment("draft"),
-                            ParamSegment("post_id"),
-                            StaticSegment("preview"),
-                        )
-                        view=DraftPreviewPage
-                    />
-                    <Route path=ParamSegment("username") view=UserTimelinePage />
-                    <Route
-                        path=(
-                            ParamSegment("username"),
-                            ParamSegment("year"),
-                            ParamSegment("month"),
-                            ParamSegment("day"),
-                            ParamSegment("slug"),
-                        )
-                        view=PostPage
-                    />
-                </Routes>
-            </main>
-        </Router>
+        <div class="j-root" attr:data-theme=move || theme.get().to_string()>
+            <Router>
+                <header>
+                    <HeaderNav />
+                </header>
+                <main>
+                    <Routes fallback=|| "Page not found.".into_view()>
+                        <Route path=StaticSegment("") view=HomePage />
+                        <Route path=StaticSegment("register") view=RegisterPage />
+                        <Route path=StaticSegment("login") view=LoginPage />
+                        <Route path=StaticSegment("logout") view=LogoutPage />
+                        <Route
+                            path=(StaticSegment("profile"), StaticSegment("email"))
+                            view=EmailPage
+                        />
+                        <Route path=StaticSegment("profile") view=ProfilePage />
+                        <Route path=StaticSegment("sessions") view=SessionsPage />
+                        <Route path=StaticSegment("invites") view=InvitesPage />
+                        <Route
+                            path=(StaticSegment("posts"), StaticSegment("new"))
+                            view=CreatePostPage
+                        />
+                        <Route path=StaticSegment("drafts") view=DraftsPage />
+                        <Route
+                            path=(
+                                StaticSegment("posts"),
+                                ParamSegment("post_id"),
+                                StaticSegment("edit"),
+                            )
+                            view=EditPostPage
+                        />
+                        <Route path=StaticSegment("verify-email") view=VerifyEmailPage />
+                        <Route path=StaticSegment("forgot-password") view=ForgotPasswordPage />
+                        <Route path=StaticSegment("reset-password") view=ResetPasswordPage />
+                        <Route
+                            path=(
+                                StaticSegment("draft"),
+                                ParamSegment("post_id"),
+                                StaticSegment("preview"),
+                            )
+                            view=DraftPreviewPage
+                        />
+                        <Route path=ParamSegment("username") view=UserTimelinePage />
+                        <Route
+                            path=(
+                                ParamSegment("username"),
+                                ParamSegment("year"),
+                                ParamSegment("month"),
+                                ParamSegment("day"),
+                                ParamSegment("slug"),
+                            )
+                            view=PostPage
+                        />
+                    </Routes>
+                </main>
+            </Router>
+        </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_theme_is_nonempty() {
+        assert!(!DEFAULT_THEME.is_empty());
     }
 }
