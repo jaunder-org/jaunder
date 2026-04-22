@@ -259,7 +259,11 @@
 
         src = pkgs.lib.cleanSourceWith {
           src = craneLib.path ./.;
-          filter = path: type: (pkgs.lib.hasSuffix ".sql" path) || (pkgs.lib.hasSuffix ".css" path) || (craneLib.filterCargoSources path type);
+          filter =
+            path: type:
+            (pkgs.lib.hasSuffix ".sql" path)
+            || (pkgs.lib.hasSuffix ".css" path)
+            || (craneLib.filterCargoSources path type);
         };
 
         commonArgs = {
@@ -765,6 +769,14 @@
         packages = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           jaunder = jaunderBin;
           site = site;
+
+          e2e-sqlite-cold = mkE2eSqliteCheck {
+            checkName = "jaunder-e2e-sqlite-cold";
+          };
+
+          e2e-postgres-cold = mkE2ePostgresCheck {
+            checkName = "jaunder-e2e-postgres-cold";
+          };
         };
 
         apps =
@@ -788,17 +800,9 @@
               warmupEnv = " JAUNDER_E2E_WARMUP=1";
             };
 
-            e2e-sqlite-cold = mkE2eSqliteCheck {
-              checkName = "jaunder-e2e-sqlite-cold";
-            };
-
             e2e-postgres = mkE2ePostgresCheck {
               checkName = "jaunder-e2e-postgres";
               warmupEnv = " JAUNDER_E2E_WARMUP=1";
-            };
-
-            e2e-postgres-cold = mkE2ePostgresCheck {
-              checkName = "jaunder-e2e-postgres-cold";
             };
 
             # `commands` includes PostgreSQL-only ignored bootstrap tests, so
