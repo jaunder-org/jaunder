@@ -103,16 +103,28 @@ path-based per `CLAUDE.md`). Shared UI primitives go in a new file
 
 ### Step 2 · Theme context
 
-2.1 Add a `Theme` enum (`Terminal | Studio | Reader`) in `web/src/` with `Display`
-    and `FromStr` impls producing the string IDs used in CSS (`terminal`, etc.).
+The theme system is fully generic: the Rust code treats a theme as an opaque
+`String` identifier. The CSS gives meaning to identifiers via `[data-theme="..."]`
+selectors. `jaunder-themes.css` ships three examples (`terminal`, `studio`,
+`reader`); a user-uploaded stylesheet can add its own identifiers in exactly the
+same way. No theme names are hardcoded as Rust types.
 
-2.2 In `App`, create a `RwSignal<Theme>` defaulting to `Terminal`, restore it from
-    `localStorage` on WASM startup, and provide it via `provide_context`.
+2.1 In `web/src/pages/mod.rs` (or a small `web/src/theme.rs` helper), define a
+    `DEFAULT_THEME: &str = "studio"` constant.
+    **Note:** `"studio"` is a pragmatic default chosen at this point in development.
+    If per-server configurability is needed in the future, this constant is the sole
+    place to update (or replace with a server-provided value).
+
+2.2 In `App`, create `let theme = RwSignal::new(DEFAULT_THEME.to_string())`.
+    On WASM only, read `localStorage.getItem("jaunder_theme")` at startup; if
+    present and non-empty, set the signal to that value.
+    Provide the signal via `provide_context(theme)`.
 
 2.3 In the shell layout (step 4), consume the signal and apply it as a reactive
     `data-theme` attribute on the `.j-shell` root div.
 
-2.4 On WASM, write the signal to `localStorage` whenever it changes.
+2.4 On WASM, use an effect to write the signal's current value to
+    `localStorage.setItem("jaunder_theme", ...)` whenever it changes.
 
 ### Step 3 · Shared UI components (`web/src/pages/ui.rs`)
 
