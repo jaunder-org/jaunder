@@ -13,10 +13,9 @@
  *   non-`goto` calls such as `page.request.post`, `page.request.get`, and
  *   `page.waitForURL`.
  *
- * - Call `waitForHydration(page)` after every navigation before filling any
- *   form fields.  Leptos `prop:value` bindings reset input values during WASM
- *   hydration; filling before hydration completes sends empty fields to the
- *   server.
+ * - `goto` waits for Leptos WASM hydration automatically.  Call
+ *   `waitForHydration(page)` only after action-triggered navigations (e.g.
+ *   redirects from form submits, server-side 302s) where `goto` was not used.
  *
  * - Never use `page.waitForLoadState("networkidle")` — it fires before
  *   Firefox's `location.replace()` navigation and before ActionForm AJAX
@@ -56,8 +55,12 @@ export async function goto(
   options?: Parameters<Page["goto"]>[1],
 ): Promise<void> {
   await withTimedAction(page, "page.goto", () =>
-    page.goto(`${BASE_URL}${path}`, options),
+    page.goto(`${BASE_URL}${path}`, {
+      waitUntil: "domcontentloaded",
+      ...options,
+    }),
   );
+  await waitForHydration(page, options?.timeout);
 }
 
 /** Click `selector`, recording timing in the OTEL trace. */
@@ -96,11 +99,7 @@ export async function login(
   password: string,
   firstNavigationTimeoutMs?: number,
 ): Promise<void> {
-  await goto(page, "/login", {
-    waitUntil: "domcontentloaded",
-    timeout: firstNavigationTimeoutMs,
-  });
-  await waitForHydration(page, firstNavigationTimeoutMs);
+  await goto(page, "/login", { timeout: firstNavigationTimeoutMs });
   await page.fill('input[name="username"]', username);
   await page.fill('input[name="password"]', password);
   await click(page, 'button[type="submit"]');
@@ -126,10 +125,7 @@ export async function register(
   const username = `user${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
 
   await withTimedAction(page, "flow.register", async () => {
-    await goto(page, "/register", {
-      timeout: firstNavigationTimeoutMs,
-    });
-    await waitForHydration(page, firstNavigationTimeoutMs);
+    await goto(page, "/register", { timeout: firstNavigationTimeoutMs });
     await withTimedAction(page, "ui.fill.username", () =>
       page.fill('input[name="username"]', username),
     );
