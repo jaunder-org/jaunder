@@ -13,10 +13,7 @@ test("password reset flow completes successfully", async ({
   const emailsBefore = readEmailLines().length;
 
   // Request a password reset on /forgot-password
-  await goto(page, "/forgot-password", {
-    waitUntil: "domcontentloaded",
-  });
-  await waitForHydration(page);
+  await goto(page, "/forgot-password");
   await page.fill('input[name="username"]', "testlogin");
   await click(page, 'button[type="submit"]');
 
@@ -35,10 +32,7 @@ test("password reset flow completes successfully", async ({
   const token = tokenMatch![1];
 
   // Visit the reset link and submit a new password
-  await goto(page, `/reset-password?token=${token}`, {
-    waitUntil: "domcontentloaded",
-  });
-  await waitForHydration(page);
+  await goto(page, `/reset-password?token=${token}`);
   await page.fill('input[name="new_password"]', "resetpassword789");
   await click(page, 'button[type="submit"]');
   // Wait for the Leptos Router redirect to /login that fires on successful reset.
@@ -49,8 +43,7 @@ test("password reset flow completes successfully", async ({
   await page.waitForURL("**/login");
 
   // Login with the old password should fail
-  await goto(page, "/login", { waitUntil: "domcontentloaded" });
-  await waitForHydration(page);
+  await goto(page, "/login");
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "testpassword123");
   await click(page, 'button[type="submit"]');
@@ -77,10 +70,7 @@ test("visiting reset-password with invalid token shows error", async ({
   page,
 }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 12_000));
-  await goto(page, "/reset-password?token=totally_invalid_token", {
-    waitUntil: "domcontentloaded",
-  });
-  await waitForHydration(page);
+  await goto(page, "/reset-password?token=totally_invalid_token");
   await page.fill('input[name="new_password"]', "somepassword123");
   await click(page, 'button[type="submit"]');
   // Wait for the error element directly rather than networkidle.
@@ -93,10 +83,7 @@ test("forgot-password for user without verified email shows contact operator err
   page,
 }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 12_000));
-  await goto(page, "/forgot-password", {
-    waitUntil: "domcontentloaded",
-  });
-  await waitForHydration(page);
+  await goto(page, "/forgot-password");
   // "testnoemail" user should exist but have no verified email
   await page.fill('input[name="username"]', "testnoemail");
   await click(page, 'button[type="submit"]');

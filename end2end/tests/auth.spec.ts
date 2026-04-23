@@ -22,7 +22,6 @@ test("register with open policy succeeds", async ({ page }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
   const username = `newuser${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
   await goto(page, "/register");
-  await waitForHydration(page);
 
   await page.fill('input[name="username"]', username);
   await page.fill('input[name="password"]', "newpassword123");
@@ -48,7 +47,6 @@ test("login with valid credentials succeeds", async ({ page }, testInfo) => {
   const perf = createPerfProbe(testInfo, "auth_login_success");
 
   await goto(page, "/login");
-  await waitForHydration(page);
 
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "testpassword123");
@@ -71,7 +69,6 @@ test("login with valid credentials succeeds", async ({ page }, testInfo) => {
 test("login with wrong password shows error", async ({ page }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 12_000));
   await goto(page, "/login");
-  await waitForHydration(page);
 
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "wrongpassword!");

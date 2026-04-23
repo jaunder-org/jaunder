@@ -6,14 +6,7 @@ import {
 } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
-import {
-  BASE_URL,
-  goto,
-  click,
-  waitForSelector,
-  waitForHydration,
-  register,
-} from "./helpers";
+import { BASE_URL, goto, click, waitForSelector, register } from "./helpers";
 import { createPerfProbe } from "./perf";
 
 const TIMELINE_PAGE_SIZE = 50;
@@ -48,7 +41,6 @@ test("authenticated user can create a post through the UI", async ({
   );
 
   await goto(page, "/posts/new");
-  await waitForHydration(page);
 
   await expect(page.locator(".j-topbar h1")).toHaveText("New post");
   await page.fill('input[name="title"]', "Playwright Post");
@@ -70,7 +62,6 @@ test("authenticated user can save a draft through the UI", async ({
   );
 
   await goto(page, "/posts/new");
-  await waitForHydration(page);
 
   await page.fill('input[name="title"]', "Playwright Draft");
   await page.fill('textarea[name="body"]', "*draft*");
@@ -91,7 +82,6 @@ test("published post renders at permalink", async ({ page }, testInfo) => {
   );
 
   await goto(page, "/posts/new");
-  await waitForHydration(page);
   await page.fill('input[name="title"]', "Permalink Story");
   await page.fill('textarea[name="body"]', "**hello permalink**");
   await page.selectOption('select[name="format"]', "markdown");
@@ -118,8 +108,7 @@ test("published post renders at permalink", async ({ page }, testInfo) => {
 
   const targetUrl = permalinkHref!;
 
-  await goto(page, targetUrl, { waitUntil: "domcontentloaded" });
-  await waitForHydration(page);
+  await goto(page, targetUrl);
 
   await expect(page.locator("article h1")).toHaveText("Permalink Story");
   await expect(page.locator(".content")).toContainText("hello permalink");
@@ -134,7 +123,6 @@ test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
 
   // Create a draft
   await goto(page, "/posts/new");
-  await waitForHydration(page);
   await page.fill('input[name="title"]', "Original Draft");
   await page.fill('textarea[name="body"]', "original body");
   await page.selectOption('select[name="format"]', "markdown");
@@ -150,7 +138,6 @@ test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
 
   // Navigate to edit page
   await goto(page, `/posts/${postId}/edit`);
-  await waitForHydration(page);
 
   await expect(page.locator("h1")).toHaveText("Edit Post");
 
@@ -177,7 +164,6 @@ test("editing a published post freezes the slug", async ({
 
   // Create and publish a post
   await goto(page, "/posts/new");
-  await waitForHydration(page);
   await page.fill('input[name="title"]', "Published Article");
   await page.fill('textarea[name="body"]', "original content");
   await page.selectOption('select[name="format"]', "markdown");
@@ -198,7 +184,6 @@ test("editing a published post freezes the slug", async ({
 
   // Navigate to edit page
   await goto(page, `/posts/${postId}/edit`);
-  await waitForHydration(page);
 
   // Published post should not have a slug_override input
   await expect(page.locator('input[name="slug_override"]')).not.toBeVisible();
@@ -227,7 +212,6 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   await register(page, firstNavigationTimeoutMs);
 
   await goto(page, "/posts/new");
-  await waitForHydration(page);
   await page.fill('input[name="title"]', "Lifecycle Draft");
   await page.fill('textarea[name="body"]', "initial draft body");
   await page.selectOption('select[name="format"]', "markdown");
@@ -245,7 +229,6 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   const postId = postIdMatch![1];
 
   await goto(page, "/drafts");
-  await waitForHydration(page);
   const initialDraftRow = page.locator("li", { hasText: "Lifecycle Draft" });
   await expect(initialDraftRow).toBeVisible();
   const permalinkHref = await initialDraftRow
@@ -255,13 +238,11 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   const permalinkUrl = permalinkHref!;
 
   await goto(page, `/posts/${postId}/edit`);
-  await waitForHydration(page);
   await page.fill('textarea[name="body"]', "edited draft body");
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");
 
   await goto(page, permalinkUrl);
-  await waitForHydration(page);
   await expect(page.locator(".content")).toContainText("edited draft body");
   await expect(page.locator(".draft-banner")).toContainText(
     "Draft - visible only to you",
@@ -269,15 +250,13 @@ test("draft lifecycle: create, view, edit, and publish", async ({
 
   const guestContext = await context.browser()!.newContext();
   const guestPage = await guestContext.newPage();
-  await goto(guestPage, permalinkUrl);
-  await waitForHydration(guestPage, firstNavigationTimeoutMs);
+  await goto(guestPage, permalinkUrl, { timeout: firstNavigationTimeoutMs });
   await expect(guestPage.locator("body")).not.toContainText(
     "edited draft body",
   );
   await guestContext.close();
 
   await goto(page, "/drafts");
-  await waitForHydration(page);
   const draftRow = page.locator("li", { hasText: "Lifecycle Draft" });
   await expect(draftRow).toBeVisible();
   await draftRow.locator('button:has-text("Publish")').click();
@@ -285,7 +264,6 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   await expect(page.locator(".success")).toContainText("Post published.");
 
   await goto(page, permalinkUrl);
-  await waitForHydration(page);
   await expect(page.locator(".content")).toContainText("edited draft body");
   await expect(page.locator(".draft-banner")).toHaveCount(0);
 });
@@ -308,8 +286,7 @@ test("per-user timeline lists published posts with pagination", async ({
     }
   });
 
-  await goto(page, `/~${username}`);
-  await waitForHydration(page, firstNavigationTimeoutMs);
+  await goto(page, `/~${username}`, { timeout: firstNavigationTimeoutMs });
 
   await expect(page.locator("h1")).toContainText(`Posts by ${username}`);
   await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
@@ -366,10 +343,7 @@ test("home page shows local timeline for unauthenticated users", async ({
 
   const guestContext = await browser.newContext();
   const guestPage = await guestContext.newPage();
-  await goto(guestPage, "/", {
-    timeout: firstNavigationTimeoutMs,
-  });
-  await waitForHydration(guestPage, firstNavigationTimeoutMs);
+  await goto(guestPage, "/", { timeout: firstNavigationTimeoutMs });
 
   await expect(guestPage.locator(".j-topbar h1")).toHaveText("jaunder.local", {
     timeout: 10_000,
@@ -422,10 +396,7 @@ test("home page shows authenticated home feed with pagination", async ({
     }
   });
 
-  await goto(page, "/", {
-    timeout: firstNavigationTimeoutMs,
-  });
-  await waitForHydration(page, firstNavigationTimeoutMs);
+  await goto(page, "/", { timeout: firstNavigationTimeoutMs });
 
   await expect(page.locator(".j-topbar h1")).toHaveText("Home", {
     timeout: 10_000,
@@ -464,7 +435,6 @@ test("authenticated user can delete a published post", async ({
 
   // Create a published post
   await goto(page, "/posts/new");
-  await waitForHydration(page);
   await page.fill('input[name="title"]', "Post To Delete");
   await page.fill('textarea[name="body"]', "this will be deleted");
   await page.selectOption('select[name="format"]', "markdown");
@@ -477,8 +447,7 @@ test("authenticated user can delete a published post", async ({
   const permalinkUrl = permalinkHref!;
 
   // Navigate to permalink page
-  await goto(page, permalinkUrl, { waitUntil: "domcontentloaded" });
-  await waitForHydration(page);
+  await goto(page, permalinkUrl);
   await expect(page.locator("article h1")).toHaveText("Post To Delete");
 
   // Delete button should be visible for the author
@@ -491,17 +460,13 @@ test("authenticated user can delete a published post", async ({
   await expect(page.locator(".success")).toContainText("Post deleted.");
 
   // Verify the permalink now returns a not-found error
-  await goto(page, permalinkUrl, { waitUntil: "domcontentloaded" });
-  await waitForHydration(page);
+  await goto(page, permalinkUrl);
   await expect(page.locator(".error")).toContainText("Post not found");
 
   // Verify excluded from user timeline
   const username = permalinkUrl.match(/\/~([^/]+)\//)?.[1];
   expect(username).toBeTruthy();
-  await goto(page, `/~${username}`, {
-    waitUntil: "domcontentloaded",
-  });
-  await waitForHydration(page);
+  await goto(page, `/~${username}`);
   await expect(page.locator("body")).not.toContainText("Post To Delete");
 });
 
@@ -516,7 +481,6 @@ test("authenticated user can delete a draft from the drafts page", async ({
 
   // Create a draft
   await goto(page, "/posts/new");
-  await waitForHydration(page);
   await page.fill('input[name="title"]', "Draft To Delete");
   await page.fill('textarea[name="body"]', "draft content");
   await page.selectOption('select[name="format"]', "markdown");
@@ -524,10 +488,7 @@ test("authenticated user can delete a draft from the drafts page", async ({
   await waitForSelector(page, ".success");
 
   // Navigate to drafts page
-  await goto(page, "/drafts", {
-    waitUntil: "domcontentloaded",
-  });
-  await waitForHydration(page);
+  await goto(page, "/drafts");
   await expect(page.locator("body")).toContainText("Draft To Delete");
 
   // Delete the draft
