@@ -91,9 +91,9 @@ test("logout page logs out", async ({ page }, testInfo) => {
   // Use the rendered logout link to avoid Firefox navigation abort races.
   await page.click("a[href='/logout']");
 
-  // Logout clears the session and redirects to "/"; wait for the sidebar footer
-  // to reflect the unauthenticated state on the home page.
-  await page.waitForSelector(".j-sb-foot");
+  // Logout clears the session and redirects to "/"; waitForURL is reliable here
+  // because logout is a server-side 302 redirect (not location.replace).
+  await page.waitForURL("http://localhost:3000/", { timeout: 10_000 });
   await waitForHydration(page);
   await expect(page.locator(".j-sb-foot")).toContainText("Sign in");
 });
