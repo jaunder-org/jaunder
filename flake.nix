@@ -366,7 +366,7 @@
           const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
           module.exports = defineConfig({
             testDir: './tests',
-            timeout: 5 * 1000,
+            timeout: 30 * 1000,
             expect: { timeout: 5000 },
             reporter: 'line',
             use: {

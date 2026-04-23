@@ -16,6 +16,7 @@ pub use ui::{Avatar, Chip, Dot, Icon, Icons, InlineComposer, PostCard, Sidebar, 
 /// constant with a value from server configuration.
 pub const DEFAULT_THEME: &str = "studio";
 
+use crate::pages::auth::{LoginPage, LogoutPage, RegisterPage};
 use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
 use crate::pages::invites::InvitesPage;
@@ -25,80 +26,25 @@ use crate::pages::posts::{
 };
 use crate::pages::profile::ProfilePage;
 use crate::pages::sessions::SessionsPage;
-use crate::{
-    auth::current_user,
-    pages::auth::{LoginPage, LogoutPage, RegisterPage},
-};
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, Stylesheet, Title};
 use leptos_router::{
-    components::{Route, Router, Routes},
-    hooks::use_location,
+    components::{Outlet, ParentRoute, Route, Router, Routes},
     ParamSegment, StaticSegment,
 };
 
 #[component]
-fn HeaderNav() -> impl IntoView {
-    let location = use_location();
-    let user = Resource::new(|| (), |_| current_user());
-
-    let skip_user_fetch = move || {
-        let path = location.pathname.get();
-        path == "/login" || path == "/register" || path == "/posts/new"
-    };
-
+fn AppShell() -> impl IntoView {
+    let theme = use_context::<RwSignal<String>>().expect("theme context missing");
     view! {
-        {move || {
-            if skip_user_fetch() {
-                return view! {
-                    <nav>
-                        <a href="/login">"Login"</a>
-                        " "
-                        <a href="/register">"Register"</a>
-                    </nav>
-                }
-                    .into_any();
-            }
-
-            view! {
-                <Suspense fallback=|| {
-                    view! {
-                        <nav>
-                            <a href="/login">"Login"</a>
-                            " "
-                            <a href="/register">"Register"</a>
-                        </nav>
-                    }
-                }>
-                    {move || Suspend::new(async move {
-                        let user = user.await;
-                        match user {
-                            Ok(Some(username)) => {
-                                view! {
-                                    <nav>
-                                        <span>"Logged in as " {username}</span>
-                                        " "
-                                        <a href="/logout">"Logout"</a>
-                                    </nav>
-                                }
-                                    .into_any()
-                            }
-                            Ok(None) | Err(_) => {
-                                view! {
-                                    <nav>
-                                        <a href="/login">"Login"</a>
-                                        " "
-                                        <a href="/register">"Register"</a>
-                                    </nav>
-                                }
-                                    .into_any()
-                            }
-                        }
-                    })}
-                </Suspense>
-            }
-                .into_any()
-        }}
+        <div class="j-root" attr:data-theme=move || theme.get()>
+            <div class="j-shell">
+                <Sidebar />
+                <main class="j-main">
+                    <Outlet />
+                </main>
+            </div>
+        </div>
     }
 }
 
@@ -157,64 +103,55 @@ pub fn App() -> impl IntoView {
         // sets the document title
         <Title text="Jaunder" />
 
-        // content for this welcome page
-        <div class="j-root" attr:data-theme=move || theme.get().to_string()>
-            <Router>
-                <header>
-                    <HeaderNav />
-                </header>
-                <main>
-                    <Routes fallback=|| "Page not found.".into_view()>
-                        <Route path=StaticSegment("") view=HomePage />
-                        <Route path=StaticSegment("register") view=RegisterPage />
-                        <Route path=StaticSegment("login") view=LoginPage />
-                        <Route path=StaticSegment("logout") view=LogoutPage />
-                        <Route
-                            path=(StaticSegment("profile"), StaticSegment("email"))
-                            view=EmailPage
-                        />
-                        <Route path=StaticSegment("profile") view=ProfilePage />
-                        <Route path=StaticSegment("sessions") view=SessionsPage />
-                        <Route path=StaticSegment("invites") view=InvitesPage />
-                        <Route
-                            path=(StaticSegment("posts"), StaticSegment("new"))
-                            view=CreatePostPage
-                        />
-                        <Route path=StaticSegment("drafts") view=DraftsPage />
-                        <Route
-                            path=(
-                                StaticSegment("posts"),
-                                ParamSegment("post_id"),
-                                StaticSegment("edit"),
-                            )
-                            view=EditPostPage
-                        />
-                        <Route path=StaticSegment("verify-email") view=VerifyEmailPage />
-                        <Route path=StaticSegment("forgot-password") view=ForgotPasswordPage />
-                        <Route path=StaticSegment("reset-password") view=ResetPasswordPage />
-                        <Route
-                            path=(
-                                StaticSegment("draft"),
-                                ParamSegment("post_id"),
-                                StaticSegment("preview"),
-                            )
-                            view=DraftPreviewPage
-                        />
-                        <Route path=ParamSegment("username") view=UserTimelinePage />
-                        <Route
-                            path=(
-                                ParamSegment("username"),
-                                ParamSegment("year"),
-                                ParamSegment("month"),
-                                ParamSegment("day"),
-                                ParamSegment("slug"),
-                            )
-                            view=PostPage
-                        />
-                    </Routes>
-                </main>
-            </Router>
-        </div>
+        <Router>
+            <Routes fallback=|| "Page not found.".into_view()>
+                <ParentRoute path=StaticSegment("") view=AppShell>
+                    <Route path=StaticSegment("") view=HomePage />
+                    <Route path=StaticSegment("register") view=RegisterPage />
+                    <Route path=StaticSegment("login") view=LoginPage />
+                    <Route path=StaticSegment("logout") view=LogoutPage />
+                    <Route path=(StaticSegment("profile"), StaticSegment("email")) view=EmailPage />
+                    <Route path=StaticSegment("profile") view=ProfilePage />
+                    <Route path=StaticSegment("sessions") view=SessionsPage />
+                    <Route path=StaticSegment("invites") view=InvitesPage />
+                    <Route
+                        path=(StaticSegment("posts"), StaticSegment("new"))
+                        view=CreatePostPage
+                    />
+                    <Route path=StaticSegment("drafts") view=DraftsPage />
+                    <Route
+                        path=(
+                            StaticSegment("posts"),
+                            ParamSegment("post_id"),
+                            StaticSegment("edit"),
+                        )
+                        view=EditPostPage
+                    />
+                    <Route path=StaticSegment("verify-email") view=VerifyEmailPage />
+                    <Route path=StaticSegment("forgot-password") view=ForgotPasswordPage />
+                    <Route path=StaticSegment("reset-password") view=ResetPasswordPage />
+                    <Route
+                        path=(
+                            StaticSegment("draft"),
+                            ParamSegment("post_id"),
+                            StaticSegment("preview"),
+                        )
+                        view=DraftPreviewPage
+                    />
+                    <Route path=ParamSegment("username") view=UserTimelinePage />
+                    <Route
+                        path=(
+                            ParamSegment("username"),
+                            ParamSegment("year"),
+                            ParamSegment("month"),
+                            ParamSegment("day"),
+                            ParamSegment("slug"),
+                        )
+                        view=PostPage
+                    />
+                </ParentRoute>
+            </Routes>
+        </Router>
     }
 }
 

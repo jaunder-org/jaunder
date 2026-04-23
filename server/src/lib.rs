@@ -1,3 +1,8 @@
+// The ParentRoute wrapping all routes in web::App generates a wide tuple of
+// route types; the compiler needs a higher recursion limit to monomorphize it,
+// particularly under llvm-cov instrumentation. Root cause under investigation.
+#![recursion_limit = "512"]
+
 pub mod assets;
 pub mod auth;
 pub mod cli;

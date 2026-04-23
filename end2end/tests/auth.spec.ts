@@ -52,14 +52,15 @@ test("login with valid credentials succeeds", async ({ page }, testInfo) => {
   await page.click('button[type="submit"]');
   perf.mark("submit_clicked");
   // waitForURL is unreliable in Firefox for location.replace() navigations; wait
-  // for the logout link that SSR renders on the home page after successful auth.
+  // for the sidebar logout link, which only appears after the Suspense resolves
+  // with the authenticated state — by that point the navigation is fully settled.
   await page.waitForSelector("a[href='/logout']");
   perf.mark("logout_link_visible");
   await waitForHydration(page);
   perf.mark("post_login_hydration_done");
 
-  await expect(page.locator("header")).toContainText("Logged in as testlogin");
-  await expect(page.locator("header a[href='/logout']")).toBeVisible();
+  await expect(page.locator(".j-sb-foot")).toContainText("testlogin");
+  await expect(page.locator(".j-sidebar")).toBeVisible();
   perf.mark("assertions_complete");
   await perf.log();
 });
@@ -90,8 +91,29 @@ test("logout page logs out", async ({ page }, testInfo) => {
   // Use the rendered logout link to avoid Firefox navigation abort races.
   await page.click("a[href='/logout']");
 
-  await expect(page.locator("h1")).toContainText("Logging out");
-  await page.waitForLoadState("networkidle");
+  // Logout clears the session and redirects to "/"; wait for the sidebar footer
+  // to reflect the unauthenticated state on the home page.
+  await page.waitForSelector(".j-sb-foot");
+  await waitForHydration(page);
+  await expect(page.locator(".j-sb-foot")).toContainText("Sign in");
+});
 
-  await expect(page.locator("p")).toContainText("You have been logged out.");
+test("sidebar reverts to sign-in after logout", async ({ page }, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
+  // Log in and confirm the sidebar shows the username.
+  await page.goto("http://localhost:3000/login");
+  await waitForHydration(page);
+  await page.fill('input[name="username"]', "testlogin");
+  await page.fill('input[name="password"]', "testpassword123");
+  await page.click('button[type="submit"]');
+  await page.waitForSelector("a[href='/logout']");
+  // a[href='/logout'] only renders when auth Suspense resolves, confirming testlogin is shown.
+  await expect(page.locator(".j-sb-foot")).toContainText("testlogin");
+
+  // Click the sidebar "Sign out" link and confirm the sidebar switches back.
+  await page.click("a[href='/logout']");
+  await page.waitForSelector(".j-sb-foot");
+  await waitForHydration(page);
+  await expect(page.locator(".j-sb-foot")).not.toContainText("testlogin");
+  await expect(page.locator(".j-sb-foot")).toContainText("Sign in");
 });
