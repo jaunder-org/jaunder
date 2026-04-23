@@ -1,7 +1,8 @@
 import { test, expect } from "./fixtures";
+import { goto } from "./helpers";
 
 test("homepage has title and links to intro page", async ({ page }) => {
-  await page.goto("http://localhost:3000/");
+  await goto(page, "/");
 
   await expect(page).toHaveTitle("Jaunder");
 
