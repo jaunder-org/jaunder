@@ -6,7 +6,14 @@ import {
 } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
-import { waitForHydration } from "./hydration";
+import {
+  BASE_URL,
+  goto,
+  click,
+  waitForSelector,
+  waitForHydration,
+  register,
+} from "./helpers";
 import { createPerfProbe } from "./perf";
 
 const TIMELINE_PAGE_SIZE = 50;
@@ -15,74 +22,12 @@ const LOCAL_TIMELINE_AUTHOR_COUNT = 26;
 const HOME_FEED_SELF_COUNT = 51;
 const HOME_FEED_OTHER_COUNT = 2;
 
-async function goto(
-  page: Page,
-  url: string,
-  options?: Parameters<Page["goto"]>[1],
-): Promise<void> {
-  await withTimedAction(page, "page.goto", () => page.goto(url, options));
-}
-
-async function waitForSelector(
-  page: Page,
-  selector: string,
-  options?: Parameters<Page["waitForSelector"]>[1],
-): Promise<void> {
-  await withTimedAction(page, "wait.selector", () => {
-    if (options === undefined) {
-      return page.waitForSelector(selector);
-    }
-    return page.waitForSelector(selector, options);
-  });
-}
-
-async function click(page: Page, selector: string): Promise<void> {
-  await withTimedAction(page, "ui.click", () => page.click(selector));
-}
-
-async function register(
-  page: Page,
-  firstNavigationTimeoutMs: number,
-): Promise<string> {
-  const username = `postuser${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
-
-  await goto(page, "http://localhost:3000/register", {
-    timeout: firstNavigationTimeoutMs,
-  });
-  await waitForHydration(page, firstNavigationTimeoutMs);
-  await withTimedAction(page, "ui.fill.username", () =>
-    page.fill('input[name="username"]', username),
-  );
-  await withTimedAction(page, "ui.fill.password", () =>
-    page.fill('input[name="password"]', "testpassword123"),
-  );
-  await click(page, 'button[type="submit"]');
-  // waitForLoadState("networkidle") resolves before Firefox's location.replace()
-  // navigation fires, causing a race with subsequent page.goto() calls.
-  // Wait for either the success marker or an explicit server error so we
-  // fail fast on misconfiguration instead of burning the full test timeout.
-  const outcome = await Promise.race([
-    page
-      .waitForSelector("a[href='/logout']", { timeout: 10_000 })
-      .then(() => "ok"),
-    page.waitForSelector(".error", { timeout: 10_000 }).then(() => "error"),
-  ]);
-  if (outcome == "error") {
-    const errorText = (
-      await page.locator(".error").first().textContent()
-    )?.trim();
-    throw new Error(`registration failed: ${errorText ?? "unknown error"}`);
-  }
-
-  return username;
-}
-
 async function createPublishedPostViaApi(
   page: Page,
   title: string,
 ): Promise<void> {
   const response = await withTimedAction(page, "api.create_post", () =>
-    page.request.post("http://localhost:3000/api/create_post", {
+    page.request.post(`${BASE_URL}/api/create_post`, {
       form: {
         title,
         body: `Body for ${title}`,
@@ -102,7 +47,7 @@ test("authenticated user can create a post through the UI", async ({
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
 
-  await goto(page, "http://localhost:3000/posts/new");
+  await goto(page, "/posts/new");
   await waitForHydration(page);
 
   await expect(page.locator(".j-topbar h1")).toHaveText("New post");
@@ -124,7 +69,7 @@ test("authenticated user can save a draft through the UI", async ({
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
 
-  await goto(page, "http://localhost:3000/posts/new");
+  await goto(page, "/posts/new");
   await waitForHydration(page);
 
   await page.fill('input[name="title"]', "Playwright Draft");
@@ -145,7 +90,7 @@ test("published post renders at permalink", async ({ page }, testInfo) => {
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
 
-  await goto(page, "http://localhost:3000/posts/new");
+  await goto(page, "/posts/new");
   await waitForHydration(page);
   await page.fill('input[name="title"]', "Permalink Story");
   await page.fill('textarea[name="body"]', "**hello permalink**");
@@ -171,7 +116,7 @@ test("published post renders at permalink", async ({ page }, testInfo) => {
   const permalinkHref = await permalinkLink.getAttribute("href");
   expect(permalinkHref).toBeTruthy();
 
-  const targetUrl = new URL(permalinkHref!, "http://localhost:3000").toString();
+  const targetUrl = permalinkHref!;
 
   await goto(page, targetUrl, { waitUntil: "domcontentloaded" });
   await waitForHydration(page);
@@ -188,7 +133,7 @@ test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
   );
 
   // Create a draft
-  await goto(page, "http://localhost:3000/posts/new");
+  await goto(page, "/posts/new");
   await waitForHydration(page);
   await page.fill('input[name="title"]', "Original Draft");
   await page.fill('textarea[name="body"]', "original body");
@@ -204,7 +149,7 @@ test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
   const postId = postIdMatch![1];
 
   // Navigate to edit page
-  await goto(page, `http://localhost:3000/posts/${postId}/edit`);
+  await goto(page, `/posts/${postId}/edit`);
   await waitForHydration(page);
 
   await expect(page.locator("h1")).toHaveText("Edit Post");
@@ -231,7 +176,7 @@ test("editing a published post freezes the slug", async ({
   );
 
   // Create and publish a post
-  await goto(page, "http://localhost:3000/posts/new");
+  await goto(page, "/posts/new");
   await waitForHydration(page);
   await page.fill('input[name="title"]', "Published Article");
   await page.fill('textarea[name="body"]', "original content");
@@ -252,7 +197,7 @@ test("editing a published post freezes the slug", async ({
   const postId = postIdMatch![1];
 
   // Navigate to edit page
-  await goto(page, `http://localhost:3000/posts/${postId}/edit`);
+  await goto(page, `/posts/${postId}/edit`);
   await waitForHydration(page);
 
   // Published post should not have a slug_override input
@@ -281,7 +226,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   );
   await register(page, firstNavigationTimeoutMs);
 
-  await goto(page, "http://localhost:3000/posts/new");
+  await goto(page, "/posts/new");
   await waitForHydration(page);
   await page.fill('input[name="title"]', "Lifecycle Draft");
   await page.fill('textarea[name="body"]', "initial draft body");
@@ -299,7 +244,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   expect(postIdMatch).toBeTruthy();
   const postId = postIdMatch![1];
 
-  await goto(page, "http://localhost:3000/drafts");
+  await goto(page, "/drafts");
   await waitForHydration(page);
   const initialDraftRow = page.locator("li", { hasText: "Lifecycle Draft" });
   await expect(initialDraftRow).toBeVisible();
@@ -307,12 +252,9 @@ test("draft lifecycle: create, view, edit, and publish", async ({
     .locator('a:has-text("Permalink")')
     .getAttribute("href");
   expect(permalinkHref).toBeTruthy();
-  const permalinkUrl = new URL(
-    permalinkHref!,
-    "http://localhost:3000",
-  ).toString();
+  const permalinkUrl = permalinkHref!;
 
-  await goto(page, `http://localhost:3000/posts/${postId}/edit`);
+  await goto(page, `/posts/${postId}/edit`);
   await waitForHydration(page);
   await page.fill('textarea[name="body"]', "edited draft body");
   await click(page, 'button[name="publish"][value="false"]');
@@ -334,7 +276,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   );
   await guestContext.close();
 
-  await goto(page, "http://localhost:3000/drafts");
+  await goto(page, "/drafts");
   await waitForHydration(page);
   const draftRow = page.locator("li", { hasText: "Lifecycle Draft" });
   await expect(draftRow).toBeVisible();
@@ -369,7 +311,7 @@ test("per-user timeline lists published posts with pagination", async ({
   perf.mark("seed_posts_done");
 
   perf.mark("goto_timeline_start");
-  await goto(page, `http://localhost:3000/~${username}`);
+  await goto(page, `/~${username}`);
   perf.mark("goto_timeline_done");
   await waitForHydration(page, firstNavigationTimeoutMs);
   perf.mark("hydration_done");
@@ -430,7 +372,7 @@ test("home page shows local timeline for unauthenticated users", async ({
   const guestContext = await browser.newContext();
   const guestPage = await guestContext.newPage();
   perf.mark("goto_home_start");
-  await goto(guestPage, "http://localhost:3000/", {
+  await goto(guestPage, "/", {
     timeout: firstNavigationTimeoutMs,
   });
   perf.mark("goto_home_done");
@@ -489,7 +431,7 @@ test("home page shows authenticated home feed with pagination", async ({
   perf.mark("seed_other_done");
 
   perf.mark("goto_home_start");
-  await goto(page, "http://localhost:3000/", {
+  await goto(page, "/", {
     timeout: firstNavigationTimeoutMs,
   });
   perf.mark("goto_home_done");
@@ -532,7 +474,7 @@ test("authenticated user can delete a published post", async ({
   );
 
   // Create a published post
-  await goto(page, "http://localhost:3000/posts/new");
+  await goto(page, "/posts/new");
   await waitForHydration(page);
   await page.fill('input[name="title"]', "Post To Delete");
   await page.fill('textarea[name="body"]', "this will be deleted");
@@ -543,10 +485,7 @@ test("authenticated user can delete a published post", async ({
   const permalinkLink = page.locator('[data-test="permalink-link"]');
   const permalinkHref = await permalinkLink.getAttribute("href");
   expect(permalinkHref).toBeTruthy();
-  const permalinkUrl = new URL(
-    permalinkHref!,
-    "http://localhost:3000",
-  ).toString();
+  const permalinkUrl = permalinkHref!;
 
   // Navigate to permalink page
   await goto(page, permalinkUrl, { waitUntil: "domcontentloaded" });
@@ -570,7 +509,7 @@ test("authenticated user can delete a published post", async ({
   // Verify excluded from user timeline
   const username = permalinkUrl.match(/\/~([^/]+)\//)?.[1];
   expect(username).toBeTruthy();
-  await goto(page, `http://localhost:3000/~${username}`, {
+  await goto(page, `/~${username}`, {
     waitUntil: "domcontentloaded",
   });
   await waitForHydration(page);
@@ -587,7 +526,7 @@ test("authenticated user can delete a draft from the drafts page", async ({
   );
 
   // Create a draft
-  await goto(page, "http://localhost:3000/posts/new");
+  await goto(page, "/posts/new");
   await waitForHydration(page);
   await page.fill('input[name="title"]', "Draft To Delete");
   await page.fill('textarea[name="body"]', "draft content");
@@ -596,7 +535,7 @@ test("authenticated user can delete a draft from the drafts page", async ({
   await waitForSelector(page, ".success");
 
   // Navigate to drafts page
-  await goto(page, "http://localhost:3000/drafts", {
+  await goto(page, "/drafts", {
     waitUntil: "domcontentloaded",
   });
   await waitForHydration(page);
