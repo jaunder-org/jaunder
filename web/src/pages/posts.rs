@@ -1,9 +1,12 @@
 use crate::{
     auth::current_user,
-    pages::signal_read::read_signal,
+    pages::{
+        signal_read::read_signal,
+        ui::{Avatar, Topbar},
+    },
     posts::{
         get_post, get_post_preview, list_drafts, list_user_posts, CreatePost, CreatePostResult,
-        DraftSummary, ListUserPosts, PostResponse, PublishPost, PublishPostResult,
+        DeletePost, DraftSummary, ListUserPosts, PostResponse, PublishPost, PublishPostResult,
         TimelinePostSummary, UpdatePost, UpdatePostResult,
     },
 };
@@ -14,48 +17,178 @@ use leptos_router::hooks::use_params_map;
 pub fn CreatePostPage() -> impl IntoView {
     let create_post_action = ServerAction::<CreatePost>::new();
     let current_user = Resource::new(|| (), |_| current_user());
+    let body = RwSignal::new(String::new());
+    let char_count = move || read_signal!(body).len();
 
     view! {
-        <h1>"New Post"</h1>
+        <Topbar title="New post".to_string() sub="Long-form".to_string() />
         <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
+            view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
             {move || Suspend::new(async move {
                 match current_user.await {
-                    Ok(Some(_username)) => {
+                    Ok(Some(username)) => {
                         view! {
                             <ActionForm action=create_post_action>
-                                <label>
-                                    "Title" <input type="text" name="title" required=true />
-                                </label>
-                                <label>"Body" <textarea name="body" rows="12"></textarea></label>
-                                <label>
-                                    "Format" <select name="format">
-                                        <option value="markdown" selected=true>
-                                            "Markdown"
-                                        </option>
-                                        <option value="org">"Org"</option>
-                                    </select>
-                                </label>
-                                <label>
-                                    "Slug override" <input type="text" name="slug_override" />
-                                </label>
-                                <button type="submit" name="publish" value="true">
-                                    "Publish"
-                                </button>
-                                <button type="submit" name="publish" value="false">
-                                    "Save Draft"
-                                </button>
+                                <div class="j-compose-grid">
+                                    <div class="j-compose-body">
+                                        <div style="display:flex;gap:14px">
+                                            <Avatar name=username.clone() size=40 />
+                                            <div style="flex:1;min-width:0">
+                                                <div style="font-size:13px;color:var(--muted);margin-bottom:10px;\
+                                                font-family:var(--font-meta)">{username}</div>
+                                                <input
+                                                    type="text"
+                                                    name="title"
+                                                    placeholder="Title"
+                                                    required=true
+                                                    style="width:100%;font-size:20px;font-weight:600;\
+                                                    border:none;outline:none;background:transparent;\
+                                                    color:var(--ink);margin-bottom:14px;\
+                                                    font-family:var(--font-body)"
+                                                />
+                                                <textarea
+                                                    name="body"
+                                                    placeholder="Write something\u{2026}"
+                                                    class="j-compose-editor"
+                                                    style="width:100%;border:none;outline:none;\
+                                                    background:transparent;resize:vertical"
+                                                    rows="16"
+                                                    prop:value=body
+                                                    on:input=move |ev| { body.set(event_target_value(&ev)) }
+                                                ></textarea>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <aside class="j-compose-aside">
+                                        <div>
+                                            <div class="j-sb-head" style="padding:0 0 10px">
+                                                "Options"
+                                            </div>
+                                            <div
+                                                class="j-field-row"
+                                                style="grid-template-columns:auto 1fr"
+                                            >
+                                                <label class="j-field-label" for="compose-format">
+                                                    "Format"
+                                                </label>
+                                                <select
+                                                    id="compose-format"
+                                                    name="format"
+                                                    class="j-field-val"
+                                                >
+                                                    <option value="markdown" selected=true>
+                                                        "Markdown"
+                                                    </option>
+                                                    <option value="org">"Org"</option>
+                                                </select>
+                                            </div>
+                                            <div
+                                                class="j-field-row"
+                                                style="grid-template-columns:auto 1fr"
+                                            >
+                                                <label class="j-field-label" for="compose-slug">
+                                                    "Slug"
+                                                </label>
+                                                <input
+                                                    id="compose-slug"
+                                                    type="text"
+                                                    name="slug_override"
+                                                    placeholder="auto"
+                                                    class="j-field-val"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
+                                            <span class="j-count" style="margin-left:0">
+                                                {char_count}
+                                            </span>
+                                            <span class="j-spacer"></span>
+                                            <button
+                                                class="j-btn"
+                                                type="submit"
+                                                name="publish"
+                                                value="false"
+                                            >
+                                                "Draft"
+                                            </button>
+                                            <button
+                                                class="j-btn is-primary"
+                                                type="submit"
+                                                name="publish"
+                                                value="true"
+                                            >
+                                                "Publish \u{2192}"
+                                            </button>
+                                        </div>
+                                    </aside>
+                                </div>
                             </ActionForm>
+                            {move || {
+                                create_post_action
+                                    .value()
+                                    .get()
+                                    .map(|result: Result<CreatePostResult, ServerFnError>| {
+                                        match result {
+                                            Ok(created) => {
+                                                let message = if created.published_at.is_some() {
+                                                    "Post published."
+                                                } else {
+                                                    "Draft saved."
+                                                };
+                                                let slug_value = created.slug.clone();
+                                                let slug_for_attr = slug_value.clone();
+                                                view! {
+                                                    <div class="success" style="padding:16px 32px">
+                                                        <p>{message}</p>
+                                                        <p data-test="slug-value" data-slug=slug_for_attr>
+                                                            "Slug: "
+                                                            {slug_value}
+                                                        </p>
+                                                        <a
+                                                            data-test="preview-link"
+                                                            href=created.preview_url.clone()
+                                                        >
+                                                            "Preview draft"
+                                                        </a>
+                                                        {created
+                                                            .permalink
+                                                            .as_ref()
+                                                            .map(|href| {
+                                                                view! {
+                                                                    <a data-test="permalink-link" href=href.clone()>
+                                                                        "View permalink"
+                                                                    </a>
+                                                                }
+                                                            })}
+                                                    </div>
+                                                }
+                                                    .into_any()
+                                            }
+                                            Err(err) => {
+                                                view! {
+                                                    <p class="error" style="padding:16px 32px">
+                                                        {err.to_string()}
+                                                    </p>
+                                                }
+                                                    .into_any()
+                                            }
+                                        }
+                                    })
+                            }}
                         }
                             .into_any()
                     }
                     Ok(None) => {
                         view! {
-                            <p>"You must be logged in to create a post."</p>
-                            <p>
-                                <a href="/login">"Login"</a>
-                            </p>
+                            <div style="padding:32px">
+                                <p>"You must be logged in to create a post."</p>
+                                <p>
+                                    <a href="/login" class="j-btn is-primary">
+                                        "Sign in"
+                                    </a>
+                                </p>
+                            </div>
                         }
                             .into_any()
                     }
@@ -63,51 +196,12 @@ pub fn CreatePostPage() -> impl IntoView {
                 }
             })}
         </Suspense>
-        {move || {
-            create_post_action
-                .value()
-                .get()
-                .map(|result: Result<CreatePostResult, ServerFnError>| match result {
-                    Ok(created) => {
-                        let message = if created.published_at.is_some() {
-                            "Post published."
-                        } else {
-                            "Draft saved."
-                        };
-                        let slug_value = created.slug.clone();
-                        let slug_for_attr = slug_value.clone();
-                        view! {
-                            <div class="success">
-                                <p>{message}</p>
-                                <p data-test="slug-value" data-slug=slug_for_attr>
-                                    "Slug: "
-                                    {slug_value}
-                                </p>
-                                <a data-test="preview-link" href=created.preview_url.clone()>
-                                    "Preview draft"
-                                </a>
-                                {created
-                                    .permalink
-                                    .as_ref()
-                                    .map(|href| {
-                                        view! {
-                                            <a data-test="permalink-link" href=href.clone()>
-                                                "View permalink"
-                                            </a>
-                                        }
-                                    })}
-                            </div>
-                        }
-                            .into_any()
-                    }
-                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                })
-        }}
     }
 }
 
 #[component]
 pub fn PostPage() -> impl IntoView {
+    let delete_action = ServerAction::<DeletePost>::new();
     let params = use_params_map();
 
     let post_data = move || {
@@ -151,12 +245,25 @@ pub fn PostPage() -> impl IntoView {
                 match post.await {
                     Ok(fetched_post) => {
                         let banner = fetched_post.is_draft.then_some("Draft - visible only to you");
-                        render_post_article(fetched_post, banner)
+                        let post_id = fetched_post.post_id;
+                        let is_author = fetched_post.is_author;
+                        let article = render_post_article(fetched_post, banner);
+                        view! {
+                            {article}
+                            {is_author
+                                .then(|| render_delete_form(
+                                    delete_action,
+                                    post_id,
+                                    "Delete this post?",
+                                ))}
+                        }
+                            .into_any()
                     }
                     Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 }
             })}
         </Suspense>
+        {render_delete_result(delete_action, "Post deleted.", "/", "Go to home")}
     }
 }
 
@@ -284,6 +391,7 @@ pub fn UserTimelinePage() -> impl IntoView {
 
 #[component]
 pub fn DraftPreviewPage() -> impl IntoView {
+    let delete_action = ServerAction::<DeletePost>::new();
     let params = use_params_map();
 
     let preview = Resource::new(
@@ -304,12 +412,22 @@ pub fn DraftPreviewPage() -> impl IntoView {
             {move || Suspend::new(async move {
                 match preview.await {
                     Ok(post) => {
-                        render_post_article(post, Some("Draft preview – visible only to you"))
+                        let post_id = post.post_id;
+                        let article = render_post_article(
+                            post,
+                            Some("Draft preview – visible only to you"),
+                        );
+                        view! {
+                            {article}
+                            {render_delete_form(delete_action, post_id, "Delete this draft?")}
+                        }
+                            .into_any()
                     }
                     Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 }
             })}
         </Suspense>
+        {render_delete_result(delete_action, "Draft deleted.", "/drafts", "Go to drafts")}
     }
 }
 
@@ -454,8 +572,14 @@ pub fn EditPostPage() -> impl IntoView {
 #[component]
 pub fn DraftsPage() -> impl IntoView {
     let publish_action = ServerAction::<PublishPost>::new();
+    let delete_action = ServerAction::<DeletePost>::new();
     let drafts = Resource::new(
-        move || publish_action.version().get(),
+        move || {
+            (
+                publish_action.version().get(),
+                delete_action.version().get(),
+            )
+        },
         |_| list_drafts(None, None, Some(50)),
     );
 
@@ -475,7 +599,11 @@ pub fn DraftsPage() -> impl IntoView {
                             <ul>
                                 {list
                                     .into_iter()
-                                    .map(|draft| render_draft_row(draft, publish_action))
+                                    .map(|draft| render_draft_row(
+                                        draft,
+                                        publish_action,
+                                        delete_action,
+                                    ))
                                     .collect::<Vec<_>>()}
                             </ul>
                         }
@@ -501,12 +629,22 @@ pub fn DraftsPage() -> impl IntoView {
                     Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 })
         }}
+        {move || {
+            delete_action
+                .value()
+                .get()
+                .map(|result| match result {
+                    Ok(()) => view! { <p class="success">"Draft deleted."</p> }.into_any(),
+                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                })
+        }}
     }
 }
 
 fn render_draft_row(
     draft: DraftSummary,
     publish_action: ServerAction<PublishPost>,
+    delete_action: ServerAction<DeletePost>,
 ) -> impl IntoView {
     let post_id = draft.post_id;
     view! {
@@ -524,6 +662,13 @@ fn render_draft_row(
             <ActionForm action=publish_action>
                 <input type="hidden" name="post_id" value=post_id />
                 <button type="submit">"Publish"</button>
+            </ActionForm>
+            " "
+            <ActionForm action=delete_action>
+                <input type="hidden" name="post_id" value=post_id />
+                <button type="submit" onclick="return confirm('Delete this draft?')">
+                    "Delete"
+                </button>
             </ActionForm>
         </li>
     }
@@ -563,4 +708,34 @@ fn render_post_article(post: PostResponse, banner: Option<&'static str>) -> AnyV
         </article>
     }
     .into_any()
+}
+
+fn render_delete_form(
+    delete_action: ServerAction<DeletePost>,
+    post_id: i64,
+    confirm_msg: &'static str,
+) -> impl IntoView {
+    view! {
+        <ActionForm action=delete_action>
+            <input type="hidden" name="post_id" value=post_id />
+            <button type="submit" onclick=format!("return confirm('{confirm_msg}')")>
+                "Delete"
+            </button>
+        </ActionForm>
+    }
+}
+
+fn render_delete_result(
+    delete_action: ServerAction<DeletePost>,
+    success_msg: &'static str,
+    success_href: &'static str,
+    success_link_text: &'static str,
+) -> impl IntoView {
+    move || {
+        delete_action.value().get().map(|result| match result {
+            Ok(()) => view! { <p class="success">{success_msg} " " <a href=success_href>{success_link_text}</a></p> }
+            .into_any(),
+            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+        })
+    }
 }

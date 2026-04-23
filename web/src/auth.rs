@@ -301,6 +301,8 @@ pub async fn logout() -> Result<(), ServerFnError> {
             .map_err(|e| ServerFnError::new(e.to_string()))?;
     }
     clear_session_cookie();
+    #[cfg(feature = "ssr")]
+    leptos_axum::redirect("/");
     Ok(())
 }
 

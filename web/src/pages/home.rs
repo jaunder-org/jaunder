@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 
 use crate::pages::signal_read::read_signal;
+use crate::pages::ui::{InlineComposer, PostCard, Topbar};
 use crate::posts::TimelinePostSummary;
 
 #[cfg(target_arch = "wasm32")]
@@ -125,71 +126,107 @@ pub fn HomePage() -> impl IntoView {
     let read_loading_more = move || read_signal!(loading_more);
 
     view! {
-        <section>
-            <h1>"Jaunder"</h1>
-            <p>"A self-hosted social reader."</p>
-            <nav>
-                <a href="/login">"Login"</a>
-                " "
-                <a href="/register">"Register"</a>
-            </nav>
-            {move || {
-                if let Some(err) = read_error() {
-                    return view! { <p class="error">{err}</p> }.into_any();
-                }
-                let Some(mode) = read_timeline_mode() else {
-                    return view! { <p>"Loading timeline..."</p> }.into_any();
-                };
-                let heading = match mode {
-                    TimelineMode::Local => "Local Timeline".to_string(),
-                    TimelineMode::Feed(ref username) => format!("Your Home Feed ({username})"),
-                };
-                let rows = read_timeline_rows();
-                let empty_message = match mode {
-                    TimelineMode::Local => "No posts yet.",
-                    TimelineMode::Feed(_) => "You have no published posts yet.",
-                };
-                if rows.is_empty() {
-                    return view! {
-                        <h2>{heading.clone()}</h2>
-                        <p>{empty_message}</p>
+        {move || {
+            if let Some(err) = read_error() {
+                return view! { <p class="error">{err}</p> }.into_any();
+            }
+            match read_timeline_mode() {
+                None => {
+                    view! {
+                        <Topbar title="Home".to_string() />
+                        <p class="j-loading">"Loading timeline\u{2026}"</p>
                     }
-                        .into_any();
+                        .into_any()
                 }
-
-                view! {
-                    <h2>{heading}</h2>
-                    <ul>{rows.into_iter().map(render_timeline_post_row).collect::<Vec<_>>()}</ul>
-                    {move || {
-                        read_has_more()
-                            .then(|| {
-                                view! {
-                                    <button on:click=on_load_more disabled=read_loading_more>
-                                        {move || {
-                                            if read_loading_more() { "Loading..." } else { "Load more" }
-                                        }}
-                                    </button>
-                                }
-                            })
-                    }}
+                Some(TimelineMode::Feed(username)) => {
+                    let rows = read_timeline_rows();
+                    let is_empty = rows.is_empty();
+                    view! {
+                        <Topbar title="Home".to_string() sub="Your home feed".to_string() />
+                        <InlineComposer username=username />
+                        <div class="j-scroll">
+                            {if is_empty {
+                                view! { <p>"No posts yet."</p> }.into_any()
+                            } else {
+                                rows.into_iter()
+                                    .map(|p| view! { <PostCard post=p /> })
+                                    .collect::<Vec<_>>()
+                                    .into_any()
+                            }}
+                            {move || {
+                                read_has_more()
+                                    .then(|| {
+                                        view! {
+                                            <button on:click=on_load_more disabled=read_loading_more>
+                                                {move || {
+                                                    if read_loading_more() {
+                                                        "Loading\u{2026}"
+                                                    } else {
+                                                        "Load more"
+                                                    }
+                                                }}
+                                            </button>
+                                        }
+                                    })
+                            }}
+                        </div>
+                    }
+                        .into_any()
                 }
-                    .into_any()
-            }}
-        </section>
-    }
-}
-
-fn render_timeline_post_row(post: TimelinePostSummary) -> impl IntoView {
-    let author_href = format!("/~{}/", post.username);
-    view! {
-        <li data-test="timeline-item">
-            <h3>
-                <a href=post.permalink.clone()>{post.title}</a>
-            </h3>
-            <p class="metadata">
-                "By " <a href=author_href>{post.username.clone()}</a> " on " {post.published_at}
-            </p>
-            <div class="content" inner_html=post.rendered_html></div>
-        </li>
+                Some(TimelineMode::Local) => {
+                    let rows = read_timeline_rows();
+                    let is_empty = rows.is_empty();
+                    view! {
+                        <Topbar
+                            title="jaunder.local".to_string()
+                            sub="Read-only \u{00b7} posts originating on this instance".to_string()
+                        >
+                            <a href="/login" class="j-btn">
+                                "Sign in"
+                            </a>
+                            <a href="/register" class="j-btn is-primary">
+                                "Register"
+                            </a>
+                        </Topbar>
+                        <div class="j-hero">
+                            <h1>"One timeline. Every protocol."</h1>
+                            <p>
+                                "Jaunder is a self-hosted social client that reads from "
+                                "ActivityPub, AT Protocol, RSS, Atom, and JSON Feed \u{2014} and "
+                                "publishes back out to the ones you choose. "
+                                "Below: what\u{2019}s been posted from this instance."
+                            </p>
+                        </div>
+                        <div class="j-scroll">
+                            {if is_empty {
+                                view! { <p>"No posts yet."</p> }.into_any()
+                            } else {
+                                rows.into_iter()
+                                    .map(|p| view! { <PostCard post=p /> })
+                                    .collect::<Vec<_>>()
+                                    .into_any()
+                            }}
+                            {move || {
+                                read_has_more()
+                                    .then(|| {
+                                        view! {
+                                            <button on:click=on_load_more disabled=read_loading_more>
+                                                {move || {
+                                                    if read_loading_more() {
+                                                        "Loading\u{2026}"
+                                                    } else {
+                                                        "Load more"
+                                                    }
+                                                }}
+                                            </button>
+                                        }
+                                    })
+                            }}
+                        </div>
+                    }
+                        .into_any()
+                }
+            }
+        }}
     }
 }
