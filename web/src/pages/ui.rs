@@ -1,6 +1,7 @@
 use crate::auth::current_user;
 use crate::posts::TimelinePostSummary;
 use leptos::prelude::*;
+use leptos_router::hooks::use_location;
 
 // ─── Icons ────────────────────────────────────────────────────
 
@@ -244,9 +245,11 @@ fn SidebarSource(proto: &'static str, name: &'static str, sub: &'static str) -> 
 pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     let active_key = active.unwrap_or_default();
 
-    // Fetch the current user. `current_user()` returns `Ok(Some(username))` when
-    // logged in, `Ok(None)` when not, and `Err(_)` on failure.
-    let user = Resource::new(|| (), |_| current_user());
+    // Fetch the current user. Key the resource off the current pathname so it
+    // re-fetches after client-side navigations (e.g. login → home, logout → home),
+    // keeping the sidebar footer in sync with auth state without a full page reload.
+    let location = use_location();
+    let user = Resource::new(move || location.pathname.get(), |_| current_user());
 
     // (key, label, icon_path, href)
     let nav_items: &[(&str, &str, &str, Option<&'static str>)] = &[
@@ -309,9 +312,12 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
                             Ok(Some(username)) => {
                                 view! {
                                     <Avatar name=username.clone() size=28 />
-                                    <div style="font-size:13px">
+                                    <div style="font-size:13px;flex:1;min-width:0">
                                         <div style="font-weight:500">{username}</div>
                                     </div>
+                                    <a href="/logout" style="font-size:11px;color:var(--muted)">
+                                        "Sign out"
+                                    </a>
                                 }
                                     .into_any()
                             }
