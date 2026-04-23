@@ -32,15 +32,11 @@ test("email verification flow completes successfully", async ({
 
   // Visit the verification link
   await goto(page, `/verify-email?token=${token}`);
-  await expect(page.locator('p:has-text("verified")')).toBeVisible({
-    timeout: 10_000,
-  });
+  await expect(page.locator('p:has-text("verified")')).toBeVisible();
 
   // Confirm email is shown as verified on the profile page
   await goto(page, "/profile/email");
-  await expect(page.locator("p")).toContainText("verified", {
-    timeout: 10_000,
-  });
+  await expect(page.locator("p")).toContainText("verified");
 });
 
 // M3.10.12: Invalid token shows an error.
