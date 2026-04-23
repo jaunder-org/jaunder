@@ -52,9 +52,7 @@ test("password reset flow completes successfully", async ({
   await click(page, 'button[type="submit"]');
   await waitForSelector(page, "a[href='/logout']", { timeout: 10_000 });
   await waitForHydration(page);
-  await expect(page.locator(".j-topbar h1")).toHaveText("Home", {
-    timeout: 10_000,
-  });
+  await expect(page.locator(".j-topbar h1")).toHaveText("Home");
 });
 
 // M3.11.14: visiting /reset-password with an invalid token shows an error.

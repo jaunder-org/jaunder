@@ -291,9 +291,6 @@ test("per-user timeline lists published posts with pagination", async ({
   await expect(page.locator("h1")).toContainText(`Posts by ${username}`);
   await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
     TIMELINE_PAGE_SIZE,
-    {
-      timeout: 10_000,
-    },
   );
   await expect(
     page.locator('[data-test="timeline-item"]').first(),
@@ -345,14 +342,9 @@ test("home page shows local timeline for unauthenticated users", async ({
   const guestPage = await guestContext.newPage();
   await goto(guestPage, "/", { timeout: firstNavigationTimeoutMs });
 
-  await expect(guestPage.locator(".j-topbar h1")).toHaveText("jaunder.local", {
-    timeout: 10_000,
-  });
+  await expect(guestPage.locator(".j-topbar h1")).toHaveText("jaunder.local");
   await expect(guestPage.locator("article.j-post")).toHaveCount(
     TIMELINE_PAGE_SIZE,
-    {
-      timeout: 10_000,
-    },
   );
 
   await click(guestPage, 'button:has-text("Load more")');
@@ -398,12 +390,8 @@ test("home page shows authenticated home feed with pagination", async ({
 
   await goto(page, "/", { timeout: firstNavigationTimeoutMs });
 
-  await expect(page.locator(".j-topbar h1")).toHaveText("Home", {
-    timeout: 10_000,
-  });
-  await expect(page.locator("article.j-post")).toHaveCount(TIMELINE_PAGE_SIZE, {
-    timeout: 10_000,
-  });
+  await expect(page.locator(".j-topbar h1")).toHaveText("Home");
+  await expect(page.locator("article.j-post")).toHaveCount(TIMELINE_PAGE_SIZE);
   await expect(page.locator("article.j-post").first()).toContainText(
     `Home Feed Mine ${HOME_FEED_SELF_COUNT - 1}`,
   );
