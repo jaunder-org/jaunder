@@ -47,11 +47,8 @@ test("login with valid credentials succeeds", async ({ page }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
   const perf = createPerfProbe(testInfo, "auth_login_success");
 
-  perf.mark("goto_login_start");
   await goto(page, "/login");
-  perf.mark("goto_login_done");
   await waitForHydration(page);
-  perf.mark("hydration_done");
 
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "testpassword123");
@@ -64,7 +61,6 @@ test("login with valid credentials succeeds", async ({ page }, testInfo) => {
   await waitForSelector(page, "a[href='/logout']");
   perf.mark("logout_link_visible");
   await waitForHydration(page);
-  perf.mark("post_login_hydration_done");
 
   await expect(page.locator(".j-sb-foot")).toContainText("testlogin");
   await expect(page.locator(".j-sidebar")).toBeVisible();

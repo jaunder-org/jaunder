@@ -300,21 +300,16 @@ test("per-user timeline lists published posts with pagination", async ({
     10_000,
   );
 
-  perf.mark("register_start");
   const username = await register(page, firstNavigationTimeoutMs);
-  perf.mark("register_done");
 
-  perf.mark("seed_posts_start");
-  for (let i = 0; i < TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT; i += 1) {
-    await createPublishedPostViaApi(page, `Timeline Post ${i}`);
-  }
-  perf.mark("seed_posts_done");
+  await perf.timed("seed_posts", async () => {
+    for (let i = 0; i < TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT; i += 1) {
+      await createPublishedPostViaApi(page, `Timeline Post ${i}`);
+    }
+  });
 
-  perf.mark("goto_timeline_start");
   await goto(page, `/~${username}`);
-  perf.mark("goto_timeline_done");
   await waitForHydration(page, firstNavigationTimeoutMs);
-  perf.mark("hydration_done");
 
   await expect(page.locator("h1")).toContainText(`Posts by ${username}`);
   await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
@@ -353,31 +348,28 @@ test("home page shows local timeline for unauthenticated users", async ({
     10_000,
   );
 
-  perf.mark("seed_author_one_start");
-  await register(page, firstNavigationTimeoutMs);
-  for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
-    await createPublishedPostViaApi(page, `Local Author One ${i}`);
-  }
-  perf.mark("seed_author_one_done");
+  await perf.timed("seed_author_one", async () => {
+    await register(page, firstNavigationTimeoutMs);
+    for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
+      await createPublishedPostViaApi(page, `Local Author One ${i}`);
+    }
+  });
 
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
-  perf.mark("seed_author_two_start");
-  await register(secondPage, firstNavigationTimeoutMs);
-  for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
-    await createPublishedPostViaApi(secondPage, `Local Author Two ${i}`);
-  }
-  perf.mark("seed_author_two_done");
+  await perf.timed("seed_author_two", async () => {
+    await register(secondPage, firstNavigationTimeoutMs);
+    for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
+      await createPublishedPostViaApi(secondPage, `Local Author Two ${i}`);
+    }
+  });
 
   const guestContext = await browser.newContext();
   const guestPage = await guestContext.newPage();
-  perf.mark("goto_home_start");
   await goto(guestPage, "/", {
     timeout: firstNavigationTimeoutMs,
   });
-  perf.mark("goto_home_done");
   await waitForHydration(guestPage, firstNavigationTimeoutMs);
-  perf.mark("hydration_done");
 
   await expect(guestPage.locator(".j-topbar h1")).toHaveText("jaunder.local", {
     timeout: 10_000,
@@ -414,29 +406,26 @@ test("home page shows authenticated home feed with pagination", async ({
     10_000,
   );
 
-  perf.mark("seed_self_start");
-  await register(page, firstNavigationTimeoutMs);
-  for (let i = 0; i < HOME_FEED_SELF_COUNT; i += 1) {
-    await createPublishedPostViaApi(page, `Home Feed Mine ${i}`);
-  }
-  perf.mark("seed_self_done");
+  await perf.timed("seed_self", async () => {
+    await register(page, firstNavigationTimeoutMs);
+    for (let i = 0; i < HOME_FEED_SELF_COUNT; i += 1) {
+      await createPublishedPostViaApi(page, `Home Feed Mine ${i}`);
+    }
+  });
 
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
-  perf.mark("seed_other_start");
-  await register(secondPage, firstNavigationTimeoutMs);
-  for (let i = 0; i < HOME_FEED_OTHER_COUNT; i += 1) {
-    await createPublishedPostViaApi(secondPage, `Home Feed Other ${i}`);
-  }
-  perf.mark("seed_other_done");
+  await perf.timed("seed_other", async () => {
+    await register(secondPage, firstNavigationTimeoutMs);
+    for (let i = 0; i < HOME_FEED_OTHER_COUNT; i += 1) {
+      await createPublishedPostViaApi(secondPage, `Home Feed Other ${i}`);
+    }
+  });
 
-  perf.mark("goto_home_start");
   await goto(page, "/", {
     timeout: firstNavigationTimeoutMs,
   });
-  perf.mark("goto_home_done");
   await waitForHydration(page, firstNavigationTimeoutMs);
-  perf.mark("hydration_done");
 
   await expect(page.locator(".j-topbar h1")).toHaveText("Home", {
     timeout: 10_000,

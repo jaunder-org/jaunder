@@ -125,32 +125,34 @@ export async function register(
 ): Promise<string> {
   const username = `user${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
 
-  await goto(page, "/register", {
-    timeout: firstNavigationTimeoutMs,
-  });
-  await waitForHydration(page, firstNavigationTimeoutMs);
-  await withTimedAction(page, "ui.fill.username", () =>
-    page.fill('input[name="username"]', username),
-  );
-  await withTimedAction(page, "ui.fill.password", () =>
-    page.fill('input[name="password"]', "testpassword123"),
-  );
-  await click(page, 'button[type="submit"]');
+  await withTimedAction(page, "flow.register", async () => {
+    await goto(page, "/register", {
+      timeout: firstNavigationTimeoutMs,
+    });
+    await waitForHydration(page, firstNavigationTimeoutMs);
+    await withTimedAction(page, "ui.fill.username", () =>
+      page.fill('input[name="username"]', username),
+    );
+    await withTimedAction(page, "ui.fill.password", () =>
+      page.fill('input[name="password"]', "testpassword123"),
+    );
+    await click(page, 'button[type="submit"]');
 
-  // Race success marker vs explicit server error so we fail fast on
-  // misconfiguration rather than burning the full test timeout.
-  const outcome = await Promise.race([
-    page
-      .waitForSelector("a[href='/logout']", { timeout: 10_000 })
-      .then(() => "ok"),
-    page.waitForSelector(".error", { timeout: 10_000 }).then(() => "error"),
-  ]);
-  if (outcome === "error") {
-    const errorText = (
-      await page.locator(".error").first().textContent()
-    )?.trim();
-    throw new Error(`registration failed: ${errorText ?? "unknown error"}`);
-  }
+    // Race success marker vs explicit server error so we fail fast on
+    // misconfiguration rather than burning the full test timeout.
+    const outcome = await Promise.race([
+      page
+        .waitForSelector("a[href='/logout']", { timeout: 10_000 })
+        .then(() => "ok"),
+      page.waitForSelector(".error", { timeout: 10_000 }).then(() => "error"),
+    ]);
+    if (outcome === "error") {
+      const errorText = (
+        await page.locator(".error").first().textContent()
+      )?.trim();
+      throw new Error(`registration failed: ${errorText ?? "unknown error"}`);
+    }
+  });
 
   return username;
 }

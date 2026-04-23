@@ -27,6 +27,14 @@ export function createPerfProbe(testInfo: TestInfo, flow: string) {
     mark(name: string) {
       marks.push({ name, tsMs: Date.now() });
     },
+    async timed<T>(name: string, fn: () => Promise<T>): Promise<T> {
+      this.mark(`${name}_start`);
+      try {
+        return await fn();
+      } finally {
+        this.mark(`${name}_done`);
+      }
+    },
     async log(extra: Record<string, unknown> = {}) {
       const sorted = [...marks].sort((a, b) => a.tsMs - b.tsMs);
       const phases = sorted.slice(1).map((entry, index) => {
