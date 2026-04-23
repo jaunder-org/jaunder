@@ -105,7 +105,7 @@ test("authenticated user can create a post through the UI", async ({
   await goto(page, "http://localhost:3000/posts/new");
   await waitForHydration(page);
 
-  await expect(page.locator("h1")).toHaveText("New Post");
+  await expect(page.locator(".j-topbar h1")).toHaveText("New post");
   await page.fill('input[name="title"]', "Playwright Post");
   await page.fill('textarea[name="body"]', "**browser**");
   await page.selectOption('select[name="format"]', "markdown");
