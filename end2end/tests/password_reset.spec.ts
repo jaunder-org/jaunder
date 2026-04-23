@@ -18,8 +18,6 @@ test("password reset flow completes successfully", async ({
   await click(page, 'button[type="submit"]');
 
   // Page should show a neutral confirmation (not confirm whether user exists).
-  // Wait for this element directly rather than using networkidle, which fires
-  // before the ActionForm AJAX response arrives under load in Firefox.
   await expect(page.locator("p")).toContainText(/check|sent|email/i, {
     timeout: 10_000,
   });
@@ -35,11 +33,8 @@ test("password reset flow completes successfully", async ({
   await goto(page, `/reset-password?token=${token}`);
   await page.fill('input[name="new_password"]', "resetpassword789");
   await click(page, 'button[type="submit"]');
-  // Wait for the Leptos Router redirect to /login that fires on successful reset.
-  // This ensures the server function has completed before we test the old password.
-  // Using networkidle here races with Firefox: it fires before the ActionForm
-  // AJAX response arrives, causing page.goto("/login") to cancel the in-flight
-  // request and the password change never persists.
+  // Wait for the router redirect to /login — ensures the password change has
+  // persisted before testing the old credential below.
   await page.waitForURL("**/login");
 
   // Login with the old password should fail
@@ -47,9 +42,6 @@ test("password reset flow completes successfully", async ({
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "testpassword123");
   await click(page, 'button[type="submit"]');
-  // Use a generous timeout here: Firefox's networkidle may fire before the
-  // ActionForm fetch response arrives under VM load, so we poll until the
-  // error element appears rather than relying on networkidle as a signal.
   await expect(page.locator(".error")).toBeVisible({ timeout: 10_000 });
 
   // Login with new password should succeed from the same hydrated login page.
@@ -73,7 +65,6 @@ test("visiting reset-password with invalid token shows error", async ({
   await goto(page, "/reset-password?token=totally_invalid_token");
   await page.fill('input[name="new_password"]', "somepassword123");
   await click(page, 'button[type="submit"]');
-  // Wait for the error element directly rather than networkidle.
   await waitForSelector(page, ".error");
   await expect(page.locator(".error")).toBeVisible();
 });
@@ -87,7 +78,6 @@ test("forgot-password for user without verified email shows contact operator err
   // "testnoemail" user should exist but have no verified email
   await page.fill('input[name="username"]', "testnoemail");
   await click(page, 'button[type="submit"]');
-  // Wait for the error element directly rather than networkidle.
   await waitForSelector(page, ".error");
   await expect(page.locator(".error")).toBeVisible();
 });
