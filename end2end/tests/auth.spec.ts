@@ -26,8 +26,6 @@ test("register with open policy succeeds", async ({ page }, testInfo) => {
   await page.fill('input[name="username"]', username);
   await page.fill('input[name="password"]', "newpassword123");
   await click(page, 'button[type="submit"]');
-  // Wait for the success indicator rather than networkidle, which fires
-  // prematurely in Firefox for location.replace() navigations.
   await waitForSelector(page, "a[href='/logout']");
 
   await expect(page.locator(".error")).not.toBeVisible();
@@ -73,8 +71,6 @@ test("login with wrong password shows error", async ({ page }, testInfo) => {
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "wrongpassword!");
   await click(page, 'button[type="submit"]');
-  // Wait for the error element directly — networkidle fires before the
-  // ActionForm AJAX response arrives under load in Firefox.
   await waitForSelector(page, ".error");
 
   await expect(page.locator(".error")).toBeVisible();

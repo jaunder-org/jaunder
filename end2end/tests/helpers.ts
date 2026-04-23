@@ -115,8 +115,7 @@ export async function login(
  * browsers.
  *
  * After submission the helper races between `a[href='/logout']` (success) and
- * `.error` (failure) rather than using `waitForLoadState("networkidle")`,
- * which fires prematurely in Firefox.
+ * `.error` (failure) for fast failure detection.
  */
 export async function register(
   page: Page,
