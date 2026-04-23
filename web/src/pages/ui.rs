@@ -1,5 +1,5 @@
 use crate::auth::current_user;
-use crate::posts::TimelinePostSummary;
+use crate::posts::{CreatePost, TimelinePostSummary};
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 
@@ -168,28 +168,67 @@ pub fn PostCard(post: TimelinePostSummary) -> impl IntoView {
 
 // ─── 3.7 InlineComposer ───────────────────────────────────────
 
-/// Compact draft row at the top of the timeline.
-/// Static placeholder — live data binding is wired up in a later step.
+/// Compact inline compose row at the top of the authenticated timeline.
+/// Submits a new post directly without navigating away.
+/// The post title is derived from the first 100 characters of the body.
 #[component]
-pub fn InlineComposer() -> impl IntoView {
+pub fn InlineComposer(username: String) -> impl IntoView {
+    let create_action = ServerAction::<CreatePost>::new();
+    let body = RwSignal::new(String::new());
+
+    // Clear the textarea after a successful post.
+    #[cfg(target_arch = "wasm32")]
+    Effect::new(move |_| {
+        if let Some(Ok(_)) = create_action.value().get() {
+            body.set(String::new());
+        }
+    });
+
+    let char_count = move || body.get().len();
+
     view! {
         <div class="j-composer">
-            <div class="j-composer-row">
-                <Avatar name="".to_string() size=36 />
-                <div class="j-composer-body">
-                    <div></div>
-                    <div class="j-composer-toolbar">
-                        <span class="j-tag">
-                            <Icon path=Icons::PLUS size=12 />
-                            "Media"
-                        </span>
-                        <span class="j-tag is-accent">
-                            "Cross-posting " <Icon path="M2 7l5 5 5-5" size=10 />
-                        </span>
-                        <button class="j-btn is-primary">"Publish"</button>
+            <ActionForm action=create_action>
+                <div class="j-composer-row">
+                    <Avatar name=username.clone() size=36 />
+                    <div class="j-composer-body">
+                        <textarea
+                            name="body"
+                            placeholder="What's on your mind?"
+                            prop:value=body
+                            on:input=move |ev| body.set(event_target_value(&ev))
+                        ></textarea>
+                        <input
+                            type="hidden"
+                            name="title"
+                            prop:value=move || { body.get().chars().take(100).collect::<String>() }
+                        />
+                        <input type="hidden" name="format" value="markdown" />
+                        <input type="hidden" name="slug_override" value="" />
+                        <div class="j-composer-toolbar">
+                            <span class="j-count">{char_count}" / 300"</span>
+                            <button
+                                class="j-btn is-primary"
+                                type="submit"
+                                name="publish"
+                                value="true"
+                                disabled=move || body.get().trim().is_empty()
+                            >
+                                "Publish"
+                            </button>
+                        </div>
                     </div>
                 </div>
-            </div>
+            </ActionForm>
+            {move || {
+                create_action
+                    .value()
+                    .get()
+                    .map(|result| match result {
+                        Ok(_) => view! { <p class="success">"Post published!"</p> }.into_any(),
+                        Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                    })
+            }}
         </div>
     }
 }

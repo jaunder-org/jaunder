@@ -437,10 +437,10 @@ test("home page shows local timeline for unauthenticated users", async ({
   await waitForHydration(guestPage, firstNavigationTimeoutMs);
   perf.mark("hydration_done");
 
-  await expect(guestPage.locator("h2")).toHaveText("Local Timeline", {
+  await expect(guestPage.locator(".j-topbar h1")).toHaveText("jaunder.local", {
     timeout: 10_000,
   });
-  await expect(guestPage.locator('[data-test="timeline-item"]')).toHaveCount(
+  await expect(guestPage.locator("article.j-post")).toHaveCount(
     TIMELINE_PAGE_SIZE,
     {
       timeout: 10_000,
@@ -450,12 +450,9 @@ test("home page shows local timeline for unauthenticated users", async ({
   await click(guestPage, 'button:has-text("Load more")');
   perf.mark("load_more_clicked");
   await expect
-    .poll(
-      async () => guestPage.locator('[data-test="timeline-item"]').count(),
-      {
-        timeout: 10_000,
-      },
-    )
+    .poll(async () => guestPage.locator("article.j-post").count(), {
+      timeout: 10_000,
+    })
     .toBeGreaterThan(TIMELINE_PAGE_SIZE);
   perf.mark("assertions_complete");
   await perf.log();
@@ -499,23 +496,20 @@ test("home page shows authenticated home feed with pagination", async ({
   await waitForHydration(page, firstNavigationTimeoutMs);
   perf.mark("hydration_done");
 
-  await expect(page.locator("h2")).toContainText("Your Home Feed", {
+  await expect(page.locator(".j-topbar h1")).toHaveText("Home", {
     timeout: 10_000,
   });
-  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
-    TIMELINE_PAGE_SIZE,
-    {
-      timeout: 10_000,
-    },
+  await expect(page.locator("article.j-post")).toHaveCount(TIMELINE_PAGE_SIZE, {
+    timeout: 10_000,
+  });
+  await expect(page.locator("article.j-post").first()).toContainText(
+    `Home Feed Mine ${HOME_FEED_SELF_COUNT - 1}`,
   );
-  await expect(
-    page.locator('[data-test="timeline-item"]').first(),
-  ).toContainText(`Home Feed Mine ${HOME_FEED_SELF_COUNT - 1}`);
   await expect(page.locator("body")).not.toContainText("Home Feed Other");
 
   await click(page, 'button:has-text("Load more")');
   perf.mark("load_more_clicked");
-  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
+  await expect(page.locator("article.j-post")).toHaveCount(
     HOME_FEED_SELF_COUNT,
     {
       timeout: 10_000,

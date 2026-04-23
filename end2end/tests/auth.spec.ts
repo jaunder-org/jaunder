@@ -112,7 +112,8 @@ test("sidebar reverts to sign-in after logout", async ({ page }, testInfo) => {
 
   // Click the sidebar "Sign out" link and confirm the sidebar switches back.
   await page.click("a[href='/logout']");
-  await page.waitForSelector(".j-sb-foot");
+  // Logout is a server-side 302 redirect (not location.replace), so waitForURL is reliable.
+  await page.waitForURL("http://localhost:3000/", { timeout: 10_000 });
   await waitForHydration(page);
   await expect(page.locator(".j-sb-foot")).not.toContainText("testlogin");
   await expect(page.locator(".j-sb-foot")).toContainText("Sign in");
