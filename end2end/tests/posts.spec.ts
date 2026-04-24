@@ -458,6 +458,30 @@ test("authenticated user can delete a published post", async ({
   await expect(page.locator("body")).not.toContainText("Post To Delete");
 });
 
+test("inline composer: published post appears in timeline without page reload", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  // Home page must already show the feed with the composer.
+  await goto(page, "/");
+  await waitForSelector(page, ".j-composer");
+
+  const initialCount = await page.locator("article.j-post").count();
+
+  await page.fill('.j-composer textarea[name="body"]', "Live refresh test");
+  await click(page, '.j-composer button[name="publish"][value="true"]');
+
+  // The new post should appear without a page reload.
+  await expect(page.locator("article.j-post")).toHaveCount(initialCount + 1, {
+    timeout: hydrationHeavyTimeoutMs(testInfo, 8_000),
+  });
+});
+
 test("authenticated user can delete a draft from the drafts page", async ({
   page,
 }, testInfo) => {
