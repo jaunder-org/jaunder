@@ -125,8 +125,8 @@ pub fn Topbar(
 
 // ─── 3.6 PostCard ─────────────────────────────────────────────
 
-/// Formats an ISO-8601 timestamp into a short relative display string.
-/// Returns a trimmed date portion as a fallback for older posts.
+/// Formats an RFC-3339 timestamp as `"YYYY-MM-DD HH:MM"`.
+/// Falls back to the raw string if the input contains no `T` separator.
 pub(crate) fn format_post_time(ts: &str) -> String {
     // RFC-3339: "YYYY-MM-DDTHH:MM:SS+HH:MM" or "YYYY-MM-DDTHH:MM:SSZ"
     // Return "YYYY-MM-DD HH:MM"; fall back to the raw string if malformed.
@@ -449,5 +449,10 @@ mod tests {
             format_post_time("2026-04-23T15:45:00-05:00"),
             "2026-04-23 15:45"
         );
+    }
+
+    #[test]
+    fn format_post_time_handles_utc_z_suffix() {
+        assert_eq!(format_post_time("2026-04-23T10:30:00Z"), "2026-04-23 10:30");
     }
 }
