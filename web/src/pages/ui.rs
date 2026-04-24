@@ -173,18 +173,34 @@ pub fn PostCard(post: TimelinePostSummary) -> impl IntoView {
 /// Compact inline compose row at the top of the authenticated timeline.
 /// Submits a new post directly without navigating away.
 /// The post title is derived from the first 100 characters of the body.
+/// `on_publish` is incremented after each successful publish so the parent
+/// can re-fetch the timeline.
 #[component]
-pub fn InlineComposer(username: String) -> impl IntoView {
+pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {
     let create_action = ServerAction::<CreatePost>::new();
     let body = RwSignal::new(String::new());
 
-    // Clear the textarea after a successful post.
+    // Clear the textarea after any successful action.
     #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(Ok(_)) = create_action.value().get() {
             body.set(String::new());
         }
     });
+
+    // Notify the parent to refresh the timeline after a successful publish.
+    #[cfg(target_arch = "wasm32")]
+    Effect::new(move |_| {
+        if let Some(Ok(ref created)) = create_action.value().get() {
+            if created.published_at.is_some() {
+                on_publish.update(|v| *v += 1);
+            }
+        }
+    });
+
+    // Suppress unused-variable warning in SSR builds.
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = on_publish;
 
     let char_count = move || body.get().len();
 
