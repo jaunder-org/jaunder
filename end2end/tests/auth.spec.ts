@@ -119,6 +119,7 @@ test("sidebar reverts to signed-out state after logout", async ({
 test("sidebar shows only Home nav link when not logged in", async ({
   page,
 }, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
   await goto(page, "/", {
     timeout: hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   });
@@ -138,6 +139,7 @@ test("sidebar shows only Home nav link when not logged in", async ({
 test("sidebar footer shows Sign out link when logged in", async ({
   page,
 }, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
   await register(
     page,
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
