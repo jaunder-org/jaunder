@@ -1,4 +1,9 @@
-import { test, expect, hydrationHeavyTimeoutMs } from "./fixtures";
+import {
+  test,
+  expect,
+  hydrationHeavyTimeoutMs,
+  hydrationHeavyFirstNavigationTimeoutMs,
+} from "./fixtures";
 import { createPerfProbe } from "./perf";
 import {
   BASE_URL,
@@ -7,6 +12,7 @@ import {
   waitForSelector,
   waitForHydration,
   login,
+  register,
 } from "./helpers";
 
 test("register page shows form", async ({ page }, testInfo) => {
@@ -87,10 +93,14 @@ test("logout page logs out", async ({ page }, testInfo) => {
   // because logout is a server-side 302 redirect (not location.replace).
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
   await waitForHydration(page);
-  await expect(page.locator(".j-sb-foot")).toContainText("Sign in");
+  // Footer shows neither username nor sign-in link after logout.
+  await expect(page.locator(".j-sb-foot")).not.toContainText("testlogin");
+  await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
 });
 
-test("sidebar reverts to sign-in after logout", async ({ page }, testInfo) => {
+test("sidebar reverts to signed-out state after logout", async ({
+  page,
+}, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
   await login(page, "testlogin", "testpassword123");
   // a[href='/logout'] only renders when auth Suspense resolves, confirming testlogin is shown.
@@ -102,5 +112,43 @@ test("sidebar reverts to sign-in after logout", async ({ page }, testInfo) => {
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
   await waitForHydration(page);
   await expect(page.locator(".j-sb-foot")).not.toContainText("testlogin");
-  await expect(page.locator(".j-sb-foot")).toContainText("Sign in");
+  // Footer no longer shows a Sign-in link — it renders nothing when unauthenticated.
+  await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
+});
+
+test("sidebar shows only Home nav link when not logged in", async ({
+  page,
+}, testInfo) => {
+  await goto(page, "/", {
+    timeout: hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  });
+
+  // Wait for the nav Suspense to resolve.
+  await waitForSelector(page, ".j-nav");
+
+  // Only one <a> inside .j-nav — the Home link.
+  const navAnchors = page.locator(".j-nav a");
+  await expect(navAnchors).toHaveCount(1);
+  await expect(navAnchors.first()).toHaveAttribute("href", "/");
+
+  // Sidebar footer must not contain a "Sign in" link.
+  await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
+});
+
+test("sidebar footer shows Sign out link when logged in", async ({
+  page,
+}, testInfo) => {
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  await waitForSelector(page, ".j-nav");
+  // Still only Home in the nav (others have no hrefs yet).
+  await expect(page.locator(".j-nav a")).toHaveCount(1);
+
+  // Footer has Sign out.
+  await expect(page.locator("a[href='/logout']")).toBeVisible();
+  // Footer does NOT have Sign in.
+  await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
 });
