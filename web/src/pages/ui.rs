@@ -127,15 +127,17 @@ pub fn Topbar(
 
 /// Formats an ISO-8601 timestamp into a short relative display string.
 /// Returns a trimmed date portion as a fallback for older posts.
-fn format_post_time(published_at: &str) -> String {
-    // The timestamp is an RFC-3339 string like "2026-04-22T10:30:00+00:00".
-    // For now, return just the date portion (YYYY-MM-DD) as a readable label.
-    // A full relative-time implementation can replace this in a later step.
-    published_at
-        .split('T')
-        .next()
-        .unwrap_or(published_at)
-        .to_owned()
+pub(crate) fn format_post_time(ts: &str) -> String {
+    // RFC-3339: "YYYY-MM-DDTHH:MM:SS+HH:MM" or "YYYY-MM-DDTHH:MM:SSZ"
+    // Return "YYYY-MM-DD HH:MM"; fall back to the raw string if malformed.
+    if let Some(t_pos) = ts.find('T') {
+        let date = &ts[..t_pos];
+        let rest = &ts[t_pos + 1..];
+        let time = if rest.len() >= 5 { &rest[..5] } else { rest };
+        format!("{date} {time}")
+    } else {
+        ts.to_owned()
+    }
 }
 
 #[component]
@@ -380,7 +382,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::avatar_parts;
+    use super::{avatar_parts, format_post_time};
 
     #[test]
     fn avatar_parts_single_word() {
@@ -425,5 +427,27 @@ mod tests {
         let (_, h1) = avatar_parts("Alice");
         let (_, h2) = avatar_parts("Bob");
         assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn format_post_time_includes_time_portion() {
+        assert_eq!(
+            format_post_time("2026-04-23T10:30:00+00:00"),
+            "2026-04-23 10:30"
+        );
+    }
+
+    #[test]
+    fn format_post_time_handles_date_only_input() {
+        // Input with no 'T' separator — return as-is.
+        assert_eq!(format_post_time("2026-04-23"), "2026-04-23");
+    }
+
+    #[test]
+    fn format_post_time_handles_negative_offset() {
+        assert_eq!(
+            format_post_time("2026-04-23T15:45:00-05:00"),
+            "2026-04-23 15:45"
+        );
     }
 }
