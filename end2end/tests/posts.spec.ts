@@ -475,6 +475,7 @@ test("inline composer: published post appears in timeline without page reload", 
 
   await page.fill('.j-composer textarea[name="body"]', "Live refresh test");
   await click(page, '.j-composer button[name="publish"][value="true"]');
+  await waitForSelector(page, ".j-composer p.success");
 
   // The new post should appear without a page reload.
   await expect(page.locator("article.j-post")).toHaveCount(initialCount + 1, {
