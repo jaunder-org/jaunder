@@ -286,21 +286,28 @@ fn SidebarSource(proto: &'static str, name: &'static str, sub: &'static str) -> 
 pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     let active_key = active.unwrap_or_default();
 
-    // Fetch the current user. Key the resource off the current pathname so it
-    // re-fetches after client-side navigations (e.g. login → home, logout → home),
-    // keeping the sidebar footer in sync with auth state without a full page reload.
     let location = use_location();
     let user = Resource::new(move || location.pathname.get(), |_| current_user());
 
-    // (key, label, icon_path, href)
-    let nav_items: &[(&str, &str, &str, Option<&'static str>)] = &[
-        ("home", "Home", Icons::HOME, Some("/")),
-        ("local", "Local", Icons::LOCAL, None),
-        ("federated", "Federated", Icons::FED, None),
-        ("replies", "Replies", Icons::REPLY, None),
-        ("bookmarks", "Bookmarks", Icons::BOOKMARK, None),
-        ("settings", "Settings", Icons::COG, None),
+    // (key, label, icon_path, href, auth_required)
+    const NAV_ITEMS: &[(&str, &str, &str, Option<&'static str>, bool)] = &[
+        ("home", "Home", Icons::HOME, Some("/"), false),
+        ("local", "Local", Icons::LOCAL, None, true),
+        ("federated", "Federated", Icons::FED, None, true),
+        ("replies", "Replies", Icons::REPLY, None, true),
+        ("bookmarks", "Bookmarks", Icons::BOOKMARK, None, true),
+        ("settings", "Settings", Icons::COG, None, true),
     ];
+
+    // Items shown when unauthenticated: has a real href and no auth required.
+    let public_nav: Vec<_> = NAV_ITEMS
+        .iter()
+        .filter(|&&(_, _, _, href, auth_required)| href.is_some() && !auth_required)
+        .copied()
+        .collect();
+
+    // Clone active_key for the fallback closure; the original moves into the Suspend closure.
+    let active_key_fallback = active_key.clone();
 
     view! {
         <aside class="j-sidebar">
@@ -313,41 +320,68 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
                 <span>"Search"</span>
                 <span class="j-kbd">"⌘K"</span>
             </div>
-            <nav class="j-nav">
-                {nav_items
-                    .iter()
-                    .map(|&(key, label, icon_path, href)| {
-                        let is_active = key == active_key.as_str();
+            // Nav: filtered by auth state after Suspense resolves.
+            <Suspense fallback=move || {
+                view! {
+                    <nav class="j-nav">
+                        {public_nav
+                            .iter()
+                            .map(|&(key, label, icon_path, href, _)| {
+                                let is_active = key == active_key_fallback.as_str();
+                                view! {
+                                    <SidebarNavItem
+                                        label=label
+                                        icon_path=icon_path
+                                        active=is_active
+                                        href=href
+                                    />
+                                }
+                            })
+                            .collect::<Vec<_>>()}
+                    </nav>
+                }
+            }>
+                {move || {
+                    let active_key = active_key.clone();
+                    Suspend::new(async move {
+                        let is_authed = matches!(user.await, Ok(Some(_)));
                         view! {
-                            <SidebarNavItem
-                                label=label
-                                icon_path=icon_path
-                                active=is_active
-                                href=href
-                            />
+                            <nav class="j-nav">
+                                {NAV_ITEMS
+                                    .iter()
+                                    .filter(|&&(_, _, _, href, auth_required)| {
+                                        href.is_some() && (!auth_required || is_authed)
+                                    })
+                                    .map(|&(key, label, icon_path, href, _)| {
+                                        let is_active = key == active_key.as_str();
+                                        view! {
+                                            <SidebarNavItem
+                                                label=label
+                                                icon_path=icon_path
+                                                active=is_active
+                                                href=href
+                                            />
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()}
+                            </nav>
                         }
                     })
-                    .collect::<Vec<_>>()}
-            </nav>
+                }}
+            </Suspense>
             <div>
                 <div class="j-sb-head">
                     <span>"Sources"</span>
                     <span class="j-sb-add">"+"</span>
                 </div>
-                // Static placeholder sources — replaced with real data in a later step.
                 <SidebarSource proto="atproto" name="Bluesky" sub="mara.bsky.social" />
                 <SidebarSource proto="activitypub" name="Mastodon" sub="@mara@hachyderm.io" />
                 <SidebarSource proto="rss" name="Ivy Chen" sub="weeknotes" />
                 <SidebarSource proto="jsonfeed" name="Manton" sub="manton.org" />
             </div>
+            // Footer: avatar+sign-out when authed; nothing when not.
             <div class="j-sb-foot">
-                <Suspense fallback=|| {
-                    view! {
-                        <a href="/login" class="j-btn is-primary" style="width:100%">
-                            "Sign in"
-                        </a>
-                    }
-                }>
+                <Suspense fallback=|| ()>
                     {move || Suspend::new(async move {
                         match user.await {
                             Ok(Some(username)) => {
@@ -362,14 +396,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
                                 }
                                     .into_any()
                             }
-                            _ => {
-                                view! {
-                                    <a href="/login" class="j-btn is-primary" style="width:100%">
-                                        "Sign in"
-                                    </a>
-                                }
-                                    .into_any()
-                            }
+                            _ => ().into_any(),
                         }
                     })}
                 </Suspense>
