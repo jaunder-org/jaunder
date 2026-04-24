@@ -2,7 +2,7 @@ use crate::{
     auth::current_user,
     pages::{
         signal_read::read_signal,
-        ui::{Avatar, Topbar},
+        ui::{format_post_time, Avatar, Topbar},
     },
     posts::{
         get_post, get_post_preview, list_drafts, list_user_posts, CreatePost, CreatePostResult,
@@ -692,16 +692,21 @@ fn render_post_article(post: PostResponse, banner: Option<&'static str>) -> AnyV
         username,
         rendered_html,
         created_at,
+        published_at,
         ..
     } = post;
     let profile_href = format!("/~{}/", username);
     let username_display = username.clone();
+    let display_time = published_at
+        .as_deref()
+        .map(format_post_time)
+        .unwrap_or_else(|| format_post_time(&created_at));
 
     view! {
         <article>
             <h1>{title}</h1>
             <p class="metadata">
-                "By " <a href=profile_href>{username_display}</a> " on " {created_at}
+                "By " <a href=profile_href>{username_display}</a> " on " {display_time}
             </p>
             {banner.map(|text| view! { <p class="draft-banner">{text}</p> })}
             <div class="content" inner_html=rendered_html></div>
