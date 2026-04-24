@@ -52,6 +52,7 @@ pub fn HomePage() -> impl IntoView {
                     _next_cursor_created_at.set(page.next_cursor_created_at);
                     _next_cursor_post_id.set(page.next_cursor_post_id);
                     has_more.set(page.has_more);
+                    loading_more.set(false);
                     error.set(None);
                 }
                 Err(err) => {
