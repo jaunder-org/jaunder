@@ -392,6 +392,7 @@ pub fn UserTimelinePage() -> impl IntoView {
 #[component]
 pub fn DraftPreviewPage() -> impl IntoView {
     let delete_action = ServerAction::<DeletePost>::new();
+    let publish_action = ServerAction::<PublishPost>::new();
     let params = use_params_map();
 
     let preview = Resource::new(
@@ -419,7 +420,19 @@ pub fn DraftPreviewPage() -> impl IntoView {
                         );
                         view! {
                             {article}
-                            {render_delete_form(delete_action, post_id, "Delete this draft?")}
+                            <div style="display:flex;gap:8px;padding:16px 32px">
+                                <ActionForm action=publish_action>
+                                    <input type="hidden" name="post_id" value=post_id />
+                                    <button
+                                        type="submit"
+                                        class="j-btn is-primary"
+                                        onclick="return confirm('Publish this draft?')"
+                                    >
+                                        "Publish \u{2192}"
+                                    </button>
+                                </ActionForm>
+                                {render_delete_form(delete_action, post_id, "Delete this draft?")}
+                            </div>
                         }
                             .into_any()
                     }
@@ -427,6 +440,22 @@ pub fn DraftPreviewPage() -> impl IntoView {
                 }
             })}
         </Suspense>
+        {move || {
+            publish_action
+                .value()
+                .get()
+                .map(|result: Result<PublishPostResult, ServerFnError>| match result {
+                    Ok(published) => {
+                        view! {
+                            <p class="success">
+                                "Post published. " <a href=published.permalink>"View post"</a>
+                            </p>
+                        }
+                            .into_any()
+                    }
+                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                })
+        }}
         {render_delete_result(delete_action, "Draft deleted.", "/drafts", "Go to drafts")}
     }
 }
@@ -448,9 +477,9 @@ pub fn EditPostPage() -> impl IntoView {
     );
 
     view! {
-        <h1>"Edit Post"</h1>
+        <Topbar title="Edit Post".to_string() sub="".to_string() />
         <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
+            view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
             {move || Suspend::new(async move {
                 match post.await {
@@ -462,62 +491,115 @@ pub fn EditPostPage() -> impl IntoView {
                         let current_slug = fetched.slug.clone();
                         view! {
                             <ActionForm action=update_post_action>
-                                <input type="hidden" name="post_id" value=post_id />
-                                <label>
-                                    "Title"
-                                    <input
-                                        type="text"
-                                        name="title"
-                                        required=true
-                                        prop:value=fetched.title
-                                    />
-                                </label>
-                                <label>
-                                    "Body" <textarea name="body" rows="12">
-                                        {fetched.body}
-                                    </textarea>
-                                </label>
-                                <label>
-                                    "Format" <select name="format">
-                                        <option value="markdown" selected=is_markdown>
-                                            "Markdown"
-                                        </option>
-                                        <option value="org" selected=is_org>
-                                            "Org"
-                                        </option>
-                                    </select>
-                                </label>
-                                {(!is_published)
-                                    .then(|| {
-                                        view! {
-                                            <label>
-                                                "Slug override"
-                                                <input
-                                                    type="text"
-                                                    name="slug_override"
-                                                    prop:value=current_slug
-                                                />
+                                <div class="j-edit-form-grid">
+                                    <div class="j-edit-form-body">
+                                        <input type="hidden" name="post_id" value=post_id />
+                                        <div class="j-edit-form-field">
+                                            <label class="j-edit-form-label" for="edit-title">
+                                                "Title"
                                             </label>
-                                        }
-                                    })}
-                                {if is_published {
-                                    view! {
-                                        <button type="submit" name="publish" value="true">
-                                            "Save"
-                                        </button>
-                                    }
-                                        .into_any()
-                                } else {
-                                    view! {
-                                        <button type="submit" name="publish" value="true">
-                                            "Publish"
-                                        </button>
-                                        <button type="submit" name="publish" value="false">
-                                            "Save Draft"
-                                        </button>
-                                    }
-                                        .into_any()
-                                }}
+                                            <input
+                                                id="edit-title"
+                                                class="j-edit-form-input"
+                                                type="text"
+                                                name="title"
+                                                required=true
+                                                prop:value=fetched.title
+                                            />
+                                        </div>
+                                        <div class="j-edit-form-field j-edit-form-field--body">
+                                            <label class="j-edit-form-label" for="edit-body">
+                                                "Body"
+                                            </label>
+                                            <textarea
+                                                id="edit-body"
+                                                class="j-edit-form-textarea"
+                                                name="body"
+                                                rows="20"
+                                            >
+                                                {fetched.body}
+                                            </textarea>
+                                        </div>
+                                    </div>
+                                    <aside class="j-edit-form-aside">
+                                        <div>
+                                            <div class="j-sb-head" style="padding:0 0 10px">
+                                                "Options"
+                                            </div>
+                                            <div
+                                                class="j-field-row"
+                                                style="grid-template-columns:auto 1fr"
+                                            >
+                                                <label class="j-field-label" for="edit-format">
+                                                    "Format"
+                                                </label>
+                                                <select id="edit-format" name="format" class="j-field-val">
+                                                    <option value="markdown" selected=is_markdown>
+                                                        "Markdown"
+                                                    </option>
+                                                    <option value="org" selected=is_org>
+                                                        "Org"
+                                                    </option>
+                                                </select>
+                                            </div>
+                                            {(!is_published)
+                                                .then(|| {
+                                                    view! {
+                                                        <div
+                                                            class="j-field-row"
+                                                            style="grid-template-columns:auto 1fr"
+                                                        >
+                                                            <label class="j-field-label" for="edit-slug">
+                                                                "Slug"
+                                                            </label>
+                                                            <input
+                                                                id="edit-slug"
+                                                                type="text"
+                                                                name="slug_override"
+                                                                class="j-field-val"
+                                                                prop:value=current_slug
+                                                            />
+                                                        </div>
+                                                    }
+                                                })}
+                                        </div>
+                                        <div class="j-edit-form-actions">
+                                            {if is_published {
+                                                view! {
+                                                    <button
+                                                        class="j-btn is-primary"
+                                                        type="submit"
+                                                        name="publish"
+                                                        value="true"
+                                                    >
+                                                        "Save"
+                                                    </button>
+                                                }
+                                                    .into_any()
+                                            } else {
+                                                view! {
+                                                    <button
+                                                        class="j-btn is-primary"
+                                                        type="submit"
+                                                        name="publish"
+                                                        value="true"
+                                                    >
+                                                        "Publish \u{2192}"
+                                                    </button>
+                                                    <button
+                                                        class="j-btn"
+                                                        type="submit"
+                                                        name="publish"
+                                                        value="false"
+                                                    >
+                                                        "Save Draft"
+                                                    </button>
+                                                }
+                                                    .into_any()
+                                            }}
+                                        </div>
+                                    </aside>
+                                </div>
                             </ActionForm>
                         }
                             .into_any()
@@ -659,17 +741,24 @@ fn render_draft_row(
             " "
             <a href=draft.permalink>"Permalink"</a>
             " "
-            <ActionForm action=publish_action>
-                <input type="hidden" name="post_id" value=post_id />
-                <button type="submit">"Publish"</button>
-            </ActionForm>
-            " "
-            <ActionForm action=delete_action>
-                <input type="hidden" name="post_id" value=post_id />
-                <button type="submit" onclick="return confirm('Delete this draft?')">
-                    "Delete"
-                </button>
-            </ActionForm>
+            <div class="j-draft-actions">
+                <ActionForm action=publish_action>
+                    <input type="hidden" name="post_id" value=post_id />
+                    <button type="submit" class="j-btn">
+                        "Publish"
+                    </button>
+                </ActionForm>
+                <ActionForm action=delete_action>
+                    <input type="hidden" name="post_id" value=post_id />
+                    <button
+                        type="submit"
+                        class="j-btn"
+                        onclick="return confirm('Delete this draft?')"
+                    >
+                        "Delete"
+                    </button>
+                </ActionForm>
+            </div>
         </li>
     }
 }

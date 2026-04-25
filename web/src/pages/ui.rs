@@ -23,6 +23,7 @@ impl Icons {
     pub const PLUS: &'static str = "M10 4v12 M4 10h12";
     pub const COG: &'static str =
         "M10 6v2 M10 12v2 M6 10H4 M16 10h-2 M6.5 6.5l-1.5-1.5 M14 14l1.5 1.5 M6.5 13.5L5 15 M14 6l1.5-1.5 M10 13a3 3 0 1 0 0-6a3 3 0 0 0 0 6z";
+    pub const EDIT: &'static str = "M3 17l4 0 9-9a2.83 2.83 0 0 0-4-4l-9 9 0 4 M12 5l3 3";
 }
 
 // ─── 3.1 Icon ─────────────────────────────────────────────────
@@ -367,6 +368,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
         ("federated", "Federated", Icons::FED, None, true),
         ("replies", "Replies", Icons::REPLY, None, true),
         ("bookmarks", "Bookmarks", Icons::BOOKMARK, None, true),
+        ("drafts", "Drafts", Icons::EDIT, Some("/drafts"), true),
         ("settings", "Settings", Icons::COG, None, true),
     ];
 

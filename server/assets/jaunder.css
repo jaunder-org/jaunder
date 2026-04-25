@@ -474,6 +474,89 @@
 }
 .j-hero-chips { margin-top: 14px; display: flex; gap: 6px; flex-wrap: wrap; }
 
+/* ─── edit post form ─── */
+.j-edit-form-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  overflow: hidden;
+  min-height: 0;
+}
+.j-edit-form-body {
+  padding: 28px 32px;
+  overflow: auto;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.j-edit-form-aside {
+  border-left: 1px var(--border-style) var(--line);
+  padding: 24px 20px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow: auto;
+}
+.j-edit-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.j-edit-form-field--body {
+  flex: 1;
+}
+.j-edit-form-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted-soft);
+  font-family: var(--font-meta);
+}
+.j-edit-form-input {
+  width: 100%;
+  font-size: 20px;
+  font-weight: 600;
+  border: none;
+  border-bottom: 1px var(--border-style) var(--line);
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  padding: 6px 0;
+  font-family: var(--font-body);
+}
+.j-edit-form-input:focus {
+  border-bottom-color: var(--accent);
+}
+.j-edit-form-textarea {
+  width: 100%;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink);
+  border: 1px var(--border-style) var(--line);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: transparent;
+  resize: vertical;
+  padding: 10px 12px;
+  font-family: var(--font-body);
+  min-height: 300px;
+}
+.j-edit-form-textarea:focus {
+  border-color: var(--accent);
+}
+.j-edit-form-actions {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ─── drafts list ─── */
+.j-draft-actions { display: flex; gap: 8px; }
+
 /* ─── utilities ─── */
 .j-spacer { flex: 1; }
 .j-icon { flex-shrink: 0; }
