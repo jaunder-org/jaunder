@@ -238,11 +238,13 @@
   font-size: 15px;
   line-height: 1.55;
   color: var(--ink);
+  display: flex; gap: 12px; align-items: flex-start;
 }
+.j-composer-body textarea { flex: 1; }
 .j-composer-toolbar {
-  margin-top: 14px;
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
 }
+.j-format-toggle { display: flex; gap: 4px; }
 .j-tag {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 10px;
@@ -277,6 +279,7 @@
   font-weight: 500;
 }
 .j-btn.is-ghost { background: transparent; border-color: transparent; }
+.j-btn.is-active { background: var(--surface-alt); font-weight: 500; }
 
 /* ─── post ─── */
 .j-post {
