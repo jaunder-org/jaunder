@@ -158,7 +158,14 @@ pub fn PostCard(post: TimelinePostSummary) -> impl IntoView {
                     <span class="j-spacer"></span>
                     <span class="j-post-time">{time_label}</span>
                 </header>
-                {has_title.then(|| view! { <div class="j-post-title">{post.title.clone()}</div> })}
+                {has_title
+                    .then(|| {
+                        view! {
+                            <div class="j-post-title">
+                                <a href=post.permalink.clone()>{post.title.clone()}</a>
+                            </div>
+                        }
+                    })}
                 <div class="j-post-body" inner_html=post.rendered_html.clone()></div>
                 <footer class="j-post-foot">
                     <span class="j-spacer"></span>
@@ -170,39 +177,42 @@ pub fn PostCard(post: TimelinePostSummary) -> impl IntoView {
 
 // ─── 3.7 InlineComposer ───────────────────────────────────────
 
-/// Compact inline compose row at the top of the authenticated timeline.
-/// Submits a new post directly without navigating away.
-/// The post title is derived from the first 100 characters of the body.
-/// `on_publish` is incremented after each successful publish so the parent
-/// can re-fetch the timeline.
 #[component]
 pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {
     let create_action = ServerAction::<CreatePost>::new();
     let body = RwSignal::new(String::new());
+    let format = RwSignal::new("markdown");
+    let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
-    // Clear the textarea after any successful action.
+    // After any successful action: clear body, set flash, optionally notify parent.
     #[cfg(target_arch = "wasm32")]
-    Effect::new(move |_| {
-        if let Some(Ok(_)) = create_action.value().get() {
-            body.set(String::new());
-        }
-    });
-
-    // Notify the parent to refresh the timeline after a successful publish.
-    #[cfg(target_arch = "wasm32")]
-    Effect::new(move |_| {
-        if let Some(Ok(ref created)) = create_action.value().get() {
-            if created.published_at.is_some() {
-                on_publish.update(|v| *v += 1);
+    {
+        use leptos_dom::helpers::set_timeout;
+        use std::time::Duration;
+        Effect::new(move |_| {
+            if let Some(Ok(ref created)) = create_action.value().get() {
+                body.set(String::new());
+                let url = created
+                    .permalink
+                    .clone()
+                    .unwrap_or_else(|| created.preview_url.clone());
+                let msg = if created.published_at.is_some() {
+                    "Post published!".to_string()
+                } else {
+                    "Draft saved!".to_string()
+                };
+                flash.set(Some((url, msg)));
+                set_timeout(move || flash.set(None), Duration::from_secs(30));
+                if created.published_at.is_some() {
+                    on_publish.update(|v| *v += 1);
+                }
             }
-        }
-    });
+        });
+    }
 
-    // Suppress unused-variable warning in SSR builds.
+    // Suppress unused-variable warnings in SSR builds.
     #[cfg(not(target_arch = "wasm32"))]
     let _ = on_publish;
-
-    let char_count = move || body.get().len();
 
     view! {
         <div class="j-composer">
@@ -212,21 +222,61 @@ pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl In
                     <div class="j-composer-body">
                         <textarea
                             name="body"
+                            rows="6"
                             placeholder="What's on your mind?"
                             prop:value=body
-                            on:input=move |ev| body.set(event_target_value(&ev))
+                            on:input=move |ev| {
+                                body.set(event_target_value(&ev));
+                                flash.set(None);
+                            }
                         ></textarea>
                         <input
                             type="hidden"
                             name="title"
                             prop:value=move || { body.get().chars().take(100).collect::<String>() }
                         />
-                        <input type="hidden" name="format" value="markdown" />
                         <input type="hidden" name="slug_override" value="" />
+                        <input type="hidden" name="format" prop:value=move || format.get() />
                         <div class="j-composer-toolbar">
-                            <span class="j-count">{char_count}" / 300"</span>
+                            <div class="j-format-toggle">
+                                <button
+                                    type="button"
+                                    class=move || {
+                                        if format.get() == "markdown" {
+                                            "j-btn is-active"
+                                        } else {
+                                            "j-btn"
+                                        }
+                                    }
+                                    on:click=move |_| format.set("markdown")
+                                >
+                                    "Markdown"
+                                </button>
+                                <button
+                                    type="button"
+                                    class=move || {
+                                        if format.get() == "org" {
+                                            "j-btn is-active"
+                                        } else {
+                                            "j-btn"
+                                        }
+                                    }
+                                    on:click=move |_| format.set("org")
+                                >
+                                    "Org"
+                                </button>
+                            </div>
                             <button
-                                class="j-btn is-primary"
+                                class="j-btn"
+                                type="submit"
+                                name="publish"
+                                value="false"
+                                disabled=move || body.get().trim().is_empty()
+                            >
+                                "Save draft"
+                            </button>
+                            <button
+                                class="j-btn"
                                 type="submit"
                                 name="publish"
                                 value="true"
@@ -239,13 +289,18 @@ pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl In
                 </div>
             </ActionForm>
             {move || {
-                create_action
-                    .value()
-                    .get()
-                    .map(|result| match result {
-                        Ok(_) => view! { <p class="success">"Post published!"</p> }.into_any(),
-                        Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
-                    })
+                if let Some(e) = create_action.value().get().and_then(|r| r.err()) {
+                    return view! { <p class="error">{e.to_string()}</p> }.into_any();
+                }
+                if let Some((url, msg)) = flash.get() {
+                    return view! {
+                        <p class="success">
+                            <a href=url>{msg}</a>
+                        </p>
+                    }
+                        .into_any();
+                }
+                ().into_any()
             }}
         </div>
     }
