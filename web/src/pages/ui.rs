@@ -23,6 +23,7 @@ impl Icons {
     pub const PLUS: &'static str = "M10 4v12 M4 10h12";
     pub const COG: &'static str =
         "M10 6v2 M10 12v2 M6 10H4 M16 10h-2 M6.5 6.5l-1.5-1.5 M14 14l1.5 1.5 M6.5 13.5L5 15 M14 6l1.5-1.5 M10 13a3 3 0 1 0 0-6a3 3 0 0 0 0 6z";
+    pub const EDIT: &'static str = "M3 17l4 0 9-9a2.83 2.83 0 0 0-4-4l-9 9 0 4 M12 5l3 3";
 }
 
 // ─── 3.1 Icon ─────────────────────────────────────────────────
@@ -125,17 +126,19 @@ pub fn Topbar(
 
 // ─── 3.6 PostCard ─────────────────────────────────────────────
 
-/// Formats an ISO-8601 timestamp into a short relative display string.
-/// Returns a trimmed date portion as a fallback for older posts.
-fn format_post_time(published_at: &str) -> String {
-    // The timestamp is an RFC-3339 string like "2026-04-22T10:30:00+00:00".
-    // For now, return just the date portion (YYYY-MM-DD) as a readable label.
-    // A full relative-time implementation can replace this in a later step.
-    published_at
-        .split('T')
-        .next()
-        .unwrap_or(published_at)
-        .to_owned()
+/// Formats an RFC-3339 timestamp as `"YYYY-MM-DD HH:MM"`.
+/// Falls back to the raw string if the input contains no `T` separator.
+pub(crate) fn format_post_time(ts: &str) -> String {
+    // RFC-3339: "YYYY-MM-DDTHH:MM:SS+HH:MM" or "YYYY-MM-DDTHH:MM:SSZ"
+    // Return "YYYY-MM-DD HH:MM"; fall back to the raw string if malformed.
+    if let Some(t_pos) = ts.find('T') {
+        let date = &ts[..t_pos];
+        let rest = &ts[t_pos + 1..];
+        let time = if rest.len() >= 5 { &rest[..5] } else { rest };
+        format!("{date} {time}")
+    } else {
+        ts.to_owned()
+    }
 }
 
 #[component]
@@ -156,7 +159,14 @@ pub fn PostCard(post: TimelinePostSummary) -> impl IntoView {
                     <span class="j-spacer"></span>
                     <span class="j-post-time">{time_label}</span>
                 </header>
-                {has_title.then(|| view! { <div class="j-post-title">{post.title.clone()}</div> })}
+                {has_title
+                    .then(|| {
+                        view! {
+                            <div class="j-post-title">
+                                <a href=post.permalink.clone()>{post.title.clone()}</a>
+                            </div>
+                        }
+                    })}
                 <div class="j-post-body" inner_html=post.rendered_html.clone()></div>
                 <footer class="j-post-foot">
                     <span class="j-spacer"></span>
@@ -168,23 +178,52 @@ pub fn PostCard(post: TimelinePostSummary) -> impl IntoView {
 
 // ─── 3.7 InlineComposer ───────────────────────────────────────
 
-/// Compact inline compose row at the top of the authenticated timeline.
-/// Submits a new post directly without navigating away.
-/// The post title is derived from the first 100 characters of the body.
+/// Derives a post title from the body: the first line, truncated to 100 characters.
+pub fn title_from_body(body: &str) -> String {
+    body.lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(100)
+        .collect()
+}
+
 #[component]
-pub fn InlineComposer(username: String) -> impl IntoView {
+pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {
     let create_action = ServerAction::<CreatePost>::new();
     let body = RwSignal::new(String::new());
+    let format = RwSignal::new("markdown");
+    let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
-    // Clear the textarea after a successful post.
+    // After any successful action: clear body, set flash, optionally notify parent.
     #[cfg(target_arch = "wasm32")]
-    Effect::new(move |_| {
-        if let Some(Ok(_)) = create_action.value().get() {
-            body.set(String::new());
-        }
-    });
+    {
+        use leptos_dom::helpers::set_timeout;
+        use std::time::Duration;
+        Effect::new(move |_| {
+            if let Some(Ok(ref created)) = create_action.value().get() {
+                body.set(String::new());
+                let url = created
+                    .permalink
+                    .clone()
+                    .unwrap_or_else(|| created.preview_url.clone());
+                let msg = if created.published_at.is_some() {
+                    "Post published!".to_string()
+                } else {
+                    "Draft saved!".to_string()
+                };
+                flash.set(Some((url, msg)));
+                set_timeout(move || flash.set(None), Duration::from_secs(30));
+                if created.published_at.is_some() {
+                    on_publish.update(|v| *v += 1);
+                }
+            }
+        });
+    }
 
-    let char_count = move || body.get().len();
+    // Suppress unused-variable warnings in SSR builds.
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = on_publish;
 
     view! {
         <div class="j-composer">
@@ -194,21 +233,61 @@ pub fn InlineComposer(username: String) -> impl IntoView {
                     <div class="j-composer-body">
                         <textarea
                             name="body"
+                            rows="6"
                             placeholder="What's on your mind?"
                             prop:value=body
-                            on:input=move |ev| body.set(event_target_value(&ev))
+                            on:input=move |ev| {
+                                body.set(event_target_value(&ev));
+                                flash.set(None);
+                            }
                         ></textarea>
                         <input
                             type="hidden"
                             name="title"
-                            prop:value=move || { body.get().chars().take(100).collect::<String>() }
+                            prop:value=move || title_from_body(&body.get())
                         />
-                        <input type="hidden" name="format" value="markdown" />
                         <input type="hidden" name="slug_override" value="" />
+                        <input type="hidden" name="format" prop:value=move || format.get() />
                         <div class="j-composer-toolbar">
-                            <span class="j-count">{char_count}" / 300"</span>
+                            <div class="j-format-toggle">
+                                <button
+                                    type="button"
+                                    class=move || {
+                                        if format.get() == "markdown" {
+                                            "j-btn is-active"
+                                        } else {
+                                            "j-btn"
+                                        }
+                                    }
+                                    on:click=move |_| format.set("markdown")
+                                >
+                                    "Markdown"
+                                </button>
+                                <button
+                                    type="button"
+                                    class=move || {
+                                        if format.get() == "org" {
+                                            "j-btn is-active"
+                                        } else {
+                                            "j-btn"
+                                        }
+                                    }
+                                    on:click=move |_| format.set("org")
+                                >
+                                    "Org"
+                                </button>
+                            </div>
                             <button
-                                class="j-btn is-primary"
+                                class="j-btn"
+                                type="submit"
+                                name="publish"
+                                value="false"
+                                disabled=move || body.get().trim().is_empty()
+                            >
+                                "Save draft"
+                            </button>
+                            <button
+                                class="j-btn"
                                 type="submit"
                                 name="publish"
                                 value="true"
@@ -221,13 +300,18 @@ pub fn InlineComposer(username: String) -> impl IntoView {
                 </div>
             </ActionForm>
             {move || {
-                create_action
-                    .value()
-                    .get()
-                    .map(|result| match result {
-                        Ok(_) => view! { <p class="success">"Post published!"</p> }.into_any(),
-                        Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
-                    })
+                if let Some(e) = create_action.value().get().and_then(|r| r.err()) {
+                    return view! { <p class="error">{e.to_string()}</p> }.into_any();
+                }
+                if let Some((url, msg)) = flash.get() {
+                    return view! {
+                        <p class="success">
+                            <a href=url>{msg}</a>
+                        </p>
+                    }
+                        .into_any();
+                }
+                ().into_any()
             }}
         </div>
     }
@@ -284,21 +368,29 @@ fn SidebarSource(proto: &'static str, name: &'static str, sub: &'static str) -> 
 pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     let active_key = active.unwrap_or_default();
 
-    // Fetch the current user. Key the resource off the current pathname so it
-    // re-fetches after client-side navigations (e.g. login → home, logout → home),
-    // keeping the sidebar footer in sync with auth state without a full page reload.
     let location = use_location();
     let user = Resource::new(move || location.pathname.get(), |_| current_user());
 
-    // (key, label, icon_path, href)
-    let nav_items: &[(&str, &str, &str, Option<&'static str>)] = &[
-        ("home", "Home", Icons::HOME, Some("/")),
-        ("local", "Local", Icons::LOCAL, None),
-        ("federated", "Federated", Icons::FED, None),
-        ("replies", "Replies", Icons::REPLY, None),
-        ("bookmarks", "Bookmarks", Icons::BOOKMARK, None),
-        ("settings", "Settings", Icons::COG, None),
+    // (key, label, icon_path, href, auth_required)
+    const NAV_ITEMS: &[(&str, &str, &str, Option<&'static str>, bool)] = &[
+        ("home", "Home", Icons::HOME, Some("/"), false),
+        ("local", "Local", Icons::LOCAL, None, true),
+        ("federated", "Federated", Icons::FED, None, true),
+        ("replies", "Replies", Icons::REPLY, None, true),
+        ("bookmarks", "Bookmarks", Icons::BOOKMARK, None, true),
+        ("drafts", "Drafts", Icons::EDIT, Some("/drafts"), true),
+        ("settings", "Settings", Icons::COG, None, true),
     ];
+
+    // Items shown when unauthenticated: has a real href and no auth required.
+    let public_nav: Vec<_> = NAV_ITEMS
+        .iter()
+        .filter(|&&(_, _, _, href, auth_required)| href.is_some() && !auth_required)
+        .copied()
+        .collect();
+
+    // Clone active_key for the fallback closure; the original moves into the Suspend closure.
+    let active_key_fallback = active_key.clone();
 
     view! {
         <aside class="j-sidebar">
@@ -311,41 +403,68 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
                 <span>"Search"</span>
                 <span class="j-kbd">"⌘K"</span>
             </div>
-            <nav class="j-nav">
-                {nav_items
-                    .iter()
-                    .map(|&(key, label, icon_path, href)| {
-                        let is_active = key == active_key.as_str();
+            // Nav: filtered by auth state after Suspense resolves.
+            <Suspense fallback=move || {
+                view! {
+                    <nav class="j-nav">
+                        {public_nav
+                            .iter()
+                            .map(|&(key, label, icon_path, href, _)| {
+                                let is_active = key == active_key_fallback.as_str();
+                                view! {
+                                    <SidebarNavItem
+                                        label=label
+                                        icon_path=icon_path
+                                        active=is_active
+                                        href=href
+                                    />
+                                }
+                            })
+                            .collect::<Vec<_>>()}
+                    </nav>
+                }
+            }>
+                {move || {
+                    let active_key = active_key.clone();
+                    Suspend::new(async move {
+                        let is_authed = matches!(user.await, Ok(Some(_)));
                         view! {
-                            <SidebarNavItem
-                                label=label
-                                icon_path=icon_path
-                                active=is_active
-                                href=href
-                            />
+                            <nav class="j-nav">
+                                {NAV_ITEMS
+                                    .iter()
+                                    .filter(|&&(_, _, _, href, auth_required)| {
+                                        href.is_some() && (!auth_required || is_authed)
+                                    })
+                                    .map(|&(key, label, icon_path, href, _)| {
+                                        let is_active = key == active_key.as_str();
+                                        view! {
+                                            <SidebarNavItem
+                                                label=label
+                                                icon_path=icon_path
+                                                active=is_active
+                                                href=href
+                                            />
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()}
+                            </nav>
                         }
                     })
-                    .collect::<Vec<_>>()}
-            </nav>
+                }}
+            </Suspense>
             <div>
                 <div class="j-sb-head">
                     <span>"Sources"</span>
                     <span class="j-sb-add">"+"</span>
                 </div>
-                // Static placeholder sources — replaced with real data in a later step.
                 <SidebarSource proto="atproto" name="Bluesky" sub="mara.bsky.social" />
                 <SidebarSource proto="activitypub" name="Mastodon" sub="@mara@hachyderm.io" />
                 <SidebarSource proto="rss" name="Ivy Chen" sub="weeknotes" />
                 <SidebarSource proto="jsonfeed" name="Manton" sub="manton.org" />
             </div>
+            // Footer: avatar+sign-out when authed; nothing when not.
             <div class="j-sb-foot">
-                <Suspense fallback=|| {
-                    view! {
-                        <a href="/login" class="j-btn is-primary" style="width:100%">
-                            "Sign in"
-                        </a>
-                    }
-                }>
+                <Suspense fallback=|| ()>
                     {move || Suspend::new(async move {
                         match user.await {
                             Ok(Some(username)) => {
@@ -360,14 +479,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
                                 }
                                     .into_any()
                             }
-                            _ => {
-                                view! {
-                                    <a href="/login" class="j-btn is-primary" style="width:100%">
-                                        "Sign in"
-                                    </a>
-                                }
-                                    .into_any()
-                            }
+                            _ => ().into_any(),
                         }
                     })}
                 </Suspense>
@@ -380,7 +492,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::avatar_parts;
+    use super::{avatar_parts, format_post_time, title_from_body};
 
     #[test]
     fn avatar_parts_single_word() {
@@ -425,5 +537,53 @@ mod tests {
         let (_, h1) = avatar_parts("Alice");
         let (_, h2) = avatar_parts("Bob");
         assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn format_post_time_includes_time_portion() {
+        assert_eq!(
+            format_post_time("2026-04-23T10:30:00+00:00"),
+            "2026-04-23 10:30"
+        );
+    }
+
+    #[test]
+    fn format_post_time_handles_date_only_input() {
+        // Input with no 'T' separator — return as-is.
+        assert_eq!(format_post_time("2026-04-23"), "2026-04-23");
+    }
+
+    #[test]
+    fn format_post_time_handles_negative_offset() {
+        assert_eq!(
+            format_post_time("2026-04-23T15:45:00-05:00"),
+            "2026-04-23 15:45"
+        );
+    }
+
+    #[test]
+    fn format_post_time_handles_utc_z_suffix() {
+        assert_eq!(format_post_time("2026-04-23T10:30:00Z"), "2026-04-23 10:30");
+    }
+
+    #[test]
+    fn title_from_body_stops_at_first_newline() {
+        assert_eq!(title_from_body("first line\nsecond line"), "first line");
+    }
+
+    #[test]
+    fn title_from_body_single_line_unchanged() {
+        assert_eq!(title_from_body("hello world"), "hello world");
+    }
+
+    #[test]
+    fn title_from_body_truncates_to_100_chars() {
+        let long_line = "a".repeat(150);
+        assert_eq!(title_from_body(&long_line), "a".repeat(100));
+    }
+
+    #[test]
+    fn title_from_body_empty_body() {
+        assert_eq!(title_from_body(""), "");
     }
 }

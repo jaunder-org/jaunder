@@ -21,6 +21,7 @@ codegen-units = 1
 [workspace.dependencies]
 common = { path = "common" }
 leptos = { version = "0.8.2" }
+leptos_dom = { version = "0.8.2" }
 leptos_meta = { version = "0.8.2" }
 leptos_router = { version = "0.8.2" }
 leptos_axum = { version = "0.8.2" }

@@ -1,19 +1,16 @@
 use leptos::prelude::*;
+use serde::{Deserialize, Serialize};
 
+use crate::auth::current_user;
 use crate::pages::signal_read::read_signal;
 use crate::pages::ui::{InlineComposer, PostCard, Topbar};
-use crate::posts::TimelinePostSummary;
+use crate::posts::{list_home_feed, list_local_timeline, TimelinePostSummary};
 
-#[cfg(target_arch = "wasm32")]
-use crate::{
-    auth::current_user,
-    posts::{list_home_feed, list_local_timeline},
-};
 #[cfg(target_arch = "wasm32")]
 use leptos::task::spawn_local;
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 enum TimelineMode {
     Local,
     Feed(String),
@@ -29,46 +26,51 @@ pub fn HomePage() -> impl IntoView {
     let loading_more = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
 
-    #[cfg(target_arch = "wasm32")]
-    {
-        let timeline_mode = timeline_mode;
-        let timeline = timeline;
-        let next_cursor_created_at = _next_cursor_created_at;
-        let next_cursor_post_id = _next_cursor_post_id;
-        let has_more = has_more;
-        let error = error;
-        spawn_local(async move {
+    let refresh_version = RwSignal::new(0u32);
+
+    let initial_page = Resource::new(
+        move || refresh_version.get(),
+        |_| async move {
             match current_user().await {
-                Ok(Some(username)) => {
-                    timeline_mode.set(Some(TimelineMode::Feed(username)));
-                    match list_home_feed(None, None, Some(50)).await {
-                        Ok(page) => {
-                            timeline.set(page.posts);
-                            next_cursor_created_at.set(page.next_cursor_created_at);
-                            next_cursor_post_id.set(page.next_cursor_post_id);
-                            has_more.set(page.has_more);
-                            error.set(None);
-                        }
-                        Err(err) => error.set(Some(err.to_string())),
-                    }
-                }
-                Ok(None) => {
-                    timeline_mode.set(Some(TimelineMode::Local));
-                    match list_local_timeline(None, None, Some(50)).await {
-                        Ok(page) => {
-                            timeline.set(page.posts);
-                            next_cursor_created_at.set(page.next_cursor_created_at);
-                            next_cursor_post_id.set(page.next_cursor_post_id);
-                            has_more.set(page.has_more);
-                            error.set(None);
-                        }
-                        Err(err) => error.set(Some(err.to_string())),
-                    }
-                }
-                Err(err) => error.set(Some(err.to_string())),
+                Ok(Some(username)) => list_home_feed(None, None, Some(50))
+                    .await
+                    .map(|page| (TimelineMode::Feed(username), page)),
+                Ok(None) => list_local_timeline(None, None, Some(50))
+                    .await
+                    .map(|page| (TimelineMode::Local, page)),
+                Err(e) => Err(e),
             }
-        });
-    }
+        },
+    );
+
+    Effect::new_isomorphic(move |_| {
+        if let Some(result) = initial_page.try_get().flatten() {
+            match result {
+                Ok((mode, page)) => {
+                    // Only update timeline_mode when it actually changes; spurious sets
+                    // would re-run the outer view closure and remount InlineComposer.
+                    if timeline_mode.get_untracked().as_ref() != Some(&mode) {
+                        timeline_mode.set(Some(mode));
+                    }
+                    timeline.set(page.posts);
+                    _next_cursor_created_at.set(page.next_cursor_created_at);
+                    _next_cursor_post_id.set(page.next_cursor_post_id);
+                    has_more.set(page.has_more);
+                    loading_more.set(false);
+                    // Only clear error when it was set; unconditional set(None) would
+                    // re-trigger the outer view closure and remount InlineComposer.
+                    if error.get_untracked().is_some() {
+                        error.set(None);
+                    }
+                }
+                Err(err) => {
+                    error.set(Some(err.to_string()));
+                    timeline.set(Vec::new());
+                    has_more.set(false);
+                }
+            }
+        }
+    });
 
     let on_load_more = move |_| {
         #[cfg(not(target_arch = "wasm32"))]
@@ -125,6 +127,17 @@ pub fn HomePage() -> impl IntoView {
     let read_has_more = move || read_signal!(has_more);
     let read_loading_more = move || read_signal!(loading_more);
 
+    // Shared "load more" button used in both Feed and Local branches.
+    let load_more_btn = move || {
+        read_has_more().then(|| {
+            view! {
+                <button on:click=on_load_more disabled=read_loading_more>
+                    {move || if read_loading_more() { "Loading\u{2026}" } else { "Load more" }}
+                </button>
+            }
+        })
+    };
+
     view! {
         {move || {
             if let Some(err) = read_error() {
@@ -132,6 +145,9 @@ pub fn HomePage() -> impl IntoView {
             }
             match read_timeline_mode() {
                 None => {
+                    // This closure reads only `timeline_mode`.  The timeline rows are read in
+                    // nested closures below so that row updates don't cause InlineComposer to
+                    // remount (which would reset its local flash state).
                     view! {
                         <Topbar title="Home".to_string() />
                         <p class="j-loading">"Loading timeline\u{2026}"</p>
@@ -139,43 +155,26 @@ pub fn HomePage() -> impl IntoView {
                         .into_any()
                 }
                 Some(TimelineMode::Feed(username)) => {
-                    let rows = read_timeline_rows();
-                    let is_empty = rows.is_empty();
                     view! {
                         <Topbar title="Home".to_string() sub="Your home feed".to_string() />
-                        <InlineComposer username=username />
+                        <InlineComposer username=username on_publish=refresh_version.write_only() />
                         <div class="j-scroll">
-                            {if is_empty {
-                                view! { <p>"No posts yet."</p> }.into_any()
-                            } else {
-                                rows.into_iter()
-                                    .map(|p| view! { <PostCard post=p /> })
-                                    .collect::<Vec<_>>()
-                                    .into_any()
-                            }}
                             {move || {
-                                read_has_more()
-                                    .then(|| {
-                                        view! {
-                                            <button on:click=on_load_more disabled=read_loading_more>
-                                                {move || {
-                                                    if read_loading_more() {
-                                                        "Loading\u{2026}"
-                                                    } else {
-                                                        "Load more"
-                                                    }
-                                                }}
-                                            </button>
-                                        }
-                                    })
-                            }}
+                                let rows = read_timeline_rows();
+                                if rows.is_empty() {
+                                    view! { <p>"No posts yet."</p> }.into_any()
+                                } else {
+                                    rows.into_iter()
+                                        .map(|p| view! { <PostCard post=p /> })
+                                        .collect::<Vec<_>>()
+                                        .into_any()
+                                }
+                            }} {load_more_btn}
                         </div>
                     }
                         .into_any()
                 }
                 Some(TimelineMode::Local) => {
-                    let rows = read_timeline_rows();
-                    let is_empty = rows.is_empty();
                     view! {
                         <Topbar
                             title="jaunder.local".to_string()
@@ -198,30 +197,17 @@ pub fn HomePage() -> impl IntoView {
                             </p>
                         </div>
                         <div class="j-scroll">
-                            {if is_empty {
-                                view! { <p>"No posts yet."</p> }.into_any()
-                            } else {
-                                rows.into_iter()
-                                    .map(|p| view! { <PostCard post=p /> })
-                                    .collect::<Vec<_>>()
-                                    .into_any()
-                            }}
                             {move || {
-                                read_has_more()
-                                    .then(|| {
-                                        view! {
-                                            <button on:click=on_load_more disabled=read_loading_more>
-                                                {move || {
-                                                    if read_loading_more() {
-                                                        "Loading\u{2026}"
-                                                    } else {
-                                                        "Load more"
-                                                    }
-                                                }}
-                                            </button>
-                                        }
-                                    })
-                            }}
+                                let rows = read_timeline_rows();
+                                if rows.is_empty() {
+                                    view! { <p>"No posts yet."</p> }.into_any()
+                                } else {
+                                    rows.into_iter()
+                                        .map(|p| view! { <PostCard post=p /> })
+                                        .collect::<Vec<_>>()
+                                        .into_any()
+                                }
+                            }} {load_more_btn}
                         </div>
                     }
                         .into_any()

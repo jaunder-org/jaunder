@@ -458,6 +458,119 @@ test("authenticated user can delete a published post", async ({
   await expect(page.locator("body")).not.toContainText("Post To Delete");
 });
 
+test("inline composer: published post appears in timeline without page reload", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  // Home page must already show the feed with the composer.
+  await goto(page, "/");
+  await waitForSelector(page, ".j-composer");
+
+  const initialCount = await page.locator("article.j-post").count();
+
+  await page.fill('.j-composer textarea[name="body"]', "Live refresh test");
+  await click(page, '.j-composer button[name="publish"][value="true"]');
+  await waitForSelector(page, ".j-composer p.success");
+
+  // The new post should appear without a page reload.
+  await expect(page.locator("article.j-post")).toHaveCount(initialCount + 1, {
+    timeout: hydrationHeavyTimeoutMs(testInfo, 8_000),
+  });
+});
+
+test("inline composer: publish flash is a link to the post permalink", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+  await goto(page, "/");
+  await waitForSelector(page, ".j-composer");
+
+  await page.fill('.j-composer textarea[name="body"]', "Flash link test");
+  await click(page, '.j-composer button[name="publish"][value="true"]');
+  await waitForSelector(page, ".j-composer p.success a");
+
+  const link = page.locator(".j-composer p.success a");
+  await expect(link).toContainText("Post published!");
+  const href = await link.getAttribute("href");
+  expect(href).toBeTruthy();
+  expect(href).toMatch(/^\/~[^/]+\//);
+});
+
+test("inline composer: draft flash is a link to the draft preview URL", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+  await goto(page, "/");
+  await waitForSelector(page, ".j-composer");
+
+  await page.fill('.j-composer textarea[name="body"]', "Draft flash link test");
+  await click(page, '.j-composer button[name="publish"][value="false"]');
+  await waitForSelector(page, ".j-composer p.success a");
+
+  const link = page.locator(".j-composer p.success a");
+  await expect(link).toContainText("Draft saved!");
+  const href = await link.getAttribute("href");
+  expect(href).toBeTruthy();
+});
+
+test("inline composer: flash clears when user starts typing", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+  await goto(page, "/");
+  await waitForSelector(page, ".j-composer");
+
+  await page.fill('.j-composer textarea[name="body"]', "Flash clear test");
+  await click(page, '.j-composer button[name="publish"][value="true"]');
+  await waitForSelector(page, ".j-composer p.success");
+
+  // Typing in the textarea should dismiss the flash immediately.
+  await page.type('.j-composer textarea[name="body"]', "x");
+  await expect(page.locator(".j-composer p.success")).toHaveCount(0);
+});
+
+test("inline composer: format toggle switches active button", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+  await goto(page, "/");
+  await waitForSelector(page, ".j-composer");
+
+  // Markdown is active by default.
+  const markdownBtn = page.locator(
+    '.j-format-toggle button:has-text("Markdown")',
+  );
+  const orgBtn = page.locator('.j-format-toggle button:has-text("Org")');
+  await expect(markdownBtn).toHaveClass(/is-active/);
+  await expect(orgBtn).not.toHaveClass(/is-active/);
+
+  // Click Org to switch.
+  await click(page, '.j-format-toggle button:has-text("Org")');
+  await expect(orgBtn).toHaveClass(/is-active/);
+  await expect(markdownBtn).not.toHaveClass(/is-active/);
+});
+
 test("authenticated user can delete a draft from the drafts page", async ({
   page,
 }, testInfo) => {
