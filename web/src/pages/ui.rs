@@ -178,6 +178,16 @@ pub fn PostCard(post: TimelinePostSummary) -> impl IntoView {
 
 // ─── 3.7 InlineComposer ───────────────────────────────────────
 
+/// Derives a post title from the body: the first line, truncated to 100 characters.
+pub fn title_from_body(body: &str) -> String {
+    body.lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(100)
+        .collect()
+}
+
 #[component]
 pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {
     let create_action = ServerAction::<CreatePost>::new();
@@ -234,7 +244,7 @@ pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl In
                         <input
                             type="hidden"
                             name="title"
-                            prop:value=move || { body.get().chars().take(100).collect::<String>() }
+                            prop:value=move || title_from_body(&body.get())
                         />
                         <input type="hidden" name="slug_override" value="" />
                         <input type="hidden" name="format" prop:value=move || format.get() />
@@ -482,7 +492,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{avatar_parts, format_post_time};
+    use super::{avatar_parts, format_post_time, title_from_body};
 
     #[test]
     fn avatar_parts_single_word() {
@@ -554,5 +564,26 @@ mod tests {
     #[test]
     fn format_post_time_handles_utc_z_suffix() {
         assert_eq!(format_post_time("2026-04-23T10:30:00Z"), "2026-04-23 10:30");
+    }
+
+    #[test]
+    fn title_from_body_stops_at_first_newline() {
+        assert_eq!(title_from_body("first line\nsecond line"), "first line");
+    }
+
+    #[test]
+    fn title_from_body_single_line_unchanged() {
+        assert_eq!(title_from_body("hello world"), "hello world");
+    }
+
+    #[test]
+    fn title_from_body_truncates_to_100_chars() {
+        let long_line = "a".repeat(150);
+        assert_eq!(title_from_body(&long_line), "a".repeat(100));
+    }
+
+    #[test]
+    fn title_from_body_empty_body() {
+        assert_eq!(title_from_body(""), "");
     }
 }
