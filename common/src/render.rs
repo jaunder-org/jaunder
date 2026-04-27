@@ -119,21 +119,52 @@ fn extract_markdown_title(body: &str) -> Option<(String, String)> {
 fn extract_org_title(body: &str) -> Option<(String, String)> {
     let mut output = Vec::new();
     let mut found = None;
+    let mut past_kv_block = false;
 
     for line in body.lines() {
-        if found.is_none() {
-            let trimmed = line.trim();
-            if let Some((key, value)) = trimmed.split_once(':') {
-                if key.eq_ignore_ascii_case("#+title") {
-                    let title = value.trim();
-                    if !title.is_empty() {
-                        found = Some(title.to_owned());
-                        continue;
-                    }
+        if found.is_some() {
+            output.push(line);
+            continue;
+        }
+
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            // Blank lines are allowed inside the KV block
+            if !past_kv_block {
+                continue;
+            }
+            // Once we're past the KV block, a blank line without a title means no title
+            return None;
+        }
+
+        // #+TITLE: value — standard org metadata title
+        if let Some((key, value)) = trimmed.split_once(':') {
+            if key.eq_ignore_ascii_case("#+title") {
+                let title = value.trim();
+                if !title.is_empty() {
+                    found = Some(title.to_owned());
+                    continue;
                 }
             }
+            // Any other #+key: value KV line is skipped (part of the header block)
+            if key.starts_with("#+") {
+                continue;
+            }
         }
-        output.push(line);
+
+        // * Top-level heading (exactly one asterisk followed by space)
+        if let Some(heading) = trimmed.strip_prefix("* ") {
+            let title = heading.trim();
+            if !title.is_empty() {
+                found = Some(title.to_owned());
+                past_kv_block = true;
+                continue;
+            }
+        }
+
+        // Any other non-blank, non-KV, non-heading content means no title
+        return None;
     }
 
     found.map(|title| (title, output.join("\n").trim().to_owned()))
@@ -667,5 +698,45 @@ mod tests {
         let err = PerformUpdateError::EmptyPost;
         let debug = format!("{:?}", err);
         assert!(debug.contains("EmptyPost"));
+    }
+
+    #[test]
+    fn extract_org_title_handles_level1_heading() {
+        let result = extract_org_title("* My Title\n\nBody text");
+        assert_eq!(result, Some(("My Title".to_string(), "Body text".to_string())));
+    }
+
+    #[test]
+    fn extract_org_title_heading_after_kv_lines() {
+        let result = extract_org_title("#+AUTHOR: Me\n* My Title\n\nBody");
+        assert_eq!(result, Some(("My Title".to_string(), "Body".to_string())));
+    }
+
+    #[test]
+    fn extract_org_title_title_takes_precedence_over_heading() {
+        let result = extract_org_title("#+TITLE: Meta\n* Heading\n\nBody");
+        assert_eq!(result, Some(("Meta".to_string(), "* Heading\n\nBody".to_string())));
+    }
+
+    #[test]
+    fn extract_org_title_heading_not_top_level_ignored() {
+        // ** is a level-2 heading, not a title
+        let result = extract_org_title("** Sub\n\nBody");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn extract_org_title_heading_after_body_text_ignored() {
+        // A heading preceded by prose is not a title
+        let result = extract_org_title("Some intro text.\n* Heading\n\nBody");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn derive_metadata_extracts_org_level1_heading() {
+        let metadata =
+            derive_post_metadata(None, "* Org Heading\n\nBody text", &PostFormat::Org).unwrap();
+        assert_eq!(metadata.title.as_deref(), Some("Org Heading"));
+        assert_eq!(metadata.slug_seed, "Org Heading");
     }
 }
