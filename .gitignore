@@ -34,3 +34,5 @@ playwright/.cache/
 /rulesync.jsonc
 /.side-tracked
 /result
+/data/
+/jaunder-interactive-testing.qcow2
