@@ -156,6 +156,10 @@ use leptos::prelude::*;
 /// Returns the site's current registration policy as a string.
 /// Possible values: `"open"`, `"invite_only"`, `"closed"`.
 #[server(endpoint = "/get_registration_policy")]
+#[cfg_attr(
+    feature = "ssr",
+    tracing::instrument(name = "web.auth.get_registration_policy")
+)]
 pub async fn get_registration_policy() -> Result<String, ServerFnError> {
     let state = expect_context::<Arc<AppState>>();
     let policy = load_registration_policy(&*state.site_config).await;
@@ -164,6 +168,7 @@ pub async fn get_registration_policy() -> Result<String, ServerFnError> {
 
 /// Returns the current logged-in username, if any.
 #[server(endpoint = "/current_user")]
+#[cfg_attr(feature = "ssr", tracing::instrument(name = "web.auth.current_user"))]
 pub async fn current_user() -> Result<Option<String>, ServerFnError> {
     match require_auth().await {
         Ok(auth) => Ok(Some(auth.username.to_string())),
