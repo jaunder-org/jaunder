@@ -10,7 +10,7 @@ macro_rules! web_ssr {
             #[cfg(not(feature = "ssr"))]
             {
                 $(let _ = $param;)*
-                Err(leptos::prelude::ServerFnError::new("Not implemented"))
+                Err($crate::error::WebError::server_function("Not implemented"))
             }
         }
     };
@@ -18,6 +18,7 @@ macro_rules! web_ssr {
 
 pub mod auth;
 pub mod email;
+pub mod error;
 pub mod invites;
 pub mod pages;
 pub mod password_reset;

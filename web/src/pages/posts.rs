@@ -1,5 +1,6 @@
 use crate::{
     auth::current_user,
+    error::WebError,
     pages::{
         signal_read::read_signal,
         ui::{format_post_time, Avatar, Topbar},
@@ -127,7 +128,7 @@ pub fn CreatePostPage() -> impl IntoView {
                                 create_post_action
                                     .value()
                                     .get()
-                                    .map(|result: Result<CreatePostResult, ServerFnError>| {
+                                    .map(|result: Result<CreatePostResult, WebError>| {
                                         match result {
                                             Ok(created) => {
                                                 let message = if created.published_at.is_some() {
@@ -229,7 +230,7 @@ pub fn PostPage() -> impl IntoView {
         |(username, year, month, day, slug): (Option<String>, i32, u32, u32, String)| async move {
             let username = match username {
                 Some(value) if !value.is_empty() => value,
-                _ => return Err(ServerFnError::new("Invalid permalink")),
+                _ => return Err(WebError::validation("Invalid permalink")),
             };
 
             get_post(username, year, month, day, slug).await
@@ -283,7 +284,7 @@ pub fn UserTimelinePage() -> impl IntoView {
         move || username.get(),
         |username| async move {
             if username.is_empty() {
-                return Err(ServerFnError::new("Invalid username"));
+                return Err(WebError::validation("Invalid username"));
             }
             list_user_posts(username, None, None, Some(50)).await
         },
@@ -400,7 +401,7 @@ pub fn DraftPreviewPage() -> impl IntoView {
             let post_id = params
                 .get("post_id")
                 .and_then(|v| v.parse::<i64>().ok())
-                .ok_or_else(|| ServerFnError::new("Invalid preview"))?;
+                .ok_or_else(|| WebError::validation("Invalid preview"))?;
             get_post_preview(post_id).await
         },
     );
@@ -443,7 +444,7 @@ pub fn DraftPreviewPage() -> impl IntoView {
             publish_action
                 .value()
                 .get()
-                .map(|result: Result<PublishPostResult, ServerFnError>| match result {
+                .map(|result: Result<PublishPostResult, WebError>| match result {
                     Ok(published) => {
                         view! {
                             <p class="success">
@@ -610,7 +611,7 @@ pub fn EditPostPage() -> impl IntoView {
             update_post_action
                 .value()
                 .get()
-                .map(|result: Result<UpdatePostResult, ServerFnError>| match result {
+                .map(|result: Result<UpdatePostResult, WebError>| match result {
                     Ok(updated) => {
                         let message = if updated.published_at.is_some() {
                             "Post updated."
@@ -697,7 +698,7 @@ pub fn DraftsPage() -> impl IntoView {
             publish_action
                 .value()
                 .get()
-                .map(|result: Result<PublishPostResult, ServerFnError>| match result {
+                .map(|result: Result<PublishPostResult, WebError>| match result {
                     Ok(published) => {
                         view! {
                             <p class="success">
