@@ -1,4 +1,5 @@
 use crate::email::{verify_email, RequestEmailVerification};
+use crate::error::WebError;
 use crate::profile::get_profile;
 use leptos::prelude::*;
 
@@ -36,7 +37,7 @@ pub fn EmailPage() -> impl IntoView {
             request_action
                 .value()
                 .get()
-                .map(|r: Result<(), ServerFnError>| match r {
+                .map(|r: Result<(), WebError>| match r {
                     Ok(()) => {
                         view! { <p>"Check your email for a verification link."</p> }.into_any()
                     }

@@ -1,10 +1,11 @@
-#[cfg(feature = "ssr")]
-use crate::error::WebError;
 use crate::error::WebResult;
+#[cfg(feature = "ssr")]
+use crate::error::{InternalError, InternalResult};
 #[cfg(feature = "ssr")]
 use axum::{
     extract::FromRequestParts,
     http::{request::Parts, StatusCode},
+    response::{IntoResponse, Response},
 };
 #[cfg(feature = "ssr")]
 use common::auth::{load_registration_policy, RegistrationPolicy};
@@ -40,11 +41,37 @@ pub struct AuthUser {
 }
 
 #[cfg(feature = "ssr")]
+#[derive(Debug)]
+pub enum AuthRejection {
+    MissingToken,
+    MissingAppState,
+    Session(common::storage::SessionAuthError),
+}
+
+#[cfg(feature = "ssr")]
+impl IntoResponse for AuthRejection {
+    fn into_response(self) -> Response {
+        match self {
+            AuthRejection::MissingAppState
+            | AuthRejection::Session(common::storage::SessionAuthError::Internal(_)) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+            AuthRejection::MissingToken
+            | AuthRejection::Session(common::storage::SessionAuthError::InvalidToken)
+            | AuthRejection::Session(common::storage::SessionAuthError::SessionNotFound) => {
+                StatusCode::UNAUTHORIZED
+            }
+        }
+        .into_response()
+    }
+}
+
+#[cfg(feature = "ssr")]
 impl<S> FromRequestParts<S> for AuthUser
 where
     S: Send + Sync,
 {
-    type Rejection = StatusCode;
+    type Rejection = AuthRejection;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         // Cookie takes precedence over Authorization header.
@@ -68,12 +95,12 @@ where
                     .map(str::to_string)
             });
 
-        let raw_token = raw_token.ok_or(StatusCode::UNAUTHORIZED)?;
+        let raw_token = raw_token.ok_or(AuthRejection::MissingToken)?;
 
         let state = parts
             .extensions
             .get::<Arc<AppState>>()
-            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+            .ok_or(AuthRejection::MissingAppState)?;
 
         match state.sessions.authenticate(&raw_token).await {
             Ok(record) => Ok(AuthUser {
@@ -81,19 +108,40 @@ where
                 username: record.username,
                 token_hash: record.token_hash,
             }),
-            Err(_) => Err(StatusCode::UNAUTHORIZED),
+            Err(error) => Err(AuthRejection::Session(error)),
         }
     }
 }
 
 /// Extracts the authenticated user inside a Leptos server function.
-/// Returns [`WebError::Unauthorized`] when no valid session is present.
+/// Returns an internal auth error when no valid session is present.
 #[cfg(feature = "ssr")]
 #[tracing::instrument(name = "web.auth.require_auth")]
-pub async fn require_auth() -> WebResult<AuthUser> {
-    leptos_axum::extract::<AuthUser>()
+pub async fn require_auth() -> InternalResult<AuthUser> {
+    let mut parts = leptos::context::use_context::<Parts>().ok_or_else(|| {
+        InternalError::server_message("missing request Parts context in require_auth")
+    })?;
+
+    AuthUser::from_request_parts(&mut parts, &())
         .await
-        .map_err(|_| WebError::Unauthorized)
+        .map_err(auth_rejection_error)
+}
+
+#[cfg(feature = "ssr")]
+fn auth_rejection_error(error: AuthRejection) -> InternalError {
+    match error {
+        AuthRejection::MissingToken => InternalError::unauthorized("missing session token"),
+        AuthRejection::MissingAppState => InternalError::server_message("missing AppState context"),
+        AuthRejection::Session(common::storage::SessionAuthError::InvalidToken) => {
+            InternalError::unauthorized("invalid session token")
+        }
+        AuthRejection::Session(common::storage::SessionAuthError::SessionNotFound) => {
+            InternalError::unauthorized("session not found")
+        }
+        AuthRejection::Session(common::storage::SessionAuthError::Internal(error)) => {
+            InternalError::storage(error)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -164,19 +212,24 @@ use leptos::prelude::*;
     tracing::instrument(name = "web.auth.get_registration_policy")
 )]
 pub async fn get_registration_policy() -> WebResult<String> {
-    let state = expect_context::<Arc<AppState>>();
-    let policy = load_registration_policy(&*state.site_config).await;
-    Ok(policy.to_string())
+    crate::web_server_fn!("get_registration_policy", => {
+        let state = expect_context::<Arc<AppState>>();
+        let policy = load_registration_policy(&*state.site_config).await;
+        Ok(policy.to_string())
+    })
 }
 
 /// Returns the current logged-in username, if any.
 #[server(endpoint = "/current_user")]
 #[cfg_attr(feature = "ssr", tracing::instrument(name = "web.auth.current_user"))]
 pub async fn current_user() -> WebResult<Option<String>> {
-    match require_auth().await {
-        Ok(auth) => Ok(Some(auth.username.to_string())),
-        Err(_) => Ok(None),
-    }
+    crate::web_server_fn!("current_user", => {
+        match require_auth().await {
+            Ok(auth) => Ok(Some(auth.username.to_string())),
+            Err(error) if matches!(error.public(), crate::error::WebError::Unauthorized) => Ok(None),
+            Err(error) => Err(error),
+        }
+    })
 }
 
 /// Registers a new user.  Returns the raw session token on success and sets
@@ -191,61 +244,61 @@ pub async fn register(
     password: String,
     invite_code: Option<String>,
 ) -> WebResult<String> {
-    let state = expect_context::<Arc<AppState>>();
-    let username = {
-        #[cfg(feature = "ssr")]
-        let _phase = tracing::info_span!("web.auth.register.parse_username").entered();
-        username
-            .to_lowercase()
-            .parse::<Username>()
-            .map_err(|e| WebError::validation(e.to_string()))?
-    };
-    let password = {
-        #[cfg(feature = "ssr")]
-        let _phase = tracing::info_span!("web.auth.register.parse_password").entered();
-        password
-            .parse::<Password>()
-            .map_err(|e| WebError::validation(e.to_string()))?
-    };
-    let policy = load_registration_policy(&*state.site_config)
-        .instrument(tracing::info_span!(
-            "web.auth.register.load_registration_policy"
-        ))
-        .await;
+    crate::web_server_fn!("register", username, password, invite_code => {
+        let state = expect_context::<Arc<AppState>>();
+        let username = {
+            let _phase = tracing::info_span!("web.auth.register.parse_username").entered();
+            username
+                .to_lowercase()
+                .parse::<Username>()
+                .map_err(|e| InternalError::validation(e.to_string()))?
+        };
+        let password = {
+            let _phase = tracing::info_span!("web.auth.register.parse_password").entered();
+            password
+                .parse::<Password>()
+                .map_err(|e| InternalError::validation(e.to_string()))?
+        };
+        let policy = load_registration_policy(&*state.site_config)
+            .instrument(tracing::info_span!(
+                "web.auth.register.load_registration_policy"
+            ))
+            .await;
 
-    let user_id = match policy {
-        RegistrationPolicy::Open => state
-            .users
-            .create_user(&username, &password, None)
-            .instrument(tracing::info_span!("web.auth.register.create_user_open"))
-            .await
-            .map_err(register_open_error)?,
-        RegistrationPolicy::InviteOnly => {
-            let code = invite_code
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| WebError::validation("invite code required"))?;
-            state
-                .atomic
-                .create_user_with_invite(&username, &password, None, &code)
-                .instrument(tracing::info_span!("web.auth.register.create_user_invite"))
+        let user_id = match policy {
+            RegistrationPolicy::Open => state
+                .users
+                .create_user(&username, &password, None)
+                .instrument(tracing::info_span!("web.auth.register.create_user_open"))
                 .await
-                .map_err(register_invite_error)?
-        }
-        RegistrationPolicy::Closed => {
-            return Err(WebError::validation("registration is closed"));
-        }
-    };
+                .map_err(register_open_error)?,
+            RegistrationPolicy::InviteOnly => {
+                let code = invite_code
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| InternalError::validation("invite code required"))?;
+                state
+                    .atomic
+                    .create_user_with_invite(&username, &password, None, &code)
+                    .instrument(tracing::info_span!("web.auth.register.create_user_invite"))
+                    .await
+                    .map_err(register_invite_error)?
+            }
+            RegistrationPolicy::Closed => {
+                return Err(InternalError::validation("registration is closed"));
+            }
+        };
 
-    let raw_token = state
-        .sessions
-        .create_session(user_id, None)
-        .instrument(tracing::info_span!("web.auth.register.create_session"))
-        .await
-        .map_err(WebError::storage)?;
+        let raw_token = state
+            .sessions
+            .create_session(user_id, None)
+            .instrument(tracing::info_span!("web.auth.register.create_session"))
+            .await
+            .map_err(InternalError::storage)?;
 
-    set_session_cookie(&raw_token);
-    leptos_axum::redirect("/");
-    Ok(raw_token)
+        set_session_cookie(&raw_token);
+        leptos_axum::redirect("/");
+        Ok(raw_token)
+    })
 }
 
 /// Authenticates a user.  Returns the raw session token on success and sets
@@ -256,94 +309,97 @@ pub async fn register(
     tracing::instrument(name = "web.auth.login", skip(password, label))
 )]
 pub async fn login(username: String, password: String, label: Option<String>) -> WebResult<String> {
-    let state = expect_context::<Arc<AppState>>();
-    let username = {
-        #[cfg(feature = "ssr")]
-        let _phase = tracing::info_span!("web.auth.login.parse_username").entered();
-        username
-            .to_lowercase()
-            .parse::<Username>()
-            .map_err(|e| WebError::validation(e.to_string()))?
-    };
-    let password = {
-        #[cfg(feature = "ssr")]
-        let _phase = tracing::info_span!("web.auth.login.parse_password").entered();
-        password
-            .parse::<Password>()
-            .map_err(|e| WebError::validation(e.to_string()))?
-    };
-    let record = state
-        .users
-        .authenticate(&username, &password)
-        .instrument(tracing::info_span!("web.auth.login.authenticate_user"))
-        .await
-        .map_err(login_error)?;
+    crate::web_server_fn!("login", username, password, label => {
+        let state = expect_context::<Arc<AppState>>();
+        let username = {
+            let _phase = tracing::info_span!("web.auth.login.parse_username").entered();
+            username
+                .to_lowercase()
+                .parse::<Username>()
+                .map_err(|e| InternalError::validation(e.to_string()))?
+        };
+        let password = {
+            let _phase = tracing::info_span!("web.auth.login.parse_password").entered();
+            password
+                .parse::<Password>()
+                .map_err(|e| InternalError::validation(e.to_string()))?
+        };
+        let record = state
+            .users
+            .authenticate(&username, &password)
+            .instrument(tracing::info_span!("web.auth.login.authenticate_user"))
+            .await
+            .map_err(login_error)?;
 
-    let label = label.filter(|s| !s.is_empty());
-    let raw_token = state
-        .sessions
-        .create_session(record.user_id, label.as_deref())
-        .instrument(tracing::info_span!("web.auth.login.create_session"))
-        .await
-        .map_err(WebError::storage)?;
+        let label = label.filter(|s| !s.is_empty());
+        let raw_token = state
+            .sessions
+            .create_session(record.user_id, label.as_deref())
+            .instrument(tracing::info_span!("web.auth.login.create_session"))
+            .await
+            .map_err(InternalError::storage)?;
 
-    set_session_cookie(&raw_token);
-    leptos_axum::redirect("/");
-    Ok(raw_token)
+        set_session_cookie(&raw_token);
+        leptos_axum::redirect("/");
+        Ok(raw_token)
+    })
 }
 
 /// Revokes the current session and clears the `session` cookie.
 #[server(endpoint = "/logout")]
 #[cfg_attr(feature = "ssr", tracing::instrument(name = "web.auth.logout"))]
 pub async fn logout() -> WebResult<()> {
-    if let Ok(auth) = require_auth().await {
-        let state = expect_context::<Arc<AppState>>();
-        state
-            .sessions
-            .revoke_session(&auth.token_hash)
-            .await
-            .map_err(WebError::storage)?;
-    }
-    clear_session_cookie();
-    #[cfg(feature = "ssr")]
-    leptos_axum::redirect("/");
-    Ok(())
+    crate::web_server_fn!("logout", => {
+        if let Ok(auth) = require_auth().await {
+            let state = expect_context::<Arc<AppState>>();
+            state
+                .sessions
+                .revoke_session(&auth.token_hash)
+                .await
+                .map_err(InternalError::storage)?;
+        }
+        clear_session_cookie();
+        leptos_axum::redirect("/");
+        Ok(())
+    })
 }
 
 #[cfg(feature = "ssr")]
-fn register_open_error(error: common::storage::CreateUserError) -> WebError {
+fn register_open_error(error: common::storage::CreateUserError) -> InternalError {
     match error {
         common::storage::CreateUserError::UsernameTaken => {
-            WebError::conflict("username is already taken")
+            InternalError::conflict("username is already taken")
         }
-        common::storage::CreateUserError::Internal(error) => WebError::storage(error),
+        common::storage::CreateUserError::Internal(error) => InternalError::storage(error),
     }
 }
 
 #[cfg(feature = "ssr")]
-fn register_invite_error(error: common::storage::RegisterWithInviteError) -> WebError {
+fn register_invite_error(error: common::storage::RegisterWithInviteError) -> InternalError {
     match error {
         common::storage::RegisterWithInviteError::UsernameTaken => {
-            WebError::conflict("username is already taken")
+            InternalError::conflict("username is already taken")
         }
         common::storage::RegisterWithInviteError::InviteNotFound => {
-            WebError::validation("invite code not found")
+            InternalError::validation("invite code not found")
         }
         common::storage::RegisterWithInviteError::InviteExpired => {
-            WebError::validation("invite code has expired")
+            InternalError::validation("invite code has expired")
         }
         common::storage::RegisterWithInviteError::InviteAlreadyUsed => {
-            WebError::validation("invite code has already been used")
+            InternalError::validation("invite code has already been used")
         }
-        common::storage::RegisterWithInviteError::Internal(error) => WebError::storage(error),
+        common::storage::RegisterWithInviteError::Internal(error) => InternalError::storage(error),
     }
 }
 
 #[cfg(feature = "ssr")]
-fn login_error(error: common::storage::UserAuthError) -> WebError {
+fn login_error(error: common::storage::UserAuthError) -> InternalError {
     match error {
-        common::storage::UserAuthError::InvalidCredentials => WebError::Unauthorized,
-        common::storage::UserAuthError::Internal(message) => WebError::server_message(message),
+        common::storage::UserAuthError::InvalidCredentials => {
+            InternalError::unauthorized("invalid credentials")
+        }
+        common::storage::UserAuthError::Internal(message) => InternalError::server_message(message),
     }
 }
 

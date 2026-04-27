@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "ssr")]
 use crate::auth::require_auth;
-#[cfg(feature = "ssr")]
-use crate::error::WebError;
 use crate::error::WebResult;
+#[cfg(feature = "ssr")]
+use crate::error::{InternalError, InternalResult, WebError};
 #[cfg(feature = "ssr")]
 use chrono::{Datelike, NaiveDate, Utc};
 #[cfg(feature = "ssr")]
@@ -111,44 +111,46 @@ pub async fn create_post(
     slug_override: Option<String>,
     publish: bool,
 ) -> WebResult<CreatePostResult> {
-    let auth = require_auth().await?;
-    let state = expect_context::<Arc<AppState>>();
+    crate::web_server_fn!("create_post", body, format, slug_override, publish => {
+        let auth = require_auth().await?;
+        let state = expect_context::<Arc<AppState>>();
 
-    let format = format
-        .parse::<PostFormat>()
-        .map_err(|e| WebError::validation(e.to_string()))?;
-    let metadata = derive_post_metadata(None, &body, &format)
-        .ok_or_else(|| WebError::validation("post body is required"))?;
-    let published_at = publish.then(Utc::now);
-    let slug_seed = slug_override
-        .as_deref()
-        .map(str::trim)
-        .filter(|slug| !slug.is_empty())
-        .map(|slug| slug.to_ascii_lowercase())
-        .map(|slug| slug.parse::<Slug>())
-        .transpose()
-        .map_err(|e| WebError::validation(e.to_string()))?
-        .map(|slug| slug.to_string())
-        .or_else(|| slugify_title(&metadata.slug_seed))
-        .ok_or_else(|| {
-            WebError::validation(
-                "post must contain at least one ASCII letter or digit for its slug",
-            )
-        })?;
+        let format = format
+            .parse::<PostFormat>()
+            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let metadata = derive_post_metadata(None, &body, &format)
+            .ok_or_else(|| InternalError::validation("post body is required"))?;
+        let published_at = publish.then(Utc::now);
+        let slug_seed = slug_override
+            .as_deref()
+            .map(str::trim)
+            .filter(|slug| !slug.is_empty())
+            .map(|slug| slug.to_ascii_lowercase())
+            .map(|slug| slug.parse::<Slug>())
+            .transpose()
+            .map_err(|e| InternalError::validation(e.to_string()))?
+            .map(|slug| slug.to_string())
+            .or_else(|| slugify_title(&metadata.slug_seed))
+            .ok_or_else(|| {
+                InternalError::validation(
+                    "post must contain at least one ASCII letter or digit for its slug",
+                )
+            })?;
 
-    let created = create_post_with_unique_slug(
-        state.as_ref(),
-        auth.user_id,
-        &auth.username,
-        metadata.title,
-        body, // verbatim — no stripping
-        format,
-        slug_seed,
-        published_at,
-    )
-    .await?;
+        let created = create_post_with_unique_slug(
+            state.as_ref(),
+            auth.user_id,
+            &auth.username,
+            metadata.title,
+            body, // verbatim — no stripping
+            format,
+            slug_seed,
+            published_at,
+        )
+        .await?;
 
-    Ok(created)
+        Ok(created)
+    })
 }
 
 /// Retrieves a post by its permalink.
@@ -160,7 +162,7 @@ pub async fn get_post(
     day: u32,
     slug: String,
 ) -> WebResult<PostResponse> {
-    crate::web_ssr!(username, year, month, day, slug => {
+    crate::web_server_fn!("get_post", username, year, month, day, slug => {
         use common::slug::Slug;
         use common::username::Username;
 
@@ -168,17 +170,17 @@ pub async fn get_post(
 
         let username_parsed = username
             .parse::<Username>()
-            .map_err(|e| WebError::validation(e.to_string()))?;
-        let slug_parsed = slug.parse::<Slug>().map_err(|e| WebError::validation(e.to_string()))?;
+            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let slug_parsed = slug.parse::<Slug>().map_err(|e| InternalError::validation(e.to_string()))?;
 
         NaiveDate::from_ymd_opt(year, month, day)
-            .ok_or_else(|| WebError::validation("Invalid permalink"))?;
+            .ok_or_else(|| InternalError::validation("Invalid permalink"))?;
 
         if let Some(post) = state
             .posts
             .get_post_by_permalink(&username_parsed, year, month, day, &slug_parsed)
             .await
-            .map_err(WebError::storage)?
+            .map_err(InternalError::storage)?
         {
             let is_author = require_auth()
                 .await
@@ -187,7 +189,9 @@ pub async fn get_post(
             return Ok(post_response(post, username_parsed.to_string(), is_author));
         }
 
-        let auth = require_auth().await.map_err(|_| not_found_error())?;
+        let auth = require_auth()
+            .await
+            .map_err(private_post_not_found_error)?;
         if auth.username != username_parsed {
             return Err(not_found_error());
         }
@@ -210,15 +214,17 @@ pub async fn get_post(
 /// Retrieves a draft preview for the authenticated author.
 #[server(endpoint = "/get_post_preview")]
 pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
-    crate::web_ssr!(post_id => {
-        let auth = require_auth().await.map_err(|_| not_found_error())?;
+    crate::web_server_fn!("get_post_preview", post_id => {
+        let auth = require_auth()
+            .await
+            .map_err(private_post_not_found_error)?;
         let state = expect_context::<Arc<AppState>>();
 
         let post = state
             .posts
             .get_post_by_id(post_id)
             .await
-            .map_err(WebError::storage)?
+            .map_err(InternalError::storage)?
             .ok_or_else(not_found_error)?;
 
         let PostRecord {
@@ -264,41 +270,43 @@ pub async fn update_post(
     slug_override: Option<String>,
     publish: bool,
 ) -> WebResult<UpdatePostResult> {
-    let auth = require_auth().await?;
-    let state = expect_context::<Arc<AppState>>();
+    crate::web_server_fn!("update_post", post_id, body, format, slug_override, publish => {
+        let auth = require_auth().await?;
+        let state = expect_context::<Arc<AppState>>();
 
-    let format = format
-        .parse::<PostFormat>()
-        .map_err(|e| WebError::validation(e.to_string()))?;
+        let format = format
+            .parse::<PostFormat>()
+            .map_err(|e| InternalError::validation(e.to_string()))?;
 
-    let record = perform_post_update(
-        state.posts.as_ref(),
-        post_id,
-        auth.user_id,
-        body,
-        format,
-        slug_override.as_deref(),
-        publish,
-    )
-    .await
-    .map_err(|e| match e {
-        PerformUpdateError::NotFound | PerformUpdateError::Unauthorized => {
-            WebError::not_found("Post")
-        }
-        other => perform_update_error(other),
-    })?;
+        let record = perform_post_update(
+            state.posts.as_ref(),
+            post_id,
+            auth.user_id,
+            body,
+            format,
+            slug_override.as_deref(),
+            publish,
+        )
+        .await
+        .map_err(|e| match e {
+            PerformUpdateError::NotFound | PerformUpdateError::Unauthorized => {
+                InternalError::not_found("Post")
+            }
+            other => perform_update_error(other),
+        })?;
 
-    let published_at_str = record.published_at.map(|t| t.to_rfc3339());
-    let permalink = record
-        .published_at
-        .map(|ts| build_permalink(&auth.username, ts, &record.slug));
+        let published_at_str = record.published_at.map(|t| t.to_rfc3339());
+        let permalink = record
+            .published_at
+            .map(|ts| build_permalink(&auth.username, ts, &record.slug));
 
-    Ok(UpdatePostResult {
-        post_id,
-        slug: record.slug.to_string(),
-        published_at: published_at_str,
-        preview_url: format!("/draft/{post_id}/preview"),
-        permalink,
+        Ok(UpdatePostResult {
+            post_id,
+            slug: record.slug.to_string(),
+            published_at: published_at_str,
+            preview_url: format!("/draft/{post_id}/preview"),
+            permalink,
+        })
     })
 }
 
@@ -309,83 +317,87 @@ pub async fn list_drafts(
     cursor_post_id: Option<i64>,
     limit: Option<u32>,
 ) -> WebResult<Vec<DraftSummary>> {
-    let auth = require_auth().await?;
-    let state = expect_context::<Arc<AppState>>();
+    crate::web_server_fn!("list_drafts", cursor_created_at, cursor_post_id, limit => {
+        let auth = require_auth().await?;
+        let state = expect_context::<Arc<AppState>>();
 
-    let parsed_cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
-    let page_size = limit.unwrap_or(50).clamp(1, 50);
-    let drafts = state
-        .posts
-        .list_drafts_by_user(auth.user_id, parsed_cursor.as_ref(), page_size)
-        .await
-        .map_err(WebError::storage)?;
+        let parsed_cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
+        let page_size = limit.unwrap_or(50).clamp(1, 50);
+        let drafts = state
+            .posts
+            .list_drafts_by_user(auth.user_id, parsed_cursor.as_ref(), page_size)
+            .await
+            .map_err(InternalError::storage)?;
 
-    Ok(drafts
-        .into_iter()
-        .map(|draft| {
-            let permalink = build_permalink(&auth.username, draft.created_at, &draft.slug);
-            DraftSummary {
-                post_id: draft.post_id,
-                title: draft.title.clone(),
-                summary_label: fallback_summary_label(&draft),
-                slug: draft.slug.to_string(),
-                created_at: draft.created_at.to_rfc3339(),
-                updated_at: draft.updated_at.to_rfc3339(),
-                preview_url: format!("/draft/{}/preview", draft.post_id),
-                edit_url: format!("/posts/{}/edit", draft.post_id),
-                permalink,
-            }
-        })
-        .collect())
+        Ok(drafts
+            .into_iter()
+            .map(|draft| {
+                let permalink = build_permalink(&auth.username, draft.created_at, &draft.slug);
+                DraftSummary {
+                    post_id: draft.post_id,
+                    title: draft.title.clone(),
+                    summary_label: fallback_summary_label(&draft),
+                    slug: draft.slug.to_string(),
+                    created_at: draft.created_at.to_rfc3339(),
+                    updated_at: draft.updated_at.to_rfc3339(),
+                    preview_url: format!("/draft/{}/preview", draft.post_id),
+                    edit_url: format!("/posts/{}/edit", draft.post_id),
+                    permalink,
+                }
+            })
+            .collect())
+    })
 }
 
 /// Publishes an existing draft owned by the authenticated user.
 #[server(endpoint = "/publish_post")]
 pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
-    let auth = require_auth().await?;
-    let state = expect_context::<Arc<AppState>>();
+    crate::web_server_fn!("publish_post", post_id => {
+        let auth = require_auth().await?;
+        let state = expect_context::<Arc<AppState>>();
 
-    let existing = state
-        .posts
-        .get_post_by_id(post_id)
-        .await
-        .map_err(WebError::storage)?
-        .ok_or_else(|| WebError::not_found("Post"))?;
+        let existing = state
+            .posts
+            .get_post_by_id(post_id)
+            .await
+            .map_err(InternalError::storage)?
+            .ok_or_else(|| InternalError::not_found("Post"))?;
 
-    if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
-        return Err(WebError::not_found("Post"));
-    }
+        if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
+            return Err(InternalError::not_found("Post"));
+        }
 
-    let updated = state
-        .posts
-        .update_post(
-            post_id,
-            auth.user_id,
-            &UpdatePostInput {
-                title: existing.title,
-                slug: existing.slug,
-                body: existing.body,
-                format: existing.format,
-                rendered_html: existing.rendered_html,
-                publish: true,
-            },
-        )
-        .await
-        .map_err(|e| match e {
-            common::storage::UpdatePostError::NotFound
-            | common::storage::UpdatePostError::Unauthorized => WebError::not_found("Post"),
-            common::storage::UpdatePostError::Internal(error) => WebError::storage(error),
-        })?;
+        let updated = state
+            .posts
+            .update_post(
+                post_id,
+                auth.user_id,
+                &UpdatePostInput {
+                    title: existing.title,
+                    slug: existing.slug,
+                    body: existing.body,
+                    format: existing.format,
+                    rendered_html: existing.rendered_html,
+                    publish: true,
+                },
+            )
+            .await
+            .map_err(|e| match e {
+                common::storage::UpdatePostError::NotFound
+                | common::storage::UpdatePostError::Unauthorized => InternalError::not_found("Post"),
+                common::storage::UpdatePostError::Internal(error) => InternalError::storage(error),
+            })?;
 
-    let published_at = updated
-        .published_at
-        .ok_or_else(|| WebError::not_found("Post"))?;
+        let published_at = updated
+            .published_at
+            .ok_or_else(|| InternalError::not_found("Post"))?;
 
-    Ok(PublishPostResult {
-        post_id: updated.post_id,
-        slug: updated.slug.to_string(),
-        published_at: published_at.to_rfc3339(),
-        permalink: build_permalink(&auth.username, published_at, &updated.slug),
+        Ok(PublishPostResult {
+            post_id: updated.post_id,
+            slug: updated.slug.to_string(),
+            published_at: published_at.to_rfc3339(),
+            permalink: build_permalink(&auth.username, published_at, &updated.slug),
+        })
     })
 }
 
@@ -397,38 +409,40 @@ pub async fn list_user_posts(
     cursor_post_id: Option<i64>,
     limit: Option<u32>,
 ) -> WebResult<TimelinePage> {
-    let state = expect_context::<Arc<AppState>>();
+    crate::web_server_fn!("list_user_posts", username, cursor_created_at, cursor_post_id, limit => {
+        let state = expect_context::<Arc<AppState>>();
 
-    let username = username
-        .trim()
-        .parse::<Username>()
-        .map_err(|e| WebError::validation(e.to_string()))?;
-    let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
+        let username = username
+            .trim()
+            .parse::<Username>()
+            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
 
-    let page_size = limit.unwrap_or(50).clamp(1, 50);
-    let fetch_limit = page_size.saturating_add(1);
+        let page_size = limit.unwrap_or(50).clamp(1, 50);
+        let fetch_limit = page_size.saturating_add(1);
 
-    let mut rows = state
-        .posts
-        .list_published_by_user(&username, cursor.as_ref(), fetch_limit)
-        .await
-        .map_err(WebError::storage)?;
+        let mut rows = state
+            .posts
+            .list_published_by_user(&username, cursor.as_ref(), fetch_limit)
+            .await
+            .map_err(InternalError::storage)?;
 
-    let has_more = rows.len() > page_size as usize;
-    rows.truncate(page_size as usize);
+        let has_more = rows.len() > page_size as usize;
+        rows.truncate(page_size as usize);
 
-    let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
+        let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
 
-    let posts = rows
-        .into_iter()
-        .filter_map(|post| timeline_post_summary(&username, post))
-        .collect();
+        let posts = rows
+            .into_iter()
+            .filter_map(|post| timeline_post_summary(&username, post))
+            .collect();
 
-    Ok(TimelinePage {
-        posts,
-        next_cursor_created_at: next_cursor.as_ref().map(|c| c.created_at.to_rfc3339()),
-        next_cursor_post_id: next_cursor.as_ref().map(|c| c.post_id),
-        has_more,
+        Ok(TimelinePage {
+            posts,
+            next_cursor_created_at: next_cursor.as_ref().map(|c| c.created_at.to_rfc3339()),
+            next_cursor_post_id: next_cursor.as_ref().map(|c| c.post_id),
+            has_more,
+        })
     })
 }
 
@@ -439,41 +453,43 @@ pub async fn list_local_timeline(
     cursor_post_id: Option<i64>,
     limit: Option<u32>,
 ) -> WebResult<TimelinePage> {
-    let state = expect_context::<Arc<AppState>>();
+    crate::web_server_fn!("list_local_timeline", cursor_created_at, cursor_post_id, limit => {
+        let state = expect_context::<Arc<AppState>>();
 
-    let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
-    let page_size = limit.unwrap_or(50).clamp(1, 50);
-    let fetch_limit = page_size.saturating_add(1);
+        let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
+        let page_size = limit.unwrap_or(50).clamp(1, 50);
+        let fetch_limit = page_size.saturating_add(1);
 
-    let mut rows = state
-        .posts
-        .list_published(cursor.as_ref(), fetch_limit)
-        .await
-        .map_err(WebError::storage)?;
-
-    let has_more = rows.len() > page_size as usize;
-    rows.truncate(page_size as usize);
-
-    let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
-    let mut posts = Vec::with_capacity(rows.len());
-
-    for post in rows {
-        let author = state
-            .users
-            .get_user(post.user_id)
+        let mut rows = state
+            .posts
+            .list_published(cursor.as_ref(), fetch_limit)
             .await
-            .map_err(WebError::storage)?
-            .ok_or_else(|| WebError::not_found("post author"))?;
-        if let Some(summary) = timeline_post_summary(&author.username, post) {
-            posts.push(summary);
-        }
-    }
+            .map_err(InternalError::storage)?;
 
-    Ok(TimelinePage {
-        posts,
-        next_cursor_created_at: next_cursor.as_ref().map(|c| c.created_at.to_rfc3339()),
-        next_cursor_post_id: next_cursor.as_ref().map(|c| c.post_id),
-        has_more,
+        let has_more = rows.len() > page_size as usize;
+        rows.truncate(page_size as usize);
+
+        let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
+        let mut posts = Vec::with_capacity(rows.len());
+
+        for post in rows {
+            let author = state
+                .users
+                .get_user(post.user_id)
+                .await
+                .map_err(InternalError::storage)?
+                .ok_or_else(|| InternalError::not_found("post author"))?;
+            if let Some(summary) = timeline_post_summary(&author.username, post) {
+                posts.push(summary);
+            }
+        }
+
+        Ok(TimelinePage {
+            posts,
+            next_cursor_created_at: next_cursor.as_ref().map(|c| c.created_at.to_rfc3339()),
+            next_cursor_post_id: next_cursor.as_ref().map(|c| c.post_id),
+            has_more,
+        })
     })
 }
 
@@ -484,33 +500,35 @@ pub async fn list_home_feed(
     cursor_post_id: Option<i64>,
     limit: Option<u32>,
 ) -> WebResult<TimelinePage> {
-    let auth = require_auth().await?;
-    let state = expect_context::<Arc<AppState>>();
+    crate::web_server_fn!("list_home_feed", cursor_created_at, cursor_post_id, limit => {
+        let auth = require_auth().await?;
+        let state = expect_context::<Arc<AppState>>();
 
-    let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
-    let page_size = limit.unwrap_or(50).clamp(1, 50);
-    let fetch_limit = page_size.saturating_add(1);
+        let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
+        let page_size = limit.unwrap_or(50).clamp(1, 50);
+        let fetch_limit = page_size.saturating_add(1);
 
-    let mut rows = state
-        .posts
-        .list_published_by_user(&auth.username, cursor.as_ref(), fetch_limit)
-        .await
-        .map_err(WebError::storage)?;
+        let mut rows = state
+            .posts
+            .list_published_by_user(&auth.username, cursor.as_ref(), fetch_limit)
+            .await
+            .map_err(InternalError::storage)?;
 
-    let has_more = rows.len() > page_size as usize;
-    rows.truncate(page_size as usize);
+        let has_more = rows.len() > page_size as usize;
+        rows.truncate(page_size as usize);
 
-    let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
-    let posts = rows
-        .into_iter()
-        .filter_map(|post| timeline_post_summary(&auth.username, post))
-        .collect();
+        let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
+        let posts = rows
+            .into_iter()
+            .filter_map(|post| timeline_post_summary(&auth.username, post))
+            .collect();
 
-    Ok(TimelinePage {
-        posts,
-        next_cursor_created_at: next_cursor.as_ref().map(|c| c.created_at.to_rfc3339()),
-        next_cursor_post_id: next_cursor.as_ref().map(|c| c.post_id),
-        has_more,
+        Ok(TimelinePage {
+            posts,
+            next_cursor_created_at: next_cursor.as_ref().map(|c| c.created_at.to_rfc3339()),
+            next_cursor_post_id: next_cursor.as_ref().map(|c| c.post_id),
+            has_more,
+        })
     })
 }
 
@@ -525,12 +543,12 @@ async fn create_post_with_unique_slug(
     format: PostFormat,
     slug_seed: String,
     published_at: Option<chrono::DateTime<Utc>>,
-) -> WebResult<CreatePostResult> {
+) -> InternalResult<CreatePostResult> {
     for attempt in 0..100 {
         let slug_string = candidate_slug(&slug_seed, attempt);
         let slug = slug_string
             .parse::<Slug>()
-            .map_err(|e| WebError::validation(e.to_string()))?;
+            .map_err(|e| InternalError::validation(e.to_string()))?;
 
         match create_rendered_post(
             state.posts.as_ref(),
@@ -548,8 +566,8 @@ async fn create_post_with_unique_slug(
                     .posts
                     .get_post_by_id(post_id)
                     .await
-                    .map_err(WebError::storage)?
-                    .ok_or_else(|| WebError::server_message("created post not found"))?;
+                    .map_err(InternalError::storage)?
+                    .ok_or_else(|| InternalError::server_message("created post not found"))?;
 
                 let created_at = record.created_at.to_rfc3339();
                 let published_at = record.published_at.map(|timestamp| timestamp.to_rfc3339());
@@ -575,11 +593,12 @@ async fn create_post_with_unique_slug(
         }
     }
 
-    Err(WebError::server_message(
+    Err(InternalError::server_message(
         "unable to allocate a unique slug after 100 attempts",
     ))
 }
 
+#[cfg(any(feature = "ssr", test))]
 fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
     if attempt == 0 {
         slug_seed.to_owned()
@@ -665,19 +684,19 @@ fn fallback_summary_label(post: &PostRecord) -> String {
 fn parse_post_cursor(
     cursor_created_at: Option<String>,
     cursor_post_id: Option<i64>,
-) -> WebResult<Option<PostCursor>> {
+) -> InternalResult<Option<PostCursor>> {
     match (cursor_created_at, cursor_post_id) {
         (None, None) => Ok(None),
         (Some(created_at), Some(post_id)) => {
             let created_at = chrono::DateTime::parse_from_rfc3339(created_at.trim())
-                .map_err(|_| WebError::validation("invalid cursor_created_at"))?
+                .map_err(|_| InternalError::validation("invalid cursor_created_at"))?
                 .with_timezone(&Utc);
             Ok(Some(PostCursor {
                 created_at,
                 post_id,
             }))
         }
-        _ => Err(WebError::validation(
+        _ => Err(InternalError::validation(
             "cursor_created_at and cursor_post_id must be provided together",
         )),
     }
@@ -691,7 +710,7 @@ async fn find_draft_by_permalink_for_user(
     month: u32,
     day: u32,
     slug: &Slug,
-) -> WebResult<Option<PostRecord>> {
+) -> InternalResult<Option<PostRecord>> {
     let mut cursor = None;
 
     // Search through up to 10,000 drafts (200 pages of 50). This 200-iteration
@@ -702,7 +721,7 @@ async fn find_draft_by_permalink_for_user(
             .posts
             .list_drafts_by_user(user_id, cursor.as_ref(), 50)
             .await
-            .map_err(WebError::storage)?;
+            .map_err(InternalError::storage)?;
         if drafts.is_empty() {
             return Ok(None);
         }
@@ -728,48 +747,64 @@ async fn find_draft_by_permalink_for_user(
 }
 
 #[cfg(feature = "ssr")]
-fn not_found_error() -> WebError {
+fn not_found_error() -> InternalError {
+    set_not_found_status();
+    InternalError::not_found("Post")
+}
+
+#[cfg(feature = "ssr")]
+fn set_not_found_status() {
     use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
 
     if let Some(opts) = use_context::<ResponseOptions>() {
         opts.set_status(axum::http::StatusCode::NOT_FOUND);
     }
-
-    WebError::not_found("Post")
 }
 
 #[cfg(feature = "ssr")]
-fn perform_update_error(error: PerformUpdateError) -> WebError {
+fn private_post_not_found_error(error: InternalError) -> InternalError {
+    set_not_found_status();
+    InternalError::masked(
+        WebError::not_found("Post"),
+        format!(
+            "private post hidden behind not-found response: {}",
+            error.operator_message()
+        ),
+    )
+}
+
+#[cfg(feature = "ssr")]
+fn perform_update_error(error: PerformUpdateError) -> InternalError {
     match error {
         PerformUpdateError::EmptyPost
         | PerformUpdateError::NoSlugFromPost
-        | PerformUpdateError::InvalidSlug => WebError::validation(error.to_string()),
+        | PerformUpdateError::InvalidSlug => InternalError::validation(error.to_string()),
         PerformUpdateError::NotFound | PerformUpdateError::Unauthorized => {
-            WebError::not_found("Post")
+            InternalError::not_found("Post")
         }
-        PerformUpdateError::Render(_) => WebError::server(error),
-        PerformUpdateError::Storage(error) => WebError::storage(error),
+        PerformUpdateError::Render(_) => InternalError::server(error),
+        PerformUpdateError::Storage(error) => InternalError::storage(error),
     }
 }
 
 #[cfg(feature = "ssr")]
-fn create_rendered_post_error(error: CreateRenderedPostError) -> WebError {
+fn create_rendered_post_error(error: CreateRenderedPostError) -> InternalError {
     match error {
         CreateRenderedPostError::Storage(CreatePostError::SlugConflict) => {
-            WebError::conflict("slug already taken for this user on this date")
+            InternalError::conflict("slug already taken for this user on this date")
         }
         CreateRenderedPostError::Storage(CreatePostError::Internal(error)) => {
-            WebError::storage(error)
+            InternalError::storage(error)
         }
-        CreateRenderedPostError::Render(error) => WebError::server(error),
+        CreateRenderedPostError::Render(error) => InternalError::server(error),
     }
 }
 
 /// Soft-deletes a post owned by the authenticated user.
 #[server(endpoint = "/delete_post")]
 pub async fn delete_post(post_id: i64) -> WebResult<()> {
-    crate::web_ssr!(post_id => {
+    crate::web_server_fn!("delete_post", post_id => {
         let auth = require_auth().await?;
         let state = expect_context::<Arc<AppState>>();
 
@@ -777,18 +812,18 @@ pub async fn delete_post(post_id: i64) -> WebResult<()> {
             .posts
             .get_post_by_id(post_id)
             .await
-            .map_err(WebError::storage)?
-            .ok_or_else(|| WebError::not_found("Post"))?;
+            .map_err(InternalError::storage)?
+            .ok_or_else(|| InternalError::not_found("Post"))?;
 
         if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
-            return Err(WebError::not_found("Post"));
+            return Err(InternalError::not_found("Post"));
         }
 
         state
             .posts
             .soft_delete_post(post_id)
             .await
-            .map_err(WebError::storage)
+            .map_err(InternalError::storage)
     })
 }
 
