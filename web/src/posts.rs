@@ -152,8 +152,7 @@ pub async fn get_post(
     day: u32,
     slug: String,
 ) -> Result<PostResponse, ServerFnError> {
-    #[cfg(feature = "ssr")]
-    {
+    crate::web_ssr!(username, year, month, day, slug => {
         use common::slug::Slug;
         use common::username::Username;
 
@@ -199,19 +198,13 @@ pub async fn get_post(
         .ok_or_else(not_found_error)?;
 
         Ok(post_response(draft, auth.username.to_string(), true))
-    }
-    #[cfg(not(feature = "ssr"))]
-    {
-        let _ = (username, year, month, day, slug);
-        Err(ServerFnError::new("Not implemented"))
-    }
+    })
 }
 
 /// Retrieves a draft preview for the authenticated author.
 #[server(endpoint = "/get_post_preview")]
 pub async fn get_post_preview(post_id: i64) -> Result<PostResponse, ServerFnError> {
-    #[cfg(feature = "ssr")]
-    {
+    crate::web_ssr!(post_id => {
         let auth = require_auth().await.map_err(|_| not_found_error())?;
         let state = expect_context::<Arc<AppState>>();
 
@@ -253,12 +246,7 @@ pub async fn get_post_preview(post_id: i64) -> Result<PostResponse, ServerFnErro
             published_at: published_at.map(|t| t.to_rfc3339()),
             is_author: true,
         })
-    }
-    #[cfg(not(feature = "ssr"))]
-    {
-        let _ = post_id;
-        Err(ServerFnError::new("Not implemented"))
-    }
+    })
 }
 
 /// Updates an existing post for the authenticated author.
@@ -750,8 +738,7 @@ fn not_found_error() -> ServerFnError {
 /// Soft-deletes a post owned by the authenticated user.
 #[server(endpoint = "/delete_post")]
 pub async fn delete_post(post_id: i64) -> Result<(), ServerFnError> {
-    #[cfg(feature = "ssr")]
-    {
+    crate::web_ssr!(post_id => {
         let auth = require_auth().await?;
         let state = expect_context::<Arc<AppState>>();
 
@@ -771,12 +758,7 @@ pub async fn delete_post(post_id: i64) -> Result<(), ServerFnError> {
             .soft_delete_post(post_id)
             .await
             .map_err(|e| ServerFnError::new(e.to_string()))
-    }
-    #[cfg(not(feature = "ssr"))]
-    {
-        let _ = post_id;
-        Err(ServerFnError::new("Not implemented"))
-    }
+    })
 }
 
 #[cfg(feature = "ssr")]

@@ -1,6 +1,21 @@
 #[cfg(feature = "ssr")]
 pub use common::username;
 
+#[macro_export]
+macro_rules! web_ssr {
+    ($($param:ident),* => $body:block) => {
+        {
+            #[cfg(feature = "ssr")]
+            $body
+            #[cfg(not(feature = "ssr"))]
+            {
+                $(let _ = $param;)*
+                Err(leptos::prelude::ServerFnError::new("Not implemented"))
+            }
+        }
+    };
+}
+
 pub mod auth;
 pub mod email;
 pub mod invites;
