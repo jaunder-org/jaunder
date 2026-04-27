@@ -41,7 +41,6 @@ pub fn CreatePostPage() -> impl IntoView {
                                                     type="text"
                                                     name="title"
                                                     placeholder="Title"
-                                                    required=true
                                                     style="width:100%;font-size:20px;font-weight:600;\
                                                     border:none;outline:none;background:transparent;\
                                                     color:var(--ink);margin-bottom:14px;\
@@ -503,8 +502,7 @@ pub fn EditPostPage() -> impl IntoView {
                                                 class="j-edit-form-input"
                                                 type="text"
                                                 name="title"
-                                                required=true
-                                                prop:value=fetched.title
+                                                prop:value=fetched.title.unwrap_or_default()
                                             />
                                         </div>
                                         <div class="j-edit-form-field j-edit-form-field--body">
@@ -729,9 +727,10 @@ fn render_draft_row(
     delete_action: ServerAction<DeletePost>,
 ) -> impl IntoView {
     let post_id = draft.post_id;
+    let label = draft.title.clone().unwrap_or(draft.summary_label.clone());
     view! {
         <li>
-            <strong>{draft.title}</strong>
+            <strong>{label}</strong>
             " ("
             {draft.slug}
             ") "
@@ -764,12 +763,18 @@ fn render_draft_row(
 }
 
 fn render_timeline_post_row(post: TimelinePostSummary) -> impl IntoView {
+    let title = post.title.clone();
+    let permalink = post.permalink.clone();
     view! {
         <li data-test="timeline-item">
-            <h2>
-                <a href=post.permalink.clone()>{post.title}</a>
-            </h2>
-            <p class="metadata">"Published on " {post.published_at}</p>
+            {title
+                .map(|title| {
+                    view! {
+                        <h2>
+                            <a href=permalink>{title}</a>
+                        </h2>
+                    }
+                })} <p class="metadata">"Published on " {post.published_at}</p>
             <div class="content" inner_html=post.rendered_html></div>
         </li>
     }
@@ -793,11 +798,10 @@ fn render_post_article(post: PostResponse, banner: Option<&'static str>) -> AnyV
 
     view! {
         <article>
-            <h1>{title}</h1>
+            {title.map(|title| view! { <h1>{title}</h1> })}
             <p class="metadata">
                 "By " <a href=profile_href>{username_display}</a> " on " {display_time}
-            </p>
-            {banner.map(|text| view! { <p class="draft-banner">{text}</p> })}
+            </p> {banner.map(|text| view! { <p class="draft-banner">{text}</p> })}
             <div class="content" inner_html=rendered_html></div>
         </article>
     }

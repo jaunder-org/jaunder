@@ -822,7 +822,7 @@ impl AtomicOps for PostgresAtomicOps {
 type PostRow = (
     i64,
     i64,
-    String,
+    Option<String>,
     String,
     String,
     String,
@@ -1512,7 +1512,7 @@ mod tests {
         let posts = PostgresPostStorage::new(pool);
         exercise(posts.create_post(&common::storage::CreatePostInput {
             user_id: 1,
-            title: "Test".to_string(),
+            title: Some("Test".to_string()),
             slug: slug.clone(),
             body: "body".to_string(),
             format: common::storage::PostFormat::Markdown,
@@ -1526,7 +1526,7 @@ mod tests {
             1,
             1,
             &common::storage::UpdatePostInput {
-                title: "Updated".to_string(),
+                title: Some("Updated".to_string()),
                 slug: slug.clone(),
                 body: "body".to_string(),
                 format: common::storage::PostFormat::Markdown,

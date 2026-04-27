@@ -702,7 +702,7 @@ impl PasswordResetStorage for SqlitePasswordResetStorage {
 type PostRow = (
     i64,
     i64,
-    String,
+    Option<String>,
     String,
     String,
     String,

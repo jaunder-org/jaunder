@@ -483,6 +483,50 @@ test("inline composer: published post appears in timeline without page reload", 
   });
 });
 
+test("inline composer: plain body publishes titleless note", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+  await goto(page, "/");
+  await waitForSelector(page, ".j-composer");
+
+  await page.fill('.j-composer textarea[name="body"]', "Titleless inline note");
+  await click(page, '.j-composer button[name="publish"][value="true"]');
+  await waitForSelector(page, ".j-composer p.success");
+
+  const post = page.locator("article.j-post").first();
+  await expect(post).toContainText("Titleless inline note");
+  await expect(post.locator(".j-post-title")).toHaveCount(0);
+});
+
+test("inline composer: markdown heading becomes article title", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+  await goto(page, "/");
+  await waitForSelector(page, ".j-composer");
+
+  await page.fill(
+    '.j-composer textarea[name="body"]',
+    "# Inline Article\n\nArticle body",
+  );
+  await click(page, '.j-composer button[name="publish"][value="true"]');
+  await waitForSelector(page, ".j-composer p.success");
+
+  const post = page.locator("article.j-post").first();
+  await expect(post.locator(".j-post-title")).toContainText("Inline Article");
+  await expect(post.locator(".j-post-body")).toContainText("Article body");
+  await expect(post.locator(".j-post-body h1")).toHaveCount(0);
+});
+
 test("inline composer: publish flash is a link to the post permalink", async ({
   page,
 }, testInfo) => {

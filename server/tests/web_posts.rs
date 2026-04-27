@@ -107,7 +107,7 @@ async fn create_post_persists_rendered_published_post() {
         .await
         .unwrap()
         .expect("post should exist");
-    assert_eq!(record.title, "Hello World");
+    assert_eq!(record.title.as_deref(), Some("Hello World"));
     assert_eq!(record.slug.to_string(), "hello-world");
     assert_eq!(record.format, PostFormat::Markdown);
     assert!(record.published_at.is_some());
@@ -232,7 +232,82 @@ async fn create_post_accepts_slug_override_and_saves_draft() {
 }
 
 #[tokio::test]
-async fn create_post_rejects_empty_title() {
+async fn create_post_accepts_titleless_body() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=&body=Titleless+note&format=markdown&publish=true",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    assert_eq!(created.slug, "titleless-note");
+    let record = state
+        .posts
+        .get_post_by_id(created.post_id)
+        .await
+        .unwrap()
+        .expect("post should exist");
+    assert_eq!(record.title, None);
+    assert_eq!(record.body, "Titleless note");
+}
+
+#[tokio::test]
+async fn create_post_extracts_markdown_heading_title() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=&body=%23+Extracted+Title%0A%0ABody+text&format=markdown&publish=true",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    assert_eq!(created.slug, "extracted-title");
+    let record = state
+        .posts
+        .get_post_by_id(created.post_id)
+        .await
+        .unwrap()
+        .expect("post should exist");
+    assert_eq!(record.title.as_deref(), Some("Extracted Title"));
+    assert_eq!(record.body, "Body text");
+    assert!(!record.rendered_html.contains("<h1>Extracted Title</h1>"));
+}
+
+#[tokio::test]
+async fn create_post_rejects_empty_post() {
     let base = TempDir::new().unwrap();
     let state = test_state(&base).await;
     let user_id = state
@@ -250,13 +325,47 @@ async fn create_post_rejects_empty_title() {
     let (status, body) = post_form(
         state,
         "/api/create_post",
-        "title=+++&body=body&format=markdown&publish=false",
+        "title=&body=&format=markdown&publish=false",
         Some(&cookie),
     )
     .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("title is required"), "body: {body}");
+    assert!(
+        body.contains("post body or title is required"),
+        "body: {body}"
+    );
+}
+
+#[tokio::test]
+async fn create_post_rejects_post_without_slug_source() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = post_form(
+        state,
+        "/api/create_post",
+        "title=%2B%2B%2B&body=%2B%2B%2B&format=markdown&publish=false",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(
+        body.contains("post must contain at least one ASCII letter or digit for its slug"),
+        "body: {body}"
+    );
 }
 
 #[tokio::test]
@@ -341,7 +450,7 @@ async fn create_post_rejects_title_without_ascii_slug_characters() {
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(
-        body.contains("title must contain at least one ASCII letter or digit"),
+        body.contains("post must contain at least one ASCII letter or digit for its slug"),
         "body: {body}"
     );
 }
@@ -794,7 +903,7 @@ async fn update_post_updates_draft_content_and_slug() {
         .await
         .unwrap()
         .expect("post should exist");
-    assert_eq!(record.title, "Updated Title");
+    assert_eq!(record.title.as_deref(), Some("Updated Title"));
     assert_eq!(record.slug.to_string(), "updated-slug");
     assert!(record.rendered_html.contains("<strong>new body</strong>"));
 }
@@ -965,7 +1074,7 @@ async fn update_post_rejects_unauthenticated() {
 }
 
 #[tokio::test]
-async fn update_post_rejects_empty_title() {
+async fn update_post_rejects_empty_post() {
     let base = TempDir::new().unwrap();
     let state = test_state(&base).await;
     let user_id = state
@@ -993,13 +1102,16 @@ async fn update_post_rejects_empty_title() {
     let (status, body) = update_post_form(
         state,
         created.post_id,
-        "title=+++&body=body&format=markdown&publish=false",
+        "title=&body=&format=markdown&publish=false",
         Some(&cookie),
     )
     .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("title is required"), "body: {body}");
+    assert!(
+        body.contains("post body or title is required"),
+        "body: {body}"
+    );
 }
 
 #[tokio::test]
@@ -1145,7 +1257,7 @@ async fn update_post_rejects_title_without_ascii_slug_characters() {
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(
-        body.contains("title must contain at least one ASCII letter or digit"),
+        body.contains("post must contain at least one ASCII letter or digit for its slug"),
         "body: {body}"
     );
 }
@@ -1604,10 +1716,10 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination() {
         "body: {body}"
     );
     assert!(
-        first_page
-            .posts
-            .iter()
-            .all(|post| !post.title.contains("Draft")),
+        first_page.posts.iter().all(|post| post
+            .title
+            .as_deref()
+            .is_none_or(|title| !title.contains("Draft"))),
         "body: {body}"
     );
 
@@ -1763,10 +1875,10 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination() {
         "body: {body}"
     );
     assert!(
-        first_page
-            .posts
-            .iter()
-            .all(|post| !post.title.contains("Draft") && !post.title.contains("Deleted")),
+        first_page.posts.iter().all(|post| post
+            .title
+            .as_deref()
+            .is_none_or(|title| { !title.contains("Draft") && !title.contains("Deleted") })),
         "body: {body}"
     );
 
@@ -1892,10 +2004,10 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only() {
         "body: {body}"
     );
     assert!(
-        first_page
-            .posts
-            .iter()
-            .all(|post| !post.title.contains("Other") && !post.title.contains("Draft")),
+        first_page.posts.iter().all(|post| post
+            .title
+            .as_deref()
+            .is_none_or(|title| { !title.contains("Other") && !title.contains("Draft") })),
         "body: {body}"
     );
 

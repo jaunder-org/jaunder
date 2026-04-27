@@ -122,7 +122,7 @@ pub(super) fn build_invite_record(
 pub(super) type PostRecordParts = (
     i64,                   // post_id
     i64,                   // user_id
-    String,                // title
+    Option<String>,        // title
     String,                // slug
     String,                // body
     String,                // format
@@ -679,7 +679,7 @@ mod tests {
         let record = build_post_record((
             10,
             20,
-            "Hello".to_string(),
+            Some("Hello".to_string()),
             "hello-world".to_string(),
             "Body".to_string(),
             "markdown".to_string(),
@@ -705,7 +705,7 @@ mod tests {
         let err = build_post_record((
             10,
             20,
-            "Hello".to_string(),
+            Some("Hello".to_string()),
             "not a slug".to_string(),
             "Body".to_string(),
             "markdown".to_string(),
@@ -726,7 +726,7 @@ mod tests {
         let err = build_post_record((
             10,
             20,
-            "Hello".to_string(),
+            Some("Hello".to_string()),
             "hello-world".to_string(),
             "Body".to_string(),
             "html".to_string(),
