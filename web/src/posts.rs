@@ -318,7 +318,7 @@ pub async fn list_drafts(
     let auth = require_auth().await?;
     let state = expect_context::<Arc<AppState>>();
 
-    let parsed_cursor = parse_draft_cursor(cursor_created_at, cursor_post_id)?;
+    let parsed_cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
     let page_size = limit.unwrap_or(50).clamp(1, 50);
     let drafts = state
         .posts
@@ -692,14 +692,6 @@ fn parse_post_cursor(
 }
 
 #[cfg(feature = "ssr")]
-fn parse_draft_cursor(
-    cursor_created_at: Option<String>,
-    cursor_post_id: Option<i64>,
-) -> Result<Option<PostCursor>, ServerFnError> {
-    parse_post_cursor(cursor_created_at, cursor_post_id)
-}
-
-#[cfg(feature = "ssr")]
 async fn find_draft_by_permalink_for_user(
     state: &AppState,
     user_id: i64,
@@ -710,6 +702,9 @@ async fn find_draft_by_permalink_for_user(
 ) -> Result<Option<PostRecord>, ServerFnError> {
     let mut cursor = None;
 
+    // Search through up to 10,000 drafts (200 pages of 50). This 200-iteration
+    // limit is a safety bound to prevent infinite loops or excessive DB load
+    // while still being large enough for almost any user's draft list.
     for _ in 0..200 {
         let drafts = state
             .posts
@@ -802,8 +797,8 @@ mod tests {
 
     #[cfg(feature = "ssr")]
     use super::{
-        build_permalink, fallback_summary_label, parse_draft_cursor, parse_post_cursor,
-        post_response, timeline_post_summary,
+        build_permalink, fallback_summary_label, parse_post_cursor, post_response,
+        timeline_post_summary,
     };
     #[cfg(feature = "ssr")]
     use chrono::{TimeZone, Utc};
@@ -835,37 +830,6 @@ mod tests {
         let permalink = build_permalink(&username, timestamp, &slug);
 
         assert_eq!(permalink, "/~author/2026/04/12/hello-world");
-    }
-
-    #[cfg(feature = "ssr")]
-    #[test]
-    fn parse_draft_cursor_accepts_valid_cursor() {
-        let cursor = parse_draft_cursor(Some("2026-04-16T10:11:12+00:00".to_string()), Some(42))
-            .unwrap()
-            .unwrap();
-        assert_eq!(cursor.post_id, 42);
-        assert_eq!(
-            cursor.created_at,
-            Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap()
-        );
-    }
-
-    #[cfg(feature = "ssr")]
-    #[test]
-    fn parse_draft_cursor_rejects_partial_cursor() {
-        let err = parse_draft_cursor(Some("2026-04-16T10:11:12+00:00".to_string()), None)
-            .err()
-            .expect("cursor should reject partial values");
-        assert!(err.to_string().contains("must be provided together"));
-    }
-
-    #[cfg(feature = "ssr")]
-    #[test]
-    fn parse_draft_cursor_rejects_invalid_timestamp() {
-        let err = parse_draft_cursor(Some("not-a-time".to_string()), Some(1))
-            .err()
-            .expect("cursor should reject invalid timestamp");
-        assert!(err.to_string().contains("invalid cursor_created_at"));
     }
 
     #[cfg(feature = "ssr")]
