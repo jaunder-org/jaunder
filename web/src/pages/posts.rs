@@ -796,9 +796,17 @@ fn render_post_article(post: PostResponse, banner: Option<&'static str>) -> AnyV
         .map(format_post_time)
         .unwrap_or_else(|| format_post_time(&created_at));
 
+    // Inject a template <h1> only when the rendered body does not already open with one.
+    // Markdown and org `* Heading` both produce <h1> in rendered_html; #+TITLE: does not.
+    // This is a mild encapsulation violation — see design doc for rationale.
+    let template_title = match title {
+        Some(ref t) if !rendered_html.trim_start().starts_with("<h1") => Some(t.clone()),
+        _ => None,
+    };
+
     view! {
         <article>
-            {title.map(|title| view! { <h1>{title}</h1> })}
+            {template_title.map(|title| view! { <h1>{title}</h1> })}
             <p class="metadata">
                 "By " <a href=profile_href>{username_display}</a> " on " {display_time}
             </p> {banner.map(|text| view! { <p class="draft-banner">{text}</p> })}
