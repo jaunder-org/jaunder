@@ -21,8 +21,7 @@ impl Icons {
         "M10 17s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 17 7c0 5.5-7 10-7 10z";
     pub const SEARCH: &'static str = "M8 3a6 6 0 1 0 0 12a6 6 0 0 0 0-12z M17 17l-4-4";
     pub const PLUS: &'static str = "M10 4v12 M4 10h12";
-    pub const COG: &'static str =
-        "M10 6v2 M10 12v2 M6 10H4 M16 10h-2 M6.5 6.5l-1.5-1.5 M14 14l1.5 1.5 M6.5 13.5L5 15 M14 6l1.5-1.5 M10 13a3 3 0 1 0 0-6a3 3 0 0 0 0 6z";
+    pub const COG: &'static str = "M10 6v2 M10 12v2 M6 10H4 M16 10h-2 M6.5 6.5l-1.5-1.5 M14 14l1.5 1.5 M6.5 13.5L5 15 M14 6l1.5-1.5 M10 13a3 3 0 1 0 0-6a3 3 0 0 0 0 6z";
     pub const EDIT: &'static str = "M3 17l4 0 9-9a2.83 2.83 0 0 0-4-4l-9 9 0 4 M12 5l3 3";
 }
 
@@ -147,7 +146,6 @@ pub fn PostCard(post: TimelinePostSummary) -> impl IntoView {
     // real app data. We render what we have and omit the source indicator and
     // stats footer for now (wired up in a later step).
     let time_label = format_post_time(&post.published_at);
-    let has_title = !post.title.is_empty();
 
     view! {
         <article class="j-post">
@@ -159,11 +157,13 @@ pub fn PostCard(post: TimelinePostSummary) -> impl IntoView {
                     <span class="j-spacer"></span>
                     <span class="j-post-time">{time_label}</span>
                 </header>
-                {has_title
-                    .then(|| {
+                {post
+                    .title
+                    .clone()
+                    .map(|title| {
                         view! {
                             <div class="j-post-title">
-                                <a href=post.permalink.clone()>{post.title.clone()}</a>
+                                <a href=post.permalink.clone()>{title}</a>
                             </div>
                         }
                     })}
@@ -177,16 +177,6 @@ pub fn PostCard(post: TimelinePostSummary) -> impl IntoView {
 }
 
 // ─── 3.7 InlineComposer ───────────────────────────────────────
-
-/// Derives a post title from the body: the first line, truncated to 100 characters.
-pub fn title_from_body(body: &str) -> String {
-    body.lines()
-        .next()
-        .unwrap_or("")
-        .chars()
-        .take(100)
-        .collect()
-}
 
 #[component]
 pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {
@@ -241,11 +231,6 @@ pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl In
                                 flash.set(None);
                             }
                         ></textarea>
-                        <input
-                            type="hidden"
-                            name="title"
-                            prop:value=move || title_from_body(&body.get())
-                        />
                         <input type="hidden" name="slug_override" value="" />
                         <input type="hidden" name="format" prop:value=move || format.get() />
                         <div class="j-composer-toolbar">
@@ -492,7 +477,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{avatar_parts, format_post_time, title_from_body};
+    use super::{avatar_parts, format_post_time};
 
     #[test]
     fn avatar_parts_single_word() {
@@ -564,26 +549,5 @@ mod tests {
     #[test]
     fn format_post_time_handles_utc_z_suffix() {
         assert_eq!(format_post_time("2026-04-23T10:30:00Z"), "2026-04-23 10:30");
-    }
-
-    #[test]
-    fn title_from_body_stops_at_first_newline() {
-        assert_eq!(title_from_body("first line\nsecond line"), "first line");
-    }
-
-    #[test]
-    fn title_from_body_single_line_unchanged() {
-        assert_eq!(title_from_body("hello world"), "hello world");
-    }
-
-    #[test]
-    fn title_from_body_truncates_to_100_chars() {
-        let long_line = "a".repeat(150);
-        assert_eq!(title_from_body(&long_line), "a".repeat(100));
-    }
-
-    #[test]
-    fn title_from_body_empty_body() {
-        assert_eq!(title_from_body(""), "");
     }
 }
