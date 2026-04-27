@@ -83,10 +83,11 @@ async fn create_post_persists_rendered_published_post() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
+    // Title embedded as # heading in the body (verbatim storage)
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Hello+World&body=%2A%2Abold%2A%2A&format=markdown&publish=true",
+        "body=%23+Hello+World%0A%0A%2A%2Abold%2A%2A&format=markdown&publish=true",
         Some(&cookie),
     )
     .await;
@@ -146,10 +147,11 @@ async fn create_post_retries_slug_conflicts_for_same_user_and_date() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
+    // Title embedded as # heading; two posts with same heading produce conflicting slugs
     let (first_status, first_body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Repeated+Title&body=first&format=markdown&publish=true",
+        "body=%23+Repeated+Title%0A%0Afirst&format=markdown&publish=true",
         Some(&cookie),
     )
     .await;
@@ -158,7 +160,7 @@ async fn create_post_retries_slug_conflicts_for_same_user_and_date() {
     let (second_status, second_body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Repeated+Title&body=second&format=markdown&publish=true",
+        "body=%23+Repeated+Title%0A%0Asecond&format=markdown&publish=true",
         Some(&cookie),
     )
     .await;
@@ -287,7 +289,7 @@ async fn create_post_extracts_markdown_heading_title() {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=&body=%23+Extracted+Title%0A%0ABody+text&format=markdown&publish=true",
+        "body=%23+Extracted+Title%0A%0ABody+text&format=markdown&publish=true",
         Some(&cookie),
     )
     .await;
@@ -302,8 +304,10 @@ async fn create_post_extracts_markdown_heading_title() {
         .unwrap()
         .expect("post should exist");
     assert_eq!(record.title.as_deref(), Some("Extracted Title"));
-    assert_eq!(record.body, "Body text");
-    assert!(!record.rendered_html.contains("<h1>Extracted Title</h1>"));
+    // Body is stored verbatim including the heading
+    assert_eq!(record.body, "# Extracted Title\n\nBody text");
+    // Rendered HTML contains the heading because body is rendered verbatim
+    assert!(record.rendered_html.contains("<h1>Extracted Title</h1>"));
 }
 
 #[tokio::test]
@@ -325,14 +329,14 @@ async fn create_post_rejects_empty_post() {
     let (status, body) = post_form(
         state,
         "/api/create_post",
-        "title=&body=&format=markdown&publish=false",
+        "body=&format=markdown&publish=false",
         Some(&cookie),
     )
     .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(
-        body.contains("post body or title is required"),
+        body.contains("post body is required"),
         "body: {body}"
     );
 }
@@ -440,10 +444,11 @@ async fn create_post_rejects_title_without_ascii_slug_characters() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
+    // Heading with only em-dashes passes the empty check but cannot produce a slug
     let (status, body) = post_form(
         state,
         "/api/create_post",
-        "title=%E2%80%94%E2%80%94%E2%80%94&body=body&format=markdown&publish=false",
+        "body=%23+%E2%80%94%E2%80%94%E2%80%94%0A%0Abody&format=markdown&publish=false",
         Some(&cookie),
     )
     .await;
@@ -474,7 +479,7 @@ async fn get_post_returns_published_post() {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Permalink&body=%2A%2Abold%2A%2A&format=markdown&publish=true",
+        "body=%23+Permalink%0A%0A%2A%2Abold%2A%2A&format=markdown&publish=true",
         Some(&cookie),
     )
     .await;
@@ -548,7 +553,7 @@ async fn get_post_returns_draft_to_author_only() {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Draft&body=draft&format=markdown&publish=false",
+        "body=%23+Draft%0A%0Adraft&format=markdown&publish=false",
         Some(&author_cookie),
     )
     .await;
@@ -653,7 +658,7 @@ async fn get_post_preview_shows_draft_to_author_only() {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Preview+Draft&body=draft&format=markdown&publish=false",
+        "body=%23+Preview+Draft%0A%0Adraft&format=markdown&publish=false",
         Some(&author_cookie),
     )
     .await;
@@ -876,7 +881,7 @@ async fn update_post_updates_draft_content_and_slug() {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Original+Title&body=original&format=markdown&publish=false",
+        "body=original&format=markdown&publish=false",
         Some(&cookie),
     )
     .await;
@@ -884,10 +889,11 @@ async fn update_post_updates_draft_content_and_slug() {
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     let post_id = created.post_id;
 
+    // Title embedded as # heading; slug_override takes precedence over the derived slug
     let (status, body) = update_post_form(
         Arc::clone(&state),
         post_id,
-        "title=Updated+Title&body=%2A%2Anew+body%2A%2A&format=markdown&slug_override=updated-slug&publish=false",
+        "body=%23+Updated+Title%0A%0A%2A%2Anew+body%2A%2A&format=markdown&slug_override=updated-slug&publish=false",
         Some(&cookie),
     )
     .await;
@@ -1239,18 +1245,18 @@ async fn update_post_rejects_title_without_ascii_slug_characters() {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Original&body=body&format=markdown&publish=false",
+        "body=original&format=markdown&publish=false",
         Some(&cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
-    // em-dash-only title passes the empty check but cannot produce a slug
+    // Heading with only em-dashes passes the empty check but cannot produce a slug
     let (status, body) = update_post_form(
         state,
         created.post_id,
-        "title=%E2%80%94%E2%80%94%E2%80%94&body=body&format=markdown&publish=false",
+        "body=%23+%E2%80%94%E2%80%94%E2%80%94%0A%0Abody&format=markdown&publish=false",
         Some(&cookie),
     )
     .await;
@@ -2294,7 +2300,7 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink() {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Deletable+Post&body=body&format=markdown&publish=true",
+        "body=%23+Deletable+Post%0A%0Abody&format=markdown&publish=true",
         Some(&cookie),
     )
     .await;

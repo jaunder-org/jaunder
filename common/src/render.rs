@@ -29,16 +29,16 @@ pub fn render(body: &str, format: &PostFormat) -> Result<String, RenderError> {
     }
 }
 
-/// Public post metadata derived from the explicit title and body.
+/// Metadata derived from a post body used for slug generation and display.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DerivedPostMetadata {
     pub title: Option<String>,
-    pub body: String,
     pub slug_seed: String,
     pub summary_label: String,
 }
 
-/// Derives the public title, stored body, slug seed, and fallback label for a post.
+/// Derives the public title, slug seed, and fallback label for a post.
+/// The body is stored verbatim by the caller — this function never mutates it.
 pub fn derive_post_metadata(
     explicit_title: Option<&str>,
     body: &str,
@@ -47,38 +47,35 @@ pub fn derive_post_metadata(
     let explicit_title = explicit_title
         .map(str::trim)
         .filter(|title| !title.is_empty());
-    let body = body.trim().to_owned();
+    let body = body.trim();
 
     if let Some(title) = explicit_title {
         let title = title.to_owned();
-        let summary_label = fallback_label(&body).unwrap_or_else(|| title.clone());
+        let summary_label = fallback_label(body).unwrap_or_else(|| title.clone());
         return Some(DerivedPostMetadata {
             title: Some(title.clone()),
-            body,
             slug_seed: title,
             summary_label,
         });
     }
 
-    let extracted = match format {
-        PostFormat::Markdown => extract_markdown_title(&body),
-        PostFormat::Org => extract_org_title(&body),
+    let extracted_title = match format {
+        PostFormat::Markdown => extract_markdown_title(body).map(|(title, _)| title),
+        PostFormat::Org => extract_org_title(body).map(|(title, _)| title),
     };
 
-    if let Some((title, body)) = extracted {
-        let summary_label = fallback_label(&body).unwrap_or_else(|| title.clone());
+    if let Some(title) = extracted_title {
+        let summary_label = fallback_label(body).unwrap_or_else(|| title.clone());
         return Some(DerivedPostMetadata {
             title: Some(title.clone()),
-            body,
             slug_seed: title,
             summary_label,
         });
     }
 
-    let summary_label = fallback_label(&body)?;
+    let summary_label = fallback_label(body)?;
     Some(DerivedPostMetadata {
         title: None,
-        body,
         slug_seed: summary_label.clone(),
         summary_label,
     })
@@ -305,18 +302,16 @@ impl From<UpdatePostError> for PerformUpdateError {
 ///
 /// The storage layer freezes the slug if the post is already published.
 /// Ownership and deletion checks are also performed atomically in storage.
-#[allow(clippy::too_many_arguments)]
 pub async fn perform_post_update(
     storage: &dyn PostStorage,
     post_id: i64,
     editor_user_id: i64,
-    title: Option<String>,
     body: String,
     format: PostFormat,
     slug_override: Option<&str>,
     publish: bool,
 ) -> Result<PostRecord, PerformUpdateError> {
-    let metadata = derive_post_metadata(title.as_deref(), &body, &format)
+    let metadata = derive_post_metadata(None, &body, &format)
         .ok_or(PerformUpdateError::EmptyPost)?;
 
     let slug = match slug_override.map(str::trim).filter(|s| !s.is_empty()) {
@@ -330,11 +325,11 @@ pub async fn perform_post_update(
             .map_err(|_| PerformUpdateError::NoSlugFromPost)?,
     };
 
-    let rendered_html = render(&metadata.body, &format)?;
+    let rendered_html = render(&body, &format)?;
     let input = UpdatePostInput {
         title: metadata.title,
         slug,
-        body: metadata.body,
+        body,
         format,
         rendered_html,
         publish,
@@ -520,7 +515,6 @@ mod tests {
         .unwrap();
         assert_eq!(metadata.title.as_deref(), Some("Explicit"));
         assert_eq!(metadata.slug_seed, "Explicit");
-        assert_eq!(metadata.body, "# Body Heading\ntext");
         assert_eq!(metadata.summary_label, "# Body Heading");
     }
 
@@ -534,8 +528,7 @@ mod tests {
         .unwrap();
         assert_eq!(metadata.title.as_deref(), Some("Article Title"));
         assert_eq!(metadata.slug_seed, "Article Title");
-        assert_eq!(metadata.body, "Body text");
-        assert_eq!(metadata.summary_label, "Body text");
+        // body is not a field of DerivedPostMetadata — the caller retains the original
     }
 
     #[test]
@@ -545,7 +538,7 @@ mod tests {
                 .unwrap();
         assert_eq!(metadata.title.as_deref(), Some("Org Title"));
         assert_eq!(metadata.slug_seed, "Org Title");
-        assert_eq!(metadata.body, "Body text");
+        // body is not a field of DerivedPostMetadata — the caller retains the original
     }
 
     #[test]
@@ -559,7 +552,6 @@ mod tests {
         assert_eq!(metadata.title, None);
         assert_eq!(metadata.slug_seed, "A compact note");
         assert_eq!(metadata.summary_label, "A compact note");
-        assert_eq!(metadata.body, "A compact note\nwith more text");
     }
 
     #[test]

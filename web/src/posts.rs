@@ -100,7 +100,6 @@ pub struct PostResponse {
 /// Creates a post for the authenticated user.
 #[server(endpoint = "/create_post")]
 pub async fn create_post(
-    title: Option<String>,
     body: String,
     format: String,
     slug_override: Option<String>,
@@ -112,8 +111,8 @@ pub async fn create_post(
     let format = format
         .parse::<PostFormat>()
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    let metadata = derive_post_metadata(title.as_deref(), &body, &format)
-        .ok_or_else(|| ServerFnError::new("post body or title is required"))?;
+    let metadata = derive_post_metadata(None, &body, &format)
+        .ok_or_else(|| ServerFnError::new("post body is required"))?;
     let published_at = publish.then(Utc::now);
     let slug_seed = slug_override
         .as_deref()
@@ -126,7 +125,9 @@ pub async fn create_post(
         .map(|slug| slug.to_string())
         .or_else(|| slugify_title(&metadata.slug_seed))
         .ok_or_else(|| {
-            ServerFnError::new("post must contain at least one ASCII letter or digit for its slug")
+            ServerFnError::new(
+                "post must contain at least one ASCII letter or digit for its slug",
+            )
         })?;
 
     let created = create_post_with_unique_slug(
@@ -134,7 +135,7 @@ pub async fn create_post(
         auth.user_id,
         &auth.username,
         metadata.title,
-        metadata.body,
+        body, // verbatim — no stripping
         format,
         slug_seed,
         published_at,
@@ -266,7 +267,6 @@ pub async fn get_post_preview(post_id: i64) -> Result<PostResponse, ServerFnErro
 #[server(endpoint = "/update_post")]
 pub async fn update_post(
     post_id: i64,
-    title: Option<String>,
     body: String,
     format: String,
     slug_override: Option<String>,
@@ -283,7 +283,6 @@ pub async fn update_post(
         state.posts.as_ref(),
         post_id,
         auth.user_id,
-        title,
         body,
         format,
         slug_override.as_deref(),
