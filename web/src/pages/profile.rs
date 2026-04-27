@@ -1,3 +1,4 @@
+use crate::error::WebError;
 use crate::profile::{get_profile, UpdateProfile};
 use leptos::prelude::*;
 
@@ -46,7 +47,7 @@ pub fn ProfilePage() -> impl IntoView {
             update_action
                 .value()
                 .get()
-                .and_then(|r: Result<(), ServerFnError>| r.err())
+                .and_then(|r: Result<(), WebError>| r.err())
                 .map(|e| view! { <p class="error">{e.to_string()}</p> })
         }}
     }

@@ -16,6 +16,23 @@ macro_rules! web_ssr {
     };
 }
 
+#[macro_export]
+macro_rules! web_server_fn {
+    ($name:expr, $($param:ident),* => $body:block) => {
+        {
+            #[cfg(feature = "ssr")]
+            {
+                $crate::error::server_boundary($name, async move $body).await
+            }
+            #[cfg(not(feature = "ssr"))]
+            {
+                $(let _ = $param;)*
+                Err($crate::error::WebError::server_function("Not implemented"))
+            }
+        }
+    };
+}
+
 pub mod auth;
 pub mod email;
 pub mod error;

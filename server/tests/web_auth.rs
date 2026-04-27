@@ -808,7 +808,10 @@ async fn auth_user_extraction_fails_without_app_state_extension() {
 
     // Attempt to extract AuthUser without AppState in extensions
     let result = web::auth::AuthUser::from_request_parts(&mut parts, &()).await;
-    assert_eq!(result.unwrap_err(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(matches!(
+        result.unwrap_err(),
+        web::auth::AuthRejection::MissingAppState
+    ));
 }
 
 #[tokio::test]
