@@ -22,8 +22,7 @@ async function createPublishedPostViaApi(
   const response = await withTimedAction(page, "api.create_post", () =>
     page.request.post(`${BASE_URL}/api/create_post`, {
       form: {
-        title,
-        body: `Body for ${title}`,
+        body: `# ${title}\n\nBody for ${title}`,
         format: "markdown",
         publish: "true",
       },
@@ -43,8 +42,7 @@ test("authenticated user can create a post through the UI", async ({
   await goto(page, "/posts/new");
 
   await expect(page.locator(".j-topbar h1")).toHaveText("New post");
-  await page.fill('input[name="title"]', "Playwright Post");
-  await page.fill('textarea[name="body"]', "**browser**");
+  await page.fill('textarea[name="body"]', "# Playwright Post\n\n**browser**");
   await page.selectOption('select[name="format"]', "markdown");
   await click(page, 'button[name="publish"][value="true"]');
   await waitForSelector(page, ".success");
@@ -82,8 +80,10 @@ test("published post renders at permalink", async ({ page }, testInfo) => {
   );
 
   await goto(page, "/posts/new");
-  await page.fill('input[name="title"]', "Permalink Story");
-  await page.fill('textarea[name="body"]', "**hello permalink**");
+  await page.fill(
+    'textarea[name="body"]',
+    "# Permalink Story\n\n**hello permalink**",
+  );
   await page.selectOption('select[name="format"]', "markdown");
   await click(page, 'button[name="publish"][value="true"]');
   await waitForSelector(page, ".success");
@@ -121,10 +121,9 @@ test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
 
-  // Create a draft
+  // Create a draft; title embedded as # heading
   await goto(page, "/posts/new");
-  await page.fill('input[name="title"]', "Original Draft");
-  await page.fill('textarea[name="body"]', "original body");
+  await page.fill('textarea[name="body"]', "# Original Draft\n\noriginal body");
   await page.selectOption('select[name="format"]', "markdown");
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");
@@ -139,11 +138,13 @@ test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
   // Navigate to edit page
   await goto(page, `/posts/${postId}/edit`);
 
-  await expect(page.locator("h1")).toHaveText("Edit Post");
+  await expect(page.locator(".j-topbar h1")).toHaveText("Edit Post");
 
-  // Update the draft
-  await page.fill('input[name="title"]', "Edited Draft");
-  await page.fill('textarea[name="body"]', "**edited content**");
+  // Update the draft; keep heading to preserve the slug
+  await page.fill(
+    'textarea[name="body"]',
+    "# Original Draft\n\n**edited content**",
+  );
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");
 
@@ -162,10 +163,12 @@ test("editing a published post freezes the slug", async ({
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
 
-  // Create and publish a post
+  // Create and publish a post; title embedded as # heading
   await goto(page, "/posts/new");
-  await page.fill('input[name="title"]', "Published Article");
-  await page.fill('textarea[name="body"]', "original content");
+  await page.fill(
+    'textarea[name="body"]',
+    "# Published Article\n\noriginal content",
+  );
   await page.selectOption('select[name="format"]', "markdown");
   await click(page, 'button[name="publish"][value="true"]');
   await waitForSelector(page, ".success");
@@ -188,8 +191,7 @@ test("editing a published post freezes the slug", async ({
   // Published post should not have a slug_override input
   await expect(page.locator('input[name="slug_override"]')).not.toBeVisible();
 
-  // Save the published post
-  await page.fill('input[name="title"]', "Updated Article");
+  // Save the published post (body already pre-filled from loaded post; slug stays frozen)
   await click(page, 'button[name="publish"][value="true"]');
   await waitForSelector(page, ".success");
 
@@ -212,8 +214,10 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   await register(page, firstNavigationTimeoutMs);
 
   await goto(page, "/posts/new");
-  await page.fill('input[name="title"]', "Lifecycle Draft");
-  await page.fill('textarea[name="body"]', "initial draft body");
+  await page.fill(
+    'textarea[name="body"]',
+    "# Lifecycle Draft\n\ninitial draft body",
+  );
   await page.selectOption('select[name="format"]', "markdown");
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");
@@ -238,7 +242,10 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   const permalinkUrl = permalinkHref!;
 
   await goto(page, `/posts/${postId}/edit`);
-  await page.fill('textarea[name="body"]', "edited draft body");
+  await page.fill(
+    'textarea[name="body"]',
+    "# Lifecycle Draft\n\nedited draft body",
+  );
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");
 
@@ -288,7 +295,9 @@ test("per-user timeline lists published posts with pagination", async ({
 
   await goto(page, `/~${username}`, { timeout: firstNavigationTimeoutMs });
 
-  await expect(page.locator("h1")).toContainText(`Posts by ${username}`);
+  await expect(page.locator("h1", { hasText: /^Posts by / })).toContainText(
+    `Posts by ${username}`,
+  );
   await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
     TIMELINE_PAGE_SIZE,
   );
@@ -421,10 +430,12 @@ test("authenticated user can delete a published post", async ({
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
 
-  // Create a published post
+  // Create a published post; title embedded as # heading (title input is removed from UI)
   await goto(page, "/posts/new");
-  await page.fill('input[name="title"]', "Post To Delete");
-  await page.fill('textarea[name="body"]', "this will be deleted");
+  await page.fill(
+    'textarea[name="body"]',
+    "# Post To Delete\n\nthis will be deleted",
+  );
   await page.selectOption('select[name="format"]', "markdown");
   await click(page, 'button[name="publish"][value="true"]');
   await waitForSelector(page, ".success");
@@ -524,7 +535,8 @@ test("inline composer: markdown heading becomes article title", async ({
   const post = page.locator("article.j-post").first();
   await expect(post.locator(".j-post-title")).toContainText("Inline Article");
   await expect(post.locator(".j-post-body")).toContainText("Article body");
-  await expect(post.locator(".j-post-body h1")).toHaveCount(0);
+  // Body is stored verbatim, so the # heading renders as <h1> inside the body
+  await expect(post.locator(".j-post-body h1")).toHaveCount(1);
 });
 
 test("inline composer: publish flash is a link to the post permalink", async ({
@@ -624,10 +636,12 @@ test("authenticated user can delete a draft from the drafts page", async ({
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
 
-  // Create a draft
+  // Create a draft; title embedded as # heading (title input is removed from UI)
   await goto(page, "/posts/new");
-  await page.fill('input[name="title"]', "Draft To Delete");
-  await page.fill('textarea[name="body"]', "draft content");
+  await page.fill(
+    'textarea[name="body"]',
+    "# Draft To Delete\n\ndraft content",
+  );
   await page.selectOption('select[name="format"]', "markdown");
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");

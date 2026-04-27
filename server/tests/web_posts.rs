@@ -335,10 +335,7 @@ async fn create_post_rejects_empty_post() {
     .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(
-        body.contains("post body is required"),
-        "body: {body}"
-    );
+    assert!(body.contains("post body is required"), "body: {body}");
 }
 
 #[tokio::test]

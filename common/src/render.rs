@@ -311,8 +311,8 @@ pub async fn perform_post_update(
     slug_override: Option<&str>,
     publish: bool,
 ) -> Result<PostRecord, PerformUpdateError> {
-    let metadata = derive_post_metadata(None, &body, &format)
-        .ok_or(PerformUpdateError::EmptyPost)?;
+    let metadata =
+        derive_post_metadata(None, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
 
     let slug = match slug_override.map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => raw
@@ -695,7 +695,10 @@ mod tests {
     #[test]
     fn extract_org_title_handles_level1_heading() {
         let result = extract_org_title("* My Title\n\nBody text");
-        assert_eq!(result, Some(("My Title".to_string(), "Body text".to_string())));
+        assert_eq!(
+            result,
+            Some(("My Title".to_string(), "Body text".to_string()))
+        );
     }
 
     #[test]
@@ -707,7 +710,10 @@ mod tests {
     #[test]
     fn extract_org_title_title_takes_precedence_over_heading() {
         let result = extract_org_title("#+TITLE: Meta\n* Heading\n\nBody");
-        assert_eq!(result, Some(("Meta".to_string(), "* Heading\n\nBody".to_string())));
+        assert_eq!(
+            result,
+            Some(("Meta".to_string(), "* Heading\n\nBody".to_string()))
+        );
     }
 
     #[test]

@@ -125,9 +125,7 @@ pub async fn create_post(
         .map(|slug| slug.to_string())
         .or_else(|| slugify_title(&metadata.slug_seed))
         .ok_or_else(|| {
-            ServerFnError::new(
-                "post must contain at least one ASCII letter or digit for its slug",
-            )
+            ServerFnError::new("post must contain at least one ASCII letter or digit for its slug")
         })?;
 
     let created = create_post_with_unique_slug(
