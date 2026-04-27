@@ -7,7 +7,7 @@ use crate::auth::require_auth;
 use chrono::{Datelike, NaiveDate, Utc};
 #[cfg(feature = "ssr")]
 use common::{
-    render::{create_rendered_post, perform_post_update, PerformUpdateError},
+    render::{create_rendered_post, derive_post_metadata, perform_post_update, PerformUpdateError},
     slug::{slugify_title, Slug},
     storage::{AppState, CreatePostError, PostCursor, PostFormat, PostRecord, UpdatePostInput},
     username::Username,
@@ -40,7 +40,8 @@ pub struct UpdatePostResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DraftSummary {
     pub post_id: i64,
-    pub title: String,
+    pub title: Option<String>,
+    pub summary_label: String,
     pub slug: String,
     pub created_at: String,
     pub updated_at: String,
@@ -63,7 +64,7 @@ pub struct PublishPostResult {
 pub struct TimelinePostSummary {
     pub post_id: i64,
     pub username: String,
-    pub title: String,
+    pub title: Option<String>,
     pub slug: String,
     pub rendered_html: String,
     pub created_at: String,
@@ -85,7 +86,7 @@ pub struct TimelinePage {
 pub struct PostResponse {
     pub post_id: i64,
     pub username: String,
-    pub title: String,
+    pub title: Option<String>,
     pub slug: String,
     pub body: String,
     pub format: String,
@@ -99,7 +100,7 @@ pub struct PostResponse {
 /// Creates a post for the authenticated user.
 #[server(endpoint = "/create_post")]
 pub async fn create_post(
-    title: String,
+    title: Option<String>,
     body: String,
     format: String,
     slug_override: Option<String>,
@@ -108,14 +109,11 @@ pub async fn create_post(
     let auth = require_auth().await?;
     let state = expect_context::<Arc<AppState>>();
 
-    let title = title.trim().to_owned();
-    if title.is_empty() {
-        return Err(ServerFnError::new("title is required"));
-    }
-
     let format = format
         .parse::<PostFormat>()
         .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let metadata = derive_post_metadata(title.as_deref(), &body, &format)
+        .ok_or_else(|| ServerFnError::new("post body or title is required"))?;
     let published_at = publish.then(Utc::now);
     let slug_seed = slug_override
         .as_deref()
@@ -126,17 +124,17 @@ pub async fn create_post(
         .transpose()
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .map(|slug| slug.to_string())
-        .or_else(|| slugify_title(&title))
+        .or_else(|| slugify_title(&metadata.slug_seed))
         .ok_or_else(|| {
-            ServerFnError::new("title must contain at least one ASCII letter or digit")
+            ServerFnError::new("post must contain at least one ASCII letter or digit for its slug")
         })?;
 
     let created = create_post_with_unique_slug(
         state.as_ref(),
         auth.user_id,
         &auth.username,
-        title,
-        body,
+        metadata.title,
+        metadata.body,
         format,
         slug_seed,
         published_at,
@@ -268,7 +266,7 @@ pub async fn get_post_preview(post_id: i64) -> Result<PostResponse, ServerFnErro
 #[server(endpoint = "/update_post")]
 pub async fn update_post(
     post_id: i64,
-    title: String,
+    title: Option<String>,
     body: String,
     format: String,
     slug_override: Option<String>,
@@ -337,7 +335,8 @@ pub async fn list_drafts(
             let permalink = build_permalink(&auth.username, draft.created_at, &draft.slug);
             DraftSummary {
                 post_id: draft.post_id,
-                title: draft.title,
+                title: draft.title.clone(),
+                summary_label: fallback_summary_label(&draft),
                 slug: draft.slug.to_string(),
                 created_at: draft.created_at.to_rfc3339(),
                 updated_at: draft.updated_at.to_rfc3339(),
@@ -532,7 +531,7 @@ async fn create_post_with_unique_slug(
     state: &AppState,
     user_id: i64,
     username: &Username,
-    title: String,
+    title: Option<String>,
     body: String,
     format: PostFormat,
     slug_seed: String,
@@ -659,6 +658,18 @@ fn post_response(post: PostRecord, username: String, is_author: bool) -> PostRes
         published_at: published_at.map(|t| t.to_rfc3339()),
         is_author,
     }
+}
+
+#[cfg(feature = "ssr")]
+fn fallback_summary_label(post: &PostRecord) -> String {
+    post.body
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.chars().take(100).collect::<String>())
+        .filter(|line| !line.is_empty())
+        .or_else(|| post.title.clone())
+        .unwrap_or_else(|| post.slug.to_string())
 }
 
 #[cfg(feature = "ssr")]
@@ -793,7 +804,10 @@ mod tests {
     use super::candidate_slug;
 
     #[cfg(feature = "ssr")]
-    use super::{build_permalink, parse_draft_cursor, parse_post_cursor, post_response};
+    use super::{
+        build_permalink, fallback_summary_label, parse_draft_cursor, parse_post_cursor,
+        post_response, timeline_post_summary,
+    };
     #[cfg(feature = "ssr")]
     use chrono::{TimeZone, Utc};
     #[cfg(feature = "ssr")]
@@ -866,6 +880,87 @@ mod tests {
 
     #[cfg(feature = "ssr")]
     #[test]
+    fn fallback_summary_label_prefers_body_then_title_then_slug() {
+        let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
+        let slug = "hello-world".parse::<Slug>().unwrap();
+
+        let body_label = fallback_summary_label(&PostRecord {
+            post_id: 1,
+            user_id: 2,
+            title: Some("Stored Title".to_string()),
+            slug: slug.clone(),
+            body: "\nBody label\nmore".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>Body label</p>".to_string(),
+            created_at: base_time,
+            updated_at: base_time,
+            published_at: None,
+            deleted_at: None,
+        });
+        assert_eq!(body_label, "Body label");
+
+        let title_label = fallback_summary_label(&PostRecord {
+            post_id: 1,
+            user_id: 2,
+            title: Some("Stored Title".to_string()),
+            slug: slug.clone(),
+            body: "".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "".to_string(),
+            created_at: base_time,
+            updated_at: base_time,
+            published_at: None,
+            deleted_at: None,
+        });
+        assert_eq!(title_label, "Stored Title");
+
+        let slug_label = fallback_summary_label(&PostRecord {
+            post_id: 1,
+            user_id: 2,
+            title: None,
+            slug,
+            body: "".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "".to_string(),
+            created_at: base_time,
+            updated_at: base_time,
+            published_at: None,
+            deleted_at: None,
+        });
+        assert_eq!(slug_label, "hello-world");
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn timeline_post_summary_keeps_titleless_posts_titleless() {
+        let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
+        let username = "author".parse::<Username>().unwrap();
+        let slug = "titleless-note".parse::<Slug>().unwrap();
+
+        let summary = timeline_post_summary(
+            &username,
+            PostRecord {
+                post_id: 1,
+                user_id: 2,
+                title: None,
+                slug,
+                body: "Titleless note".to_string(),
+                format: PostFormat::Markdown,
+                rendered_html: "<p>Titleless note</p>".to_string(),
+                created_at: base_time,
+                updated_at: base_time,
+                published_at: Some(base_time),
+                deleted_at: None,
+            },
+        )
+        .expect("published post should summarize");
+
+        assert_eq!(summary.title, None);
+        assert_eq!(summary.permalink, "/~author/2026/04/16/titleless-note");
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
     fn post_response_marks_draft_state_from_published_at() {
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
         let slug = "hello-world".parse::<Slug>().unwrap();
@@ -874,7 +969,7 @@ mod tests {
             PostRecord {
                 post_id: 1,
                 user_id: 2,
-                title: "Draft".to_string(),
+                title: Some("Draft".to_string()),
                 slug: slug.clone(),
                 body: "body".to_string(),
                 format: PostFormat::Markdown,
@@ -894,7 +989,7 @@ mod tests {
             PostRecord {
                 post_id: 2,
                 user_id: 2,
-                title: "Published".to_string(),
+                title: Some("Published".to_string()),
                 slug,
                 body: "body".to_string(),
                 format: PostFormat::Markdown,

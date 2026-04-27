@@ -1208,7 +1208,7 @@ async fn post_storage(base: &TempDir) -> (SqliteUserStorage, SqlitePostStorage) 
 fn make_create_post_input(user_id: i64, slug: &str) -> CreatePostInput {
     CreatePostInput {
         user_id,
-        title: format!("Post {slug}"),
+        title: Some(format!("Post {slug}")),
         slug: slug.parse().unwrap(),
         body: "body text".to_string(),
         format: PostFormat::Markdown,
@@ -1237,7 +1237,7 @@ async fn assert_post_create_and_get_by_id(state: &std::sync::Arc<jaunder::storag
     let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
     assert_eq!(record.post_id, post_id);
     assert_eq!(record.user_id, user_id);
-    assert_eq!(record.title, "Post hello-world");
+    assert_eq!(record.title.as_deref(), Some("Post hello-world"));
     assert_eq!(record.slug.as_str(), "hello-world");
     assert_eq!(record.format, PostFormat::Markdown);
     assert!(record.published_at.is_none());
@@ -1255,7 +1255,7 @@ async fn assert_post_slug_conflict(state: &std::sync::Arc<jaunder::storage::AppS
     let now = Utc::now();
     let input1 = CreatePostInput {
         user_id,
-        title: "First".to_string(),
+        title: Some("First".to_string()),
         slug: "duplicate-slug".parse().unwrap(),
         body: "body".to_string(),
         format: PostFormat::Markdown,
@@ -1279,7 +1279,7 @@ async fn assert_post_slug_conflict(state: &std::sync::Arc<jaunder::storage::AppS
     // Test published conflict: publish two posts with same slug on same date
     let pub_input = CreatePostInput {
         user_id,
-        title: "Published".to_string(),
+        title: Some("Published".to_string()),
         slug: "same-day-slug".parse().unwrap(),
         body: "body".to_string(),
         format: PostFormat::Markdown,
@@ -1309,7 +1309,7 @@ async fn assert_post_update_creates_revision(state: &std::sync::Arc<jaunder::sto
         .unwrap();
 
     let update_input = UpdatePostInput {
-        title: "Updated Title".to_string(),
+        title: Some("Updated Title".to_string()),
         slug: "update-test".parse().unwrap(),
         body: "updated body".to_string(),
         format: PostFormat::Org,
@@ -1322,14 +1322,14 @@ async fn assert_post_update_creates_revision(state: &std::sync::Arc<jaunder::sto
         .await
         .unwrap();
 
-    assert_eq!(record.title, "Updated Title");
+    assert_eq!(record.title.as_deref(), Some("Updated Title"));
     assert_eq!(record.format, PostFormat::Org);
     assert_eq!(record.body, "updated body");
 }
 
 async fn assert_post_update_not_found(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let update_input = UpdatePostInput {
-        title: "Title".to_string(),
+        title: Some("Title".to_string()),
         slug: "nope".parse().unwrap(),
         body: "body".to_string(),
         format: PostFormat::Markdown,
@@ -1522,7 +1522,7 @@ async fn sqlite_post_slug_conflict_returns_slug_conflict() {
         .unwrap();
     let input = CreatePostInput {
         user_id,
-        title: "Post".to_string(),
+        title: Some("Post".to_string()),
         slug: "my-slug".parse().unwrap(),
         body: "body".to_string(),
         format: PostFormat::Markdown,
@@ -1676,7 +1676,7 @@ async fn assert_multiple_tags_on_single_post(state: &std::sync::Arc<jaunder::sto
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Multi Tag Post".to_string(),
+            title: Some("Multi Tag Post".to_string()),
             slug: "multi-tag-post".parse().unwrap(),
             body: "Content with many tags".to_string(),
             format: PostFormat::Markdown,
@@ -1733,7 +1733,7 @@ async fn assert_empty_tag_list(state: &std::sync::Arc<jaunder::storage::AppState
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "No Tags".to_string(),
+            title: Some("No Tags".to_string()),
             slug: "no-tags".parse().unwrap(),
             body: "Untagged post".to_string(),
             format: PostFormat::Markdown,
@@ -1765,7 +1765,7 @@ async fn assert_tag_case_preservation_variants(state: &std::sync::Arc<jaunder::s
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Post 1".to_string(),
+            title: Some("Post 1".to_string()),
             slug: "post-1".parse().unwrap(),
             body: "Content 1".to_string(),
             format: PostFormat::Markdown,
@@ -1779,7 +1779,7 @@ async fn assert_tag_case_preservation_variants(state: &std::sync::Arc<jaunder::s
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Post 2".to_string(),
+            title: Some("Post 2".to_string()),
             slug: "post-2".parse().unwrap(),
             body: "Content 2".to_string(),
             format: PostFormat::Markdown,
@@ -1845,7 +1845,7 @@ async fn assert_invalid_tag_input(state: &std::sync::Arc<jaunder::storage::AppSt
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Test Post".to_string(),
+            title: Some("Test Post".to_string()),
             slug: "invalid-test".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -1888,7 +1888,7 @@ async fn assert_tag_list_pagination(state: &std::sync::Arc<jaunder::storage::App
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: format!("Post {}", i),
+                title: Some(format!("Post {}", i)),
                 slug: format!("post-{}", i).parse().unwrap(),
                 body: format!("Content {}", i),
                 format: PostFormat::Markdown,
@@ -1940,7 +1940,7 @@ async fn assert_list_user_posts_by_tag_excludes_other_users(
         .posts
         .create_post(&CreatePostInput {
             user_id: user1,
-            title: "User1 Post".to_string(),
+            title: Some("User1 Post".to_string()),
             slug: "user1-post".parse().unwrap(),
             body: "Content 1".to_string(),
             format: PostFormat::Markdown,
@@ -1954,7 +1954,7 @@ async fn assert_list_user_posts_by_tag_excludes_other_users(
         .posts
         .create_post(&CreatePostInput {
             user_id: user2,
-            title: "User2 Post".to_string(),
+            title: Some("User2 Post".to_string()),
             slug: "user2-post".parse().unwrap(),
             body: "Content 2".to_string(),
             format: PostFormat::Markdown,
@@ -2013,7 +2013,7 @@ async fn assert_selective_untag(state: &std::sync::Arc<jaunder::storage::AppStat
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Multi Tag".to_string(),
+            title: Some("Multi Tag".to_string()),
             slug: "multi-tag".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -2085,7 +2085,7 @@ async fn assert_numeric_tag(state: &std::sync::Arc<jaunder::storage::AppState>) 
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Numeric Tag".to_string(),
+            title: Some("Numeric Tag".to_string()),
             slug: "numeric-tag".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -2144,7 +2144,7 @@ async fn assert_retag_same_post_with_same_tag_fails(
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Retag Post".to_string(),
+            title: Some("Retag Post".to_string()),
             slug: "retag-post".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -2242,7 +2242,7 @@ async fn assert_many_tags_many_posts(state: &std::sync::Arc<jaunder::storage::Ap
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: format!("Post {}", i),
+                title: Some(format!("Post {}", i)),
                 slug: format!("post-many-{}", i).parse().unwrap(),
                 body: format!("Content {}", i),
                 format: PostFormat::Markdown,
@@ -2300,7 +2300,7 @@ async fn assert_tag_all_numeric(state: &std::sync::Arc<jaunder::storage::AppStat
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Numeric Tag".to_string(),
+            title: Some("Numeric Tag".to_string()),
             slug: "numeric-slug".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -2350,7 +2350,7 @@ async fn assert_tag_hyphen_boundaries(state: &std::sync::Arc<jaunder::storage::A
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Hyphen Test".to_string(),
+            title: Some("Hyphen Test".to_string()),
             slug: "hyphen-test".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -2411,7 +2411,7 @@ async fn assert_tag_with_long_display(state: &std::sync::Arc<jaunder::storage::A
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Long Tag Test".to_string(),
+            title: Some("Long Tag Test".to_string()),
             slug: "long-tag-test".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -2456,7 +2456,7 @@ async fn assert_tag_list_ordering(state: &std::sync::Arc<jaunder::storage::AppSt
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Post 1".to_string(),
+            title: Some("Post 1".to_string()),
             slug: "post-1-order".parse().unwrap(),
             body: "Content 1".to_string(),
             format: PostFormat::Markdown,
@@ -2470,7 +2470,7 @@ async fn assert_tag_list_ordering(state: &std::sync::Arc<jaunder::storage::AppSt
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Post 2".to_string(),
+            title: Some("Post 2".to_string()),
             slug: "post-2-order".parse().unwrap(),
             body: "Content 2".to_string(),
             format: PostFormat::Markdown,
@@ -2542,7 +2542,7 @@ async fn assert_tags_for_multiple_posts(state: &std::sync::Arc<jaunder::storage:
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Post A".to_string(),
+            title: Some("Post A".to_string()),
             slug: "post-a".parse().unwrap(),
             body: "Content A".to_string(),
             format: PostFormat::Markdown,
@@ -2556,7 +2556,7 @@ async fn assert_tags_for_multiple_posts(state: &std::sync::Arc<jaunder::storage:
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Post B".to_string(),
+            title: Some("Post B".to_string()),
             slug: "post-b".parse().unwrap(),
             body: "Content B".to_string(),
             format: PostFormat::Markdown,
@@ -2607,7 +2607,7 @@ async fn assert_tag_mixed_alphanumeric(state: &std::sync::Arc<jaunder::storage::
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Mixed Post".to_string(),
+            title: Some("Mixed Post".to_string()),
             slug: "mixed-post".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -2663,7 +2663,7 @@ async fn assert_simple_tag_lifecycle(state: &std::sync::Arc<jaunder::storage::Ap
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Simple".to_string(),
+            title: Some("Simple".to_string()),
             slug: "simple".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -2734,7 +2734,7 @@ async fn assert_tag_creation_and_retrieval(state: &std::sync::Arc<jaunder::stora
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Test Post".to_string(),
+            title: Some("Test Post".to_string()),
             slug: "test-post".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -2775,7 +2775,7 @@ async fn assert_tag_normalization(state: &std::sync::Arc<jaunder::storage::AppSt
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Test Post".to_string(),
+            title: Some("Test Post".to_string()),
             slug: "test-post".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -2816,7 +2816,7 @@ async fn assert_untag_post(state: &std::sync::Arc<jaunder::storage::AppState>) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Test Post".to_string(),
+            title: Some("Test Post".to_string()),
             slug: "test-post".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -2870,7 +2870,7 @@ async fn assert_duplicate_tag_error(state: &std::sync::Arc<jaunder::storage::App
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Test Post".to_string(),
+            title: Some("Test Post".to_string()),
             slug: "test-post".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -2916,7 +2916,7 @@ async fn assert_list_posts_by_tag(state: &std::sync::Arc<jaunder::storage::AppSt
         .posts
         .create_post(&CreatePostInput {
             user_id: user1,
-            title: "Post 1".to_string(),
+            title: Some("Post 1".to_string()),
             slug: "post-1".parse().unwrap(),
             body: "Content 1".to_string(),
             format: PostFormat::Markdown,
@@ -2930,7 +2930,7 @@ async fn assert_list_posts_by_tag(state: &std::sync::Arc<jaunder::storage::AppSt
         .posts
         .create_post(&CreatePostInput {
             user_id: user2,
-            title: "Post 2".to_string(),
+            title: Some("Post 2".to_string()),
             slug: "post-2".parse().unwrap(),
             body: "Content 2".to_string(),
             format: PostFormat::Markdown,
@@ -2984,7 +2984,7 @@ async fn assert_list_user_posts_by_tag(state: &std::sync::Arc<jaunder::storage::
         .posts
         .create_post(&CreatePostInput {
             user_id: user1,
-            title: "Post 1".to_string(),
+            title: Some("Post 1".to_string()),
             slug: "post-1".parse().unwrap(),
             body: "Content 1".to_string(),
             format: PostFormat::Markdown,
@@ -2998,7 +2998,7 @@ async fn assert_list_user_posts_by_tag(state: &std::sync::Arc<jaunder::storage::
         .posts
         .create_post(&CreatePostInput {
             user_id: user1,
-            title: "Post 2".to_string(),
+            title: Some("Post 2".to_string()),
             slug: "post-2".parse().unwrap(),
             body: "Content 2".to_string(),
             format: PostFormat::Markdown,
@@ -3012,7 +3012,7 @@ async fn assert_list_user_posts_by_tag(state: &std::sync::Arc<jaunder::storage::
         .posts
         .create_post(&CreatePostInput {
             user_id: user2,
-            title: "Post 3".to_string(),
+            title: Some("Post 3".to_string()),
             slug: "post-3".parse().unwrap(),
             body: "Content 3".to_string(),
             format: PostFormat::Markdown,
@@ -3078,7 +3078,7 @@ async fn assert_soft_deleted_posts_excluded_from_tag_list(
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Post 1".to_string(),
+            title: Some("Post 1".to_string()),
             slug: "post-1".parse().unwrap(),
             body: "Content 1".to_string(),
             format: PostFormat::Markdown,
@@ -3092,7 +3092,7 @@ async fn assert_soft_deleted_posts_excluded_from_tag_list(
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Post 2".to_string(),
+            title: Some("Post 2".to_string()),
             slug: "post-2".parse().unwrap(),
             body: "Content 2".to_string(),
             format: PostFormat::Markdown,
@@ -3158,7 +3158,7 @@ async fn assert_untag_nonexistent_tag_error(state: &std::sync::Arc<jaunder::stor
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Test Post".to_string(),
+            title: Some("Test Post".to_string()),
             slug: "test-post".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -3193,7 +3193,7 @@ async fn assert_draft_posts_excluded_from_tag_list(
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Draft Post".to_string(),
+            title: Some("Draft Post".to_string()),
             slug: "draft-post".parse().unwrap(),
             body: "Draft content".to_string(),
             format: PostFormat::Markdown,
@@ -3207,7 +3207,7 @@ async fn assert_draft_posts_excluded_from_tag_list(
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Published Post".to_string(),
+            title: Some("Published Post".to_string()),
             slug: "published-post".parse().unwrap(),
             body: "Published content".to_string(),
             format: PostFormat::Markdown,
@@ -3687,7 +3687,7 @@ async fn assert_post_update_invalid_slug(state: &std::sync::Arc<jaunder::storage
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Original".to_string(),
+            title: Some("Original".to_string()),
             slug: "original-slug".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -3702,7 +3702,7 @@ async fn assert_post_update_invalid_slug(state: &std::sync::Arc<jaunder::storage
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Second".to_string(),
+            title: Some("Second".to_string()),
             slug: "second-slug".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -3719,7 +3719,7 @@ async fn assert_post_update_invalid_slug(state: &std::sync::Arc<jaunder::storage
             post_id,
             user,
             &UpdatePostInput {
-                title: "Updated".to_string(),
+                title: Some("Updated".to_string()),
                 slug: "second-slug".parse().unwrap(),
                 body: "Updated content".to_string(),
                 format: PostFormat::Markdown,
@@ -3753,7 +3753,7 @@ async fn assert_list_published_cursor_boundary(state: &std::sync::Arc<jaunder::s
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: format!("Post {}", i),
+                title: Some(format!("Post {}", i)),
                 slug: format!("post-{}", i).parse().unwrap(),
                 body: "Content".to_string(),
                 format: PostFormat::Markdown,
@@ -3811,7 +3811,7 @@ async fn assert_list_drafts_cursor_boundary(state: &std::sync::Arc<jaunder::stor
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: format!("Draft {}", i),
+                title: Some(format!("Draft {}", i)),
                 slug: format!("draft-{}", i).parse().unwrap(),
                 body: "Content".to_string(),
                 format: PostFormat::Markdown,
@@ -3869,7 +3869,7 @@ async fn assert_list_user_posts_by_tag_cursor(state: &std::sync::Arc<jaunder::st
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: format!("Tagged {}", i),
+                title: Some(format!("Tagged {}", i)),
                 slug: format!("tagged-{}", i).parse().unwrap(),
                 body: "Content".to_string(),
                 format: PostFormat::Markdown,
@@ -3939,7 +3939,7 @@ async fn assert_list_posts_by_tag_cursor(state: &std::sync::Arc<jaunder::storage
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: format!("Global {}", i),
+                title: Some(format!("Global {}", i)),
                 slug: format!("global-{}", i).parse().unwrap(),
                 body: "Content".to_string(),
                 format: PostFormat::Markdown,
@@ -4001,7 +4001,7 @@ async fn assert_soft_delete_then_operations(state: &std::sync::Arc<jaunder::stor
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "To Delete".to_string(),
+            title: Some("To Delete".to_string()),
             slug: "to-delete".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -4136,7 +4136,7 @@ async fn assert_tag_post_multiple_attempts(state: &std::sync::Arc<jaunder::stora
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "For Tagging".to_string(),
+            title: Some("For Tagging".to_string()),
             slug: "for-tagging".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -4223,7 +4223,7 @@ async fn assert_get_by_permalink_soft_deleted(state: &std::sync::Arc<jaunder::st
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Permalink Test".to_string(),
+            title: Some("Permalink Test".to_string()),
             slug: "permalink-test".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -4281,7 +4281,7 @@ async fn assert_update_soft_deleted_post(state: &std::sync::Arc<jaunder::storage
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "To Update".to_string(),
+            title: Some("To Update".to_string()),
             slug: "to-update".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -4305,7 +4305,7 @@ async fn assert_update_soft_deleted_post(state: &std::sync::Arc<jaunder::storage
             post_id,
             user,
             &UpdatePostInput {
-                title: "Updated".to_string(),
+                title: Some("Updated".to_string()),
                 slug: "updated-slug".parse().unwrap(),
                 body: "New content".to_string(),
                 format: PostFormat::Markdown,
@@ -4337,7 +4337,7 @@ async fn assert_tag_edge_case_formats(state: &std::sync::Arc<jaunder::storage::A
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Edge Cases".to_string(),
+            title: Some("Edge Cases".to_string()),
             slug: "edge-cases".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -4479,7 +4479,7 @@ async fn assert_list_published_with_cursor_same_timestamp(
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: format!("Post {}", i),
+                title: Some(format!("Post {}", i)),
                 slug: format!("post-cursor-same-{}", i).parse().unwrap(),
                 body: "Content".to_string(),
                 format: PostFormat::Markdown,
@@ -4527,7 +4527,7 @@ async fn assert_post_revisions_created(state: &std::sync::Arc<jaunder::storage::
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Original".to_string(),
+            title: Some("Original".to_string()),
             slug: "revision-test".parse().unwrap(),
             body: "Original content".to_string(),
             format: PostFormat::Markdown,
@@ -4544,7 +4544,7 @@ async fn assert_post_revisions_created(state: &std::sync::Arc<jaunder::storage::
             post_id,
             user,
             &UpdatePostInput {
-                title: "Updated".to_string(),
+                title: Some("Updated".to_string()),
                 slug: "revision-test".parse().unwrap(),
                 body: "Updated content".to_string(),
                 format: PostFormat::Markdown,
@@ -4556,7 +4556,7 @@ async fn assert_post_revisions_created(state: &std::sync::Arc<jaunder::storage::
         .expect("update_post failed");
 
     // Verify post was updated (result returned directly from update_post)
-    assert_eq!(result.title, "Updated");
+    assert_eq!(result.title.as_deref(), Some("Updated"));
     assert_eq!(result.body, "Updated content");
     assert!(result.published_at.is_some());
 }
@@ -4573,7 +4573,7 @@ async fn assert_tag_display_preservation(state: &std::sync::Arc<jaunder::storage
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Display Test".to_string(),
+            title: Some("Display Test".to_string()),
             slug: "display-test".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -4619,7 +4619,7 @@ async fn assert_untag_preserves_other_tags(state: &std::sync::Arc<jaunder::stora
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: "Multi Tag".to_string(),
+            title: Some("Multi Tag".to_string()),
             slug: "multi-tag".parse().unwrap(),
             body: "Content".to_string(),
             format: PostFormat::Markdown,
@@ -4916,7 +4916,7 @@ async fn assert_create_rendered_post_markdown(state: &std::sync::Arc<jaunder::st
     let post_id = create_rendered_post(
         state.posts.as_ref(),
         user_id,
-        "Rendered Markdown".to_string(),
+        Some("Rendered Markdown".to_string()),
         "rendered-markdown".parse().unwrap(),
         "**bold**".to_string(),
         PostFormat::Markdown,
@@ -4926,7 +4926,7 @@ async fn assert_create_rendered_post_markdown(state: &std::sync::Arc<jaunder::st
     .unwrap();
 
     let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
-    assert_eq!(record.title, "Rendered Markdown");
+    assert_eq!(record.title.as_deref(), Some("Rendered Markdown"));
     assert!(
         record.rendered_html.contains("<strong>bold</strong>"),
         "expected rendered HTML, got: {}",
@@ -4944,7 +4944,7 @@ async fn assert_create_rendered_post_org(state: &std::sync::Arc<jaunder::storage
     let post_id = create_rendered_post(
         state.posts.as_ref(),
         user_id,
-        "Rendered Org".to_string(),
+        Some("Rendered Org".to_string()),
         "rendered-org".parse().unwrap(),
         "*bold*".to_string(),
         PostFormat::Org,
@@ -4954,7 +4954,7 @@ async fn assert_create_rendered_post_org(state: &std::sync::Arc<jaunder::storage
     .unwrap();
 
     let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
-    assert_eq!(record.title, "Rendered Org");
+    assert_eq!(record.title.as_deref(), Some("Rendered Org"));
     assert!(
         record.rendered_html.contains("<b>bold</b>"),
         "expected rendered HTML, got: {}",
@@ -4979,7 +4979,7 @@ async fn assert_create_rendered_post_slug_conflict(
     create_rendered_post(
         state.posts.as_ref(),
         user_id,
-        "First Post".to_string(),
+        Some("First Post".to_string()),
         "conflict-slug".parse().unwrap(),
         "body".to_string(),
         PostFormat::Markdown,
@@ -4992,7 +4992,7 @@ async fn assert_create_rendered_post_slug_conflict(
     let err = create_rendered_post(
         state.posts.as_ref(),
         user_id,
-        "Second Post".to_string(),
+        Some("Second Post".to_string()),
         "conflict-slug".parse().unwrap(),
         "body".to_string(),
         PostFormat::Markdown,
@@ -5029,7 +5029,7 @@ async fn assert_update_rendered_post_markdown(state: &std::sync::Arc<jaunder::st
         state.posts.as_ref(),
         post_id,
         user_id,
-        "Updated Title".to_string(),
+        Some("Updated Title".to_string()),
         "update-render-md".parse().unwrap(),
         "**updated**".to_string(),
         PostFormat::Markdown,
@@ -5038,7 +5038,7 @@ async fn assert_update_rendered_post_markdown(state: &std::sync::Arc<jaunder::st
     .await
     .unwrap();
 
-    assert_eq!(record.title, "Updated Title");
+    assert_eq!(record.title.as_deref(), Some("Updated Title"));
     assert!(
         record.rendered_html.contains("<strong>updated</strong>"),
         "expected rendered HTML, got: {}",
@@ -5063,7 +5063,7 @@ async fn assert_update_rendered_post_org(state: &std::sync::Arc<jaunder::storage
         state.posts.as_ref(),
         post_id,
         user_id,
-        "Updated Org Title".to_string(),
+        Some("Updated Org Title".to_string()),
         "update-render-org".parse().unwrap(),
         "*bold org*".to_string(),
         PostFormat::Org,
@@ -5072,7 +5072,7 @@ async fn assert_update_rendered_post_org(state: &std::sync::Arc<jaunder::storage
     .await
     .unwrap();
 
-    assert_eq!(record.title, "Updated Org Title");
+    assert_eq!(record.title.as_deref(), Some("Updated Org Title"));
     assert!(
         record.rendered_html.contains("<b>bold org</b>"),
         "expected rendered HTML, got: {}",
@@ -5087,7 +5087,7 @@ async fn assert_update_rendered_post_not_found(state: &std::sync::Arc<jaunder::s
         state.posts.as_ref(),
         99999,
         1,
-        "No Post".to_string(),
+        Some("No Post".to_string()),
         "no-post".parse().unwrap(),
         "body".to_string(),
         PostFormat::Markdown,
