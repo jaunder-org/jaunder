@@ -1,3 +1,6 @@
+#[cfg(feature = "ssr")]
+pub use common::username;
+
 pub mod auth;
 pub mod email;
 pub mod invites;
