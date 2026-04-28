@@ -7,7 +7,18 @@ pub mod posts;
 pub mod profile;
 pub mod sessions;
 pub(crate) mod signal_read;
+pub mod ui;
+pub use ui::{
+    Avatar, Chip, Dot, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar, Topbar,
+};
 
+/// Default theme identifier. This selects the CSS variable pack applied via
+/// `data-theme` on the root element. "studio" is the pragmatic default chosen
+/// during initial UI import; to make this per-server-configurable, replace this
+/// constant with a value from server configuration.
+pub const DEFAULT_THEME: &str = "studio";
+
+use crate::pages::auth::{LoginPage, LogoutPage, RegisterPage};
 use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
 use crate::pages::invites::InvitesPage;
@@ -17,80 +28,25 @@ use crate::pages::posts::{
 };
 use crate::pages::profile::ProfilePage;
 use crate::pages::sessions::SessionsPage;
-use crate::{
-    auth::current_user,
-    pages::auth::{LoginPage, LogoutPage, RegisterPage},
-};
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, Stylesheet, Title};
 use leptos_router::{
-    components::{Route, Router, Routes},
-    hooks::use_location,
+    components::{Outlet, ParentRoute, Route, Router, Routes},
     ParamSegment, StaticSegment,
 };
 
 #[component]
-fn HeaderNav() -> impl IntoView {
-    let location = use_location();
-    let user = Resource::new(|| (), |_| current_user());
-
-    let skip_user_fetch = move || {
-        let path = location.pathname.get();
-        path == "/login" || path == "/register" || path == "/posts/new"
-    };
-
+fn AppShell() -> impl IntoView {
+    let theme = use_context::<RwSignal<String>>().expect("theme context missing");
     view! {
-        {move || {
-            if skip_user_fetch() {
-                return view! {
-                    <nav>
-                        <a href="/login">"Login"</a>
-                        " "
-                        <a href="/register">"Register"</a>
-                    </nav>
-                }
-                    .into_any();
-            }
-
-            view! {
-                <Suspense fallback=|| {
-                    view! {
-                        <nav>
-                            <a href="/login">"Login"</a>
-                            " "
-                            <a href="/register">"Register"</a>
-                        </nav>
-                    }
-                }>
-                    {move || Suspend::new(async move {
-                        let user = user.await;
-                        match user {
-                            Ok(Some(username)) => {
-                                view! {
-                                    <nav>
-                                        <span>"Logged in as " {username}</span>
-                                        " "
-                                        <a href="/logout">"Logout"</a>
-                                    </nav>
-                                }
-                                    .into_any()
-                            }
-                            Ok(None) | Err(_) => {
-                                view! {
-                                    <nav>
-                                        <a href="/login">"Login"</a>
-                                        " "
-                                        <a href="/register">"Register"</a>
-                                    </nav>
-                                }
-                                    .into_any()
-                            }
-                        }
-                    })}
-                </Suspense>
-            }
-                .into_any()
-        }}
+        <div class="j-root" attr:data-theme=move || theme.get()>
+            <div class="j-shell">
+                <Sidebar />
+                <main class="j-main">
+                    <Outlet />
+                </main>
+            </div>
+        </div>
     }
 }
 
@@ -115,19 +71,43 @@ pub fn App() -> impl IntoView {
         });
     }
 
+    let theme = RwSignal::new(DEFAULT_THEME.to_string());
+
+    // On WASM: restore theme from localStorage on startup.
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+            if let Ok(Some(val)) = storage.get_item("jaunder_theme") {
+                if !val.is_empty() {
+                    theme.set(val);
+                }
+            }
+        }
+    }
+
+    provide_context(theme);
+
+    // On WASM: persist theme to localStorage whenever it changes.
+    #[cfg(target_arch = "wasm32")]
+    {
+        Effect::new(move |_| {
+            let val = theme.get();
+            if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten())
+            {
+                let _ = storage.set_item("jaunder_theme", &val);
+            }
+        });
+    }
+
     view! {
         <Stylesheet id="leptos" href="/pkg/jaunder.css" />
 
         // sets the document title
         <Title text="Jaunder" />
 
-        // content for this welcome page
         <Router>
-            <header>
-                <HeaderNav />
-            </header>
-            <main>
-                <Routes fallback=|| "Page not found.".into_view()>
+            <Routes fallback=|| "Page not found.".into_view()>
+                <ParentRoute path=StaticSegment("") view=AppShell>
                     <Route path=StaticSegment("") view=HomePage />
                     <Route path=StaticSegment("register") view=RegisterPage />
                     <Route path=StaticSegment("login") view=LoginPage />
@@ -171,8 +151,18 @@ pub fn App() -> impl IntoView {
                         )
                         view=PostPage
                     />
-                </Routes>
-            </main>
+                </ParentRoute>
+            </Routes>
         </Router>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_theme_is_nonempty() {
+        assert!(!DEFAULT_THEME.is_empty());
     }
 }

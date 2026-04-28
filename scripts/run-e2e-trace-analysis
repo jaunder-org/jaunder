@@ -81,11 +81,12 @@ function runAndCapture(command, args) {
     return output;
 }
 
-function buildCheck(checkName) {
+function buildCheck(attrPath) {
+    const checkName = attrPath.split(".").at(-1);
     console.log(`\n==> Running ${checkName}`);
     const output = runAndCapture("nix", [
         "build",
-        `.#checks.x86_64-linux.${checkName}`,
+        `.#${attrPath}`,
         "--no-link",
         "--print-out-paths",
     ]);
@@ -116,10 +117,15 @@ function main() {
         process.exit(1);
     }
 
-    const sqliteCheck = parsed.cold ? "e2e-sqlite-cold" : "e2e-sqlite";
-    const postgresCheck = parsed.cold ? "e2e-postgres-cold" : "e2e-postgres";
-    const sqliteOut = buildCheck(sqliteCheck);
-    const postgresOut = buildCheck(postgresCheck);
+    const sqliteAttr = parsed.cold
+        ? "packages.x86_64-linux.e2e-sqlite-cold"
+        : "checks.x86_64-linux.e2e-sqlite";
+    const postgresAttr = parsed.cold
+        ? "packages.x86_64-linux.e2e-postgres-cold"
+        : "checks.x86_64-linux.e2e-postgres";
+
+    const sqliteOut = buildCheck(sqliteAttr);
+    const postgresOut = buildCheck(postgresAttr);
 
     const sqliteTrace = path.join(
         sqliteOut,

@@ -8,6 +8,7 @@ license = "GPL-3.0-only"
 
 [dependencies]
 leptos.workspace = true
+leptos_dom.workspace = true
 leptos_meta.workspace = true
 leptos_router.workspace = true
 leptos_axum = { workspace = true, optional = true }
@@ -19,7 +20,7 @@ cfg-if.workspace = true
 chrono = { workspace = true, optional = true }
 email_address = { workspace = true, optional = true }
 serde.workspace = true
-web-sys = { workspace = true, features = ["Window", "Location"] }
+web-sys = { workspace = true, features = ["Window", "Location", "Storage"] }
 thiserror.workspace = true
 tracing = { workspace = true, optional = true }
 

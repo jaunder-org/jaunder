@@ -1,3 +1,9 @@
+// The ParentRoute wrapping all routes in web::App generates a wide tuple of
+// route types; the compiler needs a higher recursion limit to monomorphize it,
+// particularly under llvm-cov instrumentation. Root cause under investigation.
+#![recursion_limit = "512"]
+
+pub mod assets;
 pub mod auth;
 pub mod cli;
 pub mod commands;
@@ -15,6 +21,7 @@ use std::sync::Arc;
 
 use axum::http::HeaderName;
 use axum::Router;
+use axum_embed::ServeEmbed;
 use leptos::prelude::*;
 use leptos_axum::{generate_route_list, LeptosRoutes};
 use opentelemetry::propagation::Extractor;
@@ -25,6 +32,7 @@ use tracing::Level;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use web::{shell, App};
 
+use crate::assets::StaticAssets;
 use crate::storage::AppState;
 
 pub fn create_router(
@@ -62,7 +70,9 @@ pub fn create_router(
     let routes = generate_route_list(App);
     let extension_state = state.clone();
     let server_fn_state = state.clone();
+    let serve_assets = ServeEmbed::<StaticAssets>::new();
     Router::new()
+        .nest_service("/style", serve_assets)
         .route(
             "/api/{*fn_name}",
             axum::routing::post(move |req: axum::extract::Request| {

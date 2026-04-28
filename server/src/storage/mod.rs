@@ -1,14 +1,12 @@
 use std::time::Duration;
 use std::{fmt, io, path::Path, str::FromStr, sync::Arc};
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use log::LevelFilter;
 use sqlx::postgres::PgConnectOptions;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
+use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::ConnectOptions;
 use sqlx::PgPool;
-use sqlx::SqlitePool;
 
 // Storage traits, records, error types, and AppState are defined in the
 // `common` crate so that both `web` (server functions) and `server` can use
@@ -32,8 +30,9 @@ use common::username::Username;
 
 mod sqlite;
 pub use sqlite::{
-    SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
-    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
+    SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
+    SqlitePasswordResetStorage, SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage,
+    SqliteUserStorage,
 };
 mod postgres;
 pub use postgres::{
@@ -122,7 +121,7 @@ pub(super) fn build_invite_record(
 pub(super) type PostRecordParts = (
     i64,                   // post_id
     i64,                   // user_id
-    String,                // title
+    Option<String>,        // title
     String,                // slug
     String,                // body
     String,                // format
@@ -170,6 +169,102 @@ pub(super) fn build_post_record(
     })
 }
 
+pub(super) type UserRow = (
+    i64,
+    String,
+    Option<String>,
+    Option<String>,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+    Option<String>,
+    bool,
+);
+
+pub(super) fn user_record_from_row(row: UserRow) -> sqlx::Result<UserRecord> {
+    build_user_record(row)
+}
+
+pub(super) type SessionRow = (
+    String,
+    i64,
+    String,
+    Option<String>,
+    DateTime<Utc>,
+    DateTime<Utc>,
+);
+
+pub(super) fn session_record_from_row(
+    (token_hash, user_id, username, label, created_at, last_used_at): SessionRow,
+) -> sqlx::Result<SessionRecord> {
+    build_session_record(
+        token_hash,
+        user_id,
+        username,
+        label,
+        created_at,
+        last_used_at,
+    )
+}
+
+pub(super) type InviteRow = (
+    String,
+    DateTime<Utc>,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+    Option<i64>,
+);
+
+pub(super) fn invite_record_from_row(
+    (code, created_at, expires_at, used_at, used_by): InviteRow,
+) -> InviteRecord {
+    build_invite_record(code, created_at, expires_at, used_at, used_by)
+}
+
+pub(super) type PostRow = (
+    i64,                   // post_id
+    i64,                   // user_id
+    Option<String>,        // title
+    String,                // slug
+    String,                // body
+    String,                // format
+    String,                // rendered_html
+    DateTime<Utc>,         // created_at
+    DateTime<Utc>,         // updated_at
+    Option<DateTime<Utc>>, // published_at
+    Option<DateTime<Utc>>, // deleted_at
+);
+
+pub(super) fn post_record_from_row(row: PostRow) -> sqlx::Result<PostRecord> {
+    build_post_record(row)
+}
+
+pub(super) fn generate_hashed_token() -> sqlx::Result<(String, String)> {
+    let raw_token = crate::auth::generate_token();
+    let token_hash = crate::auth::hash_token(&raw_token)
+        .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
+    Ok((raw_token, token_hash))
+}
+
+pub(super) fn email_verification_claim_error(
+    row: Option<(Option<DateTime<Utc>>, DateTime<Utc>)>,
+) -> UseEmailVerificationError {
+    match row {
+        None => UseEmailVerificationError::NotFound,
+        Some((Some(_), _)) => UseEmailVerificationError::AlreadyUsed,
+        Some((None, _)) => UseEmailVerificationError::Expired,
+    }
+}
+
+pub(super) fn password_reset_claim_error(
+    row: Option<(Option<DateTime<Utc>>, DateTime<Utc>)>,
+) -> UsePasswordResetError {
+    match row {
+        None => UsePasswordResetError::NotFound,
+        Some((Some(_), _)) => UsePasswordResetError::AlreadyUsed,
+        Some((None, _)) => UsePasswordResetError::Expired,
+    }
+}
+
 #[tracing::instrument(name = "crypto.password.hash", skip(password))]
 pub(super) async fn hash_password(password: Password) -> io::Result<String> {
     tokio::task::spawn_blocking(move || password.hash())
@@ -184,165 +279,6 @@ pub(super) async fn verify_password(password: Password, hash: String) -> io::Res
         .await
         .map_err(io::Error::other)?
         .map_err(io::Error::other)
-}
-
-// ---------------------------------------------------------------------------
-// SqliteAtomicOps
-// ---------------------------------------------------------------------------
-
-/// SQLite implementation of [`AtomicOps`].
-///
-/// Holds the pool directly so it can span multiple tables in a single
-/// transaction without going through the individual storage trait objects.
-pub struct SqliteAtomicOps {
-    pool: SqlitePool,
-}
-
-impl SqliteAtomicOps {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait]
-impl AtomicOps for SqliteAtomicOps {
-    async fn create_user_with_invite(
-        &self,
-        username: &Username,
-        password: &Password,
-        display_name: Option<&str>,
-        invite_code: &str,
-    ) -> Result<i64, RegisterWithInviteError> {
-        use chrono::{DateTime, Utc};
-
-        let mut tx = self.pool.begin().await?;
-
-        // (a) Validate invite
-        let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
-            "SELECT used_at, expires_at FROM invites WHERE code = ?",
-        )
-        .bind(invite_code)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(RegisterWithInviteError::InviteNotFound)?;
-
-        let (used_at, expires_at) = row;
-
-        if used_at.is_some() {
-            return Err(RegisterWithInviteError::InviteAlreadyUsed);
-        }
-
-        let now = Utc::now();
-        if expires_at <= now {
-            return Err(RegisterWithInviteError::InviteExpired);
-        }
-
-        // (b) Hash password outside the async executor
-        let password_hash = hash_password(password.clone())
-            .await
-            .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;
-
-        // (c) Insert user
-        let result = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO users (username, password_hash, display_name, created_at)
-             VALUES (?, ?, ?, ?)
-             RETURNING user_id",
-        )
-        .bind(username.as_str())
-        .bind(&password_hash)
-        .bind(display_name)
-        .bind(now)
-        .fetch_one(&mut *tx)
-        .await;
-
-        let user_id = match result {
-            Ok(id) => id,
-            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-                return Err(RegisterWithInviteError::UsernameTaken);
-            }
-            Err(e) => return Err(RegisterWithInviteError::Internal(e)),
-        };
-
-        // (d) Mark invite used
-        sqlx::query("UPDATE invites SET used_at = ?, used_by = ? WHERE code = ?")
-            .bind(now)
-            .bind(user_id)
-            .bind(invite_code)
-            .execute(&mut *tx)
-            .await?;
-
-        // (e) Commit
-        tx.commit().await?;
-
-        Ok(user_id)
-    }
-
-    async fn confirm_password_reset(
-        &self,
-        raw_token: &str,
-        new_password: &Password,
-    ) -> Result<(), ConfirmPasswordResetError> {
-        let token_hash =
-            crate::auth::hash_token(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
-
-        let password_hash = hash_password(new_password.clone())
-            .await
-            .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
-
-        let mut tx = self.pool.begin().await?;
-        let now = chrono::Utc::now();
-
-        let claimed = sqlx::query_as::<_, (i64,)>(
-            "UPDATE password_resets SET used_at = ?\n             WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?\n             RETURNING user_id",
-        )
-        .bind(now)
-        .bind(&token_hash)
-        .bind(now)
-        .fetch_optional(&mut *tx)
-        .await?;
-
-        let user_id = if let Some((user_id,)) = claimed {
-            user_id
-        } else {
-            let row = sqlx::query_as::<
-                _,
-                (
-                    Option<chrono::DateTime<chrono::Utc>>,
-                    chrono::DateTime<chrono::Utc>,
-                ),
-            >(
-                "SELECT used_at, expires_at FROM password_resets WHERE token_hash = ?"
-            )
-            .bind(&token_hash)
-            .fetch_optional(&mut *tx)
-            .await?;
-
-            tx.rollback().await.ok();
-
-            return match row {
-                None => Err(ConfirmPasswordResetError::NotFound),
-                Some((Some(_), _)) => Err(ConfirmPasswordResetError::AlreadyUsed),
-                Some((None, expires_at)) if expires_at <= now => {
-                    Err(ConfirmPasswordResetError::Expired)
-                }
-                Some((None, _)) => Err(ConfirmPasswordResetError::Expired),
-            };
-        };
-
-        sqlx::query("UPDATE users SET password_hash = ? WHERE user_id = ?")
-            .bind(&password_hash)
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await?;
-
-        sqlx::query("DELETE FROM sessions WHERE user_id = ?")
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await?;
-
-        tx.commit().await?;
-        Ok(())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -411,20 +347,6 @@ pub fn init_storage(path: &Path) -> io::Result<()> {
 // Database helpers
 // ---------------------------------------------------------------------------
 
-fn make_app_state(pool: SqlitePool, mailer: Arc<dyn MailSender>) -> Arc<AppState> {
-    Arc::new(AppState {
-        site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
-        users: Arc::new(SqliteUserStorage::new(pool.clone())),
-        sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
-        invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
-        atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
-        email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
-        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
-        posts: Arc::new(SqlitePostStorage::new(pool)),
-        mailer,
-    })
-}
-
 fn make_postgres_app_state(pool: PgPool, mailer: Arc<dyn MailSender>) -> Arc<AppState> {
     Arc::new(AppState {
         site_config: Arc::new(PostgresSiteConfigStorage::new(pool.clone())),
@@ -440,7 +362,7 @@ fn make_postgres_app_state(pool: PgPool, mailer: Arc<dyn MailSender>) -> Arc<App
 }
 
 #[tracing::instrument(name = "storage.mailer.build", skip(site_config))]
-async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender> {
+pub(super) async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender> {
     if let Ok(path) = std::env::var("JAUNDER_MAIL_CAPTURE_FILE") {
         return Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>;
     }
@@ -453,34 +375,6 @@ async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender
     }
 }
 
-#[tracing::instrument(
-    name = "storage.sqlite.open_database",
-    skip(options),
-    fields(create_if_missing)
-)]
-async fn open_sqlite_database(
-    options: &SqliteConnectOptions,
-    create_if_missing: bool,
-) -> sqlx::Result<Arc<AppState>> {
-    let mut options = options.clone();
-    if create_if_missing {
-        options = options.create_if_missing(true);
-    }
-    // WAL mode allows concurrent readers while a writer is active, dramatically
-    // reducing SQLITE_BUSY errors under load.  The 5-second busy timeout lets
-    // SQLite retry automatically instead of failing immediately when it cannot
-    // obtain a lock.
-    options = options
-        .journal_mode(SqliteJournalMode::Wal)
-        .busy_timeout(Duration::from_secs(5))
-        .log_slow_statements(LevelFilter::Warn, sql_slow_query_threshold());
-    let pool = sqlx::SqlitePool::connect_with(options).await?;
-    sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
-    let site_config = SqliteSiteConfigStorage::new(pool.clone());
-    let mailer = build_mailer(&site_config).await;
-    Ok(make_app_state(pool, mailer))
-}
-
 fn postgres_password_from_env() -> io::Result<Option<String>> {
     if let Ok(path) = std::env::var("JAUNDER_DB_PASSWORD_FILE") {
         return std::fs::read_to_string(path).map(|s| Some(s.trim_end().to_owned()));
@@ -489,7 +383,7 @@ fn postgres_password_from_env() -> io::Result<Option<String>> {
     Ok(std::env::var("JAUNDER_DB_PASSWORD").ok())
 }
 
-fn sql_slow_query_threshold() -> Duration {
+pub(super) fn sql_slow_query_threshold() -> Duration {
     std::env::var("JAUNDER_SQL_SLOW_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -521,7 +415,7 @@ async fn open_postgres_database(options: &PgConnectOptions) -> sqlx::Result<Arc<
 #[tracing::instrument(name = "storage.open_database", skip(opts))]
 pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     match opts {
-        DbConnectOptions::Sqlite(options) => open_sqlite_database(options, true).await,
+        DbConnectOptions::Sqlite(options) => sqlite::open_sqlite_database(options, true).await,
         DbConnectOptions::Postgres { options, .. } => open_postgres_database(options).await,
     }
 }
@@ -532,7 +426,7 @@ pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState
 #[tracing::instrument(name = "storage.open_existing_database", skip(opts))]
 pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     match opts {
-        DbConnectOptions::Sqlite(options) => open_sqlite_database(options, false).await,
+        DbConnectOptions::Sqlite(options) => sqlite::open_sqlite_database(options, false).await,
         DbConnectOptions::Postgres { options, .. } => open_postgres_database(options).await,
     }
 }
@@ -679,7 +573,7 @@ mod tests {
         let record = build_post_record((
             10,
             20,
-            "Hello".to_string(),
+            Some("Hello".to_string()),
             "hello-world".to_string(),
             "Body".to_string(),
             "markdown".to_string(),
@@ -705,7 +599,7 @@ mod tests {
         let err = build_post_record((
             10,
             20,
-            "Hello".to_string(),
+            Some("Hello".to_string()),
             "not a slug".to_string(),
             "Body".to_string(),
             "markdown".to_string(),
@@ -726,7 +620,7 @@ mod tests {
         let err = build_post_record((
             10,
             20,
-            "Hello".to_string(),
+            Some("Hello".to_string()),
             "hello-world".to_string(),
             "Body".to_string(),
             "html".to_string(),

@@ -1,11 +1,23 @@
-import { test, expect, hydrationHeavyTimeoutMs } from "./fixtures";
+import {
+  test,
+  expect,
+  hydrationHeavyTimeoutMs,
+  hydrationHeavyFirstNavigationTimeoutMs,
+} from "./fixtures";
 import { createPerfProbe } from "./perf";
-import { waitForHydration } from "./hydration";
+import {
+  BASE_URL,
+  goto,
+  click,
+  waitForSelector,
+  waitForHydration,
+  login,
+  register,
+} from "./helpers";
 
 test("register page shows form", async ({ page }, testInfo) => {
-  test.slow();
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
-  await page.goto("http://localhost:3000/register");
+  await goto(page, "/register");
 
   await expect(page.locator("h1")).toHaveText("Register");
   await expect(page.locator('input[name="username"]')).toBeVisible();
@@ -13,23 +25,21 @@ test("register page shows form", async ({ page }, testInfo) => {
 });
 
 test("register with open policy succeeds", async ({ page }, testInfo) => {
-  test.slow();
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
   const username = `newuser${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
-  await page.goto("http://localhost:3000/register");
-  await waitForHydration(page);
+  await goto(page, "/register");
 
   await page.fill('input[name="username"]', username);
   await page.fill('input[name="password"]', "newpassword123");
-  await page.click('button[type="submit"]');
-  await page.waitForLoadState("networkidle");
+  await click(page, 'button[type="submit"]');
+  await waitForSelector(page, "a[href='/logout']");
 
   await expect(page.locator(".error")).not.toBeVisible();
 });
 
 test("login page shows form", async ({ page }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
-  await page.goto("http://localhost:3000/login");
+  await goto(page, "/login");
 
   await expect(page.locator("h1")).toHaveText("Login");
   await expect(page.locator('input[name="username"]')).toBeVisible();
@@ -40,58 +50,108 @@ test("login with valid credentials succeeds", async ({ page }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
   const perf = createPerfProbe(testInfo, "auth_login_success");
 
-  perf.mark("goto_login_start");
-  await page.goto("http://localhost:3000/login");
-  perf.mark("goto_login_done");
-  await waitForHydration(page);
-  perf.mark("hydration_done");
+  await goto(page, "/login");
 
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "testpassword123");
   perf.mark("credentials_filled");
-  await page.click('button[type="submit"]');
+  await click(page, 'button[type="submit"]');
   perf.mark("submit_clicked");
   // waitForURL is unreliable in Firefox for location.replace() navigations; wait
-  // for the logout link that SSR renders on the home page after successful auth.
-  await page.waitForSelector("a[href='/logout']");
+  // for the sidebar logout link, which only appears after the Suspense resolves
+  // with the authenticated state — by that point the navigation is fully settled.
+  await waitForSelector(page, "a[href='/logout']");
   perf.mark("logout_link_visible");
   await waitForHydration(page);
-  perf.mark("post_login_hydration_done");
 
-  await expect(page.locator("header")).toContainText("Logged in as testlogin");
-  await expect(page.locator("header a[href='/logout']")).toBeVisible();
+  await expect(page.locator(".j-sb-foot")).toContainText("testlogin");
+  await expect(page.locator(".j-sidebar")).toBeVisible();
   perf.mark("assertions_complete");
   await perf.log();
 });
 
 test("login with wrong password shows error", async ({ page }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 12_000));
-  await page.goto("http://localhost:3000/login");
-  await waitForHydration(page);
+  await goto(page, "/login");
 
   await page.fill('input[name="username"]', "testlogin");
   await page.fill('input[name="password"]', "wrongpassword!");
-  await page.click('button[type="submit"]');
-  await page.waitForLoadState("networkidle");
+  await click(page, 'button[type="submit"]');
+  await waitForSelector(page, ".error");
 
   await expect(page.locator(".error")).toBeVisible();
 });
 
 test("logout page logs out", async ({ page }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 12_000));
-  // Log in first to establish a session
-  await page.goto("http://localhost:3000/login");
-  await waitForHydration(page);
-  await page.fill('input[name="username"]', "testlogin");
-  await page.fill('input[name="password"]', "testpassword123");
-  await page.click('button[type="submit"]');
-  await page.waitForSelector("a[href='/logout']");
+  await login(page, "testlogin", "testpassword123");
 
   // Use the rendered logout link to avoid Firefox navigation abort races.
-  await page.click("a[href='/logout']");
+  await click(page, "a[href='/logout']");
 
-  await expect(page.locator("h1")).toContainText("Logging out");
-  await page.waitForLoadState("networkidle");
+  // Logout clears the session and redirects to "/"; waitForURL is reliable here
+  // because logout is a server-side 302 redirect (not location.replace).
+  await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
+  await waitForHydration(page);
+  // Footer shows neither username nor sign-in link after logout.
+  await expect(page.locator(".j-sb-foot")).not.toContainText("testlogin");
+  await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
+});
 
-  await expect(page.locator("p")).toContainText("You have been logged out.");
+test("sidebar reverts to signed-out state after logout", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
+  await login(page, "testlogin", "testpassword123");
+  // a[href='/logout'] only renders when auth Suspense resolves, confirming testlogin is shown.
+  await expect(page.locator(".j-sb-foot")).toContainText("testlogin");
+
+  // Click the sidebar "Sign out" link and confirm the sidebar switches back.
+  await click(page, "a[href='/logout']");
+  // Logout is a server-side 302 redirect (not location.replace), so waitForURL is reliable.
+  await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
+  await waitForHydration(page);
+  await expect(page.locator(".j-sb-foot")).not.toContainText("testlogin");
+  // Footer no longer shows a Sign-in link — it renders nothing when unauthenticated.
+  await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
+});
+
+test("sidebar shows only Home nav link when not logged in", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
+  await goto(page, "/", {
+    timeout: hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  });
+
+  // Wait for the nav Suspense to resolve.
+  await waitForSelector(page, ".j-nav");
+
+  // Only one <a> inside .j-nav — the Home link.
+  const navAnchors = page.locator(".j-nav a");
+  await expect(navAnchors).toHaveCount(1);
+  await expect(navAnchors.first()).toHaveAttribute("href", "/");
+
+  // Sidebar footer must not contain a "Sign in" link.
+  await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
+});
+
+test("sidebar footer shows Sign out link when logged in", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  // Wait for the authenticated nav to resolve (Suspense resolves after auth resource loads).
+  await waitForSelector(page, ".j-nav a[href='/drafts']");
+  // Home and Drafts have hrefs; others are not yet implemented.
+  await expect(page.locator(".j-nav a")).toHaveCount(2);
+
+  // Footer has Sign out.
+  await expect(page.locator("a[href='/logout']")).toBeVisible();
+  // Footer does NOT have Sign in.
+  await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
 });

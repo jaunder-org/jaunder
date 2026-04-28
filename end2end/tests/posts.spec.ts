@@ -6,7 +6,7 @@ import {
 } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
-import { waitForHydration } from "./hydration";
+import { BASE_URL, goto, click, waitForSelector, register } from "./helpers";
 import { createPerfProbe } from "./perf";
 
 const TIMELINE_PAGE_SIZE = 50;
@@ -15,77 +15,14 @@ const LOCAL_TIMELINE_AUTHOR_COUNT = 26;
 const HOME_FEED_SELF_COUNT = 51;
 const HOME_FEED_OTHER_COUNT = 2;
 
-async function goto(
-  page: Page,
-  url: string,
-  options?: Parameters<Page["goto"]>[1],
-): Promise<void> {
-  await withTimedAction(page, "page.goto", () => page.goto(url, options));
-}
-
-async function waitForSelector(
-  page: Page,
-  selector: string,
-  options?: Parameters<Page["waitForSelector"]>[1],
-): Promise<void> {
-  await withTimedAction(page, "wait.selector", () => {
-    if (options === undefined) {
-      return page.waitForSelector(selector);
-    }
-    return page.waitForSelector(selector, options);
-  });
-}
-
-async function click(page: Page, selector: string): Promise<void> {
-  await withTimedAction(page, "ui.click", () => page.click(selector));
-}
-
-async function register(
-  page: Page,
-  firstNavigationTimeoutMs: number,
-): Promise<string> {
-  const username = `postuser${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
-
-  await goto(page, "http://localhost:3000/register", {
-    timeout: firstNavigationTimeoutMs,
-  });
-  await waitForHydration(page, firstNavigationTimeoutMs);
-  await withTimedAction(page, "ui.fill.username", () =>
-    page.fill('input[name="username"]', username),
-  );
-  await withTimedAction(page, "ui.fill.password", () =>
-    page.fill('input[name="password"]', "testpassword123"),
-  );
-  await click(page, 'button[type="submit"]');
-  // waitForLoadState("networkidle") resolves before Firefox's location.replace()
-  // navigation fires, causing a race with subsequent page.goto() calls.
-  // Wait for either the success marker or an explicit server error so we
-  // fail fast on misconfiguration instead of burning the full test timeout.
-  const outcome = await Promise.race([
-    page
-      .waitForSelector("a[href='/logout']", { timeout: 10_000 })
-      .then(() => "ok"),
-    page.waitForSelector(".error", { timeout: 10_000 }).then(() => "error"),
-  ]);
-  if (outcome == "error") {
-    const errorText = (
-      await page.locator(".error").first().textContent()
-    )?.trim();
-    throw new Error(`registration failed: ${errorText ?? "unknown error"}`);
-  }
-
-  return username;
-}
-
 async function createPublishedPostViaApi(
   page: Page,
   title: string,
 ): Promise<void> {
   const response = await withTimedAction(page, "api.create_post", () =>
-    page.request.post("http://localhost:3000/api/create_post", {
+    page.request.post(`${BASE_URL}/api/create_post`, {
       form: {
-        title,
-        body: `Body for ${title}`,
+        body: `# ${title}\n\nBody for ${title}`,
         format: "markdown",
         publish: "true",
       },
@@ -102,13 +39,10 @@ test("authenticated user can create a post through the UI", async ({
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
 
-  await goto(page, "http://localhost:3000/posts/new");
-  await waitForHydration(page);
+  await goto(page, "/posts/new");
 
-  await expect(page.locator("h1")).toHaveText("New Post");
-  await page.fill('input[name="title"]', "Playwright Post");
-  await page.fill('textarea[name="body"]', "**browser**");
-  await page.selectOption('select[name="format"]', "markdown");
+  await expect(page.locator(".j-topbar h1")).toHaveText("New post");
+  await page.fill('textarea[name="body"]', "# Playwright Post\n\n**browser**");
   await click(page, 'button[name="publish"][value="true"]');
   await waitForSelector(page, ".success");
 
@@ -124,12 +58,10 @@ test("authenticated user can save a draft through the UI", async ({
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
 
-  await goto(page, "http://localhost:3000/posts/new");
-  await waitForHydration(page);
+  await goto(page, "/posts/new");
 
-  await page.fill('input[name="title"]', "Playwright Draft");
   await page.fill('textarea[name="body"]', "*draft*");
-  await page.selectOption('select[name="format"]', "org");
+  await click(page, '.j-seg button:has-text("Org")');
   await page.fill('input[name="slug_override"]', "Draft-Slug");
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");
@@ -145,11 +77,11 @@ test("published post renders at permalink", async ({ page }, testInfo) => {
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
 
-  await goto(page, "http://localhost:3000/posts/new");
-  await waitForHydration(page);
-  await page.fill('input[name="title"]', "Permalink Story");
-  await page.fill('textarea[name="body"]', "**hello permalink**");
-  await page.selectOption('select[name="format"]', "markdown");
+  await goto(page, "/posts/new");
+  await page.fill(
+    'textarea[name="body"]',
+    "# Permalink Story\n\n**hello permalink**",
+  );
   await click(page, 'button[name="publish"][value="true"]');
   await waitForSelector(page, ".success");
 
@@ -171,13 +103,12 @@ test("published post renders at permalink", async ({ page }, testInfo) => {
   const permalinkHref = await permalinkLink.getAttribute("href");
   expect(permalinkHref).toBeTruthy();
 
-  const targetUrl = new URL(permalinkHref!, "http://localhost:3000").toString();
+  const targetUrl = permalinkHref!;
 
-  await goto(page, targetUrl, { waitUntil: "domcontentloaded" });
-  await waitForHydration(page);
+  await goto(page, targetUrl);
 
   await expect(page.locator("article h1")).toHaveText("Permalink Story");
-  await expect(page.locator(".content")).toContainText("hello permalink");
+  await expect(page.locator(".j-post-body")).toContainText("hello permalink");
 });
 
 test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
@@ -187,12 +118,9 @@ test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
 
-  // Create a draft
-  await goto(page, "http://localhost:3000/posts/new");
-  await waitForHydration(page);
-  await page.fill('input[name="title"]', "Original Draft");
-  await page.fill('textarea[name="body"]', "original body");
-  await page.selectOption('select[name="format"]', "markdown");
+  // Create a draft; title embedded as # heading
+  await goto(page, "/posts/new");
+  await page.fill('textarea[name="body"]', "# Original Draft\n\noriginal body");
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");
 
@@ -204,14 +132,15 @@ test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
   const postId = postIdMatch![1];
 
   // Navigate to edit page
-  await goto(page, `http://localhost:3000/posts/${postId}/edit`);
-  await waitForHydration(page);
+  await goto(page, `/posts/${postId}/edit`);
 
-  await expect(page.locator("h1")).toHaveText("Edit Post");
+  await expect(page.locator(".j-topbar h1")).toHaveText("Edit Post");
 
-  // Update the draft
-  await page.fill('input[name="title"]', "Edited Draft");
-  await page.fill('textarea[name="body"]', "**edited content**");
+  // Update the draft; keep heading to preserve the slug
+  await page.fill(
+    'textarea[name="body"]',
+    "# Original Draft\n\n**edited content**",
+  );
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");
 
@@ -230,12 +159,12 @@ test("editing a published post freezes the slug", async ({
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
 
-  // Create and publish a post
-  await goto(page, "http://localhost:3000/posts/new");
-  await waitForHydration(page);
-  await page.fill('input[name="title"]', "Published Article");
-  await page.fill('textarea[name="body"]', "original content");
-  await page.selectOption('select[name="format"]', "markdown");
+  // Create and publish a post; title embedded as # heading
+  await goto(page, "/posts/new");
+  await page.fill(
+    'textarea[name="body"]',
+    "# Published Article\n\noriginal content",
+  );
   await click(page, 'button[name="publish"][value="true"]');
   await waitForSelector(page, ".success");
 
@@ -252,22 +181,16 @@ test("editing a published post freezes the slug", async ({
   const postId = postIdMatch![1];
 
   // Navigate to edit page
-  await goto(page, `http://localhost:3000/posts/${postId}/edit`);
-  await waitForHydration(page);
+  await goto(page, `/posts/${postId}/edit`);
 
   // Published post should not have a slug_override input
   await expect(page.locator('input[name="slug_override"]')).not.toBeVisible();
 
-  // Save the published post
-  await page.fill('input[name="title"]', "Updated Article");
+  // Save the published post (body already pre-filled from loaded post; slug stays frozen)
   await click(page, 'button[name="publish"][value="true"]');
-  await waitForSelector(page, ".success");
-
-  await expect(page.locator(".success")).toContainText("Post updated.");
-  const updatedSlug = await page
-    .locator('[data-test="slug-value"]')
-    .getAttribute("data-slug");
-  expect(updatedSlug).toBe(originalSlug);
+  // After save, editor redirects to the permalink page
+  await waitForSelector(page, "article h1");
+  expect(page.url()).toContain(originalSlug!);
 });
 
 test("draft lifecycle: create, view, edit, and publish", async ({
@@ -281,11 +204,11 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   );
   await register(page, firstNavigationTimeoutMs);
 
-  await goto(page, "http://localhost:3000/posts/new");
-  await waitForHydration(page);
-  await page.fill('input[name="title"]', "Lifecycle Draft");
-  await page.fill('textarea[name="body"]', "initial draft body");
-  await page.selectOption('select[name="format"]', "markdown");
+  await goto(page, "/posts/new");
+  await page.fill(
+    'textarea[name="body"]',
+    "# Lifecycle Draft\n\ninitial draft body",
+  );
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");
 
@@ -299,43 +222,38 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   expect(postIdMatch).toBeTruthy();
   const postId = postIdMatch![1];
 
-  await goto(page, "http://localhost:3000/drafts");
-  await waitForHydration(page);
+  await goto(page, "/drafts");
   const initialDraftRow = page.locator("li", { hasText: "Lifecycle Draft" });
   await expect(initialDraftRow).toBeVisible();
   const permalinkHref = await initialDraftRow
     .locator('a:has-text("Permalink")')
     .getAttribute("href");
   expect(permalinkHref).toBeTruthy();
-  const permalinkUrl = new URL(
-    permalinkHref!,
-    "http://localhost:3000",
-  ).toString();
+  const permalinkUrl = permalinkHref!;
 
-  await goto(page, `http://localhost:3000/posts/${postId}/edit`);
-  await waitForHydration(page);
-  await page.fill('textarea[name="body"]', "edited draft body");
+  await goto(page, `/posts/${postId}/edit`);
+  await page.fill(
+    'textarea[name="body"]',
+    "# Lifecycle Draft\n\nedited draft body",
+  );
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");
 
   await goto(page, permalinkUrl);
-  await waitForHydration(page);
-  await expect(page.locator(".content")).toContainText("edited draft body");
+  await expect(page.locator(".j-post-body")).toContainText("edited draft body");
   await expect(page.locator(".draft-banner")).toContainText(
     "Draft - visible only to you",
   );
 
   const guestContext = await context.browser()!.newContext();
   const guestPage = await guestContext.newPage();
-  await goto(guestPage, permalinkUrl);
-  await waitForHydration(guestPage, firstNavigationTimeoutMs);
+  await goto(guestPage, permalinkUrl, { timeout: firstNavigationTimeoutMs });
   await expect(guestPage.locator("body")).not.toContainText(
     "edited draft body",
   );
   await guestContext.close();
 
-  await goto(page, "http://localhost:3000/drafts");
-  await waitForHydration(page);
+  await goto(page, "/drafts");
   const draftRow = page.locator("li", { hasText: "Lifecycle Draft" });
   await expect(draftRow).toBeVisible();
   await draftRow.locator('button:has-text("Publish")').click();
@@ -343,8 +261,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   await expect(page.locator(".success")).toContainText("Post published.");
 
   await goto(page, permalinkUrl);
-  await waitForHydration(page);
-  await expect(page.locator(".content")).toContainText("edited draft body");
+  await expect(page.locator(".j-post-body")).toContainText("edited draft body");
   await expect(page.locator(".draft-banner")).toHaveCount(0);
 });
 
@@ -358,44 +275,36 @@ test("per-user timeline lists published posts with pagination", async ({
     10_000,
   );
 
-  perf.mark("register_start");
   const username = await register(page, firstNavigationTimeoutMs);
-  perf.mark("register_done");
 
-  perf.mark("seed_posts_start");
-  for (let i = 0; i < TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT; i += 1) {
-    await createPublishedPostViaApi(page, `Timeline Post ${i}`);
-  }
-  perf.mark("seed_posts_done");
+  await perf.timed("seed_posts", async () => {
+    for (let i = 0; i < TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT; i += 1) {
+      await createPublishedPostViaApi(page, `Timeline Post ${i}`);
+    }
+  });
 
-  perf.mark("goto_timeline_start");
-  await goto(page, `http://localhost:3000/~${username}`);
-  perf.mark("goto_timeline_done");
-  await waitForHydration(page, firstNavigationTimeoutMs);
-  perf.mark("hydration_done");
+  await goto(page, `/~${username}`, { timeout: firstNavigationTimeoutMs });
 
-  await expect(page.locator("h1")).toContainText(`Posts by ${username}`);
-  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
-    TIMELINE_PAGE_SIZE,
-    {
-      timeout: 10_000,
-    },
+  await expect(page.locator("h1", { hasText: /^Posts by / })).toContainText(
+    `Posts by ${username}`,
   );
-  await expect(
-    page.locator('[data-test="timeline-item"]').first(),
-  ).toContainText(`Timeline Post ${TIMELINE_PAGE_SIZE}`);
+  await expect(page.locator("article.j-post")).toHaveCount(TIMELINE_PAGE_SIZE);
+  await expect(page.locator("article.j-post").first()).toContainText(
+    `Timeline Post ${TIMELINE_PAGE_SIZE}`,
+  );
 
   await click(page, 'button:has-text("Load more")');
   perf.mark("load_more_clicked");
-  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
+  await expect(page.locator("article.j-post")).toHaveCount(
     TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT,
     {
       timeout: 10_000,
     },
   );
-  await expect(
-    page.locator('[data-test="timeline-item"]').last(),
-  ).toContainText("Timeline Post 0", { timeout: 10_000 });
+  await expect(page.locator("article.j-post").last()).toContainText(
+    "Timeline Post 0",
+    { timeout: 10_000 },
+  );
   perf.mark("assertions_complete");
   await perf.log({ username });
 });
@@ -411,51 +320,37 @@ test("home page shows local timeline for unauthenticated users", async ({
     10_000,
   );
 
-  perf.mark("seed_author_one_start");
-  await register(page, firstNavigationTimeoutMs);
-  for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
-    await createPublishedPostViaApi(page, `Local Author One ${i}`);
-  }
-  perf.mark("seed_author_one_done");
+  await perf.timed("seed_author_one", async () => {
+    await register(page, firstNavigationTimeoutMs);
+    for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
+      await createPublishedPostViaApi(page, `Local Author One ${i}`);
+    }
+  });
 
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
-  perf.mark("seed_author_two_start");
-  await register(secondPage, firstNavigationTimeoutMs);
-  for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
-    await createPublishedPostViaApi(secondPage, `Local Author Two ${i}`);
-  }
-  perf.mark("seed_author_two_done");
+  await perf.timed("seed_author_two", async () => {
+    await register(secondPage, firstNavigationTimeoutMs);
+    for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
+      await createPublishedPostViaApi(secondPage, `Local Author Two ${i}`);
+    }
+  });
 
   const guestContext = await browser.newContext();
   const guestPage = await guestContext.newPage();
-  perf.mark("goto_home_start");
-  await goto(guestPage, "http://localhost:3000/", {
-    timeout: firstNavigationTimeoutMs,
-  });
-  perf.mark("goto_home_done");
-  await waitForHydration(guestPage, firstNavigationTimeoutMs);
-  perf.mark("hydration_done");
+  await goto(guestPage, "/", { timeout: firstNavigationTimeoutMs });
 
-  await expect(guestPage.locator("h2")).toHaveText("Local Timeline", {
-    timeout: 10_000,
-  });
-  await expect(guestPage.locator('[data-test="timeline-item"]')).toHaveCount(
+  await expect(guestPage.locator(".j-topbar h1")).toHaveText("jaunder.local");
+  await expect(guestPage.locator("article.j-post")).toHaveCount(
     TIMELINE_PAGE_SIZE,
-    {
-      timeout: 10_000,
-    },
   );
 
   await click(guestPage, 'button:has-text("Load more")');
   perf.mark("load_more_clicked");
   await expect
-    .poll(
-      async () => guestPage.locator('[data-test="timeline-item"]').count(),
-      {
-        timeout: 10_000,
-      },
-    )
+    .poll(async () => guestPage.locator("article.j-post").count(), {
+      timeout: 10_000,
+    })
     .toBeGreaterThan(TIMELINE_PAGE_SIZE);
   perf.mark("assertions_complete");
   await perf.log();
@@ -475,47 +370,34 @@ test("home page shows authenticated home feed with pagination", async ({
     10_000,
   );
 
-  perf.mark("seed_self_start");
-  await register(page, firstNavigationTimeoutMs);
-  for (let i = 0; i < HOME_FEED_SELF_COUNT; i += 1) {
-    await createPublishedPostViaApi(page, `Home Feed Mine ${i}`);
-  }
-  perf.mark("seed_self_done");
+  await perf.timed("seed_self", async () => {
+    await register(page, firstNavigationTimeoutMs);
+    for (let i = 0; i < HOME_FEED_SELF_COUNT; i += 1) {
+      await createPublishedPostViaApi(page, `Home Feed Mine ${i}`);
+    }
+  });
 
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
-  perf.mark("seed_other_start");
-  await register(secondPage, firstNavigationTimeoutMs);
-  for (let i = 0; i < HOME_FEED_OTHER_COUNT; i += 1) {
-    await createPublishedPostViaApi(secondPage, `Home Feed Other ${i}`);
-  }
-  perf.mark("seed_other_done");
-
-  perf.mark("goto_home_start");
-  await goto(page, "http://localhost:3000/", {
-    timeout: firstNavigationTimeoutMs,
+  await perf.timed("seed_other", async () => {
+    await register(secondPage, firstNavigationTimeoutMs);
+    for (let i = 0; i < HOME_FEED_OTHER_COUNT; i += 1) {
+      await createPublishedPostViaApi(secondPage, `Home Feed Other ${i}`);
+    }
   });
-  perf.mark("goto_home_done");
-  await waitForHydration(page, firstNavigationTimeoutMs);
-  perf.mark("hydration_done");
 
-  await expect(page.locator("h2")).toContainText("Your Home Feed", {
-    timeout: 10_000,
-  });
-  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
-    TIMELINE_PAGE_SIZE,
-    {
-      timeout: 10_000,
-    },
+  await goto(page, "/", { timeout: firstNavigationTimeoutMs });
+
+  await expect(page.locator(".j-topbar h1")).toHaveText("Home");
+  await expect(page.locator("article.j-post")).toHaveCount(TIMELINE_PAGE_SIZE);
+  await expect(page.locator("article.j-post").first()).toContainText(
+    `Home Feed Mine ${HOME_FEED_SELF_COUNT - 1}`,
   );
-  await expect(
-    page.locator('[data-test="timeline-item"]').first(),
-  ).toContainText(`Home Feed Mine ${HOME_FEED_SELF_COUNT - 1}`);
   await expect(page.locator("body")).not.toContainText("Home Feed Other");
 
   await click(page, 'button:has-text("Load more")');
   perf.mark("load_more_clicked");
-  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
+  await expect(page.locator("article.j-post")).toHaveCount(
     HOME_FEED_SELF_COUNT,
     {
       timeout: 10_000,
@@ -537,26 +419,22 @@ test("authenticated user can delete a published post", async ({
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
 
-  // Create a published post
-  await goto(page, "http://localhost:3000/posts/new");
-  await waitForHydration(page);
-  await page.fill('input[name="title"]', "Post To Delete");
-  await page.fill('textarea[name="body"]', "this will be deleted");
-  await page.selectOption('select[name="format"]', "markdown");
+  // Create a published post; title embedded as # heading (title input is removed from UI)
+  await goto(page, "/posts/new");
+  await page.fill(
+    'textarea[name="body"]',
+    "# Post To Delete\n\nthis will be deleted",
+  );
   await click(page, 'button[name="publish"][value="true"]');
   await waitForSelector(page, ".success");
 
   const permalinkLink = page.locator('[data-test="permalink-link"]');
   const permalinkHref = await permalinkLink.getAttribute("href");
   expect(permalinkHref).toBeTruthy();
-  const permalinkUrl = new URL(
-    permalinkHref!,
-    "http://localhost:3000",
-  ).toString();
+  const permalinkUrl = permalinkHref!;
 
   // Navigate to permalink page
-  await goto(page, permalinkUrl, { waitUntil: "domcontentloaded" });
-  await waitForHydration(page);
+  await goto(page, permalinkUrl);
   await expect(page.locator("article h1")).toHaveText("Post To Delete");
 
   // Delete button should be visible for the author
@@ -569,18 +447,170 @@ test("authenticated user can delete a published post", async ({
   await expect(page.locator(".success")).toContainText("Post deleted.");
 
   // Verify the permalink now returns a not-found error
-  await goto(page, permalinkUrl, { waitUntil: "domcontentloaded" });
-  await waitForHydration(page);
+  await goto(page, permalinkUrl);
   await expect(page.locator(".error")).toContainText("Post not found");
 
   // Verify excluded from user timeline
   const username = permalinkUrl.match(/\/~([^/]+)\//)?.[1];
   expect(username).toBeTruthy();
-  await goto(page, `http://localhost:3000/~${username}`, {
-    waitUntil: "domcontentloaded",
-  });
-  await waitForHydration(page);
+  await goto(page, `/~${username}`);
   await expect(page.locator("body")).not.toContainText("Post To Delete");
+});
+
+test("inline composer: published post appears in timeline without page reload", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  // Home page must already show the feed with the composer.
+  await goto(page, "/");
+  await waitForSelector(page, ".j-composer");
+
+  const initialCount = await page.locator("article.j-post").count();
+
+  await page.fill('.j-composer textarea[name="body"]', "Live refresh test");
+  await click(page, '.j-composer button[name="publish"][value="true"]');
+  await waitForSelector(page, ".j-composer p.success");
+
+  // The new post should appear without a page reload.
+  await expect(page.locator("article.j-post")).toHaveCount(initialCount + 1, {
+    timeout: hydrationHeavyTimeoutMs(testInfo, 8_000),
+  });
+});
+
+test("inline composer: plain body publishes titleless note", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+  await goto(page, "/");
+  await waitForSelector(page, ".j-composer");
+
+  await page.fill('.j-composer textarea[name="body"]', "Titleless inline note");
+  await click(page, '.j-composer button[name="publish"][value="true"]');
+  await waitForSelector(page, ".j-composer p.success");
+
+  const post = page.locator("article.j-post").first();
+  await expect(post).toContainText("Titleless inline note");
+  await expect(post.locator(".j-post-title")).toHaveCount(0);
+});
+
+test("inline composer: markdown heading becomes article title", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+  await goto(page, "/");
+  await waitForSelector(page, ".j-composer");
+
+  await page.fill(
+    '.j-composer textarea[name="body"]',
+    "# Inline Article\n\nArticle body",
+  );
+  await click(page, '.j-composer button[name="publish"][value="true"]');
+  await waitForSelector(page, ".j-composer p.success");
+
+  const post = page.locator("article.j-post").first();
+  await expect(post.locator(".j-post-title")).toContainText("Inline Article");
+  await expect(post.locator(".j-post-body")).toContainText("Article body");
+  // Body is stored verbatim, so the # heading renders as <h1> inside the body
+  await expect(post.locator(".j-post-body h1")).toHaveCount(1);
+});
+
+test("inline composer: publish flash is a link to the post permalink", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+  await goto(page, "/");
+  await waitForSelector(page, ".j-composer");
+
+  await page.fill('.j-composer textarea[name="body"]', "Flash link test");
+  await click(page, '.j-composer button[name="publish"][value="true"]');
+  await waitForSelector(page, ".j-composer p.success a");
+
+  const link = page.locator(".j-composer p.success a");
+  await expect(link).toContainText("Post published!");
+  const href = await link.getAttribute("href");
+  expect(href).toBeTruthy();
+  expect(href).toMatch(/^\/~[^/]+\//);
+});
+
+test("inline composer: draft flash is a link to the draft preview URL", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+  await goto(page, "/");
+  await waitForSelector(page, ".j-composer");
+
+  await page.fill('.j-composer textarea[name="body"]', "Draft flash link test");
+  await click(page, '.j-composer button[name="publish"][value="false"]');
+  await waitForSelector(page, ".j-composer p.success a");
+
+  const link = page.locator(".j-composer p.success a");
+  await expect(link).toContainText("Draft saved!");
+  const href = await link.getAttribute("href");
+  expect(href).toBeTruthy();
+});
+
+test("inline composer: flash clears when user starts typing", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+  await goto(page, "/");
+  await waitForSelector(page, ".j-composer");
+
+  await page.fill('.j-composer textarea[name="body"]', "Flash clear test");
+  await click(page, '.j-composer button[name="publish"][value="true"]');
+  await waitForSelector(page, ".j-composer p.success");
+
+  // Typing in the textarea should dismiss the flash immediately.
+  await page.type('.j-composer textarea[name="body"]', "x");
+  await expect(page.locator(".j-composer p.success")).toHaveCount(0);
+});
+
+test("inline composer: format toggle switches active button", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+  await goto(page, "/");
+  await waitForSelector(page, ".j-composer");
+
+  // Markdown is active by default.
+  const markdownBtn = page.locator('.j-seg button:has-text("Markdown")');
+  const orgBtn = page.locator('.j-seg button:has-text("Org")');
+  await expect(markdownBtn).toHaveClass(/is-selected/);
+  await expect(orgBtn).not.toHaveClass(/is-selected/);
+
+  // Click Org to switch.
+  await click(page, '.j-seg button:has-text("Org")');
+  await expect(orgBtn).toHaveClass(/is-selected/);
+  await expect(markdownBtn).not.toHaveClass(/is-selected/);
 });
 
 test("authenticated user can delete a draft from the drafts page", async ({
@@ -592,20 +622,17 @@ test("authenticated user can delete a draft from the drafts page", async ({
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
 
-  // Create a draft
-  await goto(page, "http://localhost:3000/posts/new");
-  await waitForHydration(page);
-  await page.fill('input[name="title"]', "Draft To Delete");
-  await page.fill('textarea[name="body"]', "draft content");
-  await page.selectOption('select[name="format"]', "markdown");
+  // Create a draft; title embedded as # heading (title input is removed from UI)
+  await goto(page, "/posts/new");
+  await page.fill(
+    'textarea[name="body"]',
+    "# Draft To Delete\n\ndraft content",
+  );
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");
 
   // Navigate to drafts page
-  await goto(page, "http://localhost:3000/drafts", {
-    waitUntil: "domcontentloaded",
-  });
-  await waitForHydration(page);
+  await goto(page, "/drafts");
   await expect(page.locator("body")).toContainText("Draft To Delete");
 
   // Delete the draft

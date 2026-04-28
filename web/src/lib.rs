@@ -1,5 +1,41 @@
+#[cfg(feature = "ssr")]
+pub use common::username;
+
+#[macro_export]
+macro_rules! web_ssr {
+    ($($param:ident),* => $body:block) => {
+        {
+            #[cfg(feature = "ssr")]
+            $body
+            #[cfg(not(feature = "ssr"))]
+            {
+                $(let _ = $param;)*
+                Err($crate::error::WebError::server_function("Not implemented"))
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! web_server_fn {
+    ($name:expr, $($param:ident),* => $body:block) => {
+        {
+            #[cfg(feature = "ssr")]
+            {
+                $crate::error::server_boundary($name, async move $body).await
+            }
+            #[cfg(not(feature = "ssr"))]
+            {
+                $(let _ = $param;)*
+                Err($crate::error::WebError::server_function("Not implemented"))
+            }
+        }
+    };
+}
+
 pub mod auth;
 pub mod email;
+pub mod error;
 pub mod invites;
 pub mod pages;
 pub mod password_reset;
@@ -19,6 +55,8 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
             <head>
                 <meta charset="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
+                <link rel="stylesheet" href="/style/jaunder.css" />
+                <link rel="stylesheet" href="/style/jaunder-themes.css" />
                 <AutoReload options=options.clone() />
                 <HydrationScripts options />
                 <MetaTags />

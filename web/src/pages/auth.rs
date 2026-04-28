@@ -1,4 +1,5 @@
 use crate::auth::{get_registration_policy, Login, Logout, Register};
+use crate::error::WebError;
 use leptos::prelude::*;
 
 /// Registration page.
@@ -47,7 +48,7 @@ pub fn RegisterPage() -> impl IntoView {
             register_action
                 .value()
                 .get()
-                .and_then(|r: Result<String, ServerFnError>| r.err())
+                .and_then(|r: Result<String, WebError>| r.err())
                 .map(|e| view! { <p class="error">{e.to_string()}</p> })
         }}
     }
@@ -80,7 +81,7 @@ pub fn LoginPage() -> impl IntoView {
             login_action
                 .value()
                 .get()
-                .map(|r: Result<String, ServerFnError>| match r {
+                .map(|r: Result<String, WebError>| match r {
                     Ok(_) => view! { <p>"Logging in..."</p> }.into_any(),
                     Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                 })
@@ -103,7 +104,7 @@ pub fn LogoutPage() -> impl IntoView {
             logout_action
                 .value()
                 .get()
-                .map(|r: Result<(), ServerFnError>| {
+                .map(|r: Result<(), WebError>| {
                     match r {
                         Ok(_) => view! { <p>"You have been logged out."</p> }.into_any(),
                         Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),

@@ -349,7 +349,7 @@ impl FromStr for PostFormat {
 pub struct PostRecord {
     pub post_id: i64,
     pub user_id: i64,
-    pub title: String,
+    pub title: Option<String>,
     pub slug: Slug,
     pub body: String,
     pub format: PostFormat,
@@ -366,7 +366,7 @@ pub struct PostRevisionRecord {
     pub revision_id: i64,
     pub post_id: i64,
     pub user_id: i64,
-    pub title: String,
+    pub title: Option<String>,
     pub slug: Slug,
     pub body: String,
     pub format: PostFormat,
@@ -404,7 +404,7 @@ pub struct PostCursor {
 #[derive(Clone)]
 pub struct CreatePostInput {
     pub user_id: i64,
-    pub title: String,
+    pub title: Option<String>,
     pub slug: Slug,
     pub body: String,
     pub format: PostFormat,
@@ -415,7 +415,7 @@ pub struct CreatePostInput {
 /// Input for updating an existing post.
 #[derive(Clone)]
 pub struct UpdatePostInput {
-    pub title: String,
+    pub title: Option<String>,
     /// Ignored if the post is already published.
     pub slug: Slug,
     pub body: String,
@@ -488,6 +488,9 @@ pub trait PostStorage: Send + Sync {
     ) -> Result<PostRecord, UpdatePostError>;
 
     async fn soft_delete_post(&self, post_id: i64) -> sqlx::Result<()>;
+
+    /// Clears `published_at`, reverting a published post to draft status.
+    async fn unpublish_post(&self, post_id: i64) -> sqlx::Result<()>;
 
     async fn list_published_by_user(
         &self,

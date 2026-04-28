@@ -14,6 +14,20 @@ use web::posts::{
     CreatePostResult, DraftSummary, PublishPostResult, TimelinePage, UpdatePostResult,
 };
 
+async fn unpublish_post_form(
+    state: Arc<jaunder::storage::AppState>,
+    post_id: i64,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    post_form(
+        state,
+        "/api/unpublish_post",
+        format!("post_id={post_id}"),
+        cookie,
+    )
+    .await
+}
+
 use helpers::{ensure_server_fns_registered, test_options, test_state};
 
 async fn post_form(
@@ -83,10 +97,11 @@ async fn create_post_persists_rendered_published_post() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
+    // Title embedded as # heading in the body (verbatim storage)
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Hello+World&body=%2A%2Abold%2A%2A&format=markdown&publish=true",
+        "body=%23+Hello+World%0A%0A%2A%2Abold%2A%2A&format=markdown&publish=true",
         Some(&cookie),
     )
     .await;
@@ -107,7 +122,7 @@ async fn create_post_persists_rendered_published_post() {
         .await
         .unwrap()
         .expect("post should exist");
-    assert_eq!(record.title, "Hello World");
+    assert_eq!(record.title.as_deref(), Some("Hello World"));
     assert_eq!(record.slug.to_string(), "hello-world");
     assert_eq!(record.format, PostFormat::Markdown);
     assert!(record.published_at.is_some());
@@ -146,10 +161,11 @@ async fn create_post_retries_slug_conflicts_for_same_user_and_date() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
+    // Title embedded as # heading; two posts with same heading produce conflicting slugs
     let (first_status, first_body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Repeated+Title&body=first&format=markdown&publish=true",
+        "body=%23+Repeated+Title%0A%0Afirst&format=markdown&publish=true",
         Some(&cookie),
     )
     .await;
@@ -158,7 +174,7 @@ async fn create_post_retries_slug_conflicts_for_same_user_and_date() {
     let (second_status, second_body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Repeated+Title&body=second&format=markdown&publish=true",
+        "body=%23+Repeated+Title%0A%0Asecond&format=markdown&publish=true",
         Some(&cookie),
     )
     .await;
@@ -232,7 +248,84 @@ async fn create_post_accepts_slug_override_and_saves_draft() {
 }
 
 #[tokio::test]
-async fn create_post_rejects_empty_title() {
+async fn create_post_accepts_titleless_body() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "title=&body=Titleless+note&format=markdown&publish=true",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    assert_eq!(created.slug, "titleless-note");
+    let record = state
+        .posts
+        .get_post_by_id(created.post_id)
+        .await
+        .unwrap()
+        .expect("post should exist");
+    assert_eq!(record.title, None);
+    assert_eq!(record.body, "Titleless note");
+}
+
+#[tokio::test]
+async fn create_post_extracts_markdown_heading_title() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "body=%23+Extracted+Title%0A%0ABody+text&format=markdown&publish=true",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    assert_eq!(created.slug, "extracted-title");
+    let record = state
+        .posts
+        .get_post_by_id(created.post_id)
+        .await
+        .unwrap()
+        .expect("post should exist");
+    assert_eq!(record.title.as_deref(), Some("Extracted Title"));
+    // Body is stored verbatim including the heading
+    assert_eq!(record.body, "# Extracted Title\n\nBody text");
+    // Rendered HTML contains the heading because body is rendered verbatim
+    assert!(record.rendered_html.contains("<h1>Extracted Title</h1>"));
+}
+
+#[tokio::test]
+async fn create_post_rejects_empty_post() {
     let base = TempDir::new().unwrap();
     let state = test_state(&base).await;
     let user_id = state
@@ -250,13 +343,44 @@ async fn create_post_rejects_empty_title() {
     let (status, body) = post_form(
         state,
         "/api/create_post",
-        "title=+++&body=body&format=markdown&publish=false",
+        "body=&format=markdown&publish=false",
         Some(&cookie),
     )
     .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("title is required"), "body: {body}");
+    assert!(body.contains("post body is required"), "body: {body}");
+}
+
+#[tokio::test]
+async fn create_post_rejects_post_without_slug_source() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = post_form(
+        state,
+        "/api/create_post",
+        "title=%2B%2B%2B&body=%2B%2B%2B&format=markdown&publish=false",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(
+        body.contains("post must contain at least one ASCII letter or digit for its slug"),
+        "body: {body}"
+    );
 }
 
 #[tokio::test]
@@ -331,17 +455,18 @@ async fn create_post_rejects_title_without_ascii_slug_characters() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
+    // Heading with only em-dashes passes the empty check but cannot produce a slug
     let (status, body) = post_form(
         state,
         "/api/create_post",
-        "title=%E2%80%94%E2%80%94%E2%80%94&body=body&format=markdown&publish=false",
+        "body=%23+%E2%80%94%E2%80%94%E2%80%94%0A%0Abody&format=markdown&publish=false",
         Some(&cookie),
     )
     .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(
-        body.contains("title must contain at least one ASCII letter or digit"),
+        body.contains("post must contain at least one ASCII letter or digit for its slug"),
         "body: {body}"
     );
 }
@@ -365,7 +490,7 @@ async fn get_post_returns_published_post() {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Permalink&body=%2A%2Abold%2A%2A&format=markdown&publish=true",
+        "body=%23+Permalink%0A%0A%2A%2Abold%2A%2A&format=markdown&publish=true",
         Some(&cookie),
     )
     .await;
@@ -439,7 +564,7 @@ async fn get_post_returns_draft_to_author_only() {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Draft&body=draft&format=markdown&publish=false",
+        "body=%23+Draft%0A%0Adraft&format=markdown&publish=false",
         Some(&author_cookie),
     )
     .await;
@@ -544,7 +669,7 @@ async fn get_post_preview_shows_draft_to_author_only() {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Preview+Draft&body=draft&format=markdown&publish=false",
+        "body=%23+Preview+Draft%0A%0Adraft&format=markdown&publish=false",
         Some(&author_cookie),
     )
     .await;
@@ -767,7 +892,7 @@ async fn update_post_updates_draft_content_and_slug() {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Original+Title&body=original&format=markdown&publish=false",
+        "body=original&format=markdown&publish=false",
         Some(&cookie),
     )
     .await;
@@ -775,10 +900,11 @@ async fn update_post_updates_draft_content_and_slug() {
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     let post_id = created.post_id;
 
+    // Title embedded as # heading; slug_override takes precedence over the derived slug
     let (status, body) = update_post_form(
         Arc::clone(&state),
         post_id,
-        "title=Updated+Title&body=%2A%2Anew+body%2A%2A&format=markdown&slug_override=updated-slug&publish=false",
+        "body=%23+Updated+Title%0A%0A%2A%2Anew+body%2A%2A&format=markdown&slug_override=updated-slug&publish=false",
         Some(&cookie),
     )
     .await;
@@ -794,7 +920,7 @@ async fn update_post_updates_draft_content_and_slug() {
         .await
         .unwrap()
         .expect("post should exist");
-    assert_eq!(record.title, "Updated Title");
+    assert_eq!(record.title.as_deref(), Some("Updated Title"));
     assert_eq!(record.slug.to_string(), "updated-slug");
     assert!(record.rendered_html.contains("<strong>new body</strong>"));
 }
@@ -965,7 +1091,7 @@ async fn update_post_rejects_unauthenticated() {
 }
 
 #[tokio::test]
-async fn update_post_rejects_empty_title() {
+async fn update_post_rejects_empty_post() {
     let base = TempDir::new().unwrap();
     let state = test_state(&base).await;
     let user_id = state
@@ -993,13 +1119,16 @@ async fn update_post_rejects_empty_title() {
     let (status, body) = update_post_form(
         state,
         created.post_id,
-        "title=+++&body=body&format=markdown&publish=false",
+        "title=&body=&format=markdown&publish=false",
         Some(&cookie),
     )
     .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("title is required"), "body: {body}");
+    assert!(
+        body.contains("post body or title is required"),
+        "body: {body}"
+    );
 }
 
 #[tokio::test]
@@ -1127,25 +1256,25 @@ async fn update_post_rejects_title_without_ascii_slug_characters() {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Original&body=body&format=markdown&publish=false",
+        "body=original&format=markdown&publish=false",
         Some(&cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
-    // em-dash-only title passes the empty check but cannot produce a slug
+    // Heading with only em-dashes passes the empty check but cannot produce a slug
     let (status, body) = update_post_form(
         state,
         created.post_id,
-        "title=%E2%80%94%E2%80%94%E2%80%94&body=body&format=markdown&publish=false",
+        "body=%23+%E2%80%94%E2%80%94%E2%80%94%0A%0Abody&format=markdown&publish=false",
         Some(&cookie),
     )
     .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(
-        body.contains("title must contain at least one ASCII letter or digit"),
+        body.contains("post must contain at least one ASCII letter or digit for its slug"),
         "body: {body}"
     );
 }
@@ -1604,10 +1733,10 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination() {
         "body: {body}"
     );
     assert!(
-        first_page
-            .posts
-            .iter()
-            .all(|post| !post.title.contains("Draft")),
+        first_page.posts.iter().all(|post| post
+            .title
+            .as_deref()
+            .is_none_or(|title| !title.contains("Draft"))),
         "body: {body}"
     );
 
@@ -1763,10 +1892,10 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination() {
         "body: {body}"
     );
     assert!(
-        first_page
-            .posts
-            .iter()
-            .all(|post| !post.title.contains("Draft") && !post.title.contains("Deleted")),
+        first_page.posts.iter().all(|post| post
+            .title
+            .as_deref()
+            .is_none_or(|title| { !title.contains("Draft") && !title.contains("Deleted") })),
         "body: {body}"
     );
 
@@ -1892,10 +2021,10 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only() {
         "body: {body}"
     );
     assert!(
-        first_page
-            .posts
-            .iter()
-            .all(|post| !post.title.contains("Other") && !post.title.contains("Draft")),
+        first_page.posts.iter().all(|post| post
+            .title
+            .as_deref()
+            .is_none_or(|title| { !title.contains("Other") && !title.contains("Draft") })),
         "body: {body}"
     );
 
@@ -2182,7 +2311,7 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink() {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_post",
-        "title=Deletable+Post&body=body&format=markdown&publish=true",
+        "body=%23+Deletable+Post%0A%0Abody&format=markdown&publish=true",
         Some(&cookie),
     )
     .await;
@@ -2229,5 +2358,111 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink() {
     let (status, body) =
         get_post_form(Arc::clone(&state), "author", year, month, day, slug, None).await;
     assert_eq!(StatusCode::NOT_FOUND, status, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+}
+
+#[tokio::test]
+async fn unpublish_post_reverts_published_post_to_draft() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let author_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(author_id, None)
+            .await
+            .unwrap()
+    );
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "body=%23+Unpublish+Me%0A%0Abody&format=markdown&publish=true",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    assert!(created.published_at.is_some(), "should be published");
+
+    // Unpublish
+    let (status, body) =
+        unpublish_post_form(Arc::clone(&state), created.post_id, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "unpublish body: {body}");
+
+    // Should no longer appear in the user timeline
+    let (status, body) =
+        list_user_posts_form(Arc::clone(&state), "author", None, None, 10, None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(
+        !body.contains("Unpublish Me"),
+        "expected post removed from timeline: {body}"
+    );
+
+    // Should appear in drafts
+    let (status, body) = list_drafts_form(Arc::clone(&state), None, None, 50, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(
+        body.contains("unpublish-me"),
+        "expected post in drafts: {body}"
+    );
+}
+
+#[tokio::test]
+async fn unpublish_post_rejects_non_author() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let author_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let other_id = state
+        .users
+        .create_user(
+            &"other".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let author_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(author_id, None)
+            .await
+            .unwrap()
+    );
+    let other_cookie = format!(
+        "session={}",
+        state.sessions.create_session(other_id, None).await.unwrap()
+    );
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "body=%23+Others+Post%0A%0Abody&format=markdown&publish=true",
+        Some(&author_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let (status, body) = unpublish_post_form(state, created.post_id, Some(&other_cookie)).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }

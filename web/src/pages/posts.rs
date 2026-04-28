@@ -1,9 +1,13 @@
 use crate::{
     auth::current_user,
-    pages::signal_read::read_signal,
+    error::WebError,
+    pages::{
+        signal_read::read_signal,
+        ui::{ComposerFields, PostCard, PostDisplay, Topbar},
+    },
     posts::{
         get_post, get_post_preview, list_drafts, list_user_posts, CreatePost, CreatePostResult,
-        DeletePost, DraftSummary, ListUserPosts, PostResponse, PublishPost, PublishPostResult,
+        DeletePost, DraftSummary, ListUserPosts, PublishPost, PublishPostResult,
         TimelinePostSummary, UpdatePost, UpdatePostResult,
     },
 };
@@ -14,48 +18,164 @@ use leptos_router::hooks::use_params_map;
 pub fn CreatePostPage() -> impl IntoView {
     let create_post_action = ServerAction::<CreatePost>::new();
     let current_user = Resource::new(|| (), |_| current_user());
+    let body = RwSignal::new(String::new());
+    let format = RwSignal::new("markdown".to_string());
 
     view! {
-        <h1>"New Post"</h1>
+        <Topbar title="New post".to_string() sub="Long-form".to_string() />
         <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
+            view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
             {move || Suspend::new(async move {
                 match current_user.await {
-                    Ok(Some(_username)) => {
+                    Ok(Some(_)) => {
                         view! {
                             <ActionForm action=create_post_action>
-                                <label>
-                                    "Title" <input type="text" name="title" required=true />
-                                </label>
-                                <label>"Body" <textarea name="body" rows="12"></textarea></label>
-                                <label>
-                                    "Format" <select name="format">
-                                        <option value="markdown" selected=true>
-                                            "Markdown"
-                                        </option>
-                                        <option value="org">"Org"</option>
-                                    </select>
-                                </label>
-                                <label>
-                                    "Slug override" <input type="text" name="slug_override" />
-                                </label>
-                                <button type="submit" name="publish" value="true">
-                                    "Publish"
-                                </button>
-                                <button type="submit" name="publish" value="false">
-                                    "Save Draft"
-                                </button>
+                                <div class="j-compose-grid">
+                                    <div class="j-compose-body">
+                                        <ComposerFields
+                                            body=body
+                                            format=format
+                                            rows=16
+                                            placeholder="Write something\u{2026}"
+                                            show_seg=false
+                                        />
+                                    </div>
+                                    <aside class="j-compose-aside">
+                                        <div>
+                                            <div class="j-sb-head" style="padding:0 0 10px">
+                                                "Options"
+                                            </div>
+                                            <div
+                                                class="j-field-row"
+                                                style="grid-template-columns:auto 1fr"
+                                            >
+                                                <label class="j-field-label" for="compose-slug">
+                                                    "Slug"
+                                                </label>
+                                                <input
+                                                    id="compose-slug"
+                                                    type="text"
+                                                    name="slug_override"
+                                                    placeholder="auto"
+                                                    class="j-field-val"
+                                                />
+                                            </div>
+                                            <div class="j-seg" style="margin-top:10px">
+                                                <button
+                                                    type="button"
+                                                    class=move || {
+                                                        if format.get() == "markdown" {
+                                                            "j-btn is-selected"
+                                                        } else {
+                                                            "j-btn"
+                                                        }
+                                                    }
+                                                    on:click=move |_| { format.set("markdown".to_string()) }
+                                                >
+                                                    "Markdown"
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    class=move || {
+                                                        if format.get() == "org" {
+                                                            "j-btn is-selected"
+                                                        } else {
+                                                            "j-btn"
+                                                        }
+                                                    }
+                                                    on:click=move |_| format.set("org".to_string())
+                                                >
+                                                    "Org"
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
+                                            <button
+                                                class="j-btn"
+                                                type="submit"
+                                                name="publish"
+                                                value="false"
+                                            >
+                                                "Save draft"
+                                            </button>
+                                            <button
+                                                class="j-btn is-primary"
+                                                type="submit"
+                                                name="publish"
+                                                value="true"
+                                            >
+                                                "Publish"
+                                            </button>
+                                        </div>
+                                    </aside>
+                                </div>
                             </ActionForm>
+                            {move || {
+                                create_post_action
+                                    .value()
+                                    .get()
+                                    .map(|result: Result<CreatePostResult, WebError>| {
+                                        match result {
+                                            Ok(created) => {
+                                                let message = if created.published_at.is_some() {
+                                                    "Post published."
+                                                } else {
+                                                    "Draft saved."
+                                                };
+                                                let slug_value = created.slug.clone();
+                                                let slug_for_attr = slug_value.clone();
+                                                view! {
+                                                    <div class="success" style="padding:16px 32px">
+                                                        <p>{message}</p>
+                                                        <p data-test="slug-value" data-slug=slug_for_attr>
+                                                            "Slug: "
+                                                            {slug_value}
+                                                        </p>
+                                                        <a
+                                                            data-test="preview-link"
+                                                            href=created.preview_url.clone()
+                                                        >
+                                                            "Preview draft"
+                                                        </a>
+                                                        {created
+                                                            .permalink
+                                                            .as_ref()
+                                                            .map(|href| {
+                                                                view! {
+                                                                    <a data-test="permalink-link" href=href.clone()>
+                                                                        "View permalink"
+                                                                    </a>
+                                                                }
+                                                            })}
+                                                    </div>
+                                                }
+                                                    .into_any()
+                                            }
+                                            Err(err) => {
+                                                view! {
+                                                    <p class="error" style="padding:16px 32px">
+                                                        {err.to_string()}
+                                                    </p>
+                                                }
+                                                    .into_any()
+                                            }
+                                        }
+                                    })
+                            }}
                         }
                             .into_any()
                     }
                     Ok(None) => {
                         view! {
-                            <p>"You must be logged in to create a post."</p>
-                            <p>
-                                <a href="/login">"Login"</a>
-                            </p>
+                            <div style="padding:32px">
+                                <p>"You must be logged in to create a post."</p>
+                                <p>
+                                    <a href="/login" class="j-btn is-primary">
+                                        "Sign in"
+                                    </a>
+                                </p>
+                            </div>
                         }
                             .into_any()
                     }
@@ -63,52 +183,11 @@ pub fn CreatePostPage() -> impl IntoView {
                 }
             })}
         </Suspense>
-        {move || {
-            create_post_action
-                .value()
-                .get()
-                .map(|result: Result<CreatePostResult, ServerFnError>| match result {
-                    Ok(created) => {
-                        let message = if created.published_at.is_some() {
-                            "Post published."
-                        } else {
-                            "Draft saved."
-                        };
-                        let slug_value = created.slug.clone();
-                        let slug_for_attr = slug_value.clone();
-                        view! {
-                            <div class="success">
-                                <p>{message}</p>
-                                <p data-test="slug-value" data-slug=slug_for_attr>
-                                    "Slug: "
-                                    {slug_value}
-                                </p>
-                                <a data-test="preview-link" href=created.preview_url.clone()>
-                                    "Preview draft"
-                                </a>
-                                {created
-                                    .permalink
-                                    .as_ref()
-                                    .map(|href| {
-                                        view! {
-                                            <a data-test="permalink-link" href=href.clone()>
-                                                "View permalink"
-                                            </a>
-                                        }
-                                    })}
-                            </div>
-                        }
-                            .into_any()
-                    }
-                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                })
-        }}
     }
 }
 
 #[component]
 pub fn PostPage() -> impl IntoView {
-    let delete_action = ServerAction::<DeletePost>::new();
     let params = use_params_map();
 
     let post_data = move || {
@@ -128,7 +207,6 @@ pub fn PostPage() -> impl IntoView {
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or_default();
         let slug = params.get("slug").unwrap_or_default();
-
         (username, year, month, day, slug)
     };
 
@@ -137,12 +215,18 @@ pub fn PostPage() -> impl IntoView {
         |(username, year, month, day, slug): (Option<String>, i32, u32, u32, String)| async move {
             let username = match username {
                 Some(value) if !value.is_empty() => value,
-                _ => return Err(ServerFnError::new("Invalid permalink")),
+                _ => return Err(WebError::validation("Invalid permalink")),
             };
-
             get_post(username, year, month, day, slug).await
         },
     );
+
+    let on_unpublish = Callback::new(move |_| {
+        #[cfg(target_arch = "wasm32")]
+        if let Some(window) = web_sys::window() {
+            let _ = window.location().replace("/drafts");
+        }
+    });
 
     view! {
         <Suspense fallback=|| {
@@ -150,27 +234,31 @@ pub fn PostPage() -> impl IntoView {
         }>
             {move || Suspend::new(async move {
                 match post.await {
-                    Ok(fetched_post) => {
-                        let banner = fetched_post.is_draft.then_some("Draft - visible only to you");
-                        let post_id = fetched_post.post_id;
-                        let is_author = fetched_post.is_author;
-                        let article = render_post_article(fetched_post, banner);
-                        view! {
-                            {article}
-                            {is_author
-                                .then(|| render_delete_form(
-                                    delete_action,
-                                    post_id,
-                                    "Delete this post?",
-                                ))}
-                        }
+                    Ok(fetched) => {
+                        let banner = fetched
+                            .is_draft
+                            .then_some("Draft - visible only to you".to_string());
+                        let summary = TimelinePostSummary {
+                            post_id: fetched.post_id,
+                            username: fetched.username.clone(),
+                            title: fetched.title.clone(),
+                            slug: fetched.slug.clone(),
+                            rendered_html: fetched.rendered_html.clone(),
+                            created_at: fetched.created_at.clone(),
+                            published_at: fetched
+                                .published_at
+                                .clone()
+                                .unwrap_or_else(|| fetched.created_at.clone()),
+                            permalink: fetched.permalink.clone().unwrap_or_default(),
+                            is_author: fetched.is_author,
+                        };
+                        view! { <PostCard post=summary banner=banner on_unpublish=on_unpublish /> }
                             .into_any()
                     }
                     Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 }
             })}
         </Suspense>
-        {render_delete_result(delete_action, "Post deleted.", "/", "Go to home")}
     }
 }
 
@@ -187,11 +275,14 @@ pub fn UserTimelinePage() -> impl IntoView {
             .to_string()
     });
 
+    let mutate_version = RwSignal::new(0u32);
+    let on_mutate = Callback::new(move |_| mutate_version.update(|v| *v += 1));
+
     let initial_page = Resource::new(
-        move || username.get(),
-        |username| async move {
+        move || (username.get(), mutate_version.get()),
+        |(username, _)| async move {
             if username.is_empty() {
-                return Err(ServerFnError::new("Invalid username"));
+                return Err(WebError::validation("Invalid username"));
             }
             list_user_posts(username, None, None, Some(50)).await
         },
@@ -277,7 +368,14 @@ pub fn UserTimelinePage() -> impl IntoView {
             }
 
             view! {
-                <ul>{rows.into_iter().map(render_timeline_post_row).collect::<Vec<_>>()}</ul>
+                <div>
+                    {rows
+                        .into_iter()
+                        .map(|post| {
+                            view! { <PostCard post=post banner=None on_mutate=on_mutate /> }
+                        })
+                        .collect::<Vec<_>>()}
+                </div>
                 {move || {
                     read_has_more()
                         .then(|| {
@@ -299,6 +397,7 @@ pub fn UserTimelinePage() -> impl IntoView {
 #[component]
 pub fn DraftPreviewPage() -> impl IntoView {
     let delete_action = ServerAction::<DeletePost>::new();
+    let publish_action = ServerAction::<PublishPost>::new();
     let params = use_params_map();
 
     let preview = Resource::new(
@@ -307,7 +406,7 @@ pub fn DraftPreviewPage() -> impl IntoView {
             let post_id = params
                 .get("post_id")
                 .and_then(|v| v.parse::<i64>().ok())
-                .ok_or_else(|| ServerFnError::new("Invalid preview"))?;
+                .ok_or_else(|| WebError::validation("Invalid preview"))?;
             get_post_preview(post_id).await
         },
     );
@@ -318,15 +417,45 @@ pub fn DraftPreviewPage() -> impl IntoView {
         }>
             {move || Suspend::new(async move {
                 match preview.await {
-                    Ok(post) => {
-                        let post_id = post.post_id;
-                        let article = render_post_article(
-                            post,
-                            Some("Draft preview – visible only to you"),
-                        );
+                    Ok(fetched) => {
+                        let post_id = fetched.post_id;
+                        let summary = TimelinePostSummary {
+                            post_id: fetched.post_id,
+                            username: fetched.username.clone(),
+                            title: fetched.title.clone(),
+                            slug: fetched.slug.clone(),
+                            rendered_html: fetched.rendered_html.clone(),
+                            created_at: fetched.created_at.clone(),
+                            published_at: fetched
+                                .published_at
+                                .clone()
+                                .unwrap_or_else(|| fetched.created_at.clone()),
+                            permalink: fetched.permalink.clone().unwrap_or_default(),
+                            is_author: true,
+                        };
                         view! {
-                            {article}
-                            {render_delete_form(delete_action, post_id, "Delete this draft?")}
+                            <PostDisplay
+                                post=summary
+                                banner=Some("Draft preview – visible only to you".to_string())
+                            >
+                                <div class="j-post-acts">
+                                    <ActionForm action=publish_action>
+                                        <input type="hidden" name="post_id" value=post_id />
+                                        <button
+                                            type="submit"
+                                            class="j-btn is-primary"
+                                            onclick="return confirm('Publish this draft?')"
+                                        >
+                                            "Publish \u{2192}"
+                                        </button>
+                                    </ActionForm>
+                                    {render_delete_form(
+                                        delete_action,
+                                        post_id,
+                                        "Delete this draft?",
+                                    )}
+                                </div>
+                            </PostDisplay>
                         }
                             .into_any()
                     }
@@ -334,6 +463,22 @@ pub fn DraftPreviewPage() -> impl IntoView {
                 }
             })}
         </Suspense>
+        {move || {
+            publish_action
+                .value()
+                .get()
+                .map(|result: Result<PublishPostResult, WebError>| match result {
+                    Ok(published) => {
+                        view! {
+                            <p class="success">
+                                "Post published. " <a href=published.permalink>"View post"</a>
+                            </p>
+                        }
+                            .into_any()
+                    }
+                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                })
+        }}
         {render_delete_result(delete_action, "Draft deleted.", "/drafts", "Go to drafts")}
     }
 }
@@ -342,6 +487,20 @@ pub fn DraftPreviewPage() -> impl IntoView {
 pub fn EditPostPage() -> impl IntoView {
     let params = use_params_map();
     let update_post_action = ServerAction::<UpdatePost>::new();
+    let body = RwSignal::new(String::new());
+    let format = RwSignal::new("markdown".to_string());
+    Effect::new_isomorphic(move |_| {
+        if let Some(Ok(ref updated)) = update_post_action.value().get() {
+            if updated.published_at.is_some() {
+                #[cfg(target_arch = "wasm32")]
+                if let Some(ref permalink) = updated.permalink {
+                    if let Some(window) = web_sys::window() {
+                        let _ = window.location().replace(permalink);
+                    }
+                }
+            }
+        }
+    });
 
     let post = Resource::new(
         move || {
@@ -355,76 +514,121 @@ pub fn EditPostPage() -> impl IntoView {
     );
 
     view! {
-        <h1>"Edit Post"</h1>
+        <Topbar title="Edit Post".to_string() sub="".to_string() />
         <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
+            view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
             {move || Suspend::new(async move {
                 match post.await {
                     Ok(fetched) => {
+                        body.set(fetched.body.clone());
+                        format.set(fetched.format.clone());
                         let post_id = fetched.post_id;
                         let is_published = fetched.published_at.is_some();
-                        let is_markdown = fetched.format == "markdown";
-                        let is_org = fetched.format == "org";
                         let current_slug = fetched.slug.clone();
                         view! {
                             <ActionForm action=update_post_action>
-                                <input type="hidden" name="post_id" value=post_id />
-                                <label>
-                                    "Title"
-                                    <input
-                                        type="text"
-                                        name="title"
-                                        required=true
-                                        prop:value=fetched.title
-                                    />
-                                </label>
-                                <label>
-                                    "Body" <textarea name="body" rows="12">
-                                        {fetched.body}
-                                    </textarea>
-                                </label>
-                                <label>
-                                    "Format" <select name="format">
-                                        <option value="markdown" selected=is_markdown>
-                                            "Markdown"
-                                        </option>
-                                        <option value="org" selected=is_org>
-                                            "Org"
-                                        </option>
-                                    </select>
-                                </label>
-                                {(!is_published)
-                                    .then(|| {
-                                        view! {
-                                            <label>
-                                                "Slug override"
-                                                <input
-                                                    type="text"
-                                                    name="slug_override"
-                                                    prop:value=current_slug
-                                                />
-                                            </label>
-                                        }
-                                    })}
-                                {if is_published {
-                                    view! {
-                                        <button type="submit" name="publish" value="true">
-                                            "Save"
-                                        </button>
-                                    }
-                                        .into_any()
-                                } else {
-                                    view! {
-                                        <button type="submit" name="publish" value="true">
-                                            "Publish"
-                                        </button>
-                                        <button type="submit" name="publish" value="false">
-                                            "Save Draft"
-                                        </button>
-                                    }
-                                        .into_any()
-                                }}
+                                <div class="j-edit-form-grid">
+                                    <div class="j-edit-form-body">
+                                        <input type="hidden" name="post_id" value=post_id />
+                                        <ComposerFields
+                                            body=body
+                                            format=format
+                                            rows=20
+                                            show_seg=false
+                                        />
+                                    </div>
+                                    <aside class="j-edit-form-aside">
+                                        <div>
+                                            <div class="j-sb-head" style="padding:0 0 10px">
+                                                "Options"
+                                            </div>
+                                            {(!is_published)
+                                                .then(|| {
+                                                    view! {
+                                                        <div
+                                                            class="j-field-row"
+                                                            style="grid-template-columns:auto 1fr"
+                                                        >
+                                                            <label class="j-field-label" for="edit-slug">
+                                                                "Slug"
+                                                            </label>
+                                                            <input
+                                                                id="edit-slug"
+                                                                type="text"
+                                                                name="slug_override"
+                                                                class="j-field-val"
+                                                                prop:value=current_slug
+                                                            />
+                                                        </div>
+                                                    }
+                                                })}
+                                            <div class="j-seg" style="margin-top:10px">
+                                                <button
+                                                    type="button"
+                                                    class=move || {
+                                                        if format.get() == "markdown" {
+                                                            "j-btn is-selected"
+                                                        } else {
+                                                            "j-btn"
+                                                        }
+                                                    }
+                                                    on:click=move |_| { format.set("markdown".to_string()) }
+                                                >
+                                                    "Markdown"
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    class=move || {
+                                                        if format.get() == "org" {
+                                                            "j-btn is-selected"
+                                                        } else {
+                                                            "j-btn"
+                                                        }
+                                                    }
+                                                    on:click=move |_| format.set("org".to_string())
+                                                >
+                                                    "Org"
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="j-edit-form-actions">
+                                            {if is_published {
+                                                view! {
+                                                    <button
+                                                        class="j-btn is-primary"
+                                                        type="submit"
+                                                        name="publish"
+                                                        value="true"
+                                                    >
+                                                        "Save"
+                                                    </button>
+                                                }
+                                                    .into_any()
+                                            } else {
+                                                view! {
+                                                    <button
+                                                        class="j-btn"
+                                                        type="submit"
+                                                        name="publish"
+                                                        value="false"
+                                                    >
+                                                        "Save draft"
+                                                    </button>
+                                                    <button
+                                                        class="j-btn is-primary"
+                                                        type="submit"
+                                                        name="publish"
+                                                        value="true"
+                                                    >
+                                                        "Publish"
+                                                    </button>
+                                                }
+                                                    .into_any()
+                                            }}
+                                        </div>
+                                    </aside>
+                                </div>
                             </ActionForm>
                         }
                             .into_any()
@@ -437,18 +641,13 @@ pub fn EditPostPage() -> impl IntoView {
             update_post_action
                 .value()
                 .get()
-                .map(|result: Result<UpdatePostResult, ServerFnError>| match result {
-                    Ok(updated) => {
-                        let message = if updated.published_at.is_some() {
-                            "Post updated."
-                        } else {
-                            "Draft saved."
-                        };
+                .map(|result: Result<UpdatePostResult, WebError>| match result {
+                    Ok(updated) if updated.published_at.is_none() => {
                         let slug_value = updated.slug.clone();
                         let slug_for_attr = slug_value.clone();
                         view! {
                             <div class="success">
-                                <p>{message}</p>
+                                <p>"Draft saved."</p>
                                 <p data-test="slug-value" data-slug=slug_for_attr>
                                     "Slug: "
                                     {slug_value}
@@ -456,20 +655,11 @@ pub fn EditPostPage() -> impl IntoView {
                                 <a data-test="preview-link" href=updated.preview_url.clone()>
                                     "Preview draft"
                                 </a>
-                                {updated
-                                    .permalink
-                                    .as_ref()
-                                    .map(|href| {
-                                        view! {
-                                            <a data-test="permalink-link" href=href.clone()>
-                                                "View permalink"
-                                            </a>
-                                        }
-                                    })}
                             </div>
                         }
                             .into_any()
                     }
+                    Ok(_) => view! { <p>"Redirecting\u{2026}"</p> }.into_any(),
                     Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 })
         }}
@@ -524,7 +714,7 @@ pub fn DraftsPage() -> impl IntoView {
             publish_action
                 .value()
                 .get()
-                .map(|result: Result<PublishPostResult, ServerFnError>| match result {
+                .map(|result: Result<PublishPostResult, WebError>| match result {
                     Ok(published) => {
                         view! {
                             <p class="success">
@@ -554,67 +744,43 @@ fn render_draft_row(
     delete_action: ServerAction<DeletePost>,
 ) -> impl IntoView {
     let post_id = draft.post_id;
+    let label = draft.title.clone().unwrap_or(draft.summary_label.clone());
     view! {
         <li>
-            <strong>{draft.title}</strong>
-            " ("
-            {draft.slug}
-            ") "
-            <a href=draft.preview_url>"Preview"</a>
-            " "
-            <a href=draft.edit_url>"Edit"</a>
-            " "
-            <a href=draft.permalink>"Permalink"</a>
-            " "
-            <ActionForm action=publish_action>
-                <input type="hidden" name="post_id" value=post_id />
-                <button type="submit">"Publish"</button>
-            </ActionForm>
-            " "
-            <ActionForm action=delete_action>
-                <input type="hidden" name="post_id" value=post_id />
-                <button type="submit" onclick="return confirm('Delete this draft?')">
-                    "Delete"
-                </button>
-            </ActionForm>
+            <div class="j-draft-row">
+                <div class="j-draft-row-content">
+                    <strong>{label}</strong>
+                    " ("
+                    {draft.slug}
+                    ") "
+                    <a href=draft.preview_url>"Preview"</a>
+                    " "
+                    <a href=draft.permalink>"Permalink"</a>
+                </div>
+                <div class="j-draft-actions">
+                    <a class="j-btn is-ghost" href=draft.edit_url>
+                        "Edit"
+                    </a>
+                    <ActionForm action=publish_action>
+                        <input type="hidden" name="post_id" value=post_id />
+                        <button type="submit" class="j-btn is-ghost">
+                            "Publish"
+                        </button>
+                    </ActionForm>
+                    <ActionForm action=delete_action>
+                        <input type="hidden" name="post_id" value=post_id />
+                        <button
+                            type="submit"
+                            class="j-btn is-ghost"
+                            onclick="return confirm('Delete this draft?')"
+                        >
+                            "Delete"
+                        </button>
+                    </ActionForm>
+                </div>
+            </div>
         </li>
     }
-}
-
-fn render_timeline_post_row(post: TimelinePostSummary) -> impl IntoView {
-    view! {
-        <li data-test="timeline-item">
-            <h2>
-                <a href=post.permalink.clone()>{post.title}</a>
-            </h2>
-            <p class="metadata">"Published on " {post.published_at}</p>
-            <div class="content" inner_html=post.rendered_html></div>
-        </li>
-    }
-}
-
-fn render_post_article(post: PostResponse, banner: Option<&'static str>) -> AnyView {
-    let PostResponse {
-        title,
-        username,
-        rendered_html,
-        created_at,
-        ..
-    } = post;
-    let profile_href = format!("/~{}/", username);
-    let username_display = username.clone();
-
-    view! {
-        <article>
-            <h1>{title}</h1>
-            <p class="metadata">
-                "By " <a href=profile_href>{username_display}</a> " on " {created_at}
-            </p>
-            {banner.map(|text| view! { <p class="draft-banner">{text}</p> })}
-            <div class="content" inner_html=rendered_html></div>
-        </article>
-    }
-    .into_any()
 }
 
 fn render_delete_form(
@@ -625,7 +791,11 @@ fn render_delete_form(
     view! {
         <ActionForm action=delete_action>
             <input type="hidden" name="post_id" value=post_id />
-            <button type="submit" onclick=format!("return confirm('{confirm_msg}')")>
+            <button
+                type="submit"
+                class="j-btn is-ghost"
+                onclick=format!("return confirm('{confirm_msg}')")
+            >
                 "Delete"
             </button>
         </ActionForm>

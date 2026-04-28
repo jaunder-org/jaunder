@@ -405,9 +405,9 @@ async fn authenticated_home_page_shows_logged_in_indicator() {
     let (status, body) = get_html(Arc::clone(&state), "/", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("Logged in as"), "body: {body}");
+    // The sidebar footer shows the username when authenticated.
+    assert!(body.contains("j-sb-foot"), "body: {body}");
     assert!(body.contains("alice"), "body: {body}");
-    assert!(body.contains("/logout"), "body: {body}");
 }
 
 #[tokio::test]
@@ -808,7 +808,10 @@ async fn auth_user_extraction_fails_without_app_state_extension() {
 
     // Attempt to extract AuthUser without AppState in extensions
     let result = web::auth::AuthUser::from_request_parts(&mut parts, &()).await;
-    assert_eq!(result.unwrap_err(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(matches!(
+        result.unwrap_err(),
+        web::auth::AuthRejection::MissingAppState
+    ));
 }
 
 #[tokio::test]

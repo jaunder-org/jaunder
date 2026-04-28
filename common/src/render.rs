@@ -29,6 +29,144 @@ pub fn render(body: &str, format: &PostFormat) -> Result<String, RenderError> {
     }
 }
 
+/// Metadata derived from a post body used for slug generation and display.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DerivedPostMetadata {
+    pub title: Option<String>,
+    pub slug_seed: String,
+    pub summary_label: String,
+}
+
+/// Derives the public title, slug seed, and fallback label for a post.
+/// The body is stored verbatim by the caller — this function never mutates it.
+pub fn derive_post_metadata(
+    explicit_title: Option<&str>,
+    body: &str,
+    format: &PostFormat,
+) -> Option<DerivedPostMetadata> {
+    let explicit_title = explicit_title
+        .map(str::trim)
+        .filter(|title| !title.is_empty());
+    let body = body.trim();
+
+    if let Some(title) = explicit_title {
+        let title = title.to_owned();
+        let summary_label = fallback_label(body).unwrap_or_else(|| title.clone());
+        return Some(DerivedPostMetadata {
+            title: Some(title.clone()),
+            slug_seed: title,
+            summary_label,
+        });
+    }
+
+    let extracted_title = match format {
+        PostFormat::Markdown => extract_markdown_title(body).map(|(title, _)| title),
+        PostFormat::Org => extract_org_title(body).map(|(title, _)| title),
+    };
+
+    if let Some(title) = extracted_title {
+        let summary_label = fallback_label(body).unwrap_or_else(|| title.clone());
+        return Some(DerivedPostMetadata {
+            title: Some(title.clone()),
+            slug_seed: title,
+            summary_label,
+        });
+    }
+
+    let summary_label = fallback_label(body)?;
+    Some(DerivedPostMetadata {
+        title: None,
+        slug_seed: summary_label.clone(),
+        summary_label,
+    })
+}
+
+fn fallback_label(body: &str) -> Option<String> {
+    body.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.chars().take(100).collect::<String>())
+        .filter(|line| !line.is_empty())
+}
+
+fn extract_markdown_title(body: &str) -> Option<(String, String)> {
+    let mut output = Vec::new();
+    let mut found = None;
+
+    for line in body.lines() {
+        if found.is_none() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Some(title) = trimmed.strip_prefix("# ") {
+                let title = title.trim();
+                if !title.is_empty() {
+                    found = Some(title.to_owned());
+                    continue;
+                }
+            }
+        }
+        output.push(line);
+    }
+
+    found.map(|title| (title, output.join("\n").trim().to_owned()))
+}
+
+fn extract_org_title(body: &str) -> Option<(String, String)> {
+    let mut output = Vec::new();
+    let mut found = None;
+    let mut past_kv_block = false;
+
+    for line in body.lines() {
+        if found.is_some() {
+            output.push(line);
+            continue;
+        }
+
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            // Blank lines are allowed inside the KV block
+            if !past_kv_block {
+                continue;
+            }
+            // Once we're past the KV block, a blank line without a title means no title
+            return None;
+        }
+
+        // #+TITLE: value — standard org metadata title
+        if let Some((key, value)) = trimmed.split_once(':') {
+            if key.eq_ignore_ascii_case("#+title") {
+                let title = value.trim();
+                if !title.is_empty() {
+                    found = Some(title.to_owned());
+                    continue;
+                }
+            }
+            // Any other #+key: value KV line is skipped (part of the header block)
+            if key.starts_with("#+") {
+                continue;
+            }
+        }
+
+        // * Top-level heading (exactly one asterisk followed by space)
+        if let Some(heading) = trimmed.strip_prefix("* ") {
+            let title = heading.trim();
+            if !title.is_empty() {
+                found = Some(title.to_owned());
+                past_kv_block = true;
+                continue;
+            }
+        }
+
+        // Any other non-blank, non-KV, non-heading content means no title
+        return None;
+    }
+
+    found.map(|title| (title, output.join("\n").trim().to_owned()))
+}
+
 /// Renders Markdown to HTML using pulldown-cmark with common extensions.
 fn render_markdown(body: &str) -> String {
     use pulldown_cmark::{html, Options, Parser};
@@ -83,7 +221,7 @@ pub enum UpdateRenderedPostError {
 pub async fn create_rendered_post(
     storage: &dyn PostStorage,
     user_id: i64,
-    title: String,
+    title: Option<String>,
     slug: Slug,
     body: String,
     format: PostFormat,
@@ -108,7 +246,7 @@ pub async fn update_rendered_post(
     storage: &dyn PostStorage,
     post_id: i64,
     editor_user_id: i64,
-    title: String,
+    title: Option<String>,
     slug: Slug,
     body: String,
     format: PostFormat,
@@ -133,10 +271,10 @@ pub async fn update_rendered_post(
 /// Errors that can occur during a high-level post update.
 #[derive(Debug, Error)]
 pub enum PerformUpdateError {
-    #[error("title is required")]
-    EmptyTitle,
-    #[error("title must contain at least one ASCII letter or digit")]
-    NoSlugFromTitle,
+    #[error("post body or title is required")]
+    EmptyPost,
+    #[error("post must contain at least one ASCII letter or digit for its slug")]
+    NoSlugFromPost,
     #[error("invalid slug")]
     InvalidSlug,
     #[error(transparent)]
@@ -164,36 +302,32 @@ impl From<UpdatePostError> for PerformUpdateError {
 ///
 /// The storage layer freezes the slug if the post is already published.
 /// Ownership and deletion checks are also performed atomically in storage.
-#[allow(clippy::too_many_arguments)]
 pub async fn perform_post_update(
     storage: &dyn PostStorage,
     post_id: i64,
     editor_user_id: i64,
-    title: String,
     body: String,
     format: PostFormat,
     slug_override: Option<&str>,
     publish: bool,
 ) -> Result<PostRecord, PerformUpdateError> {
-    let title = title.trim().to_owned();
-    if title.is_empty() {
-        return Err(PerformUpdateError::EmptyTitle);
-    }
+    let metadata =
+        derive_post_metadata(None, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
 
     let slug = match slug_override.map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => raw
             .to_ascii_lowercase()
             .parse::<Slug>()
             .map_err(|_| PerformUpdateError::InvalidSlug)?,
-        None => slugify_title(&title)
-            .ok_or(PerformUpdateError::NoSlugFromTitle)?
+        None => slugify_title(&metadata.slug_seed)
+            .ok_or(PerformUpdateError::NoSlugFromPost)?
             .parse::<Slug>()
-            .map_err(|_| PerformUpdateError::NoSlugFromTitle)?,
+            .map_err(|_| PerformUpdateError::NoSlugFromPost)?,
     };
 
     let rendered_html = render(&body, &format)?;
     let input = UpdatePostInput {
-        title,
+        title: metadata.title,
         slug,
         body,
         format,
@@ -371,6 +505,63 @@ mod tests {
         assert!(result.contains("<b>bold</b>"));
     }
 
+    #[test]
+    fn derive_metadata_prefers_explicit_title() {
+        let metadata = derive_post_metadata(
+            Some(" Explicit "),
+            "# Body Heading\ntext",
+            &PostFormat::Markdown,
+        )
+        .unwrap();
+        assert_eq!(metadata.title.as_deref(), Some("Explicit"));
+        assert_eq!(metadata.slug_seed, "Explicit");
+        assert_eq!(metadata.summary_label, "# Body Heading");
+    }
+
+    #[test]
+    fn derive_metadata_extracts_markdown_h1() {
+        let metadata = derive_post_metadata(
+            None,
+            "\n# Article Title\n\nBody text",
+            &PostFormat::Markdown,
+        )
+        .unwrap();
+        assert_eq!(metadata.title.as_deref(), Some("Article Title"));
+        assert_eq!(metadata.slug_seed, "Article Title");
+        // body is not a field of DerivedPostMetadata — the caller retains the original
+    }
+
+    #[test]
+    fn derive_metadata_extracts_org_title() {
+        let metadata =
+            derive_post_metadata(None, "#+title: Org Title\n\nBody text", &PostFormat::Org)
+                .unwrap();
+        assert_eq!(metadata.title.as_deref(), Some("Org Title"));
+        assert_eq!(metadata.slug_seed, "Org Title");
+        // body is not a field of DerivedPostMetadata — the caller retains the original
+    }
+
+    #[test]
+    fn derive_metadata_allows_titleless_notes() {
+        let metadata = derive_post_metadata(
+            None,
+            "A compact note\nwith more text",
+            &PostFormat::Markdown,
+        )
+        .unwrap();
+        assert_eq!(metadata.title, None);
+        assert_eq!(metadata.slug_seed, "A compact note");
+        assert_eq!(metadata.summary_label, "A compact note");
+    }
+
+    #[test]
+    fn derive_metadata_rejects_empty_posts() {
+        assert_eq!(
+            derive_post_metadata(None, "   \n\t", &PostFormat::Markdown),
+            None
+        );
+    }
+
     // -- Error display tests --
 
     #[test]
@@ -446,13 +637,13 @@ mod tests {
 
     #[test]
     fn perform_update_error_empty_title_display() {
-        let err = PerformUpdateError::EmptyTitle;
-        assert_eq!(err.to_string(), "title is required");
+        let err = PerformUpdateError::EmptyPost;
+        assert_eq!(err.to_string(), "post body or title is required");
     }
 
     #[test]
     fn perform_update_error_no_slug_from_title_display() {
-        let err = PerformUpdateError::NoSlugFromTitle;
+        let err = PerformUpdateError::NoSlugFromPost;
         assert!(err.to_string().contains("ASCII"));
     }
 
@@ -496,8 +687,54 @@ mod tests {
 
     #[test]
     fn perform_update_error_debug() {
-        let err = PerformUpdateError::EmptyTitle;
+        let err = PerformUpdateError::EmptyPost;
         let debug = format!("{:?}", err);
-        assert!(debug.contains("EmptyTitle"));
+        assert!(debug.contains("EmptyPost"));
+    }
+
+    #[test]
+    fn extract_org_title_handles_level1_heading() {
+        let result = extract_org_title("* My Title\n\nBody text");
+        assert_eq!(
+            result,
+            Some(("My Title".to_string(), "Body text".to_string()))
+        );
+    }
+
+    #[test]
+    fn extract_org_title_heading_after_kv_lines() {
+        let result = extract_org_title("#+AUTHOR: Me\n* My Title\n\nBody");
+        assert_eq!(result, Some(("My Title".to_string(), "Body".to_string())));
+    }
+
+    #[test]
+    fn extract_org_title_title_takes_precedence_over_heading() {
+        let result = extract_org_title("#+TITLE: Meta\n* Heading\n\nBody");
+        assert_eq!(
+            result,
+            Some(("Meta".to_string(), "* Heading\n\nBody".to_string()))
+        );
+    }
+
+    #[test]
+    fn extract_org_title_heading_not_top_level_ignored() {
+        // ** is a level-2 heading, not a title
+        let result = extract_org_title("** Sub\n\nBody");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn extract_org_title_heading_after_body_text_ignored() {
+        // A heading preceded by prose is not a title
+        let result = extract_org_title("Some intro text.\n* Heading\n\nBody");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn derive_metadata_extracts_org_level1_heading() {
+        let metadata =
+            derive_post_metadata(None, "* Org Heading\n\nBody text", &PostFormat::Org).unwrap();
+        assert_eq!(metadata.title.as_deref(), Some("Org Heading"));
+        assert_eq!(metadata.slug_seed, "Org Heading");
     }
 }

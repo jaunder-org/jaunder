@@ -1,21 +1,80 @@
+use std::{sync::Arc, time::Duration};
+
 use chrono::{DateTime, Utc};
 use email_address::EmailAddress;
-use sqlx::{Row, SqlitePool};
+use log::LevelFilter;
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqliteJournalMode},
+    ConnectOptions, Row, SqlitePool,
+};
 
 use async_trait::async_trait;
 
+use common::mailer::MailSender;
 use common::password::Password;
 use common::slug::Slug;
 use common::storage::{
-    CreatePostError, CreatePostInput, CreateUserError, EmailVerificationStorage, InviteRecord,
-    InviteStorage, ListByTagError, PasswordResetStorage, PostCursor, PostRecord, PostStorage,
-    PostTag, ProfileUpdate, SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage,
+    AppState, AtomicOps, ConfirmPasswordResetError, CreatePostError, CreatePostInput,
+    CreateUserError, EmailVerificationStorage, InviteRecord, InviteStorage, ListByTagError,
+    PasswordResetStorage, PostCursor, PostRecord, PostStorage, PostTag, ProfileUpdate,
+    RegisterWithInviteError, SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage,
     TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
     UsePasswordResetError, UserAuthError, UserRecord, UserStorage,
 };
 use common::tag::Tag;
 use common::username::Username;
 use tracing::Instrument;
+
+use super::{
+    build_mailer, email_verification_claim_error, generate_hashed_token, invite_record_from_row,
+    password_reset_claim_error, post_record_from_row, session_record_from_row,
+    sql_slow_query_threshold, user_record_from_row, InviteRow, PostRow, SessionRow, UserRow,
+};
+
+// ---------------------------------------------------------------------------
+// Database helpers
+// ---------------------------------------------------------------------------
+
+fn make_app_state(pool: SqlitePool, mailer: Arc<dyn MailSender>) -> Arc<AppState> {
+    Arc::new(AppState {
+        site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
+        users: Arc::new(SqliteUserStorage::new(pool.clone())),
+        sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
+        invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
+        atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
+        email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
+        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
+        posts: Arc::new(SqlitePostStorage::new(pool)),
+        mailer,
+    })
+}
+
+#[tracing::instrument(
+    name = "storage.sqlite.open_database",
+    skip(options),
+    fields(create_if_missing)
+)]
+pub(super) async fn open_sqlite_database(
+    options: &SqliteConnectOptions,
+    create_if_missing: bool,
+) -> sqlx::Result<Arc<AppState>> {
+    let mut options = options.clone();
+    if create_if_missing {
+        options = options.create_if_missing(true);
+    }
+    // WAL mode allows concurrent readers while a writer is active, dramatically
+    // reducing SQLITE_BUSY errors under load. The busy timeout lets SQLite retry
+    // automatically instead of failing immediately when it cannot obtain a lock.
+    options = options
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(Duration::from_secs(5))
+        .log_slow_statements(LevelFilter::Warn, sql_slow_query_threshold());
+    let pool = sqlx::SqlitePool::connect_with(options).await?;
+    sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
+    let site_config = SqliteSiteConfigStorage::new(pool.clone());
+    let mailer = build_mailer(&site_config).await;
+    Ok(make_app_state(pool, mailer))
+}
 
 // ---------------------------------------------------------------------------
 // SiteConfig
@@ -35,7 +94,7 @@ impl SqliteSiteConfigStorage {
 #[async_trait]
 impl SiteConfigStorage for SqliteSiteConfigStorage {
     async fn get(&self, key: &str) -> sqlx::Result<Option<String>> {
-        let row = sqlx::query_as::<_, (String,)>("SELECT value FROM site_config WHERE key = ?")
+        let row = sqlx::query_as::<_, (String,)>("SELECT value FROM site_config WHERE key = $1")
             .bind(key)
             .fetch_optional(&self.pool)
             .await?;
@@ -44,7 +103,7 @@ impl SiteConfigStorage for SqliteSiteConfigStorage {
 
     async fn set(&self, key: &str, value: &str) -> sqlx::Result<()> {
         sqlx::query(
-            "INSERT INTO site_config (key, value) VALUES (?, ?)
+            "INSERT INTO site_config (key, value) VALUES ($1, $2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         )
         .bind(key)
@@ -58,41 +117,6 @@ impl SiteConfigStorage for SqliteSiteConfigStorage {
 // ---------------------------------------------------------------------------
 // Users
 // ---------------------------------------------------------------------------
-
-type UserRow = (
-    i64,
-    String,
-    Option<String>,
-    Option<String>,
-    DateTime<Utc>,
-    Option<DateTime<Utc>>,
-    Option<String>,
-    bool,
-);
-
-fn user_record_from_row(
-    (
-        user_id,
-        username,
-        display_name,
-        bio,
-        created_at,
-        last_authenticated_at,
-        email,
-        email_verified,
-    ): UserRow,
-) -> sqlx::Result<UserRecord> {
-    super::build_user_record((
-        user_id,
-        username,
-        display_name,
-        bio,
-        created_at,
-        last_authenticated_at,
-        email,
-        email_verified,
-    ))
-}
 
 /// SQLite-backed [`UserStorage`].
 pub struct SqliteUserStorage {
@@ -129,7 +153,7 @@ impl UserStorage for SqliteUserStorage {
 
         let result = sqlx::query_scalar::<_, i64>(
             "INSERT INTO users (username, password_hash, display_name, created_at)
-             VALUES (?, ?, ?, ?)
+             VALUES ($1, $2, $3, $4)
              RETURNING user_id",
         )
         .bind(username.as_str())
@@ -176,7 +200,7 @@ impl UserStorage for SqliteUserStorage {
             ),
         >(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, password_hash, email, email_verified
-             FROM users WHERE username = ?",
+             FROM users WHERE username = $1",
         )
         .bind(username.as_str())
         .fetch_optional(&self.pool)
@@ -214,7 +238,7 @@ impl UserStorage for SqliteUserStorage {
 
         let now = Utc::now();
 
-        sqlx::query("UPDATE users SET last_authenticated_at = ? WHERE user_id = ?")
+        sqlx::query("UPDATE users SET last_authenticated_at = $1 WHERE user_id = $2")
             .bind(now)
             .bind(user_id)
             .execute(&self.pool)
@@ -240,7 +264,7 @@ impl UserStorage for SqliteUserStorage {
     async fn get_user(&self, user_id: i64) -> sqlx::Result<Option<UserRecord>> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, email, email_verified
-             FROM users WHERE user_id = ?",
+             FROM users WHERE user_id = $1",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -251,7 +275,7 @@ impl UserStorage for SqliteUserStorage {
     async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, email, email_verified
-             FROM users WHERE username = ?",
+             FROM users WHERE username = $1",
         )
         .bind(username.as_str())
         .fetch_optional(&self.pool)
@@ -265,7 +289,7 @@ impl UserStorage for SqliteUserStorage {
         email: Option<&EmailAddress>,
         verified: bool,
     ) -> sqlx::Result<()> {
-        sqlx::query("UPDATE users SET email = ?, email_verified = ? WHERE user_id = ?")
+        sqlx::query("UPDATE users SET email = $1, email_verified = $2 WHERE user_id = $3")
             .bind(email.map(EmailAddress::as_str))
             .bind(verified)
             .bind(user_id)
@@ -275,7 +299,7 @@ impl UserStorage for SqliteUserStorage {
     }
 
     async fn update_profile(&self, user_id: i64, update: &ProfileUpdate<'_>) -> sqlx::Result<()> {
-        sqlx::query("UPDATE users SET display_name = ?, bio = ? WHERE user_id = ?")
+        sqlx::query("UPDATE users SET display_name = $1, bio = $2 WHERE user_id = $3")
             .bind(update.display_name)
             .bind(update.bio)
             .bind(user_id)
@@ -289,7 +313,7 @@ impl UserStorage for SqliteUserStorage {
             .await
             .map_err(sqlx::Error::Io)?;
 
-        sqlx::query("UPDATE users SET password_hash = ? WHERE user_id = ?")
+        sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
             .bind(&password_hash)
             .bind(user_id)
             .execute(&self.pool)
@@ -301,28 +325,6 @@ impl UserStorage for SqliteUserStorage {
 // ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
-
-type SessionRow = (
-    String,
-    i64,
-    String,
-    Option<String>,
-    DateTime<Utc>,
-    DateTime<Utc>,
-);
-
-fn session_record_from_row(
-    (token_hash, user_id, username, label, created_at, last_used_at): SessionRow,
-) -> Result<SessionRecord, sqlx::Error> {
-    super::build_session_record(
-        token_hash,
-        user_id,
-        username,
-        label,
-        created_at,
-        last_used_at,
-    )
-}
 
 /// SQLite-backed [`SessionStorage`].
 pub struct SqliteSessionStorage {
@@ -343,14 +345,12 @@ impl SessionStorage for SqliteSessionStorage {
         fields(user_id)
     )]
     async fn create_session(&self, user_id: i64, label: Option<&str>) -> sqlx::Result<String> {
-        let raw_token = crate::auth::generate_token();
-        let token_hash = crate::auth::hash_token(&raw_token)
-            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
+        let (raw_token, token_hash) = generate_hashed_token()?;
         let now = Utc::now();
 
         sqlx::query(
             "INSERT INTO sessions (token_hash, user_id, label, created_at, last_used_at)
-             VALUES (?, ?, ?, ?, ?)",
+             VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(&token_hash)
         .bind(user_id)
@@ -379,8 +379,8 @@ impl SessionStorage for SqliteSessionStorage {
         // UPDATE ...).
         let row = sqlx::query_as::<_, SessionRow>(
             "UPDATE sessions
-             SET last_used_at = ?
-             WHERE token_hash = ?
+             SET last_used_at = $1
+             WHERE token_hash = $2
              RETURNING token_hash, user_id, (SELECT username FROM users WHERE user_id = sessions.user_id), label, created_at, last_used_at",
         )
         .bind(now)
@@ -395,7 +395,7 @@ impl SessionStorage for SqliteSessionStorage {
 
     #[tracing::instrument(name = "storage.sqlite.session.revoke", skip(self, token_hash))]
     async fn revoke_session(&self, token_hash: &str) -> sqlx::Result<()> {
-        sqlx::query("DELETE FROM sessions WHERE token_hash = ?")
+        sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
             .bind(token_hash)
             .execute(&self.pool)
             .await?;
@@ -406,7 +406,7 @@ impl SessionStorage for SqliteSessionStorage {
         let rows = sqlx::query_as::<_, SessionRow>(
             "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
              FROM sessions s JOIN users u ON s.user_id = u.user_id
-             WHERE s.user_id = ?",
+             WHERE s.user_id = $1",
         )
         .bind(user_id)
         .fetch_all(&self.pool)
@@ -419,20 +419,6 @@ impl SessionStorage for SqliteSessionStorage {
 // ---------------------------------------------------------------------------
 // Invites
 // ---------------------------------------------------------------------------
-
-type InviteRow = (
-    String,
-    DateTime<Utc>,
-    DateTime<Utc>,
-    Option<DateTime<Utc>>,
-    Option<i64>,
-);
-
-fn invite_record_from_row(
-    (code, created_at, expires_at, used_at, used_by): InviteRow,
-) -> InviteRecord {
-    super::build_invite_record(code, created_at, expires_at, used_at, used_by)
-}
 
 /// SQLite-backed [`InviteStorage`].
 pub struct SqliteInviteStorage {
@@ -451,7 +437,7 @@ impl InviteStorage for SqliteInviteStorage {
         let code = crate::auth::generate_token();
         let now = Utc::now();
 
-        sqlx::query("INSERT INTO invites (code, created_at, expires_at) VALUES (?, ?, ?)")
+        sqlx::query("INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)")
             .bind(&code)
             .bind(now)
             .bind(expires_at)
@@ -470,7 +456,7 @@ impl InviteStorage for SqliteInviteStorage {
 
         let row = sqlx::query_as::<_, InviteRow>(
             "SELECT code, created_at, expires_at, used_at, used_by
-             FROM invites WHERE code = ?",
+             FROM invites WHERE code = $1",
         )
         .bind(code)
         .fetch_optional(&mut *tx)
@@ -489,7 +475,7 @@ impl InviteStorage for SqliteInviteStorage {
             return Err(UseInviteError::Expired);
         }
 
-        sqlx::query("UPDATE invites SET used_at = ?, used_by = ? WHERE code = ?")
+        sqlx::query("UPDATE invites SET used_at = $1, used_by = $2 WHERE code = $3")
             .bind(now)
             .bind(user_id)
             .bind(code)
@@ -536,9 +522,7 @@ impl EmailVerificationStorage for SqliteEmailVerificationStorage {
         email: &str,
         expires_at: DateTime<Utc>,
     ) -> sqlx::Result<String> {
-        let raw_token = crate::auth::generate_token();
-        let token_hash = crate::auth::hash_token(&raw_token)
-            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
+        let (raw_token, token_hash) = generate_hashed_token()?;
         let now = Utc::now();
 
         let mut tx = self.pool.begin().await?;
@@ -548,7 +532,7 @@ impl EmailVerificationStorage for SqliteEmailVerificationStorage {
         sqlx::query(
             "UPDATE email_verifications
              SET expires_at = created_at
-             WHERE user_id = ? AND used_at IS NULL AND expires_at > ?",
+             WHERE user_id = $1 AND used_at IS NULL AND expires_at > $2",
         )
         .bind(user_id)
         .bind(now)
@@ -558,7 +542,7 @@ impl EmailVerificationStorage for SqliteEmailVerificationStorage {
         sqlx::query(
             "INSERT INTO email_verifications
              (token_hash, user_id, email, created_at, expires_at)
-             VALUES (?, ?, ?, ?, ?)",
+             VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(&token_hash)
         .bind(user_id)
@@ -588,8 +572,8 @@ impl EmailVerificationStorage for SqliteEmailVerificationStorage {
         // concurrent requests cannot both succeed.  RETURNING gives us the
         // data we need without a second round-trip.
         let claimed = sqlx::query_as::<_, (i64, String)>(
-            "UPDATE email_verifications SET used_at = ?
-             WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
+            "UPDATE email_verifications SET used_at = $1
+             WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
              RETURNING user_id, email",
         )
         .bind(now)
@@ -604,17 +588,13 @@ impl EmailVerificationStorage for SqliteEmailVerificationStorage {
 
         // Zero rows affected — inspect the row to return the right error.
         let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
-            "SELECT used_at, expires_at FROM email_verifications WHERE token_hash = ?",
+            "SELECT used_at, expires_at FROM email_verifications WHERE token_hash = $1",
         )
         .bind(&token_hash)
         .fetch_optional(&self.pool)
         .await?;
 
-        match row {
-            None => Err(UseEmailVerificationError::NotFound),
-            Some((Some(_), _)) => Err(UseEmailVerificationError::AlreadyUsed),
-            Some((None, _)) => Err(UseEmailVerificationError::Expired),
-        }
+        Err(email_verification_claim_error(row))
     }
 }
 
@@ -640,14 +620,12 @@ impl PasswordResetStorage for SqlitePasswordResetStorage {
         user_id: i64,
         expires_at: DateTime<Utc>,
     ) -> sqlx::Result<String> {
-        let raw_token = crate::auth::generate_token();
-        let token_hash = crate::auth::hash_token(&raw_token)
-            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
+        let (raw_token, token_hash) = generate_hashed_token()?;
         let now = Utc::now();
 
         sqlx::query(
             "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at)
-             VALUES (?, ?, ?, ?)",
+             VALUES ($1, $2, $3, $4)",
         )
         .bind(&token_hash)
         .bind(user_id)
@@ -666,8 +644,8 @@ impl PasswordResetStorage for SqlitePasswordResetStorage {
         let now = Utc::now();
 
         let claimed = sqlx::query_as::<_, (i64,)>(
-            "UPDATE password_resets SET used_at = ?
-             WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
+            "UPDATE password_resets SET used_at = $1
+             WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
              RETURNING user_id",
         )
         .bind(now)
@@ -681,41 +659,162 @@ impl PasswordResetStorage for SqlitePasswordResetStorage {
         }
 
         let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
-            "SELECT used_at, expires_at FROM password_resets WHERE token_hash = ?",
+            "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
         )
         .bind(&token_hash)
         .fetch_optional(&self.pool)
         .await?;
 
-        match row {
-            None => Err(UsePasswordResetError::NotFound),
-            Some((Some(_), _)) => Err(UsePasswordResetError::AlreadyUsed),
-            Some((None, _)) => Err(UsePasswordResetError::Expired),
+        Err(password_reset_claim_error(row))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AtomicOps
+// ---------------------------------------------------------------------------
+
+/// SQLite implementation of [`AtomicOps`].
+///
+/// Holds the pool directly so it can span multiple tables in a single
+/// transaction without going through the individual storage trait objects.
+pub struct SqliteAtomicOps {
+    pool: SqlitePool,
+}
+
+impl SqliteAtomicOps {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl AtomicOps for SqliteAtomicOps {
+    async fn create_user_with_invite(
+        &self,
+        username: &Username,
+        password: &Password,
+        display_name: Option<&str>,
+        invite_code: &str,
+    ) -> Result<i64, RegisterWithInviteError> {
+        let mut tx = self.pool.begin().await?;
+
+        let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
+            "SELECT used_at, expires_at FROM invites WHERE code = $1",
+        )
+        .bind(invite_code)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(RegisterWithInviteError::InviteNotFound)?;
+
+        let (used_at, expires_at) = row;
+        if used_at.is_some() {
+            return Err(RegisterWithInviteError::InviteAlreadyUsed);
         }
+
+        let now = Utc::now();
+        if expires_at <= now {
+            return Err(RegisterWithInviteError::InviteExpired);
+        }
+
+        let password_hash = super::hash_password(password.clone())
+            .await
+            .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;
+
+        let result = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO users (username, password_hash, display_name, created_at)
+             VALUES ($1, $2, $3, $4)
+             RETURNING user_id",
+        )
+        .bind(username.as_str())
+        .bind(&password_hash)
+        .bind(display_name)
+        .bind(now)
+        .fetch_one(&mut *tx)
+        .await;
+
+        let user_id = match result {
+            Ok(id) => id,
+            Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
+                return Err(RegisterWithInviteError::UsernameTaken);
+            }
+            Err(error) => return Err(RegisterWithInviteError::Internal(error)),
+        };
+
+        sqlx::query("UPDATE invites SET used_at = $1, used_by = $2 WHERE code = $3")
+            .bind(now)
+            .bind(user_id)
+            .bind(invite_code)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(user_id)
+    }
+
+    async fn confirm_password_reset(
+        &self,
+        raw_token: &str,
+        new_password: &Password,
+    ) -> Result<(), ConfirmPasswordResetError> {
+        let token_hash =
+            crate::auth::hash_token(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
+
+        let password_hash = super::hash_password(new_password.clone())
+            .await
+            .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
+
+        let mut tx = self.pool.begin().await?;
+        let now = Utc::now();
+
+        let claimed = sqlx::query_as::<_, (i64,)>(
+            "UPDATE password_resets SET used_at = $1
+             WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
+             RETURNING user_id",
+        )
+        .bind(now)
+        .bind(&token_hash)
+        .bind(now)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let user_id = if let Some((user_id,)) = claimed {
+            user_id
+        } else {
+            let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
+                "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
+            )
+            .bind(&token_hash)
+            .fetch_optional(&mut *tx)
+            .await?;
+
+            tx.rollback().await.ok();
+
+            return match row {
+                None => Err(ConfirmPasswordResetError::NotFound),
+                Some((Some(_), _)) => Err(ConfirmPasswordResetError::AlreadyUsed),
+                Some((None, _)) => Err(ConfirmPasswordResetError::Expired),
+            };
+        };
+
+        sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
+            .bind(&password_hash)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(())
     }
 }
 
 // ---------------------------------------------------------------------------
 // Posts
 // ---------------------------------------------------------------------------
-
-type PostRow = (
-    i64,
-    i64,
-    String,
-    String,
-    String,
-    String,
-    String,
-    DateTime<Utc>,
-    DateTime<Utc>,
-    Option<DateTime<Utc>>,
-    Option<DateTime<Utc>>,
-);
-
-fn post_record_from_row(row: PostRow) -> sqlx::Result<PostRecord> {
-    super::build_post_record(row)
-}
 
 /// SQLite-backed [`PostStorage`].
 pub struct SqlitePostStorage {
@@ -735,7 +834,7 @@ impl PostStorage for SqlitePostStorage {
 
         let result = sqlx::query_scalar::<_, i64>(
             "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              RETURNING post_id",
         )
         .bind(input.user_id)
@@ -763,7 +862,7 @@ impl PostStorage for SqlitePostStorage {
         let row = sqlx::query_as::<_, PostRow>(
             "SELECT post_id, user_id, title, slug, body, format, rendered_html,
                     created_at, updated_at, published_at, deleted_at
-             FROM posts WHERE post_id = ?",
+             FROM posts WHERE post_id = $1",
         )
         .bind(post_id)
         .fetch_optional(&self.pool)
@@ -785,11 +884,11 @@ impl PostStorage for SqlitePostStorage {
                     p.created_at, p.updated_at, p.published_at, p.deleted_at
              FROM posts p
              JOIN users u ON p.user_id = u.user_id
-             WHERE u.username = ?
-               AND p.slug = ?
+             WHERE u.username = $1
+               AND p.slug = $2
                AND p.published_at IS NOT NULL
                AND p.deleted_at IS NULL
-               AND date(p.published_at) = ?",
+               AND date(p.published_at) = $3",
         )
         .bind(username.as_str())
         .bind(slug.as_str())
@@ -810,7 +909,7 @@ impl PostStorage for SqlitePostStorage {
 
         // Read current ownership within the transaction to prevent races.
         let existing = sqlx::query_as::<_, (i64, Option<DateTime<Utc>>)>(
-            "SELECT user_id, deleted_at FROM posts WHERE post_id = ?",
+            "SELECT user_id, deleted_at FROM posts WHERE post_id = $1",
         )
         .bind(post_id)
         .fetch_optional(&mut *tx)
@@ -831,8 +930,8 @@ impl PostStorage for SqlitePostStorage {
         // Save a revision of current state.
         sqlx::query(
             "INSERT INTO post_revisions (post_id, user_id, title, slug, body, format, rendered_html, edited_at)
-             SELECT post_id, user_id, title, slug, body, format, rendered_html, ?
-             FROM posts WHERE post_id = ?",
+             SELECT post_id, user_id, title, slug, body, format, rendered_html, $1
+             FROM posts WHERE post_id = $2",
         )
         .bind(now)
         .bind(post_id)
@@ -845,14 +944,14 @@ impl PostStorage for SqlitePostStorage {
         //   - publish=false → NULL                          (un-publish)
         let row = sqlx::query_as::<_, PostRow>(
             "UPDATE posts
-             SET title = ?,
-                 slug = CASE WHEN published_at IS NULL THEN ? ELSE slug END,
-                 body = ?,
-                 format = ?,
-                 rendered_html = ?,
-                 published_at = CASE WHEN ? THEN COALESCE(published_at, ?) ELSE NULL END,
-                 updated_at = ?
-             WHERE post_id = ?
+             SET title = $1,
+                 slug = CASE WHEN published_at IS NULL THEN $2 ELSE slug END,
+                 body = $3,
+                 format = $4,
+                 rendered_html = $5,
+                 published_at = CASE WHEN $6 THEN COALESCE(published_at, $7) ELSE NULL END,
+                 updated_at = $8
+             WHERE post_id = $9
              RETURNING post_id, user_id, title, slug, body, format, rendered_html,
                        created_at, updated_at, published_at, deleted_at",
         )
@@ -874,8 +973,16 @@ impl PostStorage for SqlitePostStorage {
 
     async fn soft_delete_post(&self, post_id: i64) -> sqlx::Result<()> {
         let now = Utc::now();
-        sqlx::query("UPDATE posts SET deleted_at = ? WHERE post_id = ?")
+        sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
             .bind(now)
+            .bind(post_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn unpublish_post(&self, post_id: i64) -> sqlx::Result<()> {
+        sqlx::query("UPDATE posts SET published_at = NULL WHERE post_id = ?")
             .bind(post_id)
             .execute(&self.pool)
             .await?;
@@ -894,12 +1001,12 @@ impl PostStorage for SqlitePostStorage {
                         p.created_at, p.updated_at, p.published_at, p.deleted_at
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
-                 WHERE u.username = ?
+                 WHERE u.username = $1
                    AND p.published_at IS NOT NULL
                    AND p.deleted_at IS NULL
-                   AND (p.created_at < ? OR (p.created_at = ? AND p.post_id < ?))
+                   AND (p.created_at < $2 OR (p.created_at = $3 AND p.post_id < $4))
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ?",
+                 LIMIT $5",
             )
             .bind(username.as_str())
             .bind(cursor.created_at)
@@ -914,11 +1021,11 @@ impl PostStorage for SqlitePostStorage {
                         p.created_at, p.updated_at, p.published_at, p.deleted_at
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
-                 WHERE u.username = ?
+                 WHERE u.username = $1
                    AND p.published_at IS NOT NULL
                    AND p.deleted_at IS NULL
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ?",
+                 LIMIT $2",
             )
             .bind(username.as_str())
             .bind(limit as i64)
@@ -940,9 +1047,9 @@ impl PostStorage for SqlitePostStorage {
                  FROM posts
                  WHERE published_at IS NOT NULL
                    AND deleted_at IS NULL
-                   AND (created_at < ? OR (created_at = ? AND post_id < ?))
+                   AND (created_at < $1 OR (created_at = $2 AND post_id < $3))
                  ORDER BY created_at DESC, post_id DESC
-                 LIMIT ?",
+                 LIMIT $4",
             )
             .bind(cursor.created_at)
             .bind(cursor.created_at)
@@ -958,7 +1065,7 @@ impl PostStorage for SqlitePostStorage {
                  WHERE published_at IS NOT NULL
                    AND deleted_at IS NULL
                  ORDER BY created_at DESC, post_id DESC
-                 LIMIT ?",
+                 LIMIT $1",
             )
             .bind(limit as i64)
             .fetch_all(&self.pool)
@@ -978,12 +1085,12 @@ impl PostStorage for SqlitePostStorage {
                 "SELECT post_id, user_id, title, slug, body, format, rendered_html,
                         created_at, updated_at, published_at, deleted_at
                  FROM posts
-                 WHERE user_id = ?
+                 WHERE user_id = $1
                    AND published_at IS NULL
                    AND deleted_at IS NULL
-                   AND (created_at < ? OR (created_at = ? AND post_id < ?))
+                   AND (created_at < $2 OR (created_at = $3 AND post_id < $4))
                  ORDER BY created_at DESC, post_id DESC
-                 LIMIT ?",
+                 LIMIT $5",
             )
             .bind(user_id)
             .bind(cursor.created_at)
@@ -997,11 +1104,11 @@ impl PostStorage for SqlitePostStorage {
                 "SELECT post_id, user_id, title, slug, body, format, rendered_html,
                         created_at, updated_at, published_at, deleted_at
                  FROM posts
-                 WHERE user_id = ?
+                 WHERE user_id = $1
                    AND published_at IS NULL
                    AND deleted_at IS NULL
                  ORDER BY created_at DESC, post_id DESC
-                 LIMIT ?",
+                 LIMIT $2",
             )
             .bind(user_id)
             .bind(limit as i64)
@@ -1021,7 +1128,7 @@ impl PostStorage for SqlitePostStorage {
 
         // Check if post exists
         let post_exists: bool =
-            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM posts WHERE post_id = ?")
+            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM posts WHERE post_id = $1")
                 .bind(post_id)
                 .fetch_one(&mut *tx)
                 .await?;
@@ -1032,21 +1139,21 @@ impl PostStorage for SqlitePostStorage {
         }
 
         // Insert or ignore tag (if it already exists)
-        sqlx::query("INSERT OR IGNORE INTO tags (tag_slug) VALUES (?)")
+        sqlx::query("INSERT OR IGNORE INTO tags (tag_slug) VALUES ($1)")
             .bind(tag.as_str())
             .execute(&mut *tx)
             .await?;
 
         // Get the tag_id (either from this insert or from existing)
         let tag_id: i64 =
-            sqlx::query_scalar::<_, i64>("SELECT tag_id FROM tags WHERE tag_slug = ?")
+            sqlx::query_scalar::<_, i64>("SELECT tag_id FROM tags WHERE tag_slug = $1")
                 .bind(tag.as_str())
                 .fetch_one(&mut *tx)
                 .await?;
 
         // Insert post_tags link
         let result =
-            sqlx::query("INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES (?, ?, ?)")
+            sqlx::query("INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3)")
                 .bind(post_id)
                 .bind(tag_id)
                 .bind(tag_display)
@@ -1072,7 +1179,7 @@ impl PostStorage for SqlitePostStorage {
     async fn untag_post(&self, post_id: i64, tag_slug: &Tag) -> Result<(), TaggingError> {
         let rows_deleted = sqlx::query(
             "DELETE FROM post_tags
-             WHERE post_id = ? AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = ?)",
+             WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)",
         )
         .bind(post_id)
         .bind(tag_slug.as_str())
@@ -1092,7 +1199,7 @@ impl PostStorage for SqlitePostStorage {
             "SELECT pt.post_id, pt.tag_id, t.tag_slug, pt.tag_display
              FROM post_tags pt
              JOIN tags t ON pt.tag_id = t.tag_id
-             WHERE pt.post_id = ?
+             WHERE pt.post_id = $1
              ORDER BY t.tag_slug",
         )
         .bind(post_id)
@@ -1123,7 +1230,7 @@ impl PostStorage for SqlitePostStorage {
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         // Check tag exists
         let tag_exists: bool =
-            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = ?")
+            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
                 .bind(tag_slug.as_str())
                 .fetch_one(&self.pool)
                 .await?;
@@ -1139,12 +1246,12 @@ impl PostStorage for SqlitePostStorage {
                  FROM posts p
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
-                 WHERE t.tag_slug = ?
+                 WHERE t.tag_slug = $1
                    AND p.published_at IS NOT NULL
                    AND p.deleted_at IS NULL
-                   AND (p.created_at < ? OR (p.created_at = ? AND p.post_id < ?))
+                   AND (p.created_at < $2 OR (p.created_at = $3 AND p.post_id < $4))
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ?",
+                 LIMIT $5",
             )
             .bind(tag_slug.as_str())
             .bind(cursor.created_at)
@@ -1160,11 +1267,11 @@ impl PostStorage for SqlitePostStorage {
                  FROM posts p
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
-                 WHERE t.tag_slug = ?
+                 WHERE t.tag_slug = $1
                    AND p.published_at IS NOT NULL
                    AND p.deleted_at IS NULL
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ?",
+                 LIMIT $2",
             )
             .bind(tag_slug.as_str())
             .bind(limit as i64)
@@ -1187,7 +1294,7 @@ impl PostStorage for SqlitePostStorage {
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         // Check tag exists
         let tag_exists: bool =
-            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = ?")
+            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
                 .bind(tag_slug.as_str())
                 .fetch_one(&self.pool)
                 .await?;
@@ -1203,13 +1310,13 @@ impl PostStorage for SqlitePostStorage {
                  FROM posts p
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
-                 WHERE p.user_id = ?
-                   AND t.tag_slug = ?
+                 WHERE p.user_id = $1
+                   AND t.tag_slug = $2
                    AND p.published_at IS NOT NULL
                    AND p.deleted_at IS NULL
-                   AND (p.created_at < ? OR (p.created_at = ? AND p.post_id < ?))
+                   AND (p.created_at < $3 OR (p.created_at = $4 AND p.post_id < $5))
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ?",
+                 LIMIT $6",
             )
             .bind(user_id)
             .bind(tag_slug.as_str())
@@ -1226,12 +1333,12 @@ impl PostStorage for SqlitePostStorage {
                  FROM posts p
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
-                 WHERE p.user_id = ?
-                   AND t.tag_slug = ?
+                 WHERE p.user_id = $1
+                   AND t.tag_slug = $2
                    AND p.published_at IS NOT NULL
                    AND p.deleted_at IS NULL
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT ?",
+                 LIMIT $3",
             )
             .bind(user_id)
             .bind(tag_slug.as_str())

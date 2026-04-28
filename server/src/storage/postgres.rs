@@ -17,6 +17,12 @@ use common::tag::Tag;
 use common::username::Username;
 use tracing::Instrument;
 
+use super::{
+    email_verification_claim_error, generate_hashed_token, invite_record_from_row,
+    password_reset_claim_error, post_record_from_row, session_record_from_row,
+    user_record_from_row, InviteRow, PostRow, SessionRow, UserRow,
+};
+
 // ---------------------------------------------------------------------------
 // SiteConfig
 // ---------------------------------------------------------------------------
@@ -57,41 +63,6 @@ impl SiteConfigStorage for PostgresSiteConfigStorage {
 // ---------------------------------------------------------------------------
 // Users
 // ---------------------------------------------------------------------------
-
-type UserRow = (
-    i64,
-    String,
-    Option<String>,
-    Option<String>,
-    DateTime<Utc>,
-    Option<DateTime<Utc>>,
-    Option<String>,
-    bool,
-);
-
-fn user_record_from_row(
-    (
-        user_id,
-        username,
-        display_name,
-        bio,
-        created_at,
-        last_authenticated_at,
-        email,
-        email_verified,
-    ): UserRow,
-) -> sqlx::Result<UserRecord> {
-    super::build_user_record((
-        user_id,
-        username,
-        display_name,
-        bio,
-        created_at,
-        last_authenticated_at,
-        email,
-        email_verified,
-    ))
-}
 
 pub struct PostgresUserStorage {
     pool: PgPool,
@@ -302,28 +273,6 @@ impl UserStorage for PostgresUserStorage {
 // Sessions
 // ---------------------------------------------------------------------------
 
-type SessionRow = (
-    String,
-    i64,
-    String,
-    Option<String>,
-    DateTime<Utc>,
-    DateTime<Utc>,
-);
-
-fn session_record_from_row(
-    (token_hash, user_id, username, label, created_at, last_used_at): SessionRow,
-) -> sqlx::Result<SessionRecord> {
-    super::build_session_record(
-        token_hash,
-        user_id,
-        username,
-        label,
-        created_at,
-        last_used_at,
-    )
-}
-
 pub struct PostgresSessionStorage {
     pool: PgPool,
 }
@@ -342,9 +291,7 @@ impl SessionStorage for PostgresSessionStorage {
         fields(user_id)
     )]
     async fn create_session(&self, user_id: i64, label: Option<&str>) -> sqlx::Result<String> {
-        let raw_token = crate::auth::generate_token();
-        let token_hash = crate::auth::hash_token(&raw_token)
-            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
+        let (raw_token, token_hash) = generate_hashed_token()?;
         let now = Utc::now();
 
         sqlx::query(
@@ -419,20 +366,6 @@ impl SessionStorage for PostgresSessionStorage {
 // ---------------------------------------------------------------------------
 // Invites
 // ---------------------------------------------------------------------------
-
-type InviteRow = (
-    String,
-    DateTime<Utc>,
-    DateTime<Utc>,
-    Option<DateTime<Utc>>,
-    Option<i64>,
-);
-
-fn invite_record_from_row(
-    (code, created_at, expires_at, used_at, used_by): InviteRow,
-) -> InviteRecord {
-    super::build_invite_record(code, created_at, expires_at, used_at, used_by)
-}
 
 pub struct PostgresInviteStorage {
     pool: PgPool,
@@ -530,9 +463,7 @@ impl EmailVerificationStorage for PostgresEmailVerificationStorage {
         email: &str,
         expires_at: DateTime<Utc>,
     ) -> sqlx::Result<String> {
-        let raw_token = crate::auth::generate_token();
-        let token_hash = crate::auth::hash_token(&raw_token)
-            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
+        let (raw_token, token_hash) = generate_hashed_token()?;
         let now = Utc::now();
 
         let mut tx = self.pool.begin().await?;
@@ -593,11 +524,7 @@ impl EmailVerificationStorage for PostgresEmailVerificationStorage {
         .fetch_optional(&self.pool)
         .await?;
 
-        match row {
-            None => Err(UseEmailVerificationError::NotFound),
-            Some((Some(_), _)) => Err(UseEmailVerificationError::AlreadyUsed),
-            Some((None, _)) => Err(UseEmailVerificationError::Expired),
-        }
+        Err(email_verification_claim_error(row))
     }
 }
 
@@ -622,9 +549,7 @@ impl PasswordResetStorage for PostgresPasswordResetStorage {
         user_id: i64,
         expires_at: DateTime<Utc>,
     ) -> sqlx::Result<String> {
-        let raw_token = crate::auth::generate_token();
-        let token_hash = crate::auth::hash_token(&raw_token)
-            .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
+        let (raw_token, token_hash) = generate_hashed_token()?;
         let now = Utc::now();
 
         sqlx::query(
@@ -668,11 +593,7 @@ impl PasswordResetStorage for PostgresPasswordResetStorage {
         .fetch_optional(&self.pool)
         .await?;
 
-        match row {
-            None => Err(UsePasswordResetError::NotFound),
-            Some((Some(_), _)) => Err(UsePasswordResetError::AlreadyUsed),
-            Some((None, _)) => Err(UsePasswordResetError::Expired),
-        }
+        Err(password_reset_claim_error(row))
     }
 }
 
@@ -818,24 +739,6 @@ impl AtomicOps for PostgresAtomicOps {
 // ---------------------------------------------------------------------------
 // Posts
 // ---------------------------------------------------------------------------
-
-type PostRow = (
-    i64,
-    i64,
-    String,
-    String,
-    String,
-    String,
-    String,
-    DateTime<Utc>,
-    DateTime<Utc>,
-    Option<DateTime<Utc>>,
-    Option<DateTime<Utc>>,
-);
-
-fn post_record_from_row(row: PostRow) -> sqlx::Result<PostRecord> {
-    super::build_post_record(row)
-}
 
 /// PostgreSQL-backed [`PostStorage`].
 pub struct PostgresPostStorage {
@@ -996,6 +899,14 @@ impl PostStorage for PostgresPostStorage {
         let now = Utc::now();
         sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
             .bind(now)
+            .bind(post_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn unpublish_post(&self, post_id: i64) -> sqlx::Result<()> {
+        sqlx::query("UPDATE posts SET published_at = NULL WHERE post_id = $1")
             .bind(post_id)
             .execute(&self.pool)
             .await?;
@@ -1512,7 +1423,7 @@ mod tests {
         let posts = PostgresPostStorage::new(pool);
         exercise(posts.create_post(&common::storage::CreatePostInput {
             user_id: 1,
-            title: "Test".to_string(),
+            title: Some("Test".to_string()),
             slug: slug.clone(),
             body: "body".to_string(),
             format: common::storage::PostFormat::Markdown,
@@ -1526,7 +1437,7 @@ mod tests {
             1,
             1,
             &common::storage::UpdatePostInput {
-                title: "Updated".to_string(),
+                title: Some("Updated".to_string()),
                 slug: slug.clone(),
                 body: "body".to_string(),
                 format: common::storage::PostFormat::Markdown,
