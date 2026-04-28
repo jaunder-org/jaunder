@@ -14,6 +14,20 @@ use web::posts::{
     CreatePostResult, DraftSummary, PublishPostResult, TimelinePage, UpdatePostResult,
 };
 
+async fn unpublish_post_form(
+    state: Arc<jaunder::storage::AppState>,
+    post_id: i64,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    post_form(
+        state,
+        "/api/unpublish_post",
+        format!("post_id={post_id}"),
+        cookie,
+    )
+    .await
+}
+
 use helpers::{ensure_server_fns_registered, test_options, test_state};
 
 async fn post_form(
@@ -2344,5 +2358,111 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink() {
     let (status, body) =
         get_post_form(Arc::clone(&state), "author", year, month, day, slug, None).await;
     assert_eq!(StatusCode::NOT_FOUND, status, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+}
+
+#[tokio::test]
+async fn unpublish_post_reverts_published_post_to_draft() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let author_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(author_id, None)
+            .await
+            .unwrap()
+    );
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "body=%23+Unpublish+Me%0A%0Abody&format=markdown&publish=true",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    assert!(created.published_at.is_some(), "should be published");
+
+    // Unpublish
+    let (status, body) =
+        unpublish_post_form(Arc::clone(&state), created.post_id, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "unpublish body: {body}");
+
+    // Should no longer appear in the user timeline
+    let (status, body) =
+        list_user_posts_form(Arc::clone(&state), "author", None, None, 10, None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(
+        !body.contains("Unpublish Me"),
+        "expected post removed from timeline: {body}"
+    );
+
+    // Should appear in drafts
+    let (status, body) = list_drafts_form(Arc::clone(&state), None, None, 50, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(
+        body.contains("unpublish-me"),
+        "expected post in drafts: {body}"
+    );
+}
+
+#[tokio::test]
+async fn unpublish_post_rejects_non_author() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let author_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let other_id = state
+        .users
+        .create_user(
+            &"other".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let author_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(author_id, None)
+            .await
+            .unwrap()
+    );
+    let other_cookie = format!(
+        "session={}",
+        state.sessions.create_session(other_id, None).await.unwrap()
+    );
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_post",
+        "body=%23+Others+Post%0A%0Abody&format=markdown&publish=true",
+        Some(&author_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let (status, body) = unpublish_post_form(state, created.post_id, Some(&other_cookie)).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }

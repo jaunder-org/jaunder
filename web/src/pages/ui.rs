@@ -1,5 +1,5 @@
 use crate::auth::current_user;
-use crate::posts::{CreatePost, TimelinePostSummary};
+use crate::posts::{CreatePost, DeletePost, TimelinePostSummary, UnpublishPost};
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 
@@ -125,6 +125,73 @@ pub fn Topbar(
 
 // ─── 3.6 PostCard ─────────────────────────────────────────────
 
+// ─── ComposerFields ───────────────────────────────────────────
+
+/// Shared body + format fields used by all post editors.
+///
+/// Renders a `name="body"` textarea and a `name="format"` hidden input.
+/// When `show_seg` is true (default), also renders the `.j-seg` format toggle.
+#[component]
+pub fn ComposerFields(
+    body: RwSignal<String>,
+    format: RwSignal<String>,
+    #[prop(default = "Write something\u{2026}")] placeholder: &'static str,
+    #[prop(default = 16u32)] rows: u32,
+    #[prop(default = "j-edit-form-textarea")] textarea_class: &'static str,
+    /// When false, the `.j-seg` format toggle is not rendered (caller places it elsewhere).
+    #[prop(default = true)]
+    show_seg: bool,
+    /// Optional callback fired on every body input event (e.g. to clear a flash message).
+    #[prop(optional)]
+    on_input: Option<Callback<()>>,
+) -> impl IntoView {
+    view! {
+        <textarea
+            name="body"
+            class=textarea_class
+            rows=rows
+            placeholder=placeholder
+            prop:value=body
+            on:input=move |ev| {
+                body.set(event_target_value(&ev));
+                if let Some(cb) = on_input {
+                    cb.run(());
+                }
+            }
+        ></textarea>
+        {show_seg
+            .then(move || {
+                view! {
+                    <div class="j-seg">
+                        <button
+                            type="button"
+                            class=move || {
+                                if format.get() == "markdown" {
+                                    "j-btn is-selected"
+                                } else {
+                                    "j-btn"
+                                }
+                            }
+                            on:click=move |_| format.set("markdown".to_string())
+                        >
+                            "Markdown"
+                        </button>
+                        <button
+                            type="button"
+                            class=move || {
+                                if format.get() == "org" { "j-btn is-selected" } else { "j-btn" }
+                            }
+                            on:click=move |_| format.set("org".to_string())
+                        >
+                            "Org"
+                        </button>
+                    </div>
+                }
+            })}
+        <input type="hidden" name="format" prop:value=move || format.get() />
+    }
+}
+
 /// Formats an RFC-3339 timestamp as `"YYYY-MM-DD HH:MM"`.
 /// Falls back to the raw string if the input contains no `T` separator.
 pub(crate) fn format_post_time(ts: &str) -> String {
@@ -141,38 +208,143 @@ pub(crate) fn format_post_time(ts: &str) -> String {
 }
 
 #[component]
-pub fn PostCard(post: TimelinePostSummary) -> impl IntoView {
-    // TimelinePostSummary has no protocol, handle, or stats fields — this is
-    // real app data. We render what we have and omit the source indicator and
-    // stats footer for now (wired up in a later step).
+pub fn PostDisplay(
+    post: TimelinePostSummary,
+    banner: Option<String>,
+    #[prop(optional)] children: Option<Children>,
+) -> impl IntoView {
     let time_label = format_post_time(&post.published_at);
+    let is_author = post.is_author;
 
     view! {
         <article class="j-post">
             <Avatar name=post.username.clone() size=38 />
-            <div style="min-width:0">
-                <header class="j-post-head">
-                    <span class="j-post-name">{post.username.clone()}</span>
-                    <span class="j-post-handle">"@"{post.username.clone()}</span>
-                    <span class="j-spacer"></span>
-                    <span class="j-post-time">{time_label}</span>
-                </header>
-                {post
-                    .title
-                    .clone()
-                    .map(|title| {
-                        view! {
-                            <div class="j-post-title">
-                                <a href=post.permalink.clone()>{title}</a>
-                            </div>
-                        }
-                    })}
-                <div class="j-post-body" inner_html=post.rendered_html.clone()></div>
-                <footer class="j-post-foot">
-                    <span class="j-spacer"></span>
-                </footer>
+            <div style="min-width:0;display:flex;gap:8px;align-items:flex-start">
+                <div style="flex:1;min-width:0">
+                    <header class="j-post-head">
+                        <span class="j-post-name">{post.username.clone()}</span>
+                        <span class="j-post-handle">"@"{post.username.clone()}</span>
+                        {(!is_author)
+                            .then(|| {
+                                view! {
+                                    <>
+                                        <span class="j-spacer"></span>
+                                        <span class="j-post-time">{time_label}</span>
+                                    </>
+                                }
+                            })}
+                    </header>
+                    {post
+                        .title
+                        .clone()
+                        .map(|title| {
+                            if post.permalink.is_empty() {
+                                view! { <div class="j-post-title">{title}</div> }.into_any()
+                            } else {
+                                view! {
+                                    <div class="j-post-title">
+                                        <a href=post.permalink.clone()>{title}</a>
+                                    </div>
+                                }
+                                    .into_any()
+                            }
+                        })}
+                    {banner.map(|b| view! { <p class="draft-banner">{b}</p> })}
+                    <div class="j-post-body" inner_html=post.rendered_html.clone()></div>
+                    <footer class="j-post-foot">
+                        <span class="j-spacer"></span>
+                    </footer>
+                </div>
+                {children.map(|c| c())}
             </div>
         </article>
+    }
+}
+
+#[component]
+pub fn PostCard(
+    post: TimelinePostSummary,
+    banner: Option<String>,
+    #[prop(optional)] on_mutate: Option<Callback<()>>,
+    #[prop(optional)] on_unpublish: Option<Callback<()>>,
+) -> impl IntoView {
+    let is_author = post.is_author;
+    let post_id = post.post_id;
+    let time_label = format_post_time(&post.published_at);
+    let permalink = post.permalink.clone();
+    let edit_url = format!("/posts/{}/edit", post_id);
+    let delete_action = ServerAction::<DeletePost>::new();
+    let unpublish_action = ServerAction::<UnpublishPost>::new();
+    let deleted = RwSignal::new(false);
+
+    Effect::new_isomorphic(move |_| {
+        if let Some(Ok(())) = delete_action.value().get() {
+            deleted.set(true);
+            if let Some(cb) = on_mutate {
+                cb.run(());
+            }
+        }
+    });
+    Effect::new_isomorphic(move |_| {
+        if let Some(Ok(())) = unpublish_action.value().get() {
+            let cb = on_unpublish.or(on_mutate);
+            if let Some(cb) = cb {
+                cb.run(());
+            }
+        }
+    });
+
+    let action_col = is_author.then(move || {
+        view! {
+            <div class="j-post-acts">
+                <a class="j-post-plink" href=permalink>
+                    {time_label}
+                </a>
+                <a class="j-btn" href=edit_url>
+                    "Edit"
+                </a>
+                <button
+                    type="button"
+                    class="j-btn"
+                    on:click=move |_| {
+                        unpublish_action.dispatch(UnpublishPost { post_id });
+                    }
+                >
+                    "Unpublish"
+                </button>
+                <button
+                    type="button"
+                    class="j-btn"
+                    on:click=move |_| {
+                        let confirmed = {
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                web_sys::window()
+                                    .and_then(|w| {
+                                        w.confirm_with_message("Delete this post?").ok()
+                                    })
+                                    .unwrap_or(false)
+                            }
+                            #[cfg(not(target_arch = "wasm32"))] { false }
+                        };
+                        if confirmed {
+                            delete_action.dispatch(DeletePost { post_id });
+                        }
+                    }
+                >
+                    "Delete"
+                </button>
+            </div>
+        }
+    });
+
+    view! {
+        {move || {
+            deleted.get().then(|| view! { <p class="success">"Post deleted."</p> }.into_any())
+        }}
+        <PostDisplay post=post banner=banner>
+            {action_col}
+        </PostDisplay>
     }
 }
 
@@ -182,7 +354,7 @@ pub fn PostCard(post: TimelinePostSummary) -> impl IntoView {
 pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {
     let create_action = ServerAction::<CreatePost>::new();
     let body = RwSignal::new(String::new());
-    let format = RwSignal::new("markdown");
+    let format = RwSignal::new("markdown".to_string());
     let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
     // After any successful action: clear body, set flash, optionally notify parent.
@@ -221,47 +393,16 @@ pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl In
                 <div class="j-composer-row">
                     <Avatar name=username.clone() size=36 />
                     <div class="j-composer-body">
-                        <textarea
-                            name="body"
-                            rows="6"
+                        <ComposerFields
+                            body=body
+                            format=format
+                            rows=6
                             placeholder="What's on your mind?"
-                            prop:value=body
-                            on:input=move |ev| {
-                                body.set(event_target_value(&ev));
-                                flash.set(None);
-                            }
-                        ></textarea>
+                            textarea_class=""
+                            on_input=Callback::new(move |_| flash.set(None))
+                        />
                         <input type="hidden" name="slug_override" value="" />
-                        <input type="hidden" name="format" prop:value=move || format.get() />
                         <div class="j-composer-toolbar">
-                            <div class="j-format-toggle">
-                                <button
-                                    type="button"
-                                    class=move || {
-                                        if format.get() == "markdown" {
-                                            "j-btn is-active"
-                                        } else {
-                                            "j-btn"
-                                        }
-                                    }
-                                    on:click=move |_| format.set("markdown")
-                                >
-                                    "Markdown"
-                                </button>
-                                <button
-                                    type="button"
-                                    class=move || {
-                                        if format.get() == "org" {
-                                            "j-btn is-active"
-                                        } else {
-                                            "j-btn"
-                                        }
-                                    }
-                                    on:click=move |_| format.set("org")
-                                >
-                                    "Org"
-                                </button>
-                            </div>
                             <button
                                 class="j-btn"
                                 type="submit"

@@ -1,3 +1,4 @@
+use crate::error::WebError;
 use crate::password_reset::{ConfirmPasswordReset, RequestPasswordReset};
 use leptos::prelude::*;
 use leptos_router::components::Redirect;
@@ -20,7 +21,7 @@ pub fn ForgotPasswordPage() -> impl IntoView {
             request_action
                 .value()
                 .get()
-                .map(|r: Result<(), ServerFnError>| match r {
+                .map(|r: Result<(), WebError>| match r {
                     Ok(()) => {
                         view! {
                             <p>
@@ -61,7 +62,7 @@ pub fn ResetPasswordPage() -> impl IntoView {
             confirm_action
                 .value()
                 .get()
-                .map(|r: Result<(), ServerFnError>| match r {
+                .map(|r: Result<(), WebError>| match r {
                     Ok(()) => view! { <Redirect path="/login" /> }.into_any(),
                     Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                 })

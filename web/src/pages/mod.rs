@@ -8,7 +8,9 @@ pub mod profile;
 pub mod sessions;
 pub(crate) mod signal_read;
 pub mod ui;
-pub use ui::{Avatar, Chip, Dot, Icon, Icons, InlineComposer, PostCard, Sidebar, Topbar};
+pub use ui::{
+    Avatar, Chip, Dot, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar, Topbar,
+};
 
 /// Default theme identifier. This selects the CSS variable pack applied via
 /// `data-theme` on the root element. "studio" is the pragmatic default chosen
