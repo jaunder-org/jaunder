@@ -489,6 +489,9 @@ pub trait PostStorage: Send + Sync {
 
     async fn soft_delete_post(&self, post_id: i64) -> sqlx::Result<()>;
 
+    /// Clears `published_at`, reverting a published post to draft status.
+    async fn unpublish_post(&self, post_id: i64) -> sqlx::Result<()>;
+
     async fn list_published_by_user(
         &self,
         username: &Username,

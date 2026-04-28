@@ -27,6 +27,7 @@ pub fn HomePage() -> impl IntoView {
     let error = RwSignal::new(None::<String>);
 
     let refresh_version = RwSignal::new(0u32);
+    let on_mutate = Callback::new(move |_| refresh_version.update(|v| *v += 1));
 
     let initial_page = Resource::new(
         move || refresh_version.get(),
@@ -165,7 +166,11 @@ pub fn HomePage() -> impl IntoView {
                                     view! { <p>"No posts yet."</p> }.into_any()
                                 } else {
                                     rows.into_iter()
-                                        .map(|p| view! { <PostCard post=p /> })
+                                        .map(|p| {
+                                            view! {
+                                                <PostCard post=p banner=None on_mutate=on_mutate />
+                                            }
+                                        })
                                         .collect::<Vec<_>>()
                                         .into_any()
                                 }
@@ -203,7 +208,11 @@ pub fn HomePage() -> impl IntoView {
                                     view! { <p>"No posts yet."</p> }.into_any()
                                 } else {
                                     rows.into_iter()
-                                        .map(|p| view! { <PostCard post=p /> })
+                                        .map(|p| {
+                                            view! {
+                                                <PostCard post=p banner=None on_mutate=on_mutate />
+                                            }
+                                        })
                                         .collect::<Vec<_>>()
                                         .into_any()
                                 }

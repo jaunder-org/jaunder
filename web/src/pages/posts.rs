@@ -3,11 +3,11 @@ use crate::{
     error::WebError,
     pages::{
         signal_read::read_signal,
-        ui::{format_post_time, Avatar, Topbar},
+        ui::{ComposerFields, PostCard, PostDisplay, Topbar},
     },
     posts::{
         get_post, get_post_preview, list_drafts, list_user_posts, CreatePost, CreatePostResult,
-        DeletePost, DraftSummary, ListUserPosts, PostResponse, PublishPost, PublishPostResult,
+        DeletePost, DraftSummary, ListUserPosts, PublishPost, PublishPostResult,
         TimelinePostSummary, UpdatePost, UpdatePostResult,
     },
 };
@@ -19,7 +19,7 @@ pub fn CreatePostPage() -> impl IntoView {
     let create_post_action = ServerAction::<CreatePost>::new();
     let current_user = Resource::new(|| (), |_| current_user());
     let body = RwSignal::new(String::new());
-    let char_count = move || read_signal!(body).len();
+    let format = RwSignal::new("markdown".to_string());
 
     view! {
         <Topbar title="New post".to_string() sub="Long-form".to_string() />
@@ -28,60 +28,23 @@ pub fn CreatePostPage() -> impl IntoView {
         }>
             {move || Suspend::new(async move {
                 match current_user.await {
-                    Ok(Some(username)) => {
+                    Ok(Some(_)) => {
                         view! {
                             <ActionForm action=create_post_action>
                                 <div class="j-compose-grid">
                                     <div class="j-compose-body">
-                                        <div style="display:flex;gap:14px">
-                                            <Avatar name=username.clone() size=40 />
-                                            <div style="flex:1;min-width:0">
-                                                <div style="font-size:13px;color:var(--muted);margin-bottom:10px;\
-                                                font-family:var(--font-meta)">{username}</div>
-                                                <input
-                                                    type="text"
-                                                    name="title"
-                                                    placeholder="Title"
-                                                    style="width:100%;font-size:20px;font-weight:600;\
-                                                    border:none;outline:none;background:transparent;\
-                                                    color:var(--ink);margin-bottom:14px;\
-                                                    font-family:var(--font-body)"
-                                                />
-                                                <textarea
-                                                    name="body"
-                                                    placeholder="Write something\u{2026}"
-                                                    class="j-compose-editor"
-                                                    style="width:100%;border:none;outline:none;\
-                                                    background:transparent;resize:vertical"
-                                                    rows="16"
-                                                    prop:value=body
-                                                    on:input=move |ev| { body.set(event_target_value(&ev)) }
-                                                ></textarea>
-                                            </div>
-                                        </div>
+                                        <ComposerFields
+                                            body=body
+                                            format=format
+                                            rows=16
+                                            placeholder="Write something\u{2026}"
+                                            show_seg=false
+                                        />
                                     </div>
                                     <aside class="j-compose-aside">
                                         <div>
                                             <div class="j-sb-head" style="padding:0 0 10px">
                                                 "Options"
-                                            </div>
-                                            <div
-                                                class="j-field-row"
-                                                style="grid-template-columns:auto 1fr"
-                                            >
-                                                <label class="j-field-label" for="compose-format">
-                                                    "Format"
-                                                </label>
-                                                <select
-                                                    id="compose-format"
-                                                    name="format"
-                                                    class="j-field-val"
-                                                >
-                                                    <option value="markdown" selected=true>
-                                                        "Markdown"
-                                                    </option>
-                                                    <option value="org">"Org"</option>
-                                                </select>
                                             </div>
                                             <div
                                                 class="j-field-row"
@@ -98,19 +61,43 @@ pub fn CreatePostPage() -> impl IntoView {
                                                     class="j-field-val"
                                                 />
                                             </div>
+                                            <div class="j-seg" style="margin-top:10px">
+                                                <button
+                                                    type="button"
+                                                    class=move || {
+                                                        if format.get() == "markdown" {
+                                                            "j-btn is-selected"
+                                                        } else {
+                                                            "j-btn"
+                                                        }
+                                                    }
+                                                    on:click=move |_| { format.set("markdown".to_string()) }
+                                                >
+                                                    "Markdown"
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    class=move || {
+                                                        if format.get() == "org" {
+                                                            "j-btn is-selected"
+                                                        } else {
+                                                            "j-btn"
+                                                        }
+                                                    }
+                                                    on:click=move |_| format.set("org".to_string())
+                                                >
+                                                    "Org"
+                                                </button>
+                                            </div>
                                         </div>
                                         <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
-                                            <span class="j-count" style="margin-left:0">
-                                                {char_count}
-                                            </span>
-                                            <span class="j-spacer"></span>
                                             <button
                                                 class="j-btn"
                                                 type="submit"
                                                 name="publish"
                                                 value="false"
                                             >
-                                                "Draft"
+                                                "Save draft"
                                             </button>
                                             <button
                                                 class="j-btn is-primary"
@@ -118,7 +105,7 @@ pub fn CreatePostPage() -> impl IntoView {
                                                 name="publish"
                                                 value="true"
                                             >
-                                                "Publish \u{2192}"
+                                                "Publish"
                                             </button>
                                         </div>
                                     </aside>
@@ -201,7 +188,6 @@ pub fn CreatePostPage() -> impl IntoView {
 
 #[component]
 pub fn PostPage() -> impl IntoView {
-    let delete_action = ServerAction::<DeletePost>::new();
     let params = use_params_map();
 
     let post_data = move || {
@@ -221,7 +207,6 @@ pub fn PostPage() -> impl IntoView {
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or_default();
         let slug = params.get("slug").unwrap_or_default();
-
         (username, year, month, day, slug)
     };
 
@@ -232,10 +217,16 @@ pub fn PostPage() -> impl IntoView {
                 Some(value) if !value.is_empty() => value,
                 _ => return Err(WebError::validation("Invalid permalink")),
             };
-
             get_post(username, year, month, day, slug).await
         },
     );
+
+    let on_unpublish = Callback::new(move |_| {
+        #[cfg(target_arch = "wasm32")]
+        if let Some(window) = web_sys::window() {
+            let _ = window.location().replace("/drafts");
+        }
+    });
 
     view! {
         <Suspense fallback=|| {
@@ -243,27 +234,31 @@ pub fn PostPage() -> impl IntoView {
         }>
             {move || Suspend::new(async move {
                 match post.await {
-                    Ok(fetched_post) => {
-                        let banner = fetched_post.is_draft.then_some("Draft - visible only to you");
-                        let post_id = fetched_post.post_id;
-                        let is_author = fetched_post.is_author;
-                        let article = render_post_article(fetched_post, banner);
-                        view! {
-                            {article}
-                            {is_author
-                                .then(|| render_delete_form(
-                                    delete_action,
-                                    post_id,
-                                    "Delete this post?",
-                                ))}
-                        }
+                    Ok(fetched) => {
+                        let banner = fetched
+                            .is_draft
+                            .then_some("Draft - visible only to you".to_string());
+                        let summary = TimelinePostSummary {
+                            post_id: fetched.post_id,
+                            username: fetched.username.clone(),
+                            title: fetched.title.clone(),
+                            slug: fetched.slug.clone(),
+                            rendered_html: fetched.rendered_html.clone(),
+                            created_at: fetched.created_at.clone(),
+                            published_at: fetched
+                                .published_at
+                                .clone()
+                                .unwrap_or_else(|| fetched.created_at.clone()),
+                            permalink: fetched.permalink.clone().unwrap_or_default(),
+                            is_author: fetched.is_author,
+                        };
+                        view! { <PostCard post=summary banner=banner on_unpublish=on_unpublish /> }
                             .into_any()
                     }
                     Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 }
             })}
         </Suspense>
-        {render_delete_result(delete_action, "Post deleted.", "/", "Go to home")}
     }
 }
 
@@ -280,9 +275,12 @@ pub fn UserTimelinePage() -> impl IntoView {
             .to_string()
     });
 
+    let mutate_version = RwSignal::new(0u32);
+    let on_mutate = Callback::new(move |_| mutate_version.update(|v| *v += 1));
+
     let initial_page = Resource::new(
-        move || username.get(),
-        |username| async move {
+        move || (username.get(), mutate_version.get()),
+        |(username, _)| async move {
             if username.is_empty() {
                 return Err(WebError::validation("Invalid username"));
             }
@@ -370,7 +368,14 @@ pub fn UserTimelinePage() -> impl IntoView {
             }
 
             view! {
-                <ul>{rows.into_iter().map(render_timeline_post_row).collect::<Vec<_>>()}</ul>
+                <div>
+                    {rows
+                        .into_iter()
+                        .map(|post| {
+                            view! { <PostCard post=post banner=None on_mutate=on_mutate /> }
+                        })
+                        .collect::<Vec<_>>()}
+                </div>
                 {move || {
                     read_has_more()
                         .then(|| {
@@ -412,27 +417,45 @@ pub fn DraftPreviewPage() -> impl IntoView {
         }>
             {move || Suspend::new(async move {
                 match preview.await {
-                    Ok(post) => {
-                        let post_id = post.post_id;
-                        let article = render_post_article(
-                            post,
-                            Some("Draft preview – visible only to you"),
-                        );
+                    Ok(fetched) => {
+                        let post_id = fetched.post_id;
+                        let summary = TimelinePostSummary {
+                            post_id: fetched.post_id,
+                            username: fetched.username.clone(),
+                            title: fetched.title.clone(),
+                            slug: fetched.slug.clone(),
+                            rendered_html: fetched.rendered_html.clone(),
+                            created_at: fetched.created_at.clone(),
+                            published_at: fetched
+                                .published_at
+                                .clone()
+                                .unwrap_or_else(|| fetched.created_at.clone()),
+                            permalink: fetched.permalink.clone().unwrap_or_default(),
+                            is_author: true,
+                        };
                         view! {
-                            {article}
-                            <div style="display:flex;gap:8px;padding:16px 32px">
-                                <ActionForm action=publish_action>
-                                    <input type="hidden" name="post_id" value=post_id />
-                                    <button
-                                        type="submit"
-                                        class="j-btn is-primary"
-                                        onclick="return confirm('Publish this draft?')"
-                                    >
-                                        "Publish \u{2192}"
-                                    </button>
-                                </ActionForm>
-                                {render_delete_form(delete_action, post_id, "Delete this draft?")}
-                            </div>
+                            <PostDisplay
+                                post=summary
+                                banner=Some("Draft preview – visible only to you".to_string())
+                            >
+                                <div class="j-post-acts">
+                                    <ActionForm action=publish_action>
+                                        <input type="hidden" name="post_id" value=post_id />
+                                        <button
+                                            type="submit"
+                                            class="j-btn is-primary"
+                                            onclick="return confirm('Publish this draft?')"
+                                        >
+                                            "Publish \u{2192}"
+                                        </button>
+                                    </ActionForm>
+                                    {render_delete_form(
+                                        delete_action,
+                                        post_id,
+                                        "Delete this draft?",
+                                    )}
+                                </div>
+                            </PostDisplay>
                         }
                             .into_any()
                     }
@@ -464,6 +487,20 @@ pub fn DraftPreviewPage() -> impl IntoView {
 pub fn EditPostPage() -> impl IntoView {
     let params = use_params_map();
     let update_post_action = ServerAction::<UpdatePost>::new();
+    let body = RwSignal::new(String::new());
+    let format = RwSignal::new("markdown".to_string());
+    Effect::new_isomorphic(move |_| {
+        if let Some(Ok(ref updated)) = update_post_action.value().get() {
+            if updated.published_at.is_some() {
+                #[cfg(target_arch = "wasm32")]
+                if let Some(ref permalink) = updated.permalink {
+                    if let Some(window) = web_sys::window() {
+                        let _ = window.location().replace(permalink);
+                    }
+                }
+            }
+        }
+    });
 
     let post = Resource::new(
         move || {
@@ -484,62 +521,27 @@ pub fn EditPostPage() -> impl IntoView {
             {move || Suspend::new(async move {
                 match post.await {
                     Ok(fetched) => {
+                        body.set(fetched.body.clone());
+                        format.set(fetched.format.clone());
                         let post_id = fetched.post_id;
                         let is_published = fetched.published_at.is_some();
-                        let is_markdown = fetched.format == "markdown";
-                        let is_org = fetched.format == "org";
                         let current_slug = fetched.slug.clone();
                         view! {
                             <ActionForm action=update_post_action>
                                 <div class="j-edit-form-grid">
                                     <div class="j-edit-form-body">
                                         <input type="hidden" name="post_id" value=post_id />
-                                        <div class="j-edit-form-field">
-                                            <label class="j-edit-form-label" for="edit-title">
-                                                "Title"
-                                            </label>
-                                            <input
-                                                id="edit-title"
-                                                class="j-edit-form-input"
-                                                type="text"
-                                                name="title"
-                                                prop:value=fetched.title.unwrap_or_default()
-                                            />
-                                        </div>
-                                        <div class="j-edit-form-field j-edit-form-field--body">
-                                            <label class="j-edit-form-label" for="edit-body">
-                                                "Body"
-                                            </label>
-                                            <textarea
-                                                id="edit-body"
-                                                class="j-edit-form-textarea"
-                                                name="body"
-                                                rows="20"
-                                            >
-                                                {fetched.body}
-                                            </textarea>
-                                        </div>
+                                        <ComposerFields
+                                            body=body
+                                            format=format
+                                            rows=20
+                                            show_seg=false
+                                        />
                                     </div>
                                     <aside class="j-edit-form-aside">
                                         <div>
                                             <div class="j-sb-head" style="padding:0 0 10px">
                                                 "Options"
-                                            </div>
-                                            <div
-                                                class="j-field-row"
-                                                style="grid-template-columns:auto 1fr"
-                                            >
-                                                <label class="j-field-label" for="edit-format">
-                                                    "Format"
-                                                </label>
-                                                <select id="edit-format" name="format" class="j-field-val">
-                                                    <option value="markdown" selected=is_markdown>
-                                                        "Markdown"
-                                                    </option>
-                                                    <option value="org" selected=is_org>
-                                                        "Org"
-                                                    </option>
-                                                </select>
                                             </div>
                                             {(!is_published)
                                                 .then(|| {
@@ -561,6 +563,34 @@ pub fn EditPostPage() -> impl IntoView {
                                                         </div>
                                                     }
                                                 })}
+                                            <div class="j-seg" style="margin-top:10px">
+                                                <button
+                                                    type="button"
+                                                    class=move || {
+                                                        if format.get() == "markdown" {
+                                                            "j-btn is-selected"
+                                                        } else {
+                                                            "j-btn"
+                                                        }
+                                                    }
+                                                    on:click=move |_| { format.set("markdown".to_string()) }
+                                                >
+                                                    "Markdown"
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    class=move || {
+                                                        if format.get() == "org" {
+                                                            "j-btn is-selected"
+                                                        } else {
+                                                            "j-btn"
+                                                        }
+                                                    }
+                                                    on:click=move |_| format.set("org".to_string())
+                                                >
+                                                    "Org"
+                                                </button>
+                                            </div>
                                         </div>
                                         <div class="j-edit-form-actions">
                                             {if is_published {
@@ -578,20 +608,20 @@ pub fn EditPostPage() -> impl IntoView {
                                             } else {
                                                 view! {
                                                     <button
-                                                        class="j-btn is-primary"
-                                                        type="submit"
-                                                        name="publish"
-                                                        value="true"
-                                                    >
-                                                        "Publish \u{2192}"
-                                                    </button>
-                                                    <button
                                                         class="j-btn"
                                                         type="submit"
                                                         name="publish"
                                                         value="false"
                                                     >
-                                                        "Save Draft"
+                                                        "Save draft"
+                                                    </button>
+                                                    <button
+                                                        class="j-btn is-primary"
+                                                        type="submit"
+                                                        name="publish"
+                                                        value="true"
+                                                    >
+                                                        "Publish"
                                                     </button>
                                                 }
                                                     .into_any()
@@ -612,17 +642,12 @@ pub fn EditPostPage() -> impl IntoView {
                 .value()
                 .get()
                 .map(|result: Result<UpdatePostResult, WebError>| match result {
-                    Ok(updated) => {
-                        let message = if updated.published_at.is_some() {
-                            "Post updated."
-                        } else {
-                            "Draft saved."
-                        };
+                    Ok(updated) if updated.published_at.is_none() => {
                         let slug_value = updated.slug.clone();
                         let slug_for_attr = slug_value.clone();
                         view! {
                             <div class="success">
-                                <p>{message}</p>
+                                <p>"Draft saved."</p>
                                 <p data-test="slug-value" data-slug=slug_for_attr>
                                     "Slug: "
                                     {slug_value}
@@ -630,20 +655,11 @@ pub fn EditPostPage() -> impl IntoView {
                                 <a data-test="preview-link" href=updated.preview_url.clone()>
                                     "Preview draft"
                                 </a>
-                                {updated
-                                    .permalink
-                                    .as_ref()
-                                    .map(|href| {
-                                        view! {
-                                            <a data-test="permalink-link" href=href.clone()>
-                                                "View permalink"
-                                            </a>
-                                        }
-                                    })}
                             </div>
                         }
                             .into_any()
                     }
+                    Ok(_) => view! { <p>"Redirecting\u{2026}"</p> }.into_any(),
                     Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 })
         }}
@@ -731,90 +747,40 @@ fn render_draft_row(
     let label = draft.title.clone().unwrap_or(draft.summary_label.clone());
     view! {
         <li>
-            <strong>{label}</strong>
-            " ("
-            {draft.slug}
-            ") "
-            <a href=draft.preview_url>"Preview"</a>
-            " "
-            <a href=draft.edit_url>"Edit"</a>
-            " "
-            <a href=draft.permalink>"Permalink"</a>
-            " "
-            <div class="j-draft-actions">
-                <ActionForm action=publish_action>
-                    <input type="hidden" name="post_id" value=post_id />
-                    <button type="submit" class="j-btn">
-                        "Publish"
-                    </button>
-                </ActionForm>
-                <ActionForm action=delete_action>
-                    <input type="hidden" name="post_id" value=post_id />
-                    <button
-                        type="submit"
-                        class="j-btn"
-                        onclick="return confirm('Delete this draft?')"
-                    >
-                        "Delete"
-                    </button>
-                </ActionForm>
+            <div class="j-draft-row">
+                <div class="j-draft-row-content">
+                    <strong>{label}</strong>
+                    " ("
+                    {draft.slug}
+                    ") "
+                    <a href=draft.preview_url>"Preview"</a>
+                    " "
+                    <a href=draft.permalink>"Permalink"</a>
+                </div>
+                <div class="j-draft-actions">
+                    <a class="j-btn is-ghost" href=draft.edit_url>
+                        "Edit"
+                    </a>
+                    <ActionForm action=publish_action>
+                        <input type="hidden" name="post_id" value=post_id />
+                        <button type="submit" class="j-btn is-ghost">
+                            "Publish"
+                        </button>
+                    </ActionForm>
+                    <ActionForm action=delete_action>
+                        <input type="hidden" name="post_id" value=post_id />
+                        <button
+                            type="submit"
+                            class="j-btn is-ghost"
+                            onclick="return confirm('Delete this draft?')"
+                        >
+                            "Delete"
+                        </button>
+                    </ActionForm>
+                </div>
             </div>
         </li>
     }
-}
-
-fn render_timeline_post_row(post: TimelinePostSummary) -> impl IntoView {
-    let title = post.title.clone();
-    let permalink = post.permalink.clone();
-    view! {
-        <li data-test="timeline-item">
-            {title
-                .map(|title| {
-                    view! {
-                        <h2>
-                            <a href=permalink>{title}</a>
-                        </h2>
-                    }
-                })} <p class="metadata">"Published on " {post.published_at}</p>
-            <div class="content" inner_html=post.rendered_html></div>
-        </li>
-    }
-}
-
-fn render_post_article(post: PostResponse, banner: Option<&'static str>) -> AnyView {
-    let PostResponse {
-        title,
-        username,
-        rendered_html,
-        created_at,
-        published_at,
-        ..
-    } = post;
-    let profile_href = format!("/~{}/", username);
-    let username_display = username.clone();
-    let display_time = published_at
-        .as_deref()
-        .map(format_post_time)
-        .unwrap_or_else(|| format_post_time(&created_at));
-
-    // Inject a template <h1> only when the rendered body does not already open with one.
-    // Markdown and org `* Heading` both produce <h1> in rendered_html; #+TITLE: does not.
-    // This is a mild encapsulation violation — see design doc for rationale.
-    let template_title = match title {
-        Some(ref t) if !rendered_html.trim_start().starts_with("<h1") => Some(t.clone()),
-        _ => None,
-    };
-
-    view! {
-        <article>
-            {template_title.map(|title| view! { <h1>{title}</h1> })}
-            <p class="metadata">
-                "By " <a href=profile_href>{username_display}</a> " on " {display_time}
-            </p> {banner.map(|text| view! { <p class="draft-banner">{text}</p> })}
-            <div class="content" inner_html=rendered_html></div>
-        </article>
-    }
-    .into_any()
 }
 
 fn render_delete_form(
@@ -825,7 +791,11 @@ fn render_delete_form(
     view! {
         <ActionForm action=delete_action>
             <input type="hidden" name="post_id" value=post_id />
-            <button type="submit" onclick=format!("return confirm('{confirm_msg}')")>
+            <button
+                type="submit"
+                class="j-btn is-ghost"
+                onclick=format!("return confirm('{confirm_msg}')")
+            >
                 "Delete"
             </button>
         </ActionForm>

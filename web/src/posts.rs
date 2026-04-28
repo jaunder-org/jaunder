@@ -2,7 +2,7 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "ssr")]
-use crate::auth::require_auth;
+use crate::auth::{require_auth, AuthUser};
 use crate::error::WebResult;
 #[cfg(feature = "ssr")]
 use crate::error::{InternalError, InternalResult, WebError};
@@ -76,6 +76,8 @@ pub struct TimelinePostSummary {
     pub created_at: String,
     pub published_at: String,
     pub permalink: String,
+    /// True when the viewing user is the post author.
+    pub is_author: bool,
 }
 
 /// A cursor-paginated page of timeline posts.
@@ -101,6 +103,8 @@ pub struct PostResponse {
     pub published_at: Option<String>,
     pub is_draft: bool,
     pub is_author: bool,
+    /// Permalink URL for published posts; `None` for drafts.
+    pub permalink: Option<String>,
 }
 
 /// Creates a post for the authenticated user.
@@ -215,6 +219,7 @@ pub async fn get_post(
 #[server(endpoint = "/get_post_preview")]
 pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
     crate::web_server_fn!("get_post_preview", post_id => {
+        use chrono::Datelike;
         let auth = require_auth()
             .await
             .map_err(private_post_not_found_error)?;
@@ -245,9 +250,21 @@ pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
             return Err(not_found_error());
         }
 
+        let username = auth.username.to_string();
+        let permalink = published_at.as_ref().map(|t| {
+            format!(
+                "/~{}/{:04}/{:02}/{:02}/{}",
+                username,
+                t.year(),
+                t.month(),
+                t.day(),
+                slug.as_str()
+            )
+        });
+
         Ok(PostResponse {
             post_id,
-            username: auth.username.to_string(),
+            username,
             title,
             slug: slug.to_string(),
             body,
@@ -257,6 +274,7 @@ pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
             is_draft: published_at.is_none(),
             published_at: published_at.map(|t| t.to_rfc3339()),
             is_author: true,
+            permalink,
         })
     })
 }
@@ -418,6 +436,11 @@ pub async fn list_user_posts(
             .map_err(|e| InternalError::validation(e.to_string()))?;
         let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
 
+        let viewer_user_id = leptos_axum::extract::<AuthUser>()
+            .await
+            .ok()
+            .map(|a| a.user_id);
+
         let page_size = limit.unwrap_or(50).clamp(1, 50);
         let fetch_limit = page_size.saturating_add(1);
 
@@ -434,7 +457,7 @@ pub async fn list_user_posts(
 
         let posts = rows
             .into_iter()
-            .filter_map(|post| timeline_post_summary(&username, post))
+            .filter_map(|post| timeline_post_summary(&username, post, viewer_user_id))
             .collect();
 
         Ok(TimelinePage {
@@ -457,6 +480,11 @@ pub async fn list_local_timeline(
         let state = expect_context::<Arc<AppState>>();
 
         let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
+        let viewer_user_id = leptos_axum::extract::<AuthUser>()
+            .await
+            .ok()
+            .map(|a| a.user_id);
+
         let page_size = limit.unwrap_or(50).clamp(1, 50);
         let fetch_limit = page_size.saturating_add(1);
 
@@ -479,7 +507,7 @@ pub async fn list_local_timeline(
                 .await
                 .map_err(InternalError::storage)?
                 .ok_or_else(|| InternalError::not_found("post author"))?;
-            if let Some(summary) = timeline_post_summary(&author.username, post) {
+            if let Some(summary) = timeline_post_summary(&author.username, post, viewer_user_id) {
                 posts.push(summary);
             }
         }
@@ -520,7 +548,7 @@ pub async fn list_home_feed(
         let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
         let posts = rows
             .into_iter()
-            .filter_map(|post| timeline_post_summary(&auth.username, post))
+            .filter_map(|post| timeline_post_summary(&auth.username, post, Some(auth.user_id)))
             .collect();
 
         Ok(TimelinePage {
@@ -608,9 +636,14 @@ fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
 }
 
 #[cfg(feature = "ssr")]
-fn timeline_post_summary(username: &Username, post: PostRecord) -> Option<TimelinePostSummary> {
+fn timeline_post_summary(
+    username: &Username,
+    post: PostRecord,
+    viewer_user_id: Option<i64>,
+) -> Option<TimelinePostSummary> {
     let PostRecord {
         post_id,
+        user_id,
         title,
         slug,
         rendered_html,
@@ -629,6 +662,7 @@ fn timeline_post_summary(username: &Username, post: PostRecord) -> Option<Timeli
         created_at: created_at.to_rfc3339(),
         published_at: published_at.to_rfc3339(),
         permalink,
+        is_author: viewer_user_id == Some(user_id),
     })
 }
 
@@ -642,6 +676,7 @@ fn to_post_cursor(post: &PostRecord) -> PostCursor {
 
 #[cfg(feature = "ssr")]
 fn post_response(post: PostRecord, username: String, is_author: bool) -> PostResponse {
+    use chrono::Datelike;
     let PostRecord {
         post_id,
         title,
@@ -653,6 +688,16 @@ fn post_response(post: PostRecord, username: String, is_author: bool) -> PostRes
         published_at,
         ..
     } = post;
+    let permalink = published_at.as_ref().map(|t| {
+        format!(
+            "/~{}/{:04}/{:02}/{:02}/{}",
+            username,
+            t.year(),
+            t.month(),
+            t.day(),
+            slug.as_str()
+        )
+    });
     PostResponse {
         post_id,
         username,
@@ -665,6 +710,7 @@ fn post_response(post: PostRecord, username: String, is_author: bool) -> PostRes
         is_draft: published_at.is_none(),
         published_at: published_at.map(|t| t.to_rfc3339()),
         is_author,
+        permalink,
     }
 }
 
@@ -827,6 +873,32 @@ pub async fn delete_post(post_id: i64) -> WebResult<()> {
     })
 }
 
+/// Reverts a published post owned by the authenticated user back to draft status.
+#[server(endpoint = "/unpublish_post")]
+pub async fn unpublish_post(post_id: i64) -> WebResult<()> {
+    crate::web_server_fn!("unpublish_post", post_id => {
+        let auth = require_auth().await?;
+        let state = expect_context::<Arc<AppState>>();
+
+        let existing = state
+            .posts
+            .get_post_by_id(post_id)
+            .await
+            .map_err(InternalError::storage)?
+            .ok_or_else(|| InternalError::not_found("Post"))?;
+
+        if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
+            return Err(InternalError::not_found("Post"));
+        }
+
+        state
+            .posts
+            .unpublish_post(post_id)
+            .await
+            .map_err(InternalError::storage)
+    })
+}
+
 #[cfg(feature = "ssr")]
 fn build_permalink(username: &Username, timestamp: chrono::DateTime<Utc>, slug: &Slug) -> String {
     format!(
@@ -961,6 +1033,7 @@ mod tests {
                 published_at: Some(base_time),
                 deleted_at: None,
             },
+            None,
         )
         .expect("published post should summarize");
 
