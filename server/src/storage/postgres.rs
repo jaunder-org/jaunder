@@ -905,6 +905,14 @@ impl PostStorage for PostgresPostStorage {
         Ok(())
     }
 
+    async fn unpublish_post(&self, post_id: i64) -> sqlx::Result<()> {
+        sqlx::query("UPDATE posts SET published_at = NULL WHERE post_id = $1")
+            .bind(post_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     async fn list_published_by_user(
         &self,
         username: &Username,

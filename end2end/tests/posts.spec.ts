@@ -43,7 +43,6 @@ test("authenticated user can create a post through the UI", async ({
 
   await expect(page.locator(".j-topbar h1")).toHaveText("New post");
   await page.fill('textarea[name="body"]', "# Playwright Post\n\n**browser**");
-  await page.selectOption('select[name="format"]', "markdown");
   await click(page, 'button[name="publish"][value="true"]');
   await waitForSelector(page, ".success");
 
@@ -61,9 +60,8 @@ test("authenticated user can save a draft through the UI", async ({
 
   await goto(page, "/posts/new");
 
-  await page.fill('input[name="title"]', "Playwright Draft");
   await page.fill('textarea[name="body"]', "*draft*");
-  await page.selectOption('select[name="format"]', "org");
+  await click(page, '.j-seg button:has-text("Org")');
   await page.fill('input[name="slug_override"]', "Draft-Slug");
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");
@@ -84,7 +82,6 @@ test("published post renders at permalink", async ({ page }, testInfo) => {
     'textarea[name="body"]',
     "# Permalink Story\n\n**hello permalink**",
   );
-  await page.selectOption('select[name="format"]', "markdown");
   await click(page, 'button[name="publish"][value="true"]');
   await waitForSelector(page, ".success");
 
@@ -111,7 +108,7 @@ test("published post renders at permalink", async ({ page }, testInfo) => {
   await goto(page, targetUrl);
 
   await expect(page.locator("article h1")).toHaveText("Permalink Story");
-  await expect(page.locator(".content")).toContainText("hello permalink");
+  await expect(page.locator(".j-post-body")).toContainText("hello permalink");
 });
 
 test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
@@ -124,7 +121,6 @@ test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
   // Create a draft; title embedded as # heading
   await goto(page, "/posts/new");
   await page.fill('textarea[name="body"]', "# Original Draft\n\noriginal body");
-  await page.selectOption('select[name="format"]', "markdown");
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");
 
@@ -169,7 +165,6 @@ test("editing a published post freezes the slug", async ({
     'textarea[name="body"]',
     "# Published Article\n\noriginal content",
   );
-  await page.selectOption('select[name="format"]', "markdown");
   await click(page, 'button[name="publish"][value="true"]');
   await waitForSelector(page, ".success");
 
@@ -193,13 +188,9 @@ test("editing a published post freezes the slug", async ({
 
   // Save the published post (body already pre-filled from loaded post; slug stays frozen)
   await click(page, 'button[name="publish"][value="true"]');
-  await waitForSelector(page, ".success");
-
-  await expect(page.locator(".success")).toContainText("Post updated.");
-  const updatedSlug = await page
-    .locator('[data-test="slug-value"]')
-    .getAttribute("data-slug");
-  expect(updatedSlug).toBe(originalSlug);
+  // After save, editor redirects to the permalink page
+  await waitForSelector(page, "article h1");
+  expect(page.url()).toContain(originalSlug!);
 });
 
 test("draft lifecycle: create, view, edit, and publish", async ({
@@ -218,7 +209,6 @@ test("draft lifecycle: create, view, edit, and publish", async ({
     'textarea[name="body"]',
     "# Lifecycle Draft\n\ninitial draft body",
   );
-  await page.selectOption('select[name="format"]', "markdown");
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");
 
@@ -250,7 +240,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   await waitForSelector(page, ".success");
 
   await goto(page, permalinkUrl);
-  await expect(page.locator(".content")).toContainText("edited draft body");
+  await expect(page.locator(".j-post-body")).toContainText("edited draft body");
   await expect(page.locator(".draft-banner")).toContainText(
     "Draft - visible only to you",
   );
@@ -271,7 +261,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   await expect(page.locator(".success")).toContainText("Post published.");
 
   await goto(page, permalinkUrl);
-  await expect(page.locator(".content")).toContainText("edited draft body");
+  await expect(page.locator(".j-post-body")).toContainText("edited draft body");
   await expect(page.locator(".draft-banner")).toHaveCount(0);
 });
 
@@ -298,24 +288,23 @@ test("per-user timeline lists published posts with pagination", async ({
   await expect(page.locator("h1", { hasText: /^Posts by / })).toContainText(
     `Posts by ${username}`,
   );
-  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
-    TIMELINE_PAGE_SIZE,
+  await expect(page.locator("article.j-post")).toHaveCount(TIMELINE_PAGE_SIZE);
+  await expect(page.locator("article.j-post").first()).toContainText(
+    `Timeline Post ${TIMELINE_PAGE_SIZE}`,
   );
-  await expect(
-    page.locator('[data-test="timeline-item"]').first(),
-  ).toContainText(`Timeline Post ${TIMELINE_PAGE_SIZE}`);
 
   await click(page, 'button:has-text("Load more")');
   perf.mark("load_more_clicked");
-  await expect(page.locator('[data-test="timeline-item"]')).toHaveCount(
+  await expect(page.locator("article.j-post")).toHaveCount(
     TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT,
     {
       timeout: 10_000,
     },
   );
-  await expect(
-    page.locator('[data-test="timeline-item"]').last(),
-  ).toContainText("Timeline Post 0", { timeout: 10_000 });
+  await expect(page.locator("article.j-post").last()).toContainText(
+    "Timeline Post 0",
+    { timeout: 10_000 },
+  );
   perf.mark("assertions_complete");
   await perf.log({ username });
 });
@@ -436,7 +425,6 @@ test("authenticated user can delete a published post", async ({
     'textarea[name="body"]',
     "# Post To Delete\n\nthis will be deleted",
   );
-  await page.selectOption('select[name="format"]', "markdown");
   await click(page, 'button[name="publish"][value="true"]');
   await waitForSelector(page, ".success");
 
@@ -614,17 +602,15 @@ test("inline composer: format toggle switches active button", async ({
   await waitForSelector(page, ".j-composer");
 
   // Markdown is active by default.
-  const markdownBtn = page.locator(
-    '.j-format-toggle button:has-text("Markdown")',
-  );
-  const orgBtn = page.locator('.j-format-toggle button:has-text("Org")');
-  await expect(markdownBtn).toHaveClass(/is-active/);
-  await expect(orgBtn).not.toHaveClass(/is-active/);
+  const markdownBtn = page.locator('.j-seg button:has-text("Markdown")');
+  const orgBtn = page.locator('.j-seg button:has-text("Org")');
+  await expect(markdownBtn).toHaveClass(/is-selected/);
+  await expect(orgBtn).not.toHaveClass(/is-selected/);
 
   // Click Org to switch.
-  await click(page, '.j-format-toggle button:has-text("Org")');
-  await expect(orgBtn).toHaveClass(/is-active/);
-  await expect(markdownBtn).not.toHaveClass(/is-active/);
+  await click(page, '.j-seg button:has-text("Org")');
+  await expect(orgBtn).toHaveClass(/is-selected/);
+  await expect(markdownBtn).not.toHaveClass(/is-selected/);
 });
 
 test("authenticated user can delete a draft from the drafts page", async ({
@@ -642,7 +628,6 @@ test("authenticated user can delete a draft from the drafts page", async ({
     'textarea[name="body"]',
     "# Draft To Delete\n\ndraft content",
   );
-  await page.selectOption('select[name="format"]', "markdown");
   await click(page, 'button[name="publish"][value="false"]');
   await waitForSelector(page, ".success");
 

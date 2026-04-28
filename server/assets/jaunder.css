@@ -80,6 +80,7 @@
 
 .j-root {
   display: flex;
+  height: 100dvh;
   background: var(--bg);
   color: var(--ink);
   overflow: hidden;
@@ -281,6 +282,13 @@
 .j-btn.is-ghost { background: transparent; border-color: transparent; }
 .j-btn.is-active { background: var(--surface-alt); font-weight: 500; }
 
+/* ─── segmented control (format selector) ─── */
+.j-seg { display: inline-flex; }
+.j-seg .j-btn { border-radius: 0; margin-left: -1px; }
+.j-seg .j-btn:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); margin-left: 0; }
+.j-seg .j-btn:last-child  { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.j-seg .j-btn.is-selected { background: var(--ink); color: var(--surface); border-color: var(--ink); z-index: 1; }
+
 /* ─── post ─── */
 .j-post {
   padding: var(--post-pad-y) var(--post-pad-x);
@@ -330,7 +338,30 @@
 .j-post-foot .j-stat { display: inline-flex; align-items: center; gap: 6px; }
 .j-post-foot .j-stat strong { font-weight: 500; color: var(--ink); }
 
+/* ─── post actions column ─── */
+.j-post-acts {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0;
+}
+.j-post-plink {
+  font-size: 12px; color: var(--muted-soft); text-decoration: none;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.j-post-plink:hover { color: var(--ink); }
+
+/* ─── permalink post page ─── */
+.j-post-page {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0 24px;
+  padding: var(--post-pad-y) var(--post-pad-x);
+}
+
 /* ─── compose page ─── */
+.j-compose-header {
+  padding: 14px 28px;
+  border-bottom: 1px var(--border-style) var(--line);
+  display: flex; align-items: center; gap: 12px;
+}
 .j-compose-grid {
   flex: 1;
   display: grid;
@@ -555,7 +586,13 @@
 }
 
 /* ─── drafts list ─── */
-.j-draft-actions { display: flex; gap: 8px; }
+.j-draft-row {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 14px 18px;
+  border-bottom: 1px var(--border-style) var(--line-soft);
+}
+.j-draft-row-content { flex: 1; min-width: 0; }
+.j-draft-actions { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; align-items: flex-end; }
 
 /* ─── utilities ─── */
 .j-spacer { flex: 1; }
