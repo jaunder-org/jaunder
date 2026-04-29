@@ -295,6 +295,7 @@ mod tests {
 
     fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::auth::CurrentUser>();
+        server_fn::axum::register_explicit::<web::backup::BackupWarningVisible>();
         server_fn::axum::register_explicit::<web::auth::GetRegistrationPolicy>();
         server_fn::axum::register_explicit::<web::auth::Register>();
         server_fn::axum::register_explicit::<web::auth::Login>();

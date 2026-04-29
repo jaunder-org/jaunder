@@ -20,6 +20,7 @@ pub fn ensure_server_fns_registered() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
         server_fn::axum::register_explicit::<web::auth::CurrentUser>();
+        server_fn::axum::register_explicit::<web::backup::BackupWarningVisible>();
         server_fn::axum::register_explicit::<web::auth::GetRegistrationPolicy>();
         server_fn::axum::register_explicit::<web::auth::Register>();
         server_fn::axum::register_explicit::<web::auth::Login>();

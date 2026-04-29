@@ -1,4 +1,5 @@
 use crate::auth::current_user;
+use crate::backup::backup_warning_visible;
 use crate::posts::{CreatePost, DeletePost, TimelinePostSummary, UnpublishPost};
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
@@ -105,6 +106,29 @@ pub fn Chip(
 }
 
 // ─── 3.5 Topbar ───────────────────────────────────────────────
+
+#[component]
+pub fn BackupBanner() -> impl IntoView {
+    let visible = Resource::new(|| (), |_| backup_warning_visible());
+
+    view! {
+        <Suspense fallback=|| ()>
+            {move || Suspend::new(async move {
+                match visible.await {
+                    Ok(true) => {
+                        view! {
+                            <div class="j-backup-banner" role="alert">
+                                <span>"Backups are not configured. Your data is at risk."</span>
+                            </div>
+                        }
+                            .into_any()
+                    }
+                    _ => ().into_any(),
+                }
+            })}
+        </Suspense>
+    }
+}
 
 #[component]
 pub fn Topbar(
