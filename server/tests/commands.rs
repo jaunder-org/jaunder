@@ -8,7 +8,8 @@ use axum::{
 };
 use jaunder::cli::StorageArgs;
 use jaunder::commands::{
-    cmd_create_pg_db, cmd_init, cmd_serve, cmd_smtp_test, cmd_user_create, cmd_user_invite,
+    cmd_backup, cmd_create_pg_db, cmd_init, cmd_restore, cmd_serve, cmd_smtp_test, cmd_user_create,
+    cmd_user_invite,
 };
 use jaunder::password::Password;
 use jaunder::storage::{open_database, open_existing_database};
@@ -373,6 +374,76 @@ async fn cmd_user_invite_too_large_expires_in_returns_error() {
     let result = cmd_user_invite(&args, Some(u64::MAX)).await;
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("too large"));
+}
+
+// M6.3.2: backup command writes a directory-mode backup.
+#[tokio::test]
+async fn cmd_backup_writes_directory_backup() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.expect("init");
+
+    let username: Username = "backupuser".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    cmd_user_create(&args, &username, Some(password), None, false)
+        .await
+        .expect("user create");
+
+    let media_path = args.storage_path.join("media");
+    std::fs::write(media_path.join("avatar.txt"), "media").expect("write media");
+
+    let backup_path = base.path().join("manual-backup");
+    let written_path = cmd_backup(&args, Some(backup_path.clone()))
+        .await
+        .expect("backup");
+
+    assert_eq!(written_path, backup_path);
+    assert!(written_path.join("manifest.json").is_file());
+    assert!(written_path.join("db").join("users.ndjson").is_file());
+    assert_eq!(
+        std::fs::read_to_string(written_path.join("media").join("avatar.txt")).expect("read media"),
+        "media"
+    );
+}
+
+// M6.3.3: restore refuses to run if the target database is populated.
+#[tokio::test]
+async fn cmd_restore_refuses_populated_database() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.expect("init");
+
+    let username: Username = "restoreuser".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    cmd_user_create(&args, &username, Some(password), None, false)
+        .await
+        .expect("user create");
+
+    let backup_path = base.path().join("backup");
+    std::fs::create_dir(&backup_path).expect("backup dir");
+    let err = cmd_restore(&args, &backup_path)
+        .await
+        .expect_err("restore fails");
+
+    assert!(err.to_string().contains("non-empty database"));
+}
+
+// M6.3.3: restore refuses to run if the media directory contains files.
+#[tokio::test]
+async fn cmd_restore_refuses_nonempty_media_directory() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.expect("init");
+
+    std::fs::write(args.storage_path.join("media").join("file.txt"), "media").expect("write media");
+
+    let backup_path = base.path().join("backup");
+    std::fs::create_dir(&backup_path).expect("backup dir");
+    let err = cmd_restore(&args, &backup_path)
+        .await
+        .expect_err("restore fails");
+
+    assert!(err.to_string().contains("non-empty media directory"));
 }
 
 #[tokio::test]
