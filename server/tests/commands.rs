@@ -406,6 +406,33 @@ async fn cmd_backup_writes_directory_backup() {
     );
 }
 
+// M6.3.2: backup command defaults to storage/backups.
+#[tokio::test]
+async fn cmd_backup_without_path_writes_under_storage_backups() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.expect("init");
+
+    let written_path = cmd_backup(&args, None).await.expect("backup");
+
+    assert!(written_path.starts_with(args.storage_path.join("backups")));
+    assert!(written_path.join("manifest.json").is_file());
+}
+
+// M6.3.3: restore refuses missing backup paths before checking target state.
+#[tokio::test]
+async fn cmd_restore_refuses_missing_backup_path() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.expect("init");
+
+    let err = cmd_restore(&args, &base.path().join("missing"))
+        .await
+        .expect_err("restore fails");
+
+    assert!(err.to_string().contains("backup path does not exist"));
+}
+
 // M6.3.3: restore refuses to run if the target database is populated.
 #[tokio::test]
 async fn cmd_restore_refuses_populated_database() {
@@ -444,6 +471,24 @@ async fn cmd_restore_refuses_nonempty_media_directory() {
         .expect_err("restore fails");
 
     assert!(err.to_string().contains("non-empty media directory"));
+}
+
+// M6.3.3: an empty target passes safety checks and then stops at unimplemented import.
+#[tokio::test]
+async fn cmd_restore_empty_target_reaches_unimplemented_import() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.expect("init");
+
+    let backup_path = base.path().join("backup");
+    std::fs::create_dir(&backup_path).expect("backup dir");
+    let err = cmd_restore(&args, &backup_path)
+        .await
+        .expect_err("restore import is not implemented");
+
+    assert!(err
+        .to_string()
+        .contains("restore import is not implemented"));
 }
 
 #[tokio::test]
