@@ -50,6 +50,7 @@ pub(super) type UserRecordParts = (
     Option<DateTime<Utc>>,
     Option<String>,
     bool,
+    bool,
 );
 
 pub(super) fn build_user_record(
@@ -62,6 +63,7 @@ pub(super) fn build_user_record(
         last_authenticated_at,
         email,
         email_verified,
+        is_operator,
     ): UserRecordParts,
 ) -> sqlx::Result<UserRecord> {
     let username = username
@@ -79,6 +81,7 @@ pub(super) fn build_user_record(
         last_authenticated_at,
         email,
         email_verified,
+        is_operator,
     })
 }
 
@@ -177,6 +180,7 @@ pub(super) type UserRow = (
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<String>,
+    bool,
     bool,
 );
 
@@ -524,6 +528,7 @@ mod tests {
             Some(now),
             Some("alice@example.com".to_string()),
             true,
+            false,
         );
         let record = build_user_record(parts).unwrap();
         assert_eq!(record.user_id, 1);

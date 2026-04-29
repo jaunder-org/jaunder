@@ -110,7 +110,7 @@ async fn assert_user_duplicate_and_authenticate(
 
     let user_id = state
         .users
-        .create_user(&username, &initial_password, Some("Alice"))
+        .create_user(&username, &initial_password, Some("Alice"), false)
         .await
         .unwrap();
     let record = state
@@ -123,7 +123,7 @@ async fn assert_user_duplicate_and_authenticate(
 
     let duplicate = state
         .users
-        .create_user(&username, &password("other_password"), None)
+        .create_user(&username, &password("other_password"), None, false)
         .await
         .unwrap_err();
     assert!(matches!(duplicate, CreateUserError::UsernameTaken));
@@ -140,7 +140,7 @@ async fn assert_user_duplicate_and_authenticate(
 async fn assert_session_lifecycle(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user_id = state
         .users
-        .create_user(&username("bob"), &password("secret_password"), None)
+        .create_user(&username("bob"), &password("secret_password"), None, false)
         .await
         .unwrap();
 
@@ -174,6 +174,7 @@ async fn assert_invite_and_atomic_registration(state: &std::sync::Arc<jaunder::s
             &username("carol"),
             &password("password123"),
             Some("Carol"),
+            false,
             &code,
         )
         .await
@@ -183,7 +184,13 @@ async fn assert_invite_and_atomic_registration(state: &std::sync::Arc<jaunder::s
 
     let err = state
         .atomic
-        .create_user_with_invite(&username("carol2"), &password("password123"), None, &code)
+        .create_user_with_invite(
+            &username("carol2"),
+            &password("password123"),
+            None,
+            false,
+            &code,
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
@@ -194,7 +201,7 @@ async fn assert_email_verification_and_password_reset(
 ) {
     let user_id = state
         .users
-        .create_user(&username("dave"), &password("password123"), None)
+        .create_user(&username("dave"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -433,7 +440,12 @@ async fn create_user_succeeds_and_get_by_username_returns_record() {
     let users = user_storage(&base).await;
 
     let user_id = users
-        .create_user(&username("alice"), &password("password123"), Some("Alice"))
+        .create_user(
+            &username("alice"),
+            &password("password123"),
+            Some("Alice"),
+            false,
+        )
         .await
         .unwrap();
 
@@ -453,12 +465,12 @@ async fn duplicate_username_returns_username_taken() {
     let users = user_storage(&base).await;
 
     users
-        .create_user(&username("alice"), &password("password123"), None)
+        .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let err = users
-        .create_user(&username("alice"), &password("other_password"), None)
+        .create_user(&username("alice"), &password("other_password"), None, false)
         .await
         .unwrap_err();
     assert!(matches!(err, CreateUserError::UsernameTaken));
@@ -470,7 +482,7 @@ async fn authenticate_correct_password_returns_record_and_sets_last_authenticate
     let users = user_storage(&base).await;
 
     users
-        .create_user(&username("bob"), &password("secret_password"), None)
+        .create_user(&username("bob"), &password("secret_password"), None, false)
         .await
         .unwrap();
 
@@ -492,7 +504,12 @@ async fn authenticate_wrong_password_returns_invalid_credentials() {
     let users = user_storage(&base).await;
 
     users
-        .create_user(&username("carol"), &password("correct_password"), None)
+        .create_user(
+            &username("carol"),
+            &password("correct_password"),
+            None,
+            false,
+        )
         .await
         .unwrap();
 
@@ -521,7 +538,12 @@ async fn update_profile_persists_changes() {
     let users = user_storage(&base).await;
 
     let user_id = users
-        .create_user(&username("dave"), &password("passw0rd!"), Some("Dave"))
+        .create_user(
+            &username("dave"),
+            &password("passw0rd!"),
+            Some("Dave"),
+            false,
+        )
         .await
         .unwrap();
 
@@ -558,7 +580,7 @@ async fn create_session_then_authenticate_returns_correct_record() {
     let (users, sessions) = storage_pair(&base).await;
 
     let user_id = users
-        .create_user(&username("alice"), &password("password123"), None)
+        .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -580,7 +602,7 @@ async fn authenticate_updates_last_used_at() {
     let (users, sessions) = storage_pair(&base).await;
 
     let user_id = users
-        .create_user(&username("bob"), &password("password123"), None)
+        .create_user(&username("bob"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -597,7 +619,7 @@ async fn revoke_session_then_authenticate_returns_session_not_found() {
     let (users, sessions) = storage_pair(&base).await;
 
     let user_id = users
-        .create_user(&username("carol"), &password("password123"), None)
+        .create_user(&username("carol"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -625,11 +647,11 @@ async fn list_sessions_returns_only_sessions_for_given_user() {
     let (users, sessions) = storage_pair(&base).await;
 
     let alice_id = users
-        .create_user(&username("alice"), &password("password123"), None)
+        .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
     let bob_id = users
-        .create_user(&username("bob"), &password("password123"), None)
+        .create_user(&username("bob"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -677,7 +699,7 @@ async fn use_invite_with_valid_code_marks_it_used() {
     let (users, _, invites) = invite_storage_triple(&base).await;
 
     let user_id = users
-        .create_user(&username("alice"), &password("password123"), None)
+        .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -698,7 +720,7 @@ async fn use_invite_with_unknown_code_returns_not_found() {
     let (users, _, invites) = invite_storage_triple(&base).await;
 
     let user_id = users
-        .create_user(&username("bob"), &password("password123"), None)
+        .create_user(&username("bob"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -715,7 +737,7 @@ async fn use_invite_with_expired_code_returns_expired() {
     let (users, _, invites) = invite_storage_triple(&base).await;
 
     let user_id = users
-        .create_user(&username("carol"), &password("password123"), None)
+        .create_user(&username("carol"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -733,7 +755,7 @@ async fn use_invite_on_already_used_code_returns_already_used() {
     let (users, _, invites) = invite_storage_triple(&base).await;
 
     let user_id = users
-        .create_user(&username("dave"), &password("password123"), None)
+        .create_user(&username("dave"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -763,6 +785,7 @@ async fn create_user_with_invite_creates_user_and_marks_invite_used() {
             &username("alice"),
             &password("password123"),
             Some("Alice"),
+            false,
             &code,
         )
         .await
@@ -790,12 +813,24 @@ async fn create_user_with_invite_second_call_returns_already_used() {
     let code = invites.create_invite(expires_at).await.unwrap();
 
     SqliteAtomicOps::new(pool.clone())
-        .create_user_with_invite(&username("alice"), &password("password123"), None, &code)
+        .create_user_with_invite(
+            &username("alice"),
+            &password("password123"),
+            None,
+            false,
+            &code,
+        )
         .await
         .unwrap();
 
     let err = SqliteAtomicOps::new(pool.clone())
-        .create_user_with_invite(&username("bob"), &password("password123"), None, &code)
+        .create_user_with_invite(
+            &username("bob"),
+            &password("password123"),
+            None,
+            false,
+            &code,
+        )
         .await
         .unwrap_err();
 
@@ -820,7 +855,13 @@ async fn create_user_with_invite_expired_returns_invite_expired() {
     let code = invites.create_invite(expires_at).await.unwrap();
 
     let err = SqliteAtomicOps::new(pool.clone())
-        .create_user_with_invite(&username("alice"), &password("password123"), None, &code)
+        .create_user_with_invite(
+            &username("alice"),
+            &password("password123"),
+            None,
+            false,
+            &code,
+        )
         .await
         .unwrap_err();
 
@@ -844,6 +885,7 @@ async fn create_user_with_invite_unknown_code_returns_not_found() {
             &username("alice"),
             &password("password123"),
             None,
+            false,
             "no-such-code",
         )
         .await
@@ -868,7 +910,7 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken() {
 
     // Create alice directly (without invite)
     users
-        .create_user(&username("alice"), &password("password123"), None)
+        .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -876,7 +918,13 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken() {
     let code = invites.create_invite(expires_at).await.unwrap();
 
     let err = SqliteAtomicOps::new(pool.clone())
-        .create_user_with_invite(&username("alice"), &password("other_password"), None, &code)
+        .create_user_with_invite(
+            &username("alice"),
+            &password("other_password"),
+            None,
+            false,
+            &code,
+        )
         .await
         .unwrap_err();
 
@@ -917,7 +965,7 @@ async fn set_email_persists_and_get_user_reflects_it() {
     let users = user_storage(&base).await;
 
     let user_id = users
-        .create_user(&username("alice"), &password("password123"), None)
+        .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -938,7 +986,7 @@ async fn set_email_clears_previously_set_email() {
     let users = user_storage(&base).await;
 
     let user_id = users
-        .create_user(&username("bob"), &password("password123"), None)
+        .create_user(&username("bob"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -968,7 +1016,7 @@ async fn create_email_verification_and_use_returns_user_id_and_email() {
     let (users, ev) = email_verification_storage(&base).await;
 
     let user_id = users
-        .create_user(&username("alice"), &password("password123"), None)
+        .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -990,7 +1038,7 @@ async fn use_email_verification_already_used_returns_already_used() {
     let (users, ev) = email_verification_storage(&base).await;
 
     let user_id = users
-        .create_user(&username("alice"), &password("password123"), None)
+        .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -1015,7 +1063,7 @@ async fn use_email_verification_expired_returns_expired() {
     let (users, ev) = email_verification_storage(&base).await;
 
     let user_id = users
-        .create_user(&username("alice"), &password("password123"), None)
+        .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -1053,7 +1101,7 @@ async fn second_email_verification_supersedes_first() {
     let (users, ev) = email_verification_storage(&base).await;
 
     let user_id = users
-        .create_user(&username("alice"), &password("password123"), None)
+        .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -1093,7 +1141,7 @@ async fn set_password_authenticate_with_old_returns_invalid_and_new_succeeds() {
     let users = user_storage(&base).await;
 
     let user_id = users
-        .create_user(&username("alice"), &password("old_password1"), None)
+        .create_user(&username("alice"), &password("old_password1"), None, false)
         .await
         .unwrap();
 
@@ -1128,7 +1176,7 @@ async fn create_password_reset_and_use_returns_user_id() {
     let (users, pr) = password_reset_storage(&base).await;
 
     let user_id = users
-        .create_user(&username("alice"), &password("password123"), None)
+        .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -1145,7 +1193,7 @@ async fn use_password_reset_already_used_returns_already_used() {
     let (users, pr) = password_reset_storage(&base).await;
 
     let user_id = users
-        .create_user(&username("alice"), &password("password123"), None)
+        .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -1167,7 +1215,7 @@ async fn use_password_reset_expired_returns_expired() {
     let (users, pr) = password_reset_storage(&base).await;
 
     let user_id = users
-        .create_user(&username("alice"), &password("password123"), None)
+        .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -1227,7 +1275,7 @@ fn make_published_create_post_input(user_id: i64, slug: &str) -> CreatePostInput
 async fn assert_post_create_and_get_by_id(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user_id = state
         .users
-        .create_user(&username("alice"), &password("password123"), None)
+        .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -1247,7 +1295,7 @@ async fn assert_post_create_and_get_by_id(state: &std::sync::Arc<jaunder::storag
 async fn assert_post_slug_conflict(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user_id = state
         .users
-        .create_user(&username("bob"), &password("password123"), None)
+        .create_user(&username("bob"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -1298,7 +1346,7 @@ async fn assert_post_slug_conflict(state: &std::sync::Arc<jaunder::storage::AppS
 async fn assert_post_update_creates_revision(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user_id = state
         .users
-        .create_user(&username("carol"), &password("password123"), None)
+        .create_user(&username("carol"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -1352,7 +1400,7 @@ async fn assert_soft_delete_excludes_from_lists(
 ) {
     let user_id = state
         .users
-        .create_user(&username("dave"), &password("password123"), None)
+        .create_user(&username("dave"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -1380,12 +1428,12 @@ async fn assert_soft_delete_excludes_from_lists(
 async fn assert_list_published_by_user(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let alice_id = state
         .users
-        .create_user(&username("ealice"), &password("password123"), None)
+        .create_user(&username("ealice"), &password("password123"), None, false)
         .await
         .unwrap();
     let bob_id = state
         .users
-        .create_user(&username("ebob"), &password("password123"), None)
+        .create_user(&username("ebob"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -1427,7 +1475,7 @@ async fn assert_list_published_returns_all_published(
 ) {
     let user_id = state
         .users
-        .create_user(&username("fuser"), &password("password123"), None)
+        .create_user(&username("fuser"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -1458,7 +1506,7 @@ async fn assert_list_published_returns_all_published(
 async fn assert_list_drafts_by_user(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user_id = state
         .users
-        .create_user(&username("guser"), &password("password123"), None)
+        .create_user(&username("guser"), &password("password123"), None, false)
         .await
         .unwrap();
 
@@ -1500,7 +1548,7 @@ async fn sqlite_post_create_and_get_by_id_works() {
     let pool = open_pool(&base).await;
     let users = SqliteUserStorage::new(pool);
     let user_id = users
-        .create_user(&username("alice"), &password("password123"), None)
+        .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
     let input = make_create_post_input(user_id, "hello-world");
@@ -1517,7 +1565,7 @@ async fn sqlite_post_slug_conflict_returns_slug_conflict() {
     let now = Utc::now();
     let (users, posts) = post_storage(&base).await;
     let user_id = users
-        .create_user(&username("bob"), &password("password123"), None)
+        .create_user(&username("bob"), &password("password123"), None, false)
         .await
         .unwrap();
     let input = CreatePostInput {
@@ -1668,6 +1716,7 @@ async fn assert_multiple_tags_on_single_post(state: &std::sync::Arc<jaunder::sto
             &username("multi_tag_user"),
             &password("password"),
             Some("Multi"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -1725,6 +1774,7 @@ async fn assert_empty_tag_list(state: &std::sync::Arc<jaunder::storage::AppState
             &username("no_tag_user"),
             &password("password"),
             Some("NoTag"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -1757,7 +1807,12 @@ async fn assert_empty_tag_list(state: &std::sync::Arc<jaunder::storage::AppState
 async fn assert_tag_case_preservation_variants(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user = state
         .users
-        .create_user(&username("case_user"), &password("password"), Some("Case"))
+        .create_user(
+            &username("case_user"),
+            &password("password"),
+            Some("Case"),
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -1837,6 +1892,7 @@ async fn assert_invalid_tag_input(state: &std::sync::Arc<jaunder::storage::AppSt
             &username("invalid_tag_user"),
             &password("password"),
             Some("Invalid"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -1877,6 +1933,7 @@ async fn assert_tag_list_pagination(state: &std::sync::Arc<jaunder::storage::App
             &username("pagination_user"),
             &password("password"),
             Some("Pagination"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -1925,13 +1982,23 @@ async fn assert_list_user_posts_by_tag_excludes_other_users(
 ) {
     let user1 = state
         .users
-        .create_user(&username("user1_tag"), &password("password"), Some("User1"))
+        .create_user(
+            &username("user1_tag"),
+            &password("password"),
+            Some("User1"),
+            false,
+        )
         .await
         .expect("user creation failed");
 
     let user2 = state
         .users
-        .create_user(&username("user2_tag"), &password("password"), Some("User2"))
+        .create_user(
+            &username("user2_tag"),
+            &password("password"),
+            Some("User2"),
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -2005,6 +2072,7 @@ async fn assert_selective_untag(state: &std::sync::Arc<jaunder::storage::AppStat
             &username("selective_untag"),
             &password("password"),
             Some("Selective"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -2077,6 +2145,7 @@ async fn assert_numeric_tag(state: &std::sync::Arc<jaunder::storage::AppState>) 
             &username("numeric_tag"),
             &password("password"),
             Some("Numeric"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -2136,6 +2205,7 @@ async fn assert_retag_same_post_with_same_tag_fails(
             &username("retag_user"),
             &password("password"),
             Some("Retag"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -2208,6 +2278,7 @@ async fn assert_list_user_posts_by_nonexistent_tag(
             &username("user_tag_nope"),
             &password("password"),
             Some("UserTagNope"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -2229,6 +2300,7 @@ async fn assert_many_tags_many_posts(state: &std::sync::Arc<jaunder::storage::Ap
             &username("many_tags_user"),
             &password("password"),
             Some("ManyTags"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -2292,6 +2364,7 @@ async fn assert_tag_all_numeric(state: &std::sync::Arc<jaunder::storage::AppStat
             &username("numeric_only"),
             &password("password"),
             Some("NumericOnly"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -2342,6 +2415,7 @@ async fn assert_tag_hyphen_boundaries(state: &std::sync::Arc<jaunder::storage::A
             &username("hyphen_user"),
             &password("password"),
             Some("Hyphen"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -2403,6 +2477,7 @@ async fn assert_tag_with_long_display(state: &std::sync::Arc<jaunder::storage::A
             &username("long_tag_user"),
             &password("password"),
             Some("LongTagUser"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -2447,6 +2522,7 @@ async fn assert_tag_list_ordering(state: &std::sync::Arc<jaunder::storage::AppSt
             &username("ordering_user"),
             &password("password"),
             Some("Ordering"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -2533,6 +2609,7 @@ async fn assert_tags_for_multiple_posts(state: &std::sync::Arc<jaunder::storage:
             &username("multi_post_user"),
             &password("password"),
             Some("MultiPost"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -2599,6 +2676,7 @@ async fn assert_tag_mixed_alphanumeric(state: &std::sync::Arc<jaunder::storage::
             &username("mixed_user"),
             &password("password"),
             Some("Mixed"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -2655,6 +2733,7 @@ async fn assert_simple_tag_lifecycle(state: &std::sync::Arc<jaunder::storage::Ap
             &username("simple_user"),
             &password("password"),
             Some("Simple"),
+            false,
         )
         .await
         .expect("user creation failed");
@@ -2726,7 +2805,12 @@ async fn assert_tag_creation_and_retrieval(state: &std::sync::Arc<jaunder::stora
     // Create a user and post
     let user = state
         .users
-        .create_user(&username("alice"), &password("password"), Some("Alice"))
+        .create_user(
+            &username("alice"),
+            &password("password"),
+            Some("Alice"),
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -2767,7 +2851,7 @@ async fn assert_tag_normalization(state: &std::sync::Arc<jaunder::storage::AppSt
     // Create a user and post
     let user = state
         .users
-        .create_user(&username("bob"), &password("password"), Some("Bob"))
+        .create_user(&username("bob"), &password("password"), Some("Bob"), false)
         .await
         .expect("user creation failed");
 
@@ -2808,7 +2892,12 @@ async fn assert_untag_post(state: &std::sync::Arc<jaunder::storage::AppState>) {
     // Create a user and post
     let user = state
         .users
-        .create_user(&username("charlie"), &password("password"), Some("Charlie"))
+        .create_user(
+            &username("charlie"),
+            &password("password"),
+            Some("Charlie"),
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -2862,7 +2951,12 @@ async fn assert_duplicate_tag_error(state: &std::sync::Arc<jaunder::storage::App
     // Create a user and post
     let user = state
         .users
-        .create_user(&username("dave"), &password("password"), Some("Dave"))
+        .create_user(
+            &username("dave"),
+            &password("password"),
+            Some("Dave"),
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -2901,13 +2995,18 @@ async fn assert_list_posts_by_tag(state: &std::sync::Arc<jaunder::storage::AppSt
     // Create users
     let user1 = state
         .users
-        .create_user(&username("eve"), &password("password"), Some("Eve"))
+        .create_user(&username("eve"), &password("password"), Some("Eve"), false)
         .await
         .expect("user creation failed");
 
     let user2 = state
         .users
-        .create_user(&username("frank"), &password("password"), Some("Frank"))
+        .create_user(
+            &username("frank"),
+            &password("password"),
+            Some("Frank"),
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -2969,13 +3068,23 @@ async fn assert_list_user_posts_by_tag(state: &std::sync::Arc<jaunder::storage::
     // Create users
     let user1 = state
         .users
-        .create_user(&username("grace"), &password("password"), Some("Grace"))
+        .create_user(
+            &username("grace"),
+            &password("password"),
+            Some("Grace"),
+            false,
+        )
         .await
         .expect("user creation failed");
 
     let user2 = state
         .users
-        .create_user(&username("henry"), &password("password"), Some("Henry"))
+        .create_user(
+            &username("henry"),
+            &password("password"),
+            Some("Henry"),
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -3070,7 +3179,12 @@ async fn assert_soft_deleted_posts_excluded_from_tag_list(
     // Create a user and posts
     let user = state
         .users
-        .create_user(&username("iris"), &password("password"), Some("Iris"))
+        .create_user(
+            &username("iris"),
+            &password("password"),
+            Some("Iris"),
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -3150,7 +3264,12 @@ async fn assert_untag_nonexistent_tag_error(state: &std::sync::Arc<jaunder::stor
     // Create a user and post
     let user = state
         .users
-        .create_user(&username("karen"), &password("password"), Some("Karen"))
+        .create_user(
+            &username("karen"),
+            &password("password"),
+            Some("Karen"),
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -3185,7 +3304,12 @@ async fn assert_draft_posts_excluded_from_tag_list(
     // Create a user and posts
     let user = state
         .users
-        .create_user(&username("jack"), &password("password"), Some("Jack"))
+        .create_user(
+            &username("jack"),
+            &password("password"),
+            Some("Jack"),
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -3679,7 +3803,7 @@ async fn postgres_simple_tag_lifecycle() {
 async fn assert_post_update_invalid_slug(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user = state
         .users
-        .create_user(&username("test_user"), &password("password"), None)
+        .create_user(&username("test_user"), &password("password"), None, false)
         .await
         .expect("user creation failed");
 
@@ -3741,7 +3865,12 @@ async fn assert_post_update_invalid_slug(state: &std::sync::Arc<jaunder::storage
 async fn assert_list_published_cursor_boundary(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user = state
         .users
-        .create_user(&username("cursor_test_user"), &password("password"), None)
+        .create_user(
+            &username("cursor_test_user"),
+            &password("password"),
+            None,
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -3799,7 +3928,12 @@ async fn assert_list_published_cursor_boundary(state: &std::sync::Arc<jaunder::s
 async fn assert_list_drafts_cursor_boundary(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user = state
         .users
-        .create_user(&username("draft_cursor_test"), &password("password"), None)
+        .create_user(
+            &username("draft_cursor_test"),
+            &password("password"),
+            None,
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -3857,7 +3991,12 @@ async fn assert_list_drafts_cursor_boundary(state: &std::sync::Arc<jaunder::stor
 async fn assert_list_user_posts_by_tag_cursor(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user = state
         .users
-        .create_user(&username("tag_cursor_test"), &password("password"), None)
+        .create_user(
+            &username("tag_cursor_test"),
+            &password("password"),
+            None,
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -3927,6 +4066,7 @@ async fn assert_list_posts_by_tag_cursor(state: &std::sync::Arc<jaunder::storage
             &username("global_tag_cursor_test"),
             &password("password"),
             None,
+            false,
         )
         .await
         .expect("user creation failed");
@@ -3993,7 +4133,12 @@ async fn assert_list_posts_by_tag_cursor(state: &std::sync::Arc<jaunder::storage
 async fn assert_soft_delete_then_operations(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user = state
         .users
-        .create_user(&username("soft_del_test"), &password("password"), None)
+        .create_user(
+            &username("soft_del_test"),
+            &password("password"),
+            None,
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -4128,7 +4273,12 @@ async fn postgres_soft_delete_then_operations() {
 async fn assert_tag_post_multiple_attempts(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user = state
         .users
-        .create_user(&username("tag_multi_user"), &password("password"), None)
+        .create_user(
+            &username("tag_multi_user"),
+            &password("password"),
+            None,
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -4184,7 +4334,12 @@ async fn assert_list_published_by_user_no_posts(
 ) {
     let _user = state
         .users
-        .create_user(&username("no_posts_user"), &password("password"), None)
+        .create_user(
+            &username("no_posts_user"),
+            &password("password"),
+            None,
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -4213,7 +4368,12 @@ async fn assert_list_published_by_user_no_posts(
 async fn assert_get_by_permalink_soft_deleted(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user = state
         .users
-        .create_user(&username("permalink_del_user"), &password("password"), None)
+        .create_user(
+            &username("permalink_del_user"),
+            &password("password"),
+            None,
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -4273,7 +4433,12 @@ async fn assert_get_by_permalink_soft_deleted(state: &std::sync::Arc<jaunder::st
 async fn assert_update_soft_deleted_post(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user = state
         .users
-        .create_user(&username("update_del_user"), &password("password"), None)
+        .create_user(
+            &username("update_del_user"),
+            &password("password"),
+            None,
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -4329,7 +4494,12 @@ async fn assert_update_soft_deleted_post(state: &std::sync::Arc<jaunder::storage
 async fn assert_tag_edge_case_formats(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user = state
         .users
-        .create_user(&username("tag_formats_user"), &password("password"), None)
+        .create_user(
+            &username("tag_formats_user"),
+            &password("password"),
+            None,
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -4466,6 +4636,7 @@ async fn assert_list_published_with_cursor_same_timestamp(
             &username("cursor_same_ts_user"),
             &password("password"),
             None,
+            false,
         )
         .await
         .expect("user creation failed");
@@ -4519,7 +4690,12 @@ async fn assert_list_published_with_cursor_same_timestamp(
 async fn assert_post_revisions_created(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user = state
         .users
-        .create_user(&username("revision_user"), &password("password"), None)
+        .create_user(
+            &username("revision_user"),
+            &password("password"),
+            None,
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -4565,7 +4741,12 @@ async fn assert_post_revisions_created(state: &std::sync::Arc<jaunder::storage::
 async fn assert_tag_display_preservation(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user = state
         .users
-        .create_user(&username("tag_display_user"), &password("password"), None)
+        .create_user(
+            &username("tag_display_user"),
+            &password("password"),
+            None,
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -4611,6 +4792,7 @@ async fn assert_untag_preserves_other_tags(state: &std::sync::Arc<jaunder::stora
             &username("untag_preserve_user"),
             &password("password"),
             None,
+            false,
         )
         .await
         .expect("user creation failed");
@@ -4784,7 +4966,12 @@ async fn assert_site_config_operations(state: &std::sync::Arc<jaunder::storage::
 async fn assert_session_list_operations(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user = state
         .users
-        .create_user(&username("session_list_user"), &password("password"), None)
+        .create_user(
+            &username("session_list_user"),
+            &password("password"),
+            None,
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -4909,7 +5096,12 @@ async fn postgres_invite_list_operations() {
 async fn assert_create_rendered_post_markdown(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user_id = state
         .users
-        .create_user(&username("render_alice"), &password("password123"), None)
+        .create_user(
+            &username("render_alice"),
+            &password("password123"),
+            None,
+            false,
+        )
         .await
         .unwrap();
 
@@ -4937,7 +5129,12 @@ async fn assert_create_rendered_post_markdown(state: &std::sync::Arc<jaunder::st
 async fn assert_create_rendered_post_org(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user_id = state
         .users
-        .create_user(&username("render_bob"), &password("password123"), None)
+        .create_user(
+            &username("render_bob"),
+            &password("password123"),
+            None,
+            false,
+        )
         .await
         .unwrap();
 
@@ -4969,7 +5166,12 @@ async fn assert_create_rendered_post_slug_conflict(
 
     let user_id = state
         .users
-        .create_user(&username("render_carol"), &password("password123"), None)
+        .create_user(
+            &username("render_carol"),
+            &password("password123"),
+            None,
+            false,
+        )
         .await
         .unwrap();
 
@@ -5015,7 +5217,12 @@ async fn assert_create_rendered_post_slug_conflict(
 async fn assert_update_rendered_post_markdown(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user_id = state
         .users
-        .create_user(&username("render_dave"), &password("password123"), None)
+        .create_user(
+            &username("render_dave"),
+            &password("password123"),
+            None,
+            false,
+        )
         .await
         .unwrap();
 
@@ -5049,7 +5256,12 @@ async fn assert_update_rendered_post_markdown(state: &std::sync::Arc<jaunder::st
 async fn assert_update_rendered_post_org(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user_id = state
         .users
-        .create_user(&username("render_eve"), &password("password123"), None)
+        .create_user(
+            &username("render_eve"),
+            &password("password123"),
+            None,
+            false,
+        )
         .await
         .unwrap();
 

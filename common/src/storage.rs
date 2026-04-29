@@ -44,6 +44,7 @@ pub struct UserRecord {
     pub last_authenticated_at: Option<DateTime<Utc>>,
     pub email: Option<EmailAddress>,
     pub email_verified: bool,
+    pub is_operator: bool,
 }
 
 /// Errors that can occur when creating a user.
@@ -80,6 +81,7 @@ pub trait UserStorage: Send + Sync {
         username: &Username,
         password: &Password,
         display_name: Option<&str>,
+        is_operator: bool,
     ) -> Result<i64, CreateUserError>;
 
     async fn authenticate(
@@ -225,6 +227,7 @@ pub trait AtomicOps: Send + Sync {
         username: &Username,
         password: &Password,
         display_name: Option<&str>,
+        is_operator: bool,
         invite_code: &str,
     ) -> Result<i64, RegisterWithInviteError>;
 

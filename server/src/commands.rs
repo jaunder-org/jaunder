@@ -137,6 +137,7 @@ pub async fn cmd_user_create(
     username: &Username,
     password: Option<Password>,
     display_name: Option<&str>,
+    is_operator: bool,
 ) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db)
         .await
@@ -156,7 +157,7 @@ pub async fn cmd_user_create(
 
     let user_id = state
         .users
-        .create_user(username, &password, display_name)
+        .create_user(username, &password, display_name, is_operator)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 

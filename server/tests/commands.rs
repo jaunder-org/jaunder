@@ -297,7 +297,7 @@ async fn cmd_user_create_creates_retrievable_user() {
 
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
-    cmd_user_create(&args, &username, Some(password), None)
+    cmd_user_create(&args, &username, Some(password), None, false)
         .await
         .expect("user create");
 
@@ -309,6 +309,32 @@ async fn cmd_user_create_creates_retrievable_user() {
         .expect("db query");
     assert!(user.is_some(), "user should exist after creation");
     assert_eq!(user.expect("user present").username.as_str(), "alice");
+}
+
+// M6.1.7: creating a user with --operator sets is_operator to true.
+#[tokio::test]
+async fn cmd_user_create_with_operator_flag_sets_is_operator() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.expect("init");
+
+    let username: Username = "admin".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    cmd_user_create(&args, &username, Some(password), None, true)
+        .await
+        .expect("user create");
+
+    let state = open_existing_database(&args.db).await.expect("open db");
+    let user = state
+        .users
+        .get_user_by_username(&username)
+        .await
+        .expect("db query")
+        .expect("user should exist");
+    assert!(
+        user.is_operator,
+        "is_operator should be true for operator user"
+    );
 }
 
 #[tokio::test]
