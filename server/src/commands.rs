@@ -347,9 +347,13 @@ pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> a
         .site_addr(bind)
         .build();
 
+    let backup_scheduler =
+        crate::start_backup_worker(db.clone(), storage.db.clone(), storage.storage_path.clone())
+            .await?;
     let router = crate::create_router(leptos_options, db, prod);
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!(bind = %bind, prod, "starting HTTP server");
+    let _backup_scheduler = backup_scheduler;
     axum::serve(listener, router).await?;
     Ok(())
 }
@@ -411,5 +415,32 @@ mod tests {
         assert!(err
             .to_string()
             .contains("--app-db must include a PostgreSQL database name"));
+    }
+
+    #[test]
+    fn default_backup_path_is_under_storage_backups() {
+        let storage = StorageArgs {
+            storage_path: PathBuf::from("/tmp/jaunder"),
+            db: "sqlite:/tmp/jaunder.db".parse().expect("sqlite db"),
+        };
+
+        let path = default_backup_path(&storage);
+
+        assert!(path.starts_with("/tmp/jaunder/backups"));
+    }
+
+    #[test]
+    fn directory_has_entries_handles_missing_empty_and_nested_paths() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        assert!(!directory_has_entries(&temp.path().join("missing")).expect("missing"));
+
+        let empty = temp.path().join("empty");
+        std::fs::create_dir(&empty).expect("empty dir");
+        assert!(!directory_has_entries(&empty).expect("empty"));
+
+        let nested = temp.path().join("nested");
+        std::fs::create_dir(&nested).expect("nested dir");
+        std::fs::write(nested.join("file.txt"), "content").expect("nested file");
+        assert!(directory_has_entries(temp.path()).expect("nested"));
     }
 }

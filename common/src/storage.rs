@@ -26,6 +26,11 @@ pub trait SiteConfigStorage: Send + Sync {
     async fn set(&self, key: &str, value: &str) -> sqlx::Result<()>;
 }
 
+pub const BACKUP_DESTINATION_PATH_KEY: &str = "backup.destination_path";
+pub const BACKUP_SCHEDULE_KEY: &str = "backup.schedule";
+pub const BACKUP_RETENTION_COUNT_KEY: &str = "backup.retention_count";
+pub const BACKUP_MODE_KEY: &str = "backup.mode";
+
 // ---------------------------------------------------------------------------
 // Users
 // ---------------------------------------------------------------------------
