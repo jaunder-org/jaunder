@@ -129,6 +129,10 @@ pub enum Commands {
         /// Optional display name.
         #[arg(long)]
         display_name: Option<String>,
+
+        /// Mark the user as an operator with administrative privileges.
+        #[arg(long)]
+        operator: bool,
     },
 
     /// Generate an invite code.

@@ -56,6 +56,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             username,
             password,
             display_name,
+            operator,
         } => {
             let username = username
                 .parse::<jaunder::username::Username>()
@@ -69,6 +70,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 &username,
                 password,
                 display_name.as_deref(),
+                operator,
             )
             .await?;
         }
@@ -131,6 +133,7 @@ mod tests {
                 username: "alice".to_string(),
                 password: Some("password123".to_string()),
                 display_name: None,
+                operator: false,
             }),
         };
         run(cli).await.unwrap();
@@ -246,6 +249,7 @@ mod tests {
                 username: "invalid username".to_string(),
                 password: Some("password123".to_string()),
                 display_name: None,
+                operator: false,
             }),
         };
         let err = run(cli).await.unwrap_err();
@@ -262,6 +266,7 @@ mod tests {
                 username: "alice".to_string(),
                 password: Some("short".to_string()),
                 display_name: None,
+                operator: false,
             }),
         };
         let err = run(cli).await.unwrap_err();

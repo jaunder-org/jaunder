@@ -141,6 +141,7 @@ impl UserStorage for SqliteUserStorage {
         username: &Username,
         password: &Password,
         display_name: Option<&str>,
+        is_operator: bool,
     ) -> Result<i64, CreateUserError> {
         let password_hash = super::hash_password(password.clone())
             .instrument(tracing::info_span!(
@@ -152,14 +153,15 @@ impl UserStorage for SqliteUserStorage {
         let now = Utc::now();
 
         let result = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO users (username, password_hash, display_name, created_at)
-             VALUES ($1, $2, $3, $4)
+            "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
+             VALUES ($1, $2, $3, $4, $5)
              RETURNING user_id",
         )
         .bind(username.as_str())
         .bind(&password_hash)
         .bind(display_name)
         .bind(now)
+        .bind(is_operator)
         .fetch_one(&self.pool)
         .instrument(tracing::info_span!(
             "storage.sqlite.user.create_user.insert_user_row"
@@ -197,9 +199,10 @@ impl UserStorage for SqliteUserStorage {
                 String,
                 Option<String>,
                 bool,
+                bool,
             ),
         >(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, password_hash, email, email_verified
+            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, password_hash, email, email_verified, is_operator
              FROM users WHERE username = $1",
         )
         .bind(username.as_str())
@@ -220,6 +223,7 @@ impl UserStorage for SqliteUserStorage {
             hash,
             email,
             email_verified,
+            is_operator,
         ) = match row {
             Some(r) => r,
             None => return Err(UserAuthError::InvalidCredentials),
@@ -257,13 +261,14 @@ impl UserStorage for SqliteUserStorage {
             Some(now),
             email,
             email_verified,
+            is_operator,
         ))
         .map_err(|e| UserAuthError::Internal(e.to_string()))
     }
 
     async fn get_user(&self, user_id: i64) -> sqlx::Result<Option<UserRecord>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, email, email_verified
+            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, email, email_verified, is_operator
              FROM users WHERE user_id = $1",
         )
         .bind(user_id)
@@ -274,7 +279,7 @@ impl UserStorage for SqliteUserStorage {
 
     async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, email, email_verified
+            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, email, email_verified, is_operator
              FROM users WHERE username = $1",
         )
         .bind(username.as_str())
@@ -694,6 +699,7 @@ impl AtomicOps for SqliteAtomicOps {
         username: &Username,
         password: &Password,
         display_name: Option<&str>,
+        is_operator: bool,
         invite_code: &str,
     ) -> Result<i64, RegisterWithInviteError> {
         let mut tx = self.pool.begin().await?;
@@ -721,14 +727,15 @@ impl AtomicOps for SqliteAtomicOps {
             .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;
 
         let result = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO users (username, password_hash, display_name, created_at)
-             VALUES ($1, $2, $3, $4)
+            "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
+             VALUES ($1, $2, $3, $4, $5)
              RETURNING user_id",
         )
         .bind(username.as_str())
         .bind(&password_hash)
         .bind(display_name)
         .bind(now)
+        .bind(is_operator)
         .fetch_one(&mut *tx)
         .await;
 
