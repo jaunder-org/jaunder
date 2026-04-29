@@ -397,7 +397,9 @@ pub(super) fn sql_slow_query_threshold() -> Duration {
         .unwrap_or(Duration::from_millis(100))
 }
 
-fn resolved_postgres_options(options: &PgConnectOptions) -> sqlx::Result<PgConnectOptions> {
+pub(crate) fn resolved_postgres_options(
+    options: &PgConnectOptions,
+) -> sqlx::Result<PgConnectOptions> {
     let mut options = options.clone();
     if let Some(password) = postgres_password_from_env().map_err(sqlx::Error::Io)? {
         options = options.password(&password);

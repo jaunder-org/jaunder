@@ -1,11 +1,17 @@
-use std::{io, net::SocketAddr};
+use std::{
+    fs, io,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
-use sqlx::{postgres::PgConnectOptions, Connection, PgConnection};
+use sqlx::{postgres::PgConnectOptions, Connection, PgConnection, PgPool, SqlitePool};
 
 use crate::cli::StorageArgs;
 use crate::mailer::LettreMailSender;
 use crate::password::Password;
-use crate::storage::DbConnectOptions;
+use crate::storage::{
+    export_backup, resolved_postgres_options, BackupExportOptions, BackupMode, DbConnectOptions,
+};
 use crate::storage::{init_storage, open_database, open_existing_database};
 use crate::username::Username;
 use common::mailer::{EmailMessage, MailSender};
@@ -213,6 +219,101 @@ pub async fn cmd_smtp_test(storage: &StorageArgs, to: &str) -> anyhow::Result<()
 
     println!("Test email sent successfully to {to}");
     Ok(())
+}
+
+pub async fn cmd_backup(storage: &StorageArgs, path: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    let destination_path = path.unwrap_or_else(|| default_backup_path(storage));
+    let manifest = export_backup(BackupExportOptions {
+        database: &storage.db,
+        media_path: &storage.storage_path.join("media"),
+        destination_path: &destination_path,
+        mode: BackupMode::Directory,
+    })
+    .await?;
+
+    println!(
+        "Backup complete: path={} tables={}",
+        destination_path.display(),
+        manifest.tables.len()
+    );
+    Ok(destination_path)
+}
+
+pub async fn cmd_restore(storage: &StorageArgs, path: &Path) -> anyhow::Result<()> {
+    if !path.exists() {
+        return Err(anyhow::anyhow!(
+            "backup path does not exist: {}",
+            path.display()
+        ));
+    }
+    ensure_restore_target_empty(storage).await?;
+    Err(anyhow::anyhow!(
+        "restore import is not implemented yet; safety pre-flight passed"
+    ))
+}
+
+fn default_backup_path(storage: &StorageArgs) -> PathBuf {
+    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+    storage
+        .storage_path
+        .join("backups")
+        .join(format!("backup-{timestamp}"))
+}
+
+async fn ensure_restore_target_empty(storage: &StorageArgs) -> anyhow::Result<()> {
+    if database_has_users(&storage.db).await? {
+        return Err(anyhow::anyhow!(
+            "refusing to restore into a non-empty database"
+        ));
+    }
+    let media_path = storage.storage_path.join("media");
+    if directory_has_entries(&media_path)? {
+        return Err(anyhow::anyhow!(
+            "refusing to restore into a non-empty media directory"
+        ));
+    }
+    Ok(())
+}
+
+async fn database_has_users(db: &DbConnectOptions) -> anyhow::Result<bool> {
+    match db {
+        DbConnectOptions::Sqlite(options) => {
+            let pool = SqlitePool::connect_with(options.clone()).await?;
+            Ok(
+                sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM users LIMIT 1)")
+                    .fetch_one(&pool)
+                    .await?
+                    != 0,
+            )
+        }
+        DbConnectOptions::Postgres { options, .. } => {
+            let options = resolved_postgres_options(options)?;
+            let pool = PgPool::connect_with(options).await?;
+            Ok(
+                sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users LIMIT 1)")
+                    .fetch_one(&pool)
+                    .await?,
+            )
+        }
+    }
+}
+
+fn directory_has_entries(path: &Path) -> io::Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        if metadata.is_dir() {
+            if directory_has_entries(&entry.path())? {
+                return Ok(true);
+            }
+        } else {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> anyhow::Result<()> {

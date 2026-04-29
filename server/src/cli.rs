@@ -160,6 +160,26 @@ pub enum Commands {
         #[arg(long)]
         to: String,
     },
+
+    /// Immediately run a backup.
+    Backup {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// Destination directory for this backup.
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
+
+    /// Restore from a backup archive or directory.
+    Restore {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// Backup archive or directory to restore from.
+        #[arg(required = true)]
+        path: PathBuf,
+    },
 }
 
 #[cfg(test)]
@@ -502,6 +522,45 @@ mod tests {
     fn smtp_test_missing_to_is_clap_error() {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let result = Cli::try_parse_from(["jaunder", "smtp-test"]);
+        assert!(result.is_err());
+    }
+
+    // --- backup / restore ---
+
+    #[test]
+    fn backup_path_optional() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&["backup"]);
+        let Commands::Backup { path, .. } = cli.command.expect("subcommand") else {
+            panic!("wrong variant");
+        };
+        assert_eq!(path, None);
+    }
+
+    #[test]
+    fn backup_parses_path() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&["backup", "--path", "/tmp/backup"]);
+        let Commands::Backup { path, .. } = cli.command.expect("subcommand") else {
+            panic!("wrong variant");
+        };
+        assert_eq!(path, Some(PathBuf::from("/tmp/backup")));
+    }
+
+    #[test]
+    fn restore_parses_required_path() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&["restore", "/tmp/backup"]);
+        let Commands::Restore { path, .. } = cli.command.expect("subcommand") else {
+            panic!("wrong variant");
+        };
+        assert_eq!(path, PathBuf::from("/tmp/backup"));
+    }
+
+    #[test]
+    fn restore_missing_path_is_clap_error() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let result = Cli::try_parse_from(["jaunder", "restore"]);
         assert!(result.is_err());
     }
 
