@@ -9,7 +9,8 @@ pub mod sessions;
 pub(crate) mod signal_read;
 pub mod ui;
 pub use ui::{
-    Avatar, Chip, Dot, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar, Topbar,
+    Avatar, BackupBanner, Chip, Dot, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar,
+    Topbar,
 };
 
 /// Default theme identifier. This selects the CSS variable pack applied via
@@ -42,9 +43,12 @@ fn AppShell() -> impl IntoView {
         <div class="j-root" attr:data-theme=move || theme.get()>
             <div class="j-shell">
                 <Sidebar />
-                <main class="j-main">
-                    <Outlet />
-                </main>
+                <div class="j-main-region">
+                    <BackupBanner />
+                    <main class="j-main">
+                        <Outlet />
+                    </main>
+                </div>
             </div>
         </div>
     }
