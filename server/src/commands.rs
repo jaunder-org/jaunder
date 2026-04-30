@@ -10,7 +10,8 @@ use crate::cli::StorageArgs;
 use crate::mailer::LettreMailSender;
 use crate::password::Password;
 use crate::storage::{
-    export_backup, resolved_postgres_options, BackupExportOptions, BackupMode, DbConnectOptions,
+    export_backup, resolved_postgres_options, restore_backup, BackupExportOptions, BackupMode,
+    BackupRestoreOptions, DbConnectOptions,
 };
 use crate::storage::{init_storage, open_database, open_existing_database};
 use crate::username::Username;
@@ -247,9 +248,19 @@ pub async fn cmd_restore(storage: &StorageArgs, path: &Path) -> anyhow::Result<(
         ));
     }
     ensure_restore_target_empty(storage).await?;
-    Err(anyhow::anyhow!(
-        "restore import is not implemented yet; safety pre-flight passed"
-    ))
+    let manifest = restore_backup(BackupRestoreOptions {
+        database: &storage.db,
+        media_path: &storage.storage_path.join("media"),
+        source_path: path,
+    })
+    .await?;
+
+    println!(
+        "Restore complete: path={} tables={}",
+        path.display(),
+        manifest.tables.len()
+    );
+    Ok(())
 }
 
 fn default_backup_path(storage: &StorageArgs) -> PathBuf {

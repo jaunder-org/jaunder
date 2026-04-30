@@ -35,7 +35,10 @@ pub use sqlite::{
     SqliteUserStorage,
 };
 pub mod backup;
-pub use backup::{export_backup, BackupExportOptions, BackupManifest, BackupMode};
+pub use backup::{
+    export_backup, restore_backup, BackupExportOptions, BackupManifest, BackupMode,
+    BackupRestoreOptions,
+};
 mod postgres;
 pub use postgres::{
     PostgresAtomicOps, PostgresEmailVerificationStorage, PostgresInviteStorage,

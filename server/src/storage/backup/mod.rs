@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File},
-    io::{BufWriter, Write},
+    io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
 };
 
@@ -51,6 +51,13 @@ pub struct BackupExportOptions<'a> {
     pub mode: BackupMode,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct BackupRestoreOptions<'a> {
+    pub database: &'a DbConnectOptions,
+    pub media_path: &'a Path,
+    pub source_path: &'a Path,
+}
+
 #[derive(Debug, Error)]
 pub enum BackupError {
     #[error("I/O error: {0}")]
@@ -63,6 +70,24 @@ pub enum BackupError {
     Json(#[from] serde_json::Error),
     #[error("backup destination is not empty: {0}")]
     DestinationNotEmpty(PathBuf),
+    #[error("invalid backup: {0}")]
+    InvalidBackup(String),
+    #[error(
+        "backup was created by jaunder {backup_version}, but this binary is {current_version}"
+    )]
+    VersionMismatch {
+        backup_version: String,
+        current_version: &'static str,
+    },
+    #[error(
+        "backup schema version {backup_version} does not match target schema version {target_version}"
+    )]
+    SchemaVersionMismatch {
+        backup_version: i64,
+        target_version: i64,
+    },
+    #[error("restored database failed constraint validation: {0}")]
+    ConstraintViolation(String),
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +102,20 @@ pub async fn export_backup(
     match options.mode {
         BackupMode::Directory => export_directory_backup(options).await,
     }
+}
+
+pub async fn restore_backup(
+    options: BackupRestoreOptions<'_>,
+) -> Result<BackupManifest, BackupError> {
+    let manifest = read_manifest(options.source_path)?;
+    validate_manifest(&manifest)?;
+
+    match manifest.mode {
+        BackupMode::Directory => restore_directory_backup(options, &manifest).await?,
+    }
+
+    restore_media_directory(&options.source_path.join("media"), options.media_path)?;
+    Ok(manifest)
 }
 
 async fn export_directory_backup(
@@ -109,6 +148,33 @@ async fn export_directory_backup(
 
     write_manifest(options.destination_path, &manifest)?;
     Ok(manifest)
+}
+
+async fn restore_directory_backup(
+    options: BackupRestoreOptions<'_>,
+    manifest: &BackupManifest,
+) -> Result<(), BackupError> {
+    if !options.source_path.join("db").is_dir() {
+        return Err(BackupError::InvalidBackup(format!(
+            "missing db directory: {}",
+            options.source_path.join("db").display()
+        )));
+    }
+
+    match options.database {
+        DbConnectOptions::Sqlite(connect_options) => {
+            let pool = sqlx::SqlitePool::connect_with(connect_options.clone()).await?;
+            sqlite::restore_database(&pool, options.source_path, manifest).await
+        }
+        DbConnectOptions::Postgres {
+            options: pg_options,
+            ..
+        } => {
+            let resolved = resolved_postgres_options(pg_options)?;
+            let pool = sqlx::PgPool::connect_with(resolved).await?;
+            postgres::restore_database(&pool, options.source_path, manifest).await
+        }
+    }
 }
 
 pub(super) fn build_manifest(
@@ -157,12 +223,125 @@ fn write_manifest(destination_path: &Path, manifest: &BackupManifest) -> Result<
     Ok(())
 }
 
+fn read_manifest(source_path: &Path) -> Result<BackupManifest, BackupError> {
+    let manifest_path = source_path.join("manifest.json");
+    if !manifest_path.is_file() {
+        return Err(BackupError::InvalidBackup(format!(
+            "missing manifest: {}",
+            manifest_path.display()
+        )));
+    }
+
+    let file = File::open(manifest_path)?;
+    Ok(serde_json::from_reader(file)?)
+}
+
+fn validate_manifest(manifest: &BackupManifest) -> Result<(), BackupError> {
+    let current_version = env!("CARGO_PKG_VERSION");
+    if manifest.version != current_version {
+        return Err(BackupError::VersionMismatch {
+            backup_version: manifest.version.clone(),
+            current_version,
+        });
+    }
+    Ok(())
+}
+
+pub(super) fn ensure_schema_version(
+    manifest: &BackupManifest,
+    target_version: i64,
+) -> Result<(), BackupError> {
+    if manifest.schema_version != target_version {
+        return Err(BackupError::SchemaVersionMismatch {
+            backup_version: manifest.schema_version,
+            target_version,
+        });
+    }
+    Ok(())
+}
+
+pub(super) fn read_table_rows(
+    source_path: &Path,
+    table: &str,
+) -> Result<Vec<serde_json::Map<String, serde_json::Value>>, BackupError> {
+    let path = source_path.join("db").join(format!("{table}.ndjson"));
+    if !path.is_file() {
+        return Err(BackupError::InvalidBackup(format!(
+            "missing table export: {}",
+            path.display()
+        )));
+    }
+
+    let mut rows = Vec::new();
+    let file = File::open(path)?;
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let value: serde_json::Value = serde_json::from_str(&line)?;
+        let serde_json::Value::Object(row) = value else {
+            return Err(BackupError::InvalidBackup(format!(
+                "table {table} contains a non-object row"
+            )));
+        };
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+pub(super) fn json_value_as_restore_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => Some(value.to_string()),
+    }
+}
+
 fn ensure_empty_or_absent(path: &Path) -> Result<(), BackupError> {
     if !path.exists() {
         return Ok(());
     }
     if fs::read_dir(path)?.next().is_some() {
         return Err(BackupError::DestinationNotEmpty(path.to_path_buf()));
+    }
+    Ok(())
+}
+
+fn restore_media_directory(source: &Path, destination: &Path) -> Result<(), BackupError> {
+    fs::create_dir_all(destination)?;
+    if !source.exists() {
+        return Ok(());
+    }
+    restore_media_entries(source, destination, Path::new(""))
+}
+
+fn restore_media_entries(
+    source_root: &Path,
+    destination_root: &Path,
+    relative_path: &Path,
+) -> Result<(), BackupError> {
+    let source_dir = source_root.join(relative_path);
+    for entry in fs::read_dir(source_dir)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let child_relative_path = relative_path.join(file_name);
+        let source_path = entry.path();
+        let destination_path = destination_root.join(&child_relative_path);
+        let metadata = entry.metadata()?;
+
+        if metadata.is_dir() {
+            fs::create_dir_all(&destination_path)?;
+            restore_media_entries(source_root, destination_root, &child_relative_path)?;
+        } else if metadata.is_file() {
+            if let Some(parent) = destination_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(source_path, destination_path)?;
+        }
     }
     Ok(())
 }
@@ -390,6 +569,164 @@ mod tests {
         }
 
         assert_eq!(previous_directory_backup(&current)?, Some(second));
+        Ok(())
+    }
+
+    #[test]
+    fn read_manifest_rejects_missing_manifest() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let error = read_manifest(temp.path()).expect_err("missing manifest");
+
+        assert!(matches!(error, BackupError::InvalidBackup(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn validate_manifest_rejects_wrong_version() {
+        let manifest = BackupManifest {
+            version: "0.0.0".to_owned(),
+            schema_version: 11,
+            schema_checksum: "checksum".to_owned(),
+            timestamp: Utc::now(),
+            mode: BackupMode::Directory,
+            tables: Vec::new(),
+        };
+
+        let error = validate_manifest(&manifest).expect_err("version mismatch");
+        assert!(matches!(error, BackupError::VersionMismatch { .. }));
+    }
+
+    #[test]
+    fn ensure_schema_version_rejects_mismatch() {
+        let manifest = BackupManifest {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            schema_version: 10,
+            schema_checksum: "checksum".to_owned(),
+            timestamp: Utc::now(),
+            mode: BackupMode::Directory,
+            tables: Vec::new(),
+        };
+
+        let error = ensure_schema_version(&manifest, 11).expect_err("schema mismatch");
+        assert!(matches!(error, BackupError::SchemaVersionMismatch { .. }));
+    }
+
+    #[test]
+    fn read_table_rows_parses_objects_and_rejects_non_objects() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let db = temp.path().join("db");
+        fs::create_dir(&db)?;
+        fs::write(
+            db.join("users.ndjson"),
+            "{\"user_id\":1}\n\n{\"user_id\":2}\n",
+        )?;
+
+        let rows = read_table_rows(temp.path(), "users")?;
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["user_id"], serde_json::json!(1));
+
+        fs::write(db.join("sessions.ndjson"), "[]\n")?;
+        let error = read_table_rows(temp.path(), "sessions").expect_err("non-object row");
+        assert!(matches!(error, BackupError::InvalidBackup(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn read_table_rows_rejects_missing_table_file() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        fs::create_dir(temp.path().join("db"))?;
+
+        let error = read_table_rows(temp.path(), "users").expect_err("missing table");
+
+        assert!(matches!(error, BackupError::InvalidBackup(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn json_value_as_restore_text_converts_scalar_values() {
+        assert_eq!(json_value_as_restore_text(&serde_json::Value::Null), None);
+        assert_eq!(
+            json_value_as_restore_text(&serde_json::json!("text")),
+            Some("text".to_owned())
+        );
+        assert_eq!(
+            json_value_as_restore_text(&serde_json::json!(true)),
+            Some("true".to_owned())
+        );
+        assert_eq!(
+            json_value_as_restore_text(&serde_json::json!(42)),
+            Some("42".to_owned())
+        );
+    }
+
+    #[test]
+    fn json_value_as_restore_text_serializes_compound_values() {
+        assert_eq!(
+            json_value_as_restore_text(&serde_json::json!(["a", "b"])),
+            Some("[\"a\",\"b\"]".to_owned())
+        );
+        assert_eq!(
+            json_value_as_restore_text(&serde_json::json!({"key": "value"})),
+            Some("{\"key\":\"value\"}".to_owned())
+        );
+    }
+
+    #[test]
+    fn restore_media_directory_accepts_missing_source() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let destination = temp.path().join("destination");
+
+        restore_media_directory(&temp.path().join("missing"), &destination)?;
+
+        assert!(destination.is_dir());
+        assert!(fs::read_dir(destination)?.next().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn restore_media_directory_copies_nested_files() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let source = temp.path().join("source");
+        let destination = temp.path().join("destination");
+        fs::create_dir_all(source.join("nested"))?;
+        fs::write(source.join("nested").join("avatar.txt"), "image")?;
+
+        restore_media_directory(&source, &destination)?;
+
+        assert_eq!(
+            fs::read_to_string(destination.join("nested").join("avatar.txt"))?,
+            "image"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restore_backup_rejects_missing_db_directory() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let backup = temp.path().join("backup");
+        fs::create_dir(&backup)?;
+        write_manifest(
+            &backup,
+            &BackupManifest {
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+                schema_version: 11,
+                schema_checksum: "checksum".to_owned(),
+                timestamp: Utc::now(),
+                mode: BackupMode::Directory,
+                tables: Vec::new(),
+            },
+        )?;
+
+        let db_options = DbConnectOptions::from_str("sqlite::memory:")?;
+        let error = restore_backup(BackupRestoreOptions {
+            database: &db_options,
+            media_path: &temp.path().join("media"),
+            source_path: &backup,
+        })
+        .await
+        .expect_err("missing db directory");
+
+        assert!(matches!(error, BackupError::InvalidBackup(_)));
         Ok(())
     }
 

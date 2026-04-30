@@ -10,8 +10,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool, Row};
 
 use super::{
-    build_manifest, order_by_clause, BackupError, BackupManifest, BackupMode, ColumnInfo,
-    TABLES_IN_EXPORT_ORDER,
+    build_manifest, ensure_schema_version, json_value_as_restore_text, order_by_clause,
+    read_table_rows, BackupError, BackupManifest, BackupMode, ColumnInfo, TABLES_IN_EXPORT_ORDER,
 };
 
 pub(super) async fn export_database(
@@ -55,6 +55,37 @@ pub(super) async fn export_database(
     }
 }
 
+pub(super) async fn restore_database(
+    pool: &PgPool,
+    source_path: &Path,
+    manifest: &BackupManifest,
+) -> Result<(), BackupError> {
+    let mut connection = pool.acquire().await?;
+    let schema_version = schema_version(&mut connection).await?;
+    ensure_schema_version(manifest, schema_version)?;
+
+    sqlx::query("BEGIN").execute(&mut *connection).await?;
+    let result = async {
+        for table in &manifest.tables {
+            let columns = columns(&mut connection, table).await?;
+            import_table(&mut connection, source_path, table, &columns).await?;
+        }
+        repair_sequences(&mut connection).await
+    }
+    .await;
+
+    match result {
+        Ok(()) => {
+            sqlx::query("COMMIT").execute(&mut *connection).await?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
+            Err(error)
+        }
+    }
+}
+
 async fn existing_export_tables(connection: &mut PgConnection) -> Result<Vec<String>, BackupError> {
     let rows = sqlx::query(
         "SELECT table_name
@@ -72,6 +103,95 @@ async fn existing_export_tables(connection: &mut PgConnection) -> Result<Vec<Str
         .filter(|table| existing.contains(**table))
         .map(|table| (*table).to_owned())
         .collect())
+}
+
+async fn import_table(
+    connection: &mut PgConnection,
+    source_path: &Path,
+    table: &str,
+    columns: &[ColumnInfo],
+) -> Result<(), BackupError> {
+    let rows = read_table_rows(source_path, table)?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let column_names = columns
+        .iter()
+        .filter(|column| rows[0].contains_key(&column.name))
+        .cloned()
+        .collect::<Vec<_>>();
+    let insert = insert_sql(table, &column_names);
+
+    for row in rows {
+        let mut query = sqlx::query(&insert);
+        for column in &column_names {
+            let value = row.get(&column.name).ok_or_else(|| {
+                BackupError::InvalidBackup(format!(
+                    "table {table} row is missing column {}",
+                    column.name
+                ))
+            })?;
+            query = query.bind(json_value_as_restore_text(value));
+        }
+        query.execute(&mut *connection).await?;
+    }
+
+    Ok(())
+}
+
+fn insert_sql(table: &str, columns: &[ColumnInfo]) -> String {
+    let column_list = columns
+        .iter()
+        .map(|column| quote_identifier(&column.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let placeholders = columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| format!("CAST(${} AS {})", index + 1, restore_type(column)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if table == "users" {
+        format!(
+            "INSERT INTO {} ({column_list}) OVERRIDING SYSTEM VALUE VALUES ({placeholders})",
+            quote_identifier(table)
+        )
+    } else {
+        format!(
+            "INSERT INTO {} ({column_list}) VALUES ({placeholders})",
+            quote_identifier(table)
+        )
+    }
+}
+
+fn restore_type(column: &ColumnInfo) -> &'static str {
+    match column.type_name.as_str() {
+        "bool" => "BOOLEAN",
+        "int8" => "BIGINT",
+        "text" => "TEXT",
+        "timestamptz" => "TIMESTAMPTZ",
+        _ => "TEXT",
+    }
+}
+
+async fn repair_sequences(connection: &mut PgConnection) -> Result<(), BackupError> {
+    for (table, column) in [
+        ("users", "user_id"),
+        ("posts", "post_id"),
+        ("post_revisions", "revision_id"),
+        ("tags", "tag_id"),
+    ] {
+        let sql = format!(
+            "SELECT setval(
+                pg_get_serial_sequence('{table}', '{column}'),
+                COALESCE((SELECT MAX({column}) FROM {table}), 1),
+                (SELECT COUNT(*) > 0 FROM {table})
+            )"
+        );
+        sqlx::query(&sql).execute(&mut *connection).await?;
+    }
+    Ok(())
 }
 
 async fn columns(
