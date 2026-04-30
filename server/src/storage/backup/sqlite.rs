@@ -10,8 +10,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{Row, SqliteConnection, SqlitePool};
 
 use super::{
-    build_manifest, order_by_clause, BackupError, BackupManifest, BackupMode, ColumnInfo,
-    TABLES_IN_EXPORT_ORDER,
+    build_manifest, ensure_schema_version, order_by_clause, read_table_rows, BackupError,
+    BackupManifest, BackupMode, ColumnInfo, TABLES_IN_EXPORT_ORDER,
 };
 
 pub(super) async fn export_database(
@@ -55,6 +55,49 @@ pub(super) async fn export_database(
     }
 }
 
+pub(super) async fn restore_database(
+    pool: &SqlitePool,
+    source_path: &Path,
+    manifest: &BackupManifest,
+) -> Result<(), BackupError> {
+    let mut connection = pool.acquire().await?;
+    let schema_version = schema_version(&mut connection).await?;
+    ensure_schema_version(manifest, schema_version)?;
+
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *connection)
+        .await?;
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut *connection)
+        .await?;
+
+    let result = async {
+        for table in &manifest.tables {
+            let columns = columns(&mut connection, table).await?;
+            import_table(&mut connection, source_path, table, &columns).await?;
+        }
+        Ok::<(), BackupError>(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => {
+            sqlx::query("COMMIT").execute(&mut *connection).await?;
+            sqlx::query("PRAGMA foreign_keys = ON")
+                .execute(&mut *connection)
+                .await?;
+            validate_foreign_keys(&mut connection).await
+        }
+        Err(error) => {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
+            let _ = sqlx::query("PRAGMA foreign_keys = ON")
+                .execute(&mut *connection)
+                .await;
+            Err(error)
+        }
+    }
+}
+
 async fn existing_export_tables(
     connection: &mut SqliteConnection,
 ) -> Result<Vec<String>, BackupError> {
@@ -70,6 +113,89 @@ async fn existing_export_tables(
         .filter(|table| existing.contains(**table))
         .map(|table| (*table).to_owned())
         .collect())
+}
+
+async fn import_table(
+    connection: &mut SqliteConnection,
+    source_path: &Path,
+    table: &str,
+    columns: &[ColumnInfo],
+) -> Result<(), BackupError> {
+    let rows = read_table_rows(source_path, table)?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let column_names = columns
+        .iter()
+        .filter(|column| rows[0].contains_key(&column.name))
+        .map(|column| column.name.clone())
+        .collect::<Vec<_>>();
+    let insert = insert_sql(table, &column_names);
+
+    for row in rows {
+        let mut query = sqlx::query(&insert);
+        for column in &column_names {
+            let value = row.get(column).ok_or_else(|| {
+                BackupError::InvalidBackup(format!("table {table} row is missing column {column}"))
+            })?;
+            query = bind_json_value(query, value);
+        }
+        query.execute(&mut *connection).await?;
+    }
+
+    Ok(())
+}
+
+fn insert_sql(table: &str, columns: &[String]) -> String {
+    let column_list = columns
+        .iter()
+        .map(|column| quote_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let placeholders = (1..=columns.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "INSERT INTO {} ({column_list}) VALUES ({placeholders})",
+        quote_identifier(table)
+    )
+}
+
+fn bind_json_value<'q>(
+    query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
+    value: &serde_json::Value,
+) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
+    match value {
+        serde_json::Value::Null => query.bind(Option::<String>::None),
+        serde_json::Value::Bool(value) => query.bind(*value),
+        serde_json::Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                query.bind(value)
+            } else if let Some(value) = value.as_u64().and_then(|value| i64::try_from(value).ok()) {
+                query.bind(value)
+            } else {
+                query.bind(value.as_f64())
+            }
+        }
+        serde_json::Value::String(value) => query.bind(value.clone()),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => query.bind(value.to_string()),
+    }
+}
+
+async fn validate_foreign_keys(connection: &mut SqliteConnection) -> Result<(), BackupError> {
+    let rows = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&mut *connection)
+        .await?;
+    if rows.is_empty() {
+        Ok(())
+    } else {
+        Err(BackupError::ConstraintViolation(format!(
+            "sqlite foreign_key_check returned {} violation(s)",
+            rows.len()
+        )))
+    }
 }
 
 async fn columns(
@@ -177,6 +303,7 @@ fn quote_literal(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::Connection;
 
     #[test]
     fn json_select_marks_boolean_values_as_json_booleans() {
@@ -202,5 +329,65 @@ mod tests {
     fn quoting_escapes_identifiers_and_literals() {
         assert_eq!(quote_identifier("a\"b"), "\"a\"\"b\"");
         assert_eq!(quote_literal("a'b"), "'a''b'");
+    }
+
+    #[test]
+    fn insert_sql_uses_numbered_placeholders() {
+        let sql = insert_sql(
+            "users",
+            &[
+                "user_id".to_owned(),
+                "username".to_owned(),
+                "is_operator".to_owned(),
+            ],
+        );
+
+        assert_eq!(
+            sql,
+            "INSERT INTO \"users\" (\"user_id\", \"username\", \"is_operator\") VALUES (?1, ?2, ?3)"
+        );
+    }
+
+    #[test]
+    fn bind_json_value_accepts_all_json_shapes() {
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!(true),
+            serde_json::json!(42),
+            serde_json::json!(42_u64),
+            serde_json::json!(3.5),
+            serde_json::json!("text"),
+            serde_json::json!(["a"]),
+            serde_json::json!({"key": "value"}),
+        ] {
+            let query = sqlx::query("SELECT ?1");
+            let _query = bind_json_value(query, &value);
+        }
+    }
+
+    #[tokio::test]
+    async fn validate_foreign_keys_reports_violations() -> Result<(), BackupError> {
+        let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:").await?;
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut connection)
+            .await?;
+        sqlx::query("CREATE TABLE parent (id INTEGER PRIMARY KEY)")
+            .execute(&mut connection)
+            .await?;
+        sqlx::query(
+            "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id))",
+        )
+        .execute(&mut connection)
+        .await?;
+        sqlx::query("INSERT INTO child (id, parent_id) VALUES (1, 999)")
+            .execute(&mut connection)
+            .await?;
+
+        let error = validate_foreign_keys(&mut connection)
+            .await
+            .expect_err("foreign key violation");
+
+        assert!(matches!(error, BackupError::ConstraintViolation(_)));
+        Ok(())
     }
 }

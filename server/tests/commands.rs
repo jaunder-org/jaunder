@@ -6,13 +6,14 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use chrono::Utc;
 use jaunder::cli::StorageArgs;
 use jaunder::commands::{
     cmd_backup, cmd_create_pg_db, cmd_init, cmd_restore, cmd_serve, cmd_smtp_test, cmd_user_create,
     cmd_user_invite,
 };
 use jaunder::password::Password;
-use jaunder::storage::{open_database, open_existing_database};
+use jaunder::storage::{open_database, open_existing_database, CreatePostInput, PostFormat};
 use jaunder::username::Username;
 use leptos::prelude::LeptosOptions;
 use sqlx::Connection;
@@ -42,6 +43,91 @@ fn uninitialized_storage_args(base: &TempDir) -> StorageArgs {
         sqlite_url(base)
     };
     StorageArgs { storage_path, db }
+}
+
+fn sqlite_storage_args(base: &TempDir, name: &str) -> StorageArgs {
+    StorageArgs {
+        storage_path: base.path().join(format!("{name}-storage")),
+        db: format!(
+            "sqlite:{}",
+            base.path().join(format!("{name}.db")).display()
+        )
+        .parse()
+        .expect("sqlite db"),
+    }
+}
+
+async fn populate_backup_fixture(args: &StorageArgs) -> i64 {
+    let state = open_existing_database(&args.db)
+        .await
+        .expect("open database");
+    let username: Username = "backupuser".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    let user_id = state
+        .users
+        .create_user(&username, &password, Some("Backup User"), true)
+        .await
+        .expect("create user");
+    let post_id = state
+        .posts
+        .create_post(&CreatePostInput {
+            user_id,
+            title: Some("Restored Post".to_owned()),
+            slug: "restored-post".parse().expect("valid slug"),
+            body: "body text".to_owned(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>body text</p>".to_owned(),
+            published_at: Some(Utc::now()),
+        })
+        .await
+        .expect("create post");
+    state
+        .posts
+        .tag_post(post_id, "Backup-Test")
+        .await
+        .expect("tag post");
+    std::fs::write(args.storage_path.join("media").join("avatar.txt"), "media")
+        .expect("write media");
+    post_id
+}
+
+async fn assert_backup_fixture_restored(args: &StorageArgs, post_id: i64) {
+    let state = open_existing_database(&args.db)
+        .await
+        .expect("open restored database");
+    let username: Username = "backupuser".parse().expect("valid username");
+    let user = state
+        .users
+        .get_user_by_username(&username)
+        .await
+        .expect("get user")
+        .expect("restored user");
+    assert!(user.is_operator);
+    assert_eq!(user.display_name.as_deref(), Some("Backup User"));
+
+    let post = state
+        .posts
+        .get_post_by_id(post_id)
+        .await
+        .expect("get post")
+        .expect("restored post");
+    assert_eq!(post.title.as_deref(), Some("Restored Post"));
+    assert_eq!(post.slug.as_str(), "restored-post");
+
+    let tags = state
+        .posts
+        .get_tags_for_post(post_id)
+        .await
+        .expect("get tags");
+    assert_eq!(tags.len(), 1);
+    assert_eq!(tags[0].tag_slug.as_str(), "backup-test");
+    assert_eq!(tags[0].tag_display, "Backup-Test");
+
+    assert_eq!(
+        std::fs::read_to_string(args.storage_path.join("media").join("avatar.txt"))
+            .expect("read restored media"),
+        "media"
+    );
 }
 
 #[tokio::test]
@@ -473,9 +559,9 @@ async fn cmd_restore_refuses_nonempty_media_directory() {
     assert!(err.to_string().contains("non-empty media directory"));
 }
 
-// M6.3.3: an empty target passes safety checks and then stops at unimplemented import.
+// M6.3.3: an empty target passes safety checks and validates the backup layout.
 #[tokio::test]
-async fn cmd_restore_empty_target_reaches_unimplemented_import() {
+async fn cmd_restore_empty_target_rejects_invalid_backup() {
     let base = TempDir::new().expect("temp dir");
     let args = storage_args(&base).await;
     cmd_init(&args, false).await.expect("init");
@@ -484,11 +570,65 @@ async fn cmd_restore_empty_target_reaches_unimplemented_import() {
     std::fs::create_dir(&backup_path).expect("backup dir");
     let err = cmd_restore(&args, &backup_path)
         .await
-        .expect_err("restore import is not implemented");
+        .expect_err("restore fails");
 
-    assert!(err
-        .to_string()
-        .contains("restore import is not implemented"));
+    assert!(err.to_string().contains("missing manifest"));
+}
+
+// M6.6.1: backup/restore round-trips database records and media.
+#[tokio::test]
+async fn cmd_restore_restores_directory_backup() {
+    let base = TempDir::new().expect("temp dir");
+    let source_args = storage_args(&base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    let post_id = populate_backup_fixture(&source_args).await;
+
+    let backup_path = base.path().join("backup");
+    cmd_backup(&source_args, Some(backup_path.clone()))
+        .await
+        .expect("backup");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let target_args = storage_args(&target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+    cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("restore");
+
+    assert_backup_fixture_restored(&target_args, post_id).await;
+}
+
+// M6.6.2: a SQLite backup restores into PostgreSQL when PostgreSQL tests are enabled.
+#[tokio::test]
+async fn cmd_restore_sqlite_backup_into_postgres() {
+    if !postgres_testing_enabled() {
+        return;
+    }
+
+    let base = TempDir::new().expect("temp dir");
+    let source_args = sqlite_storage_args(&base, "sqlite-source");
+    cmd_init(&source_args, false)
+        .await
+        .expect("init sqlite source");
+    let post_id = populate_backup_fixture(&source_args).await;
+
+    let backup_path = base.path().join("sqlite-backup");
+    cmd_backup(&source_args, Some(backup_path.clone()))
+        .await
+        .expect("sqlite backup");
+
+    let target_args = StorageArgs {
+        storage_path: base.path().join("postgres-target-storage"),
+        db: unique_postgres_url().await,
+    };
+    cmd_init(&target_args, false)
+        .await
+        .expect("init postgres target");
+    cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("restore into postgres");
+
+    assert_backup_fixture_restored(&target_args, post_id).await;
 }
 
 #[tokio::test]
