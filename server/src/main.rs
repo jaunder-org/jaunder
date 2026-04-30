@@ -83,8 +83,12 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::SmtpTest { storage, to } => {
             jaunder::commands::cmd_smtp_test(&storage, &to).await?;
         }
-        Commands::Backup { storage, path } => {
-            jaunder::commands::cmd_backup(&storage, path).await?;
+        Commands::Backup {
+            storage,
+            mode,
+            path,
+        } => {
+            jaunder::commands::cmd_backup(&storage, mode, path).await?;
         }
         Commands::Restore { storage, path } => {
             jaunder::commands::cmd_restore(&storage, &path).await?;

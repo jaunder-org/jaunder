@@ -3,7 +3,7 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::storage::DbConnectOptions;
+use crate::storage::{BackupMode, DbConnectOptions};
 
 #[derive(Parser, Clone)]
 #[command(name = "jaunder", about = "A self-hosted social reader")]
@@ -166,7 +166,11 @@ pub enum Commands {
         #[command(flatten)]
         storage: StorageArgs,
 
-        /// Destination directory for this backup.
+        /// Backup format to write.
+        #[arg(long, value_enum, default_value = "directory")]
+        mode: BackupMode,
+
+        /// Destination directory or .tar.gz archive path for this backup.
         #[arg(long)]
         path: Option<PathBuf>,
     },
@@ -531,9 +535,10 @@ mod tests {
     fn backup_path_optional() {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let cli = parse(&["backup"]);
-        let Commands::Backup { path, .. } = cli.command.expect("subcommand") else {
+        let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
             panic!("wrong variant");
         };
+        assert_eq!(mode, BackupMode::Directory);
         assert_eq!(path, None);
     }
 
@@ -545,6 +550,23 @@ mod tests {
             panic!("wrong variant");
         };
         assert_eq!(path, Some(PathBuf::from("/tmp/backup")));
+    }
+
+    #[test]
+    fn backup_parses_archive_mode() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&[
+            "backup",
+            "--mode",
+            "archive",
+            "--path",
+            "/tmp/backup.tar.gz",
+        ]);
+        let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
+            panic!("wrong variant");
+        };
+        assert_eq!(mode, BackupMode::Archive);
+        assert_eq!(path, Some(PathBuf::from("/tmp/backup.tar.gz")));
     }
 
     #[test]

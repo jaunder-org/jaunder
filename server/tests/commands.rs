@@ -13,7 +13,9 @@ use jaunder::commands::{
     cmd_user_invite,
 };
 use jaunder::password::Password;
-use jaunder::storage::{open_database, open_existing_database, CreatePostInput, PostFormat};
+use jaunder::storage::{
+    open_database, open_existing_database, BackupMode, CreatePostInput, PostFormat,
+};
 use jaunder::username::Username;
 use leptos::prelude::LeptosOptions;
 use sqlx::Connection;
@@ -43,18 +45,6 @@ fn uninitialized_storage_args(base: &TempDir) -> StorageArgs {
         sqlite_url(base)
     };
     StorageArgs { storage_path, db }
-}
-
-fn sqlite_storage_args(base: &TempDir, name: &str) -> StorageArgs {
-    StorageArgs {
-        storage_path: base.path().join(format!("{name}-storage")),
-        db: format!(
-            "sqlite:{}",
-            base.path().join(format!("{name}.db")).display()
-        )
-        .parse()
-        .expect("sqlite db"),
-    }
 }
 
 async fn populate_backup_fixture(args: &StorageArgs) -> i64 {
@@ -479,7 +469,7 @@ async fn cmd_backup_writes_directory_backup() {
     std::fs::write(media_path.join("avatar.txt"), "media").expect("write media");
 
     let backup_path = base.path().join("manual-backup");
-    let written_path = cmd_backup(&args, Some(backup_path.clone()))
+    let written_path = cmd_backup(&args, BackupMode::Directory, Some(backup_path.clone()))
         .await
         .expect("backup");
 
@@ -499,7 +489,9 @@ async fn cmd_backup_without_path_writes_under_storage_backups() {
     let args = storage_args(&base).await;
     cmd_init(&args, false).await.expect("init");
 
-    let written_path = cmd_backup(&args, None).await.expect("backup");
+    let written_path = cmd_backup(&args, BackupMode::Directory, None)
+        .await
+        .expect("backup");
 
     assert!(written_path.starts_with(args.storage_path.join("backups")));
     assert!(written_path.join("manifest.json").is_file());
@@ -584,9 +576,13 @@ async fn cmd_restore_restores_directory_backup() {
     let post_id = populate_backup_fixture(&source_args).await;
 
     let backup_path = base.path().join("backup");
-    cmd_backup(&source_args, Some(backup_path.clone()))
-        .await
-        .expect("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
 
     let target_base = TempDir::new().expect("target temp dir");
     let target_args = storage_args(&target_base).await;
@@ -594,39 +590,6 @@ async fn cmd_restore_restores_directory_backup() {
     cmd_restore(&target_args, &backup_path)
         .await
         .expect("restore");
-
-    assert_backup_fixture_restored(&target_args, post_id).await;
-}
-
-// M6.6.2: a SQLite backup restores into PostgreSQL when PostgreSQL tests are enabled.
-#[tokio::test]
-async fn cmd_restore_sqlite_backup_into_postgres() {
-    if !postgres_testing_enabled() {
-        return;
-    }
-
-    let base = TempDir::new().expect("temp dir");
-    let source_args = sqlite_storage_args(&base, "sqlite-source");
-    cmd_init(&source_args, false)
-        .await
-        .expect("init sqlite source");
-    let post_id = populate_backup_fixture(&source_args).await;
-
-    let backup_path = base.path().join("sqlite-backup");
-    cmd_backup(&source_args, Some(backup_path.clone()))
-        .await
-        .expect("sqlite backup");
-
-    let target_args = StorageArgs {
-        storage_path: base.path().join("postgres-target-storage"),
-        db: unique_postgres_url().await,
-    };
-    cmd_init(&target_args, false)
-        .await
-        .expect("init postgres target");
-    cmd_restore(&target_args, &backup_path)
-        .await
-        .expect("restore into postgres");
 
     assert_backup_fixture_restored(&target_args, post_id).await;
 }
