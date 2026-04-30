@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod backup;
 pub mod email;
 pub mod home;
 pub mod invites;
@@ -20,6 +21,7 @@ pub use ui::{
 pub const DEFAULT_THEME: &str = "studio";
 
 use crate::pages::auth::{LoginPage, LogoutPage, RegisterPage};
+use crate::pages::backup::BackupSettingsPage;
 use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
 use crate::pages::invites::InvitesPage;
@@ -120,6 +122,10 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("profile") view=ProfilePage />
                     <Route path=StaticSegment("sessions") view=SessionsPage />
                     <Route path=StaticSegment("invites") view=InvitesPage />
+                    <Route
+                        path=(StaticSegment("admin"), StaticSegment("backups"))
+                        view=BackupSettingsPage
+                    />
                     <Route
                         path=(StaticSegment("posts"), StaticSegment("new"))
                         view=CreatePostPage

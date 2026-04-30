@@ -222,13 +222,17 @@ pub async fn cmd_smtp_test(storage: &StorageArgs, to: &str) -> anyhow::Result<()
     Ok(())
 }
 
-pub async fn cmd_backup(storage: &StorageArgs, path: Option<PathBuf>) -> anyhow::Result<PathBuf> {
-    let destination_path = path.unwrap_or_else(|| default_backup_path(storage));
+pub async fn cmd_backup(
+    storage: &StorageArgs,
+    mode: BackupMode,
+    path: Option<PathBuf>,
+) -> anyhow::Result<PathBuf> {
+    let destination_path = path.unwrap_or_else(|| default_backup_path(storage, mode));
     let manifest = export_backup(BackupExportOptions {
         database: &storage.db,
         media_path: &storage.storage_path.join("media"),
         destination_path: &destination_path,
-        mode: BackupMode::Directory,
+        mode,
     })
     .await?;
 
@@ -263,12 +267,13 @@ pub async fn cmd_restore(storage: &StorageArgs, path: &Path) -> anyhow::Result<(
     Ok(())
 }
 
-fn default_backup_path(storage: &StorageArgs) -> PathBuf {
+fn default_backup_path(storage: &StorageArgs, mode: BackupMode) -> PathBuf {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-    storage
-        .storage_path
-        .join("backups")
-        .join(format!("backup-{timestamp}"))
+    let name = match mode {
+        BackupMode::Directory => format!("backup-{timestamp}"),
+        BackupMode::Archive => format!("backup-{timestamp}.tar.gz"),
+    };
+    storage.storage_path.join("backups").join(name)
 }
 
 async fn ensure_restore_target_empty(storage: &StorageArgs) -> anyhow::Result<()> {
@@ -435,9 +440,22 @@ mod tests {
             db: "sqlite:/tmp/jaunder.db".parse().expect("sqlite db"),
         };
 
-        let path = default_backup_path(&storage);
+        let path = default_backup_path(&storage, BackupMode::Directory);
 
         assert!(path.starts_with("/tmp/jaunder/backups"));
+    }
+
+    #[test]
+    fn default_archive_backup_path_ends_with_tar_gz() {
+        let storage = StorageArgs {
+            storage_path: PathBuf::from("/tmp/jaunder"),
+            db: "sqlite:/tmp/jaunder.db".parse().expect("sqlite db"),
+        };
+
+        let path = default_backup_path(&storage, BackupMode::Archive);
+
+        assert!(path.starts_with("/tmp/jaunder/backups"));
+        assert!(path.to_string_lossy().ends_with(".tar.gz"));
     }
 
     #[test]

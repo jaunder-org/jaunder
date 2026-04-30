@@ -5,6 +5,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -27,10 +28,11 @@ pub(super) const TABLES_IN_EXPORT_ORDER: &[&str] = &[
     "post_tags",
 ];
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, clap::ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BackupMode {
     Directory,
+    Archive,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +72,8 @@ pub enum BackupError {
     Json(#[from] serde_json::Error),
     #[error("backup destination is not empty: {0}")]
     DestinationNotEmpty(PathBuf),
+    #[error("backup destination already exists: {0}")]
+    DestinationExists(PathBuf),
     #[error("invalid backup: {0}")]
     InvalidBackup(String),
     #[error(
@@ -101,20 +105,57 @@ pub async fn export_backup(
 ) -> Result<BackupManifest, BackupError> {
     match options.mode {
         BackupMode::Directory => export_directory_backup(options).await,
+        BackupMode::Archive => export_archive_backup(options).await,
     }
 }
 
 pub async fn restore_backup(
     options: BackupRestoreOptions<'_>,
 ) -> Result<BackupManifest, BackupError> {
-    let manifest = read_manifest(options.source_path)?;
+    let extracted_archive = if options.source_path.is_file() {
+        Some(extract_archive_backup(options.source_path)?)
+    } else {
+        None
+    };
+    let source_path = extracted_archive
+        .as_ref()
+        .map(TemporaryBackupDirectory::path)
+        .unwrap_or(options.source_path);
+
+    let manifest = read_manifest(source_path)?;
     validate_manifest(&manifest)?;
 
     match manifest.mode {
-        BackupMode::Directory => restore_directory_backup(options, &manifest).await?,
+        BackupMode::Directory | BackupMode::Archive => {
+            restore_directory_backup(
+                BackupRestoreOptions {
+                    database: options.database,
+                    media_path: options.media_path,
+                    source_path,
+                },
+                &manifest,
+            )
+            .await?;
+        }
     }
 
-    restore_media_directory(&options.source_path.join("media"), options.media_path)?;
+    restore_media_directory(&source_path.join("media"), options.media_path)?;
+    Ok(manifest)
+}
+
+async fn export_archive_backup(
+    options: BackupExportOptions<'_>,
+) -> Result<BackupManifest, BackupError> {
+    ensure_absent(options.destination_path)?;
+    let staging = TemporaryBackupDirectory::near(options.destination_path)?;
+    let manifest = export_directory_backup(BackupExportOptions {
+        database: options.database,
+        media_path: options.media_path,
+        destination_path: staging.path(),
+        mode: BackupMode::Archive,
+    })
+    .await?;
+    write_tar_gz(staging.path(), options.destination_path)?;
     Ok(manifest)
 }
 
@@ -309,6 +350,72 @@ fn ensure_empty_or_absent(path: &Path) -> Result<(), BackupError> {
         return Err(BackupError::DestinationNotEmpty(path.to_path_buf()));
     }
     Ok(())
+}
+
+fn ensure_absent(path: &Path) -> Result<(), BackupError> {
+    if path.exists() {
+        return Err(BackupError::DestinationExists(path.to_path_buf()));
+    }
+    Ok(())
+}
+
+struct TemporaryBackupDirectory {
+    path: PathBuf,
+}
+
+impl TemporaryBackupDirectory {
+    fn near(destination_path: &Path) -> Result<Self, BackupError> {
+        let parent = destination_path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent)?;
+        let file_name = destination_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("backup");
+        let suffix = Utc::now()
+            .timestamp_nanos_opt()
+            .unwrap_or_else(|| Utc::now().timestamp_micros());
+        let path = parent.join(format!(".{file_name}.{suffix}.tmp"));
+        fs::create_dir(&path)?;
+        Ok(Self { path })
+    }
+
+    fn in_temp() -> Result<Self, BackupError> {
+        let suffix = Utc::now()
+            .timestamp_nanos_opt()
+            .unwrap_or_else(|| Utc::now().timestamp_micros());
+        let path = std::env::temp_dir().join(format!("jaunder-backup-{suffix}"));
+        fs::create_dir(&path)?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryBackupDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn write_tar_gz(source_root: &Path, destination_path: &Path) -> Result<(), BackupError> {
+    let file = File::create(destination_path)?;
+    let encoder = GzEncoder::new(file, Compression::default());
+    let mut archive = tar::Builder::new(encoder);
+    archive.append_dir_all(".", source_root)?;
+    let encoder = archive.into_inner()?;
+    encoder.finish()?;
+    Ok(())
+}
+
+fn extract_archive_backup(source_path: &Path) -> Result<TemporaryBackupDirectory, BackupError> {
+    let destination = TemporaryBackupDirectory::in_temp()?;
+    let file = File::open(source_path)?;
+    let decoder = GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+    archive.unpack(destination.path())?;
+    Ok(destination)
 }
 
 fn restore_media_directory(source: &Path, destination: &Path) -> Result<(), BackupError> {
@@ -772,6 +879,69 @@ mod tests {
         assert_eq!(
             fs::read_to_string(backup_path.join("media").join("avatar.txt"))?,
             "image"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn archive_backup_round_trips_database_and_media() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let source_url = format!("sqlite://{}", temp.path().join("source.db").display());
+        let source_options =
+            sqlx::sqlite::SqliteConnectOptions::from_str(&source_url)?.create_if_missing(true);
+        let source_pool = sqlx::SqlitePool::connect_with(source_options).await?;
+        sqlx::migrate!("./migrations/sqlite")
+            .run(&source_pool)
+            .await?;
+        sqlx::query(
+            "INSERT INTO users (username, password_hash, created_at, is_operator)
+             VALUES ('archiveuser', 'hash', '2026-04-29T00:00:00Z', TRUE)",
+        )
+        .execute(&source_pool)
+        .await?;
+
+        let media = temp.path().join("media");
+        fs::create_dir_all(&media)?;
+        fs::write(media.join("avatar.txt"), "archive media")?;
+
+        let archive_path = temp.path().join("backup.tar.gz");
+        let source_db_options = DbConnectOptions::from_str(&source_url)?;
+        let manifest = export_backup(BackupExportOptions {
+            database: &source_db_options,
+            media_path: &media,
+            destination_path: &archive_path,
+            mode: BackupMode::Archive,
+        })
+        .await?;
+
+        assert_eq!(manifest.mode, BackupMode::Archive);
+        assert!(archive_path.is_file());
+
+        let target_url = format!("sqlite://{}", temp.path().join("target.db").display());
+        let target_options =
+            sqlx::sqlite::SqliteConnectOptions::from_str(&target_url)?.create_if_missing(true);
+        let target_pool = sqlx::SqlitePool::connect_with(target_options).await?;
+        sqlx::migrate!("./migrations/sqlite")
+            .run(&target_pool)
+            .await?;
+        let target_db_options = DbConnectOptions::from_str(&target_url)?;
+        let target_media = temp.path().join("restored-media");
+
+        restore_backup(BackupRestoreOptions {
+            database: &target_db_options,
+            media_path: &target_media,
+            source_path: &archive_path,
+        })
+        .await?;
+
+        let restored_username: String =
+            sqlx::query_scalar("SELECT username FROM users WHERE username = 'archiveuser'")
+                .fetch_one(&target_pool)
+                .await?;
+        assert_eq!(restored_username, "archiveuser");
+        assert_eq!(
+            fs::read_to_string(target_media.join("avatar.txt"))?,
+            "archive media"
         );
         Ok(())
     }

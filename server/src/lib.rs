@@ -196,7 +196,7 @@ async fn run_scheduled_backup(
     config: &BackupWorkerConfig,
 ) -> anyhow::Result<PathBuf> {
     fs::create_dir_all(destination_root)?;
-    let destination_path = destination_root.join(timestamped_backup_name());
+    let destination_path = backup_path_for_mode(destination_root, config.mode);
     export_backup(BackupExportOptions {
         database,
         media_path,
@@ -217,14 +217,23 @@ fn prune_backups(destination_root: &Path, retention_count: usize) -> std::io::Re
     for entry in fs::read_dir(destination_root)? {
         let entry = entry?;
         let path = entry.path();
-        if path.join("manifest.json").is_file() {
+        if path.join("manifest.json").is_file()
+            || path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".tar.gz"))
+        {
             backups.push(path);
         }
     }
     backups.sort();
     let prune_count = backups.len().saturating_sub(retention_count);
     for path in backups.into_iter().take(prune_count) {
-        fs::remove_dir_all(path)?;
+        if path.is_dir() {
+            fs::remove_dir_all(path)?;
+        } else {
+            fs::remove_file(path)?;
+        }
     }
     Ok(())
 }
@@ -233,14 +242,20 @@ fn timestamped_backup_name() -> String {
     format!("backup-{}", chrono::Utc::now().format("%Y%m%dT%H%M%SZ"))
 }
 
+fn backup_path_for_mode(destination_root: &Path, mode: BackupMode) -> PathBuf {
+    let name = timestamped_backup_name();
+    match mode {
+        BackupMode::Directory => destination_root.join(name),
+        BackupMode::Archive => destination_root.join(format!("{name}.tar.gz")),
+    }
+}
+
 fn parse_backup_mode(value: &str) -> anyhow::Result<BackupMode> {
     match value.trim() {
         "directory" | "" => Ok(BackupMode::Directory),
-        "archive" => Err(anyhow::anyhow!(
-            "backup.mode=archive is not implemented yet; use backup.mode=directory"
-        )),
+        "archive" => Ok(BackupMode::Archive),
         other => Err(anyhow::anyhow!(
-            "unsupported backup.mode '{other}'; expected 'directory'"
+            "unsupported backup.mode '{other}'; expected 'directory' or 'archive'"
         )),
     }
 }
@@ -446,7 +461,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn backup_worker_config_rejects_archive_mode_until_supported() {
+    async fn backup_worker_config_accepts_archive_mode() {
         let state = test_state().await;
         state
             .site_config
@@ -454,11 +469,11 @@ mod tests {
             .await
             .expect("set mode");
 
-        let err = BackupWorkerConfig::load(state.site_config.as_ref())
+        let config = BackupWorkerConfig::load(state.site_config.as_ref())
             .await
-            .expect_err("archive mode unsupported");
+            .expect("load config");
 
-        assert!(err.to_string().contains("archive is not implemented"));
+        assert_eq!(config.mode, BackupMode::Archive);
     }
 
     #[tokio::test]
@@ -537,6 +552,20 @@ mod tests {
     }
 
     #[test]
+    fn prune_backups_keeps_newest_archives() {
+        let temp = TempDir::new().expect("temp dir");
+        for name in ["backup-1.tar.gz", "backup-2.tar.gz", "backup-3.tar.gz"] {
+            std::fs::write(temp.path().join(name), "archive").expect("archive");
+        }
+
+        prune_backups(temp.path(), 2).expect("prune");
+
+        assert!(!temp.path().join("backup-1.tar.gz").exists());
+        assert!(temp.path().join("backup-2.tar.gz").exists());
+        assert!(temp.path().join("backup-3.tar.gz").exists());
+    }
+
+    #[test]
     fn prune_backups_accepts_missing_destination_root() {
         let temp = TempDir::new().expect("temp dir");
         prune_backups(&temp.path().join("missing"), 1).expect("prune missing root");
@@ -556,6 +585,10 @@ mod tests {
         assert_eq!(
             parse_backup_mode("directory").expect("directory mode"),
             BackupMode::Directory
+        );
+        assert_eq!(
+            parse_backup_mode("archive").expect("archive mode"),
+            BackupMode::Archive
         );
     }
 

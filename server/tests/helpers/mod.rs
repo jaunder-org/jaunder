@@ -21,6 +21,9 @@ pub fn ensure_server_fns_registered() {
     ONCE.get_or_init(|| {
         server_fn::axum::register_explicit::<web::auth::CurrentUser>();
         server_fn::axum::register_explicit::<web::backup::BackupWarningVisible>();
+        server_fn::axum::register_explicit::<web::backup::CurrentUserIsOperator>();
+        server_fn::axum::register_explicit::<web::backup::GetBackupSettings>();
+        server_fn::axum::register_explicit::<web::backup::UpdateBackupSettings>();
         server_fn::axum::register_explicit::<web::auth::GetRegistrationPolicy>();
         server_fn::axum::register_explicit::<web::auth::Register>();
         server_fn::axum::register_explicit::<web::auth::Login>();
@@ -66,8 +69,10 @@ pub fn postgres_testing_enabled() -> bool {
 }
 
 pub fn postgres_bootstrap_url() -> String {
-    std::env::var("JAUNDER_PG_BOOTSTRAP_TEST_URL")
-        .unwrap_or_else(|_| "postgres://postgres@127.0.0.1:55432/postgres".to_owned())
+    std::env::var("JAUNDER_PG_BOOTSTRAP_TEST_URL").unwrap_or_else(|_| {
+        let authority = postgres_url_authority(&postgres_url_string());
+        format!("postgres://postgres@{authority}/postgres")
+    })
 }
 
 pub fn postgres_url_string() -> String {
@@ -75,12 +80,11 @@ pub fn postgres_url_string() -> String {
         .unwrap_or_else(|_| "postgres://jaunder@127.0.0.1:55432/jaunder".to_owned())
 }
 
-pub fn postgres_test_authority() -> String {
-    let bootstrap = postgres_bootstrap_url();
-    let without_scheme = bootstrap
+fn postgres_url_authority(url: &str) -> String {
+    let without_scheme = url
         .strip_prefix("postgres://")
-        .or_else(|| bootstrap.strip_prefix("postgresql://"))
-        .unwrap_or(&bootstrap);
+        .or_else(|| url.strip_prefix("postgresql://"))
+        .unwrap_or(url);
     let after_credentials = without_scheme
         .rsplit_once('@')
         .map(|(_, authority_and_path)| authority_and_path)
@@ -90,6 +94,10 @@ pub fn postgres_test_authority() -> String {
         .next()
         .expect("bootstrap URL should include an authority")
         .to_owned()
+}
+
+pub fn postgres_test_authority() -> String {
+    postgres_url_authority(&postgres_bootstrap_url())
 }
 
 pub async fn reset_postgres_schema() {
