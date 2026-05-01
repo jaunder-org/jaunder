@@ -75,7 +75,11 @@ fn backup_settings_form(
                         name="schedule"
                         placeholder="0 0 0 * * *"
                         prop:value=settings.schedule
+                        aria-describedby="backup-schedule-help"
                     />
+                    <span id="backup-schedule-help" class="j-backup-help">
+                        "Use a six-field cron expression: second minute hour day-of-month month day-of-week. Example: 0 0 0 * * * runs daily at midnight."
+                    </span>
                 </label>
                 <label class="j-backup-field">
                     <span class="j-edit-form-label">"Retention Count"</span>

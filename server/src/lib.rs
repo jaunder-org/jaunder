@@ -26,6 +26,7 @@ use std::{
 use axum::http::HeaderName;
 use axum::Router;
 use axum_embed::ServeEmbed;
+use croner::Cron;
 use leptos::prelude::*;
 use leptos_axum::{generate_route_list, LeptosRoutes};
 use opentelemetry::propagation::Extractor;
@@ -123,38 +124,56 @@ struct BackupWorkerConfig {
     schedule: String,
     retention_count: usize,
     mode: BackupMode,
+    invalid_keys: Vec<&'static str>,
 }
 
 impl BackupWorkerConfig {
     async fn load(site_config: &dyn SiteConfigStorage) -> anyhow::Result<Self> {
+        let mut invalid_keys = Vec::new();
         let destination_path = site_config
             .get(BACKUP_DESTINATION_PATH_KEY)
             .await?
             .and_then(|path| non_empty_path(&path));
-        let schedule = site_config
-            .get(BACKUP_SCHEDULE_KEY)
-            .await?
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "0 0 0 * * *".to_owned());
-        let retention_count = site_config
-            .get(BACKUP_RETENTION_COUNT_KEY)
-            .await?
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(7);
-        let mode = site_config
-            .get(BACKUP_MODE_KEY)
-            .await?
-            .as_deref()
-            .map(parse_backup_mode)
-            .transpose()?
-            .unwrap_or(BackupMode::Directory);
+        let schedule = match site_config.get(BACKUP_SCHEDULE_KEY).await? {
+            Some(value) if backup_schedule_valid(value.trim()) => value.trim().to_owned(),
+            Some(_) => {
+                invalid_keys.push(BACKUP_SCHEDULE_KEY);
+                default_backup_schedule()
+            }
+            None => default_backup_schedule(),
+        };
+        let retention_count = match site_config.get(BACKUP_RETENTION_COUNT_KEY).await? {
+            Some(value) => match value.parse::<usize>() {
+                Ok(value) => value,
+                Err(_) => {
+                    invalid_keys.push(BACKUP_RETENTION_COUNT_KEY);
+                    default_backup_retention_count()
+                }
+            },
+            None => default_backup_retention_count(),
+        };
+        let mode = match site_config.get(BACKUP_MODE_KEY).await? {
+            Some(value) => match parse_backup_mode(&value) {
+                Some(mode) => mode,
+                None => {
+                    invalid_keys.push(BACKUP_MODE_KEY);
+                    default_backup_mode()
+                }
+            },
+            None => default_backup_mode(),
+        };
 
         Ok(Self {
             destination_path,
             schedule,
             retention_count,
             mode,
+            invalid_keys,
         })
+    }
+
+    fn has_invalid_values(&self) -> bool {
+        !self.invalid_keys.is_empty()
     }
 }
 
@@ -168,6 +187,13 @@ pub async fn start_backup_worker(
         tracing::warn!("backup worker disabled: backup.destination_path is not configured");
         return Ok(None);
     };
+    if config.has_invalid_values() {
+        tracing::error!(
+            invalid_keys = ?config.invalid_keys,
+            "scheduled backup worker disabled: backup configuration is invalid and needs urgent operator attention"
+        );
+        return Ok(None);
+    }
 
     let scheduler = JobScheduler::new().await?;
     let schedule = config.schedule.clone();
@@ -250,13 +276,27 @@ fn backup_path_for_mode(destination_root: &Path, mode: BackupMode) -> PathBuf {
     }
 }
 
-fn parse_backup_mode(value: &str) -> anyhow::Result<BackupMode> {
+fn default_backup_schedule() -> String {
+    "0 0 0 * * *".to_owned()
+}
+
+fn default_backup_retention_count() -> usize {
+    7
+}
+
+fn default_backup_mode() -> BackupMode {
+    BackupMode::Directory
+}
+
+fn backup_schedule_valid(schedule: &str) -> bool {
+    Cron::new(schedule).with_seconds_required().parse().is_ok()
+}
+
+fn parse_backup_mode(value: &str) -> Option<BackupMode> {
     match value.trim() {
-        "directory" | "" => Ok(BackupMode::Directory),
-        "archive" => Ok(BackupMode::Archive),
-        other => Err(anyhow::anyhow!(
-            "unsupported backup.mode '{other}'; expected 'directory' or 'archive'"
-        )),
+        "directory" => Some(BackupMode::Directory),
+        "archive" => Some(BackupMode::Archive),
+        _ => None,
     }
 }
 
@@ -485,11 +525,41 @@ mod tests {
             .await
             .expect("set mode");
 
-        let err = BackupWorkerConfig::load(state.site_config.as_ref())
+        let config = BackupWorkerConfig::load(state.site_config.as_ref())
             .await
-            .expect_err("unknown mode unsupported");
+            .expect("load config");
 
-        assert!(err.to_string().contains("unsupported backup.mode"));
+        assert_eq!(config.mode, BackupMode::Directory);
+        assert_eq!(config.invalid_keys, vec![BACKUP_MODE_KEY]);
+    }
+
+    #[tokio::test]
+    async fn backup_worker_disabled_when_schedule_is_invalid() {
+        let state = test_state().await;
+        let storage = TempDir::new().expect("temp dir");
+        state
+            .site_config
+            .set(
+                BACKUP_DESTINATION_PATH_KEY,
+                storage.path().join("backups").to_str().expect("utf-8 path"),
+            )
+            .await
+            .expect("set destination");
+        state
+            .site_config
+            .set(BACKUP_SCHEDULE_KEY, "not-a-schedule")
+            .await
+            .expect("set schedule");
+
+        let scheduler = start_backup_worker(
+            state,
+            "sqlite::memory:".parse().expect("sqlite options"),
+            storage.path().to_path_buf(),
+        )
+        .await
+        .expect("worker start");
+
+        assert!(scheduler.is_none());
     }
 
     #[tokio::test]
@@ -516,6 +586,7 @@ mod tests {
             schedule: "0 0 0 1 1 *".to_owned(),
             retention_count: 1,
             mode: BackupMode::Directory,
+            invalid_keys: Vec::new(),
         };
         let written = run_scheduled_backup(
             &db_url.parse().expect("db options"),
@@ -578,18 +649,9 @@ mod tests {
             non_empty_path(" /tmp/backups "),
             Some(PathBuf::from("/tmp/backups"))
         );
-        assert_eq!(
-            parse_backup_mode("").expect("blank mode"),
-            BackupMode::Directory
-        );
-        assert_eq!(
-            parse_backup_mode("directory").expect("directory mode"),
-            BackupMode::Directory
-        );
-        assert_eq!(
-            parse_backup_mode("archive").expect("archive mode"),
-            BackupMode::Archive
-        );
+        assert_eq!(parse_backup_mode(""), None);
+        assert_eq!(parse_backup_mode("directory"), Some(BackupMode::Directory));
+        assert_eq!(parse_backup_mode("archive"), Some(BackupMode::Archive));
     }
 
     #[tokio::test]
