@@ -179,6 +179,11 @@ impl InternalError {
     }
 }
 
+/// Awaits the given future, converting any `InternalError` to its public `WebError` form.
+///
+/// # Errors
+///
+/// Returns `Err(ServerFnError)` if the wrapped future returns an `InternalError`.
 #[cfg(feature = "ssr")]
 pub async fn server_boundary<T>(
     server_fn: &'static str,
