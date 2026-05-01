@@ -7,7 +7,7 @@ use leptos::prelude::*;
 #[component]
 pub fn RegisterPage() -> impl IntoView {
     let register_action = ServerAction::<Register>::new();
-    let policy = Resource::new(|| (), |_| get_registration_policy());
+    let policy = Resource::new(|| (), |()| get_registration_policy());
     let username = RwSignal::new(String::new());
 
     view! {
@@ -109,7 +109,7 @@ pub fn LogoutPage() -> impl IntoView {
                 .get()
                 .map(|r: Result<(), WebError>| {
                     match r {
-                        Ok(_) => view! { <p>"You have been logged out."</p> }.into_any(),
+                        Ok(()) => view! { <p>"You have been logged out."</p> }.into_any(),
                         Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                     }
                 })

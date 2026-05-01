@@ -60,22 +60,21 @@ fn backup_mode_valid(mode: &str) -> bool {
 fn backup_schedule_value(value: Option<String>) -> String {
     value
         .filter(|value| backup_schedule_valid(value))
-        .map(|value| value.trim().to_owned())
-        .unwrap_or_else(default_backup_schedule)
+        .map_or_else(default_backup_schedule, |value| value.trim().to_owned())
 }
 
 fn backup_retention_count_value(value: Option<String>) -> String {
     value
         .filter(|value| backup_retention_count_valid(value))
-        .map(|value| value.trim().to_owned())
-        .unwrap_or_else(default_backup_retention_count)
+        .map_or_else(default_backup_retention_count, |value| {
+            value.trim().to_owned()
+        })
 }
 
 fn backup_mode_value(value: Option<String>) -> String {
     value
         .filter(|value| backup_mode_valid(value))
-        .map(|value| value.trim().to_owned())
-        .unwrap_or_else(default_backup_mode)
+        .map_or_else(default_backup_mode, |value| value.trim().to_owned())
 }
 
 fn optional_backup_schedule_valid(value: Option<&str>) -> bool {
