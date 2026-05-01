@@ -22,6 +22,10 @@ pub enum RenderError {
 // ---------------------------------------------------------------------------
 
 /// Renders `body` to HTML based on `format`. Pure function.
+///
+/// # Errors
+///
+/// Returns `Err(RenderError)` if the body cannot be rendered for the given format.
 pub fn render(body: &str, format: &PostFormat) -> Result<String, RenderError> {
     match format {
         PostFormat::Markdown => Ok(render_markdown(body)),
@@ -217,6 +221,10 @@ pub enum UpdateRenderedPostError {
 // ---------------------------------------------------------------------------
 
 /// Renders `body` according to `format` and creates the post via storage.
+///
+/// # Errors
+///
+/// Returns `Err(CreateRenderedPostError)` if rendering fails or the storage layer returns an error.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_rendered_post(
     storage: &dyn PostStorage,
@@ -241,6 +249,10 @@ pub async fn create_rendered_post(
 }
 
 /// Renders `body` according to `format` and updates the post via storage.
+///
+/// # Errors
+///
+/// Returns `Err(UpdateRenderedPostError)` if rendering fails or the storage layer returns an error.
 #[allow(clippy::too_many_arguments)]
 pub async fn update_rendered_post(
     storage: &dyn PostStorage,
@@ -302,6 +314,10 @@ impl From<UpdatePostError> for PerformUpdateError {
 ///
 /// The storage layer freezes the slug if the post is already published.
 /// Ownership and deletion checks are also performed atomically in storage.
+///
+/// # Errors
+///
+/// Returns `Err(PerformUpdateError)` if rendering fails or the storage layer returns an error.
 pub async fn perform_post_update(
     storage: &dyn PostStorage,
     post_id: i64,

@@ -41,6 +41,10 @@ impl Password {
     ///
     /// This is a CPU-intensive operation and should be called from a blocking
     /// context (e.g., via [`tokio::task::spawn_blocking`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if Argon2 hashing fails.
     pub fn hash(&self) -> Result<String, String> {
         use argon2::{
             password_hash::{rand_core::OsRng, SaltString},
@@ -58,6 +62,10 @@ impl Password {
     ///
     /// This is a CPU-intensive operation and should be called from a blocking
     /// context (e.g., via [`tokio::task::spawn_blocking`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if Argon2 verification fails (e.g., the hash string is malformed).
     pub fn verify(&self, hash: &str) -> Result<bool, String> {
         use argon2::{Argon2, PasswordHash, PasswordVerifier};
 
