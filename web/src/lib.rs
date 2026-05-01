@@ -34,6 +34,7 @@ macro_rules! web_server_fn {
 }
 
 pub mod auth;
+pub mod backup;
 pub mod email;
 pub mod error;
 pub mod invites;

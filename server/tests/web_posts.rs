@@ -91,6 +91,7 @@ async fn create_post_persists_rendered_published_post() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -155,6 +156,7 @@ async fn create_post_retries_slug_conflicts_for_same_user_and_date() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -211,6 +213,7 @@ async fn create_post_accepts_slug_override_and_saves_draft() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -257,6 +260,7 @@ async fn create_post_accepts_titleless_body() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -294,6 +298,7 @@ async fn create_post_extracts_markdown_heading_title() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -334,6 +339,7 @@ async fn create_post_rejects_empty_post() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -362,6 +368,7 @@ async fn create_post_rejects_post_without_slug_source() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -393,6 +400,7 @@ async fn create_post_rejects_invalid_format() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -421,6 +429,7 @@ async fn create_post_rejects_invalid_slug_override() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -449,6 +458,7 @@ async fn create_post_rejects_title_without_ascii_slug_characters() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -481,6 +491,7 @@ async fn get_post_returns_published_post() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -532,6 +543,7 @@ async fn get_post_returns_draft_to_author_only() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -541,6 +553,7 @@ async fn get_post_returns_draft_to_author_only() {
             &"stranger".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -637,6 +650,7 @@ async fn get_post_preview_shows_draft_to_author_only() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -646,6 +660,7 @@ async fn get_post_preview_shows_draft_to_author_only() {
             &"stranger".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -701,6 +716,7 @@ async fn get_post_hides_drafts_from_guests() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -883,6 +899,7 @@ async fn update_post_updates_draft_content_and_slug() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -935,6 +952,7 @@ async fn update_post_freezes_slug_when_published() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -980,6 +998,7 @@ async fn update_post_publishes_draft() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1022,6 +1041,7 @@ async fn update_post_rejects_non_author() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1031,6 +1051,7 @@ async fn update_post_rejects_non_author() {
             &"stranger".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1100,6 +1121,7 @@ async fn update_post_rejects_empty_post() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1141,6 +1163,7 @@ async fn update_post_rejects_invalid_format() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1179,6 +1202,7 @@ async fn update_post_returns_not_found_for_missing_post() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1207,6 +1231,7 @@ async fn update_post_returns_not_found_for_deleted_post() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1247,6 +1272,7 @@ async fn update_post_rejects_title_without_ascii_slug_characters() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1289,6 +1315,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1298,6 +1325,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination() {
             &"stranger".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1398,6 +1426,7 @@ async fn publish_post_publishes_draft_and_returns_permalink() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1447,6 +1476,7 @@ async fn publish_post_rejects_non_author() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1456,6 +1486,7 @@ async fn publish_post_rejects_non_author() {
             &"stranger".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1511,6 +1542,7 @@ async fn list_drafts_rejects_invalid_cursor_inputs() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1560,6 +1592,7 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1602,6 +1635,7 @@ async fn get_post_finds_author_draft_across_multiple_pages() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1663,6 +1697,7 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1672,6 +1707,7 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination() {
             &"other".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1801,6 +1837,7 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1810,6 +1847,7 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination() {
             &"other".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1949,6 +1987,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1958,6 +1997,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only() {
             &"other".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -2062,6 +2102,7 @@ async fn list_home_feed_rejects_invalid_cursor_inputs() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -2119,6 +2160,7 @@ async fn delete_post_soft_deletes_post() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -2164,6 +2206,7 @@ async fn delete_post_rejects_non_author() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -2173,6 +2216,7 @@ async fn delete_post_rejects_non_author() {
             &"stranger".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -2219,6 +2263,7 @@ async fn delete_post_rejects_unauthenticated() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -2256,6 +2301,7 @@ async fn delete_post_returns_not_found_for_already_deleted_post() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -2296,6 +2342,7 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -2371,6 +2418,7 @@ async fn unpublish_post_reverts_published_post_to_draft() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -2427,6 +2475,7 @@ async fn unpublish_post_rejects_non_author() {
             &"author".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -2436,6 +2485,7 @@ async fn unpublish_post_rejects_non_author() {
             &"other".parse().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();

@@ -56,6 +56,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             username,
             password,
             display_name,
+            operator,
         } => {
             let username = username
                 .parse::<jaunder::username::Username>()
@@ -69,6 +70,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 &username,
                 password,
                 display_name.as_deref(),
+                operator,
             )
             .await?;
         }
@@ -80,6 +82,16 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Commands::SmtpTest { storage, to } => {
             jaunder::commands::cmd_smtp_test(&storage, &to).await?;
+        }
+        Commands::Backup {
+            storage,
+            mode,
+            path,
+        } => {
+            jaunder::commands::cmd_backup(&storage, mode, path).await?;
+        }
+        Commands::Restore { storage, path } => {
+            jaunder::commands::cmd_restore(&storage, &path).await?;
         }
     }
     Ok(())
@@ -131,6 +143,7 @@ mod tests {
                 username: "alice".to_string(),
                 password: Some("password123".to_string()),
                 display_name: None,
+                operator: false,
             }),
         };
         run(cli).await.unwrap();
@@ -246,6 +259,7 @@ mod tests {
                 username: "invalid username".to_string(),
                 password: Some("password123".to_string()),
                 display_name: None,
+                operator: false,
             }),
         };
         let err = run(cli).await.unwrap_err();
@@ -262,6 +276,7 @@ mod tests {
                 username: "alice".to_string(),
                 password: Some("short".to_string()),
                 display_name: None,
+                operator: false,
             }),
         };
         let err = run(cli).await.unwrap_err();

@@ -18,3 +18,4 @@ playwright/.cache/
 /result
 /data/
 /jaunder-interactive-testing.qcow2
+.worktrees/

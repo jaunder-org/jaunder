@@ -59,6 +59,7 @@ async fn get_profile_returns_display_name_and_bio() {
             &"alice".parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -93,7 +94,7 @@ async fn get_profile_with_email_returns_email() {
     let username: Username = "emailuser".parse().unwrap();
     let user_id = state
         .users
-        .create_user(&username, &"password123".parse().unwrap(), None)
+        .create_user(&username, &"password123".parse().unwrap(), None, false)
         .await
         .unwrap();
     let email = "user@example.com".parse().unwrap();
@@ -122,6 +123,7 @@ async fn update_profile_persists_changes() {
             &"bob".parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -161,6 +163,7 @@ async fn list_sessions_returns_only_authenticated_users_sessions() {
             &"carol".parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -170,6 +173,7 @@ async fn list_sessions_returns_only_authenticated_users_sessions() {
             &"dave".parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -212,6 +216,7 @@ async fn revoke_session_removes_session_and_reauth_fails() {
             &"eve".parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -271,6 +276,7 @@ async fn create_invite_appears_in_list_invites() {
             &"frank".parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -324,6 +330,7 @@ async fn create_invite_large_hours_returns_error() {
             &"alice".parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -362,6 +369,7 @@ async fn revoke_session_unknown_hash_returns_error() {
             &"alice".parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -390,6 +398,7 @@ async fn revoke_session_other_user_hash_returns_error() {
             &"alice".parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -399,6 +408,7 @@ async fn revoke_session_other_user_hash_returns_error() {
             &"bob".parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -432,6 +442,7 @@ async fn list_invites_returns_error_when_policy_not_invite_only() {
             &"grace".parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -480,7 +491,12 @@ async fn update_profile_with_empty_fields_sets_to_none() {
     let username: Username = "empty".parse().unwrap();
     let user_id = state
         .users
-        .create_user(&username, &"password123".parse().unwrap(), Some("Initial"))
+        .create_user(
+            &username,
+            &"password123".parse().unwrap(),
+            Some("Initial"),
+            false,
+        )
         .await
         .unwrap();
     state

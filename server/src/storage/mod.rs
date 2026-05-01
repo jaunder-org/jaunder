@@ -34,6 +34,11 @@ pub use sqlite::{
     SqlitePasswordResetStorage, SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage,
     SqliteUserStorage,
 };
+pub mod backup;
+pub use backup::{
+    export_backup, restore_backup, BackupExportOptions, BackupManifest, BackupMode,
+    BackupRestoreOptions,
+};
 mod postgres;
 pub use postgres::{
     PostgresAtomicOps, PostgresEmailVerificationStorage, PostgresInviteStorage,
@@ -50,6 +55,7 @@ pub(super) type UserRecordParts = (
     Option<DateTime<Utc>>,
     Option<String>,
     bool,
+    bool,
 );
 
 pub(super) fn build_user_record(
@@ -62,6 +68,7 @@ pub(super) fn build_user_record(
         last_authenticated_at,
         email,
         email_verified,
+        is_operator,
     ): UserRecordParts,
 ) -> sqlx::Result<UserRecord> {
     let username = username
@@ -79,6 +86,7 @@ pub(super) fn build_user_record(
         last_authenticated_at,
         email,
         email_verified,
+        is_operator,
     })
 }
 
@@ -177,6 +185,7 @@ pub(super) type UserRow = (
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<String>,
+    bool,
     bool,
 );
 
@@ -391,7 +400,9 @@ pub(super) fn sql_slow_query_threshold() -> Duration {
         .unwrap_or(Duration::from_millis(100))
 }
 
-fn resolved_postgres_options(options: &PgConnectOptions) -> sqlx::Result<PgConnectOptions> {
+pub(crate) fn resolved_postgres_options(
+    options: &PgConnectOptions,
+) -> sqlx::Result<PgConnectOptions> {
     let mut options = options.clone();
     if let Some(password) = postgres_password_from_env().map_err(sqlx::Error::Io)? {
         options = options.password(&password);
@@ -524,6 +535,7 @@ mod tests {
             Some(now),
             Some("alice@example.com".to_string()),
             true,
+            false,
         );
         let record = build_user_record(parts).unwrap();
         assert_eq!(record.user_id, 1);

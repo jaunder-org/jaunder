@@ -18,6 +18,7 @@ common = { workspace = true, optional = true }
 http.workspace = true
 cfg-if.workspace = true
 chrono = { workspace = true, optional = true }
+croner.workspace = true
 email_address = { workspace = true, optional = true }
 serde.workspace = true
 web-sys = { workspace = true, features = ["Window", "Location", "Storage"] }

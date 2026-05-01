@@ -52,6 +52,7 @@ async fn create_user_with_verified_email(
             &username.parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -106,6 +107,7 @@ async fn request_password_reset_returns_error_for_user_without_verified_email() 
             &"bob".parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();

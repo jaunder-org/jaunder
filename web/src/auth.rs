@@ -268,7 +268,7 @@ pub async fn register(
         let user_id = match policy {
             RegistrationPolicy::Open => state
                 .users
-                .create_user(&username, &password, None)
+                .create_user(&username, &password, None, false)
                 .instrument(tracing::info_span!("web.auth.register.create_user_open"))
                 .await
                 .map_err(register_open_error)?,
@@ -278,7 +278,7 @@ pub async fn register(
                     .ok_or_else(|| InternalError::validation("invite code required"))?;
                 state
                     .atomic
-                    .create_user_with_invite(&username, &password, None, &code)
+                    .create_user_with_invite(&username, &password, None, false, &code)
                     .instrument(tracing::info_span!("web.auth.register.create_user_invite"))
                     .await
                     .map_err(register_invite_error)?
