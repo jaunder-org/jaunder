@@ -1,4 +1,5 @@
 use crate::auth::current_user;
+use crate::backup::{backup_warning_visible, current_user_is_operator};
 use crate::posts::{CreatePost, DeletePost, TimelinePostSummary, UnpublishPost};
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
@@ -23,6 +24,7 @@ impl Icons {
     pub const PLUS: &'static str = "M10 4v12 M4 10h12";
     pub const COG: &'static str = "M10 6v2 M10 12v2 M6 10H4 M16 10h-2 M6.5 6.5l-1.5-1.5 M14 14l1.5 1.5 M6.5 13.5L5 15 M14 6l1.5-1.5 M10 13a3 3 0 1 0 0-6a3 3 0 0 0 0 6z";
     pub const EDIT: &'static str = "M3 17l4 0 9-9a2.83 2.83 0 0 0-4-4l-9 9 0 4 M12 5l3 3";
+    pub const SHIELD: &'static str = "M10 3l6 2v4c0 4-2.4 7.1-6 8-3.6-.9-6-4-6-8V5l6-2z";
 }
 
 // ─── 3.1 Icon ─────────────────────────────────────────────────
@@ -105,6 +107,30 @@ pub fn Chip(
 }
 
 // ─── 3.5 Topbar ───────────────────────────────────────────────
+
+#[component]
+pub fn BackupBanner() -> impl IntoView {
+    let visible = Resource::new(|| (), |_| backup_warning_visible());
+
+    view! {
+        <Suspense fallback=|| ()>
+            {move || Suspend::new(async move {
+                match visible.await {
+                    Ok(true) => {
+                        view! {
+                            <div class="j-backup-banner" role="alert">
+                                <span>"Backups are not configured. Your data is at risk."</span>
+                                <a href="/admin/backups">"Configure Backups"</a>
+                            </div>
+                        }
+                            .into_any()
+                    }
+                    _ => ().into_any(),
+                }
+            })}
+        </Suspense>
+    }
+}
 
 #[component]
 pub fn Topbar(
@@ -496,6 +522,10 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
 
     let location = use_location();
     let user = Resource::new(move || location.pathname.get(), |_| current_user());
+    let operator = Resource::new(
+        move || location.pathname.get(),
+        |_| current_user_is_operator(),
+    );
 
     // (key, label, icon_path, href, auth_required)
     const NAV_ITEMS: &[(&str, &str, &str, Option<&'static str>, bool)] = &[
@@ -554,6 +584,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
                     let active_key = active_key.clone();
                     Suspend::new(async move {
                         let is_authed = matches!(user.await, Ok(Some(_)));
+                        let is_operator = matches!(operator.await, Ok(true));
                         view! {
                             <nav class="j-nav">
                                 {NAV_ITEMS
@@ -573,6 +604,19 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
                                         }
                                     })
                                     .collect::<Vec<_>>()}
+                                {if is_operator {
+                                    view! {
+                                        <SidebarNavItem
+                                            label="Admin"
+                                            icon_path=Icons::SHIELD
+                                            active=active_key == "admin"
+                                            href=Some("/admin/backups")
+                                        />
+                                    }
+                                        .into_any()
+                                } else {
+                                    ().into_any()
+                                }}
                             </nav>
                         }
                     })

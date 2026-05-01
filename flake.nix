@@ -442,16 +442,18 @@
           commonArgs
           // {
             inherit cargoArtifacts;
-            cargoExtraArgs = "-p jaunder --test commands --test storage --test web_account --test web_auth --test web_email --test web_password_reset";
+            cargoExtraArgs = "-p jaunder --test backup_interop --test commands --test storage --test web_account --test web_auth --test web_backup --test web_email --test web_password_reset";
             doCheck = false;
             installPhaseCommand = ''
               mkdir -p $out/lib $out/tests
               ln -s ${pkgs.openssl.out}/lib/libssl.so.3 $out/lib/libssl.so.3
               ln -s ${pkgs.openssl.out}/lib/libcrypto.so.3 $out/lib/libcrypto.so.3
+              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'backup_interop-*' | head -n 1)" $out/tests/backup_interop
               cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'commands-*' | head -n 1)" $out/tests/commands
               cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'storage-*' | head -n 1)" $out/tests/storage
               cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'web_account-*' | head -n 1)" $out/tests/web_account
               cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'web_auth-*' | head -n 1)" $out/tests/web_auth
+              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'web_backup-*' | head -n 1)" $out/tests/web_backup
               cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'web_email-*' | head -n 1)" $out/tests/web_email
               cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'web_password_reset-*' | head -n 1)" $out/tests/web_password_reset
             '';
@@ -805,6 +807,11 @@
               warmupEnv = " JAUNDER_E2E_WARMUP=1";
             };
 
+            postgres-backup-interop = postgresTestBinaryCheck {
+              checkName = "jaunder-postgres-backup-interop";
+              testBinary = "backup_interop";
+            };
+
             # `commands` includes PostgreSQL-only ignored bootstrap tests, so
             # this VM check runs the full binary with `--include-ignored`.
             postgres-commands = postgresTestBinaryCheck {
@@ -830,6 +837,11 @@
             postgres-web-auth = postgresTestBinaryCheck {
               checkName = "jaunder-postgres-web-auth";
               testBinary = "web_auth";
+            };
+
+            postgres-web-backup = postgresTestBinaryCheck {
+              checkName = "jaunder-postgres-web-backup";
+              testBinary = "web_backup";
             };
 
             postgres-web-email = postgresTestBinaryCheck {

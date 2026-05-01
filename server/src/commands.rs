@@ -1,11 +1,18 @@
-use std::{io, net::SocketAddr};
+use std::{
+    fs, io,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
-use sqlx::{postgres::PgConnectOptions, Connection, PgConnection};
+use sqlx::{postgres::PgConnectOptions, Connection, PgConnection, PgPool, SqlitePool};
 
 use crate::cli::StorageArgs;
 use crate::mailer::LettreMailSender;
 use crate::password::Password;
-use crate::storage::DbConnectOptions;
+use crate::storage::{
+    export_backup, resolved_postgres_options, restore_backup, BackupExportOptions, BackupMode,
+    BackupRestoreOptions, DbConnectOptions,
+};
 use crate::storage::{init_storage, open_database, open_existing_database};
 use crate::username::Username;
 use common::mailer::{EmailMessage, MailSender};
@@ -137,6 +144,7 @@ pub async fn cmd_user_create(
     username: &Username,
     password: Option<Password>,
     display_name: Option<&str>,
+    is_operator: bool,
 ) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db)
         .await
@@ -156,7 +164,7 @@ pub async fn cmd_user_create(
 
     let user_id = state
         .users
-        .create_user(username, &password, display_name)
+        .create_user(username, &password, display_name, is_operator)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -214,6 +222,116 @@ pub async fn cmd_smtp_test(storage: &StorageArgs, to: &str) -> anyhow::Result<()
     Ok(())
 }
 
+pub async fn cmd_backup(
+    storage: &StorageArgs,
+    mode: BackupMode,
+    path: Option<PathBuf>,
+) -> anyhow::Result<PathBuf> {
+    let destination_path = path.unwrap_or_else(|| default_backup_path(storage, mode));
+    let manifest = export_backup(BackupExportOptions {
+        database: &storage.db,
+        media_path: &storage.storage_path.join("media"),
+        destination_path: &destination_path,
+        mode,
+    })
+    .await?;
+
+    println!(
+        "Backup complete: path={} tables={}",
+        destination_path.display(),
+        manifest.tables.len()
+    );
+    Ok(destination_path)
+}
+
+pub async fn cmd_restore(storage: &StorageArgs, path: &Path) -> anyhow::Result<()> {
+    if !path.exists() {
+        return Err(anyhow::anyhow!(
+            "backup path does not exist: {}",
+            path.display()
+        ));
+    }
+    ensure_restore_target_empty(storage).await?;
+    let manifest = restore_backup(BackupRestoreOptions {
+        database: &storage.db,
+        media_path: &storage.storage_path.join("media"),
+        source_path: path,
+    })
+    .await?;
+
+    println!(
+        "Restore complete: path={} tables={}",
+        path.display(),
+        manifest.tables.len()
+    );
+    Ok(())
+}
+
+fn default_backup_path(storage: &StorageArgs, mode: BackupMode) -> PathBuf {
+    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+    let name = match mode {
+        BackupMode::Directory => format!("backup-{timestamp}"),
+        BackupMode::Archive => format!("backup-{timestamp}.tar.gz"),
+    };
+    storage.storage_path.join("backups").join(name)
+}
+
+async fn ensure_restore_target_empty(storage: &StorageArgs) -> anyhow::Result<()> {
+    if database_has_users(&storage.db).await? {
+        return Err(anyhow::anyhow!(
+            "refusing to restore into a non-empty database"
+        ));
+    }
+    let media_path = storage.storage_path.join("media");
+    if directory_has_entries(&media_path)? {
+        return Err(anyhow::anyhow!(
+            "refusing to restore into a non-empty media directory"
+        ));
+    }
+    Ok(())
+}
+
+async fn database_has_users(db: &DbConnectOptions) -> anyhow::Result<bool> {
+    match db {
+        DbConnectOptions::Sqlite(options) => {
+            let pool = SqlitePool::connect_with(options.clone()).await?;
+            Ok(
+                sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM users LIMIT 1)")
+                    .fetch_one(&pool)
+                    .await?
+                    != 0,
+            )
+        }
+        DbConnectOptions::Postgres { options, .. } => {
+            let options = resolved_postgres_options(options)?;
+            let pool = PgPool::connect_with(options).await?;
+            Ok(
+                sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users LIMIT 1)")
+                    .fetch_one(&pool)
+                    .await?,
+            )
+        }
+    }
+}
+
+fn directory_has_entries(path: &Path) -> io::Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        if metadata.is_dir() {
+            if directory_has_entries(&entry.path())? {
+                return Ok(true);
+            }
+        } else {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> anyhow::Result<()> {
     crate::observability::init_tracing();
 
@@ -245,9 +363,13 @@ pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> a
         .site_addr(bind)
         .build();
 
+    let backup_scheduler =
+        crate::start_backup_worker(db.clone(), storage.db.clone(), storage.storage_path.clone())
+            .await?;
     let router = crate::create_router(leptos_options, db, prod);
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!(bind = %bind, prod, "starting HTTP server");
+    let _backup_scheduler = backup_scheduler;
     axum::serve(listener, router).await?;
     Ok(())
 }
@@ -309,5 +431,45 @@ mod tests {
         assert!(err
             .to_string()
             .contains("--app-db must include a PostgreSQL database name"));
+    }
+
+    #[test]
+    fn default_backup_path_is_under_storage_backups() {
+        let storage = StorageArgs {
+            storage_path: PathBuf::from("/tmp/jaunder"),
+            db: "sqlite:/tmp/jaunder.db".parse().expect("sqlite db"),
+        };
+
+        let path = default_backup_path(&storage, BackupMode::Directory);
+
+        assert!(path.starts_with("/tmp/jaunder/backups"));
+    }
+
+    #[test]
+    fn default_archive_backup_path_ends_with_tar_gz() {
+        let storage = StorageArgs {
+            storage_path: PathBuf::from("/tmp/jaunder"),
+            db: "sqlite:/tmp/jaunder.db".parse().expect("sqlite db"),
+        };
+
+        let path = default_backup_path(&storage, BackupMode::Archive);
+
+        assert!(path.starts_with("/tmp/jaunder/backups"));
+        assert!(path.to_string_lossy().ends_with(".tar.gz"));
+    }
+
+    #[test]
+    fn directory_has_entries_handles_missing_empty_and_nested_paths() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        assert!(!directory_has_entries(&temp.path().join("missing")).expect("missing"));
+
+        let empty = temp.path().join("empty");
+        std::fs::create_dir(&empty).expect("empty dir");
+        assert!(!directory_has_entries(&empty).expect("empty"));
+
+        let nested = temp.path().join("nested");
+        std::fs::create_dir(&nested).expect("nested dir");
+        std::fs::write(nested.join("file.txt"), "content").expect("nested file");
+        assert!(directory_has_entries(temp.path()).expect("nested"));
     }
 }

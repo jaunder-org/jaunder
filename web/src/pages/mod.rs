@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod backup;
 pub mod email;
 pub mod home;
 pub mod invites;
@@ -9,7 +10,8 @@ pub mod sessions;
 pub(crate) mod signal_read;
 pub mod ui;
 pub use ui::{
-    Avatar, Chip, Dot, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar, Topbar,
+    Avatar, BackupBanner, Chip, Dot, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar,
+    Topbar,
 };
 
 /// Default theme identifier. This selects the CSS variable pack applied via
@@ -19,6 +21,7 @@ pub use ui::{
 pub const DEFAULT_THEME: &str = "studio";
 
 use crate::pages::auth::{LoginPage, LogoutPage, RegisterPage};
+use crate::pages::backup::BackupSettingsPage;
 use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
 use crate::pages::invites::InvitesPage;
@@ -42,9 +45,12 @@ fn AppShell() -> impl IntoView {
         <div class="j-root" attr:data-theme=move || theme.get()>
             <div class="j-shell">
                 <Sidebar />
-                <main class="j-main">
-                    <Outlet />
-                </main>
+                <div class="j-main-region">
+                    <BackupBanner />
+                    <main class="j-main">
+                        <Outlet />
+                    </main>
+                </div>
             </div>
         </div>
     }
@@ -116,6 +122,10 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("profile") view=ProfilePage />
                     <Route path=StaticSegment("sessions") view=SessionsPage />
                     <Route path=StaticSegment("invites") view=InvitesPage />
+                    <Route
+                        path=(StaticSegment("admin"), StaticSegment("backups"))
+                        view=BackupSettingsPage
+                    />
                     <Route
                         path=(StaticSegment("posts"), StaticSegment("new"))
                         view=CreatePostPage

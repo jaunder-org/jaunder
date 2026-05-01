@@ -3,7 +3,7 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::storage::DbConnectOptions;
+use crate::storage::{BackupMode, DbConnectOptions};
 
 #[derive(Parser, Clone)]
 #[command(name = "jaunder", about = "A self-hosted social reader")]
@@ -129,6 +129,10 @@ pub enum Commands {
         /// Optional display name.
         #[arg(long)]
         display_name: Option<String>,
+
+        /// Mark the user as an operator with administrative privileges.
+        #[arg(long)]
+        operator: bool,
     },
 
     /// Generate an invite code.
@@ -155,6 +159,30 @@ pub enum Commands {
         /// Email address to send the test message to.
         #[arg(long)]
         to: String,
+    },
+
+    /// Immediately run a backup.
+    Backup {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// Backup format to write.
+        #[arg(long, value_enum, default_value = "directory")]
+        mode: BackupMode,
+
+        /// Destination directory or .tar.gz archive path for this backup.
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
+
+    /// Restore from a backup archive or directory.
+    Restore {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// Backup archive or directory to restore from.
+        #[arg(required = true)]
+        path: PathBuf,
     },
 }
 
@@ -498,6 +526,63 @@ mod tests {
     fn smtp_test_missing_to_is_clap_error() {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let result = Cli::try_parse_from(["jaunder", "smtp-test"]);
+        assert!(result.is_err());
+    }
+
+    // --- backup / restore ---
+
+    #[test]
+    fn backup_path_optional() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&["backup"]);
+        let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
+            panic!("wrong variant");
+        };
+        assert_eq!(mode, BackupMode::Directory);
+        assert_eq!(path, None);
+    }
+
+    #[test]
+    fn backup_parses_path() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&["backup", "--path", "/tmp/backup"]);
+        let Commands::Backup { path, .. } = cli.command.expect("subcommand") else {
+            panic!("wrong variant");
+        };
+        assert_eq!(path, Some(PathBuf::from("/tmp/backup")));
+    }
+
+    #[test]
+    fn backup_parses_archive_mode() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&[
+            "backup",
+            "--mode",
+            "archive",
+            "--path",
+            "/tmp/backup.tar.gz",
+        ]);
+        let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
+            panic!("wrong variant");
+        };
+        assert_eq!(mode, BackupMode::Archive);
+        assert_eq!(path, Some(PathBuf::from("/tmp/backup.tar.gz")));
+    }
+
+    #[test]
+    fn restore_parses_required_path() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&["restore", "/tmp/backup"]);
+        let Commands::Restore { path, .. } = cli.command.expect("subcommand") else {
+            panic!("wrong variant");
+        };
+        assert_eq!(path, PathBuf::from("/tmp/backup"));
+    }
+
+    #[test]
+    fn restore_missing_path_is_clap_error() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let result = Cli::try_parse_from(["jaunder", "restore"]);
         assert!(result.is_err());
     }
 

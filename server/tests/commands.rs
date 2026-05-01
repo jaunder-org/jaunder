@@ -6,12 +6,16 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use chrono::Utc;
 use jaunder::cli::StorageArgs;
 use jaunder::commands::{
-    cmd_create_pg_db, cmd_init, cmd_serve, cmd_smtp_test, cmd_user_create, cmd_user_invite,
+    cmd_backup, cmd_create_pg_db, cmd_init, cmd_restore, cmd_serve, cmd_smtp_test, cmd_user_create,
+    cmd_user_invite,
 };
 use jaunder::password::Password;
-use jaunder::storage::{open_database, open_existing_database};
+use jaunder::storage::{
+    open_database, open_existing_database, BackupMode, CreatePostInput, PostFormat,
+};
 use jaunder::username::Username;
 use leptos::prelude::LeptosOptions;
 use sqlx::Connection;
@@ -41,6 +45,79 @@ fn uninitialized_storage_args(base: &TempDir) -> StorageArgs {
         sqlite_url(base)
     };
     StorageArgs { storage_path, db }
+}
+
+async fn populate_backup_fixture(args: &StorageArgs) -> i64 {
+    let state = open_existing_database(&args.db)
+        .await
+        .expect("open database");
+    let username: Username = "backupuser".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    let user_id = state
+        .users
+        .create_user(&username, &password, Some("Backup User"), true)
+        .await
+        .expect("create user");
+    let post_id = state
+        .posts
+        .create_post(&CreatePostInput {
+            user_id,
+            title: Some("Restored Post".to_owned()),
+            slug: "restored-post".parse().expect("valid slug"),
+            body: "body text".to_owned(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>body text</p>".to_owned(),
+            published_at: Some(Utc::now()),
+        })
+        .await
+        .expect("create post");
+    state
+        .posts
+        .tag_post(post_id, "Backup-Test")
+        .await
+        .expect("tag post");
+    std::fs::write(args.storage_path.join("media").join("avatar.txt"), "media")
+        .expect("write media");
+    post_id
+}
+
+async fn assert_backup_fixture_restored(args: &StorageArgs, post_id: i64) {
+    let state = open_existing_database(&args.db)
+        .await
+        .expect("open restored database");
+    let username: Username = "backupuser".parse().expect("valid username");
+    let user = state
+        .users
+        .get_user_by_username(&username)
+        .await
+        .expect("get user")
+        .expect("restored user");
+    assert!(user.is_operator);
+    assert_eq!(user.display_name.as_deref(), Some("Backup User"));
+
+    let post = state
+        .posts
+        .get_post_by_id(post_id)
+        .await
+        .expect("get post")
+        .expect("restored post");
+    assert_eq!(post.title.as_deref(), Some("Restored Post"));
+    assert_eq!(post.slug.as_str(), "restored-post");
+
+    let tags = state
+        .posts
+        .get_tags_for_post(post_id)
+        .await
+        .expect("get tags");
+    assert_eq!(tags.len(), 1);
+    assert_eq!(tags[0].tag_slug.as_str(), "backup-test");
+    assert_eq!(tags[0].tag_display, "Backup-Test");
+
+    assert_eq!(
+        std::fs::read_to_string(args.storage_path.join("media").join("avatar.txt"))
+            .expect("read restored media"),
+        "media"
+    );
 }
 
 #[tokio::test]
@@ -297,7 +374,7 @@ async fn cmd_user_create_creates_retrievable_user() {
 
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
-    cmd_user_create(&args, &username, Some(password), None)
+    cmd_user_create(&args, &username, Some(password), None, false)
         .await
         .expect("user create");
 
@@ -309,6 +386,32 @@ async fn cmd_user_create_creates_retrievable_user() {
         .expect("db query");
     assert!(user.is_some(), "user should exist after creation");
     assert_eq!(user.expect("user present").username.as_str(), "alice");
+}
+
+// M6.1.7: creating a user with --operator sets is_operator to true.
+#[tokio::test]
+async fn cmd_user_create_with_operator_flag_sets_is_operator() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.expect("init");
+
+    let username: Username = "admin".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    cmd_user_create(&args, &username, Some(password), None, true)
+        .await
+        .expect("user create");
+
+    let state = open_existing_database(&args.db).await.expect("open db");
+    let user = state
+        .users
+        .get_user_by_username(&username)
+        .await
+        .expect("db query")
+        .expect("user should exist");
+    assert!(
+        user.is_operator,
+        "is_operator should be true for operator user"
+    );
 }
 
 #[tokio::test]
@@ -347,6 +450,148 @@ async fn cmd_user_invite_too_large_expires_in_returns_error() {
     let result = cmd_user_invite(&args, Some(u64::MAX)).await;
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("too large"));
+}
+
+// M6.3.2: backup command writes a directory-mode backup.
+#[tokio::test]
+async fn cmd_backup_writes_directory_backup() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.expect("init");
+
+    let username: Username = "backupuser".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    cmd_user_create(&args, &username, Some(password), None, false)
+        .await
+        .expect("user create");
+
+    let media_path = args.storage_path.join("media");
+    std::fs::write(media_path.join("avatar.txt"), "media").expect("write media");
+
+    let backup_path = base.path().join("manual-backup");
+    let written_path = cmd_backup(&args, BackupMode::Directory, Some(backup_path.clone()))
+        .await
+        .expect("backup");
+
+    assert_eq!(written_path, backup_path);
+    assert!(written_path.join("manifest.json").is_file());
+    assert!(written_path.join("db").join("users.ndjson").is_file());
+    assert_eq!(
+        std::fs::read_to_string(written_path.join("media").join("avatar.txt")).expect("read media"),
+        "media"
+    );
+}
+
+// M6.3.2: backup command defaults to storage/backups.
+#[tokio::test]
+async fn cmd_backup_without_path_writes_under_storage_backups() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.expect("init");
+
+    let written_path = cmd_backup(&args, BackupMode::Directory, None)
+        .await
+        .expect("backup");
+
+    assert!(written_path.starts_with(args.storage_path.join("backups")));
+    assert!(written_path.join("manifest.json").is_file());
+}
+
+// M6.3.3: restore refuses missing backup paths before checking target state.
+#[tokio::test]
+async fn cmd_restore_refuses_missing_backup_path() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.expect("init");
+
+    let err = cmd_restore(&args, &base.path().join("missing"))
+        .await
+        .expect_err("restore fails");
+
+    assert!(err.to_string().contains("backup path does not exist"));
+}
+
+// M6.3.3: restore refuses to run if the target database is populated.
+#[tokio::test]
+async fn cmd_restore_refuses_populated_database() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.expect("init");
+
+    let username: Username = "restoreuser".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    cmd_user_create(&args, &username, Some(password), None, false)
+        .await
+        .expect("user create");
+
+    let backup_path = base.path().join("backup");
+    std::fs::create_dir(&backup_path).expect("backup dir");
+    let err = cmd_restore(&args, &backup_path)
+        .await
+        .expect_err("restore fails");
+
+    assert!(err.to_string().contains("non-empty database"));
+}
+
+// M6.3.3: restore refuses to run if the media directory contains files.
+#[tokio::test]
+async fn cmd_restore_refuses_nonempty_media_directory() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.expect("init");
+
+    std::fs::write(args.storage_path.join("media").join("file.txt"), "media").expect("write media");
+
+    let backup_path = base.path().join("backup");
+    std::fs::create_dir(&backup_path).expect("backup dir");
+    let err = cmd_restore(&args, &backup_path)
+        .await
+        .expect_err("restore fails");
+
+    assert!(err.to_string().contains("non-empty media directory"));
+}
+
+// M6.3.3: an empty target passes safety checks and validates the backup layout.
+#[tokio::test]
+async fn cmd_restore_empty_target_rejects_invalid_backup() {
+    let base = TempDir::new().expect("temp dir");
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.expect("init");
+
+    let backup_path = base.path().join("backup");
+    std::fs::create_dir(&backup_path).expect("backup dir");
+    let err = cmd_restore(&args, &backup_path)
+        .await
+        .expect_err("restore fails");
+
+    assert!(err.to_string().contains("missing manifest"));
+}
+
+// M6.6.1: backup/restore round-trips database records and media.
+#[tokio::test]
+async fn cmd_restore_restores_directory_backup() {
+    let base = TempDir::new().expect("temp dir");
+    let source_args = storage_args(&base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    let post_id = populate_backup_fixture(&source_args).await;
+
+    let backup_path = base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let target_args = storage_args(&target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+    cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("restore");
+
+    assert_backup_fixture_restored(&target_args, post_id).await;
 }
 
 #[tokio::test]

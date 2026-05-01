@@ -540,6 +540,7 @@ async fn logout_revokes_session_and_clears_cookie() {
             &"grace".parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -678,6 +679,7 @@ async fn logout_with_bearer_token_revokes_session() {
             &"henry".parse::<Username>().expect("valid username"),
             &"password123".parse().expect("valid password"),
             None,
+            false,
         )
         .await
         .expect("failed to create user");
@@ -824,6 +826,7 @@ async fn logout_clears_cookie_without_secure_attribute_when_disabled() {
             &"insecure".parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
+            false,
         )
         .await
         .unwrap();

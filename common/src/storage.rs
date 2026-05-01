@@ -26,6 +26,11 @@ pub trait SiteConfigStorage: Send + Sync {
     async fn set(&self, key: &str, value: &str) -> sqlx::Result<()>;
 }
 
+pub const BACKUP_DESTINATION_PATH_KEY: &str = "backup.destination_path";
+pub const BACKUP_SCHEDULE_KEY: &str = "backup.schedule";
+pub const BACKUP_RETENTION_COUNT_KEY: &str = "backup.retention_count";
+pub const BACKUP_MODE_KEY: &str = "backup.mode";
+
 // ---------------------------------------------------------------------------
 // Users
 // ---------------------------------------------------------------------------
@@ -44,6 +49,7 @@ pub struct UserRecord {
     pub last_authenticated_at: Option<DateTime<Utc>>,
     pub email: Option<EmailAddress>,
     pub email_verified: bool,
+    pub is_operator: bool,
 }
 
 /// Errors that can occur when creating a user.
@@ -80,6 +86,7 @@ pub trait UserStorage: Send + Sync {
         username: &Username,
         password: &Password,
         display_name: Option<&str>,
+        is_operator: bool,
     ) -> Result<i64, CreateUserError>;
 
     async fn authenticate(
@@ -225,6 +232,7 @@ pub trait AtomicOps: Send + Sync {
         username: &Username,
         password: &Password,
         display_name: Option<&str>,
+        is_operator: bool,
         invite_code: &str,
     ) -> Result<i64, RegisterWithInviteError>;
 

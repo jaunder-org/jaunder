@@ -86,6 +86,7 @@ impl UserStorage for PostgresUserStorage {
         username: &Username,
         password: &Password,
         display_name: Option<&str>,
+        is_operator: bool,
     ) -> Result<i64, CreateUserError> {
         let password_hash = super::hash_password(password.clone())
             .instrument(tracing::info_span!(
@@ -97,14 +98,15 @@ impl UserStorage for PostgresUserStorage {
         let now = Utc::now();
 
         let result = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO users (username, password_hash, display_name, created_at)
-             VALUES ($1, $2, $3, $4)
+            "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
+             VALUES ($1, $2, $3, $4, $5)
              RETURNING user_id",
         )
         .bind(username.as_str())
         .bind(&password_hash)
         .bind(display_name)
         .bind(now)
+        .bind(is_operator)
         .fetch_one(&self.pool)
         .instrument(tracing::info_span!(
             "storage.postgres.user.create_user.insert_user_row"
@@ -142,10 +144,11 @@ impl UserStorage for PostgresUserStorage {
                 String,
                 Option<String>,
                 bool,
+                bool,
             ),
         >(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
-                    password_hash, email, email_verified
+                    password_hash, email, email_verified, is_operator
              FROM users WHERE username = $1",
         )
         .bind(username.as_str())
@@ -166,6 +169,7 @@ impl UserStorage for PostgresUserStorage {
             hash,
             email,
             email_verified,
+            is_operator,
         ) = match row {
             Some(row) => row,
             None => return Err(UserAuthError::InvalidCredentials),
@@ -183,6 +187,7 @@ impl UserStorage for PostgresUserStorage {
         }
 
         let now = Utc::now();
+
         sqlx::query("UPDATE users SET last_authenticated_at = $1 WHERE user_id = $2")
             .bind(now)
             .bind(user_id)
@@ -202,6 +207,7 @@ impl UserStorage for PostgresUserStorage {
             Some(now),
             email,
             email_verified,
+            is_operator,
         ))
         .map_err(|e| UserAuthError::Internal(e.to_string()))
     }
@@ -209,7 +215,7 @@ impl UserStorage for PostgresUserStorage {
     async fn get_user(&self, user_id: i64) -> sqlx::Result<Option<UserRecord>> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
-                    email, email_verified
+                    email, email_verified, is_operator
              FROM users WHERE user_id = $1",
         )
         .bind(user_id)
@@ -221,7 +227,7 @@ impl UserStorage for PostgresUserStorage {
     async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
-                    email, email_verified
+                    email, email_verified, is_operator
              FROM users WHERE username = $1",
         )
         .bind(username.as_str())
@@ -618,6 +624,7 @@ impl AtomicOps for PostgresAtomicOps {
         username: &Username,
         password: &Password,
         display_name: Option<&str>,
+        is_operator: bool,
         invite_code: &str,
     ) -> Result<i64, RegisterWithInviteError> {
         let mut tx = self.pool.begin().await?;
@@ -644,14 +651,15 @@ impl AtomicOps for PostgresAtomicOps {
             .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;
 
         let result = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO users (username, password_hash, display_name, created_at)
-             VALUES ($1, $2, $3, $4)
+            "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
+             VALUES ($1, $2, $3, $4, $5)
              RETURNING user_id",
         )
         .bind(username.as_str())
         .bind(&password_hash)
         .bind(display_name)
         .bind(now)
+        .bind(is_operator)
         .fetch_one(&mut *tx)
         .await;
 
@@ -1297,6 +1305,7 @@ mod tests {
             Some(now),
             Some("alice@example.com".to_string()),
             true,
+            false,
         );
         let record = user_record_from_row(row).unwrap();
         assert_eq!(record.user_id, 1);
@@ -1367,7 +1376,7 @@ mod tests {
         exercise(site_config.set("site.registration_policy", "open")).await;
 
         let users = PostgresUserStorage::new(pool.clone());
-        exercise(users.create_user(&username, &password, Some("Alice"))).await;
+        exercise(users.create_user(&username, &password, Some("Alice"), false)).await;
         exercise(users.authenticate(&username, &password)).await;
         exercise(users.get_user(1)).await;
         exercise(users.get_user_by_username(&username)).await;
@@ -1413,7 +1422,14 @@ mod tests {
         ));
 
         let atomic = PostgresAtomicOps::new(pool.clone());
-        exercise(atomic.create_user_with_invite(&username, &password, Some("Alice"), "code")).await;
+        exercise(atomic.create_user_with_invite(
+            &username,
+            &password,
+            Some("Alice"),
+            false,
+            "code",
+        ))
+        .await;
         assert!(matches!(
             atomic.confirm_password_reset("not-base64", &password).await,
             Err(ConfirmPasswordResetError::NotFound)
