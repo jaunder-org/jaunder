@@ -131,6 +131,42 @@ async fn operator_gets_configured_backup_settings() {
 }
 
 #[tokio::test]
+async fn operator_gets_defaults_for_invalid_backup_settings() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let cookie = create_session_cookie(&state, "operator", true).await;
+    state
+        .site_config
+        .set(BACKUP_DESTINATION_PATH_KEY, "/srv/backups")
+        .await
+        .unwrap();
+    state
+        .site_config
+        .set(BACKUP_SCHEDULE_KEY, "not-a-schedule")
+        .await
+        .unwrap();
+    state
+        .site_config
+        .set(BACKUP_RETENTION_COUNT_KEY, "daily")
+        .await
+        .unwrap();
+    state
+        .site_config
+        .set(BACKUP_MODE_KEY, "surprise")
+        .await
+        .unwrap();
+
+    let (status, body) = post_form(state, "/api/get_backup_settings", "", Some(&cookie)).await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let settings: BackupSettings = serde_json::from_str(&body).unwrap();
+    assert_eq!(settings.destination_path, "/srv/backups");
+    assert_eq!(settings.schedule, "0 0 0 * * *");
+    assert_eq!(settings.retention_count, "7");
+    assert_eq!(settings.mode, "directory");
+}
+
+#[tokio::test]
 async fn operator_can_update_backup_settings() {
     let base = TempDir::new().unwrap();
     let state = test_state(&base).await;
@@ -224,7 +260,25 @@ async fn operator_update_backup_settings_rejects_empty_schedule() {
     .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("backup schedule is required"));
+    assert!(body.contains("backup schedule must be a valid six-field cron expression"));
+}
+
+#[tokio::test]
+async fn operator_update_backup_settings_rejects_invalid_schedule() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let cookie = create_session_cookie(&state, "operator", true).await;
+
+    let (status, body) = post_form(
+        state,
+        "/api/update_backup_settings",
+        "destination_path=%2Fsrv%2Fbackups&schedule=not-a-schedule&retention_count=5&mode=directory",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("backup schedule must be a valid six-field cron expression"));
 }
 
 #[tokio::test]
@@ -337,6 +391,34 @@ async fn backup_warning_hidden_when_destination_configured() {
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(body, "false");
+}
+
+#[tokio::test]
+async fn backup_warning_visible_when_configured_schedule_is_invalid() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let cookie = create_session_cookie(&state, "operator", true).await;
+    state
+        .site_config
+        .set(BACKUP_DESTINATION_PATH_KEY, "/srv/backups")
+        .await
+        .unwrap();
+    state
+        .site_config
+        .set(BACKUP_SCHEDULE_KEY, "not-a-schedule")
+        .await
+        .unwrap();
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/backup_warning_visible",
+        "",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(body, "true");
 }
 
 #[tokio::test]

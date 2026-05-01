@@ -47,6 +47,7 @@ flate2.workspace = true
 tar.workspace = true
 tokio-cron-scheduler.workspace = true
 chrono = { workspace = true, features = ["serde"] }
+croner.workspace = true
 email_address.workspace = true
 rust-embed = { version = "8.11.0", features = ["axum"] }
 axum-embed = "0.1.0"
