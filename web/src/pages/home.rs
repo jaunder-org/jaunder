@@ -28,7 +28,7 @@ pub fn HomePage() -> impl IntoView {
     let error = RwSignal::new(None::<String>);
 
     let refresh_version = RwSignal::new(0u32);
-    let on_mutate = Callback::new(move |_| refresh_version.update(|v| *v += 1));
+    let on_mutate = Callback::new(move |()| refresh_version.update(|v| *v += 1));
 
     let initial_page = Resource::new(
         move || refresh_version.get(),

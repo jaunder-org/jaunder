@@ -18,7 +18,7 @@ use leptos_router::hooks::use_params_map;
 #[component]
 pub fn CreatePostPage() -> impl IntoView {
     let create_post_action = ServerAction::<CreatePost>::new();
-    let current_user = Resource::new(|| (), |_| current_user());
+    let current_user = Resource::new(|| (), |()| current_user());
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
 
@@ -223,7 +223,7 @@ pub fn PostPage() -> impl IntoView {
         },
     );
 
-    let on_unpublish = Callback::new(move |_| {
+    let on_unpublish = Callback::new(move |()| {
         #[cfg(target_arch = "wasm32")]
         if let Some(window) = web_sys::window() {
             let _ = window.location().replace("/drafts");
@@ -279,7 +279,7 @@ pub fn UserTimelinePage() -> impl IntoView {
     });
 
     let mutate_version = RwSignal::new(0u32);
-    let on_mutate = Callback::new(move |_| mutate_version.update(|v| *v += 1));
+    let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
     let initial_page = Resource::new(
         move || (username.get(), mutate_version.get()),
@@ -519,7 +519,7 @@ pub fn EditPostPage() -> impl IntoView {
     );
 
     view! {
-        <Topbar title="Edit Post".to_string() sub="".to_string() />
+        <Topbar title="Edit Post".to_string() sub=String::new() />
         <Suspense fallback=|| {
             view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>

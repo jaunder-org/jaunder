@@ -57,10 +57,10 @@ impl IntoResponse for AuthRejection {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
             AuthRejection::MissingToken
-            | AuthRejection::Session(common::storage::SessionAuthError::InvalidToken)
-            | AuthRejection::Session(common::storage::SessionAuthError::SessionNotFound) => {
-                StatusCode::UNAUTHORIZED
-            }
+            | AuthRejection::Session(
+                common::storage::SessionAuthError::InvalidToken
+                | common::storage::SessionAuthError::SessionNotFound,
+            ) => StatusCode::UNAUTHORIZED,
         }
         .into_response()
     }
@@ -153,20 +153,14 @@ fn set_session_cookie(raw_token: &str) {
     use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
 
-    let secure_attr = if use_context::<CookieSettings>()
-        .map(|settings| settings.secure)
-        .unwrap_or(true)
-    {
+    let secure_attr = if use_context::<CookieSettings>().is_none_or(|settings| settings.secure) {
         "; Secure"
     } else {
         ""
     };
 
     if let Some(opts) = use_context::<ResponseOptions>() {
-        let cookie = format!(
-            "session={}; HttpOnly; SameSite=Lax; Path=/{}",
-            raw_token, secure_attr
-        );
+        let cookie = format!("session={raw_token}; HttpOnly; SameSite=Lax; Path=/{secure_attr}");
         if let Ok(val) = axum::http::HeaderValue::from_str(&cookie) {
             opts.insert_header(axum::http::header::SET_COOKIE, val);
         }
@@ -178,20 +172,14 @@ fn clear_session_cookie() {
     use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
 
-    let secure_attr = if use_context::<CookieSettings>()
-        .map(|settings| settings.secure)
-        .unwrap_or(true)
-    {
+    let secure_attr = if use_context::<CookieSettings>().is_none_or(|settings| settings.secure) {
         "; Secure"
     } else {
         ""
     };
 
     if let Some(opts) = use_context::<ResponseOptions>() {
-        let cookie = format!(
-            "session=; HttpOnly; SameSite=Lax; Path=/{}; Max-Age=0",
-            secure_attr
-        );
+        let cookie = format!("session=; HttpOnly; SameSite=Lax; Path=/{secure_attr}; Max-Age=0");
         if let Ok(val) = axum::http::HeaderValue::from_str(&cookie) {
             opts.insert_header(axum::http::header::SET_COOKIE, val);
         }

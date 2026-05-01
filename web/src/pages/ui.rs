@@ -116,7 +116,7 @@ pub fn Chip(
 #[must_use]
 #[component]
 pub fn BackupBanner() -> impl IntoView {
-    let visible = Resource::new(|| (), |_| backup_warning_visible());
+    let visible = Resource::new(|| (), |()| backup_warning_visible());
 
     view! {
         <Suspense fallback=|| ()>
@@ -308,7 +308,7 @@ pub fn PostCard(
     let post_id = post.post_id;
     let time_label = format_post_time(&post.published_at);
     let permalink = post.permalink.clone();
-    let edit_url = format!("/posts/{}/edit", post_id);
+    let edit_url = format!("/posts/{post_id}/edit");
     let delete_action = ServerAction::<DeletePost>::new();
     let unpublish_action = ServerAction::<UnpublishPost>::new();
     let deleted = RwSignal::new(false);
@@ -436,7 +436,7 @@ pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl In
                             rows=6
                             placeholder="What's on your mind?"
                             textarea_class=""
-                            on_input=Callback::new(move |_| flash.set(None))
+                            on_input=Callback::new(move |()| flash.set(None))
                         />
                         <input type="hidden" name="slug_override" value="" />
                         <div class="j-composer-toolbar">
@@ -463,7 +463,7 @@ pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl In
                 </div>
             </ActionForm>
             {move || {
-                if let Some(e) = create_action.value().get().and_then(|r| r.err()) {
+                if let Some(e) = create_action.value().get().and_then(Result::err) {
                     return view! { <p class="error">{e.to_string()}</p> }.into_any();
                 }
                 if let Some((url, msg)) = flash.get() {

@@ -129,7 +129,7 @@ pub async fn create_post(
             .as_deref()
             .map(str::trim)
             .filter(|slug| !slug.is_empty())
-            .map(|slug| slug.to_ascii_lowercase())
+            .map(str::to_ascii_lowercase)
             .map(|slug| slug.parse::<Slug>())
             .transpose()
             .map_err(|e| InternalError::validation(e.to_string()))?
