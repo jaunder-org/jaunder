@@ -32,6 +32,7 @@ impl FromStr for Password {
 }
 
 impl Password {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -62,7 +63,7 @@ impl Password {
 
         let parsed = PasswordHash::new(hash).map_err(|e| e.to_string())?;
         match Argon2::default().verify_password(self.0.as_bytes(), &parsed) {
-            Ok(_) => Ok(true),
+            Ok(()) => Ok(true),
             Err(argon2::password_hash::Error::Password) => Ok(false),
             Err(e) => Err(e.to_string()),
         }

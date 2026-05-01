@@ -38,6 +38,7 @@ impl FromStr for Tag {
 }
 
 impl Tag {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }

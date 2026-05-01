@@ -31,6 +31,7 @@ impl FromStr for Username {
 }
 
 impl Username {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
