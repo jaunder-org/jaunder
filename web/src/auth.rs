@@ -115,6 +115,10 @@ where
 
 /// Extracts the authenticated user inside a Leptos server function.
 /// Returns an internal auth error when no valid session is present.
+///
+/// # Errors
+///
+/// Returns `Err` if the request is not authenticated (missing or invalid session token).
 #[cfg(feature = "ssr")]
 #[tracing::instrument(name = "web.auth.require_auth")]
 pub async fn require_auth() -> InternalResult<AuthUser> {
