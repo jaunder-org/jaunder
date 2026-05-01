@@ -16,13 +16,14 @@ enum TimelineMode {
     Feed(String),
 }
 
+#[allow(clippy::too_many_lines)]
 #[must_use]
 #[component]
 pub fn HomePage() -> impl IntoView {
     let timeline_mode = RwSignal::new(None::<TimelineMode>);
     let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());
-    let _next_cursor_created_at = RwSignal::new(None::<String>);
-    let _next_cursor_post_id = RwSignal::new(None::<i64>);
+    let next_cursor_created_at = RwSignal::new(None::<String>);
+    let next_cursor_post_id = RwSignal::new(None::<i64>);
     let has_more = RwSignal::new(false);
     let loading_more = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
@@ -55,8 +56,8 @@ pub fn HomePage() -> impl IntoView {
                         timeline_mode.set(Some(mode));
                     }
                     timeline.set(page.posts);
-                    _next_cursor_created_at.set(page.next_cursor_created_at);
-                    _next_cursor_post_id.set(page.next_cursor_post_id);
+                    next_cursor_created_at.set(page.next_cursor_created_at);
+                    next_cursor_post_id.set(page.next_cursor_post_id);
                     has_more.set(page.has_more);
                     loading_more.set(false);
                     // Only clear error when it was set; unconditional set(None) would
@@ -88,12 +89,12 @@ pub fn HomePage() -> impl IntoView {
             };
 
             loading_more.set(true);
-            let cursor_created_at = _next_cursor_created_at.get_untracked();
-            let cursor_post_id = _next_cursor_post_id.get_untracked();
+            let cursor_created_at = next_cursor_created_at.get_untracked();
+            let cursor_post_id = next_cursor_post_id.get_untracked();
 
             let timeline = timeline;
-            let next_cursor_created_at_signal = _next_cursor_created_at;
-            let next_cursor_post_id_signal = _next_cursor_post_id;
+            let next_cursor_created_at_signal = next_cursor_created_at;
+            let next_cursor_post_id_signal = next_cursor_post_id;
             let has_more_signal = has_more;
             let loading_more_signal = loading_more;
             let error_signal = error;
