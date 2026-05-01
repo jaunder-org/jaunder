@@ -14,6 +14,7 @@ use crate::{
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
+#[allow(clippy::too_many_lines)]
 #[must_use]
 #[component]
 pub fn CreatePostPage() -> impl IntoView {
@@ -264,6 +265,7 @@ pub fn PostPage() -> impl IntoView {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 #[must_use]
 #[component]
 pub fn UserTimelinePage() -> impl IntoView {
@@ -487,6 +489,7 @@ pub fn DraftPreviewPage() -> impl IntoView {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 #[must_use]
 #[component]
 pub fn EditPostPage() -> impl IntoView {

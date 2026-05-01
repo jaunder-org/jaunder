@@ -54,6 +54,9 @@ pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoVie
 /// Derives `(initials, hue)` from a display name.
 /// `initials`: first character of each of the first two whitespace-separated words, uppercased.
 /// `hue`: sum of all char codes mod 360.
+#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_sign_loss)]
 #[must_use]
 pub fn avatar_parts(name: &str) -> (String, u32) {
     let initials: String = name
@@ -68,6 +71,7 @@ pub fn avatar_parts(name: &str) -> (String, u32) {
     (initials, hue)
 }
 
+#[allow(clippy::needless_pass_by_value)]
 #[must_use]
 #[component]
 pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
@@ -85,6 +89,7 @@ pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
 
 // ─── 3.3 Dot ──────────────────────────────────────────────────
 
+#[allow(clippy::needless_pass_by_value)]
 #[must_use]
 #[component]
 pub fn Dot(proto: String) -> impl IntoView {
@@ -241,6 +246,7 @@ pub(crate) fn format_post_time(ts: &str) -> String {
     }
 }
 
+#[allow(clippy::needless_pass_by_value)]
 #[must_use]
 #[component]
 pub fn PostDisplay(
@@ -527,6 +533,7 @@ fn SidebarSource(proto: &'static str, name: &'static str, sub: &'static str) -> 
 
 /// The left navigation sidebar. Reads theme and current-user from context.
 /// `active`: the key of the currently active nav item (e.g. `"home"`).
+#[allow(clippy::too_many_lines)]
 #[must_use]
 #[component]
 pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
@@ -540,6 +547,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     );
 
     // (key, label, icon_path, href, auth_required)
+    #[allow(clippy::items_after_statements)]
     const NAV_ITEMS: &[(&str, &str, &str, Option<&'static str>, bool)] = &[
         ("home", "Home", Icons::HOME, Some("/"), false),
         ("local", "Local", Icons::LOCAL, None, true),

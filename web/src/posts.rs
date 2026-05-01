@@ -809,6 +809,7 @@ fn set_not_found_status() {
 }
 
 #[cfg(feature = "ssr")]
+#[allow(clippy::needless_pass_by_value)]
 fn private_post_not_found_error(error: InternalError) -> InternalError {
     set_not_found_status();
     InternalError::masked(
