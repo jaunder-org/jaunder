@@ -161,7 +161,7 @@ extern "C" {
 
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn hydrate() {
-    use web::*;
+    use web::App;
     mark_phase_start("wasm_init");
     // initializes logging using the `log` crate
     _ = console_log::init_with_level(log::Level::Debug);
