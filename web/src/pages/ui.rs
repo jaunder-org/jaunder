@@ -29,6 +29,7 @@ impl Icons {
 
 // ─── 3.1 Icon ─────────────────────────────────────────────────
 
+#[must_use]
 #[component]
 pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoView {
     view! {
@@ -53,6 +54,7 @@ pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoVie
 /// Derives `(initials, hue)` from a display name.
 /// `initials`: first character of each of the first two whitespace-separated words, uppercased.
 /// `hue`: sum of all char codes mod 360.
+#[must_use]
 pub fn avatar_parts(name: &str) -> (String, u32) {
     let initials: String = name
         .split_whitespace()
@@ -66,6 +68,7 @@ pub fn avatar_parts(name: &str) -> (String, u32) {
     (initials, hue)
 }
 
+#[must_use]
 #[component]
 pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
     let (initials, hue) = avatar_parts(&name);
@@ -82,6 +85,7 @@ pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
 
 // ─── 3.3 Dot ──────────────────────────────────────────────────
 
+#[must_use]
 #[component]
 pub fn Dot(proto: String) -> impl IntoView {
     let style = format!("background: var(--c-{proto})");
@@ -90,6 +94,7 @@ pub fn Dot(proto: String) -> impl IntoView {
 
 // ─── 3.4 Chip ─────────────────────────────────────────────────
 
+#[must_use]
 #[component]
 pub fn Chip(
     label: String,
@@ -108,6 +113,7 @@ pub fn Chip(
 
 // ─── 3.5 Topbar ───────────────────────────────────────────────
 
+#[must_use]
 #[component]
 pub fn BackupBanner() -> impl IntoView {
     let visible = Resource::new(|| (), |_| backup_warning_visible());
@@ -132,6 +138,7 @@ pub fn BackupBanner() -> impl IntoView {
     }
 }
 
+#[must_use]
 #[component]
 pub fn Topbar(
     title: String,
@@ -157,6 +164,7 @@ pub fn Topbar(
 ///
 /// Renders a `name="body"` textarea and a `name="format"` hidden input.
 /// When `show_seg` is true (default), also renders the `.j-seg` format toggle.
+#[must_use]
 #[component]
 pub fn ComposerFields(
     body: RwSignal<String>,
@@ -233,6 +241,7 @@ pub(crate) fn format_post_time(ts: &str) -> String {
     }
 }
 
+#[must_use]
 #[component]
 pub fn PostDisplay(
     post: TimelinePostSummary,
@@ -287,6 +296,7 @@ pub fn PostDisplay(
     }
 }
 
+#[must_use]
 #[component]
 pub fn PostCard(
     post: TimelinePostSummary,
@@ -376,6 +386,7 @@ pub fn PostCard(
 
 // ─── 3.7 InlineComposer ───────────────────────────────────────
 
+#[must_use]
 #[component]
 pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {
     let create_action = ServerAction::<CreatePost>::new();
@@ -516,6 +527,7 @@ fn SidebarSource(proto: &'static str, name: &'static str, sub: &'static str) -> 
 
 /// The left navigation sidebar. Reads theme and current-user from context.
 /// `active`: the key of the currently active nav item (e.g. `"home"`).
+#[must_use]
 #[component]
 pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     let active_key = active.unwrap_or_default();

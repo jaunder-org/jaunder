@@ -5,6 +5,7 @@ use leptos::prelude::*;
 /// Invites page — lists invite codes; allows creating new ones.
 /// Returns 404 (via SSR response options) when the registration policy is not
 /// `invite_only`.
+#[must_use]
 #[component]
 pub fn InvitesPage() -> impl IntoView {
     let create_action = ServerAction::<CreateInvite>::new();

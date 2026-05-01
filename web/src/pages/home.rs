@@ -16,6 +16,7 @@ enum TimelineMode {
     Feed(String),
 }
 
+#[must_use]
 #[component]
 pub fn HomePage() -> impl IntoView {
     let timeline_mode = RwSignal::new(None::<TimelineMode>);

@@ -14,6 +14,7 @@ use crate::{
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
+#[must_use]
 #[component]
 pub fn CreatePostPage() -> impl IntoView {
     let create_post_action = ServerAction::<CreatePost>::new();
@@ -186,6 +187,7 @@ pub fn CreatePostPage() -> impl IntoView {
     }
 }
 
+#[must_use]
 #[component]
 pub fn PostPage() -> impl IntoView {
     let params = use_params_map();
@@ -262,6 +264,7 @@ pub fn PostPage() -> impl IntoView {
     }
 }
 
+#[must_use]
 #[component]
 pub fn UserTimelinePage() -> impl IntoView {
     let params = use_params_map();
@@ -394,6 +397,7 @@ pub fn UserTimelinePage() -> impl IntoView {
     }
 }
 
+#[must_use]
 #[component]
 pub fn DraftPreviewPage() -> impl IntoView {
     let delete_action = ServerAction::<DeletePost>::new();
@@ -483,6 +487,7 @@ pub fn DraftPreviewPage() -> impl IntoView {
     }
 }
 
+#[must_use]
 #[component]
 pub fn EditPostPage() -> impl IntoView {
     let params = use_params_map();
@@ -666,6 +671,7 @@ pub fn EditPostPage() -> impl IntoView {
     }
 }
 
+#[must_use]
 #[component]
 pub fn DraftsPage() -> impl IntoView {
     let publish_action = ServerAction::<PublishPost>::new();
