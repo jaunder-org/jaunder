@@ -3,6 +3,7 @@ use crate::error::WebError;
 use leptos::prelude::*;
 
 /// Registration page.
+#[must_use]
 #[component]
 pub fn RegisterPage() -> impl IntoView {
     let register_action = ServerAction::<Register>::new();
@@ -55,6 +56,7 @@ pub fn RegisterPage() -> impl IntoView {
 }
 
 /// Login page.
+#[must_use]
 #[component]
 pub fn LoginPage() -> impl IntoView {
     let login_action = ServerAction::<Login>::new();
@@ -90,6 +92,7 @@ pub fn LoginPage() -> impl IntoView {
 }
 
 /// Logout page — fires the logout server action on mount.
+#[must_use]
 #[component]
 pub fn LogoutPage() -> impl IntoView {
     let logout_action = ServerAction::<Logout>::new();

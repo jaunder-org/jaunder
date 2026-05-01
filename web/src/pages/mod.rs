@@ -56,6 +56,7 @@ fn AppShell() -> impl IntoView {
     }
 }
 
+#[must_use]
 #[component]
 pub fn App() -> impl IntoView {
     // Provides context that manages stylesheets, titles, meta tags, etc.

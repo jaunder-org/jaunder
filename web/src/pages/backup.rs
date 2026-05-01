@@ -3,6 +3,7 @@ use crate::error::WebError;
 use crate::pages::Topbar;
 use leptos::prelude::*;
 
+#[must_use]
 #[component]
 pub fn BackupSettingsPage() -> impl IntoView {
     let update_action = ServerAction::<UpdateBackupSettings>::new();
