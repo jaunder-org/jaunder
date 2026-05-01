@@ -42,3 +42,6 @@ ssr = [
     "dep:email_address",
     "dep:tracing",
 ]
+
+[lints]
+workspace = true
