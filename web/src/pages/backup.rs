@@ -3,7 +3,7 @@ use crate::error::WebError;
 use crate::pages::Topbar;
 use leptos::prelude::*;
 
-#[must_use]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn BackupSettingsPage() -> impl IntoView {
     let update_action = ServerAction::<UpdateBackupSettings>::new();

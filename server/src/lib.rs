@@ -143,23 +143,25 @@ impl BackupWorkerConfig {
             None => default_backup_schedule(),
         };
         let retention_count = match site_config.get(BACKUP_RETENTION_COUNT_KEY).await? {
-            Some(value) => match value.parse::<usize>() {
-                Ok(value) => value,
-                Err(_) => {
+            Some(value) => {
+                if let Ok(value) = value.parse::<usize>() {
+                    value
+                } else {
                     invalid_keys.push(BACKUP_RETENTION_COUNT_KEY);
                     default_backup_retention_count()
                 }
-            },
+            }
             None => default_backup_retention_count(),
         };
         let mode = match site_config.get(BACKUP_MODE_KEY).await? {
-            Some(value) => match parse_backup_mode(&value) {
-                Some(mode) => mode,
-                None => {
+            Some(value) => {
+                if let Some(mode) = parse_backup_mode(&value) {
+                    mode
+                } else {
                     invalid_keys.push(BACKUP_MODE_KEY);
                     default_backup_mode()
                 }
-            },
+            }
             None => default_backup_mode(),
         };
 
@@ -177,6 +179,12 @@ impl BackupWorkerConfig {
     }
 }
 
+/// Starts the background backup worker if configured.
+///
+/// # Errors
+///
+/// Returns an error if the site configuration cannot be loaded, or if the
+/// job scheduler fails to start.
 pub async fn start_backup_worker(
     state: Arc<AppState>,
     database: DbConnectOptions,
@@ -320,7 +328,7 @@ impl Extractor for HeaderExtractor<'_> {
     }
 
     fn keys(&self) -> Vec<&str> {
-        self.0.keys().map(|name| name.as_str()).collect()
+        self.0.keys().map(axum::http::HeaderName::as_str).collect()
     }
 }
 

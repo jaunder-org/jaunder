@@ -9,6 +9,7 @@ use rand::RngCore;
 
 /// Generates an opaque session token: 32 cryptographically random bytes encoded
 /// as base64url without padding (43 characters).
+#[must_use]
 pub fn generate_token() -> String {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
@@ -19,6 +20,10 @@ pub fn generate_token() -> String {
 ///
 /// This is used to store hashes of opaque tokens (sessions, invites) so that
 /// the raw token is never persisted.
+///
+/// # Errors
+///
+/// Returns an error if the `raw_token` is not valid base64url.
 pub fn hash_token(raw_token: &str) -> Result<String, String> {
     use sha2::{Digest, Sha256};
 

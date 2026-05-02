@@ -54,8 +54,7 @@ pub fn slow_op_threshold() -> Duration {
     std::env::var("JAUNDER_SLOW_OP_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(Duration::from_secs(5))
+        .map_or(Duration::from_secs(5), Duration::from_millis)
 }
 
 #[derive(Clone, Copy)]
@@ -112,6 +111,7 @@ where
 
 fn slow_span_values(elapsed: Duration, threshold: Duration) -> Option<(u64, u64)> {
     if elapsed >= threshold {
+        #[allow(clippy::cast_possible_truncation)]
         Some((elapsed.as_millis() as u64, threshold.as_millis() as u64))
     } else {
         None

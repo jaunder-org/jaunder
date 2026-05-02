@@ -17,7 +17,7 @@ enum TimelineMode {
 }
 
 #[allow(clippy::too_many_lines)]
-#[must_use]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn HomePage() -> impl IntoView {
     let timeline_mode = RwSignal::new(None::<TimelineMode>);

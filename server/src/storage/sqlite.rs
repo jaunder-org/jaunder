@@ -86,6 +86,7 @@ pub struct SqliteSiteConfigStorage {
 }
 
 impl SqliteSiteConfigStorage {
+    #[must_use]
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -124,6 +125,7 @@ pub struct SqliteUserStorage {
 }
 
 impl SqliteUserStorage {
+    #[must_use]
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -213,7 +215,7 @@ impl UserStorage for SqliteUserStorage {
         .await
         .map_err(|e| UserAuthError::Internal(e.to_string()))?;
 
-        let (
+        let Some((
             user_id,
             username,
             display_name,
@@ -224,9 +226,9 @@ impl UserStorage for SqliteUserStorage {
             email,
             email_verified,
             is_operator,
-        ) = match row {
-            Some(r) => r,
-            None => return Err(UserAuthError::InvalidCredentials),
+        )) = row
+        else {
+            return Err(UserAuthError::InvalidCredentials);
         };
 
         let valid = super::verify_password(password.clone(), hash)
@@ -337,6 +339,7 @@ pub struct SqliteSessionStorage {
 }
 
 impl SqliteSessionStorage {
+    #[must_use]
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -431,6 +434,7 @@ pub struct SqliteInviteStorage {
 }
 
 impl SqliteInviteStorage {
+    #[must_use]
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -514,6 +518,7 @@ pub struct SqliteEmailVerificationStorage {
 }
 
 impl SqliteEmailVerificationStorage {
+    #[must_use]
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -613,6 +618,7 @@ pub struct SqlitePasswordResetStorage {
 }
 
 impl SqlitePasswordResetStorage {
+    #[must_use]
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -678,7 +684,7 @@ impl PasswordResetStorage for SqlitePasswordResetStorage {
 // AtomicOps
 // ---------------------------------------------------------------------------
 
-/// SQLite implementation of [`AtomicOps`].
+/// `SQLite` implementation of [`AtomicOps`].
 ///
 /// Holds the pool directly so it can span multiple tables in a single
 /// transaction without going through the individual storage trait objects.
@@ -687,6 +693,7 @@ pub struct SqliteAtomicOps {
 }
 
 impl SqliteAtomicOps {
+    #[must_use]
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -784,9 +791,7 @@ impl AtomicOps for SqliteAtomicOps {
         .fetch_optional(&mut *tx)
         .await?;
 
-        let user_id = if let Some((user_id,)) = claimed {
-            user_id
-        } else {
+        let Some((user_id,)) = claimed else {
             let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
                 "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
             )
@@ -829,6 +834,7 @@ pub struct SqlitePostStorage {
 }
 
 impl SqlitePostStorage {
+    #[must_use]
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -1019,7 +1025,7 @@ impl PostStorage for SqlitePostStorage {
             .bind(cursor.created_at)
             .bind(cursor.created_at)
             .bind(cursor.post_id)
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         } else {
@@ -1035,7 +1041,7 @@ impl PostStorage for SqlitePostStorage {
                  LIMIT $2",
             )
             .bind(username.as_str())
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         };
@@ -1061,7 +1067,7 @@ impl PostStorage for SqlitePostStorage {
             .bind(cursor.created_at)
             .bind(cursor.created_at)
             .bind(cursor.post_id)
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         } else {
@@ -1074,7 +1080,7 @@ impl PostStorage for SqlitePostStorage {
                  ORDER BY created_at DESC, post_id DESC
                  LIMIT $1",
             )
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         };
@@ -1103,7 +1109,7 @@ impl PostStorage for SqlitePostStorage {
             .bind(cursor.created_at)
             .bind(cursor.created_at)
             .bind(cursor.post_id)
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         } else {
@@ -1118,7 +1124,7 @@ impl PostStorage for SqlitePostStorage {
                  LIMIT $2",
             )
             .bind(user_id)
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         };
@@ -1264,7 +1270,7 @@ impl PostStorage for SqlitePostStorage {
             .bind(cursor.created_at)
             .bind(cursor.created_at)
             .bind(cursor.post_id)
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         } else {
@@ -1281,7 +1287,7 @@ impl PostStorage for SqlitePostStorage {
                  LIMIT $2",
             )
             .bind(tag_slug.as_str())
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         };
@@ -1330,7 +1336,7 @@ impl PostStorage for SqlitePostStorage {
             .bind(cursor.created_at)
             .bind(cursor.created_at)
             .bind(cursor.post_id)
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         } else {
@@ -1349,7 +1355,7 @@ impl PostStorage for SqlitePostStorage {
             )
             .bind(user_id)
             .bind(tag_slug.as_str())
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         };
