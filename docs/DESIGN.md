@@ -61,10 +61,10 @@ Each user has a dedicated account management area, accessible via the web interf
 - bind address and port
 - local storage path (media stored in a subdirectory, database in the directory if using SQLite, backups in a subdirectory by default)
 
-**Runtime config** is stored in the `site_config` table in the database, read on each use with no in-process caching, so changes take effect immediately without a restart. It has two namespaces:
+**Runtime config** is stored in the database, read on each use with no in-process caching, so changes take effect immediately without a restart. It has two namespaces:
 
-- **Site config** (keys prefixed `site.`): instance-wide settings, readable and writable by operators via the CLI or web admin interface.
-- **User config** (keys prefixed `user.<username>.`): per-user preferences, stored in the same table with the same access semantics. Users manage their own settings through the account management interface.
+- **Site config**: instance-wide settings stored in the `site_config` key-value table, readable and writable by operators via the CLI or web admin interface.
+- **User config**: per-user preferences stored in a separate `user_config` table keyed by `(user_id, key)`. This table references `users(user_id)` with `ON DELETE CASCADE`, so user deletion automatically cleans up associated preferences. Users manage their own settings through the account management interface.
 
 Instance-level site config that does not have a more specific home below: site name; registration policy (open / invite-only / closed — invitations generated via CLI or web interface).
 
