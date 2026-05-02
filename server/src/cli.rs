@@ -22,7 +22,7 @@ pub struct StorageArgs {
     /// Database URL.
     ///
     /// Supports `sqlite:` and `postgres://` URLs.
-    /// PostgreSQL passwords may also be supplied via `JAUNDER_DB_PASSWORD` or
+    /// `PostgreSQL` passwords may also be supplied via `JAUNDER_DB_PASSWORD` or
     /// `JAUNDER_DB_PASSWORD_FILE`.
     #[arg(long, env = "JAUNDER_DB", default_value = "sqlite:./data/jaunder.db")]
     pub db: DbConnectOptions,
@@ -30,13 +30,13 @@ pub struct StorageArgs {
 
 #[derive(Args, Clone)]
 pub struct PgBootstrapArgs {
-    /// PostgreSQL URL for a bootstrap/superuser role.
+    /// `PostgreSQL` URL for a bootstrap/superuser role.
     ///
-    /// This command only supports PostgreSQL URLs.
+    /// This command only supports `PostgreSQL` URLs.
     #[arg(long)]
     pub bootstrap_db: String,
 
-    /// PostgreSQL URL for the long-term application role and target database.
+    /// `PostgreSQL` URL for the long-term application role and target database.
     #[arg(long = "app-db")]
     pub app_db: String,
 
@@ -52,6 +52,7 @@ pub enum DeploymentEnv {
 }
 
 impl DeploymentEnv {
+    #[must_use]
     pub fn is_prod(self) -> bool {
         matches!(self, DeploymentEnv::Prod)
     }
@@ -83,7 +84,7 @@ pub enum Commands {
         #[arg(long)]
         skip_if_exists: bool,
     },
-    /// Create a PostgreSQL application role and database using bootstrap credentials.
+    /// Create a `PostgreSQL` application role and database using bootstrap credentials.
     ///
     /// Intended for one-time administrative provisioning. This is separate from
     /// `jaunder init`, which assumes the target database already exists and only

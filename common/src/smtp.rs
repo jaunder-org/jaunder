@@ -102,6 +102,10 @@ pub enum SmtpConfigError {
 /// - `smtp.port` defaults to `587`.
 /// - `smtp.tls_mode` defaults to `"starttls"`.
 /// - `smtp.sender` defaults to `"Jaunder <noreply@localhost>"`.
+///
+/// # Errors
+///
+/// Returns `Err(SmtpConfigError)` if the site config cannot be retrieved from storage.
 pub async fn load_smtp_config(
     store: &dyn SiteConfigStorage,
 ) -> Result<Option<SmtpConfig>, SmtpConfigError> {

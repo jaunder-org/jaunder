@@ -559,7 +559,7 @@ pub struct AppState {
     pub invites: Arc<dyn InviteStorage>,
     /// Cross-table atomic operations.  The concrete implementation (in the
     /// `server` crate) holds the database pool so `common` and `web` stay
-    /// free of SQLite implementation details.
+    /// free of `SQLite` implementation details.
     pub atomic: Arc<dyn AtomicOps>,
     /// Email verification token storage (stub until Step 7).
     pub email_verifications: Arc<dyn EmailVerificationStorage>,

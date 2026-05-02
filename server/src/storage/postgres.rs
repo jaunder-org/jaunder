@@ -32,6 +32,7 @@ pub struct PostgresSiteConfigStorage {
 }
 
 impl PostgresSiteConfigStorage {
+    #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -69,6 +70,7 @@ pub struct PostgresUserStorage {
 }
 
 impl PostgresUserStorage {
+    #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -159,7 +161,7 @@ impl UserStorage for PostgresUserStorage {
         .await
         .map_err(|e| UserAuthError::Internal(e.to_string()))?;
 
-        let (
+        let Some((
             user_id,
             username,
             display_name,
@@ -170,9 +172,9 @@ impl UserStorage for PostgresUserStorage {
             email,
             email_verified,
             is_operator,
-        ) = match row {
-            Some(row) => row,
-            None => return Err(UserAuthError::InvalidCredentials),
+        )) = row
+        else {
+            return Err(UserAuthError::InvalidCredentials);
         };
 
         let valid = super::verify_password(password.clone(), hash)
@@ -284,6 +286,7 @@ pub struct PostgresSessionStorage {
 }
 
 impl PostgresSessionStorage {
+    #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -378,6 +381,7 @@ pub struct PostgresInviteStorage {
 }
 
 impl PostgresInviteStorage {
+    #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -456,6 +460,7 @@ pub struct PostgresEmailVerificationStorage {
 }
 
 impl PostgresEmailVerificationStorage {
+    #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -543,6 +548,7 @@ pub struct PostgresPasswordResetStorage {
 }
 
 impl PostgresPasswordResetStorage {
+    #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -612,6 +618,7 @@ pub struct PostgresAtomicOps {
 }
 
 impl PostgresAtomicOps {
+    #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -707,9 +714,7 @@ impl AtomicOps for PostgresAtomicOps {
         .fetch_optional(&mut *tx)
         .await?;
 
-        let user_id = if let Some((user_id,)) = claimed {
-            user_id
-        } else {
+        let Some((user_id,)) = claimed else {
             let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
                 "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
             )
@@ -754,6 +759,7 @@ pub struct PostgresPostStorage {
 }
 
 impl PostgresPostStorage {
+    #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -943,7 +949,7 @@ impl PostStorage for PostgresPostStorage {
             .bind(username.as_str())
             .bind(cursor.created_at)
             .bind(cursor.post_id)
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         } else {
@@ -959,7 +965,7 @@ impl PostStorage for PostgresPostStorage {
                  LIMIT $2",
             )
             .bind(username.as_str())
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         };
@@ -984,7 +990,7 @@ impl PostStorage for PostgresPostStorage {
             )
             .bind(cursor.created_at)
             .bind(cursor.post_id)
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         } else {
@@ -997,7 +1003,7 @@ impl PostStorage for PostgresPostStorage {
                  ORDER BY created_at DESC, post_id DESC
                  LIMIT $1",
             )
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         };
@@ -1025,7 +1031,7 @@ impl PostStorage for PostgresPostStorage {
             .bind(user_id)
             .bind(cursor.created_at)
             .bind(cursor.post_id)
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         } else {
@@ -1040,7 +1046,7 @@ impl PostStorage for PostgresPostStorage {
                  LIMIT $2",
             )
             .bind(user_id)
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         };
@@ -1184,7 +1190,7 @@ impl PostStorage for PostgresPostStorage {
             .bind(tag_slug.as_str())
             .bind(cursor.created_at)
             .bind(cursor.post_id)
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         } else {
@@ -1201,7 +1207,7 @@ impl PostStorage for PostgresPostStorage {
                  LIMIT $2",
             )
             .bind(tag_slug.as_str())
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         };
@@ -1249,7 +1255,7 @@ impl PostStorage for PostgresPostStorage {
             .bind(tag_slug.as_str())
             .bind(cursor.created_at)
             .bind(cursor.post_id)
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         } else {
@@ -1268,7 +1274,7 @@ impl PostStorage for PostgresPostStorage {
             )
             .bind(user_id)
             .bind(tag_slug.as_str())
-            .bind(limit as i64)
+            .bind(i64::from(limit))
             .fetch_all(&self.pool)
             .await?
         };

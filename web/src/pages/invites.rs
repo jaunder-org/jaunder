@@ -5,10 +5,11 @@ use leptos::prelude::*;
 /// Invites page — lists invite codes; allows creating new ones.
 /// Returns 404 (via SSR response options) when the registration policy is not
 /// `invite_only`.
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn InvitesPage() -> impl IntoView {
     let create_action = ServerAction::<CreateInvite>::new();
-    let policy = Resource::new(|| (), |_| get_registration_policy());
+    let policy = Resource::new(|| (), |()| get_registration_policy());
     let invites = Resource::new(move || create_action.version().get(), |_| list_invites());
 
     view! {

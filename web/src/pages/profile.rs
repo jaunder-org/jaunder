@@ -3,6 +3,7 @@ use crate::profile::{get_profile, UpdateProfile};
 use leptos::prelude::*;
 
 /// Profile page — shows username, display name, bio; allows updating.
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn ProfilePage() -> impl IntoView {
     let update_action = ServerAction::<UpdateProfile>::new();

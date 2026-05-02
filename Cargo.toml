@@ -139,3 +139,6 @@ lib-features = []
 #
 # Optional. Defaults to false.
 lib-default-features = false
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }

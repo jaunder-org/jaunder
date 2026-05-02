@@ -2,6 +2,7 @@ use crate::sessions::{list_sessions, RevokeSession};
 use leptos::prelude::*;
 
 /// Sessions page — lists all sessions; allows revoking individual sessions.
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn SessionsPage() -> impl IntoView {
     let revoke_action = ServerAction::<RevokeSession>::new();

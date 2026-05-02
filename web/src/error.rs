@@ -156,14 +156,17 @@ impl InternalError {
         Self::new(public, operator_message)
     }
 
+    #[must_use]
     pub fn public(&self) -> &WebError {
         &self.public
     }
 
+    #[must_use]
     pub fn operator_message(&self) -> &str {
         &self.operator_message
     }
 
+    #[must_use]
     pub fn into_public(self) -> WebError {
         self.public
     }
@@ -176,6 +179,11 @@ impl InternalError {
     }
 }
 
+/// Awaits the given future, converting any `InternalError` to its public `WebError` form.
+///
+/// # Errors
+///
+/// Returns `Err(ServerFnError)` if the wrapped future returns an `InternalError`.
 #[cfg(feature = "ssr")]
 pub async fn server_boundary<T>(
     server_fn: &'static str,
