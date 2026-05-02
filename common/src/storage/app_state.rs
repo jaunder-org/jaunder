@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crate::mailer::MailSender;
 
 use super::{
-    AtomicOps, EmailVerificationStorage, InviteStorage, PasswordResetStorage, PostStorage,
-    SessionStorage, SiteConfigStorage, UserStorage,
+    AtomicOps, EmailVerificationStorage, InviteStorage, MediaStorage, PasswordResetStorage,
+    PostStorage, SessionStorage, SiteConfigStorage, UserConfigStorage, UserStorage,
 };
 
 /// Application-wide state bundling all storage handles.
@@ -23,6 +23,10 @@ pub struct AppState {
     pub password_resets: Arc<dyn PasswordResetStorage>,
     /// Post storage.
     pub posts: Arc<dyn PostStorage>,
+    /// Media file metadata storage.
+    pub media: Arc<dyn MediaStorage>,
+    /// Per-user configuration storage.
+    pub user_config: Arc<dyn UserConfigStorage>,
     /// Outbound email sender.  `NoopMailSender` when SMTP is not configured.
     pub mailer: Arc<dyn MailSender>,
 }
