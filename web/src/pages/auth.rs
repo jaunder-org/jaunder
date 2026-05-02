@@ -3,8 +3,8 @@ use crate::error::WebError;
 use leptos::prelude::*;
 
 /// Registration page.
-#[must_use]
 #[component]
+#[allow(clippy::must_use_candidate)]
 pub fn RegisterPage() -> impl IntoView {
     let register_action = ServerAction::<Register>::new();
     let policy = Resource::new(|| (), |()| get_registration_policy());
@@ -56,8 +56,8 @@ pub fn RegisterPage() -> impl IntoView {
 }
 
 /// Login page.
-#[must_use]
 #[component]
+#[allow(clippy::must_use_candidate)]
 pub fn LoginPage() -> impl IntoView {
     let login_action = ServerAction::<Login>::new();
     let username = RwSignal::new(String::new());
@@ -92,8 +92,8 @@ pub fn LoginPage() -> impl IntoView {
 }
 
 /// Logout page — fires the logout server action on mount.
-#[must_use]
 #[component]
+#[allow(clippy::must_use_candidate)]
 pub fn LogoutPage() -> impl IntoView {
     let logout_action = ServerAction::<Logout>::new();
 

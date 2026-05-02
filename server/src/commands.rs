@@ -19,6 +19,12 @@ use common::mailer::{EmailMessage, MailSender};
 use common::smtp::load_smtp_config;
 use leptos::prelude::{Env, LeptosOptions};
 
+/// Initializes the application's storage directory and database.
+///
+/// # Errors
+///
+/// Returns an error if the storage directory cannot be created, or if the
+/// database cannot be initialized.
 pub async fn cmd_init(storage: &StorageArgs, skip_if_exists: bool) -> anyhow::Result<()> {
     match init_storage(&storage.storage_path) {
         Ok(()) => {}
@@ -40,7 +46,7 @@ fn require_postgres_options(
 ) -> anyhow::Result<PgConnectOptions> {
     match opts {
         DbConnectOptions::Postgres { options, .. } => Ok(options.clone()),
-        _ => Err(anyhow::anyhow!("{label} must be a PostgreSQL URL")),
+        DbConnectOptions::Sqlite(_) => Err(anyhow::anyhow!("{label} must be a PostgreSQL URL")),
     }
 }
 
@@ -80,6 +86,12 @@ async fn execute_postgres_utility(
     Ok(())
 }
 
+/// Bootstraps a `PostgreSQL` database and application role.
+///
+/// # Errors
+///
+/// Returns an error if the bootstrap connection fails, or if the role or
+/// database already exists.
 pub async fn cmd_create_pg_db(
     bootstrap_db: &str,
     app_db_url: &str,
@@ -108,8 +120,7 @@ pub async fn cmd_create_pg_db(
         &role_sql,
         "42710",
         format!(
-            "application role '{}' already exists; refusing to modify existing role state",
-            app_role
+            "application role '{app_role}' already exists; refusing to modify existing role state"
         ),
     )
     .await?;
@@ -126,19 +137,21 @@ pub async fn cmd_create_pg_db(
         &create_db_sql,
         "42P04",
         format!(
-            "database '{}' already exists; refusing to modify existing database state",
-            database_name
+            "database '{database_name}' already exists; refusing to modify existing database state"
         ),
     )
     .await?;
 
-    println!(
-        "PostgreSQL ready: role='{}' database='{}' owner='{}'",
-        app_role, database_name, app_role
-    );
+    println!("PostgreSQL ready: role='{app_role}' database='{database_name}' owner='{app_role}'");
     Ok(())
 }
 
+/// Creates a new user in the database.
+///
+/// # Errors
+///
+/// Returns an error if the database cannot be opened, or if the user creation
+/// fails (e.g., duplicate username).
 pub async fn cmd_user_create(
     storage: &StorageArgs,
     username: &Username,
@@ -150,16 +163,15 @@ pub async fn cmd_user_create(
         .await
         .map_err(|e| anyhow::anyhow!("{e}; run `jaunder init` first"))?;
 
-    let password = match password {
-        Some(p) => p,
-        None => {
-            let p1 = rpassword::prompt_password("Password: ")?;
-            let p2 = rpassword::prompt_password("Confirm password: ")?;
-            if p1 != p2 {
-                return Err(anyhow::anyhow!("passwords do not match"));
-            }
-            p1.parse::<Password>().map_err(|e| anyhow::anyhow!("{e}"))?
+    let password = if let Some(p) = password {
+        p
+    } else {
+        let p1 = rpassword::prompt_password("Password: ")?;
+        let p2 = rpassword::prompt_password("Confirm password: ")?;
+        if p1 != p2 {
+            return Err(anyhow::anyhow!("passwords do not match"));
         }
+        p1.parse::<Password>().map_err(|e| anyhow::anyhow!("{e}"))?
     };
 
     let user_id = state
@@ -168,10 +180,16 @@ pub async fn cmd_user_create(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    println!("Created user '{}' with id {user_id}", username);
+    println!("Created user '{username}' with id {user_id}");
     Ok(())
 }
 
+/// Generates a new invitation code.
+///
+/// # Errors
+///
+/// Returns an error if the database cannot be opened, or if the invitation
+/// cannot be saved.
 pub async fn cmd_user_invite(storage: &StorageArgs, expires_in: Option<u64>) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db)
         .await
@@ -187,6 +205,12 @@ pub async fn cmd_user_invite(storage: &StorageArgs, expires_in: Option<u64>) -> 
     Ok(())
 }
 
+/// Sends a test email using the configured SMTP settings.
+///
+/// # Errors
+///
+/// Returns an error if SMTP is not configured, or if the test email cannot be
+/// sent.
 pub async fn cmd_smtp_test(storage: &StorageArgs, to: &str) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db)
         .await
@@ -222,6 +246,11 @@ pub async fn cmd_smtp_test(storage: &StorageArgs, to: &str) -> anyhow::Result<()
     Ok(())
 }
 
+/// Performs a full backup of the application database and media.
+///
+/// # Errors
+///
+/// Returns an error if the backup process fails.
 pub async fn cmd_backup(
     storage: &StorageArgs,
     mode: BackupMode,
@@ -244,6 +273,12 @@ pub async fn cmd_backup(
     Ok(destination_path)
 }
 
+/// Restores the application state from a backup.
+///
+/// # Errors
+///
+/// Returns an error if the backup does not exist, or if the target database or
+/// media directory is not empty.
 pub async fn cmd_restore(storage: &StorageArgs, path: &Path) -> anyhow::Result<()> {
     if !path.exists() {
         return Err(anyhow::anyhow!(
@@ -332,6 +367,11 @@ fn directory_has_entries(path: &Path) -> io::Result<bool> {
     Ok(false)
 }
 
+/// Starts the HTTP server and the background backup worker.
+///
+/// # Errors
+///
+/// Returns an error if the server or backup worker fails to start.
 pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> anyhow::Result<()> {
     crate::observability::init_tracing();
 

@@ -157,7 +157,7 @@ fn set_session_cookie(raw_token: &str) {
     use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
 
-    let secure_attr = if use_context::<CookieSettings>().map_or(true, |settings| settings.secure) {
+    let secure_attr = if use_context::<CookieSettings>().is_none_or(|settings| settings.secure) {
         "; Secure"
     } else {
         ""
@@ -176,7 +176,7 @@ fn clear_session_cookie() {
     use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
 
-    let secure_attr = if use_context::<CookieSettings>().map_or(true, |settings| settings.secure) {
+    let secure_attr = if use_context::<CookieSettings>().is_none_or(|settings| settings.secure) {
         "; Secure"
     } else {
         ""

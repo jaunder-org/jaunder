@@ -7,6 +7,15 @@ async fn main() -> anyhow::Result<()> {
     run(cli).await
 }
 
+/// Executes the application logic based on the provided CLI arguments.
+///
+/// # Errors
+///
+/// Returns an error if the command execution fails.
+///
+/// # Panics
+///
+/// Panics if the `serve` subcommand is missing when implicitly required.
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
     let command = match cli.command {
         Some(cmd) => cmd,

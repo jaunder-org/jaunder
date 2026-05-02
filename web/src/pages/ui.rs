@@ -29,7 +29,7 @@ impl Icons {
 
 // ─── 3.1 Icon ─────────────────────────────────────────────────
 
-#[must_use]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoView {
     view! {
@@ -72,10 +72,13 @@ pub fn avatar_parts(name: &str) -> (String, u32) {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-#[must_use]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
     let (initials, hue) = avatar_parts(&name);
+    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_sign_loss)]
     let font_size = (size as f32 * 0.36).round() as u32;
     let style = format!(
         "width:{size}px;height:{size}px;background:oklch(0.58 0.07 {hue});font-size:{font_size}px"
@@ -90,7 +93,7 @@ pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
 // ─── 3.3 Dot ──────────────────────────────────────────────────
 
 #[allow(clippy::needless_pass_by_value)]
-#[must_use]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Dot(proto: String) -> impl IntoView {
     let style = format!("background: var(--c-{proto})");
@@ -99,7 +102,7 @@ pub fn Dot(proto: String) -> impl IntoView {
 
 // ─── 3.4 Chip ─────────────────────────────────────────────────
 
-#[must_use]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Chip(
     label: String,
@@ -118,7 +121,7 @@ pub fn Chip(
 
 // ─── 3.5 Topbar ───────────────────────────────────────────────
 
-#[must_use]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn BackupBanner() -> impl IntoView {
     let visible = Resource::new(|| (), |()| backup_warning_visible());
@@ -143,7 +146,7 @@ pub fn BackupBanner() -> impl IntoView {
     }
 }
 
-#[must_use]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Topbar(
     title: String,
@@ -169,7 +172,7 @@ pub fn Topbar(
 ///
 /// Renders a `name="body"` textarea and a `name="format"` hidden input.
 /// When `show_seg` is true (default), also renders the `.j-seg` format toggle.
-#[must_use]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn ComposerFields(
     body: RwSignal<String>,
@@ -247,7 +250,7 @@ pub(crate) fn format_post_time(ts: &str) -> String {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-#[must_use]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn PostDisplay(
     post: TimelinePostSummary,
@@ -302,7 +305,7 @@ pub fn PostDisplay(
     }
 }
 
-#[must_use]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn PostCard(
     post: TimelinePostSummary,
@@ -392,7 +395,7 @@ pub fn PostCard(
 
 // ─── 3.7 InlineComposer ───────────────────────────────────────
 
-#[must_use]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {
     let create_action = ServerAction::<CreatePost>::new();
@@ -534,7 +537,7 @@ fn SidebarSource(proto: &'static str, name: &'static str, sub: &'static str) -> 
 /// The left navigation sidebar. Reads theme and current-user from context.
 /// `active`: the key of the currently active nav item (e.g. `"home"`).
 #[allow(clippy::too_many_lines)]
-#[must_use]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     let active_key = active.unwrap_or_default();

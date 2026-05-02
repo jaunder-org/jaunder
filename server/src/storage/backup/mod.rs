@@ -100,6 +100,9 @@ pub(super) struct ColumnInfo {
     pub(super) type_name: String,
 }
 
+/// # Errors
+///
+/// Returns `Err(BackupError)` if the backup export fails.
 pub async fn export_backup(
     options: BackupExportOptions<'_>,
 ) -> Result<BackupManifest, BackupError> {
@@ -109,6 +112,9 @@ pub async fn export_backup(
     }
 }
 
+/// # Errors
+///
+/// Returns `Err(BackupError)` if the backup restore fails.
 pub async fn restore_backup(
     options: BackupRestoreOptions<'_>,
 ) -> Result<BackupManifest, BackupError> {
@@ -119,8 +125,7 @@ pub async fn restore_backup(
     };
     let source_path = extracted_archive
         .as_ref()
-        .map(TemporaryBackupDirectory::path)
-        .unwrap_or(options.source_path);
+        .map_or(options.source_path, TemporaryBackupDirectory::path);
 
     let manifest = read_manifest(source_path)?;
     validate_manifest(&manifest)?;
@@ -238,10 +243,8 @@ pub(super) fn order_by_clause(table: &str, quote_identifier: fn(&str) -> String)
     let columns = match table {
         "site_config" => &["key"][..],
         "users" => &["user_id"],
-        "sessions" => &["token_hash"],
+        "sessions" | "email_verifications" | "password_resets" => &["token_hash"],
         "invites" => &["code"],
-        "email_verifications" => &["token_hash"],
-        "password_resets" => &["token_hash"],
         "posts" => &["post_id"],
         "post_revisions" => &["revision_id"],
         "tags" => &["tag_id"],
@@ -453,6 +456,9 @@ fn restore_media_entries(
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns `Err(BackupError)` if copying or removing media files fails.
 pub fn mirror_media_directory(
     source: &Path,
     destination: &Path,
@@ -542,9 +548,8 @@ fn file_sha256(path: &Path) -> Result<[u8; 32], BackupError> {
 }
 
 fn previous_directory_backup(destination_path: &Path) -> Result<Option<PathBuf>, BackupError> {
-    let parent = match destination_path.parent() {
-        Some(parent) => parent,
-        None => return Ok(None),
+    let Some(parent) = destination_path.parent() else {
+        return Ok(None);
     };
     if !parent.exists() {
         return Ok(None);

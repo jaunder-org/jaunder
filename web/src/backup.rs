@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 use crate::error::WebResult;
 use croner::Cron;
 use leptos::prelude::*;

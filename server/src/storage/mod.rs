@@ -93,7 +93,7 @@ pub(super) fn build_user_record(
 pub(super) fn build_session_record(
     token_hash: String,
     user_id: i64,
-    username: String,
+    username: &str,
     label: Option<String>,
     created_at: DateTime<Utc>,
     last_used_at: DateTime<Utc>,
@@ -208,7 +208,7 @@ pub(super) fn session_record_from_row(
     build_session_record(
         token_hash,
         user_id,
-        username,
+        &username,
         label,
         created_at,
         last_used_at,
@@ -345,6 +345,10 @@ impl FromStr for DbConnectOptions {
 // ---------------------------------------------------------------------------
 
 /// Creates the storage root and required subdirectories (`media/`, `backups/`).
+///
+/// # Errors
+///
+/// Returns `Err` if the storage directory cannot be created.
 pub fn init_storage(path: &Path) -> io::Result<()> {
     std::fs::create_dir(path)?;
     std::fs::create_dir_all(path.join("media"))?;
@@ -396,8 +400,7 @@ pub(super) fn sql_slow_query_threshold() -> Duration {
     std::env::var("JAUNDER_SQL_SLOW_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(Duration::from_millis(100))
+        .map_or(Duration::from_millis(100), Duration::from_millis)
 }
 
 pub(crate) fn resolved_postgres_options(
@@ -423,6 +426,10 @@ async fn open_postgres_database(options: &PgConnectOptions) -> sqlx::Result<Arc<
 
 /// Opens (or creates) the database described by `opts`, runs pending
 /// migrations, and returns an [`AppState`] bundling all storage handles.
+///
+/// # Errors
+///
+/// Returns `Err` if the database connection pool cannot be established.
 #[tracing::instrument(name = "storage.open_database", skip(opts))]
 pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     match opts {
@@ -434,6 +441,10 @@ pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState
 /// Opens an existing database described by `opts`, runs pending migrations.
 ///
 /// Unlike [`open_database`], fails if the database does not already exist.
+///
+/// # Errors
+///
+/// Returns `Err` if the database connection pool cannot be established.
 #[tracing::instrument(name = "storage.open_existing_database", skip(opts))]
 pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     match opts {
@@ -549,7 +560,7 @@ mod tests {
         let record = build_session_record(
             "hash".to_string(),
             1,
-            "alice".to_string(),
+            "alice",
             Some("label".to_string()),
             now,
             now,
