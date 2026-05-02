@@ -3,10 +3,11 @@
 use common::mailer::{test_utils::CapturingMailSender, MailSender};
 use jaunder::storage::{
     open_database, AppState, DbConnectOptions, PostgresAtomicOps, PostgresEmailVerificationStorage,
-    PostgresInviteStorage, PostgresPasswordResetStorage, PostgresPostStorage,
-    PostgresSessionStorage, PostgresSiteConfigStorage, PostgresUserStorage, SqliteAtomicOps,
-    SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
-    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserStorage,
+    PostgresInviteStorage, PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
+    PostgresSessionStorage, PostgresSiteConfigStorage, PostgresUserConfigStorage,
+    PostgresUserStorage, SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
+    SqliteMediaStorage, SqlitePasswordResetStorage, SqlitePostStorage, SqliteSessionStorage,
+    SqliteSiteConfigStorage, SqliteUserConfigStorage, SqliteUserStorage,
 };
 use leptos::prelude::LeptosOptions;
 use sqlx::Connection;
@@ -208,7 +209,9 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             atomic: Arc::new(PostgresAtomicOps::new(pool.clone())),
             email_verifications: Arc::new(PostgresEmailVerificationStorage::new(pool.clone())),
             password_resets: Arc::new(PostgresPasswordResetStorage::new(pool.clone())),
-            posts: Arc::new(PostgresPostStorage::new(pool)),
+            posts: Arc::new(PostgresPostStorage::new(pool.clone())),
+            media: Arc::new(PostgresMediaStorage::new(pool.clone())),
+            user_config: Arc::new(PostgresUserConfigStorage::new(pool)),
             mailer: mailer.clone() as Arc<dyn MailSender>,
         })
     } else {
@@ -232,7 +235,9 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
             email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
             password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
-            posts: Arc::new(SqlitePostStorage::new(pool)),
+            posts: Arc::new(SqlitePostStorage::new(pool.clone())),
+            media: Arc::new(SqliteMediaStorage::new(pool.clone())),
+            user_config: Arc::new(SqliteUserConfigStorage::new(pool)),
             mailer: mailer.clone() as Arc<dyn MailSender>,
         })
     };

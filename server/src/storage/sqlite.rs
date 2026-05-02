@@ -14,12 +14,13 @@ use common::mailer::MailSender;
 use common::password::Password;
 use common::slug::Slug;
 use common::storage::{
-    AppState, AtomicOps, ConfirmPasswordResetError, CreatePostError, CreatePostInput,
-    CreateUserError, EmailVerificationStorage, InviteRecord, InviteStorage, ListByTagError,
-    PasswordResetStorage, PostCursor, PostRecord, PostStorage, PostTag, ProfileUpdate,
-    RegisterWithInviteError, SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage,
-    TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
-    UsePasswordResetError, UserAuthError, UserRecord, UserStorage,
+    AppState, AtomicOps, ConfirmPasswordResetError, CreateMediaError, CreatePostError,
+    CreatePostInput, CreateUserError, DeleteMediaError, EmailVerificationStorage, InviteRecord,
+    InviteStorage, ListByTagError, MediaRecord, MediaSource, MediaStorage, PasswordResetStorage,
+    PostCursor, PostRecord, PostStorage, PostTag, ProfileUpdate, RegisterWithInviteError,
+    SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage, TaggingError,
+    UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserAuthError, UserConfigStorage, UserRecord, UserStorage,
 };
 use common::tag::Tag;
 use common::username::Username;
@@ -27,8 +28,9 @@ use tracing::Instrument;
 
 use super::{
     build_mailer, email_verification_claim_error, generate_hashed_token, invite_record_from_row,
-    password_reset_claim_error, post_record_from_row, session_record_from_row,
-    sql_slow_query_threshold, user_record_from_row, InviteRow, PostRow, SessionRow, UserRow,
+    media_record_from_row, password_reset_claim_error, post_record_from_row,
+    session_record_from_row, sql_slow_query_threshold, user_record_from_row, InviteRow, MediaRow,
+    PostRow, SessionRow, UserRow,
 };
 
 // ---------------------------------------------------------------------------
@@ -44,7 +46,9 @@ fn make_app_state(pool: SqlitePool, mailer: Arc<dyn MailSender>) -> Arc<AppState
         atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
         email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
         password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
-        posts: Arc::new(SqlitePostStorage::new(pool)),
+        posts: Arc::new(SqlitePostStorage::new(pool.clone())),
+        media: Arc::new(SqliteMediaStorage::new(pool.clone())),
+        user_config: Arc::new(SqliteUserConfigStorage::new(pool)),
         mailer,
     })
 }
@@ -1364,5 +1368,228 @@ impl PostStorage for SqlitePostStorage {
             .map(post_record_from_row)
             .collect::<sqlx::Result<_>>()
             .map_err(ListByTagError::Internal)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Media
+// ---------------------------------------------------------------------------
+
+/// SQLite-backed [`MediaStorage`].
+pub struct SqliteMediaStorage {
+    pool: SqlitePool,
+}
+
+impl SqliteMediaStorage {
+    #[must_use]
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl MediaStorage for SqliteMediaStorage {
+    #[tracing::instrument(name = "storage.sqlite.media.create", skip(self, record))]
+    async fn create_media(&self, record: &MediaRecord) -> Result<(), CreateMediaError> {
+        let result = sqlx::query(
+            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(record.user_id)
+        .bind(&record.sha256)
+        .bind(&record.filename)
+        .bind(record.source.as_str())
+        .bind(&record.content_type)
+        .bind(record.size_bytes)
+        .bind(&record.source_url)
+        .bind(record.created_at)
+        .execute(&self.pool)
+        .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(e)
+                if e.as_database_error()
+                    .is_some_and(|de| de.is_unique_violation()) =>
+            {
+                Err(CreateMediaError::AlreadyExists)
+            }
+            Err(e) => Err(CreateMediaError::Internal(e)),
+        }
+    }
+
+    #[tracing::instrument(name = "storage.sqlite.media.get", skip(self))]
+    async fn get_media(
+        &self,
+        user_id: i64,
+        sha256: &str,
+        filename: &str,
+        source: &MediaSource,
+    ) -> sqlx::Result<Option<MediaRecord>> {
+        let row = sqlx::query_as::<_, MediaRow>(
+            "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
+             FROM media
+             WHERE user_id = $1 AND sha256 = $2 AND filename = $3 AND source = $4",
+        )
+        .bind(user_id)
+        .bind(sha256)
+        .bind(filename)
+        .bind(source.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(media_record_from_row).transpose()
+    }
+
+    #[tracing::instrument(name = "storage.sqlite.media.list", skip(self))]
+    async fn list_media(
+        &self,
+        user_id: i64,
+        source: Option<&MediaSource>,
+        limit: u32,
+        offset: u32,
+    ) -> sqlx::Result<Vec<MediaRecord>> {
+        let rows = if let Some(src) = source {
+            sqlx::query_as::<_, MediaRow>(
+                "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
+                 FROM media
+                 WHERE user_id = $1 AND source = $2
+                 ORDER BY created_at DESC
+                 LIMIT $3 OFFSET $4",
+            )
+            .bind(user_id)
+            .bind(src.as_str())
+            .bind(i64::from(limit))
+            .bind(i64::from(offset))
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, MediaRow>(
+                "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
+                 FROM media
+                 WHERE user_id = $1
+                 ORDER BY created_at DESC
+                 LIMIT $2 OFFSET $3",
+            )
+            .bind(user_id)
+            .bind(i64::from(limit))
+            .bind(i64::from(offset))
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        rows.into_iter().map(media_record_from_row).collect()
+    }
+
+    #[tracing::instrument(name = "storage.sqlite.media.delete", skip(self))]
+    async fn delete_media(
+        &self,
+        user_id: i64,
+        sha256: &str,
+        filename: &str,
+        source: &MediaSource,
+    ) -> Result<(), DeleteMediaError> {
+        let result = sqlx::query(
+            "DELETE FROM media WHERE user_id = $1 AND sha256 = $2 AND filename = $3 AND source = $4",
+        )
+        .bind(user_id)
+        .bind(sha256)
+        .bind(filename)
+        .bind(source.as_str())
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(DeleteMediaError::NotFound);
+        }
+        Ok(())
+    }
+
+    #[tracing::instrument(name = "storage.sqlite.media.upload_usage", skip(self))]
+    async fn get_user_upload_usage(&self, user_id: i64) -> sqlx::Result<i64> {
+        let row = sqlx::query_as::<_, (i64,)>(
+            "SELECT COALESCE(SUM(size_bytes), 0) FROM media WHERE user_id = $1 AND source = 'upload'",
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row.0)
+    }
+
+    #[tracing::instrument(name = "storage.sqlite.media.find_by_hash", skip(self))]
+    async fn find_by_hash(
+        &self,
+        sha256: &str,
+        source: &MediaSource,
+    ) -> sqlx::Result<Option<MediaRecord>> {
+        let row = sqlx::query_as::<_, MediaRow>(
+            "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
+             FROM media
+             WHERE sha256 = $1 AND source = $2
+             LIMIT 1",
+        )
+        .bind(sha256)
+        .bind(source.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(media_record_from_row).transpose()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UserConfig
+// ---------------------------------------------------------------------------
+
+/// SQLite-backed [`UserConfigStorage`].
+pub struct SqliteUserConfigStorage {
+    pool: SqlitePool,
+}
+
+impl SqliteUserConfigStorage {
+    #[must_use]
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl UserConfigStorage for SqliteUserConfigStorage {
+    #[tracing::instrument(name = "storage.sqlite.user_config.get", skip(self))]
+    async fn get(&self, user_id: i64, key: &str) -> sqlx::Result<Option<String>> {
+        let row = sqlx::query_as::<_, (String,)>(
+            "SELECT value FROM user_config WHERE user_id = $1 AND key = $2",
+        )
+        .bind(user_id)
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|(v,)| v))
+    }
+
+    #[tracing::instrument(name = "storage.sqlite.user_config.set", skip(self))]
+    async fn set(&self, user_id: i64, key: &str, value: &str) -> sqlx::Result<()> {
+        sqlx::query(
+            "INSERT INTO user_config (user_id, key, value) VALUES ($1, $2, $3)
+             ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(user_id)
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    #[tracing::instrument(name = "storage.sqlite.user_config.delete", skip(self))]
+    async fn delete(&self, user_id: i64, key: &str) -> sqlx::Result<()> {
+        sqlx::query("DELETE FROM user_config WHERE user_id = $1 AND key = $2")
+            .bind(user_id)
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }
