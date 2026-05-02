@@ -6,7 +6,7 @@ on:
 
 jobs:
   e2e:
-    name: End-to-end tests
+    name: E2E Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,5 +22,25 @@ jobs:
           name: jaunder-org
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
-      - name: Run end-to-end tests
-        run: nix flake check --accept-flake-config
+      - name: E2E tests (SQLite + PostgreSQL)
+        run: nix build --accept-flake-config .#packages.x86_64-linux.e2e-checks
+
+  postgres-integration:
+    name: PostgreSQL Integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: cachix/cachix-action@v15
+        with:
+          name: jaunder-org
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: PostgreSQL integration tests
+        run: nix build --accept-flake-config .#packages.x86_64-linux.postgres-integration-checks
