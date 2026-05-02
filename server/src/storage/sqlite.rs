@@ -1410,7 +1410,7 @@ impl MediaStorage for SqliteMediaStorage {
             Ok(_) => Ok(()),
             Err(e)
                 if e.as_database_error()
-                    .is_some_and(|de| de.is_unique_violation()) =>
+                    .is_some_and(sqlx::error::DatabaseError::is_unique_violation) =>
             {
                 Err(CreateMediaError::AlreadyExists)
             }
