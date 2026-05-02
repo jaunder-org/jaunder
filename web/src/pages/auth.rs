@@ -4,9 +4,10 @@ use leptos::prelude::*;
 
 /// Registration page.
 #[component]
+#[allow(clippy::must_use_candidate)]
 pub fn RegisterPage() -> impl IntoView {
     let register_action = ServerAction::<Register>::new();
-    let policy = Resource::new(|| (), |_| get_registration_policy());
+    let policy = Resource::new(|| (), |()| get_registration_policy());
     let username = RwSignal::new(String::new());
 
     view! {
@@ -56,6 +57,7 @@ pub fn RegisterPage() -> impl IntoView {
 
 /// Login page.
 #[component]
+#[allow(clippy::must_use_candidate)]
 pub fn LoginPage() -> impl IntoView {
     let login_action = ServerAction::<Login>::new();
     let username = RwSignal::new(String::new());
@@ -91,6 +93,7 @@ pub fn LoginPage() -> impl IntoView {
 
 /// Logout page — fires the logout server action on mount.
 #[component]
+#[allow(clippy::must_use_candidate)]
 pub fn LogoutPage() -> impl IntoView {
     let logout_action = ServerAction::<Logout>::new();
 
@@ -106,7 +109,7 @@ pub fn LogoutPage() -> impl IntoView {
                 .get()
                 .map(|r: Result<(), WebError>| {
                     match r {
-                        Ok(_) => view! { <p>"You have been logged out."</p> }.into_any(),
+                        Ok(()) => view! { <p>"You have been logged out."</p> }.into_any(),
                         Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                     }
                 })

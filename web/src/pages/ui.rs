@@ -29,6 +29,7 @@ impl Icons {
 
 // ─── 3.1 Icon ─────────────────────────────────────────────────
 
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoView {
     view! {
@@ -53,6 +54,10 @@ pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoVie
 /// Derives `(initials, hue)` from a display name.
 /// `initials`: first character of each of the first two whitespace-separated words, uppercased.
 /// `hue`: sum of all char codes mod 360.
+#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_sign_loss)]
+#[must_use]
 pub fn avatar_parts(name: &str) -> (String, u32) {
     let initials: String = name
         .split_whitespace()
@@ -66,9 +71,14 @@ pub fn avatar_parts(name: &str) -> (String, u32) {
     (initials, hue)
 }
 
+#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
     let (initials, hue) = avatar_parts(&name);
+    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_sign_loss)]
     let font_size = (size as f32 * 0.36).round() as u32;
     let style = format!(
         "width:{size}px;height:{size}px;background:oklch(0.58 0.07 {hue});font-size:{font_size}px"
@@ -82,6 +92,8 @@ pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
 
 // ─── 3.3 Dot ──────────────────────────────────────────────────
 
+#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Dot(proto: String) -> impl IntoView {
     let style = format!("background: var(--c-{proto})");
@@ -90,6 +102,7 @@ pub fn Dot(proto: String) -> impl IntoView {
 
 // ─── 3.4 Chip ─────────────────────────────────────────────────
 
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Chip(
     label: String,
@@ -108,9 +121,10 @@ pub fn Chip(
 
 // ─── 3.5 Topbar ───────────────────────────────────────────────
 
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn BackupBanner() -> impl IntoView {
-    let visible = Resource::new(|| (), |_| backup_warning_visible());
+    let visible = Resource::new(|| (), |()| backup_warning_visible());
 
     view! {
         <Suspense fallback=|| ()>
@@ -132,6 +146,7 @@ pub fn BackupBanner() -> impl IntoView {
     }
 }
 
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Topbar(
     title: String,
@@ -157,6 +172,7 @@ pub fn Topbar(
 ///
 /// Renders a `name="body"` textarea and a `name="format"` hidden input.
 /// When `show_seg` is true (default), also renders the `.j-seg` format toggle.
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn ComposerFields(
     body: RwSignal<String>,
@@ -233,6 +249,8 @@ pub(crate) fn format_post_time(ts: &str) -> String {
     }
 }
 
+#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn PostDisplay(
     post: TimelinePostSummary,
@@ -287,6 +305,7 @@ pub fn PostDisplay(
     }
 }
 
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn PostCard(
     post: TimelinePostSummary,
@@ -298,7 +317,7 @@ pub fn PostCard(
     let post_id = post.post_id;
     let time_label = format_post_time(&post.published_at);
     let permalink = post.permalink.clone();
-    let edit_url = format!("/posts/{}/edit", post_id);
+    let edit_url = format!("/posts/{post_id}/edit");
     let delete_action = ServerAction::<DeletePost>::new();
     let unpublish_action = ServerAction::<UnpublishPost>::new();
     let deleted = RwSignal::new(false);
@@ -376,6 +395,7 @@ pub fn PostCard(
 
 // ─── 3.7 InlineComposer ───────────────────────────────────────
 
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {
     let create_action = ServerAction::<CreatePost>::new();
@@ -425,7 +445,7 @@ pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl In
                             rows=6
                             placeholder="What's on your mind?"
                             textarea_class=""
-                            on_input=Callback::new(move |_| flash.set(None))
+                            on_input=Callback::new(move |()| flash.set(None))
                         />
                         <input type="hidden" name="slug_override" value="" />
                         <div class="j-composer-toolbar">
@@ -452,7 +472,7 @@ pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl In
                 </div>
             </ActionForm>
             {move || {
-                if let Some(e) = create_action.value().get().and_then(|r| r.err()) {
+                if let Some(e) = create_action.value().get().and_then(Result::err) {
                     return view! { <p class="error">{e.to_string()}</p> }.into_any();
                 }
                 if let Some((url, msg)) = flash.get() {
@@ -516,6 +536,8 @@ fn SidebarSource(proto: &'static str, name: &'static str, sub: &'static str) -> 
 
 /// The left navigation sidebar. Reads theme and current-user from context.
 /// `active`: the key of the currently active nav item (e.g. `"home"`).
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     let active_key = active.unwrap_or_default();
@@ -528,6 +550,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     );
 
     // (key, label, icon_path, href, auth_required)
+    #[allow(clippy::items_after_statements)]
     const NAV_ITEMS: &[(&str, &str, &str, Option<&'static str>, bool)] = &[
         ("home", "Home", Icons::HOME, Some("/"), false),
         ("local", "Local", Icons::LOCAL, None, true),

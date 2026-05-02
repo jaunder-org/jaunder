@@ -60,3 +60,6 @@ maik = "0.2.0"
 server_fn = { version = "0.8", features = ["axum-no-default"] }
 tempfile.workspace = true
 tower = { workspace = true }
+
+[lints]
+workspace = true

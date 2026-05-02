@@ -32,6 +32,7 @@ impl FromStr for Password {
 }
 
 impl Password {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -40,6 +41,10 @@ impl Password {
     ///
     /// This is a CPU-intensive operation and should be called from a blocking
     /// context (e.g., via [`tokio::task::spawn_blocking`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if Argon2 hashing fails.
     pub fn hash(&self) -> Result<String, String> {
         use argon2::{
             password_hash::{rand_core::OsRng, SaltString},
@@ -57,12 +62,16 @@ impl Password {
     ///
     /// This is a CPU-intensive operation and should be called from a blocking
     /// context (e.g., via [`tokio::task::spawn_blocking`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if Argon2 verification fails (e.g., the hash string is malformed).
     pub fn verify(&self, hash: &str) -> Result<bool, String> {
         use argon2::{Argon2, PasswordHash, PasswordVerifier};
 
         let parsed = PasswordHash::new(hash).map_err(|e| e.to_string())?;
         match Argon2::default().verify_password(self.0.as_bytes(), &parsed) {
-            Ok(_) => Ok(true),
+            Ok(()) => Ok(true),
             Err(argon2::password_hash::Error::Password) => Ok(false),
             Err(e) => Err(e.to_string()),
         }

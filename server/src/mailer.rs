@@ -36,6 +36,11 @@ pub struct LettreMailSender {
 
 impl LettreMailSender {
     /// Build a `LettreMailSender` from an [`SmtpConfig`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the sender address is invalid, or if the SMTP
+    /// transport cannot be built.
     pub fn from_config(config: &SmtpConfig) -> Result<Self, BuildMailerError> {
         let sender: Mailbox =
             config
@@ -133,10 +138,10 @@ impl MailSender for FileMailSender {
     async fn send_email(&self, message: &EmailMessage) -> Result<(), MailError> {
         use std::io::Write;
 
-        let to: Vec<String> = message.to.iter().map(|a| a.to_string()).collect();
+        let to: Vec<String> = message.to.iter().map(ToString::to_string).collect();
         let record = serde_json::json!({
             "to": to,
-            "from": message.from.as_ref().map(|a| a.to_string()),
+            "from": message.from.as_ref().map(ToString::to_string),
             "subject": message.subject,
             "body_text": message.body_text,
         });

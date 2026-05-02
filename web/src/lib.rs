@@ -49,6 +49,7 @@ pub use pages::App;
 use leptos::prelude::*;
 use leptos_meta::MetaTags;
 
+#[must_use]
 pub fn shell(options: LeptosOptions) -> impl IntoView {
     view! {
         <!DOCTYPE html>

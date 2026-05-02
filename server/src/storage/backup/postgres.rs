@@ -169,7 +169,6 @@ fn restore_type(column: &ColumnInfo) -> &'static str {
     match column.type_name.as_str() {
         "bool" => "BOOLEAN",
         "int8" => "BIGINT",
-        "text" => "TEXT",
         "timestamptz" => "TIMESTAMPTZ",
         _ => "TEXT",
     }

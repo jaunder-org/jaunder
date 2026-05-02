@@ -36,6 +36,7 @@ impl FromStr for Slug {
 }
 
 impl Slug {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -51,6 +52,7 @@ impl fmt::Display for Slug {
 /// characters and collapsing runs of non-alphanumeric characters into hyphens.
 ///
 /// Returns `None` if the title contains no ASCII alphanumeric characters.
+#[must_use]
 pub fn slugify_title(title: &str) -> Option<String> {
     let mut slug = String::new();
     let mut previous_was_dash = false;
