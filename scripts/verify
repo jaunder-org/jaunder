@@ -2,9 +2,10 @@
 # Run the standard project verification sequence.
 #
 # Usage:
-#   scripts/verify
+#   scripts/verify          # default: capture output, show on failure
+#
 # Optional env:
-#   VERIFY_PASSTHROUGH=1         Stream each step output directly (old behavior).
+#   VERIFY_PASSTHROUGH=1         Stream each step output directly (sequential).
 #   VERIFY_SHOW_STEP_OUTPUT=1    Print captured output for successful steps.
 #   VERIFY_SHOW_FAILURE_LOG=1    Print captured output when a step fails (default: 1).
 #   VERIFY_FAILURE_LOG_LINES=200 Number of failure log lines to print.
@@ -12,6 +13,10 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
+
+FAILURE_LOG_LINES="${VERIFY_FAILURE_LOG_LINES:-200}"
+
+# ── Helpers ───────────────────────────────────────────────────────────
 
 run_step() {
     local label="$1"
@@ -34,24 +39,99 @@ run_step() {
         return 0
     fi
 
-    echo "--- verify: failed: ${label} ---"
+    echo "--- verify: FAILED: ${label} ---"
     if [[ "${VERIFY_SHOW_FAILURE_LOG:-1}" == "1" ]]; then
-        local failure_lines="${VERIFY_FAILURE_LOG_LINES:-200}"
-        echo "--- verify: failure output (last ${failure_lines} lines): ${label} ---"
-        tail -n "$failure_lines" "$step_log"
+        echo "--- verify: failure output (last ${FAILURE_LOG_LINES} lines) ---"
+        tail -n "$FAILURE_LOG_LINES" "$step_log"
     fi
     rm -f "$step_log"
     return 1
 }
 
-run_step "cargo fmt --check" cargo fmt --check
-run_step "leptosfmt --check" leptosfmt -x .direnv -x .git -x target --check '**/*.rs'
-run_step "prettier --check end2end" prettier --check end2end
+# Run multiple checks in parallel, collect results, fail if any failed.
+# Usage: run_parallel "label1" cmd1 arg1 -- "label2" cmd2 arg2 -- ...
+run_parallel() {
+    if [[ "${VERIFY_PASSTHROUGH:-0}" == "1" ]]; then
+        # In passthrough mode, run sequentially with streaming output.
+        while [[ $# -gt 0 ]]; do
+            local label="$1"; shift
+            local -a cmd=()
+            while [[ $# -gt 0 && "$1" != "--" ]]; do
+                cmd+=("$1"); shift
+            done
+            [[ $# -gt 0 ]] && shift  # consume --
+            run_step "$label" "${cmd[@]}"
+        done
+        return 0
+    fi
+
+    local -a labels=()
+    local -a logs=()
+    local -a pids=()
+    local failed=0
+
+    while [[ $# -gt 0 ]]; do
+        local label="$1"; shift
+        local -a cmd=()
+        while [[ $# -gt 0 && "$1" != "--" ]]; do
+            cmd+=("$1"); shift
+        done
+        [[ $# -gt 0 ]] && shift  # consume --
+
+        echo "--- verify: ${label} ---"
+        local log
+        log="$(mktemp)"
+        labels+=("$label")
+        logs+=("$log")
+
+        # Capture cmd into a string for the subshell (avoid array scoping issues).
+        local cmd_str
+        cmd_str=$(printf '%q ' "${cmd[@]}")
+        ( eval "$cmd_str" >"$log" 2>&1 ) &
+        pids+=($!)
+    done
+
+    for i in "${!pids[@]}"; do
+        if ! wait "${pids[$i]}"; then
+            echo "--- verify: FAILED: ${labels[$i]} ---"
+            if [[ "${VERIFY_SHOW_FAILURE_LOG:-1}" == "1" ]]; then
+                echo "--- verify: failure output (last ${FAILURE_LOG_LINES} lines) ---"
+                tail -n "$FAILURE_LOG_LINES" "${logs[$i]}"
+            fi
+            failed=1
+        elif [[ "${VERIFY_SHOW_STEP_OUTPUT:-0}" == "1" ]]; then
+            cat "${logs[$i]}"
+        fi
+        rm -f "${logs[$i]}"
+    done
+
+    if [[ $failed -ne 0 ]]; then
+        return 1
+    fi
+}
+
+# ── Phase 1: Fast checks (parallel, no compilation) ──────────────────
+
+run_parallel \
+    "cargo fmt --check"                cargo fmt --check \
+    -- \
+    "leptosfmt --check"                leptosfmt -x .direnv -x .git -x target --check '**/*.rs' \
+    -- \
+    "prettier --check end2end"         prettier --check end2end \
+    -- \
+    "cargo deny check"                 cargo deny check
+
+# ── Phase 2: Lint (compiles workspace) ────────────────────────────────
+
 run_step "cargo clippy -- -D warnings" cargo clippy -- -D warnings
-run_step "cargo build" cargo build
-run_step "cargo nextest run" cargo nextest run
+
+# ── Phase 3: Coverage (runs full test suite with instrumentation) ─────
 
 run_step "scripts/check-coverage" scripts/check-coverage
-run_step "nix flake check" nix flake check
+
+# ── Phase 4: Nix-only checks (e2e + postgres VM tests) ───────────────
+
+run_step "nix build .#nix-only-checks" \
+    nix build --accept-flake-config .#nix-only-checks
 
 echo "--- verify: all checks passed ---"

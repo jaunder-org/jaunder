@@ -779,6 +779,37 @@
           e2e-postgres-cold = mkE2ePostgresCheck {
             checkName = "jaunder-e2e-postgres-cold";
           };
+
+          # Sub-group meta-packages: CI jobs build these so that adding a
+          # new e2e or postgres check only requires touching flake.nix.
+          e2e-checks = pkgs.symlinkJoin {
+            name = "jaunder-e2e-checks";
+            paths = builtins.attrValues (
+              pkgs.lib.filterAttrs
+                (name: _: pkgs.lib.hasPrefix "e2e-" name)
+                self.checks.${system}
+            );
+          };
+
+          postgres-integration-checks = pkgs.symlinkJoin {
+            name = "jaunder-postgres-integration-checks";
+            paths = builtins.attrValues (
+              pkgs.lib.filterAttrs
+                (name: _: pkgs.lib.hasPrefix "postgres-" name)
+                self.checks.${system}
+            );
+          };
+
+          # Meta-package: all checks that require Nix (VM tests).
+          # scripts/verify builds this instead of `nix flake check` to avoid
+          # re-running format/clippy/nextest/deny that it already ran via Cargo.
+          nix-only-checks = pkgs.symlinkJoin {
+            name = "jaunder-nix-only-checks";
+            paths = [
+              self.packages.${system}.e2e-checks
+              self.packages.${system}.postgres-integration-checks
+            ];
+          };
         };
 
         apps =
@@ -891,6 +922,40 @@
               pname = "jaunder";
               version = "0.1.0";
             };
+            coverage = craneLib.mkCargoDerivation (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                pname = "jaunder-coverage";
+                nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
+                  pkgs.cargo-llvm-cov
+                  pkgs.cargo-nextest
+                  pkgs.jq
+                  pkgs.gawk
+                ];
+                buildPhaseCargoCommand = ''
+                  export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:''${LD_LIBRARY_PATH:-}"
+
+                  BASELINE=$(cat ${./.coverage-baseline})
+
+                  CURRENT=$(cargo llvm-cov nextest --json --summary-only \
+                    --ignore-filename-regex 'web/src/pages|server/src/assets|server/src/storage/postgres.rs|server/src/storage/backup/postgres.rs' \
+                    | jq '.data[0].totals.lines.percent' \
+                    | awk '{ printf "%.2f", $1 }')
+
+                  echo "Current coverage:  ''${CURRENT}%"
+                  echo "Baseline coverage: ''${BASELINE}%"
+
+                  if awk "BEGIN { exit !(''${CURRENT} < ''${BASELINE}) }"; then
+                    echo "error: coverage dropped below baseline (''${CURRENT}% < ''${BASELINE}%)"
+                    exit 1
+                  fi
+
+                  echo "Coverage OK (''${CURRENT}% >= ''${BASELINE}%)"
+                '';
+                installPhaseCommand = "mkdir -p $out && touch $out/coverage-ok";
+              }
+            );
             prettier-check =
               pkgs.runCommand "prettier-check"
                 {
