@@ -1425,7 +1425,7 @@ impl MediaStorage for PostgresMediaStorage {
     #[tracing::instrument(name = "storage.postgres.media.upload_usage", skip(self))]
     async fn get_user_upload_usage(&self, user_id: i64) -> sqlx::Result<i64> {
         let row = sqlx::query_as::<_, (i64,)>(
-            "SELECT COALESCE(SUM(size_bytes), 0) FROM media WHERE user_id = $1 AND source = 'upload'",
+            "SELECT COALESCE(SUM(size_bytes), 0)::bigint FROM media WHERE user_id = $1 AND source = 'upload'",
         )
         .bind(user_id)
         .fetch_one(&self.pool)
