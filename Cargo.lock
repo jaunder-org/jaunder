@@ -4643,8 +4643,10 @@ dependencies = [
  "leptos_meta",
  "leptos_router",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
