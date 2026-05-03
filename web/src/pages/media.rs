@@ -1,10 +1,12 @@
 use crate::{
     error::WebError,
-    media::{delete_media, list_my_media, media_usage, DeleteMedia, DeleteMediaResult, MediaItem},
+    media::{list_my_media, media_usage, DeleteMedia, DeleteMediaResult, MediaItem},
     pages::ui::Topbar,
+    pages::MediaUploadButton,
 };
 use leptos::prelude::*;
 
+#[allow(clippy::cast_precision_loss)]
 fn format_bytes(bytes: i64) -> String {
     const KB: i64 = 1_024;
     const MB: i64 = 1_024 * KB;
@@ -22,20 +24,39 @@ fn format_bytes(bytes: i64) -> String {
 }
 
 #[allow(clippy::must_use_candidate)]
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::cast_precision_loss)]
 #[component]
 pub fn MediaPage() -> impl IntoView {
     let delete_action = ServerAction::<DeleteMedia>::new();
+    let upload_version = RwSignal::new(0u32);
 
-    let usage = Resource::new(move || delete_action.version().get(), |_| media_usage());
+    let usage = Resource::new(
+        move || (delete_action.version().get(), upload_version.get()),
+        |_: (usize, u32)| media_usage(),
+    );
 
     let media_list = Resource::new(
-        move || delete_action.version().get(),
-        |_| list_my_media(None, Some(50), Some(0)),
+        move || (delete_action.version().get(), upload_version.get()),
+        |_: (usize, u32)| list_my_media(None, Some(50), Some(0)),
     );
 
     view! {
         <Topbar title="Media".to_string() sub="Your uploads".to_string() />
         <div style="padding:16px 32px">
+            <div class="j-sb-head" style="margin-bottom:8px">
+                "Upload"
+            </div>
+            <div style="margin-bottom:24px">
+                <MediaUploadButton
+                    on_uploaded=Callback::new(move |_url: String| {
+                        upload_version.update(|v| *v += 1);
+                    })
+                    on_error=Callback::new(move |msg: String| {
+                        leptos::logging::warn!("upload error: {msg}");
+                    })
+                />
+            </div>
             <Suspense fallback=|| {
                 view! { <p class="j-loading">"Loading usage\u{2026}"</p> }
             }>
@@ -120,14 +141,13 @@ pub fn MediaPage() -> impl IntoView {
                             let ids = r
                                 .referenced_in_posts
                                 .iter()
-                                .map(|id| id.to_string())
+                                .map(ToString::to_string)
                                 .collect::<Vec<_>>()
                                 .join(", ");
                             view! {
                                 <p class="error">
                                     {format!(
-                                        "Cannot delete: referenced in post(s) {}. Use force delete to remove anyway.",
-                                        ids,
+                                        "Cannot delete: referenced in post(s) {ids}. Use force delete to remove anyway.",
                                     )}
                                 </p>
                             }
@@ -140,6 +160,7 @@ pub fn MediaPage() -> impl IntoView {
     }
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn render_media_row(item: MediaItem, delete_action: ServerAction<DeleteMedia>) -> impl IntoView {
     let url = item.url.clone();
     let filename = item.filename.clone();

@@ -6,8 +6,8 @@ use crate::auth::require_auth;
 use crate::error::WebResult;
 #[cfg(feature = "ssr")]
 use common::storage::{
-    AppState, MediaSource, MediaStorage, SiteConfigStorage, DEFAULT_MAX_FILE_SIZE_BYTES,
-    DEFAULT_USER_QUOTA_BYTES, MEDIA_MAX_FILE_SIZE_BYTES_KEY, MEDIA_USER_QUOTA_BYTES_KEY,
+    AppState, MediaSource, DEFAULT_MAX_FILE_SIZE_BYTES, DEFAULT_USER_QUOTA_BYTES,
+    MEDIA_MAX_FILE_SIZE_BYTES_KEY, MEDIA_USER_QUOTA_BYTES_KEY,
 };
 #[cfg(feature = "ssr")]
 use std::sync::Arc;
@@ -26,7 +26,7 @@ pub struct MediaItem {
 
 /// Storage usage returned by [`media_usage`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MediaUsage {
+pub struct MediaUsageData {
     pub used_bytes: i64,
     pub quota_bytes: i64,
     pub max_file_size_bytes: i64,
@@ -54,7 +54,7 @@ pub async fn list_my_media(
 
         let source_filter = source
             .as_deref()
-            .map(|s| s.parse::<MediaSource>())
+            .map(str::parse::<MediaSource>)
             .transpose()
             .map_err(|e| InternalError::validation(e.to_string()))?;
 
@@ -89,7 +89,7 @@ pub async fn list_my_media(
 
 /// Returns storage usage for the authenticated user.
 #[server(endpoint = "/media_usage")]
-pub async fn media_usage() -> WebResult<MediaUsage> {
+pub async fn media_usage() -> WebResult<MediaUsageData> {
     crate::web_server_fn!("media_usage", => {
         use crate::error::InternalError;
 
@@ -118,7 +118,7 @@ pub async fn media_usage() -> WebResult<MediaUsage> {
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(DEFAULT_MAX_FILE_SIZE_BYTES);
 
-        Ok(MediaUsage {
+        Ok(MediaUsageData {
             used_bytes,
             quota_bytes,
             max_file_size_bytes,
@@ -179,7 +179,7 @@ pub async fn delete_media(
             .media
             .delete_media(auth.user_id, &sha256, &filename, &source_enum)
             .await
-            .map_err(|e| InternalError::storage(e))?;
+            .map_err(InternalError::storage)?;
 
         Ok(DeleteMediaResult {
             deleted: true,
