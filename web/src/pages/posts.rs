@@ -4,6 +4,7 @@ use crate::{
     pages::{
         signal_read::read_signal,
         ui::{ComposerFields, PostCard, PostDisplay, Topbar},
+        MediaUploadButton,
     },
     posts::{
         get_post, get_post_preview, list_drafts, list_user_posts, CreatePost, CreatePostResult,
@@ -23,6 +24,8 @@ pub fn CreatePostPage() -> impl IntoView {
     let current_user = Resource::new(|| (), |()| current_user());
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
+    let last_media_url = RwSignal::new(Option::<String>::None);
+    let upload_error = RwSignal::new(Option::<String>::None);
 
     view! {
         <Topbar title="New post".to_string() sub="Long-form".to_string() />
@@ -92,6 +95,60 @@ pub fn CreatePostPage() -> impl IntoView {
                                                     "Org"
                                                 </button>
                                             </div>
+                                        </div>
+                                        <div style="margin-top:16px">
+                                            <div class="j-sb-head" style="padding:0 0 10px">
+                                                "Media"
+                                            </div>
+                                            <MediaUploadButton
+                                                on_uploaded=Callback::new(move |url: String| {
+                                                    last_media_url.set(Some(url));
+                                                    upload_error.set(None);
+                                                })
+                                                on_error=Callback::new(move |msg: String| {
+                                                    upload_error.set(Some(msg));
+                                                })
+                                            />
+                                            {move || {
+                                                last_media_url
+                                                    .get()
+                                                    .map(|url| {
+                                                        view! {
+                                                            <div style="margin-top:8px">
+                                                                <div style="font-size:12px;color:#888;margin-bottom:4px">
+                                                                    "Uploaded URL:"
+                                                                </div>
+                                                                <input
+                                                                    type="text"
+                                                                    readonly
+                                                                    value=url.clone()
+                                                                    class="j-field-val"
+                                                                    style="font-size:12px;cursor:text"
+                                                                    on:click=move |ev| {
+                                                                        use leptos::wasm_bindgen::JsCast;
+                                                                        let _ = ev
+                                                                            .target()
+                                                                            .and_then(|t| {
+                                                                                t.dyn_into::<web_sys::HtmlInputElement>().ok()
+                                                                            })
+                                                                            .map(|i| i.select());
+                                                                    }
+                                                                />
+                                                            </div>
+                                                        }
+                                                    })
+                                            }}
+                                            {move || {
+                                                upload_error
+                                                    .get()
+                                                    .map(|msg| {
+                                                        view! {
+                                                            <p class="error" style="margin-top:6px;font-size:12px">
+                                                                {msg}
+                                                            </p>
+                                                        }
+                                                    })
+                                            }}
                                         </div>
                                         <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
                                             <button
@@ -501,6 +558,8 @@ pub fn EditPostPage() -> impl IntoView {
     let update_post_action = ServerAction::<UpdatePost>::new();
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
+    let last_media_url = RwSignal::new(Option::<String>::None);
+    let upload_error = RwSignal::new(Option::<String>::None);
     Effect::new_isomorphic(move |_| {
         if let Some(Ok(ref updated)) = update_post_action.value().get() {
             if updated.published_at.is_some() {
@@ -603,6 +662,60 @@ pub fn EditPostPage() -> impl IntoView {
                                                     "Org"
                                                 </button>
                                             </div>
+                                        </div>
+                                        <div style="margin-top:16px">
+                                            <div class="j-sb-head" style="padding:0 0 10px">
+                                                "Media"
+                                            </div>
+                                            <MediaUploadButton
+                                                on_uploaded=Callback::new(move |url: String| {
+                                                    last_media_url.set(Some(url));
+                                                    upload_error.set(None);
+                                                })
+                                                on_error=Callback::new(move |msg: String| {
+                                                    upload_error.set(Some(msg));
+                                                })
+                                            />
+                                            {move || {
+                                                last_media_url
+                                                    .get()
+                                                    .map(|url| {
+                                                        view! {
+                                                            <div style="margin-top:8px">
+                                                                <div style="font-size:12px;color:#888;margin-bottom:4px">
+                                                                    "Uploaded URL:"
+                                                                </div>
+                                                                <input
+                                                                    type="text"
+                                                                    readonly
+                                                                    value=url.clone()
+                                                                    class="j-field-val"
+                                                                    style="font-size:12px;cursor:text"
+                                                                    on:click=move |ev| {
+                                                                        use leptos::wasm_bindgen::JsCast;
+                                                                        let _ = ev
+                                                                            .target()
+                                                                            .and_then(|t| {
+                                                                                t.dyn_into::<web_sys::HtmlInputElement>().ok()
+                                                                            })
+                                                                            .map(|i| i.select());
+                                                                    }
+                                                                />
+                                                            </div>
+                                                        }
+                                                    })
+                                            }}
+                                            {move || {
+                                                upload_error
+                                                    .get()
+                                                    .map(|msg| {
+                                                        view! {
+                                                            <p class="error" style="margin-top:6px;font-size:12px">
+                                                                {msg}
+                                                            </p>
+                                                        }
+                                                    })
+                                            }}
                                         </div>
                                         <div class="j-edit-form-actions">
                                             {if is_published {

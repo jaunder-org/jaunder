@@ -3,16 +3,19 @@ pub mod backup;
 pub mod email;
 pub mod home;
 pub mod invites;
+pub mod media;
 pub mod password_reset;
 pub mod posts;
 pub mod profile;
 pub mod sessions;
 pub(crate) mod signal_read;
 pub mod ui;
+pub mod upload;
 pub use ui::{
     Avatar, BackupBanner, Chip, Dot, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar,
     Topbar,
 };
+pub use upload::MediaUploadButton;
 
 /// Default theme identifier. This selects the CSS variable pack applied via
 /// `data-theme` on the root element. "studio" is the pragmatic default chosen
@@ -25,6 +28,7 @@ use crate::pages::backup::BackupSettingsPage;
 use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
 use crate::pages::invites::InvitesPage;
+use crate::pages::media::MediaPage;
 use crate::pages::password_reset::{ForgotPasswordPage, ResetPasswordPage};
 use crate::pages::posts::{
     CreatePostPage, DraftPreviewPage, DraftsPage, EditPostPage, PostPage, UserTimelinePage,
@@ -132,6 +136,7 @@ pub fn App() -> impl IntoView {
                         view=CreatePostPage
                     />
                     <Route path=StaticSegment("drafts") view=DraftsPage />
+                    <Route path=StaticSegment("media") view=MediaPage />
                     <Route
                         path=(
                             StaticSegment("posts"),

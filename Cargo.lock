@@ -1692,12 +1692,14 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-cron-scheduler",
+ "tokio-util",
  "tower",
  "tower-http",
  "tracing",
  "tracing-log",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "uuid",
  "web",
 ]
 
@@ -4641,8 +4643,10 @@ dependencies = [
  "leptos_meta",
  "leptos_router",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 

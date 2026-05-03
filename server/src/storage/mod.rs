@@ -13,13 +13,16 @@ use sqlx::PgPool;
 // them without a circular dependency.  Re-export everything for
 // backward-compatibility with existing server-crate consumers.
 pub use common::storage::{
-    AppState, AtomicOps, ConfirmPasswordResetError, CreatePostError, CreatePostInput,
-    CreateUserError, EmailVerificationStorage, InviteRecord, InviteStorage, ListByTagError,
-    PasswordResetStorage, PostCursor, PostFormat, PostRecord, PostRevisionRecord, PostStorage,
-    PostTag, ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionRecord,
+    AppState, AtomicOps, ConfirmPasswordResetError, CreateMediaError, CreatePostError,
+    CreatePostInput, CreateUserError, DeleteMediaError, EmailVerificationStorage,
+    InvalidMediaSource, InviteRecord, InviteStorage, ListByTagError, MediaRecord, MediaSource,
+    MediaStorage, PasswordResetStorage, PostCursor, PostFormat, PostRecord, PostRevisionRecord,
+    PostStorage, PostTag, ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionRecord,
     SessionStorage, SiteConfigStorage, TaggingError, UpdatePostError, UpdatePostInput,
-    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError, UserRecord,
-    UserStorage,
+    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError,
+    UserConfigStorage, UserRecord, UserStorage, DEFAULT_MAX_FILE_SIZE_BYTES,
+    DEFAULT_USER_QUOTA_BYTES, MEDIA_CACHE_POLICY_DEFAULT_KEY, MEDIA_MAX_FILE_SIZE_BYTES_KEY,
+    MEDIA_USER_QUOTA_BYTES_KEY, USER_MEDIA_CACHE_POLICY_KEY,
 };
 
 use crate::mailer::FileMailSender;
@@ -30,9 +33,9 @@ use common::username::Username;
 
 mod sqlite;
 pub use sqlite::{
-    SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
+    SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage, SqliteMediaStorage,
     SqlitePasswordResetStorage, SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage,
-    SqliteUserStorage,
+    SqliteUserConfigStorage, SqliteUserStorage,
 };
 pub mod backup;
 pub use backup::{
@@ -42,8 +45,9 @@ pub use backup::{
 mod postgres;
 pub use postgres::{
     PostgresAtomicOps, PostgresEmailVerificationStorage, PostgresInviteStorage,
-    PostgresPasswordResetStorage, PostgresPostStorage, PostgresSessionStorage,
-    PostgresSiteConfigStorage, PostgresUserStorage,
+    PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
+    PostgresSessionStorage, PostgresSiteConfigStorage, PostgresUserConfigStorage,
+    PostgresUserStorage,
 };
 
 pub(super) type UserRecordParts = (
@@ -247,6 +251,34 @@ pub(super) fn post_record_from_row(row: PostRow) -> sqlx::Result<PostRecord> {
     build_post_record(row)
 }
 
+pub(super) type MediaRow = (
+    i64,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    Option<String>,
+    DateTime<Utc>,
+);
+
+pub(super) fn media_record_from_row(row: MediaRow) -> sqlx::Result<MediaRecord> {
+    let (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at) = row;
+    let source: MediaSource = source
+        .parse()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    Ok(MediaRecord {
+        user_id,
+        sha256,
+        filename,
+        source,
+        content_type,
+        size_bytes,
+        source_url,
+        created_at,
+    })
+}
+
 pub(super) fn generate_hashed_token() -> sqlx::Result<(String, String)> {
     let raw_token = crate::auth::generate_token();
     let token_hash = crate::auth::hash_token(&raw_token)
@@ -352,6 +384,9 @@ impl FromStr for DbConnectOptions {
 pub fn init_storage(path: &Path) -> io::Result<()> {
     std::fs::create_dir(path)?;
     std::fs::create_dir_all(path.join("media"))?;
+    std::fs::create_dir_all(path.join("media").join("upload"))?;
+    std::fs::create_dir_all(path.join("media").join("cached"))?;
+    std::fs::create_dir_all(path.join("media").join("tmp"))?;
     std::fs::create_dir_all(path.join("backups"))?;
     Ok(())
 }
@@ -369,7 +404,9 @@ fn make_postgres_app_state(pool: PgPool, mailer: Arc<dyn MailSender>) -> Arc<App
         atomic: Arc::new(PostgresAtomicOps::new(pool.clone())),
         email_verifications: Arc::new(PostgresEmailVerificationStorage::new(pool.clone())),
         password_resets: Arc::new(PostgresPasswordResetStorage::new(pool.clone())),
-        posts: Arc::new(PostgresPostStorage::new(pool)),
+        posts: Arc::new(PostgresPostStorage::new(pool.clone())),
+        media: Arc::new(PostgresMediaStorage::new(pool.clone())),
+        user_config: Arc::new(PostgresUserConfigStorage::new(pool)),
         mailer,
     })
 }
@@ -470,6 +507,9 @@ mod tests {
 
         assert!(storage.is_dir());
         assert!(storage.join("media").is_dir());
+        assert!(storage.join("media").join("upload").is_dir());
+        assert!(storage.join("media").join("cached").is_dir());
+        assert!(storage.join("media").join("tmp").is_dir());
         assert!(storage.join("backups").is_dir());
     }
 

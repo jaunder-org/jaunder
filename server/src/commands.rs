@@ -406,7 +406,7 @@ pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> a
     let backup_scheduler =
         crate::start_backup_worker(db.clone(), storage.db.clone(), storage.storage_path.clone())
             .await?;
-    let router = crate::create_router(leptos_options, db, prod);
+    let router = crate::create_router(leptos_options, db, prod, storage.storage_path.clone());
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!(bind = %bind, prod, "starting HTTP server");
     let _backup_scheduler = backup_scheduler;

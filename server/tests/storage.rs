@@ -5396,3 +5396,594 @@ async fn postgres_update_rendered_post_not_found_returns_storage_error() {
     let state = postgres_state().await;
     assert_update_rendered_post_not_found(&state).await;
 }
+
+// ── MediaStorage tests ────────────────────────────────────────────────────────
+
+use jaunder::storage::{CreateMediaError, DeleteMediaError, MediaRecord, MediaSource};
+
+fn make_media_record(
+    user_id: i64,
+    sha256: &str,
+    filename: &str,
+    source: MediaSource,
+) -> MediaRecord {
+    MediaRecord {
+        user_id,
+        sha256: sha256.to_string(),
+        filename: filename.to_string(),
+        source,
+        content_type: "image/jpeg".to_string(),
+        size_bytes: 12345,
+        source_url: None,
+        created_at: chrono::Utc::now(),
+    }
+}
+
+async fn assert_create_and_get_media(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(
+            &username("mediauser1"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let sha256 = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234".to_string();
+    let record = make_media_record(user_id, &sha256, "test.jpg", MediaSource::Upload);
+    state.media.create_media(&record).await.unwrap();
+
+    let fetched = state
+        .media
+        .get_media(user_id, &sha256, "test.jpg", &MediaSource::Upload)
+        .await
+        .unwrap();
+    let fetched = fetched.expect("record should exist");
+    assert_eq!(fetched.user_id, user_id);
+    assert_eq!(fetched.sha256, sha256);
+    assert_eq!(fetched.filename, "test.jpg");
+    assert_eq!(fetched.source, MediaSource::Upload);
+    assert_eq!(fetched.content_type, "image/jpeg");
+    assert_eq!(fetched.size_bytes, 12345);
+}
+
+async fn assert_duplicate_media_returns_already_exists(
+    state: &std::sync::Arc<jaunder::storage::AppState>,
+) {
+    let user_id = state
+        .users
+        .create_user(
+            &username("mediauser2"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let sha256 = "bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234".to_string();
+    let record = make_media_record(user_id, &sha256, "dup.jpg", MediaSource::Upload);
+    state.media.create_media(&record).await.unwrap();
+    let err = state.media.create_media(&record).await.unwrap_err();
+    assert!(
+        matches!(err, CreateMediaError::AlreadyExists),
+        "expected AlreadyExists, got {err:?}"
+    );
+}
+
+async fn assert_delete_media_removes_record(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(
+            &username("mediauser3"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let sha256 = "cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234".to_string();
+    let record = make_media_record(user_id, &sha256, "del.jpg", MediaSource::Upload);
+    state.media.create_media(&record).await.unwrap();
+    state
+        .media
+        .delete_media(user_id, &sha256, "del.jpg", &MediaSource::Upload)
+        .await
+        .unwrap();
+
+    let fetched = state
+        .media
+        .get_media(user_id, &sha256, "del.jpg", &MediaSource::Upload)
+        .await
+        .unwrap();
+    assert!(fetched.is_none(), "record should have been deleted");
+}
+
+async fn assert_delete_nonexistent_returns_not_found(
+    state: &std::sync::Arc<jaunder::storage::AppState>,
+) {
+    let user_id = state
+        .users
+        .create_user(
+            &username("mediauser4"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let sha256 = "dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234".to_string();
+    let err = state
+        .media
+        .delete_media(user_id, &sha256, "ghost.jpg", &MediaSource::Upload)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, DeleteMediaError::NotFound),
+        "expected NotFound, got {err:?}"
+    );
+}
+
+async fn assert_list_media_returns_records_for_user(
+    state: &std::sync::Arc<jaunder::storage::AppState>,
+) {
+    let user_a = state
+        .users
+        .create_user(
+            &username("mediauser5a"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let user_b = state
+        .users
+        .create_user(
+            &username("mediauser5b"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let sha1 = "eeee1234eeee1234eeee1234eeee1234eeee1234eeee1234eeee1234eeee1234".to_string();
+    let sha2 = "ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234".to_string();
+    let sha3 = "gggg1234gggg1234gggg1234gggg1234gggg1234gggg1234gggg1234gggg1234".to_string();
+
+    state
+        .media
+        .create_media(&make_media_record(
+            user_a,
+            &sha1,
+            "a1.jpg",
+            MediaSource::Upload,
+        ))
+        .await
+        .unwrap();
+    state
+        .media
+        .create_media(&make_media_record(
+            user_a,
+            &sha2,
+            "a2.jpg",
+            MediaSource::Upload,
+        ))
+        .await
+        .unwrap();
+    state
+        .media
+        .create_media(&make_media_record(
+            user_b,
+            &sha3,
+            "b1.jpg",
+            MediaSource::Upload,
+        ))
+        .await
+        .unwrap();
+
+    let results = state.media.list_media(user_a, None, 10, 0).await.unwrap();
+    assert_eq!(results.len(), 2, "user_a should have 2 records");
+    assert!(results.iter().all(|r| r.user_id == user_a));
+}
+
+async fn assert_list_media_filtered_by_source(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(
+            &username("mediauser6"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let sha_up = "hhhh1234hhhh1234hhhh1234hhhh1234hhhh1234hhhh1234hhhh1234hhhh1234".to_string();
+    let sha_ca = "iiii1234iiii1234iiii1234iiii1234iiii1234iiii1234iiii1234iiii1234".to_string();
+
+    state
+        .media
+        .create_media(&make_media_record(
+            user_id,
+            &sha_up,
+            "up.jpg",
+            MediaSource::Upload,
+        ))
+        .await
+        .unwrap();
+    state
+        .media
+        .create_media(&make_media_record(
+            user_id,
+            &sha_ca,
+            "ca.jpg",
+            MediaSource::Cached,
+        ))
+        .await
+        .unwrap();
+
+    let uploads = state
+        .media
+        .list_media(user_id, Some(&MediaSource::Upload), 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(uploads.len(), 1);
+    assert_eq!(uploads[0].source, MediaSource::Upload);
+
+    let cached = state
+        .media
+        .list_media(user_id, Some(&MediaSource::Cached), 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(cached.len(), 1);
+    assert_eq!(cached[0].source, MediaSource::Cached);
+}
+
+async fn assert_get_user_upload_usage_returns_zero_initially(
+    state: &std::sync::Arc<jaunder::storage::AppState>,
+) {
+    let user_id = state
+        .users
+        .create_user(
+            &username("mediauser7"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let usage = state.media.get_user_upload_usage(user_id).await.unwrap();
+    assert_eq!(usage, 0);
+}
+
+async fn assert_get_user_upload_usage_sums_uploads_only(
+    state: &std::sync::Arc<jaunder::storage::AppState>,
+) {
+    let user_id = state
+        .users
+        .create_user(
+            &username("mediauser8"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let sha_up = "jjjj1234jjjj1234jjjj1234jjjj1234jjjj1234jjjj1234jjjj1234jjjj1234".to_string();
+    let sha_ca = "kkkk1234kkkk1234kkkk1234kkkk1234kkkk1234kkkk1234kkkk1234kkkk1234".to_string();
+
+    let mut upload = make_media_record(user_id, &sha_up, "upload.jpg", MediaSource::Upload);
+    upload.size_bytes = 1000;
+    state.media.create_media(&upload).await.unwrap();
+
+    let mut cached = make_media_record(user_id, &sha_ca, "cached.jpg", MediaSource::Cached);
+    cached.size_bytes = 9999;
+    state.media.create_media(&cached).await.unwrap();
+
+    let usage = state.media.get_user_upload_usage(user_id).await.unwrap();
+    assert_eq!(usage, 1000, "only upload bytes should count toward usage");
+}
+
+async fn assert_find_by_hash_returns_any_match(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(
+            &username("mediauser9"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let sha256 = "llll1234llll1234llll1234llll1234llll1234llll1234llll1234llll1234".to_string();
+    let record = make_media_record(user_id, &sha256, "find.jpg", MediaSource::Upload);
+    state.media.create_media(&record).await.unwrap();
+
+    let found = state
+        .media
+        .find_by_hash(&sha256, &MediaSource::Upload)
+        .await
+        .unwrap();
+    let found = found.expect("should find the record by hash");
+    assert_eq!(found.sha256, sha256);
+}
+
+// ── UserConfigStorage tests ───────────────────────────────────────────────────
+
+async fn assert_user_config_get_returns_none_when_unset(
+    state: &std::sync::Arc<jaunder::storage::AppState>,
+) {
+    let user_id = state
+        .users
+        .create_user(&username("cfguser1"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    let val = state.user_config.get(user_id, "some.key").await.unwrap();
+    assert!(val.is_none());
+}
+
+async fn assert_user_config_set_and_get(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(&username("cfguser2"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    state
+        .user_config
+        .set(user_id, "theme", "dark")
+        .await
+        .unwrap();
+    let val = state.user_config.get(user_id, "theme").await.unwrap();
+    assert_eq!(val.as_deref(), Some("dark"));
+}
+
+async fn assert_user_config_overwrite(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(&username("cfguser3"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    state
+        .user_config
+        .set(user_id, "theme", "light")
+        .await
+        .unwrap();
+    state
+        .user_config
+        .set(user_id, "theme", "dark")
+        .await
+        .unwrap();
+    let val = state.user_config.get(user_id, "theme").await.unwrap();
+    assert_eq!(val.as_deref(), Some("dark"));
+}
+
+async fn assert_user_config_delete_removes_key(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user_id = state
+        .users
+        .create_user(&username("cfguser4"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    state
+        .user_config
+        .set(user_id, "theme", "dark")
+        .await
+        .unwrap();
+    state.user_config.delete(user_id, "theme").await.unwrap();
+    let val = state.user_config.get(user_id, "theme").await.unwrap();
+    assert!(val.is_none());
+}
+
+async fn assert_user_config_delete_nonexistent_is_ok(
+    state: &std::sync::Arc<jaunder::storage::AppState>,
+) {
+    let user_id = state
+        .users
+        .create_user(&username("cfguser5"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    state
+        .user_config
+        .delete(user_id, "nonexistent.key")
+        .await
+        .unwrap();
+}
+
+// ── SQLite concrete tests ─────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn sqlite_create_and_get_media() {
+    let (_base, state) = sqlite_state().await;
+    assert_create_and_get_media(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_duplicate_media_returns_already_exists() {
+    let (_base, state) = sqlite_state().await;
+    assert_duplicate_media_returns_already_exists(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_delete_media_removes_record() {
+    let (_base, state) = sqlite_state().await;
+    assert_delete_media_removes_record(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_delete_nonexistent_returns_not_found() {
+    let (_base, state) = sqlite_state().await;
+    assert_delete_nonexistent_returns_not_found(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_list_media_returns_records_for_user() {
+    let (_base, state) = sqlite_state().await;
+    assert_list_media_returns_records_for_user(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_list_media_filtered_by_source() {
+    let (_base, state) = sqlite_state().await;
+    assert_list_media_filtered_by_source(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_get_user_upload_usage_returns_zero_initially() {
+    let (_base, state) = sqlite_state().await;
+    assert_get_user_upload_usage_returns_zero_initially(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_get_user_upload_usage_sums_uploads_only() {
+    let (_base, state) = sqlite_state().await;
+    assert_get_user_upload_usage_sums_uploads_only(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_find_by_hash_returns_any_match() {
+    let (_base, state) = sqlite_state().await;
+    assert_find_by_hash_returns_any_match(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_user_config_get_returns_none_when_unset() {
+    let (_base, state) = sqlite_state().await;
+    assert_user_config_get_returns_none_when_unset(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_user_config_set_and_get() {
+    let (_base, state) = sqlite_state().await;
+    assert_user_config_set_and_get(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_user_config_overwrite() {
+    let (_base, state) = sqlite_state().await;
+    assert_user_config_overwrite(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_user_config_delete_removes_key() {
+    let (_base, state) = sqlite_state().await;
+    assert_user_config_delete_removes_key(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_user_config_delete_nonexistent_is_ok() {
+    let (_base, state) = sqlite_state().await;
+    assert_user_config_delete_nonexistent_is_ok(&state).await;
+}
+
+// ── PostgreSQL parity tests ───────────────────────────────────────────────────
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_create_and_get_media() {
+    let state = postgres_state().await;
+    assert_create_and_get_media(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_duplicate_media_returns_already_exists() {
+    let state = postgres_state().await;
+    assert_duplicate_media_returns_already_exists(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_delete_media_removes_record() {
+    let state = postgres_state().await;
+    assert_delete_media_removes_record(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_delete_nonexistent_returns_not_found() {
+    let state = postgres_state().await;
+    assert_delete_nonexistent_returns_not_found(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_list_media_returns_records_for_user() {
+    let state = postgres_state().await;
+    assert_list_media_returns_records_for_user(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_list_media_filtered_by_source() {
+    let state = postgres_state().await;
+    assert_list_media_filtered_by_source(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_get_user_upload_usage_returns_zero_initially() {
+    let state = postgres_state().await;
+    assert_get_user_upload_usage_returns_zero_initially(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_get_user_upload_usage_sums_uploads_only() {
+    let state = postgres_state().await;
+    assert_get_user_upload_usage_sums_uploads_only(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_find_by_hash_returns_any_match() {
+    let state = postgres_state().await;
+    assert_find_by_hash_returns_any_match(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_user_config_get_returns_none_when_unset() {
+    let state = postgres_state().await;
+    assert_user_config_get_returns_none_when_unset(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_user_config_set_and_get() {
+    let state = postgres_state().await;
+    assert_user_config_set_and_get(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_user_config_overwrite() {
+    let state = postgres_state().await;
+    assert_user_config_overwrite(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_user_config_delete_removes_key() {
+    let state = postgres_state().await;
+    assert_user_config_delete_removes_key(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_user_config_delete_nonexistent_is_ok() {
+    let state = postgres_state().await;
+    assert_user_config_delete_nonexistent_is_ok(&state).await;
+}

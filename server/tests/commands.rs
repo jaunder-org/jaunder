@@ -322,7 +322,7 @@ async fn after_init_server_responds_to_health_check() {
 
     let db = open_existing_database(&args.db).await.unwrap();
     let leptos_options = LeptosOptions::builder().output_name("test").build();
-    let router = jaunder::create_router(leptos_options, db, true);
+    let router = jaunder::create_router(leptos_options, db, true, args.storage_path.clone());
 
     let response = router
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
