@@ -55,6 +55,16 @@ pub fn test_options() -> LeptosOptions {
     LeptosOptions::builder().output_name("test").build()
 }
 
+/// Returns a `PathBuf` pointing to a temporary directory usable as a storage
+/// root.  The caller is responsible for keeping the `TempDir` alive; this
+/// function returns the inner path for convenience when lifetime management is
+/// not needed (e.g. when storage is never actually written to in the test).
+pub fn tmp_storage_path() -> std::path::PathBuf {
+    // Return the system temp dir — the media subdirectories are created on
+    // demand by the handlers, so the root just needs to exist.
+    std::env::temp_dir().join("jaunder-test-storage")
+}
+
 pub fn sqlite_url(base: &TempDir) -> DbConnectOptions {
     format!("sqlite:{}", base.path().join("test.db").display())
         .parse()
