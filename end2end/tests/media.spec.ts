@@ -102,4 +102,26 @@ test.describe("Media upload and serving", () => {
     const url = await page.locator("input[readonly]").inputValue();
     expect(url).toContain("/media/upload/");
   });
+
+  test("upload widget on home page uploads file and shows URL", async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
+    await register(
+      page,
+      hydrationHeavyFirstNavigationTimeoutMs(testInfo, 30000),
+    );
+    // Home page shows InlineComposer after login, which now includes MediaPanel.
+    const fileInput = page.locator(".j-composer input[type='file']").first();
+    await fileInput.setInputFiles({
+      name: "home-image.png",
+      mimeType: "image/png",
+      buffer: Buffer.from("fake png content for home"),
+    });
+    await page
+      .locator(".j-composer input[readonly]")
+      .waitFor({ state: "visible", timeout: 10000 });
+    const url = await page.locator(".j-composer input[readonly]").inputValue();
+    expect(url).toContain("/media/upload/");
+  });
 });
