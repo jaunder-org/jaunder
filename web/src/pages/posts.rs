@@ -3,29 +3,24 @@ use crate::{
     error::WebError,
     pages::{
         signal_read::read_signal,
-        ui::{ComposerFields, PostCard, PostDisplay, Topbar},
-        MediaPanel, MediaUploadButton,
+        ui::{ComposerFields, PostCard, PostCreateForm, PostDisplay, Topbar},
+        MediaPanel,
     },
     posts::{
-        get_post, get_post_preview, list_drafts, list_user_posts, CreatePost, CreatePostResult,
-        DeletePost, DraftSummary, ListUserPosts, PublishPost, PublishPostResult,
-        TimelinePostSummary, UpdatePost, UpdatePostResult,
+        get_post, get_post_preview, list_drafts, list_user_posts, CreatePostResult, DeletePost,
+        DraftSummary, ListUserPosts, PublishPost, PublishPostResult, TimelinePostSummary,
+        UpdatePost, UpdatePostResult,
     },
 };
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
-#[allow(clippy::too_many_lines)]
 #[allow(clippy::must_use_candidate)]
 #[component]
 #[must_use]
 pub fn CreatePostPage() -> impl IntoView {
-    let create_post_action = ServerAction::<CreatePost>::new();
     let current_user = Resource::new(|| (), |()| current_user());
-    let body = RwSignal::new(String::new());
-    let format = RwSignal::new("markdown".to_string());
-    let last_media_url = RwSignal::new(Option::<String>::None);
-    let upload_error = RwSignal::new(Option::<String>::None);
+    let last_result: RwSignal<Option<CreatePostResult>> = RwSignal::new(None);
 
     view! {
         <Topbar title="New post".to_string() sub="Long-form".to_string() />
@@ -36,190 +31,49 @@ pub fn CreatePostPage() -> impl IntoView {
                 match current_user.await {
                     Ok(Some(_)) => {
                         view! {
-                            <ActionForm action=create_post_action>
-                                <div class="j-compose-grid">
-                                    <div class="j-compose-body">
-                                        <ComposerFields
-                                            body=body
-                                            format=format
-                                            rows=16
-                                            placeholder="Write something\u{2026}"
-                                            show_seg=false
-                                        />
-                                    </div>
-                                    <aside class="j-compose-aside">
-                                        <div>
-                                            <div class="j-sb-head" style="padding:0 0 10px">
-                                                "Options"
-                                            </div>
-                                            <div
-                                                class="j-field-row"
-                                                style="grid-template-columns:auto 1fr"
-                                            >
-                                                <label class="j-field-label" for="compose-slug">
-                                                    "Slug"
-                                                </label>
-                                                <input
-                                                    id="compose-slug"
-                                                    type="text"
-                                                    name="slug_override"
-                                                    placeholder="auto"
-                                                    class="j-field-val"
-                                                />
-                                            </div>
-                                            <div class="j-seg" style="margin-top:10px">
-                                                <button
-                                                    type="button"
-                                                    class=move || {
-                                                        if format.get() == "markdown" {
-                                                            "j-btn is-selected"
-                                                        } else {
-                                                            "j-btn"
-                                                        }
-                                                    }
-                                                    on:click=move |_| { format.set("markdown".to_string()) }
-                                                >
-                                                    "Markdown"
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    class=move || {
-                                                        if format.get() == "org" {
-                                                            "j-btn is-selected"
-                                                        } else {
-                                                            "j-btn"
-                                                        }
-                                                    }
-                                                    on:click=move |_| format.set("org".to_string())
-                                                >
-                                                    "Org"
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <div style="margin-top:16px">
-                                            <div class="j-sb-head" style="padding:0 0 10px">
-                                                "Media"
-                                            </div>
-                                            <MediaUploadButton
-                                                on_uploaded=Callback::new(move |url: String| {
-                                                    last_media_url.set(Some(url));
-                                                    upload_error.set(None);
-                                                })
-                                                on_error=Callback::new(move |msg: String| {
-                                                    upload_error.set(Some(msg));
-                                                })
-                                            />
-                                            {move || {
-                                                last_media_url
-                                                    .get()
-                                                    .map(|url| {
-                                                        view! {
-                                                            <div style="margin-top:8px">
-                                                                <div style="font-size:12px;color:#888;margin-bottom:4px">
-                                                                    "Uploaded URL:"
-                                                                </div>
-                                                                <input
-                                                                    type="text"
-                                                                    readonly
-                                                                    value=url.clone()
-                                                                    class="j-field-val"
-                                                                    style="font-size:12px;cursor:text"
-                                                                    on:click=move |ev| {
-                                                                        use leptos::wasm_bindgen::JsCast;
-                                                                        let _ = ev
-                                                                            .target()
-                                                                            .and_then(|t| {
-                                                                                t.dyn_into::<web_sys::HtmlInputElement>().ok()
-                                                                            })
-                                                                            .map(|i| i.select());
-                                                                    }
-                                                                />
-                                                            </div>
-                                                        }
-                                                    })
-                                            }}
-                                            {move || {
-                                                upload_error
-                                                    .get()
-                                                    .map(|msg| {
-                                                        view! {
-                                                            <p class="error" style="margin-top:6px;font-size:12px">
-                                                                {msg}
-                                                            </p>
-                                                        }
-                                                    })
-                                            }}
-                                        </div>
-                                        <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
-                                            <button
-                                                class="j-btn"
-                                                type="submit"
-                                                name="publish"
-                                                value="false"
-                                            >
-                                                "Save draft"
-                                            </button>
-                                            <button
-                                                class="j-btn is-primary"
-                                                type="submit"
-                                                name="publish"
-                                                value="true"
-                                            >
-                                                "Publish"
-                                            </button>
-                                        </div>
-                                    </aside>
-                                </div>
-                            </ActionForm>
+                            <PostCreateForm
+                                compact=false
+                                rows=16
+                                placeholder="Write something\u{2026}"
+                                on_success=Callback::new(move |created| {
+                                    last_result.set(Some(created));
+                                })
+                            />
                             {move || {
-                                create_post_action
-                                    .value()
+                                last_result
                                     .get()
-                                    .map(|result: Result<CreatePostResult, WebError>| {
-                                        match result {
-                                            Ok(created) => {
-                                                let message = if created.published_at.is_some() {
-                                                    "Post published."
-                                                } else {
-                                                    "Draft saved."
-                                                };
-                                                let slug_value = created.slug.clone();
-                                                let slug_for_attr = slug_value.clone();
-                                                view! {
-                                                    <div class="success" style="padding:16px 32px">
-                                                        <p>{message}</p>
-                                                        <p data-test="slug-value" data-slug=slug_for_attr>
-                                                            "Slug: "
-                                                            {slug_value}
-                                                        </p>
-                                                        <a
-                                                            data-test="preview-link"
-                                                            href=created.preview_url.clone()
-                                                        >
-                                                            "Preview draft"
-                                                        </a>
-                                                        {created
-                                                            .permalink
-                                                            .as_ref()
-                                                            .map(|href| {
-                                                                view! {
-                                                                    <a data-test="permalink-link" href=href.clone()>
-                                                                        "View permalink"
-                                                                    </a>
-                                                                }
-                                                            })}
-                                                    </div>
-                                                }
-                                                    .into_any()
-                                            }
-                                            Err(err) => {
-                                                view! {
-                                                    <p class="error" style="padding:16px 32px">
-                                                        {err.to_string()}
-                                                    </p>
-                                                }
-                                                    .into_any()
-                                            }
+                                    .map(|created| {
+                                        let message = if created.published_at.is_some() {
+                                            "Post published."
+                                        } else {
+                                            "Draft saved."
+                                        };
+                                        let slug_value = created.slug.clone();
+                                        let slug_for_attr = slug_value.clone();
+                                        view! {
+                                            <div class="success" style="padding:16px 32px">
+                                                <p>{message}</p>
+                                                <p data-test="slug-value" data-slug=slug_for_attr>
+                                                    "Slug: "
+                                                    {slug_value}
+                                                </p>
+                                                <a
+                                                    data-test="preview-link"
+                                                    href=created.preview_url.clone()
+                                                >
+                                                    "Preview draft"
+                                                </a>
+                                                {created
+                                                    .permalink
+                                                    .as_ref()
+                                                    .map(|href| {
+                                                        view! {
+                                                            <a data-test="permalink-link" href=href.clone()>
+                                                                "View permalink"
+                                                            </a>
+                                                        }
+                                                    })}
+                                            </div>
                                         }
                                     })
                             }}
