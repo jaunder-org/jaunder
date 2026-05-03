@@ -30,7 +30,7 @@ async fn post_form(
     }
     let request = builder.body(Body::from(body.into())).unwrap();
 
-    let app = jaunder::create_router(test_options(), state, true);
+    let app = jaunder::create_router(test_options(), state, true, helpers::tmp_storage_path());
     let response = app.oneshot(request).await.unwrap();
 
     let status = response.status();
