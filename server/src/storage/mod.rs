@@ -384,6 +384,9 @@ impl FromStr for DbConnectOptions {
 pub fn init_storage(path: &Path) -> io::Result<()> {
     std::fs::create_dir(path)?;
     std::fs::create_dir_all(path.join("media"))?;
+    std::fs::create_dir_all(path.join("media").join("upload"))?;
+    std::fs::create_dir_all(path.join("media").join("cached"))?;
+    std::fs::create_dir_all(path.join("media").join("tmp"))?;
     std::fs::create_dir_all(path.join("backups"))?;
     Ok(())
 }
@@ -504,6 +507,9 @@ mod tests {
 
         assert!(storage.is_dir());
         assert!(storage.join("media").is_dir());
+        assert!(storage.join("media").join("upload").is_dir());
+        assert!(storage.join("media").join("cached").is_dir());
+        assert!(storage.join("media").join("tmp").is_dir());
         assert!(storage.join("backups").is_dir());
     }
 
