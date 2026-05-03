@@ -2,8 +2,9 @@ import {
   test,
   expect,
   hydrationHeavyFirstNavigationTimeoutMs,
+  hydrationHeavyTimeoutMs,
 } from "./fixtures";
-import { BASE_URL, register } from "./helpers";
+import { BASE_URL, goto, register, click, waitForSelector } from "./helpers";
 
 test.describe("Media upload and serving", () => {
   test("authenticated user can upload and access media", async ({
@@ -51,5 +52,54 @@ test.describe("Media upload and serving", () => {
       },
     });
     expect(response.status()).toBe(401);
+  });
+
+  test("media nav link appears for authenticated users", async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
+    await register(
+      page,
+      hydrationHeavyFirstNavigationTimeoutMs(testInfo, 30000),
+    );
+    await waitForSelector(page, "a[href='/media']");
+  });
+
+  test("media manage page is reachable via nav link", async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
+    await register(
+      page,
+      hydrationHeavyFirstNavigationTimeoutMs(testInfo, 30000),
+    );
+    await click(page, "a[href='/media']");
+    await waitForSelector(page, "button:has-text('Attach media')");
+  });
+
+  test("upload widget on create-post page uploads file and shows URL", async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
+    await register(
+      page,
+      hydrationHeavyFirstNavigationTimeoutMs(testInfo, 30000),
+    );
+    await goto(page, "/posts/new");
+
+    // Use setInputFiles on the hidden file input to bypass the OS dialog.
+    const fileInput = page.locator("input[type='file']").first();
+    await fileInput.setInputFiles({
+      name: "test-image.png",
+      mimeType: "image/png",
+      buffer: Buffer.from("fake png content"),
+    });
+
+    // The upload should complete and show the URL in a readonly input.
+    await page
+      .locator("input[readonly]")
+      .waitFor({ state: "visible", timeout: 10000 });
+    const url = await page.locator("input[readonly]").inputValue();
+    expect(url).toContain("/media/upload/");
   });
 });
