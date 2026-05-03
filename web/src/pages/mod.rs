@@ -15,7 +15,7 @@ pub use ui::{
     Avatar, BackupBanner, Chip, Dot, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar,
     Topbar,
 };
-pub use upload::MediaUploadButton;
+pub use upload::{MediaPanel, MediaUploadButton};
 
 /// Default theme identifier. This selects the CSS variable pack applied via
 /// `data-theme` on the root element. "studio" is the pragmatic default chosen

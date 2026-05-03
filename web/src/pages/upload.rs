@@ -78,6 +78,67 @@ pub fn MediaUploadButton(
     }
 }
 
+/// Self-contained media upload widget: button, uploaded-URL display, and error.
+/// Drop this into any `ActionForm` aside that needs media upload.
+#[allow(clippy::must_use_candidate)]
+#[component]
+pub fn MediaPanel() -> impl IntoView {
+    let last_media_url = RwSignal::new(Option::<String>::None);
+    let upload_error = RwSignal::new(Option::<String>::None);
+
+    view! {
+        <MediaUploadButton
+            on_uploaded=Callback::new(move |url: String| {
+                last_media_url.set(Some(url));
+                upload_error.set(None);
+            })
+            on_error=Callback::new(move |msg: String| {
+                upload_error.set(Some(msg));
+            })
+        />
+        {move || {
+            last_media_url
+                .get()
+                .map(|url| {
+                    view! {
+                        <div style="margin-top:8px">
+                            <div style="font-size:12px;color:#888;margin-bottom:4px">
+                                "Uploaded URL:"
+                            </div>
+                            <input
+                                type="text"
+                                readonly
+                                value=url.clone()
+                                class="j-field-val"
+                                style="font-size:12px;cursor:text"
+                                on:click=move |ev| {
+                                    use leptos::wasm_bindgen::JsCast;
+                                    let _ = ev
+                                        .target()
+                                        .and_then(|t| {
+                                            t.dyn_into::<web_sys::HtmlInputElement>().ok()
+                                        })
+                                        .map(|i| i.select());
+                                }
+                            />
+                        </div>
+                    }
+                })
+        }}
+        {move || {
+            upload_error
+                .get()
+                .map(|msg| {
+                    view! {
+                        <p class="error" style="margin-top:6px;font-size:12px">
+                            {msg}
+                        </p>
+                    }
+                })
+        }}
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 async fn upload_file(form_data: web_sys::FormData) -> Result<String, String> {
     use leptos::wasm_bindgen::JsCast;
