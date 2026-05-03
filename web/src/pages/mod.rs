@@ -9,10 +9,12 @@ pub mod profile;
 pub mod sessions;
 pub(crate) mod signal_read;
 pub mod ui;
+pub mod upload;
 pub use ui::{
     Avatar, BackupBanner, Chip, Dot, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar,
     Topbar,
 };
+pub use upload::MediaUploadButton;
 
 /// Default theme identifier. This selects the CSS variable pack applied via
 /// `data-theme` on the root element. "studio" is the pragmatic default chosen
