@@ -1,6 +1,7 @@
 use crate::auth::current_user;
 use crate::backup::{backup_warning_visible, current_user_is_operator};
-use crate::posts::{CreatePost, DeletePost, TimelinePostSummary, UnpublishPost};
+use crate::pages::upload::MediaPanel;
+use crate::posts::{CreatePost, CreatePostResult, DeletePost, TimelinePostSummary, UnpublishPost};
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 
@@ -395,59 +396,54 @@ pub fn PostCard(
     }
 }
 
-// ─── 3.7 InlineComposer ───────────────────────────────────────
+// ─── 3.7 PostCreateForm ───────────────────────────────────────
 
+#[allow(clippy::too_many_lines)]
 #[allow(clippy::must_use_candidate)]
 #[component]
-pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {
+pub fn PostCreateForm(
+    compact: bool,
+    #[prop(optional)] username: Option<String>,
+    #[prop(into)] on_success: Callback<CreatePostResult>,
+    #[prop(default = 6)] rows: usize,
+    #[prop(default = "What\u{2019}s on your mind?")] placeholder: &'static str,
+    /// Called on every textarea input event (compact mode only).
+    #[prop(optional)]
+    on_input: Option<Callback<()>>,
+) -> impl IntoView {
     let create_action = ServerAction::<CreatePost>::new();
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
-    let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
-    // After any successful action: clear body, set flash, optionally notify parent.
     #[cfg(target_arch = "wasm32")]
     {
-        use leptos_dom::helpers::set_timeout;
-        use std::time::Duration;
         Effect::new(move |_| {
             if let Some(Ok(ref created)) = create_action.value().get() {
+                let created = created.clone();
+                on_success.run(created);
                 body.set(String::new());
-                let url = created
-                    .permalink
-                    .clone()
-                    .unwrap_or_else(|| created.preview_url.clone());
-                let msg = if created.published_at.is_some() {
-                    "Post published!".to_string()
-                } else {
-                    "Draft saved!".to_string()
-                };
-                flash.set(Some((url, msg)));
-                set_timeout(move || flash.set(None), Duration::from_secs(30));
-                if created.published_at.is_some() {
-                    on_publish.update(|v| *v += 1);
-                }
             }
         });
     }
-
-    // Suppress unused-variable warnings in SSR builds.
     #[cfg(not(target_arch = "wasm32"))]
-    let _ = on_publish;
+    let _ = on_success;
 
-    view! {
-        <div class="j-composer">
+    #[allow(clippy::cast_possible_truncation)]
+    let rows_u32 = rows as u32;
+
+    if compact {
+        view! {
             <ActionForm action=create_action>
                 <div class="j-composer-row">
-                    <Avatar name=username.clone() size=36 />
+                    <Avatar name=username.unwrap_or_default() size=36 />
                     <div class="j-composer-body">
                         <ComposerFields
                             body=body
                             format=format
-                            rows=6
-                            placeholder="What's on your mind?"
+                            rows=rows_u32
+                            placeholder=placeholder
                             textarea_class=""
-                            on_input=Callback::new(move |()| flash.set(None))
+                            on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))
                         />
                         <input type="hidden" name="slug_override" value="" />
                         <div class="j-composer-toolbar">
@@ -470,22 +466,164 @@ pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl In
                                 "Publish"
                             </button>
                         </div>
+                        <MediaPanel />
                     </div>
                 </div>
             </ActionForm>
             {move || {
-                if let Some(e) = create_action.value().get().and_then(Result::err) {
-                    return view! { <p class="error">{e.to_string()}</p> }.into_any();
-                }
-                if let Some((url, msg)) = flash.get() {
-                    return view! {
-                        <p class="success">
-                            <a href=url>{msg}</a>
-                        </p>
-                    }
-                        .into_any();
-                }
-                ().into_any()
+                create_action
+                    .value()
+                    .get()
+                    .and_then(Result::err)
+                    .map(|e| view! { <p class="error">{e.to_string()}</p> })
+            }}
+        }
+        .into_any()
+    } else {
+        view! {
+            <ActionForm action=create_action>
+                <div class="j-compose-grid">
+                    <div class="j-compose-body">
+                        <ComposerFields
+                            body=body
+                            format=format
+                            rows=rows_u32
+                            placeholder=placeholder
+                            show_seg=false
+                        />
+                    </div>
+                    <aside class="j-compose-aside">
+                        <div>
+                            <div class="j-sb-head" style="padding:0 0 10px">
+                                "Options"
+                            </div>
+                            <div class="j-field-row" style="grid-template-columns:auto 1fr">
+                                <label class="j-field-label" for="compose-slug">
+                                    "Slug"
+                                </label>
+                                <input
+                                    id="compose-slug"
+                                    type="text"
+                                    name="slug_override"
+                                    placeholder="auto"
+                                    class="j-field-val"
+                                />
+                            </div>
+                            <div class="j-seg" style="margin-top:10px">
+                                <button
+                                    type="button"
+                                    class=move || {
+                                        if format.get() == "markdown" {
+                                            "j-btn is-selected"
+                                        } else {
+                                            "j-btn"
+                                        }
+                                    }
+                                    on:click=move |_| format.set("markdown".to_string())
+                                >
+                                    "Markdown"
+                                </button>
+                                <button
+                                    type="button"
+                                    class=move || {
+                                        if format.get() == "org" {
+                                            "j-btn is-selected"
+                                        } else {
+                                            "j-btn"
+                                        }
+                                    }
+                                    on:click=move |_| format.set("org".to_string())
+                                >
+                                    "Org"
+                                </button>
+                            </div>
+                        </div>
+                        <div style="margin-top:16px">
+                            <div class="j-sb-head" style="padding:0 0 10px">
+                                "Media"
+                            </div>
+                            <MediaPanel />
+                        </div>
+                        <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
+                            <button class="j-btn" type="submit" name="publish" value="false">
+                                "Save draft"
+                            </button>
+                            <button
+                                class="j-btn is-primary"
+                                type="submit"
+                                name="publish"
+                                value="true"
+                            >
+                                "Publish"
+                            </button>
+                        </div>
+                    </aside>
+                </div>
+            </ActionForm>
+            {move || {
+                create_action
+                    .value()
+                    .get()
+                    .and_then(Result::err)
+                    .map(|e| view! { <p class="error">{e.to_string()}</p> })
+            }}
+        }
+        .into_any()
+    }
+}
+
+// ─── 3.8 InlineComposer ───────────────────────────────────────
+
+#[allow(clippy::must_use_candidate)]
+#[component]
+pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {
+    let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = on_publish;
+
+    let on_success = Callback::new(move |created: CreatePostResult| {
+        let url = created
+            .permalink
+            .clone()
+            .unwrap_or_else(|| created.preview_url.clone());
+        let msg = if created.published_at.is_some() {
+            "Post published!".to_string()
+        } else {
+            "Draft saved!".to_string()
+        };
+        flash.set(Some((url, msg)));
+        #[cfg(target_arch = "wasm32")]
+        {
+            use leptos_dom::helpers::set_timeout;
+            use std::time::Duration;
+            set_timeout(move || flash.set(None), Duration::from_secs(30));
+            if created.published_at.is_some() {
+                on_publish.update(|v| *v += 1);
+            }
+        }
+    });
+
+    view! {
+        <div class="j-composer">
+            <PostCreateForm
+                compact=true
+                username=username
+                on_success=on_success
+                rows=6
+                placeholder="What\u{2019}s on your mind?"
+                on_input=Callback::new(move |()| flash.set(None))
+            />
+            {move || {
+                flash
+                    .get()
+                    .map(|(url, msg)| {
+                        view! {
+                            <p class="success">
+                                <a href=url>{msg}</a>
+                            </p>
+                        }
+                    })
             }}
         </div>
     }
