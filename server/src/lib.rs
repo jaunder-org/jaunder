@@ -24,12 +24,12 @@ use std::{
     sync::Arc,
 };
 
-use axum::http::HeaderName;
 use axum::Router;
+use axum::http::HeaderName;
 use axum_embed::ServeEmbed;
 use croner::Cron;
 use leptos::prelude::*;
-use leptos_axum::{generate_route_list, LeptosRoutes};
+use leptos_axum::{LeptosRoutes, generate_route_list};
 use opentelemetry::propagation::Extractor;
 use tokio_cron_scheduler::{Job, JobScheduler};
 use tower::ServiceBuilder;
@@ -37,13 +37,13 @@ use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetReques
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-use web::{shell, App};
+use web::{App, shell};
 
 use crate::assets::StaticAssets;
-use crate::storage::{export_backup, AppState, BackupExportOptions, BackupMode, DbConnectOptions};
+use crate::storage::{AppState, BackupExportOptions, BackupMode, DbConnectOptions, export_backup};
 use common::storage::{
-    SiteConfigStorage, BACKUP_DESTINATION_PATH_KEY, BACKUP_MODE_KEY, BACKUP_RETENTION_COUNT_KEY,
-    BACKUP_SCHEDULE_KEY,
+    BACKUP_DESTINATION_PATH_KEY, BACKUP_MODE_KEY, BACKUP_RETENTION_COUNT_KEY, BACKUP_SCHEDULE_KEY,
+    SiteConfigStorage,
 };
 
 pub fn create_router(
@@ -91,7 +91,7 @@ pub fn create_router(
             axum::routing::post(crate::media::upload_handler),
         )
         .route(
-            "/media/{source}/{prefix}/{hash}/{filename}",
+            "/media/{source}/{p1}/{p2}/{hash}/{filename}",
             axum::routing::get(crate::media::serve_handler),
         )
         .route(

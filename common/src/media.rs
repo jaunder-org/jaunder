@@ -28,7 +28,7 @@ pub fn media_path(source: &str, sha256: &str, filename: &str) -> String {
     format!("{source}/{p1}/{p2}/{sha256}/{filename}")
 }
 
-/// Returns `"/media/<source>/<p1>/<p2>/<full-sha256>/<filename>"`.
+/// Returns `"/media/<source>/<2-hex-p1>/<2-hex-p2>/<full-sha256>/<filename>"`.
 #[must_use]
 pub fn media_url(source: &str, sha256: &str, filename: &str) -> String {
     let p1 = &sha256[..2];
