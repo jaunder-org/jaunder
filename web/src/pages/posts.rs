@@ -132,11 +132,10 @@ pub fn PostPage() -> impl IntoView {
             let username = match username {
                 Some(value) if !value.is_empty() => value,
                 _ => {
-                    // The first path segment doesn't start with '~', so this
-                    // is not a post permalink.  It may be a server-handled URL
-                    // (e.g. /media/…) that the SPA router matched here because
-                    // Leptos has no prefix-matching segment type to enforce the
-                    // leading '~'.  Reload the page so the server can handle it.
+                    // This is not a post permalink segment (it didn't start with '~').
+                    // It may be a server-handled URL (e.g. /media/…) that the SPA
+                    // router matched here because it has the same number of segments.
+                    // Reload the page so the server can handle it properly.
                     #[cfg(target_arch = "wasm32")]
                     if let Some(window) = web_sys::window() {
                         if let Ok(href) = window.location().href() {
