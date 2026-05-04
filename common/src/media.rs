@@ -20,18 +20,20 @@ pub fn sanitize_filename(name: &str) -> String {
     sanitized
 }
 
-/// Returns `"<source>/<4-hex-prefix>/<full-sha256>/<filename>"`.
+/// Returns `"<source>/<p1>/<p2>/<full-sha256>/<filename>"`.
 #[must_use]
 pub fn media_path(source: &str, sha256: &str, filename: &str) -> String {
-    let prefix = &sha256[..4];
-    format!("{source}/{prefix}/{sha256}/{filename}")
+    let p1 = &sha256[..2];
+    let p2 = &sha256[2..4];
+    format!("{source}/{p1}/{p2}/{sha256}/{filename}")
 }
 
-/// Returns `"/media/<source>/<4-hex-prefix>/<full-sha256>/<filename>"`.
+/// Returns `"/media/<source>/<p1>/<p2>/<full-sha256>/<filename>"`.
 #[must_use]
 pub fn media_url(source: &str, sha256: &str, filename: &str) -> String {
-    let prefix = &sha256[..4];
-    format!("/media/{source}/{prefix}/{sha256}/{filename}")
+    let p1 = &sha256[..2];
+    let p2 = &sha256[2..4];
+    format!("/media/{source}/{p1}/{p2}/{sha256}/{filename}")
 }
 
 /// Returns true if the content type should be served inline rather than as an attachment.
@@ -106,13 +108,13 @@ mod tests {
     #[test]
     fn media_path_computation() {
         let path = media_path("upload", "a3f2deadbeef1234abcd", "photo.jpg");
-        assert_eq!(path, "upload/a3f2/a3f2deadbeef1234abcd/photo.jpg");
+        assert_eq!(path, "upload/a3/f2/a3f2deadbeef1234abcd/photo.jpg");
     }
 
     #[test]
     fn media_url_computation() {
         let url = media_url("upload", "a3f2deadbeef1234abcd", "photo.jpg");
-        assert_eq!(url, "/media/upload/a3f2/a3f2deadbeef1234abcd/photo.jpg");
+        assert_eq!(url, "/media/upload/a3/f2/a3f2deadbeef1234abcd/photo.jpg");
     }
 
     #[test]
