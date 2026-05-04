@@ -218,7 +218,7 @@ async fn serve_returns_404_for_missing_file() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/media/upload/abcd/abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890/missing.jpg")
+                .uri("/media/upload/ab/cd/abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890/missing.jpg")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -379,7 +379,7 @@ async fn serve_returns_404_for_invalid_source() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/media/invalid/abcd/abcdef1234/file.jpg")
+                .uri("/media/invalid/ab/cd/abcdef1234/file.jpg")
                 .body(Body::empty())
                 .unwrap(),
         )
