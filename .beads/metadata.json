@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "jaunder",
+  "project_id": "022d6328-1d01-412f-8926-b4e4e49468a1"
+}
