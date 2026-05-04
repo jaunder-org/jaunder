@@ -2,14 +2,14 @@ use crate::{
     auth::current_user,
     error::WebError,
     pages::{
+        MediaPanel,
         signal_read::read_signal,
         ui::{ComposerFields, PostCard, PostCreateForm, PostDisplay, Topbar},
-        MediaPanel,
     },
     posts::{
-        get_post, get_post_preview, list_drafts, list_user_posts, CreatePostResult, DeletePost,
-        DraftSummary, ListUserPosts, PublishPost, PublishPostResult, TimelinePostSummary,
-        UpdatePost, UpdatePostResult,
+        CreatePostResult, DeletePost, DraftSummary, ListUserPosts, PublishPost, PublishPostResult,
+        TimelinePostSummary, UpdatePost, UpdatePostResult, get_post, get_post_preview, list_drafts,
+        list_user_posts,
     },
 };
 use leptos::prelude::*;
@@ -130,11 +130,10 @@ pub fn PostPage() -> impl IntoView {
             let username = match username {
                 Some(value) if !value.is_empty() => value,
                 _ => {
-                    // The first path segment doesn't start with '~', so this
-                    // is not a post permalink.  It may be a server-handled URL
-                    // (e.g. /media/…) that the SPA router matched here because
-                    // Leptos has no prefix-matching segment type to enforce the
-                    // leading '~'.  Reload the page so the server can handle it.
+                    // This is not a post permalink segment (it didn't start with '~').
+                    // It may be a server-handled URL (e.g. /media/…) that the SPA
+                    // router matched here because it has the same number of segments.
+                    // Reload the page so the server can handle it properly.
                     #[cfg(target_arch = "wasm32")]
                     if let Some(window) = web_sys::window() {
                         if let Ok(href) = window.location().href() {
