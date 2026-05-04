@@ -129,7 +129,20 @@ pub fn PostPage() -> impl IntoView {
         |(username, year, month, day, slug): (Option<String>, i32, u32, u32, String)| async move {
             let username = match username {
                 Some(value) if !value.is_empty() => value,
-                _ => return Err(WebError::validation("Invalid permalink")),
+                _ => {
+                    // The first path segment doesn't start with '~', so this
+                    // is not a post permalink.  It may be a server-handled URL
+                    // (e.g. /media/…) that the SPA router matched here because
+                    // Leptos has no prefix-matching segment type to enforce the
+                    // leading '~'.  Reload the page so the server can handle it.
+                    #[cfg(target_arch = "wasm32")]
+                    if let Some(window) = web_sys::window() {
+                        if let Ok(href) = window.location().href() {
+                            let _ = window.location().replace(&href);
+                        }
+                    }
+                    return Err(WebError::validation("Invalid permalink"));
+                }
             };
             get_post(username, year, month, day, slug).await
         },
