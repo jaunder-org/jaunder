@@ -990,7 +990,7 @@
             pkgs.sqlite
             pkgs.typescript-language-server
             pkgs.vscode-langservers-extracted
-            pkgs.wasm-bindgen-cli
+            wasm-bindgen-cli
           ]
           ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
             pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
@@ -1000,6 +1000,11 @@
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
           shellHook = ''
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
+
+            # Symlink Nix-provided Playwright into node_modules to avoid instance conflict
+            # and provide IDE support without redundant disk usage.
+            mkdir -p end2end/node_modules/@playwright
+            ln -sfn ${pkgs.playwright-test}/lib/node_modules/@playwright/test end2end/node_modules/@playwright/test
           '';
         };
       }
