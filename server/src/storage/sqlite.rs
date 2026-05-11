@@ -73,7 +73,15 @@ pub(super) async fn open_sqlite_database(
         .journal_mode(SqliteJournalMode::Wal)
         .busy_timeout(Duration::from_secs(5))
         .log_slow_statements(LevelFilter::Warn, sql_slow_query_threshold());
+
     let pool = sqlx::SqlitePool::connect_with(options).await?;
+
+    // Increase cache size to 32MB. SQLite page size is 4KB by default (usually),
+    // so 32MB is 8192 pages. The `-32000` syntax tells SQLite 32MB.
+    sqlx::query("PRAGMA cache_size = -32000")
+        .execute(&pool)
+        .await?;
+
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     let site_config = SqliteSiteConfigStorage::new(pool.clone());
     let mailer = build_mailer(&site_config).await;
