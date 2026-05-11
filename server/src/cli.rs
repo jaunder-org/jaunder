@@ -10,6 +10,10 @@ use crate::storage::{BackupMode, DbConnectOptions};
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
+
+    /// Enable verbose logging (DEBUG level for application crates).
+    #[arg(long, global = true, env = "JAUNDER_VERBOSE")]
+    pub verbose: bool,
 }
 
 /// Arguments shared by subcommands that need access to the storage directory.
