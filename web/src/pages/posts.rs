@@ -228,7 +228,11 @@ pub fn UserTimelinePage() -> impl IntoView {
 
     let load_more_action = ServerAction::<ListUserPosts>::new();
 
-    Effect::new_isomorphic(move |_| {
+    // Client-only: `Effect::new_isomorphic` would race with SSR reactive-owner
+    // disposal because the Resource future can resolve on a tokio worker after
+    // the per-request owner is gone, panicking on signal access. SSR renders
+    // the loading placeholder; signals seed on the client after hydration.
+    Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
                 Ok(page) => {
@@ -249,7 +253,9 @@ pub fn UserTimelinePage() -> impl IntoView {
         }
     });
 
-    Effect::new_isomorphic(move |_| {
+    // ServerAction dispatches happen only on the client, so this effect's body
+    // never fires server-side; using `Effect::new` matches that reality.
+    Effect::new(move |_| {
         if let Some(result) = load_more_action.value().get() {
             match result {
                 Ok(page) => {
@@ -424,7 +430,10 @@ pub fn EditPostPage() -> impl IntoView {
     let update_post_action = ServerAction::<UpdatePost>::new();
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
-    Effect::new_isomorphic(move |_| {
+    // ServerAction dispatches happen only on the client; this redirect-on-publish
+    // effect only ever fires there. `Effect::new_isomorphic` would needlessly
+    // schedule on the server.
+    Effect::new(move |_| {
         if let Some(Ok(ref updated)) = update_post_action.value().get() {
             if updated.published_at.is_some() {
                 #[cfg(target_arch = "wasm32")]
