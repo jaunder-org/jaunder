@@ -17,6 +17,9 @@ async fn main() -> anyhow::Result<()> {
 ///
 /// Panics if the `serve` subcommand is missing when implicitly required.
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
+    if !matches!(cli.command, Some(Commands::Serve { .. })) {
+        jaunder::observability::init_tracing(cli.verbose);
+    }
     let command = match cli.command {
         Some(cmd) => cmd,
         None => {
@@ -58,7 +61,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             bind,
             environment,
         } => {
-            jaunder::commands::cmd_serve(&storage, bind, environment.is_prod()).await?;
+            jaunder::commands::cmd_serve(&storage, bind, environment.is_prod(), cli.verbose)
+                .await?;
         }
         Commands::UserCreate {
             storage,
@@ -122,13 +126,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_init() {
+    async fn run_init_triggers_tracing() {
         let base = TempDir::new().unwrap();
         let cli = Cli {
             command: Some(Commands::Init {
                 storage: test_storage_args(&base),
                 skip_if_exists: false,
             }),
+            verbose: true,
         };
         run(cli).await.unwrap();
     }
@@ -142,6 +147,7 @@ mod tests {
                 storage: storage.clone(),
                 skip_if_exists: false,
             }),
+            verbose: false,
         })
         .await
         .unwrap();
@@ -154,6 +160,7 @@ mod tests {
                 display_name: None,
                 operator: false,
             }),
+            verbose: false,
         };
         run(cli).await.unwrap();
     }
@@ -167,6 +174,7 @@ mod tests {
                 storage: storage.clone(),
                 skip_if_exists: false,
             }),
+            verbose: false,
         })
         .await
         .unwrap();
@@ -176,6 +184,7 @@ mod tests {
                 storage,
                 expires_in: None,
             }),
+            verbose: false,
         };
         run(cli).await.unwrap();
     }
@@ -189,6 +198,7 @@ mod tests {
                 storage: storage.clone(),
                 skip_if_exists: false,
             }),
+            verbose: false,
         })
         .await
         .unwrap();
@@ -198,6 +208,7 @@ mod tests {
                 storage,
                 to: "alice@example.com".to_string(),
             }),
+            verbose: false,
         };
         let result = run(cli).await;
         assert!(result.is_err());
@@ -217,6 +228,7 @@ mod tests {
                 storage: storage.clone(),
                 skip_if_exists: false,
             }),
+            verbose: false,
         })
         .await
         .unwrap();
@@ -228,6 +240,7 @@ mod tests {
                 bind,
                 environment: jaunder::cli::DeploymentEnv::Dev,
             }),
+            verbose: false,
         };
 
         // We can't easily run the server indefinitely in a test that expects
@@ -252,6 +265,7 @@ mod tests {
                     app_role_password: "secret".to_owned(),
                 },
             }),
+            verbose: false,
         };
 
         let err = run(cli).await.unwrap_err();
@@ -270,6 +284,7 @@ mod tests {
                 display_name: None,
                 operator: false,
             }),
+            verbose: false,
         };
         let err = run(cli).await.unwrap_err();
         assert!(err.to_string().contains("username must be non-empty"));
@@ -287,6 +302,7 @@ mod tests {
                 display_name: None,
                 operator: false,
             }),
+            verbose: false,
         };
         let err = run(cli).await.unwrap_err();
         assert!(err
@@ -311,6 +327,7 @@ mod tests {
                 },
                 skip_if_exists: false,
             }),
+            verbose: false,
         };
         let err = run(cli).await.unwrap_err();
         assert!(
@@ -328,6 +345,7 @@ mod tests {
                 bind: "127.0.0.1:0".parse().unwrap(),
                 environment: jaunder::cli::DeploymentEnv::Prod,
             }),
+            verbose: false,
         };
         let err = run(cli).await.unwrap_err();
         assert!(err.to_string().contains("run `jaunder init` first"));
@@ -344,6 +362,7 @@ mod tests {
                 bind,
                 environment: jaunder::cli::DeploymentEnv::Dev,
             }),
+            verbose: false,
         };
 
         let task = tokio::spawn(async move {

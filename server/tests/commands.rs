@@ -302,7 +302,7 @@ async fn cmd_serve_fails_when_not_initialized() {
     let args = uninitialized_storage_args(&base);
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
 
-    let result = cmd_serve(&args, bind, true).await;
+    let result = cmd_serve(&args, bind, true, false).await;
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -349,7 +349,7 @@ async fn cmd_serve_starts_and_accepts_connections() {
     let db = args.db.clone();
     let task = tokio::spawn(async move {
         let storage = StorageArgs { storage_path, db };
-        let _ = cmd_serve(&storage, bind, true).await;
+        let _ = cmd_serve(&storage, bind, true, false).await;
     });
 
     // Poll until the server accepts TCP connections (up to 1 s).

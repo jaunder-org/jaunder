@@ -31,4 +31,5 @@ sqlite3 ../data/jaunder.db \
 "$BIN" user-create --username testlogin --password testpassword123 2>/dev/null || true
 
 # Run Playwright — chromium only for local dev.
+# To re-enable verbose server logging, run with JAUNDER_VERBOSE=true or pass --verbose to the server.
 playwright test --project chromium
