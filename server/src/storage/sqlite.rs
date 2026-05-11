@@ -387,19 +387,28 @@ impl SessionStorage for SqliteSessionStorage {
         // cause SQLITE_BUSY contention in high-concurrency environments.
         //
         // Note: SQLite's RETURNING clause is used with a correlated subquery
-        // here because SQLite does not support data-modifying CTEs (WITH
-        // UPDATE ...).
+        // Split the update and select into two operations to avoid the
+        // subquery overhead in the RETURNING clause and potentially
+        // reduce disk I/O contention.
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("UPDATE sessions SET last_used_at = $1 WHERE token_hash = $2")
+            .bind(now)
+            .bind(&token_hash)
+            .execute(&mut *tx)
+            .await?;
+
         let row = sqlx::query_as::<_, SessionRow>(
-            "UPDATE sessions
-             SET last_used_at = $1
-             WHERE token_hash = $2
-             RETURNING token_hash, user_id, (SELECT username FROM users WHERE user_id = sessions.user_id), label, created_at, last_used_at",
+            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
+             FROM sessions s
+             JOIN users u ON u.user_id = s.user_id
+             WHERE s.token_hash = $1",
         )
-        .bind(now)
         .bind(&token_hash)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?
         .ok_or(SessionAuthError::SessionNotFound)?;
+
+        tx.commit().await?;
 
         let record = session_record_from_row(row)?;
         Ok(record)
