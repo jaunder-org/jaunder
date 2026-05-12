@@ -40,4 +40,4 @@ sqlite3 "$JAUNDER_DB_PATH" \
 
 # Run Playwright — chromium only for local dev.
 # To re-enable verbose server logging, run with JAUNDER_VERBOSE=true or pass --verbose to the server.
-playwright test --project chromium
+playwright test --project chromium --workers=1
