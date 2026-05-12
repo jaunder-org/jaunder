@@ -40,7 +40,9 @@ pub fn RegisterPage() -> impl IntoView {
                                     </label>
                                 }
                             })}
-                        <button type="submit">"Register"</button>
+                        <button type="submit" class="j-btn is-primary">
+                            "Register"
+                        </button>
                     </ActionForm>
                 }
             })}
@@ -77,7 +79,9 @@ pub fn LoginPage() -> impl IntoView {
                 />
             </label>
             <label>"Password" <input type="password" name="password" /></label>
-            <button type="submit">"Login"</button>
+            <button type="submit" class="j-btn is-primary">
+                "Login"
+            </button>
         </ActionForm>
         {move || {
             login_action

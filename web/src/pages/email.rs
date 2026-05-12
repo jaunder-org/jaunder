@@ -32,7 +32,9 @@ pub fn EmailPage() -> impl IntoView {
         </Suspense>
         <ActionForm action=request_action>
             <label>"New email address" <input type="email" name="email" /></label>
-            <button type="submit">"Send verification link"</button>
+            <button type="submit" class="j-btn is-primary">
+                "Send verification link"
+            </button>
         </ActionForm>
         {move || {
             request_action

@@ -40,7 +40,9 @@ pub fn InvitesPage() -> impl IntoView {
                                     "Expires in hours"
                                     <input type="number" name="expires_in_hours" />
                                 </label>
-                                <button type="submit">"Create Invite"</button>
+                                <button type="submit" class="j-btn is-primary">
+                                    "Create Invite"
+                                </button>
                             </ActionForm>
                             <ul>
                                 {list
