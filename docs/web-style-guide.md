@@ -19,7 +19,7 @@ Every full-window page renders, in order:
 view! {
     <Topbar title="…".to_string() sub="…".to_string() />
     <div class="j-scroll">
-        <div style="padding:16px 32px">
+        <div class="j-page">
             // page body
         </div>
     </div>
@@ -149,8 +149,8 @@ toolbar) into a second place, lift it into `ui.rs`.
 - Component variants use BEM-ish modifier classes:
   `.j-btn.is-primary`, `.j-card-head`, `.j-backup-field-wide`.
 - Inline `style="…"` is permitted for one-off layout tweaks
-  (`margin-top:8px`, dynamic colors). Repeated patterns
-  (e.g. `padding:16px 32px` for the page gutter) belong in a class.
+  (`margin-top:8px`, dynamic colors). Repeated patterns belong in a
+  class — the page gutter is `.j-page`, not inline `padding:16px 32px`.
 
 ## 8. SSR-safe Resource patterns
 

@@ -635,7 +635,7 @@ pub fn DraftsPage() -> impl IntoView {
     view! {
         <Topbar title="Drafts".to_string() sub="Unpublished posts".to_string() />
         <div class="j-scroll">
-            <div style="padding:16px 32px">
+            <div class="j-page">
                 <Suspense fallback=|| {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
