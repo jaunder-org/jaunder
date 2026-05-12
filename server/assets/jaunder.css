@@ -185,6 +185,9 @@
     overflow: auto;
     background: var(--surface);
 }
+.j-page {
+    padding: 16px 32px;
+}
 
 /* ─── brand / logo ─── */
 .j-brand {
