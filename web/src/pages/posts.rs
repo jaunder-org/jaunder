@@ -633,60 +633,64 @@ pub fn DraftsPage() -> impl IntoView {
     );
 
     view! {
-        <h1>"Drafts"</h1>
-        <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
-        }>
-            {move || Suspend::new(async move {
-                match drafts.await {
-                    Ok(list) => {
-                        if list.is_empty() {
-                            return view! { <p>"You have no drafts."</p> }.into_any();
+        <Topbar title="Drafts".to_string() sub="Unpublished posts".to_string() />
+        <div class="j-scroll">
+            <div style="padding:16px 32px">
+                <Suspense fallback=|| {
+                    view! { <p class="j-loading">"Loading\u{2026}"</p> }
+                }>
+                    {move || Suspend::new(async move {
+                        match drafts.await {
+                            Ok(list) => {
+                                if list.is_empty() {
+                                    return view! { <p>"You have no drafts."</p> }.into_any();
+                                }
+                                view! {
+                                    <ul class="j-draft-list">
+                                        {list
+                                            .into_iter()
+                                            .map(|draft| render_draft_row(
+                                                draft,
+                                                publish_action,
+                                                delete_action,
+                                            ))
+                                            .collect::<Vec<_>>()}
+                                    </ul>
+                                }
+                                    .into_any()
+                            }
+                            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                         }
-
-                        view! {
-                            <ul>
-                                {list
-                                    .into_iter()
-                                    .map(|draft| render_draft_row(
-                                        draft,
-                                        publish_action,
-                                        delete_action,
-                                    ))
-                                    .collect::<Vec<_>>()}
-                            </ul>
-                        }
-                            .into_any()
-                    }
-                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                }
-            })}
-        </Suspense>
-        {move || {
-            publish_action
-                .value()
-                .get()
-                .map(|result: Result<PublishPostResult, WebError>| match result {
-                    Ok(published) => {
-                        view! {
-                            <p class="success">
-                                "Post published. " <a href=published.permalink>"View permalink"</a>
-                            </p>
-                        }
-                            .into_any()
-                    }
-                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                })
-        }}
-        {move || {
-            delete_action
-                .value()
-                .get()
-                .map(|result| match result {
-                    Ok(()) => view! { <p class="success">"Draft deleted."</p> }.into_any(),
-                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                })
-        }}
+                    })}
+                </Suspense>
+                {move || {
+                    publish_action
+                        .value()
+                        .get()
+                        .map(|result: Result<PublishPostResult, WebError>| match result {
+                            Ok(published) => {
+                                view! {
+                                    <p class="success">
+                                        "Post published. "
+                                        <a href=published.permalink>"View permalink"</a>
+                                    </p>
+                                }
+                                    .into_any()
+                            }
+                            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                        })
+                }}
+                {move || {
+                    delete_action
+                        .value()
+                        .get()
+                        .map(|result| match result {
+                            Ok(()) => view! { <p class="success">"Draft deleted."</p> }.into_any(),
+                            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                        })
+                }}
+            </div>
+        </div>
     }
 }
 

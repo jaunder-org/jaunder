@@ -936,6 +936,18 @@
 }
 
 /* ─── drafts list ─── */
+.j-draft-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border: 1px var(--border-style) var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    overflow: hidden;
+}
+.j-draft-list > li:last-child .j-draft-row {
+    border-bottom: none;
+}
 .j-draft-row {
     display: flex;
     gap: 12px;
