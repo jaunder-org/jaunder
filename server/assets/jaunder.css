@@ -967,6 +967,36 @@
     align-items: flex-end;
 }
 
+/* ─── tables ─── */
+.j-table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 13.5px;
+}
+.j-table thead tr {
+    text-align: left;
+    border-bottom: 1px var(--border-style) var(--line);
+}
+.j-table tbody tr {
+    border-bottom: 1px var(--border-style) var(--line-soft);
+}
+.j-table tbody tr:last-child {
+    border-bottom: none;
+}
+.j-table th,
+.j-table td {
+    padding: 8px 10px;
+    vertical-align: top;
+}
+.j-table th {
+    font-family: var(--font-meta);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
 /* ─── status messages ─── */
 .j-loading {
     color: var(--muted);

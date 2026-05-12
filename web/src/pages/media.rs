@@ -103,15 +103,15 @@ pub fn MediaPage() -> impl IntoView {
                                 return view! { <p>"No media uploaded yet."</p> }.into_any();
                             }
                             view! {
-                                <table style="border-collapse:collapse;width:100%">
+                                <table class="j-table">
                                     <thead>
-                                        <tr style="text-align:left;border-bottom:1px solid #ccc">
-                                            <th style="padding:8px">"Filename"</th>
-                                            <th style="padding:8px">"Type"</th>
-                                            <th style="padding:8px">"Size"</th>
-                                            <th style="padding:8px">"Source"</th>
-                                            <th style="padding:8px">"Uploaded"</th>
-                                            <th style="padding:8px"></th>
+                                        <tr>
+                                            <th>"Filename"</th>
+                                            <th>"Type"</th>
+                                            <th>"Size"</th>
+                                            <th>"Source"</th>
+                                            <th>"Uploaded"</th>
+                                            <th></th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -170,17 +170,17 @@ fn render_media_row(item: MediaItem, delete_action: ServerAction<DeleteMedia>) -
     let created_at = item.created_at.clone();
 
     view! {
-        <tr style="border-bottom:1px solid #eee">
-            <td style="padding:8px">
+        <tr>
+            <td>
                 <a href=url target="_blank">
                     {filename.clone()}
                 </a>
             </td>
-            <td style="padding:8px">{item.content_type.clone()}</td>
-            <td style="padding:8px">{size_label}</td>
-            <td style="padding:8px">{source.clone()}</td>
-            <td style="padding:8px">{created_at}</td>
-            <td style="padding:8px">
+            <td>{item.content_type.clone()}</td>
+            <td>{size_label}</td>
+            <td>{source.clone()}</td>
+            <td>{created_at}</td>
+            <td>
                 <ActionForm action=delete_action>
                     <input type="hidden" name="sha256" value=sha256 />
                     <input type="hidden" name="filename" value=filename />
