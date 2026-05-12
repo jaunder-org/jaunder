@@ -11,7 +11,7 @@ pub fn SessionsPage() -> impl IntoView {
     view! {
         <h1>"Sessions"</h1>
         <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
+            view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
             {move || Suspend::new(async move {
                 match sessions.await {

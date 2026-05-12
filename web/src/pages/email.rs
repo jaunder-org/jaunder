@@ -14,7 +14,7 @@ pub fn EmailPage() -> impl IntoView {
     view! {
         <h1>"Email Settings"</h1>
         <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
+            view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
             {move || Suspend::new(async move {
                 match profile.await {
@@ -63,7 +63,7 @@ pub fn VerifyEmailPage() -> impl IntoView {
     view! {
         <h1>"Verify Email"</h1>
         <Suspense fallback=|| {
-            view! { <p>"Verifying..."</p> }
+            view! { <p class="j-loading">"Verifying\u{2026}"</p> }
         }>
             {move || Suspend::new(async move {
                 match result.await {

@@ -12,7 +12,7 @@ pub fn ProfilePage() -> impl IntoView {
     view! {
         <h1>"Profile"</h1>
         <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
+            view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
             {move || Suspend::new(async move {
                 match profile.await {

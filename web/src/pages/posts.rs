@@ -158,7 +158,7 @@ pub fn PostPage() -> impl IntoView {
 
     view! {
         <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
+            view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
             {move || Suspend::new(async move {
                 match post.await {
@@ -297,7 +297,7 @@ pub fn UserTimelinePage() -> impl IntoView {
                 return view! { <p class="error">{err}</p> }.into_any();
             }
             if !read_initial_loaded() {
-                return view! { <p>"Loading..."</p> }.into_any();
+                return view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any();
             }
             let rows = read_timeline();
             if rows.is_empty() {
@@ -319,7 +319,7 @@ pub fn UserTimelinePage() -> impl IntoView {
                             view! {
                                 <button on:click=on_load_more disabled=read_pending>
                                     {move || {
-                                        if read_pending() { "Loading..." } else { "Load more" }
+                                        if read_pending() { "Loading\u{2026}" } else { "Load more" }
                                     }}
                                 </button>
                             }
@@ -352,7 +352,7 @@ pub fn DraftPreviewPage() -> impl IntoView {
 
     view! {
         <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
+            view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
             {move || Suspend::new(async move {
                 match preview.await {

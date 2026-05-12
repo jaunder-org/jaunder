@@ -15,7 +15,7 @@ pub fn InvitesPage() -> impl IntoView {
     view! {
         <h1>"Invites"</h1>
         <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
+            view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
             {move || Suspend::new(async move {
                 let policy_str = policy.await.unwrap_or_default();
