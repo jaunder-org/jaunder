@@ -131,6 +131,13 @@ new layout primitive:
 | `ComposerFields`    | Body textarea + format toggle, reusable      |
 | `MediaUploadButton`, `MediaPanel` | File-picker wired to `/media/upload` |
 
+For list views, the available CSS primitives are:
+
+- `.j-table` — collapsed table with themed borders and meta-cased
+  headers. Use for any tabular list (Media is the reference).
+- `.j-draft-list` + `.j-draft-row` — card-styled list of rows with
+  per-row action column. Use for ad-hoc lists that don't fit a table.
+
 If you find yourself copying a layout block (e.g. a draft row, a
 toolbar) into a second place, lift it into `ui.rs`.
 
