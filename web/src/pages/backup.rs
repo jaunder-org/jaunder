@@ -17,7 +17,7 @@ pub fn BackupSettingsPage() -> impl IntoView {
         <div class="j-scroll">
             <div class="j-settings j-backup-settings">
                 <Suspense fallback=|| {
-                    view! { <p class="j-settings-loading">"Loading..."</p> }
+                    view! { <p class="j-loading j-settings-loading">"Loading\u{2026}"</p> }
                 }>
                     {move || Suspend::new(async move {
                         match settings.await {

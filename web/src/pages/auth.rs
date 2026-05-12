@@ -13,7 +13,7 @@ pub fn RegisterPage() -> impl IntoView {
     view! {
         <h1>"Register"</h1>
         <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
+            view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
             {move || Suspend::new(async move {
                 let p = policy.await;
