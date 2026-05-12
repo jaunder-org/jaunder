@@ -33,7 +33,12 @@ async fn post_form(
     }
     let request = builder.body(Body::from(body.into())).unwrap();
 
-    let app = jaunder::create_router(test_options(), state, secure_cookies);
+    let app = jaunder::create_router(
+        test_options(),
+        state,
+        secure_cookies,
+        helpers::tmp_storage_path(),
+    );
     let response = app.oneshot(request).await.unwrap();
 
     let status = response.status();
@@ -63,7 +68,8 @@ async fn get_html(
     let local = tokio::task::LocalSet::new();
     let (status, body_str) = local
         .run_until(async {
-            let app = jaunder::create_router(test_options(), state, true);
+            let app =
+                jaunder::create_router(test_options(), state, true, helpers::tmp_storage_path());
             let response = app.oneshot(request).await.unwrap();
 
             let status = response.status();
@@ -97,7 +103,7 @@ async fn post_form_with_bearer(
         .body(Body::from(body.into()))
         .expect("failed to build request with bearer token");
 
-    let app = jaunder::create_router(test_options(), state, true);
+    let app = jaunder::create_router(test_options(), state, true, helpers::tmp_storage_path());
     let response = app.oneshot(request).await.expect("router oneshot failed");
 
     let status = response.status();

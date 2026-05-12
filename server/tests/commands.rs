@@ -302,7 +302,7 @@ async fn cmd_serve_fails_when_not_initialized() {
     let args = uninitialized_storage_args(&base);
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
 
-    let result = cmd_serve(&args, bind, true).await;
+    let result = cmd_serve(&args, bind, true, false).await;
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -322,12 +322,22 @@ async fn after_init_server_responds_to_health_check() {
 
     let db = open_existing_database(&args.db).await.unwrap();
     let leptos_options = LeptosOptions::builder().output_name("test").build();
-    let router = jaunder::create_router(leptos_options, db, true);
+    let router = jaunder::create_router(leptos_options, db, true, args.storage_path.clone());
 
-    let response = router
-        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
+    // Wrap the request in a LocalSet so Leptos's SSR rendering (which spawns
+    // resource fetchers via `tokio::task::spawn_local` for `<Suspense>`)
+    // doesn't panic with "spawn_local called from outside of a task::LocalSet".
+    // The production serving path provides this via leptos-axum's setup; bare
+    // `router.oneshot` on the default multi-thread runtime does not.
+    let local = tokio::task::LocalSet::new();
+    let response = local
+        .run_until(async move {
+            router
+                .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+                .await
+                .unwrap()
+        })
+        .await;
     assert_eq!(response.status(), StatusCode::OK);
 }
 
@@ -349,7 +359,7 @@ async fn cmd_serve_starts_and_accepts_connections() {
     let db = args.db.clone();
     let task = tokio::spawn(async move {
         let storage = StorageArgs { storage_path, db };
-        let _ = cmd_serve(&storage, bind, true).await;
+        let _ = cmd_serve(&storage, bind, true, false).await;
     });
 
     // Poll until the server accepts TCP connections (up to 1 s).

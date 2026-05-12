@@ -8,6 +8,7 @@ pub mod auth;
 pub mod cli;
 pub mod commands;
 pub mod mailer;
+pub mod media;
 pub mod observability;
 pub mod password;
 pub mod render {
@@ -49,6 +50,7 @@ pub fn create_router(
     leptos_options: LeptosOptions,
     state: Arc<AppState>,
     secure_cookies: bool,
+    storage_path: PathBuf,
 ) -> Router {
     let request_id_header = HeaderName::from_static("x-request-id");
     let http_observability = ServiceBuilder::new()
@@ -81,8 +83,21 @@ pub fn create_router(
     let extension_state = state.clone();
     let server_fn_state = state.clone();
     let serve_assets = ServeEmbed::<StaticAssets>::new();
+    let storage_path_ext = Arc::new(storage_path);
     Router::new()
         .nest_service("/style", serve_assets)
+        .route(
+            "/media/upload",
+            axum::routing::post(crate::media::upload_handler),
+        )
+        .route(
+            "/media/{source}/{p1}/{p2}/{hash}/{filename}",
+            axum::routing::get(crate::media::serve_handler),
+        )
+        .route(
+            "/media/proxy",
+            axum::routing::get(crate::media::proxy_handler),
+        )
         .route(
             "/api/{*fn_name}",
             axum::routing::post(move |req: axum::extract::Request| {
@@ -113,6 +128,7 @@ pub fn create_router(
             },
         )
         .fallback(leptos_axum::file_and_error_handler(shell))
+        .layer(axum::Extension(storage_path_ext))
         .layer(axum::Extension(extension_state))
         .layer(http_observability)
         .with_state(leptos_options)
@@ -367,6 +383,11 @@ mod tests {
 
     fn test_options() -> LeptosOptions {
         LeptosOptions::builder().output_name("test").build()
+    }
+
+    fn test_storage_path() -> PathBuf {
+        // Return a non-existent path; media routes are not exercised by lib.rs tests.
+        PathBuf::from("/tmp/jaunder-test-storage")
     }
 
     async fn test_state() -> Arc<AppState> {
@@ -668,7 +689,12 @@ mod tests {
         local
             .run_until(async {
                 ensure_server_fns_registered();
-                let app = create_router(test_options(), test_state().await, true);
+                let app = create_router(
+                    test_options(),
+                    test_state().await,
+                    true,
+                    test_storage_path(),
+                );
                 let response = app
                     .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
                     .await
@@ -684,7 +710,12 @@ mod tests {
         local
             .run_until(async {
                 ensure_server_fns_registered();
-                let app = create_router(test_options(), test_state().await, true);
+                let app = create_router(
+                    test_options(),
+                    test_state().await,
+                    true,
+                    test_storage_path(),
+                );
                 let response = app
                     .oneshot(
                         Request::builder()
@@ -705,7 +736,12 @@ mod tests {
         local
             .run_until(async {
                 ensure_server_fns_registered();
-                let app = create_router(test_options(), test_state().await, true);
+                let app = create_router(
+                    test_options(),
+                    test_state().await,
+                    true,
+                    test_storage_path(),
+                );
                 let response = app
                     .oneshot(
                         Request::builder()
@@ -726,7 +762,12 @@ mod tests {
         local
             .run_until(async {
                 ensure_server_fns_registered();
-                let app = create_router(test_options(), test_state().await, true);
+                let app = create_router(
+                    test_options(),
+                    test_state().await,
+                    true,
+                    test_storage_path(),
+                );
                 let response = app
                     .oneshot(
                         Request::builder()
@@ -747,7 +788,12 @@ mod tests {
         local
             .run_until(async {
                 ensure_server_fns_registered();
-                let app = create_router(test_options(), test_state().await, true);
+                let app = create_router(
+                    test_options(),
+                    test_state().await,
+                    true,
+                    test_storage_path(),
+                );
                 let response = app
                     .oneshot(
                         Request::builder()
@@ -773,7 +819,12 @@ mod tests {
         local
             .run_until(async {
                 ensure_server_fns_registered();
-                let app = create_router(test_options(), test_state().await, true);
+                let app = create_router(
+                    test_options(),
+                    test_state().await,
+                    true,
+                    test_storage_path(),
+                );
                 let response = app
                     .oneshot(
                         Request::builder()
@@ -799,7 +850,12 @@ mod tests {
         let local = tokio::task::LocalSet::new();
         local
             .run_until(async {
-                let app = create_router(test_options(), test_state().await, true);
+                let app = create_router(
+                    test_options(),
+                    test_state().await,
+                    true,
+                    test_storage_path(),
+                );
                 let response = app
                     .oneshot(
                         Request::builder()
@@ -831,7 +887,7 @@ mod tests {
                     .set("site.registration_policy", "invite_only")
                     .await
                     .unwrap();
-                let app = create_router(test_options(), state, true);
+                let app = create_router(test_options(), state, true, test_storage_path());
                 let response = app
                     .oneshot(
                         Request::builder()
@@ -857,7 +913,12 @@ mod tests {
         local
             .run_until(async {
                 ensure_server_fns_registered();
-                let app = create_router(test_options(), test_state().await, true);
+                let app = create_router(
+                    test_options(),
+                    test_state().await,
+                    true,
+                    test_storage_path(),
+                );
                 let response = app
                     .oneshot(
                         Request::builder()
@@ -886,7 +947,12 @@ mod tests {
         let local = tokio::task::LocalSet::new();
         local
             .run_until(async {
-                let app = create_router(test_options(), test_state().await, true);
+                let app = create_router(
+                    test_options(),
+                    test_state().await,
+                    true,
+                    test_storage_path(),
+                );
                 let response = app
                     .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
                     .await
@@ -956,7 +1022,12 @@ mod tests {
         local
             .run_until(async {
                 ensure_server_fns_registered();
-                let app = create_router(test_options(), test_state().await, true);
+                let app = create_router(
+                    test_options(),
+                    test_state().await,
+                    true,
+                    test_storage_path(),
+                );
                 let response = app
                     .oneshot(
                         Request::builder()

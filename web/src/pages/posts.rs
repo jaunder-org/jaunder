@@ -3,25 +3,23 @@ use crate::{
     error::WebError,
     pages::{
         signal_read::read_signal,
-        ui::{ComposerFields, PostCard, PostDisplay, Topbar},
+        ui::{ComposerFields, PostCard, PostCreateForm, PostDisplay, Topbar},
+        MediaPanel,
     },
     posts::{
-        get_post, get_post_preview, list_drafts, list_user_posts, CreatePost, CreatePostResult,
-        DeletePost, DraftSummary, ListUserPosts, PublishPost, PublishPostResult,
-        TimelinePostSummary, UpdatePost, UpdatePostResult,
+        get_post, get_post_preview, list_drafts, list_user_posts, CreatePostResult, DeletePost,
+        DraftSummary, ListUserPosts, PublishPost, PublishPostResult, TimelinePostSummary,
+        UpdatePost, UpdatePostResult,
     },
 };
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
-#[allow(clippy::too_many_lines)]
 #[allow(clippy::must_use_candidate)]
 #[component]
 pub fn CreatePostPage() -> impl IntoView {
-    let create_post_action = ServerAction::<CreatePost>::new();
     let current_user = Resource::new(|| (), |()| current_user());
-    let body = RwSignal::new(String::new());
-    let format = RwSignal::new("markdown".to_string());
+    let last_result: RwSignal<Option<CreatePostResult>> = RwSignal::new(None);
 
     view! {
         <Topbar title="New post".to_string() sub="Long-form".to_string() />
@@ -32,136 +30,49 @@ pub fn CreatePostPage() -> impl IntoView {
                 match current_user.await {
                     Ok(Some(_)) => {
                         view! {
-                            <ActionForm action=create_post_action>
-                                <div class="j-compose-grid">
-                                    <div class="j-compose-body">
-                                        <ComposerFields
-                                            body=body
-                                            format=format
-                                            rows=16
-                                            placeholder="Write something\u{2026}"
-                                            show_seg=false
-                                        />
-                                    </div>
-                                    <aside class="j-compose-aside">
-                                        <div>
-                                            <div class="j-sb-head" style="padding:0 0 10px">
-                                                "Options"
-                                            </div>
-                                            <div
-                                                class="j-field-row"
-                                                style="grid-template-columns:auto 1fr"
-                                            >
-                                                <label class="j-field-label" for="compose-slug">
-                                                    "Slug"
-                                                </label>
-                                                <input
-                                                    id="compose-slug"
-                                                    type="text"
-                                                    name="slug_override"
-                                                    placeholder="auto"
-                                                    class="j-field-val"
-                                                />
-                                            </div>
-                                            <div class="j-seg" style="margin-top:10px">
-                                                <button
-                                                    type="button"
-                                                    class=move || {
-                                                        if format.get() == "markdown" {
-                                                            "j-btn is-selected"
-                                                        } else {
-                                                            "j-btn"
-                                                        }
-                                                    }
-                                                    on:click=move |_| { format.set("markdown".to_string()) }
-                                                >
-                                                    "Markdown"
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    class=move || {
-                                                        if format.get() == "org" {
-                                                            "j-btn is-selected"
-                                                        } else {
-                                                            "j-btn"
-                                                        }
-                                                    }
-                                                    on:click=move |_| format.set("org".to_string())
-                                                >
-                                                    "Org"
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
-                                            <button
-                                                class="j-btn"
-                                                type="submit"
-                                                name="publish"
-                                                value="false"
-                                            >
-                                                "Save draft"
-                                            </button>
-                                            <button
-                                                class="j-btn is-primary"
-                                                type="submit"
-                                                name="publish"
-                                                value="true"
-                                            >
-                                                "Publish"
-                                            </button>
-                                        </div>
-                                    </aside>
-                                </div>
-                            </ActionForm>
+                            <PostCreateForm
+                                compact=false
+                                rows=16
+                                placeholder="Write something\u{2026}"
+                                on_success=Callback::new(move |created| {
+                                    last_result.set(Some(created));
+                                })
+                            />
                             {move || {
-                                create_post_action
-                                    .value()
+                                last_result
                                     .get()
-                                    .map(|result: Result<CreatePostResult, WebError>| {
-                                        match result {
-                                            Ok(created) => {
-                                                let message = if created.published_at.is_some() {
-                                                    "Post published."
-                                                } else {
-                                                    "Draft saved."
-                                                };
-                                                let slug_value = created.slug.clone();
-                                                let slug_for_attr = slug_value.clone();
-                                                view! {
-                                                    <div class="success" style="padding:16px 32px">
-                                                        <p>{message}</p>
-                                                        <p data-test="slug-value" data-slug=slug_for_attr>
-                                                            "Slug: "
-                                                            {slug_value}
-                                                        </p>
-                                                        <a
-                                                            data-test="preview-link"
-                                                            href=created.preview_url.clone()
-                                                        >
-                                                            "Preview draft"
-                                                        </a>
-                                                        {created
-                                                            .permalink
-                                                            .as_ref()
-                                                            .map(|href| {
-                                                                view! {
-                                                                    <a data-test="permalink-link" href=href.clone()>
-                                                                        "View permalink"
-                                                                    </a>
-                                                                }
-                                                            })}
-                                                    </div>
-                                                }
-                                                    .into_any()
-                                            }
-                                            Err(err) => {
-                                                view! {
-                                                    <p class="error" style="padding:16px 32px">
-                                                        {err.to_string()}
-                                                    </p>
-                                                }
-                                                    .into_any()
-                                            }
+                                    .map(|created| {
+                                        let message = if created.published_at.is_some() {
+                                            "Post published."
+                                        } else {
+                                            "Draft saved."
+                                        };
+                                        let slug_value = created.slug.clone();
+                                        let slug_for_attr = slug_value.clone();
+                                        view! {
+                                            <div class="success" style="padding:16px 32px">
+                                                <p>{message}</p>
+                                                <p data-test="slug-value" data-slug=slug_for_attr>
+                                                    "Slug: "
+                                                    {slug_value}
+                                                </p>
+                                                <a
+                                                    data-test="preview-link"
+                                                    href=created.preview_url.clone()
+                                                >
+                                                    "Preview draft"
+                                                </a>
+                                                {created
+                                                    .permalink
+                                                    .as_ref()
+                                                    .map(|href| {
+                                                        view! {
+                                                            <a data-test="permalink-link" href=href.clone()>
+                                                                "View permalink"
+                                                            </a>
+                                                        }
+                                                    })}
+                                            </div>
                                         }
                                     })
                             }}
@@ -218,7 +129,19 @@ pub fn PostPage() -> impl IntoView {
         |(username, year, month, day, slug): (Option<String>, i32, u32, u32, String)| async move {
             let username = match username {
                 Some(value) if !value.is_empty() => value,
-                _ => return Err(WebError::validation("Invalid permalink")),
+                _ => {
+                    // This is not a post permalink segment (it didn't start with '~').
+                    // It may be a server-handled URL (e.g. /media/…) that the SPA
+                    // router matched here because it has the same number of segments.
+                    // Reload the page so the server can handle it properly.
+                    #[cfg(target_arch = "wasm32")]
+                    if let Some(window) = web_sys::window() {
+                        if let Ok(href) = window.location().href() {
+                            let _ = window.location().replace(&href);
+                        }
+                    }
+                    return Err(WebError::validation("Invalid permalink"));
+                }
             };
             get_post(username, year, month, day, slug).await
         },
@@ -302,7 +225,11 @@ pub fn UserTimelinePage() -> impl IntoView {
 
     let load_more_action = ServerAction::<ListUserPosts>::new();
 
-    Effect::new_isomorphic(move |_| {
+    // Client-only: `Effect::new_isomorphic` would race with SSR reactive-owner
+    // disposal because the Resource future can resolve on a tokio worker after
+    // the per-request owner is gone, panicking on signal access. SSR renders
+    // the loading placeholder; signals seed on the client after hydration.
+    Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
                 Ok(page) => {
@@ -323,7 +250,9 @@ pub fn UserTimelinePage() -> impl IntoView {
         }
     });
 
-    Effect::new_isomorphic(move |_| {
+    // ServerAction dispatches happen only on the client, so this effect's body
+    // never fires server-side; using `Effect::new` matches that reality.
+    Effect::new(move |_| {
         if let Some(result) = load_more_action.value().get() {
             match result {
                 Ok(page) => {
@@ -497,7 +426,10 @@ pub fn EditPostPage() -> impl IntoView {
     let update_post_action = ServerAction::<UpdatePost>::new();
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
-    Effect::new_isomorphic(move |_| {
+    // ServerAction dispatches happen only on the client; this redirect-on-publish
+    // effect only ever fires there. `Effect::new_isomorphic` would needlessly
+    // schedule on the server.
+    Effect::new(move |_| {
         if let Some(Ok(ref updated)) = update_post_action.value().get() {
             if updated.published_at.is_some() {
                 #[cfg(target_arch = "wasm32")]
@@ -599,6 +531,12 @@ pub fn EditPostPage() -> impl IntoView {
                                                     "Org"
                                                 </button>
                                             </div>
+                                        </div>
+                                        <div style="margin-top:16px">
+                                            <div class="j-sb-head" style="padding:0 0 10px">
+                                                "Media"
+                                            </div>
+                                            <MediaPanel />
                                         </div>
                                         <div class="j-edit-form-actions">
                                             {if is_published {

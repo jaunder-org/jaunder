@@ -372,8 +372,13 @@ fn directory_has_entries(path: &Path) -> io::Result<bool> {
 /// # Errors
 ///
 /// Returns an error if the server or backup worker fails to start.
-pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> anyhow::Result<()> {
-    crate::observability::init_tracing();
+pub async fn cmd_serve(
+    storage: &StorageArgs,
+    bind: SocketAddr,
+    prod: bool,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    crate::observability::init_tracing(verbose);
 
     let db = match open_existing_database(&storage.db).await {
         Ok(db) => db,
@@ -406,7 +411,7 @@ pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> a
     let backup_scheduler =
         crate::start_backup_worker(db.clone(), storage.db.clone(), storage.storage_path.clone())
             .await?;
-    let router = crate::create_router(leptos_options, db, prod);
+    let router = crate::create_router(leptos_options, db, prod, storage.storage_path.clone());
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!(bind = %bind, prod, "starting HTTP server");
     let _backup_scheduler = backup_scheduler;

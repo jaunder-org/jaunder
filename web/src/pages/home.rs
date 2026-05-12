@@ -46,7 +46,14 @@ pub fn HomePage() -> impl IntoView {
         },
     );
 
-    Effect::new_isomorphic(move |_| {
+    // Client-only effect copies the resolved Resource into mutation signals.
+    // Plain `Effect::new` is intentional (not `new_isomorphic`): on the server
+    // the Resource future can resolve after the per-request reactive owner is
+    // disposed, and an isomorphic effect firing then would access disposed
+    // signals from a tokio worker and panic. SSR renders the "Loading\u{2026}"
+    // placeholder; the resource is re-resolved and signals are seeded on the
+    // client after hydration.
+    Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
                 Ok((mode, page)) => {

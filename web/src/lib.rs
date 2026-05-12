@@ -38,6 +38,7 @@ pub mod backup;
 pub mod email;
 pub mod error;
 pub mod invites;
+pub mod media;
 pub mod pages;
 pub mod password_reset;
 pub mod posts;

@@ -37,3 +37,8 @@ playwright/.cache/
 /data/
 /jaunder-interactive-testing.qcow2
 .worktrees/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
