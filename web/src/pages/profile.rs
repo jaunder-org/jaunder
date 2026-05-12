@@ -35,7 +35,9 @@ pub fn ProfilePage() -> impl IntoView {
                                         prop:value=data.bio.clone().unwrap_or_default()
                                     />
                                 </label>
-                                <button type="submit">"Update Profile"</button>
+                                <button type="submit" class="j-btn is-primary">
+                                    "Update Profile"
+                                </button>
                             </ActionForm>
                         }
                             .into_any()

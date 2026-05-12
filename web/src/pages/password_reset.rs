@@ -16,7 +16,9 @@ pub fn ForgotPasswordPage() -> impl IntoView {
         <h1>"Forgot Password"</h1>
         <ActionForm action=request_action>
             <label>"Username" <input type="text" name="username" /></label>
-            <button type="submit">"Send reset link"</button>
+            <button type="submit" class="j-btn is-primary">
+                "Send reset link"
+            </button>
         </ActionForm>
         {move || {
             request_action
@@ -58,7 +60,9 @@ pub fn ResetPasswordPage() -> impl IntoView {
         <ActionForm action=confirm_action>
             <input type="hidden" name="token" value=token />
             <label>"New password" <input type="password" name="new_password" /></label>
-            <button type="submit">"Set new password"</button>
+            <button type="submit" class="j-btn is-primary">
+                "Set new password"
+            </button>
         </ActionForm>
         {move || {
             confirm_action
