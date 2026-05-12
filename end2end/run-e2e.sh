@@ -3,32 +3,40 @@
 #
 # cargo-leptos builds the project, starts the server (which auto-initializes
 # the SQLite database in dev mode), then runs this script in the end2end
-# directory.  We seed the test fixtures and invoke Playwright.
+# directory. We seed the test fixtures via the shared script and invoke
+# Playwright.
+#
+# Run this via `scripts/e2e-local.sh` rather than `cargo leptos end-to-end`
+# directly — the wrapper provides a per-run temp storage dir via env vars
+# (JAUNDER_STORAGE_PATH, JAUNDER_DB, JAUNDER_DB_PATH, JAUNDER_MAIL_CAPTURE_FILE)
+# so the seed script can run against a clean schema. Falling back to the
+# repo-relative dev paths preserves the legacy direct-invocation flow.
 set -euo pipefail
 
 # The jaunder binary built by cargo-leptos lives in the target directory.
 BIN="../target/server/debug/jaunder"
 if [[ ! -x "$BIN" ]]; then
-  BIN="../target/debug/jaunder"
+    BIN="../target/debug/jaunder"
 fi
-
-MAIL_CAPTURE_FILE="${JAUNDER_MAIL_CAPTURE_FILE:-/tmp/jaunder-mail.jsonl}"
-export JAUNDER_MAIL_CAPTURE_FILE="$MAIL_CAPTURE_FILE"
+export JAUNDER_BIN="$BIN"
+export JAUNDER_DB_PATH="${JAUNDER_DB_PATH:-../data/jaunder.db}"
+export JAUNDER_MAIL_CAPTURE_FILE="${JAUNDER_MAIL_CAPTURE_FILE:-/tmp/jaunder-mail.jsonl}"
 
 # Wait for the server to be ready (cargo-leptos may still be starting it).
-for i in $(seq 1 30); do
-  if curl -sf http://localhost:3000/ > /dev/null 2>&1; then
-    break
-  fi
-  sleep 0.5
+for _ in $(seq 1 30); do
+    if curl -sf http://localhost:3000/ > /dev/null 2>&1; then
+        break
+    fi
+    sleep 0.5
 done
 
-# Seed registration policy.
-sqlite3 ../data/jaunder.db \
-  "INSERT OR REPLACE INTO site_config (key, value) VALUES ('site.registration_policy', 'open')"
+# Open registration so the auth-flow tests can register fresh users. The
+# shared seed script is backend-agnostic and doesn't touch site_config;
+# we do it here via sqlite3 (the local path is always SQLite).
+sqlite3 "$JAUNDER_DB_PATH" \
+    "INSERT OR REPLACE INTO site_config (key, value) VALUES ('site.registration_policy', 'open')"
 
-# Create the test user (ignore failure if it already exists).
-"$BIN" user-create --username testlogin --password testpassword123 2>/dev/null || true
+"$(git rev-parse --show-toplevel)/scripts/seed-e2e-fixtures.sh"
 
 # Run Playwright — chromium only for local dev.
 # To re-enable verbose server logging, run with JAUNDER_VERBOSE=true or pass --verbose to the server.
