@@ -458,7 +458,7 @@ pub fn EditPostPage() -> impl IntoView {
     );
 
     view! {
-        <Topbar title="Edit Post".to_string() sub=String::new() />
+        <Topbar title="Edit Post".to_string() sub="Long-form".to_string() />
         <Suspense fallback=|| {
             view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
