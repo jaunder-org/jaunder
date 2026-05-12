@@ -127,13 +127,7 @@ pub fn Chip(
 #[allow(clippy::must_use_candidate)]
 #[component]
 pub fn BackupBanner() -> impl IntoView {
-    // `LocalResource` skips server-side fetching. The banner only matters to
-    // logged-in operators and would otherwise render empty on SSR anyway; the
-    // server fn `backup_warning_visible()` was eagerly invoked on every page
-    // during SSR and racing with reactive-owner disposal on a tokio worker,
-    // panicking with "expected context of type Arc<AppState> to be present"
-    // (see jaunder-3gt). Resolving on the client avoids the race entirely.
-    let visible = LocalResource::new(|| async { backup_warning_visible().await });
+    let visible = Resource::new(|| (), |()| backup_warning_visible());
 
     view! {
         <Suspense fallback=|| ()>
@@ -690,14 +684,10 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
 
     let location = use_location();
     let user = Resource::new(move || location.pathname.get(), |_| current_user());
-    // Client-only: avoids the SSR Resource-vs-owner-disposal race that panics
-    // `current_user_is_operator()` inside expect_context::<Arc<AppState>>()
-    // when invoked eagerly on every page (jaunder-3gt). Operator-conditional
-    // nav items appear after hydration; non-operators see no change.
-    let operator = LocalResource::new(move || {
-        let _ = location.pathname.get();
-        async { current_user_is_operator().await }
-    });
+    let operator = Resource::new(
+        move || location.pathname.get(),
+        |_| current_user_is_operator(),
+    );
 
     // (key, label, icon_path, href, auth_required)
     #[allow(clippy::items_after_statements)]

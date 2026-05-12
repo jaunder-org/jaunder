@@ -324,9 +324,10 @@ async fn after_init_server_responds_to_health_check() {
     let leptos_options = LeptosOptions::builder().output_name("test").build();
     let router = jaunder::create_router(leptos_options, db, true, args.storage_path.clone());
 
-    // Wrap the request in a LocalSet so SSR components that use `spawn_local`
-    // (e.g. LocalResource in Sidebar/BackupBanner — see jaunder-3gt) can run.
-    // The production serving path provides this via leptos-axum's setup, but
+    // Wrap the request in a LocalSet so Leptos's SSR rendering (which spawns
+    // resource fetchers via `tokio::task::spawn_local` for `<Suspense>`)
+    // doesn't panic with "spawn_local called from outside of a task::LocalSet".
+    // The production serving path provides this via leptos-axum's setup; bare
     // `router.oneshot` on the default multi-thread runtime does not.
     let local = tokio::task::LocalSet::new();
     let response = local
