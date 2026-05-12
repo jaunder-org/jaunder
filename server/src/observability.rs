@@ -9,14 +9,18 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 static INIT_TRACING: Once = Once::new();
 
-fn default_filter() -> EnvFilter {
-    EnvFilter::new("jaunder=debug,web=debug,common=debug,tower_http=debug,sqlx=info")
+fn default_filter(verbose: bool) -> EnvFilter {
+    if verbose {
+        EnvFilter::new("jaunder=debug,web=debug,common=debug,tower_http=debug,sqlx=info")
+    } else {
+        EnvFilter::new("jaunder=warn,web=warn,common=warn,tower_http=warn,sqlx=warn")
+    }
 }
 
-fn resolved_filter() -> EnvFilter {
+fn resolved_filter(verbose: bool) -> EnvFilter {
     EnvFilter::try_from_env("JAUNDER_LOG_FILTER")
         .or_else(|_| EnvFilter::try_from_default_env())
-        .unwrap_or_else(|_| default_filter())
+        .unwrap_or_else(|_| default_filter(verbose))
 }
 
 fn use_json_format() -> bool {
@@ -118,7 +122,7 @@ fn slow_span_values(elapsed: Duration, threshold: Duration) -> Option<(u64, u64)
     }
 }
 
-fn init_tracing_impl() {
+fn init_tracing_impl(verbose: bool) {
     // Forward any existing `log` macros to tracing so we can migrate in
     // phases without duplicate logging calls.
     let _ = tracing_log::LogTracer::init();
@@ -126,7 +130,7 @@ fn init_tracing_impl() {
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );
 
-    let env_filter = resolved_filter();
+    let env_filter = resolved_filter(verbose);
     let slow_span_layer = SlowSpanLayer::new(slow_op_threshold());
     let use_json = use_json_format();
 
@@ -183,8 +187,8 @@ fn init_tracing_impl() {
     }
 }
 
-pub fn init_tracing() {
-    INIT_TRACING.call_once(init_tracing_impl);
+pub fn init_tracing(verbose: bool) {
+    INIT_TRACING.call_once(|| init_tracing_impl(verbose));
 }
 
 #[cfg(test)]
@@ -291,7 +295,7 @@ mod tests {
             "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
             "not a valid endpoint",
         );
-        init_tracing_impl();
+        init_tracing_impl(false);
         std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
     }
 
@@ -303,7 +307,7 @@ mod tests {
             "still not a valid endpoint",
         );
         std::env::set_var("JAUNDER_LOG_FORMAT", "json");
-        init_tracing_impl();
+        init_tracing_impl(false);
         std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
         std::env::remove_var("JAUNDER_LOG_FORMAT");
     }
@@ -314,7 +318,7 @@ mod tests {
         std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
         std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
         std::env::set_var("JAUNDER_LOG_FORMAT", "json");
-        init_tracing_impl();
+        init_tracing_impl(false);
         std::env::remove_var("JAUNDER_LOG_FORMAT");
     }
 
@@ -326,7 +330,7 @@ mod tests {
             "http://127.0.0.1:4317",
         );
         std::env::remove_var("JAUNDER_LOG_FORMAT");
-        init_tracing_impl();
+        init_tracing_impl(false);
         std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
     }
 
@@ -338,8 +342,28 @@ mod tests {
             "http://127.0.0.1:4317",
         );
         std::env::set_var("JAUNDER_LOG_FORMAT", "json");
-        init_tracing_impl();
+        init_tracing_impl(false);
         std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
         std::env::remove_var("JAUNDER_LOG_FORMAT");
+    }
+
+    #[test]
+    fn default_filter_verbose_sets_debug() {
+        let filter = default_filter(true);
+        let debug_str = format!("{filter:?}");
+        assert!(
+            debug_str.contains("LevelFilter::DEBUG"),
+            "debug_str: {debug_str}"
+        );
+    }
+
+    #[test]
+    fn default_filter_quiet_sets_warn() {
+        let filter = default_filter(false);
+        let warn_str = format!("{filter:?}");
+        assert!(
+            warn_str.contains("LevelFilter::WARN"),
+            "warn_str: {warn_str}"
+        );
     }
 }

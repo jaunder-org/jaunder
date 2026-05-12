@@ -125,12 +125,14 @@ pub async fn upload_handler(
         return Err(StatusCode::INSUFFICIENT_STORAGE);
     }
 
-    // Determine target path:  <storage_path>/media/upload/<first4>/<sha256>/<filename>
-    let prefix = &sha256_hex[..4];
+    // Determine target path:  <storage_path>/media/upload/<p1>/<p2>/<sha256>/<filename>
+    let p1 = &sha256_hex[..2];
+    let p2 = &sha256_hex[2..4];
     let hash_dir = storage_path
         .join("media")
         .join("upload")
-        .join(prefix)
+        .join(p1)
+        .join(p2)
         .join(&sha256_hex);
     let target_path = hash_dir.join(&filename);
 
@@ -188,14 +190,15 @@ pub async fn upload_handler(
 }
 
 // ---------------------------------------------------------------------------
-// Serve handler  GET /media/{source}/{prefix}/{hash}/{filename}
+// Serve handler  GET /media/{source}/{p1}/{p2}/{hash}/{filename}
 // ---------------------------------------------------------------------------
 
 /// Path parameters for the media serve route.
 #[derive(Deserialize)]
 pub struct ServeParams {
     pub source: String,
-    pub prefix: String,
+    pub p1: String,
+    pub p2: String,
     pub hash: String,
     pub filename: String,
 }
@@ -214,15 +217,16 @@ pub async fn serve_handler(
     // Validate source.
     let source: MediaSource = params.source.parse().map_err(|_| StatusCode::NOT_FOUND)?;
 
-    // Validate prefix matches hash.
-    if !params.hash.starts_with(&params.prefix) {
+    // Validate prefix segments match hash.
+    if !params.hash.starts_with(&params.p1) || !params.hash[2..].starts_with(&params.p2) {
         return Err(StatusCode::NOT_FOUND);
     }
 
     let file_path = storage_path
         .join("media")
         .join(source.as_str())
-        .join(&params.prefix)
+        .join(&params.p1)
+        .join(&params.p2)
         .join(&params.hash)
         .join(&params.filename);
 

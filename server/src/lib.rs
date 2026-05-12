@@ -91,7 +91,7 @@ pub fn create_router(
             axum::routing::post(crate::media::upload_handler),
         )
         .route(
-            "/media/{source}/{prefix}/{hash}/{filename}",
+            "/media/{source}/{p1}/{p2}/{hash}/{filename}",
             axum::routing::get(crate::media::serve_handler),
         )
         .route(

@@ -372,8 +372,13 @@ fn directory_has_entries(path: &Path) -> io::Result<bool> {
 /// # Errors
 ///
 /// Returns an error if the server or backup worker fails to start.
-pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> anyhow::Result<()> {
-    crate::observability::init_tracing();
+pub async fn cmd_serve(
+    storage: &StorageArgs,
+    bind: SocketAddr,
+    prod: bool,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    crate::observability::init_tracing(verbose);
 
     let db = match open_existing_database(&storage.db).await {
         Ok(db) => db,

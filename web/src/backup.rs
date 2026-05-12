@@ -102,10 +102,25 @@ fn backup_configuration_complete_and_valid(
         && optional_backup_mode_valid(mode)
 }
 
+// Retrieve the `Arc<AppState>` context as a `Result` rather than panicking
+// with `expect_context`. The Resource fetcher for `backup_warning_visible` /
+// `current_user_is_operator` runs on a tokio worker via Suspense; if the
+// per-request reactive owner is disposed before the worker reaches us
+// (e.g. e2e parallelism, client disconnect), the context is gone.
+// `expect_context` would panic with "expected context of type Arc<AppState>"
+// — see jaunder-3gt. Returning Err lets the rest of the request unwind
+// cleanly; the Sidebar/BackupBanner already treat the error case as "not
+// operator / no banner".
+#[cfg(feature = "ssr")]
+fn app_state_context() -> InternalResult<Arc<AppState>> {
+    use_context::<Arc<AppState>>()
+        .ok_or_else(|| InternalError::server_message("missing AppState context"))
+}
+
 #[cfg(feature = "ssr")]
 async fn require_operator() -> InternalResult<Arc<AppState>> {
     let auth = require_auth().await?;
-    let state = expect_context::<Arc<AppState>>();
+    let state = app_state_context()?;
     let Some(user) = state
         .users
         .get_user(auth.user_id)
@@ -135,7 +150,7 @@ pub async fn backup_warning_visible() -> WebResult<bool> {
             Err(error) => return Err(error),
         };
 
-        let state = expect_context::<Arc<AppState>>();
+        let state = app_state_context()?;
         let Some(user) = state
             .users
             .get_user(auth.user_id)
@@ -192,7 +207,7 @@ pub async fn current_user_is_operator() -> WebResult<bool> {
             Err(error) => return Err(error),
         };
 
-        let state = expect_context::<Arc<AppState>>();
+        let state = app_state_context()?;
         let Some(user) = state
             .users
             .get_user(auth.user_id)
@@ -306,11 +321,30 @@ pub async fn update_backup_settings(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "ssr")]
+    use super::app_state_context;
     use super::{
         backup_configuration_complete_and_valid, backup_destination_configured, backup_mode_valid,
         backup_mode_value, backup_retention_count_valid, backup_retention_count_value,
         backup_schedule_valid, backup_schedule_value,
     };
+    #[cfg(feature = "ssr")]
+    use crate::error::WebError;
+
+    // Exercises the defensive Err path of `app_state_context`: when the Leptos
+    // owner has no `Arc<AppState>` context attached, the helper should return
+    // an InternalError rather than panicking the way `expect_context` would.
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn app_state_context_returns_err_when_missing() {
+        let result = leptos::prelude::Owner::new().with(app_state_context);
+        match result {
+            Err(err) => {
+                assert!(matches!(err.public(), WebError::Server { .. }));
+            }
+            Ok(_) => panic!("expected Err when no AppState provided"),
+        }
+    }
 
     #[test]
     fn backup_destination_configured_rejects_empty_values() {

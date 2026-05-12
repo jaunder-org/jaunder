@@ -583,11 +583,23 @@
 
             testScript = ''
               def seed_db():
-                machine.succeed("sqlite3 /var/lib/jaunder/data/jaunder.db \"DELETE FROM users; DELETE FROM sessions; DELETE FROM invites; DELETE FROM email_verifications; DELETE FROM password_resets; DELETE FROM posts; DELETE FROM tags; DELETE FROM site_config;\"")
+                # Wipe the SQLite data dir wholesale and let jaunder's auto-init
+                # recreate the schema. Avoids hardcoding a table list (which
+                # would silently drift as the schema grows); mirrors the local
+                # `scripts/e2e-local.sh` flow where each run gets a fresh
+                # temp storage dir.
+                machine.succeed("systemctl stop jaunder.service")
+                machine.succeed("rm -rf /var/lib/jaunder/data")
+                machine.succeed("systemctl start jaunder.service")
+                machine.wait_for_unit("jaunder.service", timeout=60)
+                machine.wait_for_open_port(3000, timeout=30)
                 machine.succeed("sqlite3 /var/lib/jaunder/data/jaunder.db \"INSERT OR REPLACE INTO site_config (key, value) VALUES ('site.registration_policy', 'open')\"")
-                machine.succeed("cd /var/lib/jaunder && ${jaunderBin}/bin/jaunder user-create --username testlogin --password testpassword123")
-                machine.succeed("cd /var/lib/jaunder && ${jaunderBin}/bin/jaunder user-create --username testnoemail --password testpassword123")
-                machine.succeed("rm -f /var/lib/jaunder/mail.jsonl")
+                machine.succeed(
+                  "cd /var/lib/jaunder"
+                  + " && JAUNDER_BIN=${jaunderBin}/bin/jaunder"
+                  + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                  + " ${./scripts/seed-e2e-fixtures.sh}"
+                )
 
               machine.start()
               machine.wait_for_unit("otel-collector.service", timeout=60)
@@ -711,23 +723,26 @@
               machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")
 
               def seed_db():
-                machine.succeed("sudo -u postgres psql -d jaunder -c \"TRUNCATE users, sessions, invites, email_verifications, password_resets, posts, tags, site_config CASCADE\"")
+                # Dynamic TRUNCATE of every public-schema table avoids
+                # hardcoding a list that would drift as the schema grows.
+                # Postgres can't be stop-wiped the way SQLite can (it's
+                # a separate service), so a wipe-via-TRUNCATE is the
+                # cheapest equivalent.
+                machine.succeed(
+                  "sudo -u postgres psql -d jaunder -c \"DO \\$\\$ DECLARE r record;"
+                  + " BEGIN FOR r IN SELECT tablename FROM pg_tables"
+                  + " WHERE schemaname = 'public' AND tablename NOT LIKE '\\\\_sqlx%' LOOP"
+                  + " EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' CASCADE';"
+                  + " END LOOP; END \\$\\$;\""
+                )
                 machine.succeed("sudo -u postgres psql -d jaunder -c \"INSERT INTO site_config (key, value) VALUES ('site.registration_policy', 'open')\"")
                 machine.succeed(
                   "cd /var/lib/jaunder"
-                  + " && ${jaunderBin}/bin/jaunder user-create"
-                  + " --db postgres://jaunder:testpassword@127.0.0.1/jaunder"
-                  + " --username testlogin"
-                  + " --password testpassword123"
+                  + " && JAUNDER_BIN=${jaunderBin}/bin/jaunder"
+                  + " JAUNDER_DB=postgres://jaunder:testpassword@127.0.0.1/jaunder"
+                  + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                  + " ${./scripts/seed-e2e-fixtures.sh}"
                 )
-                machine.succeed(
-                  "cd /var/lib/jaunder"
-                  + " && ${jaunderBin}/bin/jaunder user-create"
-                  + " --db postgres://jaunder:testpassword@127.0.0.1/jaunder"
-                  + " --username testnoemail"
-                  + " --password testpassword123"
-                )
-                machine.succeed("rm -f /var/lib/jaunder/mail.jsonl")
 
               # Run Chromium and Firefox against separate fresh databases so that
               # state mutations in one browser's tests (e.g. password resets) do
@@ -990,7 +1005,7 @@
             pkgs.sqlite
             pkgs.typescript-language-server
             pkgs.vscode-langservers-extracted
-            pkgs.wasm-bindgen-cli
+            wasm-bindgen-cli
           ]
           ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
             pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
@@ -1000,6 +1015,11 @@
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
           shellHook = ''
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
+
+            # Symlink Nix-provided Playwright into node_modules to avoid instance conflict
+            # and provide IDE support without redundant disk usage.
+            mkdir -p end2end/node_modules/@playwright
+            ln -sfn ${pkgs.playwright-test}/lib/node_modules/@playwright/test end2end/node_modules/@playwright/test
           '';
         };
       }
