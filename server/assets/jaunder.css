@@ -25,6 +25,7 @@
     --on-accent: #ffffff;
     --ok: #2f9c5b;
     --warn: #c88a2a;
+    --err: #dc2626;
 
     /* per-protocol color hints (themes may override these too) */
     --c-local: #6b7a8f;
