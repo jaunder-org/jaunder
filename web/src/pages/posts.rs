@@ -732,12 +732,12 @@ fn render_draft_row(
                     <a href=draft.permalink>"Permalink"</a>
                 </div>
                 <div class="j-draft-actions">
-                    <a class="j-btn is-ghost" href=draft.edit_url>
+                    <a class="j-btn" href=draft.edit_url>
                         "Edit"
                     </a>
                     <ActionForm action=publish_action>
                         <input type="hidden" name="post_id" value=post_id />
-                        <button type="submit" class="j-btn is-ghost">
+                        <button type="submit" class="j-btn">
                             "Publish"
                         </button>
                     </ActionForm>
@@ -745,7 +745,7 @@ fn render_draft_row(
                         <input type="hidden" name="post_id" value=post_id />
                         <button
                             type="submit"
-                            class="j-btn is-ghost"
+                            class="j-btn is-danger"
                             onclick="return confirm('Delete this draft?')"
                         >
                             "Delete"
@@ -767,7 +767,7 @@ fn render_delete_form(
             <input type="hidden" name="post_id" value=post_id />
             <button
                 type="submit"
-                class="j-btn is-ghost"
+                class="j-btn is-danger"
                 onclick=format!("return confirm('{confirm_msg}')")
             >
                 "Delete"

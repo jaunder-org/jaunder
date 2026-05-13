@@ -432,9 +432,13 @@
     border-color: var(--accent);
     font-weight: 500;
 }
-.j-btn.is-ghost {
-    background: transparent;
-    border-color: transparent;
+.j-btn.is-danger {
+    color: var(--err);
+    border-color: color-mix(in srgb, var(--err) 40%, var(--line));
+}
+.j-btn.is-danger:hover {
+    background: color-mix(in srgb, var(--err) 10%, transparent);
+    border-color: var(--err);
 }
 .j-btn.is-active {
     background: var(--surface-alt);

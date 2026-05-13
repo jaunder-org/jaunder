@@ -365,7 +365,7 @@ pub fn PostCard(
                 </button>
                 <button
                     type="button"
-                    class="j-btn"
+                    class="j-btn is-danger"
                     on:click=move |_| {
                         let confirmed = {
                             #[cfg(target_arch = "wasm32")]
