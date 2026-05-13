@@ -25,9 +25,10 @@ the existing `post_form` helper stays for other endpoints.
 ### Tag input affordance
 
 A new `<TagInput>` component renders the current tag set as chips with
-inline `×` remove buttons, plus a text field beneath. Pressing
-`Enter`, `,`, or `Tab` turns the text into a new chip; `Backspace` on an
-empty input removes the last chip; clicking `×` removes a specific chip.
+inline `×` remove buttons, plus a text field beneath. Pressing `Enter`
+or `Tab` turns the text into a new chip; `Backspace` on an empty input
+removes the last chip; clicking `×` removes a specific chip. Comma is
+not a chip-creation key.
 Autocomplete suggestions for existing tags appear in a dropdown beneath
 the input, fetched from `list_tags(prefix)` with 150 ms debounce. Keyboard
 navigation (`ArrowUp`/`ArrowDown` + `Enter`) selects a suggestion.
@@ -208,8 +209,9 @@ typed `Vec<String>` tags parameter cleanly.
    `tags: RwSignal<Vec<TagSummary>>`, `name: &'static str` (default
    `"tags"`).
 2. [ ] Chip rendering with `×` remove buttons.
-3. [ ] Text input with keydown handling for `Enter` / `,` / `Tab`
-   (create chip), `Backspace` on empty (remove last).
+3. [ ] Text input with keydown handling for `Enter` / `Tab` (create
+   chip), `Backspace` on empty (remove last). Comma is **not** a
+   chip-creation key.
 4. [ ] Client-side validation against `[a-z0-9][a-z0-9-]*` after
    lowercasing (mirrors `Tag::from_str`); invalid input shows a brief
    inline error.
