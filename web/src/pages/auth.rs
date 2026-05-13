@@ -14,7 +14,7 @@ pub fn RegisterPage() -> impl IntoView {
     view! {
         <Topbar title="Register".to_string() sub="Create your account".to_string() />
         <div class="j-scroll">
-            <div class="j-page">
+            <div class="j-page-narrow">
                 <Suspense fallback=|| {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
@@ -22,30 +22,52 @@ pub fn RegisterPage() -> impl IntoView {
                         let p = policy.await;
                         let is_invite_only = p.as_deref() == Ok("invite_only");
                         view! {
-                            <ActionForm action=register_action>
-                                <label>
-                                    "Username"
-                                    <input
-                                        type="text"
-                                        name="username"
-                                        prop:value=username
-                                        on:input=move |ev| {
-                                            username.set(event_target_value(&ev).to_lowercase());
-                                        }
-                                    />
-                                </label>
-                                <label>"Password" <input type="password" name="password" /></label>
-                                {is_invite_only
-                                    .then(|| {
-                                        view! {
-                                            <label>
-                                                "Invite code" <input type="text" name="invite_code" />
-                                            </label>
-                                        }
-                                    })}
-                                <button type="submit" class="j-btn is-primary">
-                                    "Register"
-                                </button>
+                            <ActionForm action=register_action attr:class="j-card">
+                                <div class="j-card-head">
+                                    <h2>"Create an account"</h2>
+                                </div>
+                                <div class="j-form-body">
+                                    <label class="j-form-field">
+                                        <span class="j-form-label">"Username"</span>
+                                        <input
+                                            class="j-form-input"
+                                            type="text"
+                                            name="username"
+                                            autocomplete="username"
+                                            prop:value=username
+                                            on:input=move |ev| {
+                                                username.set(event_target_value(&ev).to_lowercase());
+                                            }
+                                        />
+                                    </label>
+                                    <label class="j-form-field">
+                                        <span class="j-form-label">"Password"</span>
+                                        <input
+                                            class="j-form-input"
+                                            type="password"
+                                            name="password"
+                                            autocomplete="new-password"
+                                        />
+                                    </label>
+                                    {is_invite_only
+                                        .then(|| {
+                                            view! {
+                                                <label class="j-form-field">
+                                                    <span class="j-form-label">"Invite code"</span>
+                                                    <input
+                                                        class="j-form-input"
+                                                        type="text"
+                                                        name="invite_code"
+                                                    />
+                                                </label>
+                                            }
+                                        })}
+                                </div>
+                                <div class="j-form-actions">
+                                    <button type="submit" class="j-btn is-primary">
+                                        "Register"
+                                    </button>
+                                </div>
                             </ActionForm>
                         }
                     })}
@@ -72,23 +94,40 @@ pub fn LoginPage() -> impl IntoView {
     view! {
         <Topbar title="Login".to_string() sub="Sign in to your account".to_string() />
         <div class="j-scroll">
-            <div class="j-page">
-                <ActionForm action=login_action>
-                    <label>
-                        "Username"
-                        <input
-                            type="text"
-                            name="username"
-                            prop:value=username
-                            on:input=move |ev| {
-                                username.set(event_target_value(&ev).to_lowercase());
-                            }
-                        />
-                    </label>
-                    <label>"Password" <input type="password" name="password" /></label>
-                    <button type="submit" class="j-btn is-primary">
-                        "Login"
-                    </button>
+            <div class="j-page-narrow">
+                <ActionForm action=login_action attr:class="j-card">
+                    <div class="j-card-head">
+                        <h2>"Sign in"</h2>
+                    </div>
+                    <div class="j-form-body">
+                        <label class="j-form-field">
+                            <span class="j-form-label">"Username"</span>
+                            <input
+                                class="j-form-input"
+                                type="text"
+                                name="username"
+                                autocomplete="username"
+                                prop:value=username
+                                on:input=move |ev| {
+                                    username.set(event_target_value(&ev).to_lowercase());
+                                }
+                            />
+                        </label>
+                        <label class="j-form-field">
+                            <span class="j-form-label">"Password"</span>
+                            <input
+                                class="j-form-input"
+                                type="password"
+                                name="password"
+                                autocomplete="current-password"
+                            />
+                        </label>
+                    </div>
+                    <div class="j-form-actions">
+                        <button type="submit" class="j-btn is-primary">
+                            "Login"
+                        </button>
+                    </div>
                 </ActionForm>
                 {move || {
                     login_action

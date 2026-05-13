@@ -188,6 +188,11 @@
 .j-page {
     padding: 16px 32px;
 }
+.j-page-narrow {
+    padding: 28px 32px;
+    max-width: 480px;
+    margin: 0 auto;
+}
 
 /* ─── brand / logo ─── */
 .j-brand {
@@ -717,6 +722,48 @@
     padding: 7px 10px;
     border: 1px var(--border-style) var(--line);
     border-radius: var(--radius-sm);
+}
+
+/* ─── generic forms (login, register, settings-style forms) ─── */
+.j-form-body {
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.j-form-field {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 0;
+}
+.j-form-label {
+    font-size: 13px;
+    color: var(--ink-soft);
+    font-family: var(--font-meta);
+}
+.j-form-input {
+    width: 100%;
+    min-height: 38px;
+    padding: 8px 10px;
+    border: 1px var(--border-style) var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--ink);
+    font-size: 13.5px;
+    font-family: inherit;
+    outline: none;
+}
+.j-form-input:focus {
+    border-color: var(--accent);
+}
+.j-form-actions {
+    padding: 14px 18px;
+    border-top: 1px var(--border-style) var(--line-soft);
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    background: var(--bg);
 }
 
 /* ─── backup administration ─── */
