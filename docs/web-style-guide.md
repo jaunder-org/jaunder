@@ -71,8 +71,11 @@ Every server action result must render as a single styled paragraph.
 ```
 
 - **Do not** use `<div class="success">` to wrap multiple elements.
-  If you need more than a sentence + a link, the page needs a proper
-  layout, not a class on a div.
+  If you need more than a sentence + a link, use `<div class="j-save-summary">`
+  (the post-publish / draft-saved confirmation card) and put a
+  `<p class="success">` inside as the lead. New variants of this
+  pattern should add their own `.j-…-summary` class rather than
+  re-purposing the flash class.
 - The CSS rules backing `.success` and `.error` are currently
   unspecified — see jaunder-styles bd issue. Treat the classes as
   contracts: when CSS lands, every flash already wears the right class.

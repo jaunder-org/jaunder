@@ -1000,6 +1000,24 @@
     color: var(--muted);
 }
 
+/* ─── save summary card ─── */
+.j-save-summary {
+    margin: 16px 0;
+    padding: 16px 18px;
+    background: var(--surface);
+    border: 1px var(--border-style) var(--line);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.j-save-summary > p {
+    margin: 0;
+}
+.j-save-summary > a {
+    align-self: flex-start;
+}
+
 /* ─── status messages ─── */
 .j-loading {
     color: var(--muted);
