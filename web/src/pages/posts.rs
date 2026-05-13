@@ -51,8 +51,8 @@ pub fn CreatePostPage() -> impl IntoView {
                                         let slug_value = created.slug.clone();
                                         let slug_for_attr = slug_value.clone();
                                         view! {
-                                            <div class="success" style="padding:16px 32px">
-                                                <p>{message}</p>
+                                            <div class="j-save-summary">
+                                                <p class="success">{message}</p>
                                                 <p data-test="slug-value" data-slug=slug_for_attr>
                                                     "Slug: "
                                                     {slug_value}
@@ -596,8 +596,8 @@ pub fn EditPostPage() -> impl IntoView {
                         let slug_value = updated.slug.clone();
                         let slug_for_attr = slug_value.clone();
                         view! {
-                            <div class="success">
-                                <p>"Draft saved."</p>
+                            <div class="j-save-summary">
+                                <p class="success">"Draft saved."</p>
                                 <p data-test="slug-value" data-slug=slug_for_attr>
                                     "Slug: "
                                     {slug_value}
