@@ -187,7 +187,7 @@ fn render_media_row(item: MediaItem, delete_action: ServerAction<DeleteMedia>) -
                     <input type="hidden" name="source" value=source />
                     <button
                         type="submit"
-                        class="j-btn is-ghost"
+                        class="j-btn is-danger"
                         onclick="return confirm('Delete this media item?')"
                     >
                         "Delete"

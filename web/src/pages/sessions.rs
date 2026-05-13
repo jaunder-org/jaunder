@@ -35,7 +35,7 @@ pub fn SessionsPage() -> impl IntoView {
                                                         {s.is_current.then_some(view! { " (current)" })} " "
                                                         <ActionForm action=revoke_action>
                                                             <input type="hidden" name="token_hash" value=hash />
-                                                            <button type="submit" class="j-btn is-ghost">
+                                                            <button type="submit" class="j-btn is-danger">
                                                                 "Revoke"
                                                             </button>
                                                         </ActionForm>

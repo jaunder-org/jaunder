@@ -106,12 +106,15 @@ Forms hang off a `ServerAction::<T>::new()` plus an `ActionForm`.
 
 | Class                 | When                                                |
 |-----------------------|-----------------------------------------------------|
-| `j-btn`               | Default secondary action                            |
+| `j-btn`               | Default — neutral form / row action (Edit, Publish, Unpublish, Revoke, secondary form submits) |
 | `j-btn is-primary`    | One per form — the action the user is here to take  |
-| `j-btn is-ghost`      | Destructive or table-row actions (Delete, Publish)  |
+| `j-btn is-danger`     | Destructive action (Delete, and anything else that removes data) — themed via `--err` |
 | `j-btn is-accent`     | Reserved for emphasis (rare)                        |
 | `j-btn is-active`     | Toggle in active state                              |
 | `j-btn is-selected`   | Inside a `j-seg` segmented control                  |
+
+`is-ghost` has been retired — `j-btn` now covers everything that was
+"transparent secondary", and destructive actions wear `is-danger`.
 
 `onclick="return confirm('…')"` is the established pattern for
 destructive confirmations on row buttons (see `drafts`, `media`). Don't
