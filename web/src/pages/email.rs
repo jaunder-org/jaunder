@@ -1,5 +1,6 @@
 use crate::email::{verify_email, RequestEmailVerification};
 use crate::error::WebError;
+use crate::pages::Topbar;
 use crate::profile::get_profile;
 use leptos::prelude::*;
 
@@ -12,39 +13,46 @@ pub fn EmailPage() -> impl IntoView {
     let profile = Resource::new(move || request_action.version().get(), |_| get_profile());
 
     view! {
-        <h1>"Email Settings"</h1>
-        <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
-        }>
-            {move || Suspend::new(async move {
-                match profile.await {
-                    Ok(data) => {
-                        let email_status = match (data.email.clone(), data.email_verified) {
-                            (Some(ref e), true) => format!("{e} (verified)"),
-                            (Some(ref e), false) => format!("{e} (unverified)"),
-                            (None, _) => "No email set".to_string(),
-                        };
-                        view! { <p>"Current email: " {email_status}</p> }.into_any()
-                    }
-                    Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
-                }
-            })}
-        </Suspense>
-        <ActionForm action=request_action>
-            <label>"New email address" <input type="email" name="email" /></label>
-            <button type="submit">"Send verification link"</button>
-        </ActionForm>
-        {move || {
-            request_action
-                .value()
-                .get()
-                .map(|r: Result<(), WebError>| match r {
-                    Ok(()) => {
-                        view! { <p>"Check your email for a verification link."</p> }.into_any()
-                    }
-                    Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
-                })
-        }}
+        <Topbar title="Email".to_string() sub="Verify your address".to_string() />
+        <div class="j-scroll">
+            <div class="j-page">
+                <Suspense fallback=|| {
+                    view! { <p class="j-loading">"Loading\u{2026}"</p> }
+                }>
+                    {move || Suspend::new(async move {
+                        match profile.await {
+                            Ok(data) => {
+                                let email_status = match (data.email.clone(), data.email_verified) {
+                                    (Some(ref e), true) => format!("{e} (verified)"),
+                                    (Some(ref e), false) => format!("{e} (unverified)"),
+                                    (None, _) => "No email set".to_string(),
+                                };
+                                view! { <p>"Current email: " {email_status}</p> }.into_any()
+                            }
+                            Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                        }
+                    })}
+                </Suspense>
+                <ActionForm action=request_action>
+                    <label>"New email address" <input type="email" name="email" /></label>
+                    <button type="submit" class="j-btn is-primary">
+                        "Send verification link"
+                    </button>
+                </ActionForm>
+                {move || {
+                    request_action
+                        .value()
+                        .get()
+                        .map(|r: Result<(), WebError>| match r {
+                            Ok(()) => {
+                                view! { <p>"Check your email for a verification link."</p> }
+                                    .into_any()
+                            }
+                            Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                        })
+                }}
+            </div>
+        </div>
     }
 }
 
@@ -59,19 +67,25 @@ pub fn VerifyEmailPage() -> impl IntoView {
     let result = Resource::new(token, verify_email);
 
     view! {
-        <h1>"Verify Email"</h1>
-        <Suspense fallback=|| {
-            view! { <p>"Verifying..."</p> }
-        }>
-            {move || Suspend::new(async move {
-                match result.await {
-                    Ok(()) => view! { <p>"Your email address has been verified."</p> }.into_any(),
-                    Err(e) => {
-                        let msg = e.to_string();
-                        view! { <p class="error">{msg}</p> }.into_any()
-                    }
-                }
-            })}
-        </Suspense>
+        <Topbar title="Verify Email".to_string() />
+        <div class="j-scroll">
+            <div class="j-page">
+                <Suspense fallback=|| {
+                    view! { <p class="j-loading">"Verifying\u{2026}"</p> }
+                }>
+                    {move || Suspend::new(async move {
+                        match result.await {
+                            Ok(()) => {
+                                view! { <p>"Your email address has been verified."</p> }.into_any()
+                            }
+                            Err(e) => {
+                                let msg = e.to_string();
+                                view! { <p class="error">{msg}</p> }.into_any()
+                            }
+                        }
+                    })}
+                </Suspense>
+            </div>
+        </div>
     }
 }

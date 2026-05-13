@@ -1,4 +1,5 @@
 use crate::error::WebError;
+use crate::pages::Topbar;
 use crate::password_reset::{ConfirmPasswordReset, RequestPasswordReset};
 use leptos::prelude::*;
 use leptos_router::components::Redirect;
@@ -13,27 +14,33 @@ pub fn ForgotPasswordPage() -> impl IntoView {
     let request_action = ServerAction::<RequestPasswordReset>::new();
 
     view! {
-        <h1>"Forgot Password"</h1>
-        <ActionForm action=request_action>
-            <label>"Username" <input type="text" name="username" /></label>
-            <button type="submit">"Send reset link"</button>
-        </ActionForm>
-        {move || {
-            request_action
-                .value()
-                .get()
-                .map(|r: Result<(), WebError>| match r {
-                    Ok(()) => {
-                        view! {
-                            <p>
-                                "If there is a verified email address on file, a reset link has been sent. Check your email."
-                            </p>
-                        }
-                            .into_any()
-                    }
-                    Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
-                })
-        }}
+        <Topbar title="Forgot Password".to_string() sub="Recover access".to_string() />
+        <div class="j-scroll">
+            <div class="j-page">
+                <ActionForm action=request_action>
+                    <label>"Username" <input type="text" name="username" /></label>
+                    <button type="submit" class="j-btn is-primary">
+                        "Send reset link"
+                    </button>
+                </ActionForm>
+                {move || {
+                    request_action
+                        .value()
+                        .get()
+                        .map(|r: Result<(), WebError>| match r {
+                            Ok(()) => {
+                                view! {
+                                    <p>
+                                        "If there is a verified email address on file, a reset link has been sent. Check your email."
+                                    </p>
+                                }
+                                    .into_any()
+                            }
+                            Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                        })
+                }}
+            </div>
+        </div>
     }
 }
 
@@ -54,20 +61,26 @@ pub fn ResetPasswordPage() -> impl IntoView {
     let confirm_action = ServerAction::<ConfirmPasswordReset>::new();
 
     view! {
-        <h1>"Reset Password"</h1>
-        <ActionForm action=confirm_action>
-            <input type="hidden" name="token" value=token />
-            <label>"New password" <input type="password" name="new_password" /></label>
-            <button type="submit">"Set new password"</button>
-        </ActionForm>
-        {move || {
-            confirm_action
-                .value()
-                .get()
-                .map(|r: Result<(), WebError>| match r {
-                    Ok(()) => view! { <Redirect path="/login" /> }.into_any(),
-                    Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
-                })
-        }}
+        <Topbar title="Reset Password".to_string() sub="Set a new password".to_string() />
+        <div class="j-scroll">
+            <div class="j-page">
+                <ActionForm action=confirm_action>
+                    <input type="hidden" name="token" value=token />
+                    <label>"New password" <input type="password" name="new_password" /></label>
+                    <button type="submit" class="j-btn is-primary">
+                        "Set new password"
+                    </button>
+                </ActionForm>
+                {move || {
+                    confirm_action
+                        .value()
+                        .get()
+                        .map(|r: Result<(), WebError>| match r {
+                            Ok(()) => view! { <Redirect path="/login" /> }.into_any(),
+                            Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                        })
+                }}
+            </div>
+        </div>
     }
 }

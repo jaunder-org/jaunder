@@ -44,10 +44,14 @@ test("authenticated user can create a post through the UI", async ({
   await expect(page.locator(".j-topbar h1")).toHaveText("New post");
   await page.fill('textarea[name="body"]', "# Playwright Post\n\n**browser**");
   await click(page, 'button[name="publish"][value="true"]');
-  await waitForSelector(page, ".success");
+  await waitForSelector(page, ".j-save-summary");
 
-  await expect(page.locator(".success")).toContainText("Post published.");
-  await expect(page.locator(".success")).toContainText("Slug: playwright-post");
+  await expect(page.locator(".j-save-summary")).toContainText(
+    "Post published.",
+  );
+  await expect(page.locator(".j-save-summary")).toContainText(
+    "Slug: playwright-post",
+  );
 });
 
 test("authenticated user can save a draft through the UI", async ({
@@ -64,10 +68,12 @@ test("authenticated user can save a draft through the UI", async ({
   await click(page, '.j-seg button:has-text("Org")');
   await page.fill('input[name="slug_override"]', "Draft-Slug");
   await click(page, 'button[name="publish"][value="false"]');
-  await waitForSelector(page, ".success");
+  await waitForSelector(page, ".j-save-summary");
 
-  await expect(page.locator(".success")).toContainText("Draft saved.");
-  await expect(page.locator(".success")).toContainText("Slug: draft-slug");
+  await expect(page.locator(".j-save-summary")).toContainText("Draft saved.");
+  await expect(page.locator(".j-save-summary")).toContainText(
+    "Slug: draft-slug",
+  );
 });
 
 test("published post renders at permalink", async ({ page }, testInfo) => {
@@ -83,22 +89,22 @@ test("published post renders at permalink", async ({ page }, testInfo) => {
     "# Permalink Story\n\n**hello permalink**",
   );
   await click(page, 'button[name="publish"][value="true"]');
-  await waitForSelector(page, ".success");
+  await waitForSelector(page, ".j-save-summary");
 
-  const success = page.locator(".success");
-  await expect(success).toContainText("Post published.");
+  const summary = page.locator(".j-save-summary");
+  await expect(summary).toContainText("Post published.");
 
-  const slugAttr = await success
+  const slugAttr = await summary
     .locator('[data-test="slug-value"]')
     .getAttribute("data-slug");
   expect(slugAttr).toBeTruthy();
 
-  const previewLink = success.locator('[data-test="preview-link"]');
+  const previewLink = summary.locator('[data-test="preview-link"]');
   await expect(previewLink).toBeVisible();
   const previewHref = await previewLink.getAttribute("href");
   expect(previewHref).toBeTruthy();
 
-  const permalinkLink = success.locator('[data-test="permalink-link"]');
+  const permalinkLink = summary.locator('[data-test="permalink-link"]');
   await expect(permalinkLink).toBeVisible();
   const permalinkHref = await permalinkLink.getAttribute("href");
   expect(permalinkHref).toBeTruthy();
@@ -122,10 +128,10 @@ test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
   await goto(page, "/posts/new");
   await page.fill('textarea[name="body"]', "# Original Draft\n\noriginal body");
   await click(page, 'button[name="publish"][value="false"]');
-  await waitForSelector(page, ".success");
+  await waitForSelector(page, ".j-save-summary");
 
-  const success = page.locator(".success");
-  const postIdMatch = (await success
+  const summary = page.locator(".j-save-summary");
+  const postIdMatch = (await summary
     .locator('[data-test="preview-link"]')
     .getAttribute("href"))!.match(/\/draft\/(\d+)\/preview/);
   expect(postIdMatch).toBeTruthy();
@@ -142,10 +148,10 @@ test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
     "# Original Draft\n\n**edited content**",
   );
   await click(page, 'button[name="publish"][value="false"]');
-  await waitForSelector(page, ".success");
+  await waitForSelector(page, ".j-save-summary");
 
-  await expect(page.locator(".success")).toContainText("Draft saved.");
-  await expect(page.locator(".success")).toContainText(
+  await expect(page.locator(".j-save-summary")).toContainText("Draft saved.");
+  await expect(page.locator(".j-save-summary")).toContainText(
     "Draft saved.Slug: original-draftPreview draft",
   );
 });
@@ -166,15 +172,15 @@ test("editing a published post freezes the slug", async ({
     "# Published Article\n\noriginal content",
   );
   await click(page, 'button[name="publish"][value="true"]');
-  await waitForSelector(page, ".success");
+  await waitForSelector(page, ".j-save-summary");
 
-  const success = page.locator(".success");
-  const originalSlug = await success
+  const summary = page.locator(".j-save-summary");
+  const originalSlug = await summary
     .locator('[data-test="slug-value"]')
     .getAttribute("data-slug");
   expect(originalSlug).toBeTruthy();
 
-  const postIdMatch = (await success
+  const postIdMatch = (await summary
     .locator('[data-test="preview-link"]')
     .getAttribute("href"))!.match(/\/draft\/(\d+)\/preview/);
   expect(postIdMatch).toBeTruthy();
@@ -210,10 +216,10 @@ test("draft lifecycle: create, view, edit, and publish", async ({
     "# Lifecycle Draft\n\ninitial draft body",
   );
   await click(page, 'button[name="publish"][value="false"]');
-  await waitForSelector(page, ".success");
+  await waitForSelector(page, ".j-save-summary");
 
-  const success = page.locator(".success");
-  const previewHref = await success
+  const summary = page.locator(".j-save-summary");
+  const previewHref = await summary
     .locator('[data-test="preview-link"]')
     .getAttribute("href");
   expect(previewHref).toBeTruthy();
@@ -237,7 +243,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
     "# Lifecycle Draft\n\nedited draft body",
   );
   await click(page, 'button[name="publish"][value="false"]');
-  await waitForSelector(page, ".success");
+  await waitForSelector(page, ".j-save-summary");
 
   await goto(page, permalinkUrl);
   await expect(page.locator(".j-post-body")).toContainText("edited draft body");
@@ -426,7 +432,7 @@ test("authenticated user can delete a published post", async ({
     "# Post To Delete\n\nthis will be deleted",
   );
   await click(page, 'button[name="publish"][value="true"]');
-  await waitForSelector(page, ".success");
+  await waitForSelector(page, ".j-save-summary");
 
   const permalinkLink = page.locator('[data-test="permalink-link"]');
   const permalinkHref = await permalinkLink.getAttribute("href");
@@ -629,7 +635,7 @@ test("authenticated user can delete a draft from the drafts page", async ({
     "# Draft To Delete\n\ndraft content",
   );
   await click(page, 'button[name="publish"][value="false"]');
-  await waitForSelector(page, ".success");
+  await waitForSelector(page, ".j-save-summary");
 
   // Navigate to drafts page
   await goto(page, "/drafts");
