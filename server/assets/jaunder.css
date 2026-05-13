@@ -371,17 +371,18 @@
     line-height: 1.55;
     color: var(--ink);
     display: flex;
-    gap: 12px;
-    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
 }
 .j-composer-body textarea {
-    flex: 1;
+    width: 100%;
 }
 .j-composer-toolbar {
     display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 6px;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 .j-format-toggle {
     display: flex;

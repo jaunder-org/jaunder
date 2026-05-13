@@ -446,10 +446,41 @@ pub fn PostCreateForm(
                             rows=rows_u32
                             placeholder=placeholder
                             textarea_class=""
+                            show_seg=false
                             on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))
                         />
                         <input type="hidden" name="slug_override" value="" />
+                        <MediaPanel />
                         <div class="j-composer-toolbar">
+                            <div class="j-seg">
+                                <button
+                                    type="button"
+                                    class=move || {
+                                        if format.get() == "markdown" {
+                                            "j-btn is-selected"
+                                        } else {
+                                            "j-btn"
+                                        }
+                                    }
+                                    on:click=move |_| format.set("markdown".to_string())
+                                >
+                                    "Markdown"
+                                </button>
+                                <button
+                                    type="button"
+                                    class=move || {
+                                        if format.get() == "org" {
+                                            "j-btn is-selected"
+                                        } else {
+                                            "j-btn"
+                                        }
+                                    }
+                                    on:click=move |_| format.set("org".to_string())
+                                >
+                                    "Org"
+                                </button>
+                            </div>
+                            <span class="j-spacer"></span>
                             <button
                                 class="j-btn"
                                 type="submit"
@@ -460,7 +491,7 @@ pub fn PostCreateForm(
                                 "Save draft"
                             </button>
                             <button
-                                class="j-btn"
+                                class="j-btn is-primary"
                                 type="submit"
                                 name="publish"
                                 value="true"
@@ -469,7 +500,6 @@ pub fn PostCreateForm(
                                 "Publish"
                             </button>
                         </div>
-                        <MediaPanel />
                     </div>
                 </div>
             </ActionForm>
