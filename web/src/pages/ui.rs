@@ -152,15 +152,18 @@ pub fn BackupBanner() -> impl IntoView {
 #[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Topbar(
-    title: String,
-    #[prop(optional)] sub: Option<String>,
+    #[prop(into)] title: Signal<String>,
+    #[prop(optional, into)] sub: Option<Signal<String>>,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
     view! {
         <div class="j-topbar">
             <div>
-                <h1>{title}</h1>
-                {sub.map(|s| view! { <div class="j-sub">{s}</div> })}
+                <h1>{move || title.get()}</h1>
+                {sub
+                    .map(|s| {
+                        view! { <div class="j-sub">{move || s.get()}</div> }
+                    })}
             </div>
             <div class="j-topbar-right">{children.map(|c| c())}</div>
         </div>
@@ -362,7 +365,7 @@ pub fn PostCard(
                 </button>
                 <button
                     type="button"
-                    class="j-btn"
+                    class="j-btn is-danger"
                     on:click=move |_| {
                         let confirmed = {
                             #[cfg(target_arch = "wasm32")]
@@ -443,10 +446,41 @@ pub fn PostCreateForm(
                             rows=rows_u32
                             placeholder=placeholder
                             textarea_class=""
+                            show_seg=false
                             on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))
                         />
                         <input type="hidden" name="slug_override" value="" />
+                        <MediaPanel />
                         <div class="j-composer-toolbar">
+                            <div class="j-seg">
+                                <button
+                                    type="button"
+                                    class=move || {
+                                        if format.get() == "markdown" {
+                                            "j-btn is-selected"
+                                        } else {
+                                            "j-btn"
+                                        }
+                                    }
+                                    on:click=move |_| format.set("markdown".to_string())
+                                >
+                                    "Markdown"
+                                </button>
+                                <button
+                                    type="button"
+                                    class=move || {
+                                        if format.get() == "org" {
+                                            "j-btn is-selected"
+                                        } else {
+                                            "j-btn"
+                                        }
+                                    }
+                                    on:click=move |_| format.set("org".to_string())
+                                >
+                                    "Org"
+                                </button>
+                            </div>
+                            <span class="j-spacer"></span>
                             <button
                                 class="j-btn"
                                 type="submit"
@@ -457,7 +491,7 @@ pub fn PostCreateForm(
                                 "Save draft"
                             </button>
                             <button
-                                class="j-btn"
+                                class="j-btn is-primary"
                                 type="submit"
                                 name="publish"
                                 value="true"
@@ -466,7 +500,6 @@ pub fn PostCreateForm(
                                 "Publish"
                             </button>
                         </div>
-                        <MediaPanel />
                     </div>
                 </div>
             </ActionForm>

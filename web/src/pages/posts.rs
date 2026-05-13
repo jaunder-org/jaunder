@@ -50,8 +50,8 @@ pub fn CreatePostPage() -> impl IntoView {
                                         let slug_value = created.slug.clone();
                                         let slug_for_attr = slug_value.clone();
                                         view! {
-                                            <div class="success" style="padding:16px 32px">
-                                                <p>{message}</p>
+                                            <div class="j-save-summary">
+                                                <p class="success">{message}</p>
                                                 <p data-test="slug-value" data-slug=slug_for_attr>
                                                     "Slug: "
                                                     {slug_value}
@@ -155,36 +155,46 @@ pub fn PostPage() -> impl IntoView {
     });
 
     view! {
-        <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
-        }>
-            {move || Suspend::new(async move {
-                match post.await {
-                    Ok(fetched) => {
-                        let banner = fetched
-                            .is_draft
-                            .then_some("Draft - visible only to you".to_string());
-                        let summary = TimelinePostSummary {
-                            post_id: fetched.post_id,
-                            username: fetched.username.clone(),
-                            title: fetched.title.clone(),
-                            slug: fetched.slug.clone(),
-                            rendered_html: fetched.rendered_html.clone(),
-                            created_at: fetched.created_at.clone(),
-                            published_at: fetched
-                                .published_at
-                                .clone()
-                                .unwrap_or_else(|| fetched.created_at.clone()),
-                            permalink: fetched.permalink.clone().unwrap_or_default(),
-                            is_author: fetched.is_author,
-                        };
-                        view! { <PostCard post=summary banner=banner on_unpublish=on_unpublish /> }
-                            .into_any()
-                    }
-                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                }
-            })}
-        </Suspense>
+        <div class="j-scroll">
+            <div class="j-page">
+                <Suspense fallback=|| {
+                    view! { <p class="j-loading">"Loading\u{2026}"</p> }
+                }>
+                    {move || Suspend::new(async move {
+                        match post.await {
+                            Ok(fetched) => {
+                                let banner = fetched
+                                    .is_draft
+                                    .then_some("Draft - visible only to you".to_string());
+                                let summary = TimelinePostSummary {
+                                    post_id: fetched.post_id,
+                                    username: fetched.username.clone(),
+                                    title: fetched.title.clone(),
+                                    slug: fetched.slug.clone(),
+                                    rendered_html: fetched.rendered_html.clone(),
+                                    created_at: fetched.created_at.clone(),
+                                    published_at: fetched
+                                        .published_at
+                                        .clone()
+                                        .unwrap_or_else(|| fetched.created_at.clone()),
+                                    permalink: fetched.permalink.clone().unwrap_or_default(),
+                                    is_author: fetched.is_author,
+                                };
+                                view! {
+                                    <PostCard
+                                        post=summary
+                                        banner=banner
+                                        on_unpublish=on_unpublish
+                                    />
+                                }
+                                    .into_any()
+                            }
+                            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                        }
+                    })}
+                </Suspense>
+            </div>
+        </div>
     }
 }
 
@@ -288,43 +298,49 @@ pub fn UserTimelinePage() -> impl IntoView {
     let read_pending = move || read_signal!(load_more_action.pending());
 
     view! {
-        <h1>{move || format!("Posts by {}", display_username())}</h1>
-        {move || {
-            if let Some(err) = read_error() {
-                return view! { <p class="error">{err}</p> }.into_any();
-            }
-            if !read_initial_loaded() {
-                return view! { <p>"Loading..."</p> }.into_any();
-            }
-            let rows = read_timeline();
-            if rows.is_empty() {
-                return view! { <p>"No posts yet."</p> }.into_any();
-            }
-
-            view! {
-                <div>
-                    {rows
-                        .into_iter()
-                        .map(|post| {
-                            view! { <PostCard post=post banner=None on_mutate=on_mutate /> }
-                        })
-                        .collect::<Vec<_>>()}
-                </div>
+        <Topbar
+            title=move || format!("Posts by {}", display_username())
+            sub="User timeline".to_string()
+        />
+        <div class="j-scroll">
+            <div class="j-page">
                 {move || {
-                    read_has_more()
-                        .then(|| {
-                            view! {
-                                <button on:click=on_load_more disabled=read_pending>
-                                    {move || {
-                                        if read_pending() { "Loading..." } else { "Load more" }
-                                    }}
-                                </button>
-                            }
-                        })
+                    if let Some(err) = read_error() {
+                        return view! { <p class="error">{err}</p> }.into_any();
+                    }
+                    if !read_initial_loaded() {
+                        return view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any();
+                    }
+                    let rows = read_timeline();
+                    if rows.is_empty() {
+                        return view! { <p>"No posts yet."</p> }.into_any();
+                    }
+                    view! {
+                        <div>
+                            {rows
+                                .into_iter()
+                                .map(|post| {
+                                    view! { <PostCard post=post banner=None on_mutate=on_mutate /> }
+                                })
+                                .collect::<Vec<_>>()}
+                        </div>
+                        {move || {
+                            read_has_more()
+                                .then(|| {
+                                    view! {
+                                        <button on:click=on_load_more disabled=read_pending>
+                                            {move || {
+                                                if read_pending() { "Loading\u{2026}" } else { "Load more" }
+                                            }}
+                                        </button>
+                                    }
+                                })
+                        }}
+                    }
+                        .into_any()
                 }}
-            }
-                .into_any()
-        }}
+            </div>
+        </div>
     }
 }
 
@@ -347,74 +363,81 @@ pub fn DraftPreviewPage() -> impl IntoView {
     );
 
     view! {
-        <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
-        }>
-            {move || Suspend::new(async move {
-                match preview.await {
-                    Ok(fetched) => {
-                        let post_id = fetched.post_id;
-                        let summary = TimelinePostSummary {
-                            post_id: fetched.post_id,
-                            username: fetched.username.clone(),
-                            title: fetched.title.clone(),
-                            slug: fetched.slug.clone(),
-                            rendered_html: fetched.rendered_html.clone(),
-                            created_at: fetched.created_at.clone(),
-                            published_at: fetched
-                                .published_at
-                                .clone()
-                                .unwrap_or_else(|| fetched.created_at.clone()),
-                            permalink: fetched.permalink.clone().unwrap_or_default(),
-                            is_author: true,
-                        };
-                        view! {
-                            <PostDisplay
-                                post=summary
-                                banner=Some("Draft preview – visible only to you".to_string())
-                            >
-                                <div class="j-post-acts">
-                                    <ActionForm action=publish_action>
-                                        <input type="hidden" name="post_id" value=post_id />
-                                        <button
-                                            type="submit"
-                                            class="j-btn is-primary"
-                                            onclick="return confirm('Publish this draft?')"
-                                        >
-                                            "Publish \u{2192}"
-                                        </button>
-                                    </ActionForm>
-                                    {render_delete_form(
-                                        delete_action,
-                                        post_id,
-                                        "Delete this draft?",
-                                    )}
-                                </div>
-                            </PostDisplay>
+        <div class="j-scroll">
+            <div class="j-page">
+                <Suspense fallback=|| {
+                    view! { <p class="j-loading">"Loading\u{2026}"</p> }
+                }>
+                    {move || Suspend::new(async move {
+                        match preview.await {
+                            Ok(fetched) => {
+                                let post_id = fetched.post_id;
+                                let summary = TimelinePostSummary {
+                                    post_id: fetched.post_id,
+                                    username: fetched.username.clone(),
+                                    title: fetched.title.clone(),
+                                    slug: fetched.slug.clone(),
+                                    rendered_html: fetched.rendered_html.clone(),
+                                    created_at: fetched.created_at.clone(),
+                                    published_at: fetched
+                                        .published_at
+                                        .clone()
+                                        .unwrap_or_else(|| fetched.created_at.clone()),
+                                    permalink: fetched.permalink.clone().unwrap_or_default(),
+                                    is_author: true,
+                                };
+                                view! {
+                                    <PostDisplay
+                                        post=summary
+                                        banner=Some(
+                                            "Draft preview – visible only to you".to_string(),
+                                        )
+                                    >
+                                        <div class="j-post-acts">
+                                            <ActionForm action=publish_action>
+                                                <input type="hidden" name="post_id" value=post_id />
+                                                <button
+                                                    type="submit"
+                                                    class="j-btn is-primary"
+                                                    onclick="return confirm('Publish this draft?')"
+                                                >
+                                                    "Publish \u{2192}"
+                                                </button>
+                                            </ActionForm>
+                                            {render_delete_form(
+                                                delete_action,
+                                                post_id,
+                                                "Delete this draft?",
+                                            )}
+                                        </div>
+                                    </PostDisplay>
+                                }
+                                    .into_any()
+                            }
+                            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                         }
-                            .into_any()
-                    }
-                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                }
-            })}
-        </Suspense>
-        {move || {
-            publish_action
-                .value()
-                .get()
-                .map(|result: Result<PublishPostResult, WebError>| match result {
-                    Ok(published) => {
-                        view! {
-                            <p class="success">
-                                "Post published. " <a href=published.permalink>"View post"</a>
-                            </p>
-                        }
-                            .into_any()
-                    }
-                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                })
-        }}
-        {render_delete_result(delete_action, "Draft deleted.", "/drafts", "Go to drafts")}
+                    })}
+                </Suspense>
+                {move || {
+                    publish_action
+                        .value()
+                        .get()
+                        .map(|result: Result<PublishPostResult, WebError>| match result {
+                            Ok(published) => {
+                                view! {
+                                    <p class="success">
+                                        "Post published. "
+                                        <a href=published.permalink>"View post"</a>
+                                    </p>
+                                }
+                                    .into_any()
+                            }
+                            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                        })
+                }}
+                {render_delete_result(delete_action, "Draft deleted.", "/drafts", "Go to drafts")}
+            </div>
+        </div>
     }
 }
 
@@ -454,7 +477,7 @@ pub fn EditPostPage() -> impl IntoView {
     );
 
     view! {
-        <Topbar title="Edit Post".to_string() sub=String::new() />
+        <Topbar title="Edit Post".to_string() sub="Long-form".to_string() />
         <Suspense fallback=|| {
             view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
@@ -592,8 +615,8 @@ pub fn EditPostPage() -> impl IntoView {
                         let slug_value = updated.slug.clone();
                         let slug_for_attr = slug_value.clone();
                         view! {
-                            <div class="success">
-                                <p>"Draft saved."</p>
+                            <div class="j-save-summary">
+                                <p class="success">"Draft saved."</p>
                                 <p data-test="slug-value" data-slug=slug_for_attr>
                                     "Slug: "
                                     {slug_value}
@@ -628,60 +651,64 @@ pub fn DraftsPage() -> impl IntoView {
     );
 
     view! {
-        <h1>"Drafts"</h1>
-        <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
-        }>
-            {move || Suspend::new(async move {
-                match drafts.await {
-                    Ok(list) => {
-                        if list.is_empty() {
-                            return view! { <p>"You have no drafts."</p> }.into_any();
+        <Topbar title="Drafts".to_string() sub="Unpublished posts".to_string() />
+        <div class="j-scroll">
+            <div class="j-page">
+                <Suspense fallback=|| {
+                    view! { <p class="j-loading">"Loading\u{2026}"</p> }
+                }>
+                    {move || Suspend::new(async move {
+                        match drafts.await {
+                            Ok(list) => {
+                                if list.is_empty() {
+                                    return view! { <p>"You have no drafts."</p> }.into_any();
+                                }
+                                view! {
+                                    <ul class="j-draft-list">
+                                        {list
+                                            .into_iter()
+                                            .map(|draft| render_draft_row(
+                                                draft,
+                                                publish_action,
+                                                delete_action,
+                                            ))
+                                            .collect::<Vec<_>>()}
+                                    </ul>
+                                }
+                                    .into_any()
+                            }
+                            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                         }
-
-                        view! {
-                            <ul>
-                                {list
-                                    .into_iter()
-                                    .map(|draft| render_draft_row(
-                                        draft,
-                                        publish_action,
-                                        delete_action,
-                                    ))
-                                    .collect::<Vec<_>>()}
-                            </ul>
-                        }
-                            .into_any()
-                    }
-                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                }
-            })}
-        </Suspense>
-        {move || {
-            publish_action
-                .value()
-                .get()
-                .map(|result: Result<PublishPostResult, WebError>| match result {
-                    Ok(published) => {
-                        view! {
-                            <p class="success">
-                                "Post published. " <a href=published.permalink>"View permalink"</a>
-                            </p>
-                        }
-                            .into_any()
-                    }
-                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                })
-        }}
-        {move || {
-            delete_action
-                .value()
-                .get()
-                .map(|result| match result {
-                    Ok(()) => view! { <p class="success">"Draft deleted."</p> }.into_any(),
-                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                })
-        }}
+                    })}
+                </Suspense>
+                {move || {
+                    publish_action
+                        .value()
+                        .get()
+                        .map(|result: Result<PublishPostResult, WebError>| match result {
+                            Ok(published) => {
+                                view! {
+                                    <p class="success">
+                                        "Post published. "
+                                        <a href=published.permalink>"View permalink"</a>
+                                    </p>
+                                }
+                                    .into_any()
+                            }
+                            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                        })
+                }}
+                {move || {
+                    delete_action
+                        .value()
+                        .get()
+                        .map(|result| match result {
+                            Ok(()) => view! { <p class="success">"Draft deleted."</p> }.into_any(),
+                            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                        })
+                }}
+            </div>
+        </div>
     }
 }
 
@@ -705,12 +732,12 @@ fn render_draft_row(
                     <a href=draft.permalink>"Permalink"</a>
                 </div>
                 <div class="j-draft-actions">
-                    <a class="j-btn is-ghost" href=draft.edit_url>
+                    <a class="j-btn" href=draft.edit_url>
                         "Edit"
                     </a>
                     <ActionForm action=publish_action>
                         <input type="hidden" name="post_id" value=post_id />
-                        <button type="submit" class="j-btn is-ghost">
+                        <button type="submit" class="j-btn">
                             "Publish"
                         </button>
                     </ActionForm>
@@ -718,7 +745,7 @@ fn render_draft_row(
                         <input type="hidden" name="post_id" value=post_id />
                         <button
                             type="submit"
-                            class="j-btn is-ghost"
+                            class="j-btn is-danger"
                             onclick="return confirm('Delete this draft?')"
                         >
                             "Delete"
@@ -740,7 +767,7 @@ fn render_delete_form(
             <input type="hidden" name="post_id" value=post_id />
             <button
                 type="submit"
-                class="j-btn is-ghost"
+                class="j-btn is-danger"
                 onclick=format!("return confirm('{confirm_msg}')")
             >
                 "Delete"

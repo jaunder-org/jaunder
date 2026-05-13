@@ -1,5 +1,6 @@
 use crate::auth::{get_registration_policy, Login, Logout, Register};
 use crate::error::WebError;
+use crate::pages::Topbar;
 use leptos::prelude::*;
 
 /// Registration page.
@@ -11,47 +12,75 @@ pub fn RegisterPage() -> impl IntoView {
     let username = RwSignal::new(String::new());
 
     view! {
-        <h1>"Register"</h1>
-        <Suspense fallback=|| {
-            view! { <p>"Loading..."</p> }
-        }>
-            {move || Suspend::new(async move {
-                let p = policy.await;
-                let is_invite_only = p.as_deref() == Ok("invite_only");
-                view! {
-                    <ActionForm action=register_action>
-                        <label>
-                            "Username"
-                            <input
-                                type="text"
-                                name="username"
-                                prop:value=username
-                                on:input=move |ev| {
-                                    username.set(event_target_value(&ev).to_lowercase());
-                                }
-                            />
-                        </label>
-                        <label>"Password" <input type="password" name="password" /></label>
-                        {is_invite_only
-                            .then(|| {
-                                view! {
-                                    <label>
-                                        "Invite code" <input type="text" name="invite_code" />
+        <Topbar title="Register".to_string() sub="Create your account".to_string() />
+        <div class="j-scroll">
+            <div class="j-page-narrow">
+                <Suspense fallback=|| {
+                    view! { <p class="j-loading">"Loading\u{2026}"</p> }
+                }>
+                    {move || Suspend::new(async move {
+                        let p = policy.await;
+                        let is_invite_only = p.as_deref() == Ok("invite_only");
+                        view! {
+                            <ActionForm action=register_action attr:class="j-card">
+                                <div class="j-card-head">
+                                    <h2>"Create an account"</h2>
+                                </div>
+                                <div class="j-form-body">
+                                    <label class="j-form-field">
+                                        <span class="j-form-label">"Username"</span>
+                                        <input
+                                            class="j-form-input"
+                                            type="text"
+                                            name="username"
+                                            autocomplete="username"
+                                            prop:value=username
+                                            on:input=move |ev| {
+                                                username.set(event_target_value(&ev).to_lowercase());
+                                            }
+                                        />
                                     </label>
-                                }
-                            })}
-                        <button type="submit">"Register"</button>
-                    </ActionForm>
-                }
-            })}
-        </Suspense>
-        {move || {
-            register_action
-                .value()
-                .get()
-                .and_then(|r: Result<String, WebError>| r.err())
-                .map(|e| view! { <p class="error">{e.to_string()}</p> })
-        }}
+                                    <label class="j-form-field">
+                                        <span class="j-form-label">"Password"</span>
+                                        <input
+                                            class="j-form-input"
+                                            type="password"
+                                            name="password"
+                                            autocomplete="new-password"
+                                        />
+                                    </label>
+                                    {is_invite_only
+                                        .then(|| {
+                                            view! {
+                                                <label class="j-form-field">
+                                                    <span class="j-form-label">"Invite code"</span>
+                                                    <input
+                                                        class="j-form-input"
+                                                        type="text"
+                                                        name="invite_code"
+                                                    />
+                                                </label>
+                                            }
+                                        })}
+                                </div>
+                                <div class="j-form-actions">
+                                    <button type="submit" class="j-btn is-primary">
+                                        "Register"
+                                    </button>
+                                </div>
+                            </ActionForm>
+                        }
+                    })}
+                </Suspense>
+                {move || {
+                    register_action
+                        .value()
+                        .get()
+                        .and_then(|r: Result<String, WebError>| r.err())
+                        .map(|e| view! { <p class="error">{e.to_string()}</p> })
+                }}
+            </div>
+        </div>
     }
 }
 
@@ -63,31 +92,56 @@ pub fn LoginPage() -> impl IntoView {
     let username = RwSignal::new(String::new());
 
     view! {
-        <h1>"Login"</h1>
-        <ActionForm action=login_action>
-            <label>
-                "Username"
-                <input
-                    type="text"
-                    name="username"
-                    prop:value=username
-                    on:input=move |ev| {
-                        username.set(event_target_value(&ev).to_lowercase());
-                    }
-                />
-            </label>
-            <label>"Password" <input type="password" name="password" /></label>
-            <button type="submit">"Login"</button>
-        </ActionForm>
-        {move || {
-            login_action
-                .value()
-                .get()
-                .map(|r: Result<String, WebError>| match r {
-                    Ok(_) => view! { <p>"Logging in..."</p> }.into_any(),
-                    Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
-                })
-        }}
+        <Topbar title="Login".to_string() sub="Sign in to your account".to_string() />
+        <div class="j-scroll">
+            <div class="j-page-narrow">
+                <ActionForm action=login_action attr:class="j-card">
+                    <div class="j-card-head">
+                        <h2>"Sign in"</h2>
+                    </div>
+                    <div class="j-form-body">
+                        <label class="j-form-field">
+                            <span class="j-form-label">"Username"</span>
+                            <input
+                                class="j-form-input"
+                                type="text"
+                                name="username"
+                                autocomplete="username"
+                                prop:value=username
+                                on:input=move |ev| {
+                                    username.set(event_target_value(&ev).to_lowercase());
+                                }
+                            />
+                        </label>
+                        <label class="j-form-field">
+                            <span class="j-form-label">"Password"</span>
+                            <input
+                                class="j-form-input"
+                                type="password"
+                                name="password"
+                                autocomplete="current-password"
+                            />
+                        </label>
+                    </div>
+                    <div class="j-form-actions">
+                        <button type="submit" class="j-btn is-primary">
+                            "Login"
+                        </button>
+                    </div>
+                </ActionForm>
+                {move || {
+                    login_action
+                        .value()
+                        .get()
+                        .map(|r: Result<String, WebError>| match r {
+                            Ok(_) => {
+                                view! { <p class="j-loading">"Logging in\u{2026}"</p> }.into_any()
+                            }
+                            Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                        })
+                }}
+            </div>
+        </div>
     }
 }
 
@@ -102,17 +156,22 @@ pub fn LogoutPage() -> impl IntoView {
     });
 
     view! {
-        <h1>"Logging out\u{2026}"</h1>
-        {move || {
-            logout_action
-                .value()
-                .get()
-                .map(|r: Result<(), WebError>| {
-                    match r {
-                        Ok(()) => view! { <p>"You have been logged out."</p> }.into_any(),
-                        Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
-                    }
-                })
-        }}
+        <Topbar title="Logout".to_string() />
+        <div class="j-scroll">
+            <div class="j-page">
+                <p class="j-loading">"Logging out\u{2026}"</p>
+                {move || {
+                    logout_action
+                        .value()
+                        .get()
+                        .map(|r: Result<(), WebError>| {
+                            match r {
+                                Ok(()) => view! { <p>"You have been logged out."</p> }.into_any(),
+                                Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                            }
+                        })
+                }}
+            </div>
+        </div>
     }
 }

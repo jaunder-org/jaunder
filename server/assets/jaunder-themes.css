@@ -18,6 +18,7 @@
   --on-accent: #fbf8f1;
   --ok:   #3d7a3a;
   --warn: #a05d00;
+  --err:  #9d2218;
 
   --font-body:    'IBM Plex Mono', 'JetBrains Mono', ui-monospace, Menlo, monospace;
   --font-display: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, Menlo, monospace;
@@ -63,6 +64,7 @@
   --on-accent: #ffffff;
   --ok:   #2f9c5b;
   --warn: #c88a2a;
+  --err:  #dc2626;
 
   --font-body:    'Geist', 'Inter', system-ui, -apple-system, sans-serif;
   --font-display: 'Geist', 'Inter', system-ui, -apple-system, sans-serif;
@@ -106,6 +108,7 @@
   --on-accent: #fbf8f1;
   --ok:   #4a6b34;
   --warn: #a05d00;
+  --err:  #a83232;
 
   --font-body:    'Source Serif 4', 'Charter', Georgia, serif;
   --font-display: 'Source Serif 4', 'Charter', Georgia, serif;
