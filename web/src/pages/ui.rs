@@ -152,15 +152,18 @@ pub fn BackupBanner() -> impl IntoView {
 #[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Topbar(
-    title: String,
-    #[prop(optional)] sub: Option<String>,
+    #[prop(into)] title: Signal<String>,
+    #[prop(optional, into)] sub: Option<Signal<String>>,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
     view! {
         <div class="j-topbar">
             <div>
-                <h1>{title}</h1>
-                {sub.map(|s| view! { <div class="j-sub">{s}</div> })}
+                <h1>{move || title.get()}</h1>
+                {sub
+                    .map(|s| {
+                        view! { <div class="j-sub">{move || s.get()}</div> }
+                    })}
             </div>
             <div class="j-topbar-right">{children.map(|c| c())}</div>
         </div>
