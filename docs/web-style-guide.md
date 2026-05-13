@@ -35,6 +35,9 @@ view! {
   `j-sub` line.
 - `Topbar` accepts `children` for right-aligned actions (sign-in
   buttons, primary CTA). See `home.rs` Local mode for the pattern.
+- Both `title` and `sub` accept either a static `String` or a closure
+  (`move || …`) for reactive content — see `UserTimelinePage` for the
+  closure form.
 - The outer `<div class="j-scroll">` is the scrollable region; the
   inner padded div is the gutter. Pages that follow a dense
   card-grid layout (Backup, settings-style forms) may use

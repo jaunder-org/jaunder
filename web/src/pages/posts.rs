@@ -301,12 +301,10 @@ pub fn UserTimelinePage() -> impl IntoView {
     let read_pending = move || read_signal!(load_more_action.pending());
 
     view! {
-        <div class="j-topbar">
-            <div>
-                <h1>{move || format!("Posts by {}", display_username())}</h1>
-                <div class="j-sub">"User timeline"</div>
-            </div>
-        </div>
+        <Topbar
+            title=move || format!("Posts by {}", display_username())
+            sub="User timeline".to_string()
+        />
         <div class="j-scroll">
             <div class="j-page">
                 {move || {
