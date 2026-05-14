@@ -441,6 +441,7 @@ pub fn PostCreateForm(
                 format: format.get(),
                 slug_override: None,
                 publish: false,
+                tags: None,
             });
         };
         let dispatch_publish = move |_| {
@@ -449,6 +450,7 @@ pub fn PostCreateForm(
                 format: format.get(),
                 slug_override: None,
                 publish: true,
+                tags: None,
             });
         };
         view! {
@@ -541,6 +543,7 @@ pub fn PostCreateForm(
                 format: format.get(),
                 slug_override,
                 publish,
+                tags: None,
             });
         };
         view! {
