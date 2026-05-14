@@ -979,6 +979,7 @@ mod tests {
             updated_at: base_time,
             published_at: None,
             deleted_at: None,
+            tags: vec![],
         });
         assert_eq!(body_label, "Body label");
 
@@ -994,6 +995,7 @@ mod tests {
             updated_at: base_time,
             published_at: None,
             deleted_at: None,
+            tags: vec![],
         });
         assert_eq!(title_label, "Stored Title");
 
@@ -1009,6 +1011,7 @@ mod tests {
             updated_at: base_time,
             published_at: None,
             deleted_at: None,
+            tags: vec![],
         });
         assert_eq!(slug_label, "hello-world");
     }
@@ -1034,6 +1037,7 @@ mod tests {
                 updated_at: base_time,
                 published_at: Some(base_time),
                 deleted_at: None,
+                tags: vec![],
             },
             None,
         )
@@ -1062,6 +1066,7 @@ mod tests {
                 updated_at: base_time,
                 published_at: None,
                 deleted_at: None,
+                tags: vec![],
             },
             "author".to_string(),
             true,
@@ -1082,6 +1087,7 @@ mod tests {
                 updated_at: base_time,
                 published_at: Some(base_time),
                 deleted_at: None,
+                tags: vec![],
             },
             "author".to_string(),
             false,
