@@ -18,12 +18,13 @@ use common::storage::{
     CreatePostInput, CreateUserError, DeleteMediaError, EmailVerificationStorage, InviteRecord,
     InviteStorage, ListByTagError, MediaRecord, MediaSource, MediaStorage, PasswordResetStorage,
     PostCursor, PostRecord, PostStorage, PostTag, ProfileUpdate, RegisterWithInviteError,
-    SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage, TaggingError,
+    SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage, TagRecord, TaggingError,
     UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
     UsePasswordResetError, UserAuthError, UserConfigStorage, UserRecord, UserStorage,
 };
 use common::tag::Tag;
 use common::username::Username;
+use std::collections::HashMap;
 use tracing::Instrument;
 
 use super::{
@@ -1385,6 +1386,96 @@ impl PostStorage for SqlitePostStorage {
             .map(post_record_from_row)
             .collect::<sqlx::Result<_>>()
             .map_err(ListByTagError::Internal)
+    }
+
+    async fn list_tags(&self, prefix: Option<&str>, limit: u32) -> sqlx::Result<Vec<TagRecord>> {
+        let normalized = prefix
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_ascii_lowercase);
+        let pattern = normalized.as_deref().map(|p| format!("{p}%"));
+        let limit_i64 = i64::from(limit);
+
+        let rows = match pattern {
+            Some(ref like) => {
+                sqlx::query(
+                    "SELECT tag_id, tag_slug FROM tags
+                     WHERE tag_slug LIKE $1
+                     ORDER BY tag_slug
+                     LIMIT $2",
+                )
+                .bind(like)
+                .bind(limit_i64)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query(
+                    "SELECT tag_id, tag_slug FROM tags
+                     ORDER BY tag_slug
+                     LIMIT $1",
+                )
+                .bind(limit_i64)
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+
+        rows.into_iter()
+            .map(|row| {
+                let tag_slug_str: String = row.get("tag_slug");
+                let tag_slug: Tag = tag_slug_str
+                    .parse()
+                    .map_err(|_| sqlx::Error::Decode("invalid tag format".into()))?;
+                Ok(TagRecord {
+                    tag_id: row.get("tag_id"),
+                    tag_slug,
+                })
+            })
+            .collect()
+    }
+
+    async fn get_tags_for_posts(
+        &self,
+        post_ids: &[i64],
+    ) -> sqlx::Result<HashMap<i64, Vec<PostTag>>> {
+        if post_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        // SQLite doesn't have a native array bind for `IN (...)`; build a
+        // parameter list of the right length.
+        let placeholders = (1..=post_ids.len())
+            .map(|i| format!("${i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT pt.post_id, pt.tag_id, t.tag_slug, pt.tag_display
+             FROM post_tags pt
+             JOIN tags t ON pt.tag_id = t.tag_id
+             WHERE pt.post_id IN ({placeholders})
+             ORDER BY pt.post_id, t.tag_slug"
+        );
+        let mut q = sqlx::query(&sql);
+        for id in post_ids {
+            q = q.bind(*id);
+        }
+        let rows = q.fetch_all(&self.pool).await?;
+
+        let mut by_post: HashMap<i64, Vec<PostTag>> = HashMap::new();
+        for row in rows {
+            let tag_slug_str: String = row.get("tag_slug");
+            let tag_slug: Tag = tag_slug_str
+                .parse()
+                .map_err(|_| sqlx::Error::Decode("invalid tag format".into()))?;
+            let post_id: i64 = row.get("post_id");
+            by_post.entry(post_id).or_default().push(PostTag {
+                post_id,
+                tag_id: row.get("tag_id"),
+                tag_slug,
+                tag_display: row.get("tag_display"),
+            });
+        }
+        Ok(by_post)
     }
 }
 
