@@ -3,7 +3,7 @@ use crate::{
     error::WebError,
     pages::{
         signal_read::read_signal,
-        ui::{ComposerFields, PostCard, PostCreateForm, PostDisplay, Topbar},
+        ui::{ComposerFields, PostCard, PostCreateForm, PostDisplay, TagContext, Topbar},
         MediaPanel,
     },
     posts::{
@@ -181,10 +181,12 @@ pub fn PostPage() -> impl IntoView {
                                     is_author: fetched.is_author,
                                     tags: fetched.tags.clone(),
                                 };
+                                let username_for_tags = fetched.username.clone();
                                 view! {
                                     <PostCard
                                         post=summary
                                         banner=banner
+                                        tag_context=TagContext::ForUser(username_for_tags)
                                         on_unpublish=on_unpublish
                                     />
                                 }
@@ -321,7 +323,15 @@ pub fn UserTimelinePage() -> impl IntoView {
                             {rows
                                 .into_iter()
                                 .map(|post| {
-                                    view! { <PostCard post=post banner=None on_mutate=on_mutate /> }
+                                    let username_for_tags = post.username.clone();
+                                    view! {
+                                        <PostCard
+                                            post=post
+                                            banner=None
+                                            tag_context=TagContext::ForUser(username_for_tags)
+                                            on_mutate=on_mutate
+                                        />
+                                    }
                                 })
                                 .collect::<Vec<_>>()}
                         </div>
@@ -388,12 +398,14 @@ pub fn DraftPreviewPage() -> impl IntoView {
                                     is_author: true,
                                     tags: fetched.tags.clone(),
                                 };
+                                let username_for_tags = fetched.username.clone();
                                 view! {
                                     <PostDisplay
                                         post=summary
                                         banner=Some(
                                             "Draft preview – visible only to you".to_string(),
                                         )
+                                        tag_context=TagContext::ForUser(username_for_tags)
                                     >
                                         <div class="j-post-acts">
                                             <ActionForm action=publish_action>
