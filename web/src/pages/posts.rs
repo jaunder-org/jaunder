@@ -179,6 +179,7 @@ pub fn PostPage() -> impl IntoView {
                                         .unwrap_or_else(|| fetched.created_at.clone()),
                                     permalink: fetched.permalink.clone().unwrap_or_default(),
                                     is_author: fetched.is_author,
+                                    tags: fetched.tags.clone(),
                                 };
                                 view! {
                                     <PostCard
@@ -385,6 +386,7 @@ pub fn DraftPreviewPage() -> impl IntoView {
                                         .unwrap_or_else(|| fetched.created_at.clone()),
                                     permalink: fetched.permalink.clone().unwrap_or_default(),
                                     is_author: true,
+                                    tags: fetched.tags.clone(),
                                 };
                                 view! {
                                     <PostDisplay

@@ -7,6 +7,7 @@ use crate::auth::{require_auth, AuthUser};
 use crate::error::WebResult;
 #[cfg(feature = "ssr")]
 use crate::error::{InternalError, InternalResult, WebError};
+use crate::tags::TagSummary;
 #[cfg(feature = "ssr")]
 use chrono::{Datelike, NaiveDate, Utc};
 #[cfg(feature = "ssr")]
@@ -79,6 +80,8 @@ pub struct TimelinePostSummary {
     pub permalink: String,
     /// True when the viewing user is the post author.
     pub is_author: bool,
+    /// Tags applied to this post, ordered by canonical slug.
+    pub tags: Vec<TagSummary>,
 }
 
 /// A cursor-paginated page of timeline posts.
@@ -106,6 +109,8 @@ pub struct PostResponse {
     pub is_author: bool,
     /// Permalink URL for published posts; `None` for drafts.
     pub permalink: Option<String>,
+    /// Tags applied to this post, ordered by canonical slug.
+    pub tags: Vec<TagSummary>,
 }
 
 /// Creates a post for the authenticated user.
@@ -244,6 +249,7 @@ pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
             created_at,
             published_at,
             deleted_at,
+            tags,
             ..
         } = post;
 
@@ -276,6 +282,7 @@ pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
             published_at: published_at.map(|t| t.to_rfc3339()),
             is_author: true,
             permalink,
+            tags: post_tags_to_summaries(tags),
         })
     })
 }
@@ -650,6 +657,7 @@ fn timeline_post_summary(
         rendered_html,
         created_at,
         published_at,
+        tags,
         ..
     } = post;
     let published_at = published_at?;
@@ -664,7 +672,18 @@ fn timeline_post_summary(
         published_at: published_at.to_rfc3339(),
         permalink,
         is_author: viewer_user_id == Some(user_id),
+        tags: post_tags_to_summaries(tags),
     })
+}
+
+#[cfg(feature = "ssr")]
+fn post_tags_to_summaries(tags: Vec<common::storage::PostTag>) -> Vec<TagSummary> {
+    tags.into_iter()
+        .map(|t| TagSummary {
+            slug: t.tag_slug.to_string(),
+            display: t.tag_display,
+        })
+        .collect()
 }
 
 #[cfg(feature = "ssr")]
@@ -687,6 +706,7 @@ fn post_response(post: PostRecord, username: String, is_author: bool) -> PostRes
         rendered_html,
         created_at,
         published_at,
+        tags,
         ..
     } = post;
     let permalink = published_at.as_ref().map(|t| {
@@ -711,6 +731,7 @@ fn post_response(post: PostRecord, username: String, is_author: bool) -> PostRes
         is_draft: published_at.is_none(),
         published_at: published_at.map(|t| t.to_rfc3339()),
         is_author,
+        tags: post_tags_to_summaries(tags),
         permalink,
     }
 }

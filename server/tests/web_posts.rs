@@ -2725,3 +2725,116 @@ body",
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
+
+#[tokio::test]
+async fn list_user_posts_carries_tags_per_post() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let cookie = format!(
+        "session={}",
+        state.sessions.create_session(user_id, None).await.unwrap()
+    );
+
+    let (status, body) = create_post_json(
+        Arc::clone(&state),
+        "# Tagged Post\n\nbody",
+        "markdown",
+        None,
+        true,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    // Apply two tags via the storage layer (the create_post tags param lands
+    // in tags.5; here we just verify the timeline surface threads them
+    // through).
+    state.posts.tag_post(created.post_id, "Rust").await.unwrap();
+    state.posts.tag_post(created.post_id, "web").await.unwrap();
+
+    let (status, body) =
+        list_user_posts_form(Arc::clone(&state), "author", None, None, 50, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "list body: {body}");
+    let page: TimelinePage = serde_json::from_str(&body).unwrap();
+    assert_eq!(page.posts.len(), 1);
+    let post = &page.posts[0];
+    let slugs: Vec<&str> = post.tags.iter().map(|t| t.slug.as_str()).collect();
+    assert_eq!(slugs, vec!["rust", "web"]);
+    // Display casing is preserved (author-provided).
+    assert!(post.tags.iter().any(|t| t.display == "Rust"));
+}
+
+#[tokio::test]
+async fn get_post_carries_tags() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let cookie = format!(
+        "session={}",
+        state.sessions.create_session(user_id, None).await.unwrap()
+    );
+
+    let (status, body) = create_post_json(
+        Arc::clone(&state),
+        "# Tagged Post\n\nbody",
+        "markdown",
+        None,
+        true,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    state
+        .posts
+        .tag_post(created.post_id, "Performance")
+        .await
+        .unwrap();
+
+    let published_at = state
+        .posts
+        .get_post_by_id(created.post_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .published_at
+        .unwrap();
+
+    use chrono::Datelike;
+    let (status, body) = get_post_form(
+        Arc::clone(&state),
+        "author",
+        published_at.year(),
+        published_at.month(),
+        published_at.day(),
+        &created.slug,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "get body: {body}");
+    let response: web::posts::PostResponse = serde_json::from_str(&body).unwrap();
+    assert_eq!(response.tags.len(), 1);
+    assert_eq!(response.tags[0].slug, "performance");
+    assert_eq!(response.tags[0].display, "Performance");
+}
