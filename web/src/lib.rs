@@ -44,6 +44,7 @@ pub mod password_reset;
 pub mod posts;
 pub mod profile;
 pub mod sessions;
+pub mod tags;
 
 pub use pages::App;
 
