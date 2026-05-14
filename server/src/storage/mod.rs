@@ -142,7 +142,40 @@ pub(super) type PostRecordParts = (
     DateTime<Utc>,         // updated_at
     Option<DateTime<Utc>>, // published_at
     Option<DateTime<Utc>>, // deleted_at
+    String,                // tags (JSON array)
 );
+
+/// Row shape for the JSON-aggregated tags column. Field names match the SQL
+/// `json_object` keys verbatim, hence the matching `tag_` prefixes.
+#[allow(clippy::struct_field_names)]
+#[derive(serde::Deserialize)]
+struct PostTagJson {
+    tag_id: i64,
+    tag_slug: String,
+    tag_display: String,
+}
+
+fn parse_post_tags_json(json: &str, post_id: i64) -> sqlx::Result<Vec<common::storage::PostTag>> {
+    use common::storage::PostTag;
+    use common::tag::Tag;
+
+    let raw: Vec<PostTagJson> =
+        serde_json::from_str(json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    raw.into_iter()
+        .map(|r| {
+            let tag_slug: Tag = r
+                .tag_slug
+                .parse()
+                .map_err(|_| sqlx::Error::Decode("invalid tag slug in db".into()))?;
+            Ok(PostTag {
+                post_id,
+                tag_id: r.tag_id,
+                tag_slug,
+                tag_display: r.tag_display,
+            })
+        })
+        .collect()
+}
 
 pub(super) fn build_post_record(
     (
@@ -157,6 +190,7 @@ pub(super) fn build_post_record(
         updated_at,
         published_at,
         deleted_at,
+        tags_json,
     ): PostRecordParts,
 ) -> sqlx::Result<PostRecord> {
     use common::slug::Slug;
@@ -166,6 +200,7 @@ pub(super) fn build_post_record(
     let format = format
         .parse::<PostFormat>()
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let tags = parse_post_tags_json(&tags_json, post_id)?;
     Ok(PostRecord {
         post_id,
         user_id,
@@ -178,6 +213,7 @@ pub(super) fn build_post_record(
         updated_at,
         published_at,
         deleted_at,
+        tags,
     })
 }
 
@@ -245,6 +281,7 @@ pub(super) type PostRow = (
     DateTime<Utc>,         // updated_at
     Option<DateTime<Utc>>, // published_at
     Option<DateTime<Utc>>, // deleted_at
+    String,                // tags (JSON array)
 );
 
 pub(super) fn post_record_from_row(row: PostRow) -> sqlx::Result<PostRecord> {
@@ -645,6 +682,7 @@ mod tests {
             now,
             Some(now),
             None,
+            "[]".to_string(),
         ))
         .unwrap();
 
@@ -654,6 +692,7 @@ mod tests {
         assert_eq!(record.format, PostFormat::Markdown);
         assert_eq!(record.published_at, Some(now));
         assert_eq!(record.deleted_at, None);
+        assert!(record.tags.is_empty());
     }
 
     #[test]
@@ -671,6 +710,7 @@ mod tests {
             now,
             None,
             None,
+            "[]".to_string(),
         ))
         .unwrap_err();
 
@@ -692,6 +732,7 @@ mod tests {
             now,
             None,
             None,
+            "[]".to_string(),
         ))
         .unwrap_err();
 

@@ -6053,13 +6053,13 @@ async fn assert_list_tags_returns_alphabetical_with_prefix(
     assert!(none.is_empty());
 }
 
-async fn assert_get_tags_for_posts_batch(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_post_record_carries_tags(state: &std::sync::Arc<jaunder::storage::AppState>) {
     let user = state
         .users
         .create_user(
-            &username("batch_tags_user"),
+            &username("inline_tags_user"),
             &password("password"),
-            Some("Batch"),
+            Some("Inline"),
             false,
         )
         .await
@@ -6089,30 +6089,36 @@ async fn assert_get_tags_for_posts_batch(state: &std::sync::Arc<jaunder::storage
     state.posts.tag_post(p1, "web").await.unwrap();
     state.posts.tag_post(p2, "performance").await.unwrap();
 
-    let mixed = state
+    // Each loaded post carries its own tags from the same query that loaded
+    // the rest of the row — no separate batch call.
+    let p1_record = state
         .posts
-        .get_tags_for_posts(&[p1, p2, p3, 99_999])
+        .get_post_by_id(p1)
         .await
-        .expect("get_tags_for_posts failed");
-
-    // p3 (no tags) and 99999 (nonexistent) are omitted from the map.
-    assert_eq!(mixed.len(), 2);
-
-    let p1_tags = mixed.get(&p1).expect("p1 missing");
-    let p1_slugs: Vec<&str> = p1_tags.iter().map(|t| t.tag_slug.as_str()).collect();
+        .expect("get_post_by_id p1")
+        .expect("p1 should exist");
+    let p1_slugs: Vec<&str> = p1_record.tags.iter().map(|t| t.tag_slug.as_str()).collect();
     assert_eq!(p1_slugs, vec!["rust", "web"]);
-
-    let p2_tags = mixed.get(&p2).expect("p2 missing");
-    assert_eq!(p2_tags.len(), 1);
-    assert_eq!(p2_tags[0].tag_slug.as_str(), "performance");
-    assert_eq!(p2_tags[0].tag_display, "performance");
-
     // Display casing is preserved.
-    assert!(p1_tags.iter().any(|t| t.tag_display == "Rust"));
+    assert!(p1_record.tags.iter().any(|t| t.tag_display == "Rust"));
 
-    // Empty input → empty map (and no SQL roundtrip required).
-    let empty = state.posts.get_tags_for_posts(&[]).await.unwrap();
-    assert!(empty.is_empty());
+    let p2_record = state
+        .posts
+        .get_post_by_id(p2)
+        .await
+        .expect("get_post_by_id p2")
+        .expect("p2 should exist");
+    assert_eq!(p2_record.tags.len(), 1);
+    assert_eq!(p2_record.tags[0].tag_slug.as_str(), "performance");
+    assert_eq!(p2_record.tags[0].tag_display, "performance");
+
+    let p3_record = state
+        .posts
+        .get_post_by_id(p3)
+        .await
+        .expect("get_post_by_id p3")
+        .expect("p3 should exist");
+    assert!(p3_record.tags.is_empty());
 }
 
 #[tokio::test]
@@ -6122,9 +6128,9 @@ async fn sqlite_list_tags_returns_alphabetical_with_prefix() {
 }
 
 #[tokio::test]
-async fn sqlite_get_tags_for_posts_batch() {
+async fn sqlite_post_record_carries_tags() {
     let (_base, state) = sqlite_state().await;
-    assert_get_tags_for_posts_batch(&state).await;
+    assert_post_record_carries_tags(&state).await;
 }
 
 #[tokio::test]
@@ -6136,7 +6142,7 @@ async fn postgres_list_tags_returns_alphabetical_with_prefix() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL test VM"]
-async fn postgres_get_tags_for_posts_batch() {
+async fn postgres_post_record_carries_tags() {
     let state = postgres_state().await;
-    assert_get_tags_for_posts_batch(&state).await;
+    assert_post_record_carries_tags(&state).await;
 }

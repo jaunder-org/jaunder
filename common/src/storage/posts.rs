@@ -1,6 +1,6 @@
 //! Content storage for posts, revisions, and tagging.
 
-use std::{collections::HashMap, fmt, str::FromStr};
+use std::{fmt, str::FromStr};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -46,6 +46,10 @@ impl FromStr for PostFormat {
 }
 
 /// A post record returned by [`PostStorage`] queries.
+///
+/// `tags` is populated by the same query that loads the rest of the row via
+/// a JSON-aggregating subquery, so post and tag state are always read from
+/// the same statement-level snapshot.
 #[derive(Clone, Debug)]
 pub struct PostRecord {
     /// Unique internal identifier.
@@ -70,6 +74,7 @@ pub struct PostRecord {
     pub published_at: Option<DateTime<Utc>>,
     /// When the post was soft-deleted (None if active).
     pub deleted_at: Option<DateTime<Utc>>,
+    pub tags: Vec<PostTag>,
 }
 
 /// A post revision record returned by [`PostStorage`] queries.
@@ -296,14 +301,6 @@ pub trait PostStorage: Send + Sync {
     /// on the slug). An empty / `None` prefix returns all tags, alphabetically,
     /// up to `limit`.
     async fn list_tags(&self, prefix: Option<&str>, limit: u32) -> sqlx::Result<Vec<TagRecord>>;
-
-    /// Returns tag rows for every post in `post_ids`, keyed by `post_id`.
-    /// Posts with no tags are omitted from the map; callers should treat a
-    /// missing key as the empty set.
-    async fn get_tags_for_posts(
-        &self,
-        post_ids: &[i64],
-    ) -> sqlx::Result<HashMap<i64, Vec<PostTag>>>;
 }
 
 #[cfg(test)]

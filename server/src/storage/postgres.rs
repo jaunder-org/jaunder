@@ -16,7 +16,6 @@ use common::storage::{
 };
 use common::tag::Tag;
 use common::username::Username;
-use std::collections::HashMap;
 use tracing::Instrument;
 
 use super::{
@@ -802,7 +801,8 @@ impl PostStorage for PostgresPostStorage {
     async fn get_post_by_id(&self, post_id: i64) -> sqlx::Result<Option<PostRecord>> {
         let row = sqlx::query_as::<_, PostRow>(
             "SELECT post_id, user_id, title, slug, body, format, rendered_html,
-                    created_at, updated_at, published_at, deleted_at
+                    created_at, updated_at, published_at, deleted_at,
+                    COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]'::json)::text AS tags
              FROM posts WHERE post_id = $1",
         )
         .bind(post_id)
@@ -822,7 +822,8 @@ impl PostStorage for PostgresPostStorage {
         let date_str = format!("{year:04}-{month:02}-{day:02}");
         let row = sqlx::query_as::<_, PostRow>(
             "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
-                    p.created_at, p.updated_at, p.published_at, p.deleted_at
+                    p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                    COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::json)::text AS tags
              FROM posts p
              JOIN users u ON p.user_id = u.user_id
              WHERE u.username = $1
@@ -894,7 +895,8 @@ impl PostStorage for PostgresPostStorage {
                  updated_at = $8
              WHERE post_id = $9
              RETURNING post_id, user_id, title, slug, body, format, rendered_html,
-                       created_at, updated_at, published_at, deleted_at",
+                       created_at, updated_at, published_at, deleted_at,
+                       COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]'::json)::text AS tags",
         )
         .bind(&input.title)
         .bind(input.slug.as_str())
@@ -939,7 +941,8 @@ impl PostStorage for PostgresPostStorage {
         let rows = if let Some(cursor) = cursor {
             sqlx::query_as::<_, PostRow>(
                 "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::json)::text AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE u.username = $1
@@ -958,7 +961,8 @@ impl PostStorage for PostgresPostStorage {
         } else {
             sqlx::query_as::<_, PostRow>(
                 "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::json)::text AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE u.username = $1
@@ -983,7 +987,8 @@ impl PostStorage for PostgresPostStorage {
         let rows = if let Some(cursor) = cursor {
             sqlx::query_as::<_, PostRow>(
                 "SELECT post_id, user_id, title, slug, body, format, rendered_html,
-                        created_at, updated_at, published_at, deleted_at
+                        created_at, updated_at, published_at, deleted_at,
+                        COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]'::json)::text AS tags
                  FROM posts
                  WHERE published_at IS NOT NULL
                    AND deleted_at IS NULL
@@ -999,7 +1004,8 @@ impl PostStorage for PostgresPostStorage {
         } else {
             sqlx::query_as::<_, PostRow>(
                 "SELECT post_id, user_id, title, slug, body, format, rendered_html,
-                        created_at, updated_at, published_at, deleted_at
+                        created_at, updated_at, published_at, deleted_at,
+                        COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]'::json)::text AS tags
                  FROM posts
                  WHERE published_at IS NOT NULL
                    AND deleted_at IS NULL
@@ -1022,7 +1028,8 @@ impl PostStorage for PostgresPostStorage {
         let rows = if let Some(cursor) = cursor {
             sqlx::query_as::<_, PostRow>(
                 "SELECT post_id, user_id, title, slug, body, format, rendered_html,
-                        created_at, updated_at, published_at, deleted_at
+                        created_at, updated_at, published_at, deleted_at,
+                        COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]'::json)::text AS tags
                  FROM posts
                  WHERE user_id = $1
                    AND published_at IS NULL
@@ -1040,7 +1047,8 @@ impl PostStorage for PostgresPostStorage {
         } else {
             sqlx::query_as::<_, PostRow>(
                 "SELECT post_id, user_id, title, slug, body, format, rendered_html,
-                        created_at, updated_at, published_at, deleted_at
+                        created_at, updated_at, published_at, deleted_at,
+                        COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]'::json)::text AS tags
                  FROM posts
                  WHERE user_id = $1
                    AND published_at IS NULL
@@ -1179,7 +1187,8 @@ impl PostStorage for PostgresPostStorage {
         let rows = if let Some(cursor) = cursor {
             sqlx::query_as::<_, PostRow>(
                 "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::json)::text AS tags
                  FROM posts p
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
@@ -1199,7 +1208,8 @@ impl PostStorage for PostgresPostStorage {
         } else {
             sqlx::query_as::<_, PostRow>(
                 "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::json)::text AS tags
                  FROM posts p
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
@@ -1242,7 +1252,8 @@ impl PostStorage for PostgresPostStorage {
         let rows = if let Some(cursor) = cursor {
             sqlx::query_as::<_, PostRow>(
                 "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::json)::text AS tags
                  FROM posts p
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
@@ -1264,7 +1275,8 @@ impl PostStorage for PostgresPostStorage {
         } else {
             sqlx::query_as::<_, PostRow>(
                 "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::json)::text AS tags
                  FROM posts p
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
@@ -1333,41 +1345,6 @@ impl PostStorage for PostgresPostStorage {
                 })
             })
             .collect()
-    }
-
-    async fn get_tags_for_posts(
-        &self,
-        post_ids: &[i64],
-    ) -> sqlx::Result<HashMap<i64, Vec<PostTag>>> {
-        if post_ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let rows = sqlx::query(
-            "SELECT pt.post_id, pt.tag_id, t.tag_slug, pt.tag_display
-             FROM post_tags pt
-             JOIN tags t ON pt.tag_id = t.tag_id
-             WHERE pt.post_id = ANY($1)
-             ORDER BY pt.post_id, t.tag_slug",
-        )
-        .bind(post_ids)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let mut by_post: HashMap<i64, Vec<PostTag>> = HashMap::new();
-        for row in rows {
-            let tag_slug_str: String = row.get("tag_slug");
-            let tag_slug: Tag = tag_slug_str
-                .parse()
-                .map_err(|_| sqlx::Error::Decode("invalid tag format".into()))?;
-            let post_id: i64 = row.get("post_id");
-            by_post.entry(post_id).or_default().push(PostTag {
-                post_id,
-                tag_id: row.get("tag_id"),
-                tag_slug,
-                tag_display: row.get("tag_display"),
-            });
-        }
-        Ok(by_post)
     }
 }
 
