@@ -548,6 +548,43 @@
     color: var(--ink);
 }
 
+/* ─── tag chips (display) ─── */
+.j-tag-list {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+.j-tag-cell {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+}
+.j-tag {
+    background: var(--surface-alt);
+    color: var(--accent-ink);
+    border: 1px var(--border-style) var(--line);
+    border-radius: var(--pill);
+    padding: 2px 9px;
+    font-size: 12px;
+    font-family: var(--font-meta);
+    text-decoration: none;
+    line-height: 1.4;
+}
+.j-tag:hover {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+}
+.j-tag-here {
+    color: var(--muted-soft);
+    font-size: 11px;
+    font-family: var(--font-meta);
+    text-decoration: none;
+}
+.j-tag-here:hover {
+    color: var(--accent);
+}
+
 /* ─── post actions column ─── */
 .j-post-acts {
     display: flex;

@@ -2,8 +2,59 @@ use crate::auth::current_user;
 use crate::backup::{backup_warning_visible, current_user_is_operator};
 use crate::pages::upload::MediaPanel;
 use crate::posts::{CreatePost, CreatePostResult, DeletePost, TimelinePostSummary, UnpublishPost};
+use crate::tags::TagSummary;
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
+
+/// Linking context for a [`TagList`] rendering.
+///
+/// `SiteWide` links each chip to `/tags/:slug` only. `ForUser` adds a small
+/// "· here" link next to each chip pointing at `/~:username/tags/:slug`, so
+/// per-user tag listings stay one click away from any user-rooted page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TagContext {
+    SiteWide,
+    ForUser(String),
+}
+
+/// Renders a post's tags as clickable chips for use inside a post-display
+/// footer. See [`TagContext`] for the linking behavior.
+#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::must_use_candidate)]
+#[component]
+pub fn TagList(tags: Vec<TagSummary>, context: TagContext) -> impl IntoView {
+    if tags.is_empty() {
+        return ().into_any();
+    }
+    let chips: Vec<_> = tags
+        .into_iter()
+        .map(|tag| {
+            let slug = tag.slug.clone();
+            let here = match &context {
+                TagContext::ForUser(username) => {
+                    let here_href = format!("/~{username}/tags/{slug}");
+                    Some(view! {
+                        <a class="j-tag-here" href=here_href title="On this blog">
+                            "\u{00b7} here"
+                        </a>
+                    })
+                }
+                TagContext::SiteWide => None,
+            };
+            let chip_href = format!("/tags/{slug}");
+            view! {
+                <span class="j-tag-cell">
+                    <a class="j-tag" href=chip_href>
+                        "#"
+                        {tag.display}
+                    </a>
+                    {here}
+                </span>
+            }
+        })
+        .collect();
+    view! { <span class="j-tag-list">{chips}</span> }.into_any()
+}
 
 // ─── Icons ────────────────────────────────────────────────────
 
@@ -261,10 +312,15 @@ pub(crate) fn format_post_time(ts: &str) -> String {
 pub fn PostDisplay(
     post: TimelinePostSummary,
     banner: Option<String>,
+    /// Linking context for the tag chips in the footer; defaults to
+    /// site-wide.
+    #[prop(default = TagContext::SiteWide)]
+    tag_context: TagContext,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
     let time_label = format_post_time(&post.published_at);
     let is_author = post.is_author;
+    let post_tags = post.tags.clone();
 
     view! {
         <article class="j-post">
@@ -302,6 +358,7 @@ pub fn PostDisplay(
                     {banner.map(|b| view! { <p class="draft-banner">{b}</p> })}
                     <div class="j-post-body" inner_html=post.rendered_html.clone()></div>
                     <footer class="j-post-foot">
+                        <TagList tags=post_tags context=tag_context />
                         <span class="j-spacer"></span>
                     </footer>
                 </div>
@@ -316,6 +373,9 @@ pub fn PostDisplay(
 pub fn PostCard(
     post: TimelinePostSummary,
     banner: Option<String>,
+    /// Linking context for the footer tag chips; defaults to site-wide.
+    #[prop(default = TagContext::SiteWide)]
+    tag_context: TagContext,
     #[prop(optional)] on_mutate: Option<Callback<()>>,
     #[prop(optional)] on_unpublish: Option<Callback<()>>,
 ) -> impl IntoView {
@@ -393,7 +453,7 @@ pub fn PostCard(
         {move || {
             deleted.get().then(|| view! { <p class="success">"Post deleted."</p> }.into_any())
         }}
-        <PostDisplay post=post banner=banner>
+        <PostDisplay post=post banner=banner tag_context=tag_context>
             {action_col}
         </PostDisplay>
     }
