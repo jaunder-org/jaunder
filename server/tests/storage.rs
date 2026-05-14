@@ -5987,3 +5987,156 @@ async fn postgres_user_config_delete_nonexistent_is_ok() {
     let state = postgres_state().await;
     assert_user_config_delete_nonexistent_is_ok(&state).await;
 }
+
+// ====== tags.2: list_tags + get_tags_for_posts ======
+
+async fn assert_list_tags_returns_alphabetical_with_prefix(
+    state: &std::sync::Arc<jaunder::storage::AppState>,
+) {
+    let user = state
+        .users
+        .create_user(
+            &username("list_tags_user"),
+            &password("password"),
+            Some("ListTags"),
+            false,
+        )
+        .await
+        .expect("user creation failed");
+    let post = state
+        .posts
+        .create_post(&CreatePostInput {
+            user_id: user,
+            title: Some("Tagged".to_string()),
+            slug: "tagged".parse().unwrap(),
+            body: "body".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>body</p>".to_string(),
+            published_at: Some(Utc::now()),
+        })
+        .await
+        .expect("post creation failed");
+
+    // Mixed-case display tokens — the slug should normalize to lowercase.
+    for display in &["Rust", "rust-lang", "performance", "PostgreSQL", "web"] {
+        state.posts.tag_post(post, display).await.unwrap();
+    }
+
+    // No prefix → all tags, alphabetical by slug.
+    let all = state.posts.list_tags(None, 50).await.unwrap();
+    let slugs: Vec<&str> = all.iter().map(|t| t.tag_slug.as_str()).collect();
+    assert_eq!(
+        slugs,
+        vec!["performance", "postgresql", "rust", "rust-lang", "web"]
+    );
+
+    // Prefix "rust" → "rust" and "rust-lang", still alphabetical.
+    let rs = state.posts.list_tags(Some("rust"), 50).await.unwrap();
+    let rs_slugs: Vec<&str> = rs.iter().map(|t| t.tag_slug.as_str()).collect();
+    assert_eq!(rs_slugs, vec!["rust", "rust-lang"]);
+
+    // Prefix case-insensitive: "RUST" matches the same set.
+    let upper = state.posts.list_tags(Some("RUST"), 50).await.unwrap();
+    let upper_slugs: Vec<&str> = upper.iter().map(|t| t.tag_slug.as_str()).collect();
+    assert_eq!(upper_slugs, vec!["rust", "rust-lang"]);
+
+    // Limit clamps the result.
+    let limited = state.posts.list_tags(None, 2).await.unwrap();
+    assert_eq!(limited.len(), 2);
+
+    // Empty-string prefix is treated as "no prefix".
+    let empty = state.posts.list_tags(Some("   "), 50).await.unwrap();
+    assert_eq!(empty.len(), 5);
+
+    // Nonexistent prefix → empty.
+    let none = state.posts.list_tags(Some("zz"), 50).await.unwrap();
+    assert!(none.is_empty());
+}
+
+async fn assert_get_tags_for_posts_batch(state: &std::sync::Arc<jaunder::storage::AppState>) {
+    let user = state
+        .users
+        .create_user(
+            &username("batch_tags_user"),
+            &password("password"),
+            Some("Batch"),
+            false,
+        )
+        .await
+        .expect("user creation failed");
+
+    let mut post_ids = Vec::new();
+    for n in 1..=3 {
+        let id = state
+            .posts
+            .create_post(&CreatePostInput {
+                user_id: user,
+                title: Some(format!("Post {n}")),
+                slug: format!("post-{n}").parse().unwrap(),
+                body: format!("body {n}"),
+                format: PostFormat::Markdown,
+                rendered_html: format!("<p>body {n}</p>"),
+                published_at: Some(Utc::now()),
+            })
+            .await
+            .expect("post creation failed");
+        post_ids.push(id);
+    }
+    let (p1, p2, p3) = (post_ids[0], post_ids[1], post_ids[2]);
+
+    // p1: two tags; p2: one tag; p3: none.
+    state.posts.tag_post(p1, "Rust").await.unwrap();
+    state.posts.tag_post(p1, "web").await.unwrap();
+    state.posts.tag_post(p2, "performance").await.unwrap();
+
+    let mixed = state
+        .posts
+        .get_tags_for_posts(&[p1, p2, p3, 99_999])
+        .await
+        .expect("get_tags_for_posts failed");
+
+    // p3 (no tags) and 99999 (nonexistent) are omitted from the map.
+    assert_eq!(mixed.len(), 2);
+
+    let p1_tags = mixed.get(&p1).expect("p1 missing");
+    let p1_slugs: Vec<&str> = p1_tags.iter().map(|t| t.tag_slug.as_str()).collect();
+    assert_eq!(p1_slugs, vec!["rust", "web"]);
+
+    let p2_tags = mixed.get(&p2).expect("p2 missing");
+    assert_eq!(p2_tags.len(), 1);
+    assert_eq!(p2_tags[0].tag_slug.as_str(), "performance");
+    assert_eq!(p2_tags[0].tag_display, "performance");
+
+    // Display casing is preserved.
+    assert!(p1_tags.iter().any(|t| t.tag_display == "Rust"));
+
+    // Empty input → empty map (and no SQL roundtrip required).
+    let empty = state.posts.get_tags_for_posts(&[]).await.unwrap();
+    assert!(empty.is_empty());
+}
+
+#[tokio::test]
+async fn sqlite_list_tags_returns_alphabetical_with_prefix() {
+    let (_base, state) = sqlite_state().await;
+    assert_list_tags_returns_alphabetical_with_prefix(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_get_tags_for_posts_batch() {
+    let (_base, state) = sqlite_state().await;
+    assert_get_tags_for_posts_batch(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_list_tags_returns_alphabetical_with_prefix() {
+    let state = postgres_state().await;
+    assert_list_tags_returns_alphabetical_with_prefix(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_get_tags_for_posts_batch() {
+    let state = postgres_state().await;
+    assert_get_tags_for_posts_batch(&state).await;
+}
