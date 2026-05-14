@@ -590,6 +590,137 @@ pub async fn list_home_feed(
     })
 }
 
+/// Lists published, non-deleted posts site-wide carrying `tag`.
+#[server(endpoint = "/list_posts_by_tag")]
+pub async fn list_posts_by_tag(
+    tag: String,
+    cursor_created_at: Option<String>,
+    cursor_post_id: Option<i64>,
+    limit: Option<u32>,
+) -> WebResult<TimelinePage> {
+    crate::web_server_fn!("list_posts_by_tag", tag, cursor_created_at, cursor_post_id, limit => {
+        use common::storage::ListByTagError;
+        use common::tag::Tag;
+
+        let state = expect_context::<Arc<AppState>>();
+        let tag_slug = tag
+            .trim()
+            .parse::<Tag>()
+            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
+        let viewer_user_id = leptos_axum::extract::<AuthUser>()
+            .await
+            .ok()
+            .map(|a| a.user_id);
+
+        let page_size = limit.unwrap_or(50).clamp(1, 50);
+        let fetch_limit = page_size.saturating_add(1);
+
+        let rows = match state
+            .posts
+            .list_posts_by_tag(&tag_slug, cursor.as_ref(), fetch_limit)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(ListByTagError::TagNotFound) => Vec::new(),
+            Err(ListByTagError::Internal(e)) => return Err(InternalError::storage(e)),
+        };
+
+        let has_more = rows.len() > page_size as usize;
+        let mut rows = rows;
+        rows.truncate(page_size as usize);
+
+        let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
+        let mut posts = Vec::with_capacity(rows.len());
+
+        for post in rows {
+            let author = state
+                .users
+                .get_user(post.user_id)
+                .await
+                .map_err(InternalError::storage)?
+                .ok_or_else(|| InternalError::not_found("post author"))?;
+            if let Some(summary) = timeline_post_summary(&author.username, post, viewer_user_id) {
+                posts.push(summary);
+            }
+        }
+
+        Ok(TimelinePage {
+            posts,
+            next_cursor_created_at: next_cursor.as_ref().map(|c| c.created_at.to_rfc3339()),
+            next_cursor_post_id: next_cursor.as_ref().map(|c| c.post_id),
+            has_more,
+        })
+    })
+}
+
+/// Lists published, non-deleted posts by `username` carrying `tag`.
+#[server(endpoint = "/list_user_posts_by_tag")]
+pub async fn list_user_posts_by_tag(
+    username: String,
+    tag: String,
+    cursor_created_at: Option<String>,
+    cursor_post_id: Option<i64>,
+    limit: Option<u32>,
+) -> WebResult<TimelinePage> {
+    crate::web_server_fn!("list_user_posts_by_tag", username, tag, cursor_created_at, cursor_post_id, limit => {
+        use common::storage::ListByTagError;
+        use common::tag::Tag;
+
+        let state = expect_context::<Arc<AppState>>();
+        let username = username
+            .trim()
+            .parse::<Username>()
+            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let tag_slug = tag
+            .trim()
+            .parse::<Tag>()
+            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
+        let viewer_user_id = leptos_axum::extract::<AuthUser>()
+            .await
+            .ok()
+            .map(|a| a.user_id);
+
+        let author = state
+            .users
+            .get_user_by_username(&username)
+            .await
+            .map_err(InternalError::storage)?
+            .ok_or_else(|| InternalError::not_found("user"))?;
+
+        let page_size = limit.unwrap_or(50).clamp(1, 50);
+        let fetch_limit = page_size.saturating_add(1);
+
+        let rows = match state
+            .posts
+            .list_user_posts_by_tag(author.user_id, &tag_slug, cursor.as_ref(), fetch_limit)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(ListByTagError::TagNotFound) => Vec::new(),
+            Err(ListByTagError::Internal(e)) => return Err(InternalError::storage(e)),
+        };
+
+        let has_more = rows.len() > page_size as usize;
+        let mut rows = rows;
+        rows.truncate(page_size as usize);
+
+        let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
+        let posts = rows
+            .into_iter()
+            .filter_map(|post| timeline_post_summary(&author.username, post, viewer_user_id))
+            .collect();
+
+        Ok(TimelinePage {
+            posts,
+            next_cursor_created_at: next_cursor.as_ref().map(|c| c.created_at.to_rfc3339()),
+            next_cursor_post_id: next_cursor.as_ref().map(|c| c.post_id),
+            has_more,
+        })
+    })
+}
+
 #[cfg(feature = "ssr")]
 #[allow(clippy::too_many_arguments)]
 async fn create_post_with_unique_slug(

@@ -951,6 +951,25 @@ async fn list_user_posts_form(
     post_form(state, "/api/list_user_posts", parts.join("&"), cookie).await
 }
 
+async fn list_posts_by_tag_form(
+    state: Arc<jaunder::storage::AppState>,
+    tag: &str,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    let body = format!("tag={tag}&limit=50");
+    post_form(state, "/api/list_posts_by_tag", body, cookie).await
+}
+
+async fn list_user_posts_by_tag_form(
+    state: Arc<jaunder::storage::AppState>,
+    username: &str,
+    tag: &str,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    let body = format!("username={username}&tag={tag}&limit=50");
+    post_form(state, "/api/list_user_posts_by_tag", body, cookie).await
+}
+
 async fn list_local_timeline_form(
     state: Arc<jaunder::storage::AppState>,
     cursor_created_at: Option<&str>,
@@ -2970,6 +2989,159 @@ async fn update_post_applies_tag_set_diff() {
         .unwrap();
     let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_str()).collect();
     assert_eq!(slugs, vec!["new-tag", "rust"]);
+}
+
+#[tokio::test]
+async fn list_posts_by_tag_returns_matching_posts_from_all_users() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    // Two authors each post twice; only some posts get the target tag.
+    let alice_id = state
+        .users
+        .create_user(
+            &"alice".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let alice_cookie = format!(
+        "session={}",
+        state.sessions.create_session(alice_id, None).await.unwrap()
+    );
+    let bob_id = state
+        .users
+        .create_user(
+            &"bob".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let bob_cookie = format!(
+        "session={}",
+        state.sessions.create_session(bob_id, None).await.unwrap()
+    );
+
+    let create = |cookie: String, body: &'static str, tags: serde_json::Value| {
+        let state = Arc::clone(&state);
+        async move {
+            let payload = serde_json::json!({
+                "body": body,
+                "format": "markdown",
+                "slug_override": null,
+                "publish": true,
+                "tags": tags,
+            });
+            let (status, body) = post_json(state, "/api/create_post", payload, Some(&cookie)).await;
+            assert_eq!(status, StatusCode::OK, "create body: {body}");
+            serde_json::from_str::<CreatePostResult>(&body).unwrap()
+        }
+    };
+
+    create(
+        alice_cookie.clone(),
+        "# Alice A\n\nbody",
+        serde_json::json!(["rust", "web"]),
+    )
+    .await;
+    create(
+        alice_cookie,
+        "# Alice B\n\nbody",
+        serde_json::json!(["rust"]),
+    )
+    .await;
+    create(
+        bob_cookie.clone(),
+        "# Bob A\n\nbody",
+        serde_json::json!(["rust", "perf"]),
+    )
+    .await;
+    create(
+        bob_cookie,
+        "# Bob B\n\nbody",
+        serde_json::json!(["javascript"]),
+    )
+    .await;
+
+    let (status, body) = list_posts_by_tag_form(Arc::clone(&state), "rust", None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let page: TimelinePage = serde_json::from_str(&body).unwrap();
+    // Three posts carry the "rust" tag, across both authors.
+    assert_eq!(page.posts.len(), 3);
+    let usernames: std::collections::HashSet<&str> =
+        page.posts.iter().map(|p| p.username.as_str()).collect();
+    assert!(usernames.contains("alice"));
+    assert!(usernames.contains("bob"));
+}
+
+#[tokio::test]
+async fn list_posts_by_tag_returns_empty_for_unknown_tag() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, body) = list_posts_by_tag_form(state, "rust", None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let page: TimelinePage = serde_json::from_str(&body).unwrap();
+    assert!(page.posts.is_empty());
+    assert!(!page.has_more);
+}
+
+#[tokio::test]
+async fn list_user_posts_by_tag_scopes_to_user() {
+    let (_base, state, alice_cookie) = login_and_state().await;
+    let bob_id = state
+        .users
+        .create_user(
+            &"bob".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let bob_cookie = format!(
+        "session={}",
+        state.sessions.create_session(bob_id, None).await.unwrap()
+    );
+
+    // Alice ("author") + Bob each post with shared tag.
+    let create = |cookie: String, body: &'static str| {
+        let state = Arc::clone(&state);
+        async move {
+            let payload = serde_json::json!({
+                "body": body,
+                "format": "markdown",
+                "slug_override": null,
+                "publish": true,
+                "tags": ["shared"],
+            });
+            let (status, body) = post_json(state, "/api/create_post", payload, Some(&cookie)).await;
+            assert_eq!(status, StatusCode::OK, "create body: {body}");
+        }
+    };
+    create(alice_cookie, "# Author Post\n\nbody").await;
+    create(bob_cookie, "# Bob Post\n\nbody").await;
+
+    let (status, body) =
+        list_user_posts_by_tag_form(Arc::clone(&state), "author", "shared", None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let page: TimelinePage = serde_json::from_str(&body).unwrap();
+    assert_eq!(page.posts.len(), 1);
+    assert_eq!(page.posts[0].username, "author");
+}
+
+#[tokio::test]
+async fn list_user_posts_by_tag_unknown_user_returns_not_found() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, body) = list_user_posts_by_tag_form(state, "nobody", "rust", None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("user"), "body: {body}");
 }
 
 #[tokio::test]

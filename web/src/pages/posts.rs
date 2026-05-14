@@ -7,8 +7,9 @@ use crate::{
         MediaPanel,
     },
     posts::{
-        get_post, get_post_preview, list_drafts, list_user_posts, CreatePostResult, DeletePost,
-        DraftSummary, ListUserPosts, PublishPost, PublishPostResult, TimelinePostSummary,
+        get_post, get_post_preview, list_drafts, list_posts_by_tag, list_user_posts,
+        list_user_posts_by_tag, CreatePostResult, DeletePost, DraftSummary, ListPostsByTag,
+        ListUserPosts, ListUserPostsByTag, PublishPost, PublishPostResult, TimelinePostSummary,
         UpdatePost, UpdatePostResult,
     },
 };
@@ -828,5 +829,294 @@ fn render_delete_result(
             .into_any(),
             Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
         })
+    }
+}
+
+/// Site-wide listing of posts carrying a tag, at `/tags/:tag`.
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::must_use_candidate)]
+#[component]
+pub fn SiteTagPage() -> impl IntoView {
+    let params = use_params_map();
+    let tag = Memo::new(move |_| params.get().get("tag").unwrap_or_default().to_lowercase());
+
+    let mutate_version = RwSignal::new(0u32);
+    let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
+
+    let initial_page = Resource::new(
+        move || (tag.get(), mutate_version.get()),
+        |(tag, _)| async move {
+            if tag.is_empty() {
+                return Err(WebError::validation("Invalid tag"));
+            }
+            list_posts_by_tag(tag, None, None, Some(50)).await
+        },
+    );
+
+    let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());
+    let next_cursor_created_at = RwSignal::new(None::<String>);
+    let next_cursor_post_id = RwSignal::new(None::<i64>);
+    let has_more = RwSignal::new(false);
+    let error = RwSignal::new(None::<String>);
+    let initial_loaded = RwSignal::new(false);
+
+    let load_more_action = ServerAction::<ListPostsByTag>::new();
+
+    Effect::new(move |_| {
+        if let Some(result) = initial_page.try_get().flatten() {
+            match result {
+                Ok(page) => {
+                    timeline.set(page.posts);
+                    next_cursor_created_at.set(page.next_cursor_created_at);
+                    next_cursor_post_id.set(page.next_cursor_post_id);
+                    has_more.set(page.has_more);
+                    error.set(None);
+                    initial_loaded.set(true);
+                }
+                Err(err) => {
+                    error.set(Some(err.to_string()));
+                    timeline.set(Vec::new());
+                    has_more.set(false);
+                    initial_loaded.set(true);
+                }
+            }
+        }
+    });
+
+    Effect::new(move |_| {
+        if let Some(result) = load_more_action.value().get() {
+            match result {
+                Ok(page) => {
+                    timeline.update(|rows| rows.extend(page.posts));
+                    next_cursor_created_at.set(page.next_cursor_created_at);
+                    next_cursor_post_id.set(page.next_cursor_post_id);
+                    has_more.set(page.has_more);
+                    error.set(None);
+                }
+                Err(err) => error.set(Some(err.to_string())),
+            }
+        }
+    });
+
+    let on_load_more = move |_| {
+        let tag_value = tag.get_untracked();
+        if tag_value.is_empty() || !has_more.get_untracked() {
+            return;
+        }
+        load_more_action.dispatch(ListPostsByTag {
+            tag: tag_value,
+            cursor_created_at: next_cursor_created_at.get_untracked(),
+            cursor_post_id: next_cursor_post_id.get_untracked(),
+            limit: Some(50),
+        });
+    };
+
+    let read_tag = move || read_signal!(tag);
+    let read_error = move || read_signal!(error);
+    let read_initial_loaded = move || read_signal!(initial_loaded);
+    let read_timeline = move || read_signal!(timeline);
+    let read_has_more = move || read_signal!(has_more);
+    let read_pending = move || read_signal!(load_more_action.pending());
+
+    view! {
+        <Topbar
+            title=Signal::derive(move || format!("#{}", read_tag()))
+            sub="Posts on this instance".to_string()
+        />
+        <div class="j-scroll">
+            <div class="j-page">
+                {move || {
+                    if let Some(err) = read_error() {
+                        return view! { <p class="error">{err}</p> }.into_any();
+                    }
+                    if !read_initial_loaded() {
+                        return view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any();
+                    }
+                    let rows = read_timeline();
+                    if rows.is_empty() {
+                        return view! { <p>"No posts with this tag yet."</p> }.into_any();
+                    }
+                    view! {
+                        <div>
+                            {rows
+                                .into_iter()
+                                .map(|post| {
+                                    view! { <PostCard post=post banner=None on_mutate=on_mutate /> }
+                                })
+                                .collect::<Vec<_>>()}
+                        </div>
+                        {move || {
+                            read_has_more()
+                                .then(|| {
+                                    view! {
+                                        <button on:click=on_load_more disabled=read_pending>
+                                            {move || {
+                                                if read_pending() { "Loading\u{2026}" } else { "Load more" }
+                                            }}
+                                        </button>
+                                    }
+                                })
+                        }}
+                    }
+                        .into_any()
+                }}
+            </div>
+        </div>
+    }
+}
+
+/// Per-user listing of posts carrying a tag, at `/~:username/tags/:tag`.
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::must_use_candidate)]
+#[component]
+pub fn UserTagPage() -> impl IntoView {
+    let params = use_params_map();
+    let username = Memo::new(move |_| {
+        params
+            .get()
+            .get("username")
+            .unwrap_or_default()
+            .strip_prefix('~')
+            .unwrap_or_default()
+            .to_string()
+    });
+    let tag = Memo::new(move |_| params.get().get("tag").unwrap_or_default().to_lowercase());
+
+    let mutate_version = RwSignal::new(0u32);
+    let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
+
+    let initial_page = Resource::new(
+        move || (username.get(), tag.get(), mutate_version.get()),
+        |(username, tag, _)| async move {
+            if username.is_empty() {
+                return Err(WebError::validation("Invalid username"));
+            }
+            if tag.is_empty() {
+                return Err(WebError::validation("Invalid tag"));
+            }
+            list_user_posts_by_tag(username, tag, None, None, Some(50)).await
+        },
+    );
+
+    let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());
+    let next_cursor_created_at = RwSignal::new(None::<String>);
+    let next_cursor_post_id = RwSignal::new(None::<i64>);
+    let has_more = RwSignal::new(false);
+    let error = RwSignal::new(None::<String>);
+    let initial_loaded = RwSignal::new(false);
+
+    let load_more_action = ServerAction::<ListUserPostsByTag>::new();
+
+    Effect::new(move |_| {
+        if let Some(result) = initial_page.try_get().flatten() {
+            match result {
+                Ok(page) => {
+                    timeline.set(page.posts);
+                    next_cursor_created_at.set(page.next_cursor_created_at);
+                    next_cursor_post_id.set(page.next_cursor_post_id);
+                    has_more.set(page.has_more);
+                    error.set(None);
+                    initial_loaded.set(true);
+                }
+                Err(err) => {
+                    error.set(Some(err.to_string()));
+                    timeline.set(Vec::new());
+                    has_more.set(false);
+                    initial_loaded.set(true);
+                }
+            }
+        }
+    });
+
+    Effect::new(move |_| {
+        if let Some(result) = load_more_action.value().get() {
+            match result {
+                Ok(page) => {
+                    timeline.update(|rows| rows.extend(page.posts));
+                    next_cursor_created_at.set(page.next_cursor_created_at);
+                    next_cursor_post_id.set(page.next_cursor_post_id);
+                    has_more.set(page.has_more);
+                    error.set(None);
+                }
+                Err(err) => error.set(Some(err.to_string())),
+            }
+        }
+    });
+
+    let on_load_more = move |_| {
+        let username_value = username.get_untracked();
+        let tag_value = tag.get_untracked();
+        if username_value.is_empty() || tag_value.is_empty() || !has_more.get_untracked() {
+            return;
+        }
+        load_more_action.dispatch(ListUserPostsByTag {
+            username: username_value,
+            tag: tag_value,
+            cursor_created_at: next_cursor_created_at.get_untracked(),
+            cursor_post_id: next_cursor_post_id.get_untracked(),
+            limit: Some(50),
+        });
+    };
+
+    let read_username = move || read_signal!(username);
+    let read_tag = move || read_signal!(tag);
+    let read_error = move || read_signal!(error);
+    let read_initial_loaded = move || read_signal!(initial_loaded);
+    let read_timeline = move || read_signal!(timeline);
+    let read_has_more = move || read_signal!(has_more);
+    let read_pending = move || read_signal!(load_more_action.pending());
+
+    view! {
+        <Topbar
+            title=Signal::derive(move || format!("#{}", read_tag()))
+            sub=Signal::derive(move || format!("Posts by ~{}", read_username()))
+        />
+        <div class="j-scroll">
+            <div class="j-page">
+                {move || {
+                    if let Some(err) = read_error() {
+                        return view! { <p class="error">{err}</p> }.into_any();
+                    }
+                    if !read_initial_loaded() {
+                        return view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any();
+                    }
+                    let rows = read_timeline();
+                    if rows.is_empty() {
+                        return view! { <p>"No posts with this tag yet."</p> }.into_any();
+                    }
+                    view! {
+                        <div>
+                            {rows
+                                .into_iter()
+                                .map(|post| {
+                                    let username_for_tags = post.username.clone();
+                                    view! {
+                                        <PostCard
+                                            post=post
+                                            banner=None
+                                            tag_context=TagContext::ForUser(username_for_tags)
+                                            on_mutate=on_mutate
+                                        />
+                                    }
+                                })
+                                .collect::<Vec<_>>()}
+                        </div>
+                        {move || {
+                            read_has_more()
+                                .then(|| {
+                                    view! {
+                                        <button on:click=on_load_more disabled=read_pending>
+                                            {move || {
+                                                if read_pending() { "Loading\u{2026}" } else { "Load more" }
+                                            }}
+                                        </button>
+                                    }
+                                })
+                        }}
+                    }
+                        .into_any()
+                }}
+            </div>
+        </div>
     }
 }
