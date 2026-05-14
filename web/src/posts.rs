@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos::server_fn::codec::Json;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "ssr")]
@@ -108,7 +109,7 @@ pub struct PostResponse {
 }
 
 /// Creates a post for the authenticated user.
-#[server(endpoint = "/create_post")]
+#[server(endpoint = "/create_post", input = Json)]
 pub async fn create_post(
     body: String,
     format: String,
@@ -280,7 +281,7 @@ pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
 }
 
 /// Updates an existing post for the authenticated author.
-#[server(endpoint = "/update_post")]
+#[server(endpoint = "/update_post", input = Json)]
 pub async fn update_post(
     post_id: i64,
     body: String,
