@@ -19,6 +19,58 @@ pub const DEFAULT_TAG_LIMIT: u32 = 10;
 /// against pathological requests.
 pub const MAX_TAG_LIMIT: u32 = 50;
 
+/// Hard upper bound on tags per post. Enforced by [`parse_and_validate_tags`].
+pub const MAX_TAGS_PER_POST: usize = 25;
+
+/// Validates a `Vec<String>` of author-provided tag display tokens.
+///
+/// Trims whitespace, drops empty tokens, normalizes the canonical slug via
+/// [`common::tag::Tag::from_str`] (which rejects anything outside
+/// `[a-z0-9][a-z0-9-]*` after lowercasing), de-duplicates by slug while
+/// preserving the first occurrence's display casing, and enforces the
+/// [`MAX_TAGS_PER_POST`] cap.
+///
+/// Returns the validated display tokens in input order with duplicates
+/// removed. The caller passes each through `tag_post` to apply.
+///
+/// # Errors
+///
+/// Returns `InternalError::validation` if any token fails [`Tag::from_str`]
+/// (e.g., contains characters outside `[a-z0-9-]` after lowercasing) or if
+/// the input exceeds [`MAX_TAGS_PER_POST`].
+#[cfg(feature = "ssr")]
+pub fn parse_and_validate_tags(
+    raw: Vec<String>,
+) -> Result<Vec<String>, crate::error::InternalError> {
+    use common::tag::Tag;
+    use std::collections::HashSet;
+    use std::str::FromStr;
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<String> = Vec::with_capacity(raw.len().min(MAX_TAGS_PER_POST));
+    for token in raw {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let tag = Tag::from_str(trimmed).map_err(|_| {
+            crate::error::InternalError::validation(format!(
+                "invalid tag: {trimmed:?} (must match [a-z0-9][a-z0-9-]*)"
+            ))
+        })?;
+        if seen.insert(tag.to_string()) {
+            out.push(trimmed.to_string());
+        }
+    }
+    if out.len() > MAX_TAGS_PER_POST {
+        return Err(crate::error::InternalError::validation(format!(
+            "too many tags ({} > {MAX_TAGS_PER_POST})",
+            out.len()
+        )));
+    }
+    Ok(out)
+}
+
 /// A tag row returned by [`list_tags`].
 ///
 /// `slug` is the canonical lowercase form used in URLs (`/tags/:slug`).

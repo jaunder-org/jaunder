@@ -2838,3 +2838,184 @@ async fn get_post_carries_tags() {
     assert_eq!(response.tags[0].slug, "performance");
     assert_eq!(response.tags[0].display, "Performance");
 }
+
+async fn login_and_state() -> (TempDir, Arc<jaunder::storage::AppState>, String) {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let cookie = format!(
+        "session={}",
+        state.sessions.create_session(user_id, None).await.unwrap()
+    );
+    (base, state, cookie)
+}
+
+#[tokio::test]
+async fn create_post_applies_tags_from_param() {
+    let (_base, state, cookie) = login_and_state().await;
+
+    let payload = serde_json::json!({
+        "body": "# Tagged via API\n\nbody",
+        "format": "markdown",
+        "slug_override": null,
+        "publish": true,
+        "tags": ["Rust", "web-dev"],
+    });
+    let (status, body) = post_json(
+        Arc::clone(&state),
+        "/api/create_post",
+        payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let stored_tags = state
+        .posts
+        .get_tags_for_post(created.post_id)
+        .await
+        .unwrap();
+    let slugs: Vec<&str> = stored_tags.iter().map(|t| t.tag_slug.as_str()).collect();
+    assert_eq!(slugs, vec!["rust", "web-dev"]);
+    assert!(stored_tags.iter().any(|t| t.tag_display == "Rust"));
+}
+
+#[tokio::test]
+async fn create_post_rejects_invalid_tag_token() {
+    let (_base, state, cookie) = login_and_state().await;
+
+    let payload = serde_json::json!({
+        "body": "# Bad Tag\n\nbody",
+        "format": "markdown",
+        "slug_override": null,
+        "publish": true,
+        "tags": ["rust", "not a valid tag!"],
+    });
+    let (status, body) = post_json(state, "/api/create_post", payload, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("invalid tag"), "body: {body}");
+}
+
+#[tokio::test]
+async fn create_post_rejects_more_than_25_tags() {
+    let (_base, state, cookie) = login_and_state().await;
+    let many: Vec<String> = (0..26).map(|n| format!("tag{n}")).collect();
+
+    let payload = serde_json::json!({
+        "body": "# Too Many\n\nbody",
+        "format": "markdown",
+        "slug_override": null,
+        "publish": true,
+        "tags": many,
+    });
+    let (status, body) = post_json(state, "/api/create_post", payload, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("too many tags"), "body: {body}");
+}
+
+#[tokio::test]
+async fn update_post_applies_tag_set_diff() {
+    let (_base, state, cookie) = login_and_state().await;
+
+    // Create with two tags.
+    let create_payload = serde_json::json!({
+        "body": "# Diff Me\n\nbody",
+        "format": "markdown",
+        "slug_override": null,
+        "publish": false,
+        "tags": ["rust", "old-tag"],
+    });
+    let (status, body) = post_json(
+        Arc::clone(&state),
+        "/api/create_post",
+        create_payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    // Update: replace old-tag with new-tag, keep rust.
+    let update_payload = serde_json::json!({
+        "post_id": created.post_id,
+        "body": "# Diff Me\n\nbody",
+        "format": "markdown",
+        "slug_override": null,
+        "publish": false,
+        "tags": ["rust", "new-tag"],
+    });
+    let (status, body) = post_json(
+        Arc::clone(&state),
+        "/api/update_post",
+        update_payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "update body: {body}");
+
+    let stored = state
+        .posts
+        .get_tags_for_post(created.post_id)
+        .await
+        .unwrap();
+    let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_str()).collect();
+    assert_eq!(slugs, vec!["new-tag", "rust"]);
+}
+
+#[tokio::test]
+async fn update_post_with_tags_unset_leaves_existing_tags_alone() {
+    let (_base, state, cookie) = login_and_state().await;
+
+    // Create with one tag.
+    let create_payload = serde_json::json!({
+        "body": "# Untouched\n\nbody",
+        "format": "markdown",
+        "slug_override": null,
+        "publish": false,
+        "tags": ["keep"],
+    });
+    let (status, body) = post_json(
+        Arc::clone(&state),
+        "/api/create_post",
+        create_payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    // Update without including the tags key (None on the server side).
+    let update_payload = serde_json::json!({
+        "post_id": created.post_id,
+        "body": "# Untouched edited\n\nbody",
+        "format": "markdown",
+        "slug_override": null,
+        "publish": false,
+    });
+    let (status, body) = post_json(
+        Arc::clone(&state),
+        "/api/update_post",
+        update_payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "update body: {body}");
+
+    let stored = state
+        .posts
+        .get_tags_for_post(created.post_id)
+        .await
+        .unwrap();
+    let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_str()).collect();
+    assert_eq!(slugs, vec!["keep"]);
+}

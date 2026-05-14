@@ -510,6 +510,7 @@ pub fn EditPostPage() -> impl IntoView {
                                     format: format.get(),
                                     slug_override: slug_override_arg,
                                     publish,
+                                    tags: None,
                                 });
                         };
                         view! {

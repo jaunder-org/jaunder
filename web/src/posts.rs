@@ -120,10 +120,13 @@ pub async fn create_post(
     format: String,
     slug_override: Option<String>,
     publish: bool,
+    tags: Option<Vec<String>>,
 ) -> WebResult<CreatePostResult> {
-    crate::web_server_fn!("create_post", body, format, slug_override, publish => {
+    crate::web_server_fn!("create_post", body, format, slug_override, publish, tags => {
         let auth = require_auth().await?;
         let state = expect_context::<Arc<AppState>>();
+
+        let validated_tags = crate::tags::parse_and_validate_tags(tags.unwrap_or_default())?;
 
         let format = format
             .parse::<PostFormat>()
@@ -158,6 +161,14 @@ pub async fn create_post(
             published_at,
         )
         .await?;
+
+        for display in &validated_tags {
+            state
+                .posts
+                .tag_post(created.post_id, display)
+                .await
+                .map_err(|e| InternalError::server_message(e.to_string()))?;
+        }
 
         Ok(created)
     })
@@ -295,10 +306,17 @@ pub async fn update_post(
     format: String,
     slug_override: Option<String>,
     publish: bool,
+    tags: Option<Vec<String>>,
 ) -> WebResult<UpdatePostResult> {
-    crate::web_server_fn!("update_post", post_id, body, format, slug_override, publish => {
+    crate::web_server_fn!("update_post", post_id, body, format, slug_override, publish, tags => {
         let auth = require_auth().await?;
         let state = expect_context::<Arc<AppState>>();
+
+        // Validate tags up-front so a malformed input rejects before any
+        // post mutation lands.
+        let new_tags = tags
+            .map(crate::tags::parse_and_validate_tags)
+            .transpose()?;
 
         let format = format
             .parse::<PostFormat>()
@@ -320,6 +338,10 @@ pub async fn update_post(
             }
             other => perform_update_error(other),
         })?;
+
+        if let Some(new_tags) = new_tags {
+            apply_post_tag_diff(state.as_ref(), post_id, &new_tags).await?;
+        }
 
         let published_at_str = record.published_at.map(|t| t.to_rfc3339());
         let permalink = record
@@ -684,6 +706,59 @@ fn post_tags_to_summaries(tags: Vec<common::storage::PostTag>) -> Vec<TagSummary
             display: t.tag_display,
         })
         .collect()
+}
+
+/// Diff the existing tag set against `desired` (a Vec of validated display
+/// tokens) and apply the difference: `tag_post` for new entries, `untag_post`
+/// for removed entries. Re-applying an existing tag with new display casing
+/// is a no-op at the slug level (the storage layer keys on slug); the
+/// display casing of the existing row is preserved.
+#[cfg(feature = "ssr")]
+async fn apply_post_tag_diff(
+    state: &AppState,
+    post_id: i64,
+    desired: &[String],
+) -> InternalResult<()> {
+    use common::tag::Tag;
+    use std::collections::HashSet;
+    use std::str::FromStr;
+
+    let existing = state
+        .posts
+        .get_tags_for_post(post_id)
+        .await
+        .map_err(InternalError::storage)?;
+    let existing_slugs: HashSet<String> = existing.iter().map(|t| t.tag_slug.to_string()).collect();
+    let desired_slugs: HashSet<String> = desired
+        .iter()
+        .filter_map(|d| Tag::from_str(d).ok())
+        .map(|t| t.to_string())
+        .collect();
+
+    // Add: every desired tag whose slug isn't already present.
+    for display in desired {
+        let Ok(slug) = Tag::from_str(display) else {
+            continue;
+        };
+        if !existing_slugs.contains(&slug.to_string()) {
+            state
+                .posts
+                .tag_post(post_id, display)
+                .await
+                .map_err(|e| InternalError::server_message(e.to_string()))?;
+        }
+    }
+    // Remove: every existing tag whose slug isn't in desired.
+    for tag in &existing {
+        if !desired_slugs.contains(&tag.tag_slug.to_string()) {
+            state
+                .posts
+                .untag_post(post_id, &tag.tag_slug)
+                .await
+                .map_err(|e| InternalError::server_message(e.to_string()))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "ssr")]
