@@ -453,6 +453,7 @@ pub fn EditPostPage() -> impl IntoView {
     let update_post_action = ServerAction::<UpdatePost>::new();
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
+    let slug_override = RwSignal::new(String::new());
     // ServerAction dispatches happen only on the client; this redirect-on-publish
     // effect only ever fires there. `Effect::new_isomorphic` would needlessly
     // schedule on the server.
@@ -490,119 +491,138 @@ pub fn EditPostPage() -> impl IntoView {
                     Ok(fetched) => {
                         body.set(fetched.body.clone());
                         format.set(fetched.format.clone());
+                        slug_override.set(fetched.slug.clone());
                         let post_id = fetched.post_id;
                         let is_published = fetched.published_at.is_some();
-                        let current_slug = fetched.slug.clone();
+                        let dispatch_update = move |publish: bool| {
+                            let slug = slug_override.get();
+                            let slug_override_arg = if slug.trim().is_empty() {
+                                None
+                            } else {
+                                Some(slug)
+                            };
+                            update_post_action
+                                .dispatch(UpdatePost {
+                                    post_id,
+                                    body: body.get(),
+                                    format: format.get(),
+                                    slug_override: slug_override_arg,
+                                    publish,
+                                });
+                        };
                         view! {
-                            <ActionForm action=update_post_action>
-                                <div class="j-edit-form-grid">
-                                    <div class="j-edit-form-body">
-                                        <input type="hidden" name="post_id" value=post_id />
-                                        <ComposerFields
-                                            body=body
-                                            format=format
-                                            rows=20
-                                            show_seg=false
-                                        />
-                                    </div>
-                                    <aside class="j-edit-form-aside">
-                                        <div>
-                                            <div class="j-sb-head" style="padding:0 0 10px">
-                                                "Options"
-                                            </div>
-                                            {(!is_published)
-                                                .then(|| {
-                                                    view! {
-                                                        <div
-                                                            class="j-field-row"
-                                                            style="grid-template-columns:auto 1fr"
-                                                        >
-                                                            <label class="j-field-label" for="edit-slug">
-                                                                "Slug"
-                                                            </label>
-                                                            <input
-                                                                id="edit-slug"
-                                                                type="text"
-                                                                name="slug_override"
-                                                                class="j-field-val"
-                                                                prop:value=current_slug
-                                                            />
-                                                        </div>
-                                                    }
-                                                })}
-                                            <div class="j-seg" style="margin-top:10px">
-                                                <button
-                                                    type="button"
-                                                    class=move || {
-                                                        if format.get() == "markdown" {
-                                                            "j-btn is-selected"
-                                                        } else {
-                                                            "j-btn"
-                                                        }
-                                                    }
-                                                    on:click=move |_| { format.set("markdown".to_string()) }
-                                                >
-                                                    "Markdown"
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    class=move || {
-                                                        if format.get() == "org" {
-                                                            "j-btn is-selected"
-                                                        } else {
-                                                            "j-btn"
-                                                        }
-                                                    }
-                                                    on:click=move |_| format.set("org".to_string())
-                                                >
-                                                    "Org"
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <div style="margin-top:16px">
-                                            <div class="j-sb-head" style="padding:0 0 10px">
-                                                "Media"
-                                            </div>
-                                            <MediaPanel />
-                                        </div>
-                                        <div class="j-edit-form-actions">
-                                            {if is_published {
-                                                view! {
-                                                    <button
-                                                        class="j-btn is-primary"
-                                                        type="submit"
-                                                        name="publish"
-                                                        value="true"
-                                                    >
-                                                        "Save"
-                                                    </button>
-                                                }
-                                                    .into_any()
-                                            } else {
-                                                view! {
-                                                    <button
-                                                        class="j-btn"
-                                                        type="submit"
-                                                        name="publish"
-                                                        value="false"
-                                                    >
-                                                        "Save draft"
-                                                    </button>
-                                                    <button
-                                                        class="j-btn is-primary"
-                                                        type="submit"
-                                                        name="publish"
-                                                        value="true"
-                                                    >
-                                                        "Publish"
-                                                    </button>
-                                                }
-                                                    .into_any()
-                                            }}
-                                        </div>
-                                    </aside>
+                            <div class="j-edit-form-grid">
+                                <div class="j-edit-form-body">
+                                    <ComposerFields
+                                        body=body
+                                        format=format
+                                        rows=20
+                                        show_seg=false
+                                    />
                                 </div>
-                            </ActionForm>
+                                <aside class="j-edit-form-aside">
+                                    <div>
+                                        <div class="j-sb-head" style="padding:0 0 10px">
+                                            "Options"
+                                        </div>
+                                        {(!is_published)
+                                            .then(|| {
+                                                view! {
+                                                    <div
+                                                        class="j-field-row"
+                                                        style="grid-template-columns:auto 1fr"
+                                                    >
+                                                        <label class="j-field-label" for="edit-slug">
+                                                            "Slug"
+                                                        </label>
+                                                        <input
+                                                            id="edit-slug"
+                                                            type="text"
+                                                            name="slug_override"
+                                                            class="j-field-val"
+                                                            prop:value=slug_override
+                                                            on:input=move |ev| {
+                                                                slug_override.set(event_target_value(&ev));
+                                                            }
+                                                        />
+                                                    </div>
+                                                }
+                                            })}
+                                        <div class="j-seg" style="margin-top:10px">
+                                            <button
+                                                type="button"
+                                                class=move || {
+                                                    if format.get() == "markdown" {
+                                                        "j-btn is-selected"
+                                                    } else {
+                                                        "j-btn"
+                                                    }
+                                                }
+                                                on:click=move |_| { format.set("markdown".to_string()) }
+                                            >
+                                                "Markdown"
+                                            </button>
+                                            <button
+                                                type="button"
+                                                class=move || {
+                                                    if format.get() == "org" {
+                                                        "j-btn is-selected"
+                                                    } else {
+                                                        "j-btn"
+                                                    }
+                                                }
+                                                on:click=move |_| format.set("org".to_string())
+                                            >
+                                                "Org"
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div style="margin-top:16px">
+                                        <div class="j-sb-head" style="padding:0 0 10px">
+                                            "Media"
+                                        </div>
+                                        <MediaPanel />
+                                    </div>
+                                    <div class="j-edit-form-actions">
+                                        {if is_published {
+                                            view! {
+                                                <button
+                                                    class="j-btn is-primary"
+                                                    type="button"
+                                                    name="publish"
+                                                    value="true"
+                                                    on:click=move |_| dispatch_update(true)
+                                                >
+                                                    "Save"
+                                                </button>
+                                            }
+                                                .into_any()
+                                        } else {
+                                            view! {
+                                                <button
+                                                    class="j-btn"
+                                                    type="button"
+                                                    name="publish"
+                                                    value="false"
+                                                    on:click=move |_| dispatch_update(false)
+                                                >
+                                                    "Save draft"
+                                                </button>
+                                                <button
+                                                    class="j-btn is-primary"
+                                                    type="button"
+                                                    name="publish"
+                                                    value="true"
+                                                    on:click=move |_| dispatch_update(true)
+                                                >
+                                                    "Publish"
+                                                </button>
+                                            }
+                                                .into_any()
+                                        }}
+                                    </div>
+                                </aside>
+                            </div>
                         }
                             .into_any()
                     }

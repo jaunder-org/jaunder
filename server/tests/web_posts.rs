@@ -59,6 +59,73 @@ async fn post_form(
     (status, body_str)
 }
 
+async fn create_post_json(
+    state: Arc<jaunder::storage::AppState>,
+    body: &str,
+    format: &str,
+    slug_override: Option<&str>,
+    publish: bool,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    let payload = serde_json::json!({
+        "body": body,
+        "format": format,
+        "slug_override": slug_override,
+        "publish": publish,
+    });
+    post_json(state, "/api/create_post", payload, cookie).await
+}
+
+async fn update_post_json(
+    state: Arc<jaunder::storage::AppState>,
+    post_id: i64,
+    body: &str,
+    format: &str,
+    slug_override: Option<&str>,
+    publish: bool,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    let payload = serde_json::json!({
+        "post_id": post_id,
+        "body": body,
+        "format": format,
+        "slug_override": slug_override,
+        "publish": publish,
+    });
+    post_json(state, "/api/update_post", payload, cookie).await
+}
+
+/// POST to a `#[server(input = Json)]` endpoint. Mirrors `post_form` but emits
+/// `application/json` so the JSON-encoded server fns deserialize correctly.
+async fn post_json(
+    state: Arc<jaunder::storage::AppState>,
+    uri: &str,
+    body: serde_json::Value,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    ensure_server_fns_registered();
+
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(c) = cookie {
+        builder = builder.header(header::COOKIE, c);
+    }
+    let request = builder.body(Body::from(body.to_string())).unwrap();
+
+    let app = jaunder::create_router(test_options(), state, true, helpers::tmp_storage_path());
+    let response = app.oneshot(request).await.unwrap();
+
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(bytes.to_vec()).unwrap();
+
+    (status, body_str)
+}
+
 async fn get_post_form(
     state: Arc<jaunder::storage::AppState>,
     username: &str,
@@ -99,10 +166,14 @@ async fn create_post_persists_rendered_published_post() {
     let cookie = format!("session={token}");
 
     // Title embedded as # heading in the body (verbatim storage)
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "body=%23+Hello+World%0A%0A%2A%2Abold%2A%2A&format=markdown&publish=true",
+        "# Hello World
+
+**bold**",
+        "markdown",
+        None,
+        true,
         Some(&cookie),
     )
     .await;
@@ -164,19 +235,27 @@ async fn create_post_retries_slug_conflicts_for_same_user_and_date() {
     let cookie = format!("session={token}");
 
     // Title embedded as # heading; two posts with same heading produce conflicting slugs
-    let (first_status, first_body) = post_form(
+    let (first_status, first_body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "body=%23+Repeated+Title%0A%0Afirst&format=markdown&publish=true",
+        "# Repeated Title
+
+first",
+        "markdown",
+        None,
+        true,
         Some(&cookie),
     )
     .await;
     assert_eq!(first_status, StatusCode::OK, "body: {first_body}");
 
-    let (second_status, second_body) = post_form(
+    let (second_status, second_body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "body=%23+Repeated+Title%0A%0Asecond&format=markdown&publish=true",
+        "# Repeated Title
+
+second",
+        "markdown",
+        None,
+        true,
         Some(&cookie),
     )
     .await;
@@ -191,13 +270,8 @@ async fn create_post_rejects_requests_without_authentication() {
     let base = TempDir::new().unwrap();
     let state = test_state(&base).await;
 
-    let (status, body) = post_form(
-        state,
-        "/api/create_post",
-        "title=Unauthorized&body=body&format=markdown&publish=false",
-        None,
-    )
-    .await;
+    let (status, body) =
+        create_post_json(Arc::clone(&state), "body", "markdown", None, false, None).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("unauthorized"), "body: {body}");
@@ -220,10 +294,12 @@ async fn create_post_accepts_slug_override_and_saves_draft() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Draft+Post&body=%2Abold%2A&format=org&slug_override=Custom-Slug&publish=false",
+        "*bold*",
+        "org",
+        Some("Custom-Slug"),
+        false,
         Some(&cookie),
     )
     .await;
@@ -267,10 +343,12 @@ async fn create_post_accepts_titleless_body() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=&body=Titleless+note&format=markdown&publish=true",
+        "Titleless note",
+        "markdown",
+        None,
+        true,
         Some(&cookie),
     )
     .await;
@@ -305,10 +383,14 @@ async fn create_post_extracts_markdown_heading_title() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "body=%23+Extracted+Title%0A%0ABody+text&format=markdown&publish=true",
+        "# Extracted Title
+
+Body text",
+        "markdown",
+        None,
+        true,
         Some(&cookie),
     )
     .await;
@@ -346,10 +428,12 @@ async fn create_post_rejects_empty_post() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = post_form(
-        state,
-        "/api/create_post",
-        "body=&format=markdown&publish=false",
+    let (status, body) = create_post_json(
+        Arc::clone(&state),
+        "",
+        "markdown",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
@@ -375,10 +459,12 @@ async fn create_post_rejects_post_without_slug_source() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = post_form(
-        state,
-        "/api/create_post",
-        "title=%2B%2B%2B&body=%2B%2B%2B&format=markdown&publish=false",
+    let (status, body) = create_post_json(
+        Arc::clone(&state),
+        "+++",
+        "markdown",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
@@ -407,10 +493,12 @@ async fn create_post_rejects_invalid_format() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = post_form(
-        state,
-        "/api/create_post",
-        "title=Bad+Format&body=body&format=html&publish=false",
+    let (status, body) = create_post_json(
+        Arc::clone(&state),
+        "body",
+        "html",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
@@ -436,10 +524,12 @@ async fn create_post_rejects_invalid_slug_override() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = post_form(
-        state,
-        "/api/create_post",
-        "title=Invalid+Slug&body=body&format=markdown&slug_override=Not Valid&publish=false",
+    let (status, body) = create_post_json(
+        Arc::clone(&state),
+        "body",
+        "markdown",
+        Some("Not Valid"),
+        false,
         Some(&cookie),
     )
     .await;
@@ -466,10 +556,14 @@ async fn create_post_rejects_title_without_ascii_slug_characters() {
     let cookie = format!("session={token}");
 
     // Heading with only em-dashes passes the empty check but cannot produce a slug
-    let (status, body) = post_form(
-        state,
-        "/api/create_post",
-        "body=%23+%E2%80%94%E2%80%94%E2%80%94%0A%0Abody&format=markdown&publish=false",
+    let (status, body) = create_post_json(
+        Arc::clone(&state),
+        "# ———
+
+body",
+        "markdown",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
@@ -498,10 +592,14 @@ async fn get_post_returns_published_post() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "body=%23+Permalink%0A%0A%2A%2Abold%2A%2A&format=markdown&publish=true",
+        "# Permalink
+
+**bold**",
+        "markdown",
+        None,
+        true,
         Some(&cookie),
     )
     .await;
@@ -574,10 +672,14 @@ async fn get_post_returns_draft_to_author_only() {
             .unwrap()
     );
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "body=%23+Draft%0A%0Adraft&format=markdown&publish=false",
+        "# Draft
+
+draft",
+        "markdown",
+        None,
+        false,
         Some(&author_cookie),
     )
     .await;
@@ -681,10 +783,14 @@ async fn get_post_preview_shows_draft_to_author_only() {
             .unwrap()
     );
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "body=%23+Preview+Draft%0A%0Adraft&format=markdown&publish=false",
+        "# Preview Draft
+
+draft",
+        "markdown",
+        None,
+        false,
         Some(&author_cookie),
     )
     .await;
@@ -729,10 +835,12 @@ async fn get_post_hides_drafts_from_guests() {
             .unwrap()
     );
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Draft&body=draft&format=markdown&publish=false",
+        "draft",
+        "markdown",
+        None,
+        false,
         Some(&author_cookie),
     )
     .await;
@@ -790,16 +898,6 @@ async fn get_post_returns_not_found_for_missing_post() {
 
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
-}
-
-async fn update_post_form(
-    state: Arc<jaunder::storage::AppState>,
-    post_id: i64,
-    extra_params: &str,
-    cookie: Option<&str>,
-) -> (StatusCode, String) {
-    let body = format!("post_id={}&{}", post_id, extra_params);
-    post_form(state, "/api/update_post", body, cookie).await
 }
 
 async fn list_drafts_form(
@@ -906,10 +1004,12 @@ async fn update_post_updates_draft_content_and_slug() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "body=original&format=markdown&publish=false",
+        "original",
+        "markdown",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
@@ -918,10 +1018,15 @@ async fn update_post_updates_draft_content_and_slug() {
     let post_id = created.post_id;
 
     // Title embedded as # heading; slug_override takes precedence over the derived slug
-    let (status, body) = update_post_form(
+    let (status, body) = update_post_json(
         Arc::clone(&state),
         post_id,
-        "body=%23+Updated+Title%0A%0A%2A%2Anew+body%2A%2A&format=markdown&slug_override=updated-slug&publish=false",
+        "# Updated Title
+
+**new body**",
+        "markdown",
+        Some("updated-slug"),
+        false,
         Some(&cookie),
     )
     .await;
@@ -959,10 +1064,12 @@ async fn update_post_freezes_slug_when_published() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Published+Post&body=body&format=markdown&publish=true",
+        "body",
+        "markdown",
+        None,
+        true,
         Some(&cookie),
     )
     .await;
@@ -971,10 +1078,13 @@ async fn update_post_freezes_slug_when_published() {
     let post_id = created.post_id;
     let original_slug = created.slug.clone();
 
-    let (status, body) = update_post_form(
+    let (status, body) = update_post_json(
         Arc::clone(&state),
         post_id,
-        "title=Changed+Title&body=new+body&format=markdown&slug_override=new-slug&publish=true",
+        "new body",
+        "markdown",
+        Some("new-slug"),
+        true,
         Some(&cookie),
     )
     .await;
@@ -1005,10 +1115,12 @@ async fn update_post_publishes_draft() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Draft+Post&body=draft+body&format=markdown&publish=false",
+        "draft body",
+        "markdown",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
@@ -1017,10 +1129,13 @@ async fn update_post_publishes_draft() {
     assert!(created.published_at.is_none());
     let post_id = created.post_id;
 
-    let (status, body) = update_post_form(
+    let (status, body) = update_post_json(
         Arc::clone(&state),
         post_id,
-        "title=Draft+Post&body=draft+body&format=markdown&publish=true",
+        "draft body",
+        "markdown",
+        None,
+        true,
         Some(&cookie),
     )
     .await;
@@ -1072,20 +1187,25 @@ async fn update_post_rejects_non_author() {
             .unwrap()
     );
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Authors+Post&body=body&format=markdown&publish=false",
+        "body",
+        "markdown",
+        None,
+        false,
         Some(&author_cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
-    let (status, body) = update_post_form(
+    let (status, body) = update_post_json(
         Arc::clone(&state),
         created.post_id,
-        "title=Stolen+Title&body=hacked&format=markdown&publish=false",
+        "hacked",
+        "markdown",
+        None,
+        false,
         Some(&stranger_cookie),
     )
     .await;
@@ -1099,10 +1219,13 @@ async fn update_post_rejects_unauthenticated() {
     let base = TempDir::new().unwrap();
     let state = test_state(&base).await;
 
-    let (status, body) = update_post_form(
-        state,
+    let (status, body) = update_post_json(
+        Arc::clone(&state),
         42,
-        "title=Unauthorized&body=body&format=markdown&publish=false",
+        "body",
+        "markdown",
+        None,
+        false,
         None,
     )
     .await;
@@ -1128,20 +1251,25 @@ async fn update_post_rejects_empty_post() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Original&body=body&format=markdown&publish=false",
+        "body",
+        "markdown",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
-    let (status, body) = update_post_form(
-        state,
+    let (status, body) = update_post_json(
+        Arc::clone(&state),
         created.post_id,
-        "title=&body=&format=markdown&publish=false",
+        "",
+        "markdown",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
@@ -1170,20 +1298,25 @@ async fn update_post_rejects_invalid_format() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Original&body=body&format=markdown&publish=false",
+        "body",
+        "markdown",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
-    let (status, body) = update_post_form(
-        state,
+    let (status, body) = update_post_json(
+        Arc::clone(&state),
         created.post_id,
-        "title=Updated&body=body&format=html&publish=false",
+        "body",
+        "html",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
@@ -1209,10 +1342,13 @@ async fn update_post_returns_not_found_for_missing_post() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = update_post_form(
-        state,
+    let (status, body) = update_post_json(
+        Arc::clone(&state),
         99999,
-        "title=Does+Not+Exist&body=body&format=markdown&publish=false",
+        "body",
+        "markdown",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
@@ -1238,10 +1374,12 @@ async fn update_post_returns_not_found_for_deleted_post() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Delete+Me&body=body&format=markdown&publish=false",
+        "body",
+        "markdown",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
@@ -1250,10 +1388,13 @@ async fn update_post_returns_not_found_for_deleted_post() {
 
     state.posts.soft_delete_post(created.post_id).await.unwrap();
 
-    let (status, body) = update_post_form(
-        state,
+    let (status, body) = update_post_json(
+        Arc::clone(&state),
         created.post_id,
-        "title=Delete+Me&body=body&format=markdown&publish=false",
+        "body",
+        "markdown",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
@@ -1279,10 +1420,12 @@ async fn update_post_rejects_title_without_ascii_slug_characters() {
     let token = state.sessions.create_session(user_id, None).await.unwrap();
     let cookie = format!("session={token}");
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "body=original&format=markdown&publish=false",
+        "original",
+        "markdown",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
@@ -1290,10 +1433,15 @@ async fn update_post_rejects_title_without_ascii_slug_characters() {
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
     // Heading with only em-dashes passes the empty check but cannot produce a slug
-    let (status, body) = update_post_form(
-        state,
+    let (status, body) = update_post_json(
+        Arc::clone(&state),
         created.post_id,
-        "body=%23+%E2%80%94%E2%80%94%E2%80%94%0A%0Abody&format=markdown&publish=false",
+        "# ———
+
+body",
+        "markdown",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
@@ -1346,39 +1494,47 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination() {
             .unwrap()
     );
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Draft+One&body=first&format=markdown&publish=false",
+        "first",
+        "markdown",
+        None,
+        false,
         Some(&author_cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let first_draft: CreatePostResult = serde_json::from_str(&body).unwrap();
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Draft+Two&body=second&format=markdown&publish=false",
+        "second",
+        "markdown",
+        None,
+        false,
         Some(&author_cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let second_draft: CreatePostResult = serde_json::from_str(&body).unwrap();
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Published&body=visible&format=markdown&publish=true",
+        "visible",
+        "markdown",
+        None,
+        true,
         Some(&author_cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Stranger+Draft&body=private&format=markdown&publish=false",
+        "private",
+        "markdown",
+        None,
+        false,
         Some(&stranger_cookie),
     )
     .await;
@@ -1439,10 +1595,12 @@ async fn publish_post_publishes_draft_and_returns_permalink() {
             .unwrap()
     );
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Publish+Me&body=draft+body&format=markdown&publish=false",
+        "draft body",
+        "markdown",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
@@ -1507,10 +1665,12 @@ async fn publish_post_rejects_non_author() {
             .unwrap()
     );
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Private+Draft&body=secret&format=markdown&publish=false",
+        "secret",
+        "markdown",
+        None,
+        false,
         Some(&author_cookie),
     )
     .await;
@@ -1609,10 +1769,12 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Delete+Before+Publish&body=body&format=markdown&publish=false",
+        "body",
+        "markdown",
+        None,
+        false,
         Some(&cookie),
     )
     .await;
@@ -1650,10 +1812,13 @@ async fn get_post_finds_author_draft_across_multiple_pages() {
 
     let mut first_post_id = None;
     for i in 0..55 {
-        let (status, body) = post_form(
+        let request_body = format!("# Draft {i}\n\nbody");
+        let (status, body) = create_post_json(
             Arc::clone(&state),
-            "/api/create_post",
-            format!("title=Draft+{i}&body=body&format=markdown&publish=false"),
+            &request_body,
+            "markdown",
+            None,
+            false,
             Some(&cookie),
         )
         .await;
@@ -1725,29 +1890,36 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination() {
     );
 
     for i in 0..51 {
-        let (status, body) = post_form(
+        let request_body = format!("# Post {i}\n\nbody");
+        let (status, body) = create_post_json(
             Arc::clone(&state),
-            "/api/create_post",
-            format!("title=Author+Published+{i}&body=body&format=markdown&publish=true"),
+            &request_body,
+            "markdown",
+            None,
+            true,
             Some(&author_cookie),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "create body: {body}");
     }
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Author+Draft&body=private&format=markdown&publish=false",
+        "private",
+        "markdown",
+        None,
+        false,
         Some(&author_cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Other+Published&body=body&format=markdown&publish=true",
+        "body",
+        "markdown",
+        None,
+        true,
         Some(&other_cookie),
     )
     .await;
@@ -1865,38 +2037,47 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination() {
     );
 
     for i in 0..26 {
-        let (status, body) = post_form(
+        let request_body = format!("# Post {i}\n\nbody");
+        let (status, body) = create_post_json(
             Arc::clone(&state),
-            "/api/create_post",
-            format!("title=Author+Timeline+{i}&body=body&format=markdown&publish=true"),
+            &request_body,
+            "markdown",
+            None,
+            true,
             Some(&author_cookie),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "create body: {body}");
 
-        let (status, body) = post_form(
+        let (status, body) = create_post_json(
             Arc::clone(&state),
-            "/api/create_post",
-            format!("title=Other+Timeline+{i}&body=body&format=markdown&publish=true"),
+            "body",
+            "markdown",
+            None,
+            true,
             Some(&other_cookie),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "create body: {body}");
     }
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Timeline+Draft&body=private&format=markdown&publish=false",
+        "private",
+        "markdown",
+        None,
+        false,
         Some(&author_cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Timeline+Deleted&body=gone&format=markdown&publish=true",
+        "gone",
+        "markdown",
+        None,
+        true,
         Some(&author_cookie),
     )
     .await;
@@ -2015,30 +2196,38 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only() {
     );
 
     for i in 0..51 {
-        let (status, body) = post_form(
+        let request_body = format!("# Post {i}\n\nbody");
+        let (status, body) = create_post_json(
             Arc::clone(&state),
-            "/api/create_post",
-            format!("title=Home+Feed+{i}&body=body&format=markdown&publish=true"),
+            &request_body,
+            "markdown",
+            None,
+            true,
             Some(&author_cookie),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "create body: {body}");
     }
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Author+Home+Draft&body=private&format=markdown&publish=false",
+        "private",
+        "markdown",
+        None,
+        false,
         Some(&author_cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
     for i in 0..3 {
-        let (status, body) = post_form(
+        let request_body = format!("# Post {i}\n\nbody");
+        let (status, body) = create_post_json(
             Arc::clone(&state),
-            "/api/create_post",
-            format!("title=Other+Home+{i}&body=body&format=markdown&publish=true"),
+            &request_body,
+            "markdown",
+            None,
+            true,
             Some(&other_cookie),
         )
         .await;
@@ -2173,10 +2362,12 @@ async fn delete_post_soft_deletes_post() {
             .unwrap()
     );
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=To+Delete&body=gone&format=markdown&publish=true",
+        "gone",
+        "markdown",
+        None,
+        true,
         Some(&cookie),
     )
     .await;
@@ -2237,10 +2428,12 @@ async fn delete_post_rejects_non_author() {
             .unwrap()
     );
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Owned+Post&body=mine&format=markdown&publish=true",
+        "mine",
+        "markdown",
+        None,
+        true,
         Some(&author_cookie),
     )
     .await;
@@ -2276,10 +2469,12 @@ async fn delete_post_rejects_unauthenticated() {
             .unwrap()
     );
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Protected&body=body&format=markdown&publish=true",
+        "body",
+        "markdown",
+        None,
+        true,
         Some(&cookie),
     )
     .await;
@@ -2314,10 +2509,12 @@ async fn delete_post_returns_not_found_for_already_deleted_post() {
             .unwrap()
     );
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "title=Once+Only&body=body&format=markdown&publish=true",
+        "body",
+        "markdown",
+        None,
+        true,
         Some(&cookie),
     )
     .await;
@@ -2355,10 +2552,14 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink() {
             .unwrap()
     );
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "body=%23+Deletable+Post%0A%0Abody&format=markdown&publish=true",
+        "# Deletable Post
+
+body",
+        "markdown",
+        None,
+        true,
         Some(&cookie),
     )
     .await;
@@ -2431,10 +2632,14 @@ async fn unpublish_post_reverts_published_post_to_draft() {
             .unwrap()
     );
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "body=%23+Unpublish+Me%0A%0Abody&format=markdown&publish=true",
+        "# Unpublish Me
+
+body",
+        "markdown",
+        None,
+        true,
         Some(&cookie),
     )
     .await;
@@ -2502,10 +2707,14 @@ async fn unpublish_post_rejects_non_author() {
         state.sessions.create_session(other_id, None).await.unwrap()
     );
 
-    let (status, body) = post_form(
+    let (status, body) = create_post_json(
         Arc::clone(&state),
-        "/api/create_post",
-        "body=%23+Others+Post%0A%0Abody&format=markdown&publish=true",
+        "# Others Post
+
+body",
+        "markdown",
+        None,
+        true,
         Some(&author_cookie),
     )
     .await;

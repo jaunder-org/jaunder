@@ -21,10 +21,11 @@ async function createPublishedPostViaApi(
 ): Promise<void> {
   const response = await withTimedAction(page, "api.create_post", () =>
     page.request.post(`${BASE_URL}/api/create_post`, {
-      form: {
+      data: {
         body: `# ${title}\n\nBody for ${title}`,
         format: "markdown",
-        publish: "true",
+        slug_override: null,
+        publish: true,
       },
     }),
   );

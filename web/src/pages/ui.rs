@@ -435,74 +435,89 @@ pub fn PostCreateForm(
     let rows_u32 = rows as u32;
 
     if compact {
+        let dispatch_save = move |_| {
+            create_action.dispatch(CreatePost {
+                body: body.get(),
+                format: format.get(),
+                slug_override: None,
+                publish: false,
+            });
+        };
+        let dispatch_publish = move |_| {
+            create_action.dispatch(CreatePost {
+                body: body.get(),
+                format: format.get(),
+                slug_override: None,
+                publish: true,
+            });
+        };
         view! {
-            <ActionForm action=create_action>
-                <div class="j-composer-row">
-                    <Avatar name=username.unwrap_or_default() size=36 />
-                    <div class="j-composer-body">
-                        <ComposerFields
-                            body=body
-                            format=format
-                            rows=rows_u32
-                            placeholder=placeholder
-                            textarea_class=""
-                            show_seg=false
-                            on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))
-                        />
-                        <input type="hidden" name="slug_override" value="" />
-                        <MediaPanel />
-                        <div class="j-composer-toolbar">
-                            <div class="j-seg">
-                                <button
-                                    type="button"
-                                    class=move || {
-                                        if format.get() == "markdown" {
-                                            "j-btn is-selected"
-                                        } else {
-                                            "j-btn"
-                                        }
-                                    }
-                                    on:click=move |_| format.set("markdown".to_string())
-                                >
-                                    "Markdown"
-                                </button>
-                                <button
-                                    type="button"
-                                    class=move || {
-                                        if format.get() == "org" {
-                                            "j-btn is-selected"
-                                        } else {
-                                            "j-btn"
-                                        }
-                                    }
-                                    on:click=move |_| format.set("org".to_string())
-                                >
-                                    "Org"
-                                </button>
-                            </div>
-                            <span class="j-spacer"></span>
+            <div class="j-composer-row">
+                <Avatar name=username.unwrap_or_default() size=36 />
+                <div class="j-composer-body">
+                    <ComposerFields
+                        body=body
+                        format=format
+                        rows=rows_u32
+                        placeholder=placeholder
+                        textarea_class=""
+                        show_seg=false
+                        on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))
+                    />
+                    <MediaPanel />
+                    <div class="j-composer-toolbar">
+                        <div class="j-seg">
                             <button
-                                class="j-btn"
-                                type="submit"
-                                name="publish"
-                                value="false"
-                                disabled=move || body.get().trim().is_empty()
+                                type="button"
+                                class=move || {
+                                    if format.get() == "markdown" {
+                                        "j-btn is-selected"
+                                    } else {
+                                        "j-btn"
+                                    }
+                                }
+                                on:click=move |_| format.set("markdown".to_string())
                             >
-                                "Save draft"
+                                "Markdown"
                             </button>
                             <button
-                                class="j-btn is-primary"
-                                type="submit"
-                                name="publish"
-                                value="true"
-                                disabled=move || body.get().trim().is_empty()
+                                type="button"
+                                class=move || {
+                                    if format.get() == "org" {
+                                        "j-btn is-selected"
+                                    } else {
+                                        "j-btn"
+                                    }
+                                }
+                                on:click=move |_| format.set("org".to_string())
                             >
-                                "Publish"
+                                "Org"
                             </button>
                         </div>
+                        <span class="j-spacer"></span>
+                        <button
+                            class="j-btn"
+                            type="button"
+                            name="publish"
+                            value="false"
+                            disabled=move || body.get().trim().is_empty()
+                            on:click=dispatch_save
+                        >
+                            "Save draft"
+                        </button>
+                        <button
+                            class="j-btn is-primary"
+                            type="button"
+                            name="publish"
+                            value="true"
+                            disabled=move || body.get().trim().is_empty()
+                            on:click=dispatch_publish
+                        >
+                            "Publish"
+                        </button>
                     </div>
                 </div>
-            </ActionForm>
+            </div>
             {move || {
                 create_action
                     .value()
@@ -513,86 +528,108 @@ pub fn PostCreateForm(
         }
         .into_any()
     } else {
+        let slug_override = RwSignal::new(String::new());
+        let dispatch_create = move |publish: bool| {
+            let slug = slug_override.get();
+            let slug_override = if slug.trim().is_empty() {
+                None
+            } else {
+                Some(slug)
+            };
+            create_action.dispatch(CreatePost {
+                body: body.get(),
+                format: format.get(),
+                slug_override,
+                publish,
+            });
+        };
         view! {
-            <ActionForm action=create_action>
-                <div class="j-compose-grid">
-                    <div class="j-compose-body">
-                        <ComposerFields
-                            body=body
-                            format=format
-                            rows=rows_u32
-                            placeholder=placeholder
-                            show_seg=false
-                        />
-                    </div>
-                    <aside class="j-compose-aside">
-                        <div>
-                            <div class="j-sb-head" style="padding:0 0 10px">
-                                "Options"
-                            </div>
-                            <div class="j-field-row" style="grid-template-columns:auto 1fr">
-                                <label class="j-field-label" for="compose-slug">
-                                    "Slug"
-                                </label>
-                                <input
-                                    id="compose-slug"
-                                    type="text"
-                                    name="slug_override"
-                                    placeholder="auto"
-                                    class="j-field-val"
-                                />
-                            </div>
-                            <div class="j-seg" style="margin-top:10px">
-                                <button
-                                    type="button"
-                                    class=move || {
-                                        if format.get() == "markdown" {
-                                            "j-btn is-selected"
-                                        } else {
-                                            "j-btn"
-                                        }
-                                    }
-                                    on:click=move |_| format.set("markdown".to_string())
-                                >
-                                    "Markdown"
-                                </button>
-                                <button
-                                    type="button"
-                                    class=move || {
-                                        if format.get() == "org" {
-                                            "j-btn is-selected"
-                                        } else {
-                                            "j-btn"
-                                        }
-                                    }
-                                    on:click=move |_| format.set("org".to_string())
-                                >
-                                    "Org"
-                                </button>
-                            </div>
+            <div class="j-compose-grid">
+                <div class="j-compose-body">
+                    <ComposerFields
+                        body=body
+                        format=format
+                        rows=rows_u32
+                        placeholder=placeholder
+                        show_seg=false
+                    />
+                </div>
+                <aside class="j-compose-aside">
+                    <div>
+                        <div class="j-sb-head" style="padding:0 0 10px">
+                            "Options"
                         </div>
-                        <div style="margin-top:16px">
-                            <div class="j-sb-head" style="padding:0 0 10px">
-                                "Media"
-                            </div>
-                            <MediaPanel />
+                        <div class="j-field-row" style="grid-template-columns:auto 1fr">
+                            <label class="j-field-label" for="compose-slug">
+                                "Slug"
+                            </label>
+                            <input
+                                id="compose-slug"
+                                type="text"
+                                name="slug_override"
+                                placeholder="auto"
+                                class="j-field-val"
+                                prop:value=slug_override
+                                on:input=move |ev| slug_override.set(event_target_value(&ev))
+                            />
                         </div>
-                        <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
-                            <button class="j-btn" type="submit" name="publish" value="false">
-                                "Save draft"
+                        <div class="j-seg" style="margin-top:10px">
+                            <button
+                                type="button"
+                                class=move || {
+                                    if format.get() == "markdown" {
+                                        "j-btn is-selected"
+                                    } else {
+                                        "j-btn"
+                                    }
+                                }
+                                on:click=move |_| format.set("markdown".to_string())
+                            >
+                                "Markdown"
                             </button>
                             <button
-                                class="j-btn is-primary"
-                                type="submit"
-                                name="publish"
-                                value="true"
+                                type="button"
+                                class=move || {
+                                    if format.get() == "org" {
+                                        "j-btn is-selected"
+                                    } else {
+                                        "j-btn"
+                                    }
+                                }
+                                on:click=move |_| format.set("org".to_string())
                             >
-                                "Publish"
+                                "Org"
                             </button>
                         </div>
-                    </aside>
-                </div>
-            </ActionForm>
+                    </div>
+                    <div style="margin-top:16px">
+                        <div class="j-sb-head" style="padding:0 0 10px">
+                            "Media"
+                        </div>
+                        <MediaPanel />
+                    </div>
+                    <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
+                        <button
+                            class="j-btn"
+                            type="button"
+                            name="publish"
+                            value="false"
+                            on:click=move |_| dispatch_create(false)
+                        >
+                            "Save draft"
+                        </button>
+                        <button
+                            class="j-btn is-primary"
+                            type="button"
+                            name="publish"
+                            value="true"
+                            on:click=move |_| dispatch_create(true)
+                        >
+                            "Publish"
+                        </button>
+                    </div>
+                </aside>
+            </div>
             {move || {
                 create_action
                     .value()
