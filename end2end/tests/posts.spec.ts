@@ -620,6 +620,45 @@ test("inline composer: format toggle switches active button", async ({
   await expect(markdownBtn).not.toHaveClass(/is-selected/);
 });
 
+test("create post with tags via UI: tags persist and appear on the post", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  await goto(page, "/posts/new");
+
+  await page.fill('textarea[name="body"]', "# Tagged Post\n\ncontent");
+
+  // Add three tags via the TagInput: type and press Enter for each
+  for (const tag of ["alpha", "beta", "gamma"]) {
+    await page.fill(".j-tag-text", tag);
+    await page.keyboard.press("Enter");
+    await waitForSelector(page, `.j-tag-chip-label:has-text("#${tag}")`);
+  }
+
+  await click(page, 'button[name="publish"][value="true"]');
+  await waitForSelector(page, ".j-save-summary");
+  await expect(page.locator(".j-save-summary")).toContainText(
+    "Post published.",
+  );
+
+  // Navigate to the permalink and confirm all three tags appear
+  const permalink = await page
+    .locator('[data-test="permalink-link"]')
+    .getAttribute("href");
+  expect(permalink).toBeTruthy();
+  await goto(page, permalink!);
+
+  const tagList = page.locator(".j-tag-list");
+  await expect(tagList).toContainText("#alpha");
+  await expect(tagList).toContainText("#beta");
+  await expect(tagList).toContainText("#gamma");
+});
+
 test("authenticated user can delete a draft from the drafts page", async ({
   page,
 }, testInfo) => {

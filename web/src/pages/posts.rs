@@ -1,9 +1,10 @@
+use crate::tags::TagSummary;
 use crate::{
     auth::current_user,
     error::WebError,
     pages::{
         signal_read::read_signal,
-        ui::{ComposerFields, PostCard, PostCreateForm, PostDisplay, TagContext, Topbar},
+        ui::{ComposerFields, PostCard, PostCreateForm, PostDisplay, TagContext, TagInput, Topbar},
         MediaPanel,
     },
     posts::{
@@ -465,6 +466,7 @@ pub fn EditPostPage() -> impl IntoView {
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
     let slug_override = RwSignal::new(String::new());
+    let post_tags: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());
     // ServerAction dispatches happen only on the client; this redirect-on-publish
     // effect only ever fires there. `Effect::new_isomorphic` would needlessly
     // schedule on the server.
@@ -503,6 +505,7 @@ pub fn EditPostPage() -> impl IntoView {
                         body.set(fetched.body.clone());
                         format.set(fetched.format.clone());
                         slug_override.set(fetched.slug.clone());
+                        post_tags.set(fetched.tags.clone());
                         let post_id = fetched.post_id;
                         let is_published = fetched.published_at.is_some();
                         let dispatch_update = move |publish: bool| {
@@ -519,7 +522,9 @@ pub fn EditPostPage() -> impl IntoView {
                                     format: format.get(),
                                     slug_override: slug_override_arg,
                                     publish,
-                                    tags: None,
+                                    tags: Some(
+                                        post_tags.get().into_iter().map(|t| t.display).collect(),
+                                    ),
                                 });
                         };
                         view! {
@@ -560,6 +565,9 @@ pub fn EditPostPage() -> impl IntoView {
                                                     </div>
                                                 }
                                             })}
+                                        <div style="margin-top:10px">
+                                            <TagInput tags=post_tags />
+                                        </div>
                                         <div class="j-seg" style="margin-top:10px">
                                             <button
                                                 type="button"
