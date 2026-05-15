@@ -477,6 +477,7 @@ pub fn PostCreateForm(
     let create_action = ServerAction::<CreatePost>::new();
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
+    let tags: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());
 
     #[cfg(target_arch = "wasm32")]
     {
@@ -485,6 +486,7 @@ pub fn PostCreateForm(
                 let created = created.clone();
                 on_success.run(created);
                 body.set(String::new());
+                tags.set(Vec::new());
             }
         });
     }
@@ -501,7 +503,7 @@ pub fn PostCreateForm(
                 format: format.get(),
                 slug_override: None,
                 publish: false,
-                tags: None,
+                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
             });
         };
         let dispatch_publish = move |_| {
@@ -510,7 +512,7 @@ pub fn PostCreateForm(
                 format: format.get(),
                 slug_override: None,
                 publish: true,
-                tags: None,
+                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
             });
         };
         view! {
@@ -527,6 +529,7 @@ pub fn PostCreateForm(
                         on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))
                     />
                     <MediaPanel />
+                    <TagInput tags=tags />
                     <div class="j-composer-toolbar">
                         <div class="j-seg">
                             <button
@@ -603,7 +606,7 @@ pub fn PostCreateForm(
                 format: format.get(),
                 slug_override,
                 publish,
-                tags: None,
+                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
             });
         };
         view! {
@@ -635,6 +638,9 @@ pub fn PostCreateForm(
                                 prop:value=slug_override
                                 on:input=move |ev| slug_override.set(event_target_value(&ev))
                             />
+                        </div>
+                        <div style="margin-top:10px">
+                            <TagInput tags=tags />
                         </div>
                         <div class="j-seg" style="margin-top:10px">
                             <button
