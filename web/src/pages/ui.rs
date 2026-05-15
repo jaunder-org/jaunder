@@ -955,11 +955,274 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     }
 }
 
+// ─── Pure helpers for TagInput ────────────────────────────────
+
+/// Returns `true` when `s` is a valid tag slug: non-empty, first char
+/// `[a-z0-9]`, remaining chars `[a-z0-9-]`.  The input must already be
+/// lowercased (call [`normalize_tag_token`] first).
+///
+/// Mirrors [`common::tag::Tag::from_str`] so client and server agree on
+/// validity without importing `common` into the WASM bundle.
+#[must_use]
+pub fn is_valid_tag_slug(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => false,
+        Some(c) if !c.is_ascii_lowercase() && !c.is_ascii_digit() => false,
+        _ => chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+    }
+}
+
+/// Trims whitespace from `raw` and lowercases the result.
+#[must_use]
+pub fn normalize_tag_token(raw: &str) -> String {
+    raw.trim().to_lowercase()
+}
+
+// ─── 3.9 TagInput ─────────────────────────────────────────────
+
+/// Chip-based tag input with debounced autocomplete.
+///
+/// Renders each tag in `tags` as a removable chip and emits one
+/// `<input type="hidden" name=name value=display>` per chip so an enclosing
+/// form receives a `Vec<String>`.
+///
+/// Key bindings: `Enter`/`Tab` commit a chip from the text field; `Backspace`
+/// on an empty field removes the last chip; `ArrowUp`/`ArrowDown` navigate
+/// the autocomplete dropdown; `Escape` closes it.
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::must_use_candidate)]
+#[component]
+pub fn TagInput(
+    tags: RwSignal<Vec<TagSummary>>,
+    #[prop(default = "tags")] name: &'static str,
+) -> impl IntoView {
+    let input_text = RwSignal::new(String::new());
+    let error: RwSignal<Option<String>> = RwSignal::new(None);
+    let suggestions: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());
+    let suggestions_open = RwSignal::new(false);
+    let selected_idx: RwSignal<Option<usize>> = RwSignal::new(None);
+    // Tick counter for debounce: increment on each keystroke; the timeout
+    // callback only fires if the tick hasn't changed.
+    #[cfg(target_arch = "wasm32")]
+    let debounce_tick = RwSignal::new(0u64);
+
+    let on_input = move |ev: leptos::ev::Event| {
+        let val = event_target_value(&ev);
+        input_text.set(val.clone());
+        error.set(None);
+        selected_idx.set(None);
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            use leptos::task::spawn_local;
+            use leptos_dom::helpers::set_timeout;
+            use std::time::Duration;
+
+            let prefix = val.trim().to_lowercase();
+            if prefix.is_empty() {
+                suggestions.set(Vec::new());
+                suggestions_open.set(false);
+                return;
+            }
+
+            let tick = debounce_tick.get_untracked() + 1;
+            debounce_tick.set(tick);
+
+            set_timeout(
+                move || {
+                    if debounce_tick.get_untracked() != tick {
+                        return;
+                    }
+                    spawn_local(async move {
+                        if let Ok(results) = crate::tags::list_tags(Some(prefix), Some(10)).await {
+                            if debounce_tick.get_untracked() == tick {
+                                let open = !results.is_empty();
+                                suggestions.set(results);
+                                suggestions_open.set(open);
+                            }
+                        }
+                    });
+                },
+                Duration::from_millis(150),
+            );
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = val;
+    };
+
+    let on_keydown = move |ev: leptos::ev::KeyboardEvent| {
+        let key = ev.key();
+        match key.as_str() {
+            "Enter" | "Tab" => {
+                // If a suggestion is keyboard-selected, commit it.
+                if let Some(i) = selected_idx.get() {
+                    if let Some(tag) = suggestions.get().get(i).cloned() {
+                        ev.prevent_default();
+                        tags.update(|t| {
+                            if !t.iter().any(|x| x.slug == tag.slug) {
+                                t.push(tag.clone());
+                            }
+                        });
+                        input_text.set(String::new());
+                        error.set(None);
+                        suggestions.set(Vec::new());
+                        suggestions_open.set(false);
+                        selected_idx.set(None);
+                        return;
+                    }
+                }
+                // Commit the typed text; Tab passes through if the field is empty.
+                let text = normalize_tag_token(&input_text.get());
+                if text.is_empty() {
+                    return;
+                }
+                ev.prevent_default();
+                if is_valid_tag_slug(&text) {
+                    let slug = text.clone();
+                    tags.update(|t| {
+                        if !t.iter().any(|x| x.slug == slug) {
+                            t.push(TagSummary {
+                                slug: slug.clone(),
+                                display: slug,
+                            });
+                        }
+                    });
+                    input_text.set(String::new());
+                    error.set(None);
+                    suggestions.set(Vec::new());
+                    suggestions_open.set(false);
+                    selected_idx.set(None);
+                } else {
+                    error.set(Some(format!("Invalid tag \"{text}\"")));
+                }
+            }
+            "Backspace" => {
+                if input_text.get().is_empty() {
+                    tags.update(|t| {
+                        t.pop();
+                    });
+                }
+            }
+            "ArrowDown" => {
+                ev.prevent_default();
+                let len = suggestions.get().len();
+                if len > 0 {
+                    selected_idx.update(|i| {
+                        *i = Some(i.map(|n| (n + 1).min(len - 1)).unwrap_or(0));
+                    });
+                }
+            }
+            "ArrowUp" => {
+                ev.prevent_default();
+                selected_idx.update(|i| {
+                    *i = i.and_then(|n| n.checked_sub(1));
+                });
+            }
+            "Escape" => {
+                suggestions.set(Vec::new());
+                suggestions_open.set(false);
+                selected_idx.set(None);
+            }
+            _ => {}
+        }
+    };
+
+    view! {
+        <div class="j-tag-input">
+            <div class="j-tag-chips">
+                {move || {
+                    tags.get()
+                        .into_iter()
+                        .map(|tag| {
+                            let slug = tag.slug.clone();
+                            let display = tag.display.clone();
+                            view! {
+                                <span class="j-tag-chip">
+                                    <input type="hidden" name=name value=display.clone() />
+                                    <span class="j-tag-chip-label">"#" {display}</span>
+                                    <button
+                                        type="button"
+                                        class="j-tag-chip-remove"
+                                        aria-label="Remove tag"
+                                        on:click=move |_| {
+                                            tags.update(|t| t.retain(|x| x.slug != slug));
+                                        }
+                                    >
+                                        "\u{00d7}"
+                                    </button>
+                                </span>
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                }}
+            </div>
+            <div class="j-tag-input-wrap">
+                <input
+                    type="text"
+                    class="j-tag-text"
+                    placeholder="Add tag\u{2026}"
+                    prop:value=input_text
+                    on:input=on_input
+                    on:keydown=on_keydown
+                    autocomplete="off"
+                />
+                {move || error.get().map(|e| view! { <p class="j-tag-error">{e}</p> })}
+                {move || {
+                    if !suggestions_open.get() {
+                        return ().into_any();
+                    }
+                    let items = suggestions
+                        .get()
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, tag)| {
+                            let is_active = selected_idx.get() == Some(idx);
+                            let slug = tag.slug.clone();
+                            let display = tag.display.clone();
+                            view! {
+                                <li
+                                    class=if is_active {
+                                        "j-tag-suggest-item is-active"
+                                    } else {
+                                        "j-tag-suggest-item"
+                                    }
+                                    on:click=move |_| {
+                                        let slug = slug.clone();
+                                        let display = display.clone();
+                                        tags.update(|t| {
+                                            if !t.iter().any(|x| x.slug == slug) {
+                                                t.push(TagSummary {
+                                                    slug: slug.clone(),
+                                                    display: display.clone(),
+                                                });
+                                            }
+                                        });
+                                        input_text.set(String::new());
+                                        error.set(None);
+                                        suggestions.set(Vec::new());
+                                        suggestions_open.set(false);
+                                        selected_idx.set(None);
+                                    }
+                                >
+                                    "#"
+                                    {tag.display}
+                                </li>
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    view! { <ul class="j-tag-suggest">{items}</ul> }.into_any()
+                }}
+            </div>
+        </div>
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
-    use super::{avatar_parts, format_post_time};
+    use super::{avatar_parts, format_post_time, is_valid_tag_slug, normalize_tag_token};
 
     #[test]
     fn avatar_parts_single_word() {
@@ -1031,5 +1294,81 @@ mod tests {
     #[test]
     fn format_post_time_handles_utc_z_suffix() {
         assert_eq!(format_post_time("2026-04-23T10:30:00Z"), "2026-04-23 10:30");
+    }
+
+    // ─── is_valid_tag_slug ────────────────────────────────────
+
+    #[test]
+    fn tag_slug_accepts_lowercase_alpha() {
+        assert!(is_valid_tag_slug("rust"));
+    }
+
+    #[test]
+    fn tag_slug_accepts_leading_digit() {
+        assert!(is_valid_tag_slug("42things"));
+    }
+
+    #[test]
+    fn tag_slug_accepts_hyphens_in_body() {
+        assert!(is_valid_tag_slug("hello-world"));
+    }
+
+    #[test]
+    fn tag_slug_accepts_single_char() {
+        assert!(is_valid_tag_slug("a"));
+        assert!(is_valid_tag_slug("0"));
+    }
+
+    #[test]
+    fn tag_slug_rejects_empty() {
+        assert!(!is_valid_tag_slug(""));
+    }
+
+    #[test]
+    fn tag_slug_rejects_leading_hyphen() {
+        assert!(!is_valid_tag_slug("-hello"));
+    }
+
+    #[test]
+    fn tag_slug_rejects_uppercase() {
+        assert!(!is_valid_tag_slug("Rust"));
+        assert!(!is_valid_tag_slug("RUST"));
+    }
+
+    #[test]
+    fn tag_slug_rejects_spaces() {
+        assert!(!is_valid_tag_slug("hello world"));
+    }
+
+    #[test]
+    fn tag_slug_rejects_special_chars() {
+        assert!(!is_valid_tag_slug("tag@site"));
+        assert!(!is_valid_tag_slug("tag_name"));
+    }
+
+    // ─── normalize_tag_token ──────────────────────────────────
+
+    #[test]
+    fn normalize_trims_whitespace() {
+        assert_eq!(normalize_tag_token("  rust  "), "rust");
+    }
+
+    #[test]
+    fn normalize_lowercases() {
+        assert_eq!(normalize_tag_token("Rust"), "rust");
+        assert_eq!(normalize_tag_token("HELLO-WORLD"), "hello-world");
+    }
+
+    #[test]
+    fn normalize_empty_stays_empty() {
+        assert_eq!(normalize_tag_token(""), "");
+        assert_eq!(normalize_tag_token("   "), "");
+    }
+
+    #[test]
+    fn normalize_then_validate_roundtrip() {
+        let normalized = normalize_tag_token("  Hello-World  ");
+        assert!(is_valid_tag_slug(&normalized));
+        assert_eq!(normalized, "hello-world");
     }
 }
