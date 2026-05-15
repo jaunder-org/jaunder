@@ -585,6 +585,85 @@
     color: var(--accent);
 }
 
+/* ─── tag input (editable chips + autocomplete) ─── */
+.j-tag-input {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.j-tag-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: 0;
+}
+.j-tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--accent-soft);
+    border: 1px var(--border-style) var(--accent);
+    border-radius: var(--pill);
+    padding: 2px 6px 2px 9px;
+    font-size: 12px;
+    font-family: var(--font-meta);
+    color: var(--accent-ink);
+}
+.j-tag-chip-label {
+    line-height: 1.4;
+}
+.j-tag-chip-remove {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--muted-soft);
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+}
+.j-tag-chip-remove:hover {
+    color: var(--ink);
+}
+.j-tag-input-wrap {
+    position: relative;
+}
+.j-tag-text {
+    width: 100%;
+}
+.j-tag-error {
+    margin: 4px 0 0;
+    font-size: 12px;
+    color: var(--c-danger);
+}
+.j-tag-suggest {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    right: 0;
+    background: var(--surface);
+    border: 1px var(--border-style) var(--line);
+    border-radius: 6px;
+    list-style: none;
+    margin: 0;
+    padding: 4px 0;
+    z-index: 50;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    max-height: 220px;
+    overflow-y: auto;
+}
+.j-tag-suggest-item {
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: var(--font-meta);
+    color: var(--ink);
+}
+.j-tag-suggest-item:hover,
+.j-tag-suggest-item.is-active {
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+}
+
 /* ─── post actions column ─── */
 .j-post-acts {
     display: flex;
