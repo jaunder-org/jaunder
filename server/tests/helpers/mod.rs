@@ -48,6 +48,9 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::posts::ListUserPosts>();
         server_fn::axum::register_explicit::<web::posts::ListLocalTimeline>();
         server_fn::axum::register_explicit::<web::posts::ListHomeFeed>();
+        server_fn::axum::register_explicit::<web::posts::ListPostsByTag>();
+        server_fn::axum::register_explicit::<web::posts::ListUserPostsByTag>();
+        server_fn::axum::register_explicit::<web::tags::ListTags>();
     });
 }
 
