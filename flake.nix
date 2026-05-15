@@ -438,25 +438,44 @@
           filter = path: _type: !(pkgs.lib.hasInfix "/node_modules" path);
         };
 
+        # Discover integration test modules from server/tests/ at evaluation time.
+        # Any .rs file added there is automatically included; directories (e.g.
+        # helpers/) are filtered out by type.
+        integrationTestModules =
+          let
+            entries = builtins.readDir ./server/tests;
+            rsFiles = pkgs.lib.filterAttrs (n: t: t == "regular" && pkgs.lib.hasSuffix ".rs" n) entries;
+          in
+          map (pkgs.lib.removeSuffix ".rs") (builtins.attrNames rsFiles);
+
+        # Non-default postgres check configs for specific test modules.
+        testModuleOverrides = {
+          # `commands` includes PostgreSQL-only ignored bootstrap tests.
+          commands = {
+            includeIgnored = true;
+            extraEnv = "JAUNDER_PG_BOOTSTRAP_TEST_URL=postgres://postgres@127.0.0.1/postgres ";
+          };
+          # `storage` carries ignored PostgreSQL-only parity/migration tests.
+          storage = {
+            includeIgnored = true;
+          };
+        };
+
         postgresIntegrationTests = craneLib.buildPackage (
           commonArgs
           // {
             inherit cargoArtifacts;
-            cargoExtraArgs = "-p jaunder --test backup_interop --test commands --test storage --test web_account --test web_auth --test web_backup --test web_email --test web_password_reset";
+            cargoExtraArgs = "-p jaunder" + pkgs.lib.concatMapStrings (m: " --test ${m}") integrationTestModules;
             doCheck = false;
-            installPhaseCommand = ''
-              mkdir -p $out/lib $out/tests
-              ln -s ${pkgs.openssl.out}/lib/libssl.so.3 $out/lib/libssl.so.3
-              ln -s ${pkgs.openssl.out}/lib/libcrypto.so.3 $out/lib/libcrypto.so.3
-              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'backup_interop-*' | head -n 1)" $out/tests/backup_interop
-              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'commands-*' | head -n 1)" $out/tests/commands
-              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'storage-*' | head -n 1)" $out/tests/storage
-              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'web_account-*' | head -n 1)" $out/tests/web_account
-              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'web_auth-*' | head -n 1)" $out/tests/web_auth
-              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'web_backup-*' | head -n 1)" $out/tests/web_backup
-              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'web_email-*' | head -n 1)" $out/tests/web_email
-              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name 'web_password_reset-*' | head -n 1)" $out/tests/web_password_reset
-            '';
+            installPhaseCommand =
+              ''
+                mkdir -p $out/lib $out/tests
+                ln -s ${pkgs.openssl.out}/lib/libssl.so.3 $out/lib/libssl.so.3
+                ln -s ${pkgs.openssl.out}/lib/libcrypto.so.3 $out/lib/libcrypto.so.3
+              ''
+              + pkgs.lib.concatMapStrings (m: ''
+                cp "$(find target/release/deps -maxdepth 1 -type f -executable -name '${m}-*' | head -n 1)" $out/tests/${m}
+              '') integrationTestModules;
           }
         );
 
@@ -853,53 +872,23 @@
               warmupEnv = " JAUNDER_E2E_WARMUP=1";
             };
 
-            postgres-backup-interop = postgresTestBinaryCheck {
-              checkName = "jaunder-postgres-backup-interop";
-              testBinary = "backup_interop";
-            };
-
-            # `commands` includes PostgreSQL-only ignored bootstrap tests, so
-            # this VM check runs the full binary with `--include-ignored`.
-            postgres-commands = postgresTestBinaryCheck {
-              checkName = "jaunder-postgres-commands";
-              testBinary = "commands";
-              includeIgnored = true;
-              extraEnv = "JAUNDER_PG_BOOTSTRAP_TEST_URL=postgres://postgres@127.0.0.1/postgres ";
-            };
-
-            # `storage` also carries ignored PostgreSQL-only parity/migration
-            # tests, so it likewise includes ignored cases in the VM run.
-            postgres-storage = postgresTestBinaryCheck {
-              checkName = "jaunder-postgres-storage";
-              testBinary = "storage";
-              includeIgnored = true;
-            };
-
-            postgres-web-account = postgresTestBinaryCheck {
-              checkName = "jaunder-postgres-web-account";
-              testBinary = "web_account";
-            };
-
-            postgres-web-auth = postgresTestBinaryCheck {
-              checkName = "jaunder-postgres-web-auth";
-              testBinary = "web_auth";
-            };
-
-            postgres-web-backup = postgresTestBinaryCheck {
-              checkName = "jaunder-postgres-web-backup";
-              testBinary = "web_backup";
-            };
-
-            postgres-web-email = postgresTestBinaryCheck {
-              checkName = "jaunder-postgres-web-email";
-              testBinary = "web_email";
-            };
-
-            postgres-web-password-reset = postgresTestBinaryCheck {
-              checkName = "jaunder-postgres-web-password-reset";
-              testBinary = "web_password_reset";
-            };
           }
+          // pkgs.lib.listToAttrs (
+            map (
+              m:
+              let
+                checkKey = "postgres-" + pkgs.lib.replaceStrings [ "_" ] [ "-" ] m;
+                overrides = testModuleOverrides.${m} or { };
+              in
+              pkgs.lib.nameValuePair checkKey (postgresTestBinaryCheck (
+                {
+                  checkName = "jaunder-${checkKey}";
+                  testBinary = m;
+                }
+                // overrides
+              ))
+            ) integrationTestModules
+          )
           // {
             clippy = craneLib.cargoClippy (
               commonArgs
