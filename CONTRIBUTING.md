@@ -92,7 +92,37 @@ matches the change first, then move up to the broader checks before pushing.
 - In hydration-heavy e2e tests, use
   `hydrationHeavyTimeoutMs(testInfo, chromiumBudgetMs)` for whole-test budgets
   and `hydrationHeavyFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)` for
-  first navigation waits.
+  first navigation waits (see [ADR-0012](docs/decisions/0012-environment-aware-timeouts.md)).
+
+### Observability and Performance Analysis
+
+Jaunder uses OpenTelemetry for deep performance analysis (see [ADR-0011](docs/decisions/0011-unified-observability.md)).
+
+- **Trace Analysis**: Use `scripts/analyze-otel-traces` to process trace artifacts (JSONL) from VM runs or local tests.
+  ```bash
+  scripts/analyze-otel-traces \
+    /path/to/otel-traces-sqlite.jsonl/otel-traces.jsonl \
+    /path/to/otel-traces-postgres.jsonl/otel-traces.jsonl
+  ```
+  The analyzer reports on:
+  - Slowest spans overall and per `e2e.test`.
+  - Top navigation and action hotspots.
+  - `commit -> hydration` splits by `cacheWarmth`.
+  - Hydration component hotspots (`wasm_init`, `leptos_hydrate`, etc.).
+
+  **Optional Filters**:
+  - `--top N`: Limit the number of rows in each section.
+  - `--trace TRACE_ID`: Analyze a specific trace.
+  - `--project NAME`: Filter by browser (e.g., `firefox`, `webkit`).
+
+- **WASM Audit**: Use `scripts/audit-wasm-bundle` to measure the size of the frontend WASM and JS bundles from the deterministic Nix build.
+  ```bash
+  scripts/audit-wasm-bundle
+  ```
+  Useful options: `--json` for machine-readable output, or `--site-path` to reuse a build.
+
+- **Run & Analyze**: Use `scripts/run-e2e-trace-analysis` to run the full VM e2e suite and immediately analyze the results.
+  - Use `--cold` to run against cold caches instead of the default warmup checks.
 
 ### Targeted Rust tests
 
