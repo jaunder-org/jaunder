@@ -207,7 +207,7 @@ pub async fn get_post(
                 .await
                 .map(|auth| auth.user_id == post.user_id)
                 .unwrap_or(false);
-            return Ok(post_response(post, username_parsed.to_string(), is_author));
+            return Ok(post_response(post, is_author));
         }
 
         let auth = require_auth()
@@ -228,7 +228,7 @@ pub async fn get_post(
         .await?
         .ok_or_else(not_found_error)?;
 
-        Ok(post_response(draft, auth.username.to_string(), true))
+        Ok(post_response(draft, true))
     })
 }
 
@@ -236,7 +236,6 @@ pub async fn get_post(
 #[server(endpoint = "/get_post_preview")]
 pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
     crate::web_server_fn!("get_post_preview", post_id => {
-        use chrono::Datelike;
         let auth = require_auth()
             .await
             .map_err(private_post_not_found_error)?;
@@ -249,52 +248,11 @@ pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
             .map_err(InternalError::storage)?
             .ok_or_else(not_found_error)?;
 
-        let PostRecord {
-            post_id,
-            user_id,
-            title,
-            slug,
-            body,
-            format,
-            rendered_html,
-            created_at,
-            published_at,
-            deleted_at,
-            tags,
-            ..
-        } = post;
-
-        if deleted_at.is_some() || user_id != auth.user_id {
+        if post.deleted_at.is_some() || post.user_id != auth.user_id {
             return Err(not_found_error());
         }
 
-        let username = auth.username.to_string();
-        let permalink = published_at.as_ref().map(|t| {
-            format!(
-                "/~{}/{:04}/{:02}/{:02}/{}",
-                username,
-                t.year(),
-                t.month(),
-                t.day(),
-                slug.as_str()
-            )
-        });
-
-        Ok(PostResponse {
-            post_id,
-            username,
-            title,
-            slug: slug.to_string(),
-            body,
-            format: format.to_string(),
-            rendered_html,
-            created_at: created_at.to_rfc3339(),
-            is_draft: published_at.is_none(),
-            published_at: published_at.map(|t| t.to_rfc3339()),
-            is_author: true,
-            permalink,
-            tags: post_tags_to_summaries(tags),
-        })
+        Ok(post_response(post, true))
     })
 }
 
@@ -487,7 +445,7 @@ pub async fn list_user_posts(
 
         let posts = rows
             .into_iter()
-            .filter_map(|post| timeline_post_summary(&username, post, viewer_user_id))
+            .filter_map(|post| timeline_post_summary(post, viewer_user_id))
             .collect();
 
         Ok(TimelinePage {
@@ -528,19 +486,10 @@ pub async fn list_local_timeline(
         rows.truncate(page_size as usize);
 
         let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
-        let mut posts = Vec::with_capacity(rows.len());
-
-        for post in rows {
-            let author = state
-                .users
-                .get_user(post.user_id)
-                .await
-                .map_err(InternalError::storage)?
-                .ok_or_else(|| InternalError::not_found("post author"))?;
-            if let Some(summary) = timeline_post_summary(&author.username, post, viewer_user_id) {
-                posts.push(summary);
-            }
-        }
+        let posts = rows
+            .into_iter()
+            .filter_map(|post| timeline_post_summary(post, viewer_user_id))
+            .collect();
 
         Ok(TimelinePage {
             posts,
@@ -578,7 +527,7 @@ pub async fn list_home_feed(
         let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
         let posts = rows
             .into_iter()
-            .filter_map(|post| timeline_post_summary(&auth.username, post, Some(auth.user_id)))
+            .filter_map(|post| timeline_post_summary(post, Some(auth.user_id)))
             .collect();
 
         Ok(TimelinePage {
@@ -631,19 +580,10 @@ pub async fn list_posts_by_tag(
         rows.truncate(page_size as usize);
 
         let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
-        let mut posts = Vec::with_capacity(rows.len());
-
-        for post in rows {
-            let author = state
-                .users
-                .get_user(post.user_id)
-                .await
-                .map_err(InternalError::storage)?
-                .ok_or_else(|| InternalError::not_found("post author"))?;
-            if let Some(summary) = timeline_post_summary(&author.username, post, viewer_user_id) {
-                posts.push(summary);
-            }
-        }
+        let posts = rows
+            .into_iter()
+            .filter_map(|post| timeline_post_summary(post, viewer_user_id))
+            .collect();
 
         Ok(TimelinePage {
             posts,
@@ -709,7 +649,7 @@ pub async fn list_user_posts_by_tag(
         let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
         let posts = rows
             .into_iter()
-            .filter_map(|post| timeline_post_summary(&author.username, post, viewer_user_id))
+            .filter_map(|post| timeline_post_summary(post, viewer_user_id))
             .collect();
 
         Ok(TimelinePage {
@@ -798,13 +738,13 @@ fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
 
 #[cfg(feature = "ssr")]
 fn timeline_post_summary(
-    username: &Username,
     post: PostRecord,
     viewer_user_id: Option<i64>,
 ) -> Option<TimelinePostSummary> {
     let PostRecord {
         post_id,
         user_id,
+        author_username,
         title,
         slug,
         rendered_html,
@@ -814,10 +754,10 @@ fn timeline_post_summary(
         ..
     } = post;
     let published_at = published_at?;
-    let permalink = build_permalink(username, published_at, &slug);
+    let permalink = build_permalink(&author_username, published_at, &slug);
     Some(TimelinePostSummary {
         post_id,
-        username: username.to_string(),
+        username: author_username.to_string(),
         title,
         slug: slug.to_string(),
         rendered_html,
@@ -901,10 +841,11 @@ fn to_post_cursor(post: &PostRecord) -> PostCursor {
 }
 
 #[cfg(feature = "ssr")]
-fn post_response(post: PostRecord, username: String, is_author: bool) -> PostResponse {
+fn post_response(post: PostRecord, is_author: bool) -> PostResponse {
     use chrono::Datelike;
     let PostRecord {
         post_id,
+        author_username,
         title,
         slug,
         body,
@@ -918,7 +859,7 @@ fn post_response(post: PostRecord, username: String, is_author: bool) -> PostRes
     let permalink = published_at.as_ref().map(|t| {
         format!(
             "/~{}/{:04}/{:02}/{:02}/{}",
-            username,
+            author_username.as_str(),
             t.year(),
             t.month(),
             t.day(),
@@ -927,7 +868,7 @@ fn post_response(post: PostRecord, username: String, is_author: bool) -> PostRes
     });
     PostResponse {
         post_id,
-        username,
+        username: author_username.to_string(),
         title,
         slug: slug.to_string(),
         body,
@@ -1192,11 +1133,13 @@ mod tests {
     #[test]
     fn fallback_summary_label_prefers_body_then_title_then_slug() {
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
+        let author_username = "author".parse::<Username>().unwrap();
         let slug = "hello-world".parse::<Slug>().unwrap();
 
         let body_label = fallback_summary_label(&PostRecord {
             post_id: 1,
             user_id: 2,
+            author_username: author_username.clone(),
             title: Some("Stored Title".to_string()),
             slug: slug.clone(),
             body: "\nBody label\nmore".to_string(),
@@ -1213,6 +1156,7 @@ mod tests {
         let title_label = fallback_summary_label(&PostRecord {
             post_id: 1,
             user_id: 2,
+            author_username: author_username.clone(),
             title: Some("Stored Title".to_string()),
             slug: slug.clone(),
             body: "".to_string(),
@@ -1229,6 +1173,7 @@ mod tests {
         let slug_label = fallback_summary_label(&PostRecord {
             post_id: 1,
             user_id: 2,
+            author_username,
             title: None,
             slug,
             body: "".to_string(),
@@ -1247,14 +1192,13 @@ mod tests {
     #[test]
     fn timeline_post_summary_keeps_titleless_posts_titleless() {
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
-        let username = "author".parse::<Username>().unwrap();
         let slug = "titleless-note".parse::<Slug>().unwrap();
 
         let summary = timeline_post_summary(
-            &username,
             PostRecord {
                 post_id: 1,
                 user_id: 2,
+                author_username: "author".parse::<Username>().unwrap(),
                 title: None,
                 slug,
                 body: "Titleless note".to_string(),
@@ -1271,6 +1215,7 @@ mod tests {
         .expect("published post should summarize");
 
         assert_eq!(summary.title, None);
+        assert_eq!(summary.username, "author");
         assert_eq!(summary.permalink, "/~author/2026/04/16/titleless-note");
     }
 
@@ -1278,12 +1223,14 @@ mod tests {
     #[test]
     fn post_response_marks_draft_state_from_published_at() {
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
+        let author_username = "author".parse::<Username>().unwrap();
         let slug = "hello-world".parse::<Slug>().unwrap();
 
         let draft = post_response(
             PostRecord {
                 post_id: 1,
                 user_id: 2,
+                author_username: author_username.clone(),
                 title: Some("Draft".to_string()),
                 slug: slug.clone(),
                 body: "body".to_string(),
@@ -1295,16 +1242,17 @@ mod tests {
                 deleted_at: None,
                 tags: vec![],
             },
-            "author".to_string(),
             true,
         );
         assert!(draft.is_draft);
         assert!(draft.published_at.is_none());
+        assert_eq!(draft.username, "author");
 
         let published = post_response(
             PostRecord {
                 post_id: 2,
                 user_id: 2,
+                author_username,
                 title: Some("Published".to_string()),
                 slug,
                 body: "body".to_string(),
@@ -1316,7 +1264,6 @@ mod tests {
                 deleted_at: None,
                 tags: vec![],
             },
-            "author".to_string(),
             false,
         );
         assert!(!published.is_draft);

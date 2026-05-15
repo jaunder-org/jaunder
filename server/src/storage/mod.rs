@@ -133,6 +133,7 @@ pub(super) fn build_invite_record(
 pub(super) type PostRecordParts = (
     i64,                   // post_id
     i64,                   // user_id
+    String,                // author_username
     Option<String>,        // title
     String,                // slug
     String,                // body
@@ -181,6 +182,7 @@ pub(super) fn build_post_record(
     (
         post_id,
         user_id,
+        author_username,
         title,
         slug,
         body,
@@ -194,6 +196,9 @@ pub(super) fn build_post_record(
     ): PostRecordParts,
 ) -> sqlx::Result<PostRecord> {
     use common::slug::Slug;
+    let author_username = author_username
+        .parse::<Username>()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     let slug = slug
         .parse::<Slug>()
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
@@ -204,6 +209,7 @@ pub(super) fn build_post_record(
     Ok(PostRecord {
         post_id,
         user_id,
+        author_username,
         title,
         slug,
         body,
@@ -272,6 +278,7 @@ pub(super) fn invite_record_from_row(
 pub(super) type PostRow = (
     i64,                   // post_id
     i64,                   // user_id
+    String,                // author_username
     Option<String>,        // title
     String,                // slug
     String,                // body
@@ -673,6 +680,7 @@ mod tests {
         let record = build_post_record((
             10,
             20,
+            "alice".to_string(),
             Some("Hello".to_string()),
             "hello-world".to_string(),
             "Body".to_string(),
@@ -688,6 +696,7 @@ mod tests {
 
         assert_eq!(record.post_id, 10);
         assert_eq!(record.user_id, 20);
+        assert_eq!(record.author_username.as_str(), "alice");
         assert_eq!(record.slug.as_str(), "hello-world");
         assert_eq!(record.format, PostFormat::Markdown);
         assert_eq!(record.published_at, Some(now));
@@ -701,6 +710,7 @@ mod tests {
         let err = build_post_record((
             10,
             20,
+            "alice".to_string(),
             Some("Hello".to_string()),
             "not a slug".to_string(),
             "Body".to_string(),
@@ -723,10 +733,34 @@ mod tests {
         let err = build_post_record((
             10,
             20,
+            "alice".to_string(),
             Some("Hello".to_string()),
             "hello-world".to_string(),
             "Body".to_string(),
             "html".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            None,
+            None,
+            "[]".to_string(),
+        ))
+        .unwrap_err();
+
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[test]
+    fn test_build_post_record_rejects_invalid_username() {
+        let now = Utc::now();
+        let err = build_post_record((
+            10,
+            20,
+            "Invalid Username".to_string(),
+            Some("Hello".to_string()),
+            "hello-world".to_string(),
+            "Body".to_string(),
+            "markdown".to_string(),
             "<p>Body</p>".to_string(),
             now,
             now,
