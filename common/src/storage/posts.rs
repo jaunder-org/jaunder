@@ -49,13 +49,17 @@ impl FromStr for PostFormat {
 ///
 /// `tags` is populated by the same query that loads the rest of the row via
 /// a JSON-aggregating subquery, so post and tag state are always read from
-/// the same statement-level snapshot.
+/// the same statement-level snapshot. `author_username` is sourced from the
+/// `users` table in the same query (via JOIN or correlated subquery), so
+/// callers never need a second roundtrip to look up the post's author.
 #[derive(Clone, Debug)]
 pub struct PostRecord {
     /// Unique internal identifier.
     pub post_id: i64,
     /// ID of the user who owns the post.
     pub user_id: i64,
+    /// Username of the author
+    pub author_username: Username,
     /// Optional title.
     pub title: Option<String>,
     /// Unique slug (per user, per day).
