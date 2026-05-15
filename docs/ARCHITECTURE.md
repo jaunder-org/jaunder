@@ -48,22 +48,24 @@ graph TD
 
 ## Data Flow & Storage
 
-Persistence is abstracted behind traits defined in the `common` crate (`common/src/storage/`). This prevents circular dependencies between the `server` and `web` crates. Jaunder uses a tiered storage architecture to isolate user data from shared network content (see [ADR-0006](decisions/0006-storage-isolation.md)).
+Persistence is abstracted behind traits defined in the `common` crate (`common/src/storage/`). This prevents circular dependencies between the `server` and `web` crates and allows the application to remain agnostic of the underlying database engine (see [ADR-0001](decisions/0001-storage-backends.md)).
 
-### Storage Traits
+Jaunder uses a tiered storage architecture to isolate user data from shared network content (see [ADR-0006](decisions/0006-storage-isolation.md)).
 
-Traits are defined in `common` and re-exported by `server/src/storage/mod.rs` for convenience:
+### Storage Abstraction
 
-- `SiteConfigStorage`: Key-value configuration.
-- `UserStorage`: User account management.
-- `SessionStorage`: Session token lifecycle.
-- `InviteStorage`: Invite code management.
+The storage layer is divided into functional modules, each defining a trait for operations on a specific domain (e.g., `UserStorage`, `PostStorage`). These traits, along with their associated data models and error types, are the definitive interface for persistence in Jaunder.
 
-All concrete implementations (e.g., `SqliteUserStorage`) are hidden from the application logic. The `server` crate provides an `AppState` struct that bundles these traits as `Arc<dyn Trait>` objects.
+The [**`common/src/storage/`**](../common/src/storage/) directory is the single source of truth for these interfaces. Developers should consult the doc comments in that directory for the most up-to-date definitions of:
+
+-   **Domain Traits**: Core interfaces for users, posts, sessions, etc.
+-   **Atomic Operations**: Cross-table transactions that span multiple traits.
+-   **Data Records**: Normalized models returned by storage queries.
+-   **App State**: The centralized bundle of all storage handles used by the application.
 
 ### Cross-Table Transactions
 
-While individual traits handle single-table operations, some business logic spans multiple tables. These operations are implemented as **free functions** in the `storage` module that accept a raw database pool, allowing for atomic transactions across trait boundaries.
+While individual traits handle single-table operations, some business logic spans multiple tables. These operations are implemented as **free functions** in the server's storage module that accept a raw database pool, allowing for atomic transactions across trait boundaries.
 
 ## Authentication
 

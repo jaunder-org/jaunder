@@ -1,3 +1,5 @@
+//! Content storage for posts, revisions, and tagging.
+
 use std::{fmt, str::FromStr};
 
 use async_trait::async_trait;
@@ -11,7 +13,9 @@ use crate::username::Username;
 /// The format/markup language used to author a post body.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PostFormat {
+    /// CommonMark/GitHub-flavored Markdown.
     Markdown,
+    /// Emacs Org-mode format.
     Org,
 }
 
@@ -44,38 +48,62 @@ impl FromStr for PostFormat {
 /// A post record returned by [`PostStorage`] queries.
 #[derive(Clone, Debug)]
 pub struct PostRecord {
+    /// Unique internal identifier.
     pub post_id: i64,
+    /// ID of the user who owns the post.
     pub user_id: i64,
+    /// Optional title.
     pub title: Option<String>,
+    /// Unique slug (per user, per day).
     pub slug: Slug,
+    /// Raw source body (Markdown or Org).
     pub body: String,
+    /// Format of the `body`.
     pub format: PostFormat,
+    /// Sanitized HTML rendering of the `body`.
     pub rendered_html: String,
+    /// When the post was first created.
     pub created_at: DateTime<Utc>,
+    /// When the post was last updated.
     pub updated_at: DateTime<Utc>,
+    /// When the post was published (None if it is a draft).
     pub published_at: Option<DateTime<Utc>>,
+    /// When the post was soft-deleted (None if active).
     pub deleted_at: Option<DateTime<Utc>>,
 }
 
 /// A post revision record returned by [`PostStorage`] queries.
+///
+/// Revisions are created automatically whenever a post is updated.
 #[derive(Clone, Debug)]
 pub struct PostRevisionRecord {
+    /// Unique identifier for this revision.
     pub revision_id: i64,
+    /// ID of the associated post.
     pub post_id: i64,
+    /// ID of the user who made the edit.
     pub user_id: i64,
+    /// Title at the time of this revision.
     pub title: Option<String>,
+    /// Slug at the time of this revision.
     pub slug: Slug,
+    /// Raw source body at the time of this revision.
     pub body: String,
+    /// Format at the time of this revision.
     pub format: PostFormat,
+    /// Sanitized HTML rendering at the time of this revision.
     pub rendered_html: String,
+    /// When this revision was created.
     pub edited_at: DateTime<Utc>,
 }
 
 /// Errors that can occur when creating a post.
 #[derive(Debug, Error)]
 pub enum CreatePostError {
+    /// A post with the same slug already exists for this user on this day.
     #[error("slug already taken for this user on this date")]
     SlugConflict,
+    /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
 }
@@ -83,17 +111,22 @@ pub enum CreatePostError {
 /// Errors that can occur when updating a post.
 #[derive(Debug, Error)]
 pub enum UpdatePostError {
+    /// The requested post does not exist.
     #[error("post not found")]
     NotFound,
+    /// The user is not authorized to edit this post.
     #[error("not authorized")]
     Unauthorized,
+    /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
 }
 
 /// Cursor for keyset pagination of post listings.
 pub struct PostCursor {
+    /// Creation timestamp of the last item in the previous page.
     pub created_at: DateTime<Utc>,
+    /// ID of the last item in the previous page (used for stable ordering).
     pub post_id: i64,
 }
 
@@ -106,6 +139,7 @@ pub struct CreatePostInput {
     pub body: String,
     pub format: PostFormat,
     pub rendered_html: String,
+    /// If Some, the post is created in a published state.
     pub published_at: Option<DateTime<Utc>>,
 }
 
@@ -113,7 +147,7 @@ pub struct CreatePostInput {
 #[derive(Clone)]
 pub struct UpdatePostInput {
     pub title: Option<String>,
-    /// Ignored if the post is already published.
+    /// The new slug. Note: Slugs are typically immutable once published.
     pub slug: Slug,
     pub body: String,
     pub format: PostFormat,
@@ -136,18 +170,23 @@ pub struct PostTag {
     pub post_id: i64,
     pub tag_id: i64,
     pub tag_slug: Tag,
+    /// The original case-sensitive display name of the tag.
     pub tag_display: String,
 }
 
 /// Errors that can occur when tagging a post.
 #[derive(Debug, Error)]
 pub enum TaggingError {
+    /// The target post does not exist.
     #[error("post not found")]
     PostNotFound,
+    /// The specified tag does not exist.
     #[error("tag not found")]
     TagNotFound,
+    /// The post is already associated with this tag.
     #[error("post is already tagged with this tag")]
     AlreadyTagged,
+    /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
 }
@@ -155,19 +194,27 @@ pub enum TaggingError {
 /// Errors that can occur when listing posts by tag.
 #[derive(Debug, Error)]
 pub enum ListByTagError {
+    /// The specified tag does not exist.
     #[error("tag not found")]
     TagNotFound,
+    /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
 }
 
 /// Async operations on the `posts` and `post_revisions` tables.
+///
+/// This trait manages the lifecycle of posts, including versioned edits,
+/// draft/publish status, soft-deletion, and tagging.
 #[async_trait]
 pub trait PostStorage: Send + Sync {
+    /// Creates a new post.
     async fn create_post(&self, input: &CreatePostInput) -> Result<i64, CreatePostError>;
 
+    /// Fetches a post by its ID.
     async fn get_post_by_id(&self, post_id: i64) -> sqlx::Result<Option<PostRecord>>;
 
+    /// Fetches a post by its public permalink components.
     async fn get_post_by_permalink(
         &self,
         username: &Username,
@@ -177,6 +224,12 @@ pub trait PostStorage: Send + Sync {
         slug: &Slug,
     ) -> sqlx::Result<Option<PostRecord>>;
 
+    /// Updates a post and creates a new revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UpdatePostError::NotFound`] if the post doesn't exist, or
+    /// [`UpdatePostError::Unauthorized`] if the editor isn't the owner.
     async fn update_post(
         &self,
         post_id: i64,
@@ -184,11 +237,13 @@ pub trait PostStorage: Send + Sync {
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError>;
 
+    /// Marks a post as deleted without removing it from the database.
     async fn soft_delete_post(&self, post_id: i64) -> sqlx::Result<()>;
 
-    /// Clears `published_at`, reverting a published post to draft status.
+    /// Reverts a published post to draft status.
     async fn unpublish_post(&self, post_id: i64) -> sqlx::Result<()>;
 
+    /// Lists published posts for a specific user, ordered by creation date.
     async fn list_published_by_user(
         &self,
         username: &Username,
@@ -196,12 +251,14 @@ pub trait PostStorage: Send + Sync {
         limit: u32,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
+    /// Lists all published posts across the entire site.
     async fn list_published(
         &self,
         cursor: Option<&PostCursor>,
         limit: u32,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
+    /// Lists draft posts for a specific user.
     async fn list_drafts_by_user(
         &self,
         user_id: i64,
@@ -209,16 +266,16 @@ pub trait PostStorage: Send + Sync {
         limit: u32,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
-    /// Associates a post with a tag. If the tag doesn't exist, creates it.
+    /// Associates a post with a tag. If the tag doesn't exist, it is created.
     async fn tag_post(&self, post_id: i64, tag_display: &str) -> Result<(), TaggingError>;
 
     /// Removes a tag association from a post.
     async fn untag_post(&self, post_id: i64, tag_slug: &Tag) -> Result<(), TaggingError>;
 
-    /// Returns all tags on a post.
+    /// Returns all tags associated with a specific post.
     async fn get_tags_for_post(&self, post_id: i64) -> sqlx::Result<Vec<PostTag>>;
 
-    /// Returns published, non-deleted posts with a tag.
+    /// Lists published posts that carry a specific tag.
     async fn list_posts_by_tag(
         &self,
         tag_slug: &Tag,
@@ -226,7 +283,7 @@ pub trait PostStorage: Send + Sync {
         limit: u32,
     ) -> Result<Vec<PostRecord>, ListByTagError>;
 
-    /// Returns published, non-deleted posts by user with a tag.
+    /// Lists published posts for a specific user that carry a specific tag.
     async fn list_user_posts_by_tag(
         &self,
         user_id: i64,
