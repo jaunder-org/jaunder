@@ -75,3 +75,31 @@ Jaunder supports two authentication mechanisms to accommodate both web and API c
 2.  **Bearer Tokens**: Used by API clients and mobile apps.
 
 Both are handled by the `AuthUser` Axum extractor, which resolves tokens via the `SessionStorage` trait. Inside Leptos server functions, `require_auth()` provides a unified way to access the current user.
+
+## Observability
+
+Jaunder implements a unified observability strategy using OpenTelemetry to correlate events across the backend and the end-to-end test runner (see [ADR-0011](decisions/0011-unified-observability.md)).
+
+### Tracing Layers
+
+1.  **Backend**: Rust spans produced via `tracing` in the `server` crate.
+2.  **E2E (Automatic)**: Per-test spans capturing navigation, hydration, and resource summaries.
+3.  **E2E (Semantic)**: Manual flow timing for domain-specific analysis.
+
+Trace context is propagated via the `JAUNDER_E2E_TRACEPARENT` header, allowing Playwright spans to be parented to the corresponding backend operations.
+
+### Trace Output Locations
+
+In E2E VM checks, traces are exported to an in-VM collector and persisted to:
+- `/var/lib/jaunder/otel-traces.jsonl` (inside the VM)
+- `otel-traces-sqlite.jsonl/otel-traces.jsonl` (as a build artifact)
+- `otel-traces-postgres.jsonl/otel-traces.jsonl` (as a build artifact)
+
+## Tooling & Diagnostics
+
+The project includes specialized tools for analyzing system behavior and performance:
+
+-   **`scripts/analyze-otel-traces`**: Processes JSONL trace artifacts to report on slowest spans, hydration hotspots, and navigation phase bottlenecks.
+-   **`scripts/audit-wasm-bundle`**: Measures deterministic WASM bundle sizes (raw, gzip, brotli) from Nix build outputs.
+
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for detailed usage of these tools during development.
