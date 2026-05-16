@@ -588,14 +588,15 @@
 /* ─── tag input (editable chips + autocomplete) ─── */
 .j-tag-input {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-.j-tag-chips {
-    display: flex;
     flex-wrap: wrap;
-    gap: 6px;
-    min-height: 0;
+    align-items: center;
+    gap: 4px;
+    position: relative;
+    padding: 4px 6px;
+    border: 1px var(--border-style) var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    cursor: text;
 }
 .j-tag-chip {
     display: inline-flex;
@@ -624,11 +625,15 @@
 .j-tag-chip-remove:hover {
     color: var(--ink);
 }
-.j-tag-input-wrap {
-    position: relative;
-}
 .j-tag-text {
-    width: 100%;
+    flex: 1;
+    min-width: 120px;
+    border: none;
+    background: transparent;
+    outline: none;
+    padding: 2px 0;
+    font-size: inherit;
+    color: inherit;
 }
 .j-tag-error {
     margin: 4px 0 0;
