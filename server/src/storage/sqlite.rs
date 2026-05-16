@@ -18,7 +18,7 @@ use common::storage::{
     CreatePostInput, CreateUserError, DeleteMediaError, EmailVerificationStorage, InviteRecord,
     InviteStorage, ListByTagError, MediaRecord, MediaSource, MediaStorage, PasswordResetStorage,
     PostCursor, PostRecord, PostStorage, PostTag, ProfileUpdate, RegisterWithInviteError,
-    SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage, TaggingError,
+    SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage, TagRecord, TaggingError,
     UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
     UsePasswordResetError, UserAuthError, UserConfigStorage, UserRecord, UserStorage,
 };
@@ -894,9 +894,12 @@ impl PostStorage for SqlitePostStorage {
 
     async fn get_post_by_id(&self, post_id: i64) -> sqlx::Result<Option<PostRecord>> {
         let row = sqlx::query_as::<_, PostRow>(
-            "SELECT post_id, user_id, title, slug, body, format, rendered_html,
-                    created_at, updated_at, published_at, deleted_at
-             FROM posts WHERE post_id = $1",
+            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                    p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                    COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]') AS tags
+             FROM posts p
+             JOIN users u ON p.user_id = u.user_id
+             WHERE p.post_id = $1",
         )
         .bind(post_id)
         .fetch_optional(&self.pool)
@@ -914,8 +917,9 @@ impl PostStorage for SqlitePostStorage {
     ) -> sqlx::Result<Option<PostRecord>> {
         let date_str = format!("{year:04}-{month:02}-{day:02}");
         let row = sqlx::query_as::<_, PostRow>(
-            "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
-                    p.created_at, p.updated_at, p.published_at, p.deleted_at
+            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                    p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                    COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]') AS tags
              FROM posts p
              JOIN users u ON p.user_id = u.user_id
              WHERE u.username = $1
@@ -986,8 +990,11 @@ impl PostStorage for SqlitePostStorage {
                  published_at = CASE WHEN $6 THEN COALESCE(published_at, $7) ELSE NULL END,
                  updated_at = $8
              WHERE post_id = $9
-             RETURNING post_id, user_id, title, slug, body, format, rendered_html,
-                       created_at, updated_at, published_at, deleted_at",
+             RETURNING post_id, user_id,
+                       (SELECT username FROM users WHERE user_id = posts.user_id) AS username,
+                       title, slug, body, format, rendered_html,
+                       created_at, updated_at, published_at, deleted_at,
+                       COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]') AS tags",
         )
         .bind(&input.title)
         .bind(input.slug.as_str())
@@ -1031,8 +1038,9 @@ impl PostStorage for SqlitePostStorage {
     ) -> sqlx::Result<Vec<PostRecord>> {
         let rows = if let Some(cursor) = cursor {
             sqlx::query_as::<_, PostRow>(
-                "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]') AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE u.username = $1
@@ -1051,8 +1059,9 @@ impl PostStorage for SqlitePostStorage {
             .await?
         } else {
             sqlx::query_as::<_, PostRow>(
-                "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]') AS tags
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE u.username = $1
@@ -1076,13 +1085,15 @@ impl PostStorage for SqlitePostStorage {
     ) -> sqlx::Result<Vec<PostRecord>> {
         let rows = if let Some(cursor) = cursor {
             sqlx::query_as::<_, PostRow>(
-                "SELECT post_id, user_id, title, slug, body, format, rendered_html,
-                        created_at, updated_at, published_at, deleted_at
-                 FROM posts
-                 WHERE published_at IS NOT NULL
-                   AND deleted_at IS NULL
-                   AND (created_at < $1 OR (created_at = $2 AND post_id < $3))
-                 ORDER BY created_at DESC, post_id DESC
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]') AS tags
+                 FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 WHERE p.published_at IS NOT NULL
+                   AND p.deleted_at IS NULL
+                   AND (p.created_at < $1 OR (p.created_at = $2 AND p.post_id < $3))
+                 ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT $4",
             )
             .bind(cursor.created_at)
@@ -1093,12 +1104,14 @@ impl PostStorage for SqlitePostStorage {
             .await?
         } else {
             sqlx::query_as::<_, PostRow>(
-                "SELECT post_id, user_id, title, slug, body, format, rendered_html,
-                        created_at, updated_at, published_at, deleted_at
-                 FROM posts
-                 WHERE published_at IS NOT NULL
-                   AND deleted_at IS NULL
-                 ORDER BY created_at DESC, post_id DESC
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]') AS tags
+                 FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 WHERE p.published_at IS NOT NULL
+                   AND p.deleted_at IS NULL
+                 ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT $1",
             )
             .bind(i64::from(limit))
@@ -1116,14 +1129,16 @@ impl PostStorage for SqlitePostStorage {
     ) -> sqlx::Result<Vec<PostRecord>> {
         let rows = if let Some(cursor) = cursor {
             sqlx::query_as::<_, PostRow>(
-                "SELECT post_id, user_id, title, slug, body, format, rendered_html,
-                        created_at, updated_at, published_at, deleted_at
-                 FROM posts
-                 WHERE user_id = $1
-                   AND published_at IS NULL
-                   AND deleted_at IS NULL
-                   AND (created_at < $2 OR (created_at = $3 AND post_id < $4))
-                 ORDER BY created_at DESC, post_id DESC
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]') AS tags
+                 FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 WHERE p.user_id = $1
+                   AND p.published_at IS NULL
+                   AND p.deleted_at IS NULL
+                   AND (p.created_at < $2 OR (p.created_at = $3 AND p.post_id < $4))
+                 ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT $5",
             )
             .bind(user_id)
@@ -1135,13 +1150,15 @@ impl PostStorage for SqlitePostStorage {
             .await?
         } else {
             sqlx::query_as::<_, PostRow>(
-                "SELECT post_id, user_id, title, slug, body, format, rendered_html,
-                        created_at, updated_at, published_at, deleted_at
-                 FROM posts
-                 WHERE user_id = $1
-                   AND published_at IS NULL
-                   AND deleted_at IS NULL
-                 ORDER BY created_at DESC, post_id DESC
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]') AS tags
+                 FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 WHERE p.user_id = $1
+                   AND p.published_at IS NULL
+                   AND p.deleted_at IS NULL
+                 ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT $2",
             )
             .bind(user_id)
@@ -1275,9 +1292,11 @@ impl PostStorage for SqlitePostStorage {
 
         let rows = if let Some(cursor) = cursor {
             sqlx::query_as::<_, PostRow>(
-                "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]') AS tags
                  FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
                  WHERE t.tag_slug = $1
@@ -1296,9 +1315,11 @@ impl PostStorage for SqlitePostStorage {
             .await?
         } else {
             sqlx::query_as::<_, PostRow>(
-                "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]') AS tags
                  FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
                  WHERE t.tag_slug = $1
@@ -1339,9 +1360,11 @@ impl PostStorage for SqlitePostStorage {
 
         let rows = if let Some(cursor) = cursor {
             sqlx::query_as::<_, PostRow>(
-                "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]') AS tags
                  FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
                  WHERE p.user_id = $1
@@ -1362,9 +1385,11 @@ impl PostStorage for SqlitePostStorage {
             .await?
         } else {
             sqlx::query_as::<_, PostRow>(
-                "SELECT p.post_id, p.user_id, p.title, p.slug, p.body, p.format, p.rendered_html,
-                        p.created_at, p.updated_at, p.published_at, p.deleted_at
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                        COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]') AS tags
                  FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
                  WHERE p.user_id = $1
@@ -1385,6 +1410,53 @@ impl PostStorage for SqlitePostStorage {
             .map(post_record_from_row)
             .collect::<sqlx::Result<_>>()
             .map_err(ListByTagError::Internal)
+    }
+
+    async fn list_tags(&self, prefix: Option<&str>, limit: u32) -> sqlx::Result<Vec<TagRecord>> {
+        let normalized = prefix
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_ascii_lowercase);
+        let pattern = normalized.as_deref().map(|p| format!("{p}%"));
+        let limit_i64 = i64::from(limit);
+
+        let rows = match pattern {
+            Some(ref like) => {
+                sqlx::query(
+                    "SELECT tag_id, tag_slug FROM tags
+                     WHERE tag_slug LIKE $1
+                     ORDER BY tag_slug
+                     LIMIT $2",
+                )
+                .bind(like)
+                .bind(limit_i64)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query(
+                    "SELECT tag_id, tag_slug FROM tags
+                     ORDER BY tag_slug
+                     LIMIT $1",
+                )
+                .bind(limit_i64)
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+
+        rows.into_iter()
+            .map(|row| {
+                let tag_slug_str: String = row.get("tag_slug");
+                let tag_slug: Tag = tag_slug_str
+                    .parse()
+                    .map_err(|_| sqlx::Error::Decode("invalid tag format".into()))?;
+                Ok(TagRecord {
+                    tag_id: row.get("tag_id"),
+                    tag_slug,
+                })
+            })
+            .collect()
     }
 }
 
