@@ -1136,91 +1136,87 @@ pub fn TagInput(
 
     view! {
         <div class="j-tag-input">
-            <div class="j-tag-chips">
-                {move || {
-                    tags.get()
-                        .into_iter()
-                        .map(|tag| {
-                            let slug = tag.slug.clone();
-                            let display = tag.display.clone();
-                            view! {
-                                <span class="j-tag-chip">
-                                    <input type="hidden" name=name value=display.clone() />
-                                    <span class="j-tag-chip-label">"#" {display}</span>
-                                    <button
-                                        type="button"
-                                        class="j-tag-chip-remove"
-                                        aria-label="Remove tag"
-                                        on:click=move |_| {
-                                            tags.update(|t| t.retain(|x| x.slug != slug));
-                                        }
-                                    >
-                                        "\u{00d7}"
-                                    </button>
-                                </span>
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                }}
-            </div>
-            <div class="j-tag-input-wrap">
-                <input
-                    type="text"
-                    class="j-tag-text"
-                    placeholder="Add tag\u{2026}"
-                    prop:value=input_text
-                    on:input=on_input
-                    on:keydown=on_keydown
-                    autocomplete="off"
-                />
-                {move || error.get().map(|e| view! { <p class="j-tag-error">{e}</p> })}
-                {move || {
-                    if !suggestions_open.get() {
-                        return ().into_any();
-                    }
-                    let items = suggestions
-                        .get()
-                        .into_iter()
-                        .enumerate()
-                        .map(|(idx, tag)| {
-                            let is_active = selected_idx.get() == Some(idx);
-                            let slug = tag.slug.clone();
-                            let display = tag.display.clone();
-                            view! {
-                                <li
-                                    class=if is_active {
-                                        "j-tag-suggest-item is-active"
-                                    } else {
-                                        "j-tag-suggest-item"
-                                    }
+            {move || {
+                tags.get()
+                    .into_iter()
+                    .map(|tag| {
+                        let slug = tag.slug.clone();
+                        let display = tag.display.clone();
+                        view! {
+                            <span class="j-tag-chip">
+                                <input type="hidden" name=name value=display.clone() />
+                                <span class="j-tag-chip-label">"#" {display}</span>
+                                <button
+                                    type="button"
+                                    class="j-tag-chip-remove"
+                                    aria-label="Remove tag"
                                     on:click=move |_| {
-                                        let slug = slug.clone();
-                                        let display = display.clone();
-                                        tags.update(|t| {
-                                            if !t.iter().any(|x| x.slug == slug) {
-                                                t.push(TagSummary {
-                                                    slug: slug.clone(),
-                                                    display: display.clone(),
-                                                });
-                                            }
-                                        });
-                                        input_text.set(String::new());
-                                        error.set(None);
-                                        suggestions.set(Vec::new());
-                                        suggestions_open.set(false);
-                                        selected_idx.set(None);
+                                        tags.update(|t| t.retain(|x| x.slug != slug));
                                     }
                                 >
-                                    "#"
-                                    {tag.display}
-                                </li>
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    view! { <ul class="j-tag-suggest">{items}</ul> }.into_any()
-                }}
-            </div>
+                                    "\u{00d7}"
+                                </button>
+                            </span>
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }}
+            <input
+                type="text"
+                class="j-tag-text"
+                placeholder="Add tag\u{2026}"
+                prop:value=input_text
+                on:input=on_input
+                on:keydown=on_keydown
+                autocomplete="off"
+            />
+            {move || {
+                if !suggestions_open.get() {
+                    return ().into_any();
+                }
+                let items = suggestions
+                    .get()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, tag)| {
+                        let is_active = selected_idx.get() == Some(idx);
+                        let slug = tag.slug.clone();
+                        let display = tag.display.clone();
+                        view! {
+                            <li
+                                class=if is_active {
+                                    "j-tag-suggest-item is-active"
+                                } else {
+                                    "j-tag-suggest-item"
+                                }
+                                on:click=move |_| {
+                                    let slug = slug.clone();
+                                    let display = display.clone();
+                                    tags.update(|t| {
+                                        if !t.iter().any(|x| x.slug == slug) {
+                                            t.push(TagSummary {
+                                                slug: slug.clone(),
+                                                display: display.clone(),
+                                            });
+                                        }
+                                    });
+                                    input_text.set(String::new());
+                                    error.set(None);
+                                    suggestions.set(Vec::new());
+                                    suggestions_open.set(false);
+                                    selected_idx.set(None);
+                                }
+                            >
+                                "#"
+                                {tag.display}
+                            </li>
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                view! { <ul class="j-tag-suggest">{items}</ul> }.into_any()
+            }}
         </div>
+        {move || error.get().map(|e| view! { <p class="j-tag-error">{e}</p> })}
     }
 }
 

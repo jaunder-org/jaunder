@@ -805,6 +805,121 @@ test("TagInput autocomplete suggests existing tags", async ({
   await waitForSelector(page, '.j-tag-chip-label:has-text("#rustlang")');
 });
 
+test("TagInput: Backspace on empty input removes last chip", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  await goto(page, "/posts/new");
+
+  // Add two chips
+  await page.fill(".j-tag-text", "alpha");
+  await page.keyboard.press("Enter");
+  await waitForSelector(page, '.j-tag-chip-label:has-text("#alpha")');
+  await page.fill(".j-tag-text", "beta");
+  await page.keyboard.press("Enter");
+  await waitForSelector(page, '.j-tag-chip-label:has-text("#beta")');
+
+  // Input is empty; Backspace should remove the last chip ("beta")
+  await page.keyboard.press("Backspace");
+  await expect(page.locator('.j-tag-chip-label:has-text("#beta")')).toHaveCount(
+    0,
+  );
+  await expect(
+    page.locator('.j-tag-chip-label:has-text("#alpha")'),
+  ).toHaveCount(1);
+});
+
+test("TagInput: keyboard navigation selects autocomplete item", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  // Seed a known tag
+  const res = await page.request.post(`${BASE_URL}/api/create_post`, {
+    data: {
+      body: "seed post",
+      format: "markdown",
+      slug_override: null,
+      publish: true,
+      tags: ["kbdnav"],
+    },
+  });
+  expect(res.ok()).toBeTruthy();
+
+  await goto(page, "/posts/new");
+  await page.fill(".j-tag-text", "kbd");
+  await waitForSelector(page, ".j-tag-suggest");
+
+  // ArrowDown highlights first item; Enter commits it
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator(".j-tag-suggest-item.is-active")).toContainText(
+    "kbdnav",
+  );
+  await page.keyboard.press("Enter");
+  await waitForSelector(page, '.j-tag-chip-label:has-text("#kbdnav")');
+  // Dropdown closes after selection
+  await expect(page.locator(".j-tag-suggest")).toHaveCount(0);
+});
+
+test("TagInput: Escape dismisses autocomplete without adding a chip", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  const res = await page.request.post(`${BASE_URL}/api/create_post`, {
+    data: {
+      body: "seed post",
+      format: "markdown",
+      slug_override: null,
+      publish: true,
+      tags: ["esctest"],
+    },
+  });
+  expect(res.ok()).toBeTruthy();
+
+  await goto(page, "/posts/new");
+  await page.fill(".j-tag-text", "esc");
+  await waitForSelector(page, ".j-tag-suggest");
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".j-tag-suggest")).toHaveCount(0);
+  // No chip should have been added
+  await expect(page.locator(".j-tag-chip")).toHaveCount(0);
+});
+
+test("TagInput: invalid tag text shows an error", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  await goto(page, "/posts/new");
+  // "bad tag" has a space — invalid after normalize
+  await page.fill(".j-tag-text", "bad tag");
+  await page.keyboard.press("Enter");
+
+  await waitForSelector(page, ".j-tag-error");
+  await expect(page.locator(".j-tag-error")).toContainText("Invalid tag");
+  // No chip should appear
+  await expect(page.locator(".j-tag-chip")).toHaveCount(0);
+});
+
 test("authenticated user can delete a draft from the drafts page", async ({
   page,
 }, testInfo) => {
