@@ -31,7 +31,8 @@ use crate::pages::invites::InvitesPage;
 use crate::pages::media::MediaPage;
 use crate::pages::password_reset::{ForgotPasswordPage, ResetPasswordPage};
 use crate::pages::posts::{
-    CreatePostPage, DraftPreviewPage, DraftsPage, EditPostPage, PostPage, UserTimelinePage,
+    CreatePostPage, DraftPreviewPage, DraftsPage, EditPostPage, PostPage, SiteTagPage, UserTagPage,
+    UserTimelinePage,
 };
 use crate::pages::profile::ProfilePage;
 use crate::pages::sessions::SessionsPage;
@@ -155,6 +156,11 @@ pub fn App() -> impl IntoView {
                             StaticSegment("preview"),
                         )
                         view=DraftPreviewPage
+                    />
+                    <Route path=(StaticSegment("tags"), ParamSegment("tag")) view=SiteTagPage />
+                    <Route
+                        path=(ParamSegment("username"), StaticSegment("tags"), ParamSegment("tag"))
+                        view=UserTagPage
                     />
                     <Route path=ParamSegment("username") view=UserTimelinePage />
                     <Route

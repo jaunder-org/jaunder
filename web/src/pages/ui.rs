@@ -2,8 +2,59 @@ use crate::auth::current_user;
 use crate::backup::{backup_warning_visible, current_user_is_operator};
 use crate::pages::upload::MediaPanel;
 use crate::posts::{CreatePost, CreatePostResult, DeletePost, TimelinePostSummary, UnpublishPost};
+use crate::tags::TagSummary;
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
+
+/// Linking context for a [`TagList`] rendering.
+///
+/// `SiteWide` links each chip to `/tags/:slug` only. `ForUser` adds a small
+/// "· here" link next to each chip pointing at `/~:username/tags/:slug`, so
+/// per-user tag listings stay one click away from any user-rooted page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TagContext {
+    SiteWide,
+    ForUser(String),
+}
+
+/// Renders a post's tags as clickable chips for use inside a post-display
+/// footer. See [`TagContext`] for the linking behavior.
+#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::must_use_candidate)]
+#[component]
+pub fn TagList(tags: Vec<TagSummary>, context: TagContext) -> impl IntoView {
+    if tags.is_empty() {
+        return ().into_any();
+    }
+    let chips: Vec<_> = tags
+        .into_iter()
+        .map(|tag| {
+            let slug = tag.slug.clone();
+            let here = match &context {
+                TagContext::ForUser(username) => {
+                    let here_href = format!("/~{username}/tags/{slug}");
+                    Some(view! {
+                        <a class="j-tag-here" href=here_href title="On this blog">
+                            "\u{00b7} here"
+                        </a>
+                    })
+                }
+                TagContext::SiteWide => None,
+            };
+            let chip_href = format!("/tags/{slug}");
+            view! {
+                <span class="j-tag-cell">
+                    <a class="j-tag" href=chip_href>
+                        "#"
+                        {tag.display}
+                    </a>
+                    {here}
+                </span>
+            }
+        })
+        .collect();
+    view! { <span class="j-tag-list">{chips}</span> }.into_any()
+}
 
 // ─── Icons ────────────────────────────────────────────────────
 
@@ -261,10 +312,15 @@ pub(crate) fn format_post_time(ts: &str) -> String {
 pub fn PostDisplay(
     post: TimelinePostSummary,
     banner: Option<String>,
+    /// Linking context for the tag chips in the footer; defaults to
+    /// site-wide.
+    #[prop(default = TagContext::SiteWide)]
+    tag_context: TagContext,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
     let time_label = format_post_time(&post.published_at);
     let is_author = post.is_author;
+    let post_tags = post.tags.clone();
 
     view! {
         <article class="j-post">
@@ -302,6 +358,7 @@ pub fn PostDisplay(
                     {banner.map(|b| view! { <p class="draft-banner">{b}</p> })}
                     <div class="j-post-body" inner_html=post.rendered_html.clone()></div>
                     <footer class="j-post-foot">
+                        <TagList tags=post_tags context=tag_context />
                         <span class="j-spacer"></span>
                     </footer>
                 </div>
@@ -316,6 +373,9 @@ pub fn PostDisplay(
 pub fn PostCard(
     post: TimelinePostSummary,
     banner: Option<String>,
+    /// Linking context for the footer tag chips; defaults to site-wide.
+    #[prop(default = TagContext::SiteWide)]
+    tag_context: TagContext,
     #[prop(optional)] on_mutate: Option<Callback<()>>,
     #[prop(optional)] on_unpublish: Option<Callback<()>>,
 ) -> impl IntoView {
@@ -393,7 +453,7 @@ pub fn PostCard(
         {move || {
             deleted.get().then(|| view! { <p class="success">"Post deleted."</p> }.into_any())
         }}
-        <PostDisplay post=post banner=banner>
+        <PostDisplay post=post banner=banner tag_context=tag_context>
             {action_col}
         </PostDisplay>
     }
@@ -417,6 +477,7 @@ pub fn PostCreateForm(
     let create_action = ServerAction::<CreatePost>::new();
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
+    let tags: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());
 
     #[cfg(target_arch = "wasm32")]
     {
@@ -425,6 +486,7 @@ pub fn PostCreateForm(
                 let created = created.clone();
                 on_success.run(created);
                 body.set(String::new());
+                tags.set(Vec::new());
             }
         });
     }
@@ -435,74 +497,92 @@ pub fn PostCreateForm(
     let rows_u32 = rows as u32;
 
     if compact {
+        let dispatch_save = move |_| {
+            create_action.dispatch(CreatePost {
+                body: body.get(),
+                format: format.get(),
+                slug_override: None,
+                publish: false,
+                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
+            });
+        };
+        let dispatch_publish = move |_| {
+            create_action.dispatch(CreatePost {
+                body: body.get(),
+                format: format.get(),
+                slug_override: None,
+                publish: true,
+                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
+            });
+        };
         view! {
-            <ActionForm action=create_action>
-                <div class="j-composer-row">
-                    <Avatar name=username.unwrap_or_default() size=36 />
-                    <div class="j-composer-body">
-                        <ComposerFields
-                            body=body
-                            format=format
-                            rows=rows_u32
-                            placeholder=placeholder
-                            textarea_class=""
-                            show_seg=false
-                            on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))
-                        />
-                        <input type="hidden" name="slug_override" value="" />
-                        <MediaPanel />
-                        <div class="j-composer-toolbar">
-                            <div class="j-seg">
-                                <button
-                                    type="button"
-                                    class=move || {
-                                        if format.get() == "markdown" {
-                                            "j-btn is-selected"
-                                        } else {
-                                            "j-btn"
-                                        }
-                                    }
-                                    on:click=move |_| format.set("markdown".to_string())
-                                >
-                                    "Markdown"
-                                </button>
-                                <button
-                                    type="button"
-                                    class=move || {
-                                        if format.get() == "org" {
-                                            "j-btn is-selected"
-                                        } else {
-                                            "j-btn"
-                                        }
-                                    }
-                                    on:click=move |_| format.set("org".to_string())
-                                >
-                                    "Org"
-                                </button>
-                            </div>
-                            <span class="j-spacer"></span>
+            <div class="j-composer-row">
+                <Avatar name=username.unwrap_or_default() size=36 />
+                <div class="j-composer-body">
+                    <ComposerFields
+                        body=body
+                        format=format
+                        rows=rows_u32
+                        placeholder=placeholder
+                        textarea_class=""
+                        show_seg=false
+                        on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))
+                    />
+                    <MediaPanel />
+                    <TagInput tags=tags />
+                    <div class="j-composer-toolbar">
+                        <div class="j-seg">
                             <button
-                                class="j-btn"
-                                type="submit"
-                                name="publish"
-                                value="false"
-                                disabled=move || body.get().trim().is_empty()
+                                type="button"
+                                class=move || {
+                                    if format.get() == "markdown" {
+                                        "j-btn is-selected"
+                                    } else {
+                                        "j-btn"
+                                    }
+                                }
+                                on:click=move |_| format.set("markdown".to_string())
                             >
-                                "Save draft"
+                                "Markdown"
                             </button>
                             <button
-                                class="j-btn is-primary"
-                                type="submit"
-                                name="publish"
-                                value="true"
-                                disabled=move || body.get().trim().is_empty()
+                                type="button"
+                                class=move || {
+                                    if format.get() == "org" {
+                                        "j-btn is-selected"
+                                    } else {
+                                        "j-btn"
+                                    }
+                                }
+                                on:click=move |_| format.set("org".to_string())
                             >
-                                "Publish"
+                                "Org"
                             </button>
                         </div>
+                        <span class="j-spacer"></span>
+                        <button
+                            class="j-btn"
+                            type="button"
+                            name="publish"
+                            value="false"
+                            disabled=move || body.get().trim().is_empty()
+                            on:click=dispatch_save
+                        >
+                            "Save draft"
+                        </button>
+                        <button
+                            class="j-btn is-primary"
+                            type="button"
+                            name="publish"
+                            value="true"
+                            disabled=move || body.get().trim().is_empty()
+                            on:click=dispatch_publish
+                        >
+                            "Publish"
+                        </button>
                     </div>
                 </div>
-            </ActionForm>
+            </div>
             {move || {
                 create_action
                     .value()
@@ -513,86 +593,112 @@ pub fn PostCreateForm(
         }
         .into_any()
     } else {
+        let slug_override = RwSignal::new(String::new());
+        let dispatch_create = move |publish: bool| {
+            let slug = slug_override.get();
+            let slug_override = if slug.trim().is_empty() {
+                None
+            } else {
+                Some(slug)
+            };
+            create_action.dispatch(CreatePost {
+                body: body.get(),
+                format: format.get(),
+                slug_override,
+                publish,
+                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
+            });
+        };
         view! {
-            <ActionForm action=create_action>
-                <div class="j-compose-grid">
-                    <div class="j-compose-body">
-                        <ComposerFields
-                            body=body
-                            format=format
-                            rows=rows_u32
-                            placeholder=placeholder
-                            show_seg=false
-                        />
-                    </div>
-                    <aside class="j-compose-aside">
-                        <div>
-                            <div class="j-sb-head" style="padding:0 0 10px">
-                                "Options"
-                            </div>
-                            <div class="j-field-row" style="grid-template-columns:auto 1fr">
-                                <label class="j-field-label" for="compose-slug">
-                                    "Slug"
-                                </label>
-                                <input
-                                    id="compose-slug"
-                                    type="text"
-                                    name="slug_override"
-                                    placeholder="auto"
-                                    class="j-field-val"
-                                />
-                            </div>
-                            <div class="j-seg" style="margin-top:10px">
-                                <button
-                                    type="button"
-                                    class=move || {
-                                        if format.get() == "markdown" {
-                                            "j-btn is-selected"
-                                        } else {
-                                            "j-btn"
-                                        }
-                                    }
-                                    on:click=move |_| format.set("markdown".to_string())
-                                >
-                                    "Markdown"
-                                </button>
-                                <button
-                                    type="button"
-                                    class=move || {
-                                        if format.get() == "org" {
-                                            "j-btn is-selected"
-                                        } else {
-                                            "j-btn"
-                                        }
-                                    }
-                                    on:click=move |_| format.set("org".to_string())
-                                >
-                                    "Org"
-                                </button>
-                            </div>
+            <div class="j-compose-grid">
+                <div class="j-compose-body">
+                    <ComposerFields
+                        body=body
+                        format=format
+                        rows=rows_u32
+                        placeholder=placeholder
+                        show_seg=false
+                    />
+                </div>
+                <aside class="j-compose-aside">
+                    <div>
+                        <div class="j-sb-head" style="padding:0 0 10px">
+                            "Options"
                         </div>
-                        <div style="margin-top:16px">
-                            <div class="j-sb-head" style="padding:0 0 10px">
-                                "Media"
-                            </div>
-                            <MediaPanel />
+                        <div class="j-field-row" style="grid-template-columns:auto 1fr">
+                            <label class="j-field-label" for="compose-slug">
+                                "Slug"
+                            </label>
+                            <input
+                                id="compose-slug"
+                                type="text"
+                                name="slug_override"
+                                placeholder="auto"
+                                class="j-field-val"
+                                prop:value=slug_override
+                                on:input=move |ev| slug_override.set(event_target_value(&ev))
+                            />
                         </div>
-                        <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
-                            <button class="j-btn" type="submit" name="publish" value="false">
-                                "Save draft"
+                        <div style="margin-top:10px">
+                            <TagInput tags=tags />
+                        </div>
+                        <div class="j-seg" style="margin-top:10px">
+                            <button
+                                type="button"
+                                class=move || {
+                                    if format.get() == "markdown" {
+                                        "j-btn is-selected"
+                                    } else {
+                                        "j-btn"
+                                    }
+                                }
+                                on:click=move |_| format.set("markdown".to_string())
+                            >
+                                "Markdown"
                             </button>
                             <button
-                                class="j-btn is-primary"
-                                type="submit"
-                                name="publish"
-                                value="true"
+                                type="button"
+                                class=move || {
+                                    if format.get() == "org" {
+                                        "j-btn is-selected"
+                                    } else {
+                                        "j-btn"
+                                    }
+                                }
+                                on:click=move |_| format.set("org".to_string())
                             >
-                                "Publish"
+                                "Org"
                             </button>
                         </div>
-                    </aside>
-                </div>
-            </ActionForm>
+                    </div>
+                    <div style="margin-top:16px">
+                        <div class="j-sb-head" style="padding:0 0 10px">
+                            "Media"
+                        </div>
+                        <MediaPanel />
+                    </div>
+                    <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
+                        <button
+                            class="j-btn"
+                            type="button"
+                            name="publish"
+                            value="false"
+                            on:click=move |_| dispatch_create(false)
+                        >
+                            "Save draft"
+                        </button>
+                        <button
+                            class="j-btn is-primary"
+                            type="button"
+                            name="publish"
+                            value="true"
+                            on:click=move |_| dispatch_create(true)
+                        >
+                            "Publish"
+                        </button>
+                    </div>
+                </aside>
+            </div>
             {move || {
                 create_action
                     .value()
@@ -855,11 +961,270 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     }
 }
 
+// ─── Pure helpers for TagInput ────────────────────────────────
+
+/// Returns `true` when `s` is a valid tag slug: non-empty, first char
+/// `[a-z0-9]`, remaining chars `[a-z0-9-]`.  The input must already be
+/// lowercased (call [`normalize_tag_token`] first).
+///
+/// Mirrors [`common::tag::Tag::from_str`] so client and server agree on
+/// validity without importing `common` into the WASM bundle.
+#[must_use]
+pub fn is_valid_tag_slug(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => false,
+        Some(c) if !c.is_ascii_lowercase() && !c.is_ascii_digit() => false,
+        _ => chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+    }
+}
+
+/// Trims whitespace from `raw` and lowercases the result.
+#[must_use]
+pub fn normalize_tag_token(raw: &str) -> String {
+    raw.trim().to_lowercase()
+}
+
+// ─── 3.9 TagInput ─────────────────────────────────────────────
+
+/// Chip-based tag input with debounced autocomplete.
+///
+/// Renders each tag in `tags` as a removable chip and emits one
+/// `<input type="hidden" name=name value=display>` per chip so an enclosing
+/// form receives a `Vec<String>`.
+///
+/// Key bindings: `Enter`/`Tab` commit a chip from the text field; `Backspace`
+/// on an empty field removes the last chip; `ArrowUp`/`ArrowDown` navigate
+/// the autocomplete dropdown; `Escape` closes it.
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::must_use_candidate)]
+#[component]
+pub fn TagInput(
+    tags: RwSignal<Vec<TagSummary>>,
+    #[prop(default = "tags")] name: &'static str,
+) -> impl IntoView {
+    let input_text = RwSignal::new(String::new());
+    let error: RwSignal<Option<String>> = RwSignal::new(None);
+    let suggestions: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());
+    let suggestions_open = RwSignal::new(false);
+    let selected_idx: RwSignal<Option<usize>> = RwSignal::new(None);
+    // Tick counter for debounce: increment on each keystroke; the timeout
+    // callback only fires if the tick hasn't changed.
+    #[cfg(target_arch = "wasm32")]
+    let debounce_tick = RwSignal::new(0u64);
+
+    let on_input = move |ev: leptos::ev::Event| {
+        let val = event_target_value(&ev);
+        input_text.set(val.clone());
+        error.set(None);
+        selected_idx.set(None);
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            use leptos::task::spawn_local;
+            use leptos_dom::helpers::set_timeout;
+            use std::time::Duration;
+
+            let prefix = val.trim().to_lowercase();
+            if prefix.is_empty() {
+                suggestions.set(Vec::new());
+                suggestions_open.set(false);
+                return;
+            }
+
+            let tick = debounce_tick.get_untracked() + 1;
+            debounce_tick.set(tick);
+
+            set_timeout(
+                move || {
+                    if debounce_tick.get_untracked() != tick {
+                        return;
+                    }
+                    spawn_local(async move {
+                        if let Ok(results) = crate::tags::list_tags(Some(prefix), Some(10)).await {
+                            if debounce_tick.get_untracked() == tick {
+                                let open = !results.is_empty();
+                                suggestions.set(results);
+                                suggestions_open.set(open);
+                            }
+                        }
+                    });
+                },
+                Duration::from_millis(150),
+            );
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = val;
+    };
+
+    let on_keydown = move |ev: leptos::ev::KeyboardEvent| {
+        let key = ev.key();
+        match key.as_str() {
+            "Enter" | "Tab" => {
+                // If a suggestion is keyboard-selected, commit it.
+                if let Some(i) = selected_idx.get() {
+                    if let Some(tag) = suggestions.get().get(i).cloned() {
+                        ev.prevent_default();
+                        tags.update(|t| {
+                            if !t.iter().any(|x| x.slug == tag.slug) {
+                                t.push(tag.clone());
+                            }
+                        });
+                        input_text.set(String::new());
+                        error.set(None);
+                        suggestions.set(Vec::new());
+                        suggestions_open.set(false);
+                        selected_idx.set(None);
+                        return;
+                    }
+                }
+                // Commit the typed text; Tab passes through if the field is empty.
+                let text = normalize_tag_token(&input_text.get());
+                if text.is_empty() {
+                    return;
+                }
+                ev.prevent_default();
+                if is_valid_tag_slug(&text) {
+                    let slug = text.clone();
+                    tags.update(|t| {
+                        if !t.iter().any(|x| x.slug == slug) {
+                            t.push(TagSummary {
+                                slug: slug.clone(),
+                                display: slug,
+                            });
+                        }
+                    });
+                    input_text.set(String::new());
+                    error.set(None);
+                    suggestions.set(Vec::new());
+                    suggestions_open.set(false);
+                    selected_idx.set(None);
+                } else {
+                    error.set(Some(format!("Invalid tag \"{text}\"")));
+                }
+            }
+            "Backspace" => {
+                if input_text.get().is_empty() {
+                    tags.update(|t| {
+                        t.pop();
+                    });
+                }
+            }
+            "ArrowDown" => {
+                ev.prevent_default();
+                let len = suggestions.get().len();
+                if len > 0 {
+                    selected_idx.update(|i| {
+                        *i = Some(i.map(|n| (n + 1).min(len - 1)).unwrap_or(0));
+                    });
+                }
+            }
+            "ArrowUp" => {
+                ev.prevent_default();
+                selected_idx.update(|i| {
+                    *i = i.and_then(|n| n.checked_sub(1));
+                });
+            }
+            "Escape" => {
+                suggestions.set(Vec::new());
+                suggestions_open.set(false);
+                selected_idx.set(None);
+            }
+            _ => {}
+        }
+    };
+
+    view! {
+        <div class="j-tag-input">
+            {move || {
+                tags.get()
+                    .into_iter()
+                    .map(|tag| {
+                        let slug = tag.slug.clone();
+                        let display = tag.display.clone();
+                        view! {
+                            <span class="j-tag-chip">
+                                <input type="hidden" name=name value=display.clone() />
+                                <span class="j-tag-chip-label">"#" {display}</span>
+                                <button
+                                    type="button"
+                                    class="j-tag-chip-remove"
+                                    aria-label="Remove tag"
+                                    on:click=move |_| {
+                                        tags.update(|t| t.retain(|x| x.slug != slug));
+                                    }
+                                >
+                                    "\u{00d7}"
+                                </button>
+                            </span>
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }}
+            <input
+                type="text"
+                class="j-tag-text"
+                placeholder="Add tag\u{2026}"
+                prop:value=input_text
+                on:input=on_input
+                on:keydown=on_keydown
+                autocomplete="off"
+            />
+            {move || {
+                if !suggestions_open.get() {
+                    return ().into_any();
+                }
+                let items = suggestions
+                    .get()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, tag)| {
+                        let is_active = selected_idx.get() == Some(idx);
+                        let slug = tag.slug.clone();
+                        let display = tag.display.clone();
+                        view! {
+                            <li
+                                class=if is_active {
+                                    "j-tag-suggest-item is-active"
+                                } else {
+                                    "j-tag-suggest-item"
+                                }
+                                on:click=move |_| {
+                                    let slug = slug.clone();
+                                    let display = display.clone();
+                                    tags.update(|t| {
+                                        if !t.iter().any(|x| x.slug == slug) {
+                                            t.push(TagSummary {
+                                                slug: slug.clone(),
+                                                display: display.clone(),
+                                            });
+                                        }
+                                    });
+                                    input_text.set(String::new());
+                                    error.set(None);
+                                    suggestions.set(Vec::new());
+                                    suggestions_open.set(false);
+                                    selected_idx.set(None);
+                                }
+                            >
+                                "#"
+                                {tag.display}
+                            </li>
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                view! { <ul class="j-tag-suggest">{items}</ul> }.into_any()
+            }}
+        </div>
+        {move || error.get().map(|e| view! { <p class="j-tag-error">{e}</p> })}
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
-    use super::{avatar_parts, format_post_time};
+    use super::{avatar_parts, format_post_time, is_valid_tag_slug, normalize_tag_token};
 
     #[test]
     fn avatar_parts_single_word() {
@@ -931,5 +1296,81 @@ mod tests {
     #[test]
     fn format_post_time_handles_utc_z_suffix() {
         assert_eq!(format_post_time("2026-04-23T10:30:00Z"), "2026-04-23 10:30");
+    }
+
+    // ─── is_valid_tag_slug ────────────────────────────────────
+
+    #[test]
+    fn tag_slug_accepts_lowercase_alpha() {
+        assert!(is_valid_tag_slug("rust"));
+    }
+
+    #[test]
+    fn tag_slug_accepts_leading_digit() {
+        assert!(is_valid_tag_slug("42things"));
+    }
+
+    #[test]
+    fn tag_slug_accepts_hyphens_in_body() {
+        assert!(is_valid_tag_slug("hello-world"));
+    }
+
+    #[test]
+    fn tag_slug_accepts_single_char() {
+        assert!(is_valid_tag_slug("a"));
+        assert!(is_valid_tag_slug("0"));
+    }
+
+    #[test]
+    fn tag_slug_rejects_empty() {
+        assert!(!is_valid_tag_slug(""));
+    }
+
+    #[test]
+    fn tag_slug_rejects_leading_hyphen() {
+        assert!(!is_valid_tag_slug("-hello"));
+    }
+
+    #[test]
+    fn tag_slug_rejects_uppercase() {
+        assert!(!is_valid_tag_slug("Rust"));
+        assert!(!is_valid_tag_slug("RUST"));
+    }
+
+    #[test]
+    fn tag_slug_rejects_spaces() {
+        assert!(!is_valid_tag_slug("hello world"));
+    }
+
+    #[test]
+    fn tag_slug_rejects_special_chars() {
+        assert!(!is_valid_tag_slug("tag@site"));
+        assert!(!is_valid_tag_slug("tag_name"));
+    }
+
+    // ─── normalize_tag_token ──────────────────────────────────
+
+    #[test]
+    fn normalize_trims_whitespace() {
+        assert_eq!(normalize_tag_token("  rust  "), "rust");
+    }
+
+    #[test]
+    fn normalize_lowercases() {
+        assert_eq!(normalize_tag_token("Rust"), "rust");
+        assert_eq!(normalize_tag_token("HELLO-WORLD"), "hello-world");
+    }
+
+    #[test]
+    fn normalize_empty_stays_empty() {
+        assert_eq!(normalize_tag_token(""), "");
+        assert_eq!(normalize_tag_token("   "), "");
+    }
+
+    #[test]
+    fn normalize_then_validate_roundtrip() {
+        let normalized = normalize_tag_token("  Hello-World  ");
+        assert!(is_valid_tag_slug(&normalized));
+        assert_eq!(normalized, "hello-world");
     }
 }

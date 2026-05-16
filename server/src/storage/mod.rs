@@ -133,6 +133,7 @@ pub(super) fn build_invite_record(
 pub(super) type PostRecordParts = (
     i64,                   // post_id
     i64,                   // user_id
+    String,                // author_username
     Option<String>,        // title
     String,                // slug
     String,                // body
@@ -142,12 +143,46 @@ pub(super) type PostRecordParts = (
     DateTime<Utc>,         // updated_at
     Option<DateTime<Utc>>, // published_at
     Option<DateTime<Utc>>, // deleted_at
+    String,                // tags (JSON array)
 );
+
+/// Row shape for the JSON-aggregated tags column. Field names match the SQL
+/// `json_object` keys verbatim, hence the matching `tag_` prefixes.
+#[allow(clippy::struct_field_names)]
+#[derive(serde::Deserialize)]
+struct PostTagJson {
+    tag_id: i64,
+    tag_slug: String,
+    tag_display: String,
+}
+
+fn parse_post_tags_json(json: &str, post_id: i64) -> sqlx::Result<Vec<common::storage::PostTag>> {
+    use common::storage::PostTag;
+    use common::tag::Tag;
+
+    let raw: Vec<PostTagJson> =
+        serde_json::from_str(json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    raw.into_iter()
+        .map(|r| {
+            let tag_slug: Tag = r
+                .tag_slug
+                .parse()
+                .map_err(|_| sqlx::Error::Decode("invalid tag slug in db".into()))?;
+            Ok(PostTag {
+                post_id,
+                tag_id: r.tag_id,
+                tag_slug,
+                tag_display: r.tag_display,
+            })
+        })
+        .collect()
+}
 
 pub(super) fn build_post_record(
     (
         post_id,
         user_id,
+        author_username,
         title,
         slug,
         body,
@@ -157,18 +192,24 @@ pub(super) fn build_post_record(
         updated_at,
         published_at,
         deleted_at,
+        tags_json,
     ): PostRecordParts,
 ) -> sqlx::Result<PostRecord> {
     use common::slug::Slug;
+    let author_username = author_username
+        .parse::<Username>()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     let slug = slug
         .parse::<Slug>()
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     let format = format
         .parse::<PostFormat>()
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let tags = parse_post_tags_json(&tags_json, post_id)?;
     Ok(PostRecord {
         post_id,
         user_id,
+        author_username,
         title,
         slug,
         body,
@@ -178,6 +219,7 @@ pub(super) fn build_post_record(
         updated_at,
         published_at,
         deleted_at,
+        tags,
     })
 }
 
@@ -236,6 +278,7 @@ pub(super) fn invite_record_from_row(
 pub(super) type PostRow = (
     i64,                   // post_id
     i64,                   // user_id
+    String,                // author_username
     Option<String>,        // title
     String,                // slug
     String,                // body
@@ -245,6 +288,7 @@ pub(super) type PostRow = (
     DateTime<Utc>,         // updated_at
     Option<DateTime<Utc>>, // published_at
     Option<DateTime<Utc>>, // deleted_at
+    String,                // tags (JSON array)
 );
 
 pub(super) fn post_record_from_row(row: PostRow) -> sqlx::Result<PostRecord> {
@@ -636,6 +680,7 @@ mod tests {
         let record = build_post_record((
             10,
             20,
+            "alice".to_string(),
             Some("Hello".to_string()),
             "hello-world".to_string(),
             "Body".to_string(),
@@ -645,15 +690,18 @@ mod tests {
             now,
             Some(now),
             None,
+            "[]".to_string(),
         ))
         .unwrap();
 
         assert_eq!(record.post_id, 10);
         assert_eq!(record.user_id, 20);
+        assert_eq!(record.author_username.as_str(), "alice");
         assert_eq!(record.slug.as_str(), "hello-world");
         assert_eq!(record.format, PostFormat::Markdown);
         assert_eq!(record.published_at, Some(now));
         assert_eq!(record.deleted_at, None);
+        assert!(record.tags.is_empty());
     }
 
     #[test]
@@ -662,6 +710,7 @@ mod tests {
         let err = build_post_record((
             10,
             20,
+            "alice".to_string(),
             Some("Hello".to_string()),
             "not a slug".to_string(),
             "Body".to_string(),
@@ -671,6 +720,7 @@ mod tests {
             now,
             None,
             None,
+            "[]".to_string(),
         ))
         .unwrap_err();
 
@@ -683,6 +733,7 @@ mod tests {
         let err = build_post_record((
             10,
             20,
+            "alice".to_string(),
             Some("Hello".to_string()),
             "hello-world".to_string(),
             "Body".to_string(),
@@ -692,6 +743,30 @@ mod tests {
             now,
             None,
             None,
+            "[]".to_string(),
+        ))
+        .unwrap_err();
+
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[test]
+    fn test_build_post_record_rejects_invalid_username() {
+        let now = Utc::now();
+        let err = build_post_record((
+            10,
+            20,
+            "Invalid Username".to_string(),
+            Some("Hello".to_string()),
+            "hello-world".to_string(),
+            "Body".to_string(),
+            "markdown".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            None,
+            None,
+            "[]".to_string(),
         ))
         .unwrap_err();
 

@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos::server_fn::codec::Json;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "ssr")]
@@ -6,6 +7,7 @@ use crate::auth::{require_auth, AuthUser};
 use crate::error::WebResult;
 #[cfg(feature = "ssr")]
 use crate::error::{InternalError, InternalResult, WebError};
+use crate::tags::TagSummary;
 #[cfg(feature = "ssr")]
 use chrono::{Datelike, NaiveDate, Utc};
 #[cfg(feature = "ssr")]
@@ -78,6 +80,8 @@ pub struct TimelinePostSummary {
     pub permalink: String,
     /// True when the viewing user is the post author.
     pub is_author: bool,
+    /// Tags applied to this post, ordered by canonical slug.
+    pub tags: Vec<TagSummary>,
 }
 
 /// A cursor-paginated page of timeline posts.
@@ -105,19 +109,24 @@ pub struct PostResponse {
     pub is_author: bool,
     /// Permalink URL for published posts; `None` for drafts.
     pub permalink: Option<String>,
+    /// Tags applied to this post, ordered by canonical slug.
+    pub tags: Vec<TagSummary>,
 }
 
 /// Creates a post for the authenticated user.
-#[server(endpoint = "/create_post")]
+#[server(endpoint = "/create_post", input = Json)]
 pub async fn create_post(
     body: String,
     format: String,
     slug_override: Option<String>,
     publish: bool,
+    tags: Option<Vec<String>>,
 ) -> WebResult<CreatePostResult> {
-    crate::web_server_fn!("create_post", body, format, slug_override, publish => {
+    crate::web_server_fn!("create_post", body, format, slug_override, publish, tags => {
         let auth = require_auth().await?;
         let state = expect_context::<Arc<AppState>>();
+
+        let validated_tags = crate::tags::parse_and_validate_tags(tags.unwrap_or_default())?;
 
         let format = format
             .parse::<PostFormat>()
@@ -152,6 +161,14 @@ pub async fn create_post(
             published_at,
         )
         .await?;
+
+        for display in &validated_tags {
+            state
+                .posts
+                .tag_post(created.post_id, display)
+                .await
+                .map_err(|e| InternalError::server_message(e.to_string()))?;
+        }
 
         Ok(created)
     })
@@ -190,7 +207,7 @@ pub async fn get_post(
                 .await
                 .map(|auth| auth.user_id == post.user_id)
                 .unwrap_or(false);
-            return Ok(post_response(post, username_parsed.to_string(), is_author));
+            return Ok(post_response(post, is_author));
         }
 
         let auth = require_auth()
@@ -211,7 +228,7 @@ pub async fn get_post(
         .await?
         .ok_or_else(not_found_error)?;
 
-        Ok(post_response(draft, auth.username.to_string(), true))
+        Ok(post_response(draft, true))
     })
 }
 
@@ -219,7 +236,6 @@ pub async fn get_post(
 #[server(endpoint = "/get_post_preview")]
 pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
     crate::web_server_fn!("get_post_preview", post_id => {
-        use chrono::Datelike;
         let auth = require_auth()
             .await
             .map_err(private_post_not_found_error)?;
@@ -232,65 +248,33 @@ pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
             .map_err(InternalError::storage)?
             .ok_or_else(not_found_error)?;
 
-        let PostRecord {
-            post_id,
-            user_id,
-            title,
-            slug,
-            body,
-            format,
-            rendered_html,
-            created_at,
-            published_at,
-            deleted_at,
-            ..
-        } = post;
-
-        if deleted_at.is_some() || user_id != auth.user_id {
+        if post.deleted_at.is_some() || post.user_id != auth.user_id {
             return Err(not_found_error());
         }
 
-        let username = auth.username.to_string();
-        let permalink = published_at.as_ref().map(|t| {
-            format!(
-                "/~{}/{:04}/{:02}/{:02}/{}",
-                username,
-                t.year(),
-                t.month(),
-                t.day(),
-                slug.as_str()
-            )
-        });
-
-        Ok(PostResponse {
-            post_id,
-            username,
-            title,
-            slug: slug.to_string(),
-            body,
-            format: format.to_string(),
-            rendered_html,
-            created_at: created_at.to_rfc3339(),
-            is_draft: published_at.is_none(),
-            published_at: published_at.map(|t| t.to_rfc3339()),
-            is_author: true,
-            permalink,
-        })
+        Ok(post_response(post, true))
     })
 }
 
 /// Updates an existing post for the authenticated author.
-#[server(endpoint = "/update_post")]
+#[server(endpoint = "/update_post", input = Json)]
 pub async fn update_post(
     post_id: i64,
     body: String,
     format: String,
     slug_override: Option<String>,
     publish: bool,
+    tags: Option<Vec<String>>,
 ) -> WebResult<UpdatePostResult> {
-    crate::web_server_fn!("update_post", post_id, body, format, slug_override, publish => {
+    crate::web_server_fn!("update_post", post_id, body, format, slug_override, publish, tags => {
         let auth = require_auth().await?;
         let state = expect_context::<Arc<AppState>>();
+
+        // Validate tags up-front so a malformed input rejects before any
+        // post mutation lands.
+        let new_tags = tags
+            .map(crate::tags::parse_and_validate_tags)
+            .transpose()?;
 
         let format = format
             .parse::<PostFormat>()
@@ -312,6 +296,10 @@ pub async fn update_post(
             }
             other => perform_update_error(other),
         })?;
+
+        if let Some(new_tags) = new_tags {
+            apply_post_tag_diff(state.as_ref(), post_id, &new_tags).await?;
+        }
 
         let published_at_str = record.published_at.map(|t| t.to_rfc3339());
         let permalink = record
@@ -457,7 +445,7 @@ pub async fn list_user_posts(
 
         let posts = rows
             .into_iter()
-            .filter_map(|post| timeline_post_summary(&username, post, viewer_user_id))
+            .filter_map(|post| timeline_post_summary(post, viewer_user_id))
             .collect();
 
         Ok(TimelinePage {
@@ -498,19 +486,10 @@ pub async fn list_local_timeline(
         rows.truncate(page_size as usize);
 
         let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
-        let mut posts = Vec::with_capacity(rows.len());
-
-        for post in rows {
-            let author = state
-                .users
-                .get_user(post.user_id)
-                .await
-                .map_err(InternalError::storage)?
-                .ok_or_else(|| InternalError::not_found("post author"))?;
-            if let Some(summary) = timeline_post_summary(&author.username, post, viewer_user_id) {
-                posts.push(summary);
-            }
-        }
+        let posts = rows
+            .into_iter()
+            .filter_map(|post| timeline_post_summary(post, viewer_user_id))
+            .collect();
 
         Ok(TimelinePage {
             posts,
@@ -548,7 +527,129 @@ pub async fn list_home_feed(
         let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
         let posts = rows
             .into_iter()
-            .filter_map(|post| timeline_post_summary(&auth.username, post, Some(auth.user_id)))
+            .filter_map(|post| timeline_post_summary(post, Some(auth.user_id)))
+            .collect();
+
+        Ok(TimelinePage {
+            posts,
+            next_cursor_created_at: next_cursor.as_ref().map(|c| c.created_at.to_rfc3339()),
+            next_cursor_post_id: next_cursor.as_ref().map(|c| c.post_id),
+            has_more,
+        })
+    })
+}
+
+/// Lists published, non-deleted posts site-wide carrying `tag`.
+#[server(endpoint = "/list_posts_by_tag")]
+pub async fn list_posts_by_tag(
+    tag: String,
+    cursor_created_at: Option<String>,
+    cursor_post_id: Option<i64>,
+    limit: Option<u32>,
+) -> WebResult<TimelinePage> {
+    crate::web_server_fn!("list_posts_by_tag", tag, cursor_created_at, cursor_post_id, limit => {
+        use common::storage::ListByTagError;
+        use common::tag::Tag;
+
+        let state = expect_context::<Arc<AppState>>();
+        let tag_slug = tag
+            .trim()
+            .parse::<Tag>()
+            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
+        let viewer_user_id = leptos_axum::extract::<AuthUser>()
+            .await
+            .ok()
+            .map(|a| a.user_id);
+
+        let page_size = limit.unwrap_or(50).clamp(1, 50);
+        let fetch_limit = page_size.saturating_add(1);
+
+        let rows = match state
+            .posts
+            .list_posts_by_tag(&tag_slug, cursor.as_ref(), fetch_limit)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(ListByTagError::TagNotFound) => Vec::new(),
+            Err(ListByTagError::Internal(e)) => return Err(InternalError::storage(e)),
+        };
+
+        let has_more = rows.len() > page_size as usize;
+        let mut rows = rows;
+        rows.truncate(page_size as usize);
+
+        let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
+        let posts = rows
+            .into_iter()
+            .filter_map(|post| timeline_post_summary(post, viewer_user_id))
+            .collect();
+
+        Ok(TimelinePage {
+            posts,
+            next_cursor_created_at: next_cursor.as_ref().map(|c| c.created_at.to_rfc3339()),
+            next_cursor_post_id: next_cursor.as_ref().map(|c| c.post_id),
+            has_more,
+        })
+    })
+}
+
+/// Lists published, non-deleted posts by `username` carrying `tag`.
+#[server(endpoint = "/list_user_posts_by_tag")]
+pub async fn list_user_posts_by_tag(
+    username: String,
+    tag: String,
+    cursor_created_at: Option<String>,
+    cursor_post_id: Option<i64>,
+    limit: Option<u32>,
+) -> WebResult<TimelinePage> {
+    crate::web_server_fn!("list_user_posts_by_tag", username, tag, cursor_created_at, cursor_post_id, limit => {
+        use common::storage::ListByTagError;
+        use common::tag::Tag;
+
+        let state = expect_context::<Arc<AppState>>();
+        let username = username
+            .trim()
+            .parse::<Username>()
+            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let tag_slug = tag
+            .trim()
+            .parse::<Tag>()
+            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
+        let viewer_user_id = leptos_axum::extract::<AuthUser>()
+            .await
+            .ok()
+            .map(|a| a.user_id);
+
+        let author = state
+            .users
+            .get_user_by_username(&username)
+            .await
+            .map_err(InternalError::storage)?
+            .ok_or_else(|| InternalError::not_found("user"))?;
+
+        let page_size = limit.unwrap_or(50).clamp(1, 50);
+        let fetch_limit = page_size.saturating_add(1);
+
+        let rows = match state
+            .posts
+            .list_user_posts_by_tag(author.user_id, &tag_slug, cursor.as_ref(), fetch_limit)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(ListByTagError::TagNotFound) => Vec::new(),
+            Err(ListByTagError::Internal(e)) => return Err(InternalError::storage(e)),
+        };
+
+        let has_more = rows.len() > page_size as usize;
+        let mut rows = rows;
+        rows.truncate(page_size as usize);
+
+        let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
+        let posts = rows
+            .into_iter()
+            .filter_map(|post| timeline_post_summary(post, viewer_user_id))
             .collect();
 
         Ok(TimelinePage {
@@ -637,25 +738,26 @@ fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
 
 #[cfg(feature = "ssr")]
 fn timeline_post_summary(
-    username: &Username,
     post: PostRecord,
     viewer_user_id: Option<i64>,
 ) -> Option<TimelinePostSummary> {
     let PostRecord {
         post_id,
         user_id,
+        author_username,
         title,
         slug,
         rendered_html,
         created_at,
         published_at,
+        tags,
         ..
     } = post;
     let published_at = published_at?;
-    let permalink = build_permalink(username, published_at, &slug);
+    let permalink = build_permalink(&author_username, published_at, &slug);
     Some(TimelinePostSummary {
         post_id,
-        username: username.to_string(),
+        username: author_username.to_string(),
         title,
         slug: slug.to_string(),
         rendered_html,
@@ -663,7 +765,71 @@ fn timeline_post_summary(
         published_at: published_at.to_rfc3339(),
         permalink,
         is_author: viewer_user_id == Some(user_id),
+        tags: post_tags_to_summaries(tags),
     })
+}
+
+#[cfg(feature = "ssr")]
+fn post_tags_to_summaries(tags: Vec<common::storage::PostTag>) -> Vec<TagSummary> {
+    tags.into_iter()
+        .map(|t| TagSummary {
+            slug: t.tag_slug.to_string(),
+            display: t.tag_display,
+        })
+        .collect()
+}
+
+/// Diff the existing tag set against `desired` (a Vec of validated display
+/// tokens) and apply the difference: `tag_post` for new entries, `untag_post`
+/// for removed entries. Re-applying an existing tag with new display casing
+/// is a no-op at the slug level (the storage layer keys on slug); the
+/// display casing of the existing row is preserved.
+#[cfg(feature = "ssr")]
+async fn apply_post_tag_diff(
+    state: &AppState,
+    post_id: i64,
+    desired: &[String],
+) -> InternalResult<()> {
+    use common::tag::Tag;
+    use std::collections::HashSet;
+    use std::str::FromStr;
+
+    let existing = state
+        .posts
+        .get_tags_for_post(post_id)
+        .await
+        .map_err(InternalError::storage)?;
+    let existing_slugs: HashSet<String> = existing.iter().map(|t| t.tag_slug.to_string()).collect();
+    let desired_slugs: HashSet<String> = desired
+        .iter()
+        .filter_map(|d| Tag::from_str(d).ok())
+        .map(|t| t.to_string())
+        .collect();
+
+    // Add: every desired tag whose slug isn't already present.
+    for display in desired {
+        let Ok(slug) = Tag::from_str(display) else {
+            continue;
+        };
+        if !existing_slugs.contains(&slug.to_string()) {
+            state
+                .posts
+                .tag_post(post_id, display)
+                .await
+                .map_err(|e| InternalError::server_message(e.to_string()))?;
+        }
+    }
+    // Remove: every existing tag whose slug isn't in desired.
+    for tag in &existing {
+        if !desired_slugs.contains(&tag.tag_slug.to_string()) {
+            state
+                .posts
+                .untag_post(post_id, &tag.tag_slug)
+                .await
+                .map_err(|e| InternalError::server_message(e.to_string()))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "ssr")]
@@ -675,10 +841,11 @@ fn to_post_cursor(post: &PostRecord) -> PostCursor {
 }
 
 #[cfg(feature = "ssr")]
-fn post_response(post: PostRecord, username: String, is_author: bool) -> PostResponse {
+fn post_response(post: PostRecord, is_author: bool) -> PostResponse {
     use chrono::Datelike;
     let PostRecord {
         post_id,
+        author_username,
         title,
         slug,
         body,
@@ -686,12 +853,13 @@ fn post_response(post: PostRecord, username: String, is_author: bool) -> PostRes
         rendered_html,
         created_at,
         published_at,
+        tags,
         ..
     } = post;
     let permalink = published_at.as_ref().map(|t| {
         format!(
             "/~{}/{:04}/{:02}/{:02}/{}",
-            username,
+            author_username.as_str(),
             t.year(),
             t.month(),
             t.day(),
@@ -700,7 +868,7 @@ fn post_response(post: PostRecord, username: String, is_author: bool) -> PostRes
     });
     PostResponse {
         post_id,
-        username,
+        username: author_username.to_string(),
         title,
         slug: slug.to_string(),
         body,
@@ -710,6 +878,7 @@ fn post_response(post: PostRecord, username: String, is_author: bool) -> PostRes
         is_draft: published_at.is_none(),
         published_at: published_at.map(|t| t.to_rfc3339()),
         is_author,
+        tags: post_tags_to_summaries(tags),
         permalink,
     }
 }
@@ -964,11 +1133,13 @@ mod tests {
     #[test]
     fn fallback_summary_label_prefers_body_then_title_then_slug() {
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
+        let author_username = "author".parse::<Username>().unwrap();
         let slug = "hello-world".parse::<Slug>().unwrap();
 
         let body_label = fallback_summary_label(&PostRecord {
             post_id: 1,
             user_id: 2,
+            author_username: author_username.clone(),
             title: Some("Stored Title".to_string()),
             slug: slug.clone(),
             body: "\nBody label\nmore".to_string(),
@@ -978,12 +1149,14 @@ mod tests {
             updated_at: base_time,
             published_at: None,
             deleted_at: None,
+            tags: vec![],
         });
         assert_eq!(body_label, "Body label");
 
         let title_label = fallback_summary_label(&PostRecord {
             post_id: 1,
             user_id: 2,
+            author_username: author_username.clone(),
             title: Some("Stored Title".to_string()),
             slug: slug.clone(),
             body: "".to_string(),
@@ -993,12 +1166,14 @@ mod tests {
             updated_at: base_time,
             published_at: None,
             deleted_at: None,
+            tags: vec![],
         });
         assert_eq!(title_label, "Stored Title");
 
         let slug_label = fallback_summary_label(&PostRecord {
             post_id: 1,
             user_id: 2,
+            author_username,
             title: None,
             slug,
             body: "".to_string(),
@@ -1008,6 +1183,7 @@ mod tests {
             updated_at: base_time,
             published_at: None,
             deleted_at: None,
+            tags: vec![],
         });
         assert_eq!(slug_label, "hello-world");
     }
@@ -1016,14 +1192,13 @@ mod tests {
     #[test]
     fn timeline_post_summary_keeps_titleless_posts_titleless() {
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
-        let username = "author".parse::<Username>().unwrap();
         let slug = "titleless-note".parse::<Slug>().unwrap();
 
         let summary = timeline_post_summary(
-            &username,
             PostRecord {
                 post_id: 1,
                 user_id: 2,
+                author_username: "author".parse::<Username>().unwrap(),
                 title: None,
                 slug,
                 body: "Titleless note".to_string(),
@@ -1033,12 +1208,14 @@ mod tests {
                 updated_at: base_time,
                 published_at: Some(base_time),
                 deleted_at: None,
+                tags: vec![],
             },
             None,
         )
         .expect("published post should summarize");
 
         assert_eq!(summary.title, None);
+        assert_eq!(summary.username, "author");
         assert_eq!(summary.permalink, "/~author/2026/04/16/titleless-note");
     }
 
@@ -1046,12 +1223,14 @@ mod tests {
     #[test]
     fn post_response_marks_draft_state_from_published_at() {
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
+        let author_username = "author".parse::<Username>().unwrap();
         let slug = "hello-world".parse::<Slug>().unwrap();
 
         let draft = post_response(
             PostRecord {
                 post_id: 1,
                 user_id: 2,
+                author_username: author_username.clone(),
                 title: Some("Draft".to_string()),
                 slug: slug.clone(),
                 body: "body".to_string(),
@@ -1061,17 +1240,19 @@ mod tests {
                 updated_at: base_time,
                 published_at: None,
                 deleted_at: None,
+                tags: vec![],
             },
-            "author".to_string(),
             true,
         );
         assert!(draft.is_draft);
         assert!(draft.published_at.is_none());
+        assert_eq!(draft.username, "author");
 
         let published = post_response(
             PostRecord {
                 post_id: 2,
                 user_id: 2,
+                author_username,
                 title: Some("Published".to_string()),
                 slug,
                 body: "body".to_string(),
@@ -1081,8 +1262,8 @@ mod tests {
                 updated_at: base_time,
                 published_at: Some(base_time),
                 deleted_at: None,
+                tags: vec![],
             },
-            "author".to_string(),
             false,
         );
         assert!(!published.is_draft);
