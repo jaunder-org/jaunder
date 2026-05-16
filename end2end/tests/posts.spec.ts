@@ -659,6 +659,152 @@ test("create post with tags via UI: tags persist and appear on the post", async 
   await expect(tagList).toContainText("#gamma");
 });
 
+test("tag chip on permalink navigates to site tag listing", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  // Create a published post with two tags via the API
+  const res = await page.request.post(`${BASE_URL}/api/create_post`, {
+    data: {
+      body: "# Chip Nav Post\n\ncontent",
+      format: "markdown",
+      slug_override: null,
+      publish: true,
+      tags: ["rustlang", "nix"],
+    },
+  });
+  expect(res.ok()).toBeTruthy();
+  const { permalink } = (await res.json()) as { permalink: string };
+  expect(permalink).toBeTruthy();
+
+  // Visit permalink; wait for tag chips to render
+  await goto(page, permalink);
+  await waitForSelector(page, '.j-tag[href="/tags/rustlang"]');
+
+  // Click the "rustlang" chip — Leptos router handles this client-side
+  await page.locator('.j-tag[href="/tags/rustlang"]').click();
+  await waitForSelector(page, '.j-topbar:has-text("#rustlang")');
+
+  // Post should appear in the listing
+  await expect(page.locator(".j-page")).toContainText("Chip Nav Post");
+});
+
+test("editing a post updates tag chips and tag listing pages", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 60_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  // Use tags unique to this test so cross-test pollution can't affect the
+  // /tags/:tag listing checks below.
+  const res = await page.request.post(`${BASE_URL}/api/create_post`, {
+    data: {
+      body: "# Tag Edit Post\n\ncontent",
+      format: "markdown",
+      slug_override: null,
+      publish: true,
+      tags: ["xedita", "xeditb", "xeditc"],
+    },
+  });
+  expect(res.ok()).toBeTruthy();
+  const { permalink, post_id } = (await res.json()) as {
+    permalink: string;
+    post_id: number;
+  };
+
+  // Open the edit page directly
+  await goto(page, `/posts/${post_id}/edit`);
+
+  // Wait for pre-populated chips from get_post_preview to appear
+  await waitForSelector(page, '.j-tag-chip-label:has-text("#xeditc")');
+
+  // Remove the "xeditc" chip
+  await page
+    .locator(".j-tag-chip")
+    .filter({ hasText: "#xeditc" })
+    .locator(".j-tag-chip-remove")
+    .click();
+  await expect(
+    page.locator('.j-tag-chip-label:has-text("#xeditc")'),
+  ).toHaveCount(0);
+
+  // Add a new "xeditd" chip
+  await page.fill(".j-tag-text", "xeditd");
+  await page.keyboard.press("Enter");
+  await waitForSelector(page, '.j-tag-chip-label:has-text("#xeditd")');
+
+  // Save (post is already published, so the button reads "Save").
+  // EditPostPage redirects via location.replace() to the permalink on success.
+  await click(page, 'button[name="publish"][value="true"]');
+
+  // Wait for something that only exists on the destination permalink page.
+  // waitForHydration() would race in Firefox: body[data-hydrated] is already
+  // set on the (hydrated) edit page, so page.evaluate() runs while Firefox is
+  // mid-navigation and the execution context gets destroyed.
+  await waitForSelector(page, ".j-tag-list");
+
+  // Now on the permalink — verify the footer reflects the updated tag set
+  const tagList = page.locator(".j-tag-list");
+  await expect(tagList).toContainText("#xedita");
+  await expect(tagList).toContainText("#xeditb");
+  await expect(tagList).toContainText("#xeditd");
+  await expect(tagList).not.toContainText("#xeditc");
+
+  // /tags/xeditc should no longer list the post
+  await goto(page, "/tags/xeditc");
+  await waitForSelector(page, ".j-page");
+  await expect(page.locator(".j-page")).toContainText(
+    "No posts with this tag yet.",
+  );
+
+  // /tags/xeditd should list it
+  await goto(page, "/tags/xeditd");
+  await waitForSelector(page, ".j-post-body");
+  await expect(page.locator(".j-post-body")).toContainText("Tag Edit Post");
+});
+
+test("TagInput autocomplete suggests existing tags", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  // Seed the tag corpus with a known tag
+  const res = await page.request.post(`${BASE_URL}/api/create_post`, {
+    data: {
+      body: "seed post",
+      format: "markdown",
+      slug_override: null,
+      publish: true,
+      tags: ["rustlang"],
+    },
+  });
+  expect(res.ok()).toBeTruthy();
+
+  // Open the create form and type a prefix that matches "rustlang"
+  await goto(page, "/posts/new");
+  await page.fill(".j-tag-text", "rust");
+
+  // Autocomplete dropdown should appear (150 ms debounce + fetch)
+  await waitForSelector(page, ".j-tag-suggest");
+  await expect(page.locator(".j-tag-suggest")).toContainText("rustlang");
+
+  // Click the suggestion to add it as a chip
+  await page.locator(".j-tag-suggest-item").first().click();
+  await waitForSelector(page, '.j-tag-chip-label:has-text("#rustlang")');
+});
+
 test("authenticated user can delete a draft from the drafts page", async ({
   page,
 }, testInfo) => {
