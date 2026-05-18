@@ -44,3 +44,5 @@ playwright/.cache/
 .dolt/
 *.db
 .beads-credential-key
+.pi-lens/
+/coverage-report.txt
