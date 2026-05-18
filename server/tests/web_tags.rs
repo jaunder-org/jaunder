@@ -7,7 +7,7 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use chrono::Utc;
-use common::storage::{CreatePostInput, PostFormat};
+use storage::{CreatePostInput, PostFormat};
 use tempfile::TempDir;
 use tower::ServiceExt;
 use web::tags::TagSummary;
@@ -15,7 +15,7 @@ use web::tags::TagSummary;
 use helpers::{ensure_server_fns_registered, test_options, test_state};
 
 async fn post_json(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     uri: &str,
     body: serde_json::Value,
 ) -> (StatusCode, String) {
@@ -28,7 +28,13 @@ async fn post_json(
         .body(Body::from(body.to_string()))
         .unwrap();
 
-    let app = jaunder::create_router(test_options(), state, true, helpers::tmp_storage_path());
+    let app = jaunder::create_router(
+        test_options(),
+        state,
+        helpers::noop_mailer(),
+        true,
+        helpers::tmp_storage_path(),
+    );
     let response = app.oneshot(request).await.unwrap();
 
     let status = response.status();
@@ -41,7 +47,7 @@ async fn post_json(
 }
 
 async fn seed_user_and_tagged_post(
-    state: &Arc<jaunder::storage::AppState>,
+    state: &Arc<storage::AppState>,
     username: &str,
     slug: &str,
     tags: &[&str],

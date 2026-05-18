@@ -6,9 +6,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
-use crate::slug::Slug;
-use crate::tag::Tag;
-use crate::username::Username;
+use common::slug::Slug;
+use common::tag::Tag;
+use common::username::Username;
 
 /// The format/markup language used to author a post body.
 #[derive(Clone, Debug, PartialEq, Eq)]

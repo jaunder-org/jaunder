@@ -9,15 +9,15 @@ use sqlx::{postgres::PgConnectOptions, Connection, PgConnection, PgPool, SqliteP
 use crate::cli::StorageArgs;
 use crate::mailer::LettreMailSender;
 use crate::password::Password;
-use crate::storage::{
+use crate::username::Username;
+use common::mailer::{EmailMessage, MailSender};
+use leptos::prelude::{Env, LeptosOptions};
+use storage::load_smtp_config;
+use storage::{
     export_backup, resolved_postgres_options, restore_backup, BackupExportOptions, BackupMode,
     BackupRestoreOptions, DbConnectOptions,
 };
-use crate::storage::{init_storage, open_database, open_existing_database};
-use crate::username::Username;
-use common::mailer::{EmailMessage, MailSender};
-use common::smtp::load_smtp_config;
-use leptos::prelude::{Env, LeptosOptions};
+use storage::{init_storage, open_database, open_existing_database};
 
 /// Initializes the application's storage directory and database.
 ///
@@ -411,7 +411,14 @@ pub async fn cmd_serve(
     let backup_scheduler =
         crate::start_backup_worker(db.clone(), storage.db.clone(), storage.storage_path.clone())
             .await?;
-    let router = crate::create_router(leptos_options, db, prod, storage.storage_path.clone());
+    let mailer = crate::mailer::build_mailer(db.site_config.as_ref()).await;
+    let router = crate::create_router(
+        leptos_options,
+        db,
+        mailer,
+        prod,
+        storage.storage_path.clone(),
+    );
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!(bind = %bind, prod, "starting HTTP server");
     let _backup_scheduler = backup_scheduler;
@@ -422,7 +429,7 @@ pub async fn cmd_serve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::DbConnectOptions;
+    use storage::DbConnectOptions;
 
     #[test]
     fn test_quote_postgres_identifier() {

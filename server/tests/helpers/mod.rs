@@ -1,19 +1,19 @@
 #![allow(dead_code)]
 
-use common::mailer::{test_utils::CapturingMailSender, MailSender};
-use jaunder::storage::{
+use common::mailer::{test_utils::CapturingMailSender, MailSender, NoopMailSender};
+use leptos::prelude::LeptosOptions;
+use sqlx::Connection;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, OnceLock,
+};
+use storage::{
     open_database, AppState, DbConnectOptions, PostgresAtomicOps, PostgresEmailVerificationStorage,
     PostgresInviteStorage, PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
     PostgresSessionStorage, PostgresSiteConfigStorage, PostgresUserConfigStorage,
     PostgresUserStorage, SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
     SqliteMediaStorage, SqlitePasswordResetStorage, SqlitePostStorage, SqliteSessionStorage,
     SqliteSiteConfigStorage, SqliteUserConfigStorage, SqliteUserStorage,
-};
-use leptos::prelude::LeptosOptions;
-use sqlx::Connection;
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc, OnceLock,
 };
 use tempfile::TempDir;
 
@@ -210,7 +210,7 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             panic!("expected postgres options");
         };
         let pool = sqlx::PgPool::connect_with(options).await.unwrap();
-        sqlx::migrate!("./migrations/postgres")
+        sqlx::migrate!("../storage/migrations/postgres")
             .run(&pool)
             .await
             .unwrap();
@@ -225,7 +225,6 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             posts: Arc::new(PostgresPostStorage::new(pool.clone())),
             media: Arc::new(PostgresMediaStorage::new(pool.clone())),
             user_config: Arc::new(PostgresUserConfigStorage::new(pool)),
-            mailer: mailer.clone() as Arc<dyn MailSender>,
         })
     } else {
         let pool = sqlx::SqlitePool::connect_with(
@@ -236,7 +235,7 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
         )
         .await
         .unwrap();
-        sqlx::migrate!("./migrations/sqlite")
+        sqlx::migrate!("../storage/migrations/sqlite")
             .run(&pool)
             .await
             .unwrap();
@@ -251,8 +250,13 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             posts: Arc::new(SqlitePostStorage::new(pool.clone())),
             media: Arc::new(SqliteMediaStorage::new(pool.clone())),
             user_config: Arc::new(SqliteUserConfigStorage::new(pool)),
-            mailer: mailer.clone() as Arc<dyn MailSender>,
         })
     };
     (state, mailer)
+}
+
+/// Default mailer for tests that don't care about email sending. Use with
+/// [`create_router`] when you don't have a captured mailer to pass.
+pub fn noop_mailer() -> Arc<dyn MailSender> {
+    Arc::new(NoopMailSender)
 }

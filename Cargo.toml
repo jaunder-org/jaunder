@@ -4,6 +4,7 @@ members = [
   "common",
   "hydrate",
   "server",
+  "storage",
   "web"
 ]
 
@@ -20,6 +21,7 @@ codegen-units = 1
 
 [workspace.dependencies]
 common = { path = "common" }
+storage = { path = "storage" }
 leptos = { version = "0.8.2" }
 leptos_dom = { version = "0.8.2" }
 leptos_meta = { version = "0.8.2" }

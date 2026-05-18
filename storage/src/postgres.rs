@@ -1,11 +1,15 @@
+use std::io;
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use email_address::EmailAddress;
+use log::LevelFilter;
+use sqlx::postgres::PgConnectOptions;
+use sqlx::ConnectOptions;
 use sqlx::{PgPool, Row};
 
-use common::password::Password;
-use common::slug::Slug;
-use common::storage::{
+use crate::{
     AtomicOps, ConfirmPasswordResetError, CreateMediaError, CreatePostError, CreatePostInput,
     CreateUserError, DeleteMediaError, EmailVerificationStorage, InviteRecord, InviteStorage,
     ListByTagError, MediaRecord, MediaSource, MediaStorage, PasswordResetStorage, PostCursor,
@@ -14,11 +18,13 @@ use common::storage::{
     UpdatePostInput, UseEmailVerificationError, UseInviteError, UsePasswordResetError,
     UserAuthError, UserConfigStorage, UserRecord, UserStorage,
 };
+use common::password::Password;
+use common::slug::Slug;
 use common::tag::Tag;
 use common::username::Username;
 use tracing::Instrument;
 
-use super::{
+use crate::helpers::{
     email_verification_claim_error, generate_hashed_token, invite_record_from_row,
     media_record_from_row, password_reset_claim_error, post_record_from_row,
     session_record_from_row, user_record_from_row, InviteRow, MediaRow, PostRow, SessionRow,
@@ -92,7 +98,7 @@ impl UserStorage for PostgresUserStorage {
         display_name: Option<&str>,
         is_operator: bool,
     ) -> Result<i64, CreateUserError> {
-        let password_hash = super::hash_password(password.clone())
+        let password_hash = crate::helpers::hash_password(password.clone())
             .instrument(tracing::info_span!(
                 "storage.postgres.user.create_user.hash_password"
             ))
@@ -179,7 +185,7 @@ impl UserStorage for PostgresUserStorage {
             return Err(UserAuthError::InvalidCredentials);
         };
 
-        let valid = super::verify_password(password.clone(), hash)
+        let valid = crate::helpers::verify_password(password.clone(), hash)
             .instrument(tracing::info_span!(
                 "storage.postgres.user.authenticate.verify_password"
             ))
@@ -202,7 +208,7 @@ impl UserStorage for PostgresUserStorage {
             .await
             .map_err(|e| UserAuthError::Internal(e.to_string()))?;
 
-        super::build_user_record((
+        crate::helpers::build_user_record((
             user_id,
             username,
             display_name,
@@ -266,7 +272,7 @@ impl UserStorage for PostgresUserStorage {
     }
 
     async fn set_password(&self, user_id: i64, new_password: &Password) -> sqlx::Result<()> {
-        let password_hash = super::hash_password(new_password.clone())
+        let password_hash = crate::helpers::hash_password(new_password.clone())
             .await
             .map_err(sqlx::Error::Io)?;
 
@@ -655,7 +661,7 @@ impl AtomicOps for PostgresAtomicOps {
             return Err(RegisterWithInviteError::InviteExpired);
         }
 
-        let password_hash = super::hash_password(password.clone())
+        let password_hash = crate::helpers::hash_password(password.clone())
             .await
             .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;
 
@@ -699,7 +705,7 @@ impl AtomicOps for PostgresAtomicOps {
         let token_hash =
             crate::auth::hash_token(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
 
-        let password_hash = super::hash_password(new_password.clone())
+        let password_hash = crate::helpers::hash_password(new_password.clone())
             .await
             .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
 
@@ -1583,9 +1589,68 @@ impl UserConfigStorage for PostgresUserConfigStorage {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Database open / connection
+// ---------------------------------------------------------------------------
+
+fn make_postgres_app_state(pool: PgPool) -> Arc<crate::AppState> {
+    Arc::new(crate::AppState {
+        site_config: Arc::new(PostgresSiteConfigStorage::new(pool.clone())),
+        users: Arc::new(PostgresUserStorage::new(pool.clone())),
+        sessions: Arc::new(PostgresSessionStorage::new(pool.clone())),
+        invites: Arc::new(PostgresInviteStorage::new(pool.clone())),
+        atomic: Arc::new(PostgresAtomicOps::new(pool.clone())),
+        email_verifications: Arc::new(PostgresEmailVerificationStorage::new(pool.clone())),
+        password_resets: Arc::new(PostgresPasswordResetStorage::new(pool.clone())),
+        posts: Arc::new(PostgresPostStorage::new(pool.clone())),
+        media: Arc::new(PostgresMediaStorage::new(pool.clone())),
+        user_config: Arc::new(PostgresUserConfigStorage::new(pool)),
+    })
+}
+
+fn postgres_password_from_env() -> io::Result<Option<String>> {
+    if let Ok(path) = std::env::var("JAUNDER_DB_PASSWORD_FILE") {
+        return std::fs::read_to_string(path).map(|s| Some(s.trim_end().to_owned()));
+    }
+
+    Ok(std::env::var("JAUNDER_DB_PASSWORD").ok())
+}
+
+/// Resolve final Postgres options, applying password overrides from env
+/// and the slow-query log threshold.
+///
+/// # Errors
+///
+/// Returns `sqlx::Error::Io` if the password file env var points at an
+/// unreadable file.
+pub fn resolved_postgres_options(options: &PgConnectOptions) -> sqlx::Result<PgConnectOptions> {
+    let mut options = options.clone();
+    if let Some(password) = postgres_password_from_env().map_err(sqlx::Error::Io)? {
+        options = options.password(&password);
+    }
+    options = options.log_slow_statements(LevelFilter::Warn, crate::db::sql_slow_query_threshold());
+    Ok(options)
+}
+
+#[tracing::instrument(name = "storage.postgres.open_database", skip(options))]
+pub(crate) async fn open_postgres_database(
+    options: &PgConnectOptions,
+) -> sqlx::Result<Arc<crate::AppState>> {
+    let options = resolved_postgres_options(options)?;
+    let pool = PgPool::connect_with(options).await?;
+    sqlx::migrate!("./migrations/postgres").run(&pool).await?;
+    Ok(make_postgres_app_state(pool))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::*;
+    use chrono::Utc;
+    use common::password::Password;
+    use common::username::Username;
+    use email_address::EmailAddress;
+    use sqlx::PgPool;
     use std::{future::Future, time::Duration};
 
     fn lazy_pool() -> PgPool {
@@ -1594,6 +1659,82 @@ mod tests {
 
     async fn exercise<F: Future>(future: F) {
         let _ = tokio::time::timeout(Duration::from_millis(50), future).await;
+    }
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn postgres_password_prefers_file_over_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("JAUNDER_DB_PASSWORD", "from-env");
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("db-password");
+        std::fs::write(&path, "from-file\n").unwrap();
+        std::env::set_var("JAUNDER_DB_PASSWORD_FILE", &path);
+
+        let password = postgres_password_from_env().unwrap();
+
+        std::env::remove_var("JAUNDER_DB_PASSWORD");
+        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
+        assert_eq!(password.as_deref(), Some("from-file"));
+    }
+
+    #[test]
+    fn postgres_password_uses_env_when_file_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
+        std::env::set_var("JAUNDER_DB_PASSWORD", "from-env");
+
+        let password = postgres_password_from_env().unwrap();
+
+        std::env::remove_var("JAUNDER_DB_PASSWORD");
+        assert_eq!(password.as_deref(), Some("from-env"));
+    }
+
+    #[test]
+    fn postgres_password_returns_none_when_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("JAUNDER_DB_PASSWORD");
+        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
+
+        let password = postgres_password_from_env().unwrap();
+
+        assert_eq!(password, None);
+    }
+
+    #[test]
+    fn resolved_postgres_options_applies_password_override_when_env_set() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("JAUNDER_DB_PASSWORD", "secret");
+        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
+
+        let base: PgConnectOptions = "postgres://user@localhost/db".parse().unwrap();
+        let resolved = resolved_postgres_options(&base);
+
+        std::env::remove_var("JAUNDER_DB_PASSWORD");
+        assert!(resolved.is_ok());
+    }
+
+    #[test]
+    fn resolved_postgres_options_returns_io_error_when_password_file_unreadable() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("JAUNDER_DB_PASSWORD");
+        std::env::set_var(
+            "JAUNDER_DB_PASSWORD_FILE",
+            "/nonexistent/path/to/db-password",
+        );
+
+        let base: PgConnectOptions = "postgres://user@localhost/db".parse().unwrap();
+        let result = resolved_postgres_options(&base);
+
+        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
+        assert!(matches!(result, Err(sqlx::Error::Io(_))));
+    }
+
+    #[tokio::test]
+    async fn make_postgres_app_state_constructs_with_lazy_pool() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/db").unwrap();
+        let _ = make_postgres_app_state(pool);
     }
 
     #[test]
@@ -1740,12 +1881,12 @@ mod tests {
 
         let slug: common::slug::Slug = "hello-world".parse().unwrap();
         let posts = PostgresPostStorage::new(pool);
-        exercise(posts.create_post(&common::storage::CreatePostInput {
+        exercise(posts.create_post(&crate::CreatePostInput {
             user_id: 1,
             title: Some("Test".to_string()),
             slug: slug.clone(),
             body: "body".to_string(),
-            format: common::storage::PostFormat::Markdown,
+            format: crate::PostFormat::Markdown,
             rendered_html: "<p>body</p>".to_string(),
             published_at: None,
         }))
@@ -1755,11 +1896,11 @@ mod tests {
         exercise(posts.update_post(
             1,
             1,
-            &common::storage::UpdatePostInput {
+            &crate::UpdatePostInput {
                 title: Some("Updated".to_string()),
                 slug: slug.clone(),
                 body: "body".to_string(),
-                format: common::storage::PostFormat::Markdown,
+                format: crate::PostFormat::Markdown,
                 rendered_html: "<p>body</p>".to_string(),
                 publish: false,
             },
