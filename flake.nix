@@ -263,6 +263,7 @@
             path: type:
             (pkgs.lib.hasSuffix ".sql" path)
             || (pkgs.lib.hasSuffix ".css" path)
+            || (builtins.match "scripts/.*" path != null)
             || (craneLib.filterCargoSources path type);
         };
 
@@ -929,6 +930,7 @@
             coverage = craneLib.mkCargoDerivation (
               commonArgs
               // {
+                src = ./.;
                 inherit cargoArtifacts;
                 pname = "jaunder-coverage";
                 nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
@@ -939,23 +941,7 @@
                 ];
                 buildPhaseCargoCommand = ''
                   export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:''${LD_LIBRARY_PATH:-}"
-
-                  BASELINE=$(cat ${./.coverage-baseline})
-
-                  CURRENT=$(cargo llvm-cov nextest --json --summary-only \
-                    --ignore-filename-regex 'web/src/pages|server/src/assets|server/src/storage/postgres.rs|server/src/storage/backup/postgres.rs' \
-                    | jq '.data[0].totals.lines.percent' \
-                    | awk '{ printf "%.2f", $1 }')
-
-                  echo "Current coverage:  ''${CURRENT}%"
-                  echo "Baseline coverage: ''${BASELINE}%"
-
-                  if awk "BEGIN { exit !(''${CURRENT} < ''${BASELINE}) }"; then
-                    echo "error: coverage dropped below baseline (''${CURRENT}% < ''${BASELINE}%)"
-                    exit 1
-                  fi
-
-                  echo "Coverage OK (''${CURRENT}% >= ''${BASELINE}%)"
+                  bash ./scripts/check-coverage
                 '';
                 installPhaseCommand = "mkdir -p $out && touch $out/coverage-ok";
               }
