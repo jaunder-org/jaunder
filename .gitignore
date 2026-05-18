@@ -21,3 +21,5 @@ playwright/.cache/
 .worktrees/
 .coverage-report.json
 .coverage-report.txt
+
+/coverage-report.txt
