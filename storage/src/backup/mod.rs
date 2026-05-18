@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use super::{resolved_postgres_options, DbConnectOptions};
+use crate::{resolved_postgres_options, DbConnectOptions};
 
 mod postgres;
 mod sqlite;

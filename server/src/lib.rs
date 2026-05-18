@@ -7,14 +7,11 @@ pub mod assets;
 pub mod auth;
 pub mod cli;
 pub mod commands;
+pub mod context;
 pub mod mailer;
 pub mod media;
 pub mod observability;
 pub mod password;
-pub mod render {
-    pub use common::render::*;
-}
-pub mod storage;
 pub mod tag;
 pub mod username;
 
@@ -40,15 +37,16 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use web::{shell, App};
 
 use crate::assets::StaticAssets;
-use crate::storage::{export_backup, AppState, BackupExportOptions, BackupMode, DbConnectOptions};
-use common::storage::{
-    SiteConfigStorage, BACKUP_DESTINATION_PATH_KEY, BACKUP_MODE_KEY, BACKUP_RETENTION_COUNT_KEY,
-    BACKUP_SCHEDULE_KEY,
+use ::storage::{
+    AppState, SiteConfigStorage, BACKUP_DESTINATION_PATH_KEY, BACKUP_MODE_KEY,
+    BACKUP_RETENTION_COUNT_KEY, BACKUP_SCHEDULE_KEY,
 };
+use storage::{export_backup, BackupExportOptions, BackupMode, DbConnectOptions};
 
 pub fn create_router(
     leptos_options: LeptosOptions,
     state: Arc<AppState>,
+    mailer: Arc<dyn common::mailer::MailSender>,
     secure_cookies: bool,
     storage_path: PathBuf,
 ) -> Router {
@@ -82,6 +80,8 @@ pub fn create_router(
     let routes = generate_route_list(App);
     let extension_state = state.clone();
     let server_fn_state = state.clone();
+    let server_fn_mailer = mailer.clone();
+    let leptos_mailer = mailer;
     let serve_assets = ServeEmbed::<StaticAssets>::new();
     let storage_path_ext = Arc::new(storage_path);
     Router::new()
@@ -102,9 +102,11 @@ pub fn create_router(
             "/api/{*fn_name}",
             axum::routing::post(move |req: axum::extract::Request| {
                 let state = server_fn_state.clone();
+                let mailer = server_fn_mailer.clone();
                 leptos_axum::handle_server_fns_with_context(
                     move || {
-                        provide_context(state.clone());
+                        crate::context::provide_app_state_contexts(&state);
+                        crate::context::provide_mailer_context(&mailer);
                         provide_context(web::auth::CookieSettings {
                             secure: secure_cookies,
                         });
@@ -117,7 +119,8 @@ pub fn create_router(
             &leptos_options,
             routes,
             move || {
-                provide_context(state.clone());
+                crate::context::provide_app_state_contexts(&state);
+                crate::context::provide_mailer_context(&leptos_mailer);
                 provide_context(web::auth::CookieSettings {
                     secure: secure_cookies,
                 });
@@ -391,9 +394,13 @@ mod tests {
     }
 
     async fn test_state() -> Arc<AppState> {
-        crate::storage::open_database(&"sqlite::memory:".parse().unwrap())
+        storage::open_database(&"sqlite::memory:".parse().unwrap())
             .await
             .unwrap()
+    }
+
+    fn test_mailer() -> Arc<dyn common::mailer::MailSender> {
+        Arc::new(common::mailer::NoopMailSender)
     }
 
     #[tokio::test]
@@ -447,9 +454,7 @@ mod tests {
             format!("sqlite:{}", temp.path().join("jaunder.db").display())
                 .parse()
                 .expect("db options");
-        let state = crate::storage::open_database(&db_options)
-            .await
-            .expect("open db");
+        let state = storage::open_database(&db_options).await.expect("open db");
         let storage_path = temp.path().join("storage");
         let media_path = storage_path.join("media");
         std::fs::create_dir_all(&media_path).expect("media dir");
@@ -595,7 +600,7 @@ mod tests {
     async fn run_scheduled_backup_writes_backup_and_prunes_old_ones() {
         let temp = TempDir::new().expect("temp dir");
         let db_url = format!("sqlite:{}", temp.path().join("jaunder.db").display());
-        crate::storage::open_database(&db_url.parse().expect("db options"))
+        storage::open_database(&db_url.parse().expect("db options"))
             .await
             .expect("open db");
 
@@ -692,6 +697,7 @@ mod tests {
                 let app = create_router(
                     test_options(),
                     test_state().await,
+                    test_mailer(),
                     true,
                     test_storage_path(),
                 );
@@ -713,6 +719,7 @@ mod tests {
                 let app = create_router(
                     test_options(),
                     test_state().await,
+                    test_mailer(),
                     true,
                     test_storage_path(),
                 );
@@ -739,6 +746,7 @@ mod tests {
                 let app = create_router(
                     test_options(),
                     test_state().await,
+                    test_mailer(),
                     true,
                     test_storage_path(),
                 );
@@ -765,6 +773,7 @@ mod tests {
                 let app = create_router(
                     test_options(),
                     test_state().await,
+                    test_mailer(),
                     true,
                     test_storage_path(),
                 );
@@ -791,6 +800,7 @@ mod tests {
                 let app = create_router(
                     test_options(),
                     test_state().await,
+                    test_mailer(),
                     true,
                     test_storage_path(),
                 );
@@ -822,6 +832,7 @@ mod tests {
                 let app = create_router(
                     test_options(),
                     test_state().await,
+                    test_mailer(),
                     true,
                     test_storage_path(),
                 );
@@ -853,6 +864,7 @@ mod tests {
                 let app = create_router(
                     test_options(),
                     test_state().await,
+                    test_mailer(),
                     true,
                     test_storage_path(),
                 );
@@ -887,7 +899,13 @@ mod tests {
                     .set("site.registration_policy", "invite_only")
                     .await
                     .unwrap();
-                let app = create_router(test_options(), state, true, test_storage_path());
+                let app = create_router(
+                    test_options(),
+                    state,
+                    test_mailer(),
+                    true,
+                    test_storage_path(),
+                );
                 let response = app
                     .oneshot(
                         Request::builder()
@@ -916,6 +934,7 @@ mod tests {
                 let app = create_router(
                     test_options(),
                     test_state().await,
+                    test_mailer(),
                     true,
                     test_storage_path(),
                 );
@@ -950,6 +969,7 @@ mod tests {
                 let app = create_router(
                     test_options(),
                     test_state().await,
+                    test_mailer(),
                     true,
                     test_storage_path(),
                 );
@@ -1025,6 +1045,7 @@ mod tests {
                 let app = create_router(
                     test_options(),
                     test_state().await,
+                    test_mailer(),
                     true,
                     test_storage_path(),
                 );

@@ -2,7 +2,7 @@ use std::{fmt, str::FromStr};
 
 use thiserror::Error;
 
-use crate::storage::SiteConfigStorage;
+use crate::SiteConfigStorage;
 
 // ---------------------------------------------------------------------------
 // SmtpTlsMode

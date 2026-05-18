@@ -81,11 +81,16 @@ pub mod test_utils {
 
     impl CapturingMailSender {
         /// Create a new, empty `CapturingMailSender`.
+        #[must_use]
         pub fn new() -> Self {
             Self::default()
         }
 
         /// Return a clone of all messages sent so far.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the internal mutex is poisoned.
         pub fn sent(&self) -> Vec<EmailMessage> {
             self.sent.lock().expect("mutex poisoned").clone()
         }

@@ -381,6 +381,52 @@ mod tests {
 
     #[cfg(feature = "ssr")]
     #[test]
+    fn internal_error_server_message_keeps_operator_detail_and_generic_public_message() {
+        let error = InternalError::server_message("operator-only context");
+        assert_eq!(error.operator_message(), "operator-only context");
+        assert_eq!(
+            error.public(),
+            &WebError::Server {
+                message: "server operation failed".to_string()
+            }
+        );
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn server_boundary_evaluates_tracing_fields_when_subscriber_is_active() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+        use tracing_subscriber::fmt;
+
+        let subscriber = fmt()
+            .with_test_writer()
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let mut future = Box::pin(server_boundary("test_fn", async {
+            Err::<(), _>(InternalError::server(OuterError {
+                source: SourceError,
+            }))
+        }));
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        let result = match future.as_mut().poll(&mut context) {
+            Poll::Ready(result) => result,
+            Poll::Pending => panic!("server_boundary test future should complete immediately"),
+        };
+
+        assert_eq!(
+            result,
+            Err(WebError::Server {
+                message: "server operation failed".to_string()
+            })
+        );
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
     fn masked_internal_error_keeps_public_and_operator_messages_separate() {
         let error = InternalError::masked(
             WebError::not_found("Post"),

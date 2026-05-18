@@ -2,20 +2,19 @@ mod helpers;
 
 use chrono::{Datelike, Utc};
 use jaunder::password::Password;
-use jaunder::render::{create_rendered_post, update_rendered_post};
-use jaunder::storage::{
-    open_database, open_existing_database, AtomicOps, CreatePostError, CreatePostInput,
-    CreateUserError, DbConnectOptions, EmailVerificationStorage, InviteStorage, ListByTagError,
-    PasswordResetStorage, PostCursor, PostFormat, PostStorage, ProfileUpdate,
-    RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteAtomicOps,
+use jaunder::tag::Tag;
+use jaunder::username::Username;
+use sqlx::SqlitePool;
+use storage::{
+    create_rendered_post, open_database, open_existing_database, update_rendered_post, AtomicOps,
+    CreatePostError, CreatePostInput, CreateUserError, DbConnectOptions, EmailVerificationStorage,
+    InviteStorage, ListByTagError, PasswordResetStorage, PostCursor, PostFormat, PostStorage,
+    ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteAtomicOps,
     SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
     SqlitePostStorage, SqliteSessionStorage, SqliteUserStorage, TaggingError, UpdatePostError,
     UpdatePostInput, UseEmailVerificationError, UseInviteError, UsePasswordResetError,
     UserAuthError, UserStorage,
 };
-use jaunder::tag::Tag;
-use jaunder::username::Username;
-use sqlx::SqlitePool;
 use tempfile::TempDir;
 
 use helpers::{postgres_url, reset_postgres_schema, sqlite_url};
@@ -31,19 +30,19 @@ async fn open_pool(base: &TempDir) -> SqlitePool {
     let pool = SqlitePool::connect_with(opts.create_if_missing(true))
         .await
         .unwrap();
-    sqlx::migrate!("./migrations/sqlite")
+    sqlx::migrate!("../storage/migrations/sqlite")
         .run(&pool)
         .await
         .unwrap();
     pool
 }
 
-async fn postgres_state() -> std::sync::Arc<jaunder::storage::AppState> {
+async fn postgres_state() -> std::sync::Arc<storage::AppState> {
     reset_postgres_schema().await;
     open_database(&postgres_url()).await.unwrap()
 }
 
-async fn sqlite_state() -> (TempDir, std::sync::Arc<jaunder::storage::AppState>) {
+async fn sqlite_state() -> (TempDir, std::sync::Arc<storage::AppState>) {
     let base = TempDir::new().unwrap();
     let state = open_database(&sqlite_url(&base)).await.unwrap();
     (base, state)
@@ -90,7 +89,7 @@ fn password(s: &str) -> Password {
     s.parse().unwrap()
 }
 
-async fn assert_site_config_roundtrip(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_site_config_roundtrip(state: &std::sync::Arc<storage::AppState>) {
     state
         .site_config
         .set("site.name", "Parity Site")
@@ -102,9 +101,7 @@ async fn assert_site_config_roundtrip(state: &std::sync::Arc<jaunder::storage::A
     );
 }
 
-async fn assert_user_duplicate_and_authenticate(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
+async fn assert_user_duplicate_and_authenticate(state: &std::sync::Arc<storage::AppState>) {
     let username = username("alice");
     let initial_password = password("password123");
 
@@ -137,7 +134,7 @@ async fn assert_user_duplicate_and_authenticate(
     assert!(authed.last_authenticated_at.is_some());
 }
 
-async fn assert_session_lifecycle(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_session_lifecycle(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(&username("bob"), &password("secret_password"), None, false)
@@ -164,7 +161,7 @@ async fn assert_session_lifecycle(state: &std::sync::Arc<jaunder::storage::AppSt
     assert!(matches!(err, SessionAuthError::SessionNotFound));
 }
 
-async fn assert_invite_and_atomic_registration(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_invite_and_atomic_registration(state: &std::sync::Arc<storage::AppState>) {
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let code = state.invites.create_invite(expires_at).await.unwrap();
 
@@ -196,9 +193,7 @@ async fn assert_invite_and_atomic_registration(state: &std::sync::Arc<jaunder::s
     assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
 }
 
-async fn assert_email_verification_and_password_reset(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
+async fn assert_email_verification_and_password_reset(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(&username("dave"), &password("password123"), None, false)
@@ -936,13 +931,14 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken() {
     assert!(list[0].used_at.is_none());
 }
 
-// --- AppState mailer tests ---
+// --- build_mailer tests ---
 
 #[tokio::test]
-async fn open_database_uses_noop_mailer_when_smtp_not_configured() {
+async fn build_mailer_returns_noop_when_smtp_not_configured() {
     let base = TempDir::new().unwrap();
     let opts = sqlite_url(&base);
     let state = open_database(&opts).await.unwrap();
+    let mailer = jaunder::mailer::build_mailer(state.site_config.as_ref()).await;
 
     let msg = common::mailer::EmailMessage {
         from: None,
@@ -950,7 +946,7 @@ async fn open_database_uses_noop_mailer_when_smtp_not_configured() {
         subject: "Test".to_string(),
         body_text: "Hello".to_string(),
     };
-    let result = state.mailer.send_email(&msg).await;
+    let result = mailer.send_email(&msg).await;
     assert!(
         matches!(result, Err(common::mailer::MailError::NotConfigured)),
         "expected NotConfigured, got {result:?}"
@@ -1272,7 +1268,7 @@ fn make_published_create_post_input(user_id: i64, slug: &str) -> CreatePostInput
     }
 }
 
-async fn assert_post_create_and_get_by_id(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_post_create_and_get_by_id(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(&username("alice"), &password("password123"), None, false)
@@ -1292,7 +1288,7 @@ async fn assert_post_create_and_get_by_id(state: &std::sync::Arc<jaunder::storag
     assert!(record.deleted_at.is_none());
 }
 
-async fn assert_post_slug_conflict(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_post_slug_conflict(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(&username("bob"), &password("password123"), None, false)
@@ -1343,7 +1339,7 @@ async fn assert_post_slug_conflict(state: &std::sync::Arc<jaunder::storage::AppS
     );
 }
 
-async fn assert_post_update_creates_revision(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_post_update_creates_revision(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(&username("carol"), &password("password123"), None, false)
@@ -1375,7 +1371,7 @@ async fn assert_post_update_creates_revision(state: &std::sync::Arc<jaunder::sto
     assert_eq!(record.body, "updated body");
 }
 
-async fn assert_post_update_not_found(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_post_update_not_found(state: &std::sync::Arc<storage::AppState>) {
     let update_input = UpdatePostInput {
         title: Some("Title".to_string()),
         slug: "nope".parse().unwrap(),
@@ -1395,9 +1391,7 @@ async fn assert_post_update_not_found(state: &std::sync::Arc<jaunder::storage::A
     );
 }
 
-async fn assert_soft_delete_excludes_from_lists(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
+async fn assert_soft_delete_excludes_from_lists(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(&username("dave"), &password("password123"), None, false)
@@ -1425,7 +1419,7 @@ async fn assert_soft_delete_excludes_from_lists(
     assert!(record.deleted_at.is_some());
 }
 
-async fn assert_list_published_by_user(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_list_published_by_user(state: &std::sync::Arc<storage::AppState>) {
     let alice_id = state
         .users
         .create_user(&username("ealice"), &password("password123"), None, false)
@@ -1470,9 +1464,7 @@ async fn assert_list_published_by_user(state: &std::sync::Arc<jaunder::storage::
     assert_eq!(bob_posts[0].user_id, bob_id);
 }
 
-async fn assert_list_published_returns_all_published(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
+async fn assert_list_published_returns_all_published(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(&username("fuser"), &password("password123"), None, false)
@@ -1503,7 +1495,7 @@ async fn assert_list_published_returns_all_published(
     assert!(published.iter().all(|p| p.published_at.is_some()));
 }
 
-async fn assert_list_drafts_by_user(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_list_drafts_by_user(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(&username("guser"), &password("password123"), None, false)
@@ -1709,7 +1701,7 @@ async fn postgres_list_drafts_by_user_returns_only_drafts() {
 // =============================================================================
 
 // Test: Multiple tags on a single post
-async fn assert_multiple_tags_on_single_post(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_multiple_tags_on_single_post(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -1767,7 +1759,7 @@ async fn assert_multiple_tags_on_single_post(state: &std::sync::Arc<jaunder::sto
 }
 
 // Test: Post with no tags
-async fn assert_empty_tag_list(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_empty_tag_list(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -1804,7 +1796,7 @@ async fn assert_empty_tag_list(state: &std::sync::Arc<jaunder::storage::AppState
 }
 
 // Test: Tag case preservation with different casing
-async fn assert_tag_case_preservation_variants(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_tag_case_preservation_variants(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -1885,7 +1877,7 @@ async fn assert_tag_case_preservation_variants(state: &std::sync::Arc<jaunder::s
 }
 
 // Test: Invalid tag input
-async fn assert_invalid_tag_input(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_invalid_tag_input(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -1926,7 +1918,7 @@ async fn assert_invalid_tag_input(state: &std::sync::Arc<jaunder::storage::AppSt
 }
 
 // Test: Tag pagination with many posts
-async fn assert_tag_list_pagination(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_tag_list_pagination(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -1978,7 +1970,7 @@ async fn assert_tag_list_pagination(state: &std::sync::Arc<jaunder::storage::App
 
 // Test: User-specific tag listing
 async fn assert_list_user_posts_by_tag_excludes_other_users(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
+    state: &std::sync::Arc<storage::AppState>,
 ) {
     let user1 = state
         .users
@@ -2065,7 +2057,7 @@ async fn assert_list_user_posts_by_tag_excludes_other_users(
 }
 
 // Test: Untag multiple times and verify correct tag removed
-async fn assert_selective_untag(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_selective_untag(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -2138,7 +2130,7 @@ async fn assert_selective_untag(state: &std::sync::Arc<jaunder::storage::AppStat
 }
 
 // Test: Tag with numeric characters
-async fn assert_numeric_tag(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_numeric_tag(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -2196,9 +2188,7 @@ async fn assert_numeric_tag(state: &std::sync::Arc<jaunder::storage::AppState>) 
 }
 
 // Test: Retagging a post with the same tag (duplicate tag error)
-async fn assert_retag_same_post_with_same_tag_fails(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
+async fn assert_retag_same_post_with_same_tag_fails(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -2241,7 +2231,7 @@ async fn assert_retag_same_post_with_same_tag_fails(
 }
 
 // Test: Untag from nonexistent post (should fail)
-async fn assert_untag_nonexistent_post(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_untag_nonexistent_post(state: &std::sync::Arc<storage::AppState>) {
     let tag_slug: Tag = "phantom".parse().unwrap();
     let result = state.posts.untag_post(99999, &tag_slug).await;
 
@@ -2250,7 +2240,7 @@ async fn assert_untag_nonexistent_post(state: &std::sync::Arc<jaunder::storage::
 }
 
 // Test: Get tags for nonexistent post (should return empty)
-async fn assert_get_tags_nonexistent_post(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_get_tags_nonexistent_post(state: &std::sync::Arc<storage::AppState>) {
     let tags = state
         .posts
         .get_tags_for_post(99999)
@@ -2261,7 +2251,7 @@ async fn assert_get_tags_nonexistent_post(state: &std::sync::Arc<jaunder::storag
 }
 
 // Test: List posts by nonexistent tag
-async fn assert_list_posts_by_nonexistent_tag(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_list_posts_by_nonexistent_tag(state: &std::sync::Arc<storage::AppState>) {
     let tag_slug: Tag = "nosuch-tag".parse().unwrap();
     let result = state.posts.list_posts_by_tag(&tag_slug, None, 50).await;
 
@@ -2269,9 +2259,7 @@ async fn assert_list_posts_by_nonexistent_tag(state: &std::sync::Arc<jaunder::st
 }
 
 // Test: List user posts by nonexistent tag
-async fn assert_list_user_posts_by_nonexistent_tag(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
+async fn assert_list_user_posts_by_nonexistent_tag(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -2293,7 +2281,7 @@ async fn assert_list_user_posts_by_nonexistent_tag(
 }
 
 // Test: Many tags on many posts
-async fn assert_many_tags_many_posts(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_many_tags_many_posts(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -2357,7 +2345,7 @@ async fn assert_many_tags_many_posts(state: &std::sync::Arc<jaunder::storage::Ap
 }
 
 // Test: Tag with all-numeric slug
-async fn assert_tag_all_numeric(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_tag_all_numeric(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -2408,7 +2396,7 @@ async fn assert_tag_all_numeric(state: &std::sync::Arc<jaunder::storage::AppStat
 }
 
 // Test: Tag with hyphens at boundaries
-async fn assert_tag_hyphen_boundaries(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_tag_hyphen_boundaries(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -2470,7 +2458,7 @@ async fn assert_tag_hyphen_boundaries(state: &std::sync::Arc<jaunder::storage::A
 }
 
 // Test: Tag with long slug and display name
-async fn assert_tag_with_long_display(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_tag_with_long_display(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -2515,7 +2503,7 @@ async fn assert_tag_with_long_display(state: &std::sync::Arc<jaunder::storage::A
 }
 
 // Test: Tag list ordering and consistency
-async fn assert_tag_list_ordering(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_tag_list_ordering(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -2602,7 +2590,7 @@ async fn assert_tag_list_ordering(state: &std::sync::Arc<jaunder::storage::AppSt
 }
 
 // Test: Boundary test for tag operations without tags
-async fn assert_tags_for_multiple_posts(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_tags_for_multiple_posts(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -2669,7 +2657,7 @@ async fn assert_tags_for_multiple_posts(state: &std::sync::Arc<jaunder::storage:
 }
 
 // Test: Tag normalization with mixed alphanumeric
-async fn assert_tag_mixed_alphanumeric(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_tag_mixed_alphanumeric(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -2726,7 +2714,7 @@ async fn assert_tag_mixed_alphanumeric(state: &std::sync::Arc<jaunder::storage::
 }
 
 // Test: User with single tag on single post, then untag
-async fn assert_simple_tag_lifecycle(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_simple_tag_lifecycle(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -2801,7 +2789,7 @@ async fn assert_simple_tag_lifecycle(state: &std::sync::Arc<jaunder::storage::Ap
     assert_eq!(posts_after.len(), 0);
 }
 
-async fn assert_tag_creation_and_retrieval(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_tag_creation_and_retrieval(state: &std::sync::Arc<storage::AppState>) {
     // Create a user and post
     let user = state
         .users
@@ -2847,7 +2835,7 @@ async fn assert_tag_creation_and_retrieval(state: &std::sync::Arc<jaunder::stora
     assert_eq!(tags[0].tag_display, "rust");
 }
 
-async fn assert_tag_normalization(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_tag_normalization(state: &std::sync::Arc<storage::AppState>) {
     // Create a user and post
     let user = state
         .users
@@ -2888,7 +2876,7 @@ async fn assert_tag_normalization(state: &std::sync::Arc<jaunder::storage::AppSt
     assert_eq!(tags[0].tag_display, "Rust-Web"); // original preserved
 }
 
-async fn assert_untag_post(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_untag_post(state: &std::sync::Arc<storage::AppState>) {
     // Create a user and post
     let user = state
         .users
@@ -2947,7 +2935,7 @@ async fn assert_untag_post(state: &std::sync::Arc<jaunder::storage::AppState>) {
     assert_eq!(tags.len(), 0);
 }
 
-async fn assert_duplicate_tag_error(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_duplicate_tag_error(state: &std::sync::Arc<storage::AppState>) {
     // Create a user and post
     let user = state
         .users
@@ -2991,7 +2979,7 @@ async fn assert_duplicate_tag_error(state: &std::sync::Arc<jaunder::storage::App
     }
 }
 
-async fn assert_list_posts_by_tag(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_list_posts_by_tag(state: &std::sync::Arc<storage::AppState>) {
     // Create users
     let user1 = state
         .users
@@ -3064,7 +3052,7 @@ async fn assert_list_posts_by_tag(state: &std::sync::Arc<jaunder::storage::AppSt
     assert!(posts.iter().any(|p| p.post_id == post2));
 }
 
-async fn assert_list_user_posts_by_tag(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_list_user_posts_by_tag(state: &std::sync::Arc<storage::AppState>) {
     // Create users
     let user1 = state
         .users
@@ -3160,7 +3148,7 @@ async fn assert_list_user_posts_by_tag(state: &std::sync::Arc<jaunder::storage::
     assert!(posts.iter().all(|p| p.user_id == user1));
 }
 
-async fn assert_tag_not_found_error(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_tag_not_found_error(state: &std::sync::Arc<storage::AppState>) {
     // Try to list posts by non-existent tag
     let tag_slug: Tag = "nonexistent".parse().unwrap();
     let result = state.posts.list_posts_by_tag(&tag_slug, None, 50).await;
@@ -3174,7 +3162,7 @@ async fn assert_tag_not_found_error(state: &std::sync::Arc<jaunder::storage::App
 }
 
 async fn assert_soft_deleted_posts_excluded_from_tag_list(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
+    state: &std::sync::Arc<storage::AppState>,
 ) {
     // Create a user and posts
     let user = state
@@ -3247,9 +3235,7 @@ async fn assert_soft_deleted_posts_excluded_from_tag_list(
     assert_eq!(posts[0].post_id, post2);
 }
 
-async fn assert_tag_post_nonexistent_post_error(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
+async fn assert_tag_post_nonexistent_post_error(state: &std::sync::Arc<storage::AppState>) {
     // Try to tag a post that doesn't exist
     let result = state.posts.tag_post(99999, "nonexistent-post").await;
     match result {
@@ -3260,7 +3246,7 @@ async fn assert_tag_post_nonexistent_post_error(
     }
 }
 
-async fn assert_untag_nonexistent_tag_error(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_untag_nonexistent_tag_error(state: &std::sync::Arc<storage::AppState>) {
     // Create a user and post
     let user = state
         .users
@@ -3298,9 +3284,7 @@ async fn assert_untag_nonexistent_tag_error(state: &std::sync::Arc<jaunder::stor
     }
 }
 
-async fn assert_draft_posts_excluded_from_tag_list(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
+async fn assert_draft_posts_excluded_from_tag_list(state: &std::sync::Arc<storage::AppState>) {
     // Create a user and posts
     let user = state
         .users
@@ -3800,7 +3784,7 @@ async fn postgres_simple_tag_lifecycle() {
 // ====== Additional coverage tests for error paths ======
 
 // SQLite: Post update with invalid slug and edge cases
-async fn assert_post_update_invalid_slug(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_post_update_invalid_slug(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(&username("test_user"), &password("password"), None, false)
@@ -3862,7 +3846,7 @@ async fn assert_post_update_invalid_slug(state: &std::sync::Arc<jaunder::storage
 }
 
 // SQLite: List published with cursor boundary conditions
-async fn assert_list_published_cursor_boundary(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_list_published_cursor_boundary(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -3925,7 +3909,7 @@ async fn assert_list_published_cursor_boundary(state: &std::sync::Arc<jaunder::s
 }
 
 // SQLite: List drafts with cursor
-async fn assert_list_drafts_cursor_boundary(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_list_drafts_cursor_boundary(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -3988,7 +3972,7 @@ async fn assert_list_drafts_cursor_boundary(state: &std::sync::Arc<jaunder::stor
 }
 
 // SQLite: List user posts by tag with cursor
-async fn assert_list_user_posts_by_tag_cursor(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_list_user_posts_by_tag_cursor(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -4059,7 +4043,7 @@ async fn assert_list_user_posts_by_tag_cursor(state: &std::sync::Arc<jaunder::st
 }
 
 // SQLite: List posts by tag with cursor
-async fn assert_list_posts_by_tag_cursor(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_list_posts_by_tag_cursor(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -4130,7 +4114,7 @@ async fn assert_list_posts_by_tag_cursor(state: &std::sync::Arc<jaunder::storage
 }
 
 // SQLite: Soft delete then try operations
-async fn assert_soft_delete_then_operations(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_soft_delete_then_operations(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -4270,7 +4254,7 @@ async fn postgres_soft_delete_then_operations() {
 // ====== Additional error path and rollback scenario tests ======
 
 // Test tagging with multiple failed attempts
-async fn assert_tag_post_multiple_attempts(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_tag_post_multiple_attempts(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -4329,9 +4313,7 @@ async fn assert_tag_post_multiple_attempts(state: &std::sync::Arc<jaunder::stora
 }
 
 // Test list_published_by_user with cursor when no posts match
-async fn assert_list_published_by_user_no_posts(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
+async fn assert_list_published_by_user_no_posts(state: &std::sync::Arc<storage::AppState>) {
     let _user = state
         .users
         .create_user(
@@ -4365,7 +4347,7 @@ async fn assert_list_published_by_user_no_posts(
 }
 
 // Test get_post_by_permalink returns None when post is soft-deleted
-async fn assert_get_by_permalink_soft_deleted(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_get_by_permalink_soft_deleted(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -4430,7 +4412,7 @@ async fn assert_get_by_permalink_soft_deleted(state: &std::sync::Arc<jaunder::st
 }
 
 // Test update_post on soft-deleted post
-async fn assert_update_soft_deleted_post(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_update_soft_deleted_post(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -4491,7 +4473,7 @@ async fn assert_update_soft_deleted_post(state: &std::sync::Arc<jaunder::storage
 }
 
 // Test tag with various edge case formats
-async fn assert_tag_edge_case_formats(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_tag_edge_case_formats(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -4616,7 +4598,7 @@ async fn postgres_tag_edge_case_formats() {
 // ====== Comprehensive error path coverage ======
 
 // Test get_post_by_id with non-existent post
-async fn assert_get_post_by_id_nonexistent(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_get_post_by_id_nonexistent(state: &std::sync::Arc<storage::AppState>) {
     let result = state.posts.get_post_by_id(999999).await;
     match result {
         Ok(None) => {
@@ -4628,7 +4610,7 @@ async fn assert_get_post_by_id_nonexistent(state: &std::sync::Arc<jaunder::stora
 
 // Test list_published with cursor where boundary is crossed
 async fn assert_list_published_with_cursor_same_timestamp(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
+    state: &std::sync::Arc<storage::AppState>,
 ) {
     let user = state
         .users
@@ -4687,7 +4669,7 @@ async fn assert_list_published_with_cursor_same_timestamp(
 }
 
 // Test post revisions are created during update
-async fn assert_post_revisions_created(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_post_revisions_created(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -4738,7 +4720,7 @@ async fn assert_post_revisions_created(state: &std::sync::Arc<jaunder::storage::
 }
 
 // Test display preservation of tags
-async fn assert_tag_display_preservation(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_tag_display_preservation(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -4785,7 +4767,7 @@ async fn assert_tag_display_preservation(state: &std::sync::Arc<jaunder::storage
 }
 
 // Test untag operation removes only the specified tag
-async fn assert_untag_preserves_other_tags(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_untag_preserves_other_tags(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -4922,7 +4904,7 @@ async fn postgres_untag_preserves_other_tags() {
 
 // ====== Site config tests ======
 
-async fn assert_site_config_operations(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_site_config_operations(state: &std::sync::Arc<storage::AppState>) {
     // Test get non-existent key
     let value = state.site_config.get("nonexistent.key").await;
     match value {
@@ -4963,7 +4945,7 @@ async fn assert_site_config_operations(state: &std::sync::Arc<jaunder::storage::
     }
 }
 
-async fn assert_session_list_operations(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_session_list_operations(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(
@@ -5018,7 +5000,7 @@ async fn assert_session_list_operations(state: &std::sync::Arc<jaunder::storage:
     assert_eq!(record.user_id, user);
 }
 
-async fn assert_invite_list_operations(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_invite_list_operations(state: &std::sync::Arc<storage::AppState>) {
     let now = Utc::now();
     let future = now + chrono::Duration::hours(1);
     let past = now - chrono::Duration::hours(1);
@@ -5093,7 +5075,7 @@ async fn postgres_invite_list_operations() {
 // create_rendered_post / update_rendered_post integration tests
 // =============================================================================
 
-async fn assert_create_rendered_post_markdown(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_create_rendered_post_markdown(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(
@@ -5126,7 +5108,7 @@ async fn assert_create_rendered_post_markdown(state: &std::sync::Arc<jaunder::st
     );
 }
 
-async fn assert_create_rendered_post_org(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_create_rendered_post_org(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(
@@ -5159,10 +5141,8 @@ async fn assert_create_rendered_post_org(state: &std::sync::Arc<jaunder::storage
     );
 }
 
-async fn assert_create_rendered_post_slug_conflict(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
-    use jaunder::render::CreateRenderedPostError;
+async fn assert_create_rendered_post_slug_conflict(state: &std::sync::Arc<storage::AppState>) {
+    use storage::CreateRenderedPostError;
 
     let user_id = state
         .users
@@ -5214,7 +5194,7 @@ async fn assert_create_rendered_post_slug_conflict(
     );
 }
 
-async fn assert_update_rendered_post_markdown(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_update_rendered_post_markdown(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(
@@ -5253,7 +5233,7 @@ async fn assert_update_rendered_post_markdown(state: &std::sync::Arc<jaunder::st
     );
 }
 
-async fn assert_update_rendered_post_org(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_update_rendered_post_org(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(
@@ -5292,8 +5272,8 @@ async fn assert_update_rendered_post_org(state: &std::sync::Arc<jaunder::storage
     );
 }
 
-async fn assert_update_rendered_post_not_found(state: &std::sync::Arc<jaunder::storage::AppState>) {
-    use jaunder::render::UpdateRenderedPostError;
+async fn assert_update_rendered_post_not_found(state: &std::sync::Arc<storage::AppState>) {
+    use storage::UpdateRenderedPostError;
 
     let err = update_rendered_post(
         state.posts.as_ref(),
@@ -5399,7 +5379,7 @@ async fn postgres_update_rendered_post_not_found_returns_storage_error() {
 
 // ── MediaStorage tests ────────────────────────────────────────────────────────
 
-use jaunder::storage::{CreateMediaError, DeleteMediaError, MediaRecord, MediaSource};
+use storage::{CreateMediaError, DeleteMediaError, MediaRecord, MediaSource};
 
 fn make_media_record(
     user_id: i64,
@@ -5419,7 +5399,7 @@ fn make_media_record(
     }
 }
 
-async fn assert_create_and_get_media(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_create_and_get_media(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(
@@ -5449,9 +5429,7 @@ async fn assert_create_and_get_media(state: &std::sync::Arc<jaunder::storage::Ap
     assert_eq!(fetched.size_bytes, 12345);
 }
 
-async fn assert_duplicate_media_returns_already_exists(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
+async fn assert_duplicate_media_returns_already_exists(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(
@@ -5473,7 +5451,7 @@ async fn assert_duplicate_media_returns_already_exists(
     );
 }
 
-async fn assert_delete_media_removes_record(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_delete_media_removes_record(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(
@@ -5502,9 +5480,7 @@ async fn assert_delete_media_removes_record(state: &std::sync::Arc<jaunder::stor
     assert!(fetched.is_none(), "record should have been deleted");
 }
 
-async fn assert_delete_nonexistent_returns_not_found(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
+async fn assert_delete_nonexistent_returns_not_found(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(
@@ -5528,9 +5504,7 @@ async fn assert_delete_nonexistent_returns_not_found(
     );
 }
 
-async fn assert_list_media_returns_records_for_user(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
+async fn assert_list_media_returns_records_for_user(state: &std::sync::Arc<storage::AppState>) {
     let user_a = state
         .users
         .create_user(
@@ -5592,7 +5566,7 @@ async fn assert_list_media_returns_records_for_user(
     assert!(results.iter().all(|r| r.user_id == user_a));
 }
 
-async fn assert_list_media_filtered_by_source(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_list_media_filtered_by_source(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(
@@ -5646,7 +5620,7 @@ async fn assert_list_media_filtered_by_source(state: &std::sync::Arc<jaunder::st
 }
 
 async fn assert_get_user_upload_usage_returns_zero_initially(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
+    state: &std::sync::Arc<storage::AppState>,
 ) {
     let user_id = state
         .users
@@ -5663,9 +5637,7 @@ async fn assert_get_user_upload_usage_returns_zero_initially(
     assert_eq!(usage, 0);
 }
 
-async fn assert_get_user_upload_usage_sums_uploads_only(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
+async fn assert_get_user_upload_usage_sums_uploads_only(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(
@@ -5692,7 +5664,7 @@ async fn assert_get_user_upload_usage_sums_uploads_only(
     assert_eq!(usage, 1000, "only upload bytes should count toward usage");
 }
 
-async fn assert_find_by_hash_returns_any_match(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_find_by_hash_returns_any_match(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(
@@ -5719,9 +5691,7 @@ async fn assert_find_by_hash_returns_any_match(state: &std::sync::Arc<jaunder::s
 
 // ── UserConfigStorage tests ───────────────────────────────────────────────────
 
-async fn assert_user_config_get_returns_none_when_unset(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
+async fn assert_user_config_get_returns_none_when_unset(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(&username("cfguser1"), &password("password123"), None, false)
@@ -5732,7 +5702,7 @@ async fn assert_user_config_get_returns_none_when_unset(
     assert!(val.is_none());
 }
 
-async fn assert_user_config_set_and_get(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_user_config_set_and_get(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(&username("cfguser2"), &password("password123"), None, false)
@@ -5748,7 +5718,7 @@ async fn assert_user_config_set_and_get(state: &std::sync::Arc<jaunder::storage:
     assert_eq!(val.as_deref(), Some("dark"));
 }
 
-async fn assert_user_config_overwrite(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_user_config_overwrite(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(&username("cfguser3"), &password("password123"), None, false)
@@ -5769,7 +5739,7 @@ async fn assert_user_config_overwrite(state: &std::sync::Arc<jaunder::storage::A
     assert_eq!(val.as_deref(), Some("dark"));
 }
 
-async fn assert_user_config_delete_removes_key(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_user_config_delete_removes_key(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(&username("cfguser4"), &password("password123"), None, false)
@@ -5786,9 +5756,7 @@ async fn assert_user_config_delete_removes_key(state: &std::sync::Arc<jaunder::s
     assert!(val.is_none());
 }
 
-async fn assert_user_config_delete_nonexistent_is_ok(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
-) {
+async fn assert_user_config_delete_nonexistent_is_ok(state: &std::sync::Arc<storage::AppState>) {
     let user_id = state
         .users
         .create_user(&username("cfguser5"), &password("password123"), None, false)
@@ -5991,7 +5959,7 @@ async fn postgres_user_config_delete_nonexistent_is_ok() {
 // ====== tags.2: list_tags + get_tags_for_posts ======
 
 async fn assert_list_tags_returns_alphabetical_with_prefix(
-    state: &std::sync::Arc<jaunder::storage::AppState>,
+    state: &std::sync::Arc<storage::AppState>,
 ) {
     let user = state
         .users
@@ -6053,7 +6021,7 @@ async fn assert_list_tags_returns_alphabetical_with_prefix(
     assert!(none.is_empty());
 }
 
-async fn assert_post_record_carries_tags(state: &std::sync::Arc<jaunder::storage::AppState>) {
+async fn assert_post_record_carries_tags(state: &std::sync::Arc<storage::AppState>) {
     let user = state
         .users
         .create_user(

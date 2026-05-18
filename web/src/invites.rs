@@ -20,11 +20,9 @@ use crate::auth::require_auth;
 #[cfg(feature = "ssr")]
 use chrono::Utc;
 #[cfg(feature = "ssr")]
-use common::auth::{load_registration_policy, RegistrationPolicy};
-#[cfg(feature = "ssr")]
-use common::storage::AppState;
-#[cfg(feature = "ssr")]
 use std::sync::Arc;
+#[cfg(feature = "ssr")]
+use storage::{load_registration_policy, InviteStorage, RegistrationPolicy, SiteConfigStorage};
 
 /// Creates an invite code expiring in `expires_in_hours` (default 168 = 7 days).
 /// Requires authentication.
@@ -32,15 +30,14 @@ use std::sync::Arc;
 pub async fn create_invite(expires_in_hours: Option<u64>) -> WebResult<String> {
     crate::web_server_fn!("create_invite", expires_in_hours => {
         let _auth = require_auth().await?;
-        let state = expect_context::<Arc<AppState>>();
+        let invites = expect_context::<Arc<dyn InviteStorage>>();
         let hours = expires_in_hours.unwrap_or(168);
         let duration = i64::try_from(hours)
             .ok()
             .and_then(chrono::Duration::try_hours)
             .ok_or_else(|| InternalError::validation("expires_in_hours too large"))?;
         let expires_at = Utc::now() + duration;
-        state
-            .invites
+        invites
             .create_invite(expires_at)
             .await
             .map_err(InternalError::storage)
@@ -53,13 +50,13 @@ pub async fn create_invite(expires_in_hours: Option<u64>) -> WebResult<String> {
 pub async fn list_invites() -> WebResult<Vec<InviteInfo>> {
     crate::web_server_fn!("list_invites", => {
         let _auth = require_auth().await?;
-        let state = expect_context::<Arc<AppState>>();
-        let policy = load_registration_policy(&*state.site_config).await;
+        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+        let invites = expect_context::<Arc<dyn InviteStorage>>();
+        let policy = load_registration_policy(&*site_config).await;
         if policy != RegistrationPolicy::InviteOnly {
             return Err(InternalError::not_found("invites"));
         }
-        let records = state
-            .invites
+        let records = invites
             .list_invites()
             .await
             .map_err(InternalError::storage)?;

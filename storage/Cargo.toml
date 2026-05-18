@@ -1,0 +1,38 @@
+[package]
+name = "storage"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[dependencies]
+common.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+chrono = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["derive"] }
+croner.workspace = true
+email_address.workspace = true
+flate2.workspace = true
+futures-util.workspace = true
+log.workspace = true
+orgize.workspace = true
+pulldown-cmark.workspace = true
+rand.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+sqlx = { workspace = true, features = ["postgres"] }
+tar.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[features]
+test-utils = []
+
+[lints]
+workspace = true

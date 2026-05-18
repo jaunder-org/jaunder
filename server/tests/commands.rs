@@ -13,12 +13,10 @@ use jaunder::commands::{
     cmd_user_invite,
 };
 use jaunder::password::Password;
-use jaunder::storage::{
-    open_database, open_existing_database, BackupMode, CreatePostInput, PostFormat,
-};
 use jaunder::username::Username;
 use leptos::prelude::LeptosOptions;
 use sqlx::Connection;
+use storage::{open_database, open_existing_database, BackupMode, CreatePostInput, PostFormat};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -322,7 +320,13 @@ async fn after_init_server_responds_to_health_check() {
 
     let db = open_existing_database(&args.db).await.unwrap();
     let leptos_options = LeptosOptions::builder().output_name("test").build();
-    let router = jaunder::create_router(leptos_options, db, true, args.storage_path.clone());
+    let router = jaunder::create_router(
+        leptos_options,
+        db,
+        helpers::noop_mailer(),
+        true,
+        args.storage_path.clone(),
+    );
 
     // Wrap the request in a LocalSet so Leptos's SSR rendering (which spawns
     // resource fetchers via `tokio::task::spawn_local` for `<Suspense>`)
