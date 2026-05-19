@@ -31,9 +31,7 @@ pub fn media_path(source: &str, sha256: &str, filename: &str) -> String {
 /// Returns `"/media/<source>/<2-hex-p1>/<2-hex-p2>/<full-sha256>/<filename>"`.
 #[must_use]
 pub fn media_url(source: &str, sha256: &str, filename: &str) -> String {
-    let p1 = &sha256[..2];
-    let p2 = &sha256[2..4];
-    format!("/media/{source}/{p1}/{p2}/{sha256}/{filename}")
+    format!("/media/{}", media_path(source, sha256, filename))
 }
 
 /// Returns true if the content type should be served inline rather than as an attachment.
@@ -59,27 +57,33 @@ pub fn should_inline(content_type: &str) -> bool {
 /// Extension-based content type detection. Falls back to `"application/octet-stream"`.
 #[must_use]
 pub fn detect_content_type(filename: &str) -> &'static str {
+    static EXTENSIONS: [(&[&str], &str); 12] = [
+        (&["jpg", "jpeg"], "image/jpeg"),
+        (&["png"], "image/png"),
+        (&["gif"], "image/gif"),
+        (&["webp"], "image/webp"),
+        (&["svg"], "image/svg+xml"),
+        (&["mp3"], "audio/mpeg"),
+        (&["ogg", "oga"], "audio/ogg"),
+        (&["flac"], "audio/flac"),
+        (&["wav"], "audio/wav"),
+        (&["mp4"], "video/mp4"),
+        (&["webm"], "video/webm"),
+        (&["pdf"], "application/pdf"),
+    ];
+
     let ext = Path::new(filename)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
 
-    match ext.as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "svg" => "image/svg+xml",
-        "mp3" => "audio/mpeg",
-        "ogg" | "oga" => "audio/ogg",
-        "flac" => "audio/flac",
-        "wav" => "audio/wav",
-        "mp4" => "video/mp4",
-        "webm" => "video/webm",
-        "pdf" => "application/pdf",
-        _ => "application/octet-stream",
+    for (extensions, content_type) in EXTENSIONS {
+        if extensions.contains(&ext.as_str()) {
+            return content_type;
+        }
     }
+    "application/octet-stream"
 }
 
 #[cfg(test)]
