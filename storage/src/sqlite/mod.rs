@@ -10,14 +10,17 @@ use sqlx::{
 
 use async_trait::async_trait;
 
+mod site_config;
+pub use site_config::SqliteSiteConfigStorage;
+
 use crate::{
     AppState, AtomicOps, ConfirmPasswordResetError, CreateMediaError, CreatePostError,
     CreatePostInput, CreateUserError, DeleteMediaError, EmailVerificationStorage, InviteRecord,
     InviteStorage, ListByTagError, MediaRecord, MediaSource, MediaStorage, PasswordResetStorage,
     PostCursor, PostRecord, PostStorage, PostTag, ProfileUpdate, RegisterWithInviteError,
-    SessionAuthError, SessionRecord, SessionStorage, SiteConfigStorage, TagRecord, TaggingError,
-    UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
-    UsePasswordResetError, UserAuthError, UserConfigStorage, UserRecord, UserStorage,
+    SessionAuthError, SessionRecord, SessionStorage, TagRecord, TaggingError, UpdatePostError,
+    UpdatePostInput, UseEmailVerificationError, UseInviteError, UsePasswordResetError,
+    UserAuthError, UserConfigStorage, UserRecord, UserStorage,
 };
 use common::password::Password;
 use common::slug::Slug;
@@ -83,45 +86,6 @@ pub(super) async fn open_sqlite_database(
 
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     Ok(make_app_state(pool))
-}
-
-// ---------------------------------------------------------------------------
-// SiteConfig
-// ---------------------------------------------------------------------------
-
-/// SQLite-backed [`SiteConfigStorage`].
-pub struct SqliteSiteConfigStorage {
-    pool: SqlitePool,
-}
-
-impl SqliteSiteConfigStorage {
-    #[must_use]
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait]
-impl SiteConfigStorage for SqliteSiteConfigStorage {
-    async fn get(&self, key: &str) -> sqlx::Result<Option<String>> {
-        let row = sqlx::query_as::<_, (String,)>("SELECT value FROM site_config WHERE key = $1")
-            .bind(key)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.map(|(v,)| v))
-    }
-
-    async fn set(&self, key: &str, value: &str) -> sqlx::Result<()> {
-        sqlx::query(
-            "INSERT INTO site_config (key, value) VALUES ($1, $2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        )
-        .bind(key)
-        .bind(value)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1677,5 +1641,47 @@ impl UserConfigStorage for SqliteUserConfigStorage {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{UserAuthError, UserStorage};
+    use common::password::Password;
+    use common::username::Username;
+
+    async fn in_memory_pool() -> SqlitePool {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(":memory:")
+            .create_if_missing(true);
+        let pool = sqlx::pool::PoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations/sqlite")
+            .run(&pool)
+            .await
+            .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn authenticate_with_corrupted_hash_returns_internal_error() {
+        let pool = in_memory_pool().await;
+        sqlx::query(
+            "INSERT INTO users (username, password_hash, created_at, is_operator)
+             VALUES ('alice', 'not-a-bcrypt-hash', datetime('now'), false)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let storage = SqliteUserStorage::new(pool);
+        let username: Username = "alice".parse().unwrap();
+        let password: Password = "password123".parse().unwrap();
+        let result = storage.authenticate(&username, &password).await;
+        assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
 }

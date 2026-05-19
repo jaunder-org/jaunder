@@ -401,6 +401,33 @@ async fn postgres_site_config_set_then_get_roundtrips() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL test VM"]
+async fn postgres_authenticate_with_corrupted_hash_returns_internal_error() {
+    use storage::{PostgresUserStorage, UserAuthError, UserStorage};
+    reset_postgres_schema().await;
+    let url = helpers::postgres_url_string();
+    let pool = sqlx::PgPool::connect(&url).await.unwrap();
+    sqlx::migrate!("../storage/migrations/postgres")
+        .run(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO users (username, password_hash, created_at, is_operator)
+         VALUES ($1, $2, now(), false)",
+    )
+    .bind("alice_bad_hash")
+    .bind("not-a-bcrypt-hash")
+    .execute(&pool)
+    .await
+    .unwrap();
+    let storage = PostgresUserStorage::new(pool);
+    let username: common::username::Username = "alice_bad_hash".parse().unwrap();
+    let password: common::password::Password = "password123".parse().unwrap();
+    let result = storage.authenticate(&username, &password).await;
+    assert!(matches!(result, Err(UserAuthError::Internal(_))));
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
 async fn postgres_create_user_duplicate_and_authenticate_work() {
     let state = postgres_state().await;
     assert_user_duplicate_and_authenticate(&state).await;
