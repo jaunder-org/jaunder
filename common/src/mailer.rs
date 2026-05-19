@@ -117,17 +117,27 @@ mod tests {
     use super::*;
     use crate::mailer::test_utils::CapturingMailSender;
 
+    fn parse_email(s: &str) -> email_address::EmailAddress {
+        s.parse::<email_address::EmailAddress>().expect("valid email")
+    }
+
+    fn create_test_message(
+        from: Option<&str>,
+        to: Vec<&str>,
+        subject: &str,
+    ) -> EmailMessage {
+        EmailMessage {
+            from: from.map(parse_email),
+            to: to.into_iter().map(parse_email).collect(),
+            subject: subject.to_string(),
+            body_text: "Hello".to_string(),
+        }
+    }
+
     #[tokio::test]
     async fn noop_mail_sender_returns_not_configured() {
         let sender = NoopMailSender;
-        let msg = EmailMessage {
-            from: None,
-            to: vec!["alice@example.com"
-                .parse::<email_address::EmailAddress>()
-                .unwrap()],
-            subject: "Test".to_string(),
-            body_text: "Hello".to_string(),
-        };
+        let msg = create_test_message(None, vec!["alice@example.com"], "Test");
         let result = sender.send_email(&msg).await;
         assert!(
             matches!(result, Err(MailError::NotConfigured)),
@@ -138,47 +148,24 @@ mod tests {
     #[tokio::test]
     async fn capturing_mail_sender_stores_messages() {
         let sender = CapturingMailSender::new();
-        let msg = EmailMessage {
-            from: Some(
-                "sender@example.com"
-                    .parse::<email_address::EmailAddress>()
-                    .unwrap(),
-            ),
-            to: vec!["alice@example.com"
-                .parse::<email_address::EmailAddress>()
-                .unwrap()],
-            subject: "Hello".to_string(),
-            body_text: "Hi there!".to_string(),
-        };
+        let msg = create_test_message(
+            Some("sender@example.com"),
+            vec!["alice@example.com"],
+            "Hello",
+        );
         sender.send_email(&msg).await.expect("send should succeed");
 
         let sent = sender.sent();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].subject, "Hello");
-        assert_eq!(
-            sent[0].to,
-            vec!["alice@example.com"
-                .parse::<email_address::EmailAddress>()
-                .unwrap()]
-        );
+        assert_eq!(sent[0].to, vec![parse_email("alice@example.com")]);
     }
 
     #[test]
     fn email_message_fields_are_accessible() {
         let msg = EmailMessage {
-            from: Some(
-                "sender@example.com"
-                    .parse::<email_address::EmailAddress>()
-                    .unwrap(),
-            ),
-            to: vec![
-                "alice@example.com"
-                    .parse::<email_address::EmailAddress>()
-                    .unwrap(),
-                "bob@example.com"
-                    .parse::<email_address::EmailAddress>()
-                    .unwrap(),
-            ],
+            from: Some(parse_email("sender@example.com")),
+            to: vec![parse_email("alice@example.com"), parse_email("bob@example.com")],
             subject: "Hello".to_string(),
             body_text: "Hi there!".to_string(),
         };
@@ -189,12 +176,8 @@ mod tests {
         assert_eq!(
             msg.to,
             vec![
-                "alice@example.com"
-                    .parse::<email_address::EmailAddress>()
-                    .unwrap(),
-                "bob@example.com"
-                    .parse::<email_address::EmailAddress>()
-                    .unwrap(),
+                parse_email("alice@example.com"),
+                parse_email("bob@example.com"),
             ]
         );
         assert_eq!(msg.subject, "Hello");
@@ -203,14 +186,7 @@ mod tests {
 
     #[test]
     fn email_message_from_defaults_to_none() {
-        let msg = EmailMessage {
-            from: None,
-            to: vec!["alice@example.com"
-                .parse::<email_address::EmailAddress>()
-                .unwrap()],
-            subject: "Hello".to_string(),
-            body_text: "Hi there!".to_string(),
-        };
+        let msg = create_test_message(None, vec!["alice@example.com"], "Hello");
         assert!(msg.from.is_none());
     }
 }
