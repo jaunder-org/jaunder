@@ -151,6 +151,27 @@ mod tests {
     }
 
     #[test]
+    fn detect_content_type_image_formats() {
+        assert_eq!(detect_content_type("anim.gif"), "image/gif");
+        assert_eq!(detect_content_type("photo.webp"), "image/webp");
+        assert_eq!(detect_content_type("icon.svg"), "image/svg+xml");
+    }
+
+    #[test]
+    fn detect_content_type_audio_formats() {
+        assert_eq!(detect_content_type("track.mp3"), "audio/mpeg");
+        assert_eq!(detect_content_type("track.ogg"), "audio/ogg");
+        assert_eq!(detect_content_type("track.oga"), "audio/ogg");
+        assert_eq!(detect_content_type("track.flac"), "audio/flac");
+        assert_eq!(detect_content_type("track.wav"), "audio/wav");
+    }
+
+    #[test]
+    fn detect_content_type_video_webm() {
+        assert_eq!(detect_content_type("clip.webm"), "video/webm");
+    }
+
+    #[test]
     fn detect_content_type_unknown_extension() {
         assert_eq!(detect_content_type("file.xyz"), "application/octet-stream");
         assert_eq!(detect_content_type("noext"), "application/octet-stream");
