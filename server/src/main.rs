@@ -1,4 +1,6 @@
 use clap::Parser;
+use common::password::Password;
+use common::username::Username;
 use jaunder::cli::{Cli, Commands};
 
 #[tokio::main]
@@ -72,10 +74,10 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             operator,
         } => {
             let username = username
-                .parse::<jaunder::username::Username>()
+                .parse::<Username>()
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             let password = password
-                .map(|p| p.parse::<jaunder::password::Password>())
+                .map(|p| p.parse::<Password>())
                 .transpose()
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             jaunder::commands::cmd_user_create(
@@ -262,7 +264,7 @@ mod tests {
                 pg: PgBootstrapArgs {
                     bootstrap_db: "sqlite:/tmp/bootstrap.db".to_owned(),
                     app_db: "postgres://jaunder@localhost/jaunder".to_owned(),
-                    app_role_password: "secret".to_owned(),
+                    app_role_password: std::iter::repeat('z').take(20).collect(),
                 },
             }),
             verbose: false,
