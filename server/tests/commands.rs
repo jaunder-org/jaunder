@@ -7,13 +7,13 @@ use axum::{
     http::{Request, StatusCode},
 };
 use chrono::Utc;
+use common::password::Password;
+use common::username::Username;
 use jaunder::cli::StorageArgs;
 use jaunder::commands::{
     cmd_backup, cmd_create_pg_db, cmd_init, cmd_restore, cmd_serve, cmd_smtp_test, cmd_user_create,
     cmd_user_invite,
 };
-use jaunder::password::Password;
-use jaunder::username::Username;
 use leptos::prelude::LeptosOptions;
 use sqlx::Connection;
 use storage::{open_database, open_existing_database, BackupMode, CreatePostInput, PostFormat};

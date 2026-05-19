@@ -1,9 +1,9 @@
 mod helpers;
 
 use chrono::{Datelike, Utc};
-use jaunder::password::Password;
-use jaunder::tag::Tag;
-use jaunder::username::Username;
+use common::password::Password;
+use common::tag::Tag;
+use common::username::Username;
 use sqlx::SqlitePool;
 use storage::{
     create_rendered_post, open_database, open_existing_database, update_rendered_post, AtomicOps,

@@ -6,7 +6,7 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
-use jaunder::username::Username;
+use common::username::Username;
 use storage::ProfileUpdate;
 use tempfile::TempDir;
 use tower::ServiceExt;

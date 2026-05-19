@@ -10,9 +10,6 @@ pub fn sanitize_filename(name: &str) -> String {
         return String::new();
     };
     let s = file_name.to_string_lossy();
-    if s == "." || s == ".." {
-        return String::new();
-    }
     let sanitized = s.replace('\0', "_");
     if sanitized.is_empty() {
         return String::new();
@@ -105,8 +102,8 @@ mod tests {
     #[test]
     fn sanitize_rejects_empty() {
         assert!(sanitize_filename("").is_empty());
-        assert!(sanitize_filename("..").is_empty());
         assert!(sanitize_filename(".").is_empty());
+        assert!(sanitize_filename("..").is_empty());
     }
 
     #[test]

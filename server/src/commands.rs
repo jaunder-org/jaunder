@@ -8,9 +8,9 @@ use sqlx::{postgres::PgConnectOptions, Connection, PgConnection, PgPool, SqliteP
 
 use crate::cli::StorageArgs;
 use crate::mailer::LettreMailSender;
-use crate::password::Password;
-use crate::username::Username;
 use common::mailer::{EmailMessage, MailSender};
+use common::password::Password;
+use common::username::Username;
 use leptos::prelude::{Env, LeptosOptions};
 use storage::load_smtp_config;
 use storage::{

@@ -1,7 +1,7 @@
 {
   "common/src/mailer.rs": 100,
-  "common/src/media.rs": 98.1982,
-  "common/src/password.rs": 98.3871,
+  "common/src/media.rs": 98.9691,
+  "common/src/password.rs": 98.5075,
   "common/src/slug.rs": 100,
   "common/src/tag.rs": 100,
   "common/src/username.rs": 100,
@@ -37,7 +37,7 @@
   "web/src/pages/auth.rs": 82.8947,
   "web/src/pages/backup.rs": 0,
   "web/src/pages/email.rs": 0,
-  "web/src/pages/home.rs": 50.9259,
+  "web/src/pages/home.rs": 39.8148,
   "web/src/pages/invites.rs": 46.8085,
   "web/src/pages/media.rs": 0,
   "web/src/pages/mod.rs": 95,
