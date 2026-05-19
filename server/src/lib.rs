@@ -4,16 +4,12 @@
 #![recursion_limit = "512"]
 
 pub mod assets;
-pub mod auth;
 pub mod cli;
 pub mod commands;
 pub mod context;
 pub mod mailer;
 pub mod media;
 pub mod observability;
-pub mod password;
-pub mod tag;
-pub mod username;
 
 use std::{
     fs,
