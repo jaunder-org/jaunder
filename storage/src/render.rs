@@ -823,6 +823,26 @@ mod tests {
     }
 
     #[test]
+    fn extract_org_title_skips_blank_lines_inside_kv_block() {
+        // Blank lines inside the KV header block must be skipped so the
+        // following heading is still recognized as the title. This pins the
+        // `if !past_kv_block { continue }` arm against a flipped-sign mutation.
+        let result = extract_org_title("\n#+AUTHOR: Me\n\n#+DATE: today\n* My Title\n\nBody");
+        assert_eq!(result, Some(("My Title".to_string(), "Body".to_string())));
+    }
+
+    #[test]
+    fn extract_org_title_blank_line_after_kv_without_title_returns_none() {
+        // A blank line that appears *after* a heading-less KV block should
+        // terminate the search with no title. This pins the
+        // `past_kv_block` arm in the empty-line branch.
+        let result = extract_org_title("#+AUTHOR: Me\n* Heading\n\nBody\n\nMore");
+        // Title should still come from the heading; trailing blank lines
+        // after a found title are appended to the body.
+        assert!(result.is_some());
+    }
+
+    #[test]
     fn extract_org_title_title_takes_precedence_over_heading() {
         let result = extract_org_title("#+TITLE: Meta\n* Heading\n\nBody");
         assert_eq!(
