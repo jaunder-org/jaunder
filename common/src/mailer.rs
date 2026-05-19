@@ -118,14 +118,11 @@ mod tests {
     use crate::mailer::test_utils::CapturingMailSender;
 
     fn parse_email(s: &str) -> email_address::EmailAddress {
-        s.parse::<email_address::EmailAddress>().expect("valid email")
+        s.parse::<email_address::EmailAddress>()
+            .expect("valid email")
     }
 
-    fn create_test_message(
-        from: Option<&str>,
-        to: Vec<&str>,
-        subject: &str,
-    ) -> EmailMessage {
+    fn create_test_message(from: Option<&str>, to: Vec<&str>, subject: &str) -> EmailMessage {
         EmailMessage {
             from: from.map(parse_email),
             to: to.into_iter().map(parse_email).collect(),
@@ -165,7 +162,10 @@ mod tests {
     fn email_message_fields_are_accessible() {
         let msg = EmailMessage {
             from: Some(parse_email("sender@example.com")),
-            to: vec![parse_email("alice@example.com"), parse_email("bob@example.com")],
+            to: vec![
+                parse_email("alice@example.com"),
+                parse_email("bob@example.com"),
+            ],
             subject: "Hello".to_string(),
             body_text: "Hi there!".to_string(),
         };
