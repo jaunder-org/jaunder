@@ -9,14 +9,17 @@ use sqlx::postgres::PgConnectOptions;
 use sqlx::ConnectOptions;
 use sqlx::{PgPool, Row};
 
+mod site_config;
+pub use site_config::PostgresSiteConfigStorage;
+
 use crate::{
     AtomicOps, ConfirmPasswordResetError, CreateMediaError, CreatePostError, CreatePostInput,
     CreateUserError, DeleteMediaError, EmailVerificationStorage, InviteRecord, InviteStorage,
     ListByTagError, MediaRecord, MediaSource, MediaStorage, PasswordResetStorage, PostCursor,
     PostRecord, PostStorage, PostTag, ProfileUpdate, RegisterWithInviteError, SessionAuthError,
-    SessionRecord, SessionStorage, SiteConfigStorage, TagRecord, TaggingError, UpdatePostError,
-    UpdatePostInput, UseEmailVerificationError, UseInviteError, UsePasswordResetError,
-    UserAuthError, UserConfigStorage, UserRecord, UserStorage,
+    SessionRecord, SessionStorage, TagRecord, TaggingError, UpdatePostError, UpdatePostInput,
+    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError,
+    UserConfigStorage, UserRecord, UserStorage,
 };
 use common::password::Password;
 use common::slug::Slug;
@@ -30,44 +33,6 @@ use crate::helpers::{
     session_record_from_row, user_record_from_row, InviteRow, MediaRow, PostRow, SessionRow,
     UserRow,
 };
-
-// ---------------------------------------------------------------------------
-// SiteConfig
-// ---------------------------------------------------------------------------
-
-pub struct PostgresSiteConfigStorage {
-    pool: PgPool,
-}
-
-impl PostgresSiteConfigStorage {
-    #[must_use]
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait]
-impl SiteConfigStorage for PostgresSiteConfigStorage {
-    async fn get(&self, key: &str) -> sqlx::Result<Option<String>> {
-        let row = sqlx::query_as::<_, (String,)>("SELECT value FROM site_config WHERE key = $1")
-            .bind(key)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.map(|(value,)| value))
-    }
-
-    async fn set(&self, key: &str, value: &str) -> sqlx::Result<()> {
-        sqlx::query(
-            "INSERT INTO site_config (key, value) VALUES ($1, $2)
-             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-        )
-        .bind(key)
-        .bind(value)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Users
@@ -1907,8 +1872,20 @@ mod tests {
         ))
         .await;
         exercise(posts.soft_delete_post(1)).await;
+        exercise(posts.unpublish_post(1)).await;
         exercise(posts.list_published_by_user(&username, None, 10)).await;
         exercise(posts.list_published(None, 10)).await;
         exercise(posts.list_drafts_by_user(1, None, 10)).await;
+
+        let tag: common::tag::Tag = "rust".parse().unwrap();
+        // Exercise tag_post with an invalid tag display to cover the parse-error path.
+        exercise(posts.tag_post(1, "NOT A VALID TAG!!!")).await;
+        exercise(posts.tag_post(1, "rust")).await;
+        exercise(posts.untag_post(1, &tag)).await;
+        exercise(posts.get_tags_for_post(1)).await;
+        exercise(posts.list_posts_by_tag(&tag, None, 10)).await;
+        exercise(posts.list_user_posts_by_tag(1, &tag, None, 10)).await;
+        exercise(posts.list_tags(None, 10)).await;
+        exercise(posts.list_tags(Some("rust"), 10)).await;
     }
 }
