@@ -6,15 +6,15 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
-use common::storage::ProfileUpdate;
 use jaunder::username::Username;
+use storage::ProfileUpdate;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
 use helpers::{ensure_server_fns_registered, test_options, test_state};
 
 async fn post_form(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     uri: &str,
     body: impl Into<String>,
     cookie: Option<&str>,
@@ -30,7 +30,13 @@ async fn post_form(
     }
     let request = builder.body(Body::from(body.into())).unwrap();
 
-    let app = jaunder::create_router(test_options(), state, true, helpers::tmp_storage_path());
+    let app = jaunder::create_router(
+        test_options(),
+        state,
+        helpers::noop_mailer(),
+        true,
+        helpers::tmp_storage_path(),
+    );
     let response = app.oneshot(request).await.unwrap();
 
     let status = response.status();

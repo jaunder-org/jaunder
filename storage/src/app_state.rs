@@ -2,19 +2,22 @@
 
 use std::sync::Arc;
 
-use crate::mailer::MailSender;
-
 use super::{
     AtomicOps, EmailVerificationStorage, InviteStorage, MediaStorage, PasswordResetStorage,
     PostStorage, SessionStorage, SiteConfigStorage, UserConfigStorage, UserStorage,
 };
 
-/// Application-wide state bundling all storage handles.
+/// Bundle of every storage handle the application needs.
 ///
-/// This struct is the primary way that application logic (both in the server
-/// and in Leptos server functions) accesses the persistence layer. It uses
-/// `Arc<dyn Trait>` to remain agnostic of the concrete database implementation
-/// (e.g., `SQLite` vs. `PostgreSQL`).
+/// `open_database` constructs this struct so callers get all handles in one
+/// shot; the server then unpacks it into individual Leptos contexts (see
+/// `server::context::provide_app_state_contexts`). Server functions never
+/// touch `AppState` directly — they `expect_context::<Arc<dyn FooStorage>>()`
+/// for the specific traits they need.
+///
+/// The mailer deliberately lives outside this bundle. It is not a storage
+/// concern, and it is constructed by the server (which knows about SMTP /
+/// file-capture transports) rather than by `open_database`.
 pub struct AppState {
     /// Interface for site-wide configuration settings.
     pub site_config: Arc<dyn SiteConfigStorage>,
@@ -39,6 +42,4 @@ pub struct AppState {
     pub media: Arc<dyn MediaStorage>,
     /// Interface for per-user preference storage.
     pub user_config: Arc<dyn UserConfigStorage>,
-    /// The system's outbound email sender.
-    pub mailer: Arc<dyn MailSender>,
 }

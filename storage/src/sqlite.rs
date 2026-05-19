@@ -10,10 +10,7 @@ use sqlx::{
 
 use async_trait::async_trait;
 
-use common::mailer::MailSender;
-use common::password::Password;
-use common::slug::Slug;
-use common::storage::{
+use crate::{
     AppState, AtomicOps, ConfirmPasswordResetError, CreateMediaError, CreatePostError,
     CreatePostInput, CreateUserError, DeleteMediaError, EmailVerificationStorage, InviteRecord,
     InviteStorage, ListByTagError, MediaRecord, MediaSource, MediaStorage, PasswordResetStorage,
@@ -22,22 +19,25 @@ use common::storage::{
     UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
     UsePasswordResetError, UserAuthError, UserConfigStorage, UserRecord, UserStorage,
 };
+use common::password::Password;
+use common::slug::Slug;
 use common::tag::Tag;
 use common::username::Username;
 use tracing::Instrument;
 
-use super::{
-    build_mailer, email_verification_claim_error, generate_hashed_token, invite_record_from_row,
+use crate::db::sql_slow_query_threshold;
+use crate::helpers::{
+    email_verification_claim_error, generate_hashed_token, invite_record_from_row,
     media_record_from_row, password_reset_claim_error, post_record_from_row,
-    session_record_from_row, sql_slow_query_threshold, user_record_from_row, InviteRow, MediaRow,
-    PostRow, SessionRow, UserRow,
+    session_record_from_row, user_record_from_row, InviteRow, MediaRow, PostRow, SessionRow,
+    UserRow,
 };
 
 // ---------------------------------------------------------------------------
 // Database helpers
 // ---------------------------------------------------------------------------
 
-fn make_app_state(pool: SqlitePool, mailer: Arc<dyn MailSender>) -> Arc<AppState> {
+fn make_app_state(pool: SqlitePool) -> Arc<AppState> {
     Arc::new(AppState {
         site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
         users: Arc::new(SqliteUserStorage::new(pool.clone())),
@@ -49,7 +49,6 @@ fn make_app_state(pool: SqlitePool, mailer: Arc<dyn MailSender>) -> Arc<AppState
         posts: Arc::new(SqlitePostStorage::new(pool.clone())),
         media: Arc::new(SqliteMediaStorage::new(pool.clone())),
         user_config: Arc::new(SqliteUserConfigStorage::new(pool)),
-        mailer,
     })
 }
 
@@ -83,9 +82,7 @@ pub(super) async fn open_sqlite_database(
         .await?;
 
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
-    let site_config = SqliteSiteConfigStorage::new(pool.clone());
-    let mailer = build_mailer(&site_config).await;
-    Ok(make_app_state(pool, mailer))
+    Ok(make_app_state(pool))
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +154,7 @@ impl UserStorage for SqliteUserStorage {
         display_name: Option<&str>,
         is_operator: bool,
     ) -> Result<i64, CreateUserError> {
-        let password_hash = super::hash_password(password.clone())
+        let password_hash = crate::helpers::hash_password(password.clone())
             .instrument(tracing::info_span!(
                 "storage.sqlite.user.create_user.hash_password"
             ))
@@ -243,7 +240,7 @@ impl UserStorage for SqliteUserStorage {
             return Err(UserAuthError::InvalidCredentials);
         };
 
-        let valid = super::verify_password(password.clone(), hash)
+        let valid = crate::helpers::verify_password(password.clone(), hash)
             .instrument(tracing::info_span!(
                 "storage.sqlite.user.authenticate.verify_password"
             ))
@@ -266,7 +263,7 @@ impl UserStorage for SqliteUserStorage {
             .await
             .map_err(|e| UserAuthError::Internal(e.to_string()))?;
 
-        super::build_user_record((
+        crate::helpers::build_user_record((
             user_id,
             username,
             display_name,
@@ -328,7 +325,7 @@ impl UserStorage for SqliteUserStorage {
     }
 
     async fn set_password(&self, user_id: i64, new_password: &Password) -> sqlx::Result<()> {
-        let password_hash = super::hash_password(new_password.clone())
+        let password_hash = crate::helpers::hash_password(new_password.clone())
             .await
             .map_err(sqlx::Error::Io)?;
 
@@ -750,7 +747,7 @@ impl AtomicOps for SqliteAtomicOps {
             return Err(RegisterWithInviteError::InviteExpired);
         }
 
-        let password_hash = super::hash_password(password.clone())
+        let password_hash = crate::helpers::hash_password(password.clone())
             .await
             .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;
 
@@ -794,7 +791,7 @@ impl AtomicOps for SqliteAtomicOps {
         let token_hash =
             crate::auth::hash_token(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
 
-        let password_hash = super::hash_password(new_password.clone())
+        let password_hash = crate::helpers::hash_password(new_password.clone())
             .await
             .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
 

@@ -10,12 +10,12 @@ use crate::{
     error::{InternalError, InternalResult, WebError},
 };
 #[cfg(feature = "ssr")]
-use common::storage::{
-    AppState, BACKUP_DESTINATION_PATH_KEY, BACKUP_MODE_KEY, BACKUP_RETENTION_COUNT_KEY,
-    BACKUP_SCHEDULE_KEY,
-};
-#[cfg(feature = "ssr")]
 use std::sync::Arc;
+#[cfg(feature = "ssr")]
+use storage::{
+    SiteConfigStorage, UserStorage, BACKUP_DESTINATION_PATH_KEY, BACKUP_MODE_KEY,
+    BACKUP_RETENTION_COUNT_KEY, BACKUP_SCHEDULE_KEY,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BackupSettings {
@@ -102,27 +102,11 @@ fn backup_configuration_complete_and_valid(
         && optional_backup_mode_valid(mode)
 }
 
-// Retrieve the `Arc<AppState>` context as a `Result` rather than panicking
-// with `expect_context`. The Resource fetcher for `backup_warning_visible` /
-// `current_user_is_operator` runs on a tokio worker via Suspense; if the
-// per-request reactive owner is disposed before the worker reaches us
-// (e.g. e2e parallelism, client disconnect), the context is gone.
-// `expect_context` would panic with "expected context of type Arc<AppState>"
-// — see jaunder-3gt. Returning Err lets the rest of the request unwind
-// cleanly; the Sidebar/BackupBanner already treat the error case as "not
-// operator / no banner".
 #[cfg(feature = "ssr")]
-fn app_state_context() -> InternalResult<Arc<AppState>> {
-    use_context::<Arc<AppState>>()
-        .ok_or_else(|| InternalError::server_message("missing AppState context"))
-}
-
-#[cfg(feature = "ssr")]
-async fn require_operator() -> InternalResult<Arc<AppState>> {
+async fn require_operator() -> InternalResult<()> {
     let auth = require_auth().await?;
-    let state = app_state_context()?;
-    let Some(user) = state
-        .users
+    let users = expect_context::<Arc<dyn UserStorage>>();
+    let Some(user) = users
         .get_user(auth.user_id)
         .await
         .map_err(InternalError::storage)?
@@ -134,7 +118,7 @@ async fn require_operator() -> InternalResult<Arc<AppState>> {
         return Err(InternalError::unauthorized("operator access required"));
     }
 
-    Ok(state)
+    Ok(())
 }
 
 #[server(endpoint = "/backup_warning_visible")]
@@ -150,9 +134,9 @@ pub async fn backup_warning_visible() -> WebResult<bool> {
             Err(error) => return Err(error),
         };
 
-        let state = app_state_context()?;
-        let Some(user) = state
-            .users
+        let users = expect_context::<Arc<dyn UserStorage>>();
+        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+        let Some(user) = users
             .get_user(auth.user_id)
             .await
             .map_err(InternalError::storage)?
@@ -164,23 +148,19 @@ pub async fn backup_warning_visible() -> WebResult<bool> {
             return Ok(false);
         }
 
-        let destination_path = state
-            .site_config
+        let destination_path = site_config
             .get(BACKUP_DESTINATION_PATH_KEY)
             .await
             .map_err(InternalError::storage)?;
-        let schedule = state
-            .site_config
+        let schedule = site_config
             .get(BACKUP_SCHEDULE_KEY)
             .await
             .map_err(InternalError::storage)?;
-        let retention_count = state
-            .site_config
+        let retention_count = site_config
             .get(BACKUP_RETENTION_COUNT_KEY)
             .await
             .map_err(InternalError::storage)?;
-        let mode = state
-            .site_config
+        let mode = site_config
             .get(BACKUP_MODE_KEY)
             .await
             .map_err(InternalError::storage)?;
@@ -207,9 +187,8 @@ pub async fn current_user_is_operator() -> WebResult<bool> {
             Err(error) => return Err(error),
         };
 
-        let state = app_state_context()?;
-        let Some(user) = state
-            .users
+        let users = expect_context::<Arc<dyn UserStorage>>();
+        let Some(user) = users
             .get_user(auth.user_id)
             .await
             .map_err(InternalError::storage)?
@@ -225,25 +204,22 @@ pub async fn current_user_is_operator() -> WebResult<bool> {
 #[cfg_attr(feature = "ssr", tracing::instrument(name = "web.backup.get_settings"))]
 pub async fn get_backup_settings() -> WebResult<BackupSettings> {
     crate::web_server_fn!("get_backup_settings", => {
-        let state = require_operator().await?;
-        let destination_path = state
-            .site_config
+        require_operator().await?;
+        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+        let destination_path = site_config
             .get(BACKUP_DESTINATION_PATH_KEY)
             .await
             .map_err(InternalError::storage)?
             .unwrap_or_default();
-        let schedule = backup_schedule_value(state
-            .site_config
+        let schedule = backup_schedule_value(site_config
             .get(BACKUP_SCHEDULE_KEY)
             .await
             .map_err(InternalError::storage)?);
-        let retention_count = backup_retention_count_value(state
-            .site_config
+        let retention_count = backup_retention_count_value(site_config
             .get(BACKUP_RETENTION_COUNT_KEY)
             .await
             .map_err(InternalError::storage)?);
-        let mode = backup_mode_value(state
-            .site_config
+        let mode = backup_mode_value(site_config
             .get(BACKUP_MODE_KEY)
             .await
             .map_err(InternalError::storage)?);
@@ -272,7 +248,8 @@ pub async fn update_backup_settings(
     mode: String,
 ) -> WebResult<()> {
     crate::web_server_fn!("update_backup_settings", destination_path, schedule, retention_count, mode => {
-        let state = require_operator().await?;
+        require_operator().await?;
+        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let destination_path = destination_path.trim();
         let schedule = schedule.trim();
         let retention_count = retention_count.trim();
@@ -294,23 +271,19 @@ pub async fn update_backup_settings(
             ));
         }
 
-        state
-            .site_config
+        site_config
             .set(BACKUP_DESTINATION_PATH_KEY, destination_path)
             .await
             .map_err(InternalError::storage)?;
-        state
-            .site_config
+        site_config
             .set(BACKUP_SCHEDULE_KEY, schedule)
             .await
             .map_err(InternalError::storage)?;
-        state
-            .site_config
+        site_config
             .set(BACKUP_RETENTION_COUNT_KEY, retention_count)
             .await
             .map_err(InternalError::storage)?;
-        state
-            .site_config
+        site_config
             .set(BACKUP_MODE_KEY, mode)
             .await
             .map_err(InternalError::storage)?;
@@ -321,30 +294,11 @@ pub async fn update_backup_settings(
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "ssr")]
-    use super::app_state_context;
     use super::{
         backup_configuration_complete_and_valid, backup_destination_configured, backup_mode_valid,
         backup_mode_value, backup_retention_count_valid, backup_retention_count_value,
         backup_schedule_valid, backup_schedule_value,
     };
-    #[cfg(feature = "ssr")]
-    use crate::error::WebError;
-
-    // Exercises the defensive Err path of `app_state_context`: when the Leptos
-    // owner has no `Arc<AppState>` context attached, the helper should return
-    // an InternalError rather than panicking the way `expect_context` would.
-    #[cfg(feature = "ssr")]
-    #[test]
-    fn app_state_context_returns_err_when_missing() {
-        let result = leptos::prelude::Owner::new().with(app_state_context);
-        match result {
-            Err(err) => {
-                assert!(matches!(err.public(), WebError::Server { .. }));
-            }
-            Ok(_) => panic!("expected Err when no AppState provided"),
-        }
-    }
 
     #[test]
     fn backup_destination_configured_rejects_empty_values() {

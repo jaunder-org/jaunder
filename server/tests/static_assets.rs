@@ -19,7 +19,13 @@ async fn get_asset(uri: &str) -> (StatusCode, Option<String>) {
         .body(Body::empty())
         .unwrap();
 
-    let app = jaunder::create_router(test_options(), state, false, helpers::tmp_storage_path());
+    let app = jaunder::create_router(
+        test_options(),
+        state,
+        helpers::noop_mailer(),
+        false,
+        helpers::tmp_storage_path(),
+    );
     let response = app.oneshot(request).await.unwrap();
 
     let status = response.status();

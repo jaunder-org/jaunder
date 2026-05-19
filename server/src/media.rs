@@ -13,7 +13,7 @@ use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 
 use common::media::{detect_content_type, media_url, sanitize_filename, should_inline};
-use common::storage::{
+use storage::{
     AppState, CreateMediaError, MediaRecord, MediaSource, DEFAULT_MAX_FILE_SIZE_BYTES,
     DEFAULT_USER_QUOTA_BYTES, MEDIA_MAX_FILE_SIZE_BYTES_KEY, MEDIA_USER_QUOTA_BYTES_KEY,
 };
@@ -174,7 +174,10 @@ pub async fn upload_handler(
     };
     match state.media.create_media(&record).await {
         Ok(()) | Err(CreateMediaError::AlreadyExists) => {}
-        Err(CreateMediaError::Internal(_)) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(CreateMediaError::Internal(e)) => {
+            tracing::error!(error = %e, "create_media failed");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
     }
 
     let url = media_url("upload", &sha256_hex, &filename);
@@ -371,4 +374,30 @@ async fn first_file_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use tokio::fs;
+
+    #[tokio::test]
+    async fn test_first_file_in_dir() {
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path();
+
+        // Empty dir
+        assert_eq!(first_file_in_dir(dir).await, None);
+
+        // Dir with a subdir (should be ignored by is_file())
+        let subdir = dir.join("subdir");
+        fs::create_dir(&subdir).await.unwrap();
+        assert_eq!(first_file_in_dir(dir).await, None);
+
+        // Dir with a file
+        let file = dir.join("test.txt");
+        fs::write(&file, "hello").await.unwrap();
+        assert_eq!(first_file_in_dir(dir).await, Some(file));
+    }
 }

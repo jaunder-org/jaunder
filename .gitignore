@@ -38,8 +38,11 @@ playwright/.cache/
 /jaunder-interactive-testing.qcow2
 .worktrees/
 .coverage-report.json
+.coverage-report.txt
 
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
 .beads-credential-key
+.pi-lens/
+/coverage-report.txt

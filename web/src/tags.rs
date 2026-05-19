@@ -7,9 +7,9 @@ use crate::error::InternalError;
 use crate::error::WebResult;
 
 #[cfg(feature = "ssr")]
-use common::storage::AppState;
-#[cfg(feature = "ssr")]
 use std::sync::Arc;
+#[cfg(feature = "ssr")]
+use storage::PostStorage;
 
 /// Default number of suggestions returned to the autocomplete dropdown when
 /// the caller doesn't specify a limit.
@@ -92,10 +92,9 @@ pub struct TagSummary {
 #[server(endpoint = "/list_tags", input = Json)]
 pub async fn list_tags(prefix: Option<String>, limit: Option<u32>) -> WebResult<Vec<TagSummary>> {
     crate::web_server_fn!("list_tags", prefix, limit => {
-        let state = expect_context::<Arc<AppState>>();
+        let posts = expect_context::<Arc<dyn PostStorage>>();
         let resolved_limit = limit.unwrap_or(DEFAULT_TAG_LIMIT).clamp(1, MAX_TAG_LIMIT);
-        let records = state
-            .posts
+        let records = posts
             .list_tags(prefix.as_deref(), resolved_limit)
             .await
             .map_err(InternalError::storage)?;
@@ -109,4 +108,51 @@ pub async fn list_tags(prefix: Option<String>, limit: Option<u32>) -> WebResult<
             })
             .collect())
     })
+}
+
+#[cfg(all(test, feature = "ssr"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_and_validate_tags_skips_empty_and_whitespace_only_tokens() {
+        let tags = parse_and_validate_tags(vec![
+            "".to_string(),
+            "   ".to_string(),
+            "rust".to_string(),
+            "\t".to_string(),
+        ])
+        .expect("non-empty tags should validate");
+        assert_eq!(tags, vec!["rust".to_string()]);
+    }
+
+    #[test]
+    fn parse_and_validate_tags_deduplicates_repeated_tags() {
+        let tags = parse_and_validate_tags(vec![
+            "rust".to_string(),
+            "rust".to_string(),
+            "leptos".to_string(),
+        ])
+        .expect("valid tags should validate");
+        assert_eq!(tags, vec!["rust".to_string(), "leptos".to_string()]);
+    }
+
+    #[test]
+    fn parse_and_validate_tags_rejects_invalid_token() {
+        let err = parse_and_validate_tags(vec!["Not A Tag".to_string()]).unwrap_err();
+        assert!(matches!(
+            err.public(),
+            crate::error::WebError::Validation { .. }
+        ));
+    }
+
+    #[test]
+    fn parse_and_validate_tags_rejects_too_many_tags() {
+        let raw: Vec<String> = (0..=MAX_TAGS_PER_POST).map(|i| format!("tag{i}")).collect();
+        let err = parse_and_validate_tags(raw).unwrap_err();
+        assert!(matches!(
+            err.public(),
+            crate::error::WebError::Validation { .. }
+        ));
+    }
 }

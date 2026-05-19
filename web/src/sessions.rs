@@ -18,9 +18,9 @@ pub struct SessionInfo {
 #[cfg(feature = "ssr")]
 use crate::auth::require_auth;
 #[cfg(feature = "ssr")]
-use common::storage::AppState;
-#[cfg(feature = "ssr")]
 use std::sync::Arc;
+#[cfg(feature = "ssr")]
+use storage::SessionStorage;
 
 /// Returns all sessions for the authenticated user.
 /// `is_current` is `true` for the session used to make this request.
@@ -28,9 +28,8 @@ use std::sync::Arc;
 pub async fn list_sessions() -> WebResult<Vec<SessionInfo>> {
     crate::web_server_fn!("list_sessions", => {
         let auth = require_auth().await?;
-        let state = expect_context::<Arc<AppState>>();
-        let records = state
-            .sessions
+        let sessions = expect_context::<Arc<dyn SessionStorage>>();
+        let records = sessions
             .list_sessions(auth.user_id)
             .await
             .map_err(InternalError::storage)?;
@@ -52,18 +51,16 @@ pub async fn list_sessions() -> WebResult<Vec<SessionInfo>> {
 pub async fn revoke_session(token_hash: String) -> WebResult<()> {
     crate::web_server_fn!("revoke_session", token_hash => {
         let auth = require_auth().await?;
-        let state = expect_context::<Arc<AppState>>();
+        let sessions = expect_context::<Arc<dyn SessionStorage>>();
         // Verify the session belongs to the authenticated user.
-        let sessions = state
-            .sessions
+        let session_records = sessions
             .list_sessions(auth.user_id)
             .await
             .map_err(InternalError::storage)?;
-        if !sessions.iter().any(|s| s.token_hash == token_hash) {
+        if !session_records.iter().any(|s| s.token_hash == token_hash) {
             return Err(InternalError::not_found("session"));
         }
-        state
-            .sessions
+        sessions
             .revoke_session(&token_hash)
             .await
             .map_err(InternalError::storage)

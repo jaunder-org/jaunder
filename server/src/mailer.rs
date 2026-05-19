@@ -1,12 +1,10 @@
 use async_trait::async_trait;
-use common::{
-    mailer::{EmailMessage, MailError, MailSender},
-    smtp::{SmtpConfig, SmtpTlsMode},
-};
+use common::mailer::{EmailMessage, MailError, MailSender};
 use lettre::{
     message::Mailbox, transport::smtp::authentication::Credentials, AsyncSmtpTransport,
     AsyncTransport, Message, Tokio1Executor,
 };
+use storage::{SmtpConfig, SmtpTlsMode};
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------
@@ -171,7 +169,7 @@ impl MailSender for FileMailSender {
 
 #[cfg(test)]
 mod tests {
-    use common::smtp::{SmtpConfig, SmtpTlsMode};
+    use storage::{SmtpConfig, SmtpTlsMode};
 
     use super::*;
 
@@ -317,5 +315,37 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("failed to send email"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// build_mailer
+// ---------------------------------------------------------------------------
+
+use std::sync::Arc;
+
+use common::mailer::NoopMailSender;
+use storage::{load_smtp_config, SiteConfigStorage};
+
+/// Picks a mailer implementation based on environment and stored SMTP config.
+///
+/// In e2e tests, `JAUNDER_MAIL_CAPTURE_FILE` short-circuits to the file-capture
+/// transport. Otherwise falls back to the configured SMTP transport, or the
+/// no-op sender if configuration is absent or invalid.
+///
+/// Lives in `server` (not `storage`) because it depends on lettre and
+/// file-capture transports — concerns that the storage crate is deliberately
+/// kept agnostic of.
+#[tracing::instrument(name = "server.mailer.build", skip(site_config))]
+pub async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender> {
+    if let Ok(path) = std::env::var("JAUNDER_MAIL_CAPTURE_FILE") {
+        return Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>;
+    }
+    match load_smtp_config(site_config).await {
+        Ok(Some(cfg)) => match LettreMailSender::from_config(&cfg) {
+            Ok(sender) => Arc::new(sender) as Arc<dyn MailSender>,
+            Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
+        },
+        Ok(None) | Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
     }
 }

@@ -7,7 +7,7 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use chrono::Datelike;
-use common::storage::PostFormat;
+use storage::PostFormat;
 use tempfile::TempDir;
 use tower::ServiceExt;
 use web::posts::{
@@ -15,7 +15,7 @@ use web::posts::{
 };
 
 async fn unpublish_post_form(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     post_id: i64,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
@@ -31,7 +31,7 @@ async fn unpublish_post_form(
 use helpers::{ensure_server_fns_registered, test_options, test_state};
 
 async fn post_form(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     uri: &str,
     body: impl Into<String>,
     cookie: Option<&str>,
@@ -47,7 +47,13 @@ async fn post_form(
     }
     let request = builder.body(Body::from(body.into())).unwrap();
 
-    let app = jaunder::create_router(test_options(), state, true, helpers::tmp_storage_path());
+    let app = jaunder::create_router(
+        test_options(),
+        state,
+        helpers::noop_mailer(),
+        true,
+        helpers::tmp_storage_path(),
+    );
     let response = app.oneshot(request).await.unwrap();
 
     let status = response.status();
@@ -60,7 +66,7 @@ async fn post_form(
 }
 
 async fn create_post_json(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     body: &str,
     format: &str,
     slug_override: Option<&str>,
@@ -77,7 +83,7 @@ async fn create_post_json(
 }
 
 async fn update_post_json(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     post_id: i64,
     body: &str,
     format: &str,
@@ -98,7 +104,7 @@ async fn update_post_json(
 /// POST to a `#[server(input = Json)]` endpoint. Mirrors `post_form` but emits
 /// `application/json` so the JSON-encoded server fns deserialize correctly.
 async fn post_json(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     uri: &str,
     body: serde_json::Value,
     cookie: Option<&str>,
@@ -114,7 +120,13 @@ async fn post_json(
     }
     let request = builder.body(Body::from(body.to_string())).unwrap();
 
-    let app = jaunder::create_router(test_options(), state, true, helpers::tmp_storage_path());
+    let app = jaunder::create_router(
+        test_options(),
+        state,
+        helpers::noop_mailer(),
+        true,
+        helpers::tmp_storage_path(),
+    );
     let response = app.oneshot(request).await.unwrap();
 
     let status = response.status();
@@ -127,7 +139,7 @@ async fn post_json(
 }
 
 async fn get_post_form(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     username: &str,
     year: i32,
     month: u32,
@@ -140,7 +152,7 @@ async fn get_post_form(
 }
 
 async fn get_post_preview_form(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     post_id: i64,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
@@ -901,7 +913,7 @@ async fn get_post_returns_not_found_for_missing_post() {
 }
 
 async fn list_drafts_form(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     cursor_created_at: Option<&str>,
     cursor_post_id: Option<i64>,
     limit: u32,
@@ -919,7 +931,7 @@ async fn list_drafts_form(
 }
 
 async fn publish_post_form(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     post_id: i64,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
@@ -933,7 +945,7 @@ async fn publish_post_form(
 }
 
 async fn list_user_posts_form(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     username: &str,
     cursor_created_at: Option<&str>,
     cursor_post_id: Option<i64>,
@@ -952,7 +964,7 @@ async fn list_user_posts_form(
 }
 
 async fn list_posts_by_tag_form(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     tag: &str,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
@@ -961,7 +973,7 @@ async fn list_posts_by_tag_form(
 }
 
 async fn list_user_posts_by_tag_form(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     username: &str,
     tag: &str,
     cookie: Option<&str>,
@@ -971,7 +983,7 @@ async fn list_user_posts_by_tag_form(
 }
 
 async fn list_local_timeline_form(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     cursor_created_at: Option<&str>,
     cursor_post_id: Option<i64>,
     limit: u32,
@@ -989,7 +1001,7 @@ async fn list_local_timeline_form(
 }
 
 async fn list_home_feed_form(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     cursor_created_at: Option<&str>,
     cursor_post_id: Option<i64>,
     limit: u32,
@@ -2345,7 +2357,7 @@ async fn list_home_feed_rejects_invalid_cursor_inputs() {
 }
 
 async fn delete_post_form(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     post_id: i64,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
@@ -2858,7 +2870,7 @@ async fn get_post_carries_tags() {
     assert_eq!(response.tags[0].display, "Performance");
 }
 
-async fn login_and_state() -> (TempDir, Arc<jaunder::storage::AppState>, String) {
+async fn login_and_state() -> (TempDir, Arc<storage::AppState>, String) {
     let base = TempDir::new().unwrap();
     let state = test_state(&base).await;
     let user_id = state

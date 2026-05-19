@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
-use crate::username::Username;
+use common::username::Username;
 
 /// A session record returned by [`SessionStorage`] queries.
 #[derive(Clone, Debug)]
