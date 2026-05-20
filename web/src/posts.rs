@@ -3,7 +3,7 @@ use leptos::server_fn::codec::Json;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "ssr")]
-use crate::auth::{AuthUser, require_auth};
+use crate::auth::{require_auth, AuthUser};
 use crate::error::WebResult;
 #[cfg(feature = "ssr")]
 use crate::error::{InternalError, InternalResult, WebError};
@@ -16,8 +16,8 @@ use common::{slug::Slug, username::Username};
 use std::sync::Arc;
 #[cfg(feature = "ssr")]
 use storage::{
-    CreatePostError, CreateRenderedPostError, PerformUpdateError, PostCursor, PostFormat,
-    PostRecord, PostStorage, UpdatePostInput, UserStorage, perform_post_update,
+    perform_post_update, PerformUpdateError, PostCursor, PostFormat, PostRecord, PostStorage,
+    UpdatePostInput, UserStorage,
 };
 
 /// Result returned by [`create_post`].
@@ -140,15 +140,7 @@ pub async fn create_post(
             100,
         )
         .await
-        .map_err(|err| match err {
-            storage::PerformCreationError::EmptyPost => InternalError::validation("post body is required"),
-            storage::PerformCreationError::NoSlugFromPost => InternalError::validation("post must contain at least one ASCII letter or digit for its slug"),
-            storage::PerformCreationError::InvalidSlug(msg) => InternalError::validation(msg),
-            storage::PerformCreationError::Exhausted(_) => InternalError::server_message("unable to allocate a unique slug after 100 attempts"),
-            storage::PerformCreationError::Render(e) => InternalError::validation(e.to_string()),
-            storage::PerformCreationError::CreatedNotFound => InternalError::server_message("created post not found"),
-            storage::PerformCreationError::Storage(e) => InternalError::storage(e),
-        })?;
+        .map_err(perform_creation_error)?;
 
         let created_at = record.created_at.to_rfc3339();
         let published_at_str = record.published_at.map(|timestamp| timestamp.to_rfc3339());
@@ -918,6 +910,27 @@ fn perform_update_error(error: PerformUpdateError) -> InternalError {
     }
 }
 
+#[cfg(feature = "ssr")]
+fn perform_creation_error(err: storage::PerformCreationError) -> InternalError {
+    match err {
+        storage::PerformCreationError::EmptyPost => {
+            InternalError::validation("post body is required")
+        }
+        storage::PerformCreationError::NoSlugFromPost => InternalError::validation(
+            "post must contain at least one ASCII letter or digit for its slug",
+        ),
+        storage::PerformCreationError::InvalidSlug(msg) => InternalError::validation(msg),
+        storage::PerformCreationError::Exhausted(_) => {
+            InternalError::server_message("unable to allocate a unique slug after 100 attempts")
+        }
+        storage::PerformCreationError::Render(e) => InternalError::validation(e.to_string()),
+        storage::PerformCreationError::CreatedNotFound => {
+            InternalError::server_message("created post not found")
+        }
+        storage::PerformCreationError::Storage(e) => InternalError::storage(e),
+    }
+}
+
 /// Soft-deletes a post owned by the authenticated user.
 #[server(endpoint = "/delete_post")]
 pub async fn delete_post(post_id: i64) -> WebResult<()> {
@@ -1202,6 +1215,47 @@ mod tests {
             )))
             .public(),
             WebError::Server { .. }
+        ));
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn perform_creation_error_maps_each_arm() {
+        use super::perform_creation_error;
+        use crate::error::WebError;
+        use storage::PerformCreationError;
+
+        assert!(matches!(
+            perform_creation_error(PerformCreationError::EmptyPost).public(),
+            WebError::Validation { .. }
+        ));
+        assert!(matches!(
+            perform_creation_error(PerformCreationError::NoSlugFromPost).public(),
+            WebError::Validation { .. }
+        ));
+        assert!(matches!(
+            perform_creation_error(PerformCreationError::InvalidSlug("invalid".to_string()))
+                .public(),
+            WebError::Validation { .. }
+        ));
+        assert!(matches!(
+            perform_creation_error(PerformCreationError::Exhausted(5)).public(),
+            WebError::Server { .. }
+        ));
+        assert!(matches!(
+            perform_creation_error(PerformCreationError::Render(
+                storage::RenderError::OrgRender("bad".to_string())
+            ))
+            .public(),
+            WebError::Validation { .. }
+        ));
+        assert!(matches!(
+            perform_creation_error(PerformCreationError::CreatedNotFound).public(),
+            WebError::Server { .. }
+        ));
+        assert!(matches!(
+            perform_creation_error(PerformCreationError::Storage(sqlx::Error::PoolClosed)).public(),
+            WebError::Storage { .. }
         ));
     }
 }

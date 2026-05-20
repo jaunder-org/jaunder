@@ -5,7 +5,7 @@ use crate::{
     CreatePostError, CreatePostInput, PostFormat, PostRecord, PostStorage, UpdatePostError,
     UpdatePostInput,
 };
-use common::slug::{Slug, slugify_title};
+use common::slug::{slugify_title, Slug};
 
 // ---------------------------------------------------------------------------
 // Render errors
@@ -173,7 +173,7 @@ fn extract_org_title(body: &str) -> Option<(String, String)> {
 
 /// Renders Markdown to HTML using pulldown-cmark with common extensions.
 fn render_markdown(body: &str) -> String {
-    use pulldown_cmark::{Options, Parser, html};
+    use pulldown_cmark::{html, Options, Parser};
 
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);

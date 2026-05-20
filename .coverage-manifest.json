@@ -33,7 +33,7 @@
   "storage/src/postgres/user_config.rs": 100,
   "storage/src/postgres/users.rs": 10.3448,
   "storage/src/posts.rs": 100,
-  "storage/src/render.rs": 97.9943,
+  "storage/src/render.rs": 98,
   "storage/src/smtp.rs": 100,
   "storage/src/sqlite/email_verifications.rs": 100,
   "storage/src/sqlite/invites.rs": 100,
@@ -66,7 +66,7 @@
   "web/src/pages/ui.rs": 31.2652,
   "web/src/pages/upload.rs": 0,
   "web/src/password_reset.rs": 100,
-  "web/src/posts.rs": 98.3982,
+  "web/src/posts.rs": 98.7849,
   "web/src/profile.rs": 100,
   "web/src/sessions.rs": 100,
   "web/src/tags.rs": 100
