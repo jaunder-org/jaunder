@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use email_address::EmailAddress;
 use log::LevelFilter;
 use sqlx::postgres::PgConnectOptions;
 use sqlx::ConnectOptions;
@@ -12,243 +11,26 @@ use sqlx::{PgPool, Row};
 mod site_config;
 pub use site_config::PostgresSiteConfigStorage;
 
+mod users;
+pub use users::PostgresUserStorage;
+
+use crate::helpers::{
+    email_verification_claim_error, generate_hashed_token, invite_record_from_row,
+    media_record_from_row, password_reset_claim_error, post_record_from_row,
+    session_record_from_row, InviteRow, MediaRow, PostRow, SessionRow,
+};
 use crate::{
     AtomicOps, ConfirmPasswordResetError, CreateMediaError, CreatePostError, CreatePostInput,
-    CreateUserError, DeleteMediaError, EmailVerificationStorage, InviteRecord, InviteStorage,
-    ListByTagError, MediaRecord, MediaSource, MediaStorage, PasswordResetStorage, PostCursor,
-    PostRecord, PostStorage, PostTag, ProfileUpdate, RegisterWithInviteError, SessionAuthError,
-    SessionRecord, SessionStorage, TagRecord, TaggingError, UpdatePostError, UpdatePostInput,
-    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError,
-    UserConfigStorage, UserRecord, UserStorage,
+    DeleteMediaError, EmailVerificationStorage, InviteRecord, InviteStorage, ListByTagError,
+    MediaRecord, MediaSource, MediaStorage, PasswordResetStorage, PostCursor, PostRecord,
+    PostStorage, PostTag, RegisterWithInviteError, SessionAuthError, SessionRecord, SessionStorage,
+    TagRecord, TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError,
+    UseInviteError, UsePasswordResetError, UserConfigStorage,
 };
 use common::password::Password;
 use common::slug::Slug;
 use common::tag::Tag;
 use common::username::Username;
-use tracing::Instrument;
-
-use crate::helpers::{
-    email_verification_claim_error, generate_hashed_token, invite_record_from_row,
-    media_record_from_row, password_reset_claim_error, post_record_from_row,
-    session_record_from_row, user_record_from_row, InviteRow, MediaRow, PostRow, SessionRow,
-    UserRow,
-};
-
-// ---------------------------------------------------------------------------
-// Users
-// ---------------------------------------------------------------------------
-
-pub struct PostgresUserStorage {
-    pool: PgPool,
-}
-
-impl PostgresUserStorage {
-    #[must_use]
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait]
-impl UserStorage for PostgresUserStorage {
-    #[tracing::instrument(
-        name = "storage.postgres.user.create_user",
-        skip(self, password, display_name),
-        fields(username = %username.as_str())
-    )]
-    async fn create_user(
-        &self,
-        username: &Username,
-        password: &Password,
-        display_name: Option<&str>,
-        is_operator: bool,
-    ) -> Result<i64, CreateUserError> {
-        let password_hash = crate::helpers::hash_password(password.clone())
-            .instrument(tracing::info_span!(
-                "storage.postgres.user.create_user.hash_password"
-            ))
-            .await
-            .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(e)))?;
-
-        let now = Utc::now();
-
-        let result = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
-             VALUES ($1, $2, $3, $4, $5)
-             RETURNING user_id",
-        )
-        .bind(username.as_str())
-        .bind(&password_hash)
-        .bind(display_name)
-        .bind(now)
-        .bind(is_operator)
-        .fetch_one(&self.pool)
-        .instrument(tracing::info_span!(
-            "storage.postgres.user.create_user.insert_user_row"
-        ))
-        .await;
-
-        match result {
-            Ok(id) => Ok(id),
-            Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
-                Err(CreateUserError::UsernameTaken)
-            }
-            Err(error) => Err(CreateUserError::Internal(error)),
-        }
-    }
-
-    #[tracing::instrument(
-        name = "storage.postgres.user.authenticate",
-        skip(self, password),
-        fields(username = %username.as_str())
-    )]
-    async fn authenticate(
-        &self,
-        username: &Username,
-        password: &Password,
-    ) -> Result<UserRecord, UserAuthError> {
-        let row = sqlx::query_as::<
-            _,
-            (
-                i64,
-                String,
-                Option<String>,
-                Option<String>,
-                DateTime<Utc>,
-                Option<DateTime<Utc>>,
-                String,
-                Option<String>,
-                bool,
-                bool,
-            ),
-        >(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
-                    password_hash, email, email_verified, is_operator
-             FROM users WHERE username = $1",
-        )
-        .bind(username.as_str())
-        .fetch_optional(&self.pool)
-        .instrument(tracing::info_span!(
-            "storage.postgres.user.authenticate.lookup_user"
-        ))
-        .await
-        .map_err(|e| UserAuthError::Internal(e.to_string()))?;
-
-        let Some((
-            user_id,
-            username,
-            display_name,
-            bio,
-            created_at,
-            _last_authenticated_at,
-            hash,
-            email,
-            email_verified,
-            is_operator,
-        )) = row
-        else {
-            return Err(UserAuthError::InvalidCredentials);
-        };
-
-        let valid = crate::helpers::verify_password(password.clone(), hash)
-            .instrument(tracing::info_span!(
-                "storage.postgres.user.authenticate.verify_password"
-            ))
-            .await
-            .map_err(|e| UserAuthError::Internal(e.to_string()))?;
-
-        if !valid {
-            return Err(UserAuthError::InvalidCredentials);
-        }
-
-        let now = Utc::now();
-
-        sqlx::query("UPDATE users SET last_authenticated_at = $1 WHERE user_id = $2")
-            .bind(now)
-            .bind(user_id)
-            .execute(&self.pool)
-            .instrument(tracing::info_span!(
-                "storage.postgres.user.authenticate.update_last_authenticated_at"
-            ))
-            .await
-            .map_err(|e| UserAuthError::Internal(e.to_string()))?;
-
-        crate::helpers::build_user_record((
-            user_id,
-            username,
-            display_name,
-            bio,
-            created_at,
-            Some(now),
-            email,
-            email_verified,
-            is_operator,
-        ))
-        .map_err(|e| UserAuthError::Internal(e.to_string()))
-    }
-
-    async fn get_user(&self, user_id: i64) -> sqlx::Result<Option<UserRecord>> {
-        let row = sqlx::query_as::<_, UserRow>(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
-                    email, email_verified, is_operator
-             FROM users WHERE user_id = $1",
-        )
-        .bind(user_id)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row.map(user_record_from_row).transpose()?)
-    }
-
-    async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>> {
-        let row = sqlx::query_as::<_, UserRow>(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
-                    email, email_verified, is_operator
-             FROM users WHERE username = $1",
-        )
-        .bind(username.as_str())
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row.map(user_record_from_row).transpose()?)
-    }
-
-    async fn update_profile(&self, user_id: i64, update: &ProfileUpdate<'_>) -> sqlx::Result<()> {
-        sqlx::query("UPDATE users SET display_name = $1, bio = $2 WHERE user_id = $3")
-            .bind(update.display_name)
-            .bind(update.bio)
-            .bind(user_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    async fn set_email(
-        &self,
-        user_id: i64,
-        email: Option<&EmailAddress>,
-        verified: bool,
-    ) -> sqlx::Result<()> {
-        sqlx::query("UPDATE users SET email = $1, email_verified = $2 WHERE user_id = $3")
-            .bind(email.map(EmailAddress::as_str))
-            .bind(verified)
-            .bind(user_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    async fn set_password(&self, user_id: i64, new_password: &Password) -> sqlx::Result<()> {
-        let password_hash = crate::helpers::hash_password(new_password.clone())
-            .await
-            .map_err(sqlx::Error::Io)?;
-
-        sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
-            .bind(&password_hash)
-            .bind(user_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Sessions
@@ -1608,13 +1390,25 @@ pub(crate) async fn open_postgres_database(
 }
 
 #[cfg(test)]
+pub(crate) async fn postgres_pool() -> PgPool {
+    let url = std::env::var("JAUNDER_PG_TEST_URL")
+        .unwrap_or_else(|_| "postgres://jaunder@127.0.0.1:55432/jaunder".to_owned());
+    let pool = PgPool::connect(&url).await.unwrap();
+    sqlx::migrate!("./migrations/postgres")
+        .run(&pool)
+        .await
+        .unwrap();
+    pool
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::helpers::{user_record_from_row, UserRow};
     use crate::*;
     use chrono::Utc;
     use common::password::Password;
     use common::username::Username;
-    use email_address::EmailAddress;
     use sqlx::PgPool;
     use std::{future::Future, time::Duration};
 
@@ -1763,7 +1557,6 @@ mod tests {
     async fn test_storage_constructors() {
         let pool = sqlx::PgPool::connect_lazy("postgres://localhost/db").unwrap();
         let _ = PostgresSiteConfigStorage::new(pool.clone());
-        let _ = PostgresUserStorage::new(pool.clone());
         let _ = PostgresSessionStorage::new(pool.clone());
         let _ = PostgresInviteStorage::new(pool.clone());
         let _ = PostgresEmailVerificationStorage::new(pool.clone());
@@ -1777,28 +1570,11 @@ mod tests {
         let pool = lazy_pool();
         let username: Username = "alice".parse().unwrap();
         let password: Password = "password123".parse().unwrap();
-        let email: EmailAddress = "alice@example.com".parse().unwrap();
         let now = Utc::now();
 
         let site_config = PostgresSiteConfigStorage::new(pool.clone());
         exercise(site_config.get("site.registration_policy")).await;
         exercise(site_config.set("site.registration_policy", "open")).await;
-
-        let users = PostgresUserStorage::new(pool.clone());
-        exercise(users.create_user(&username, &password, Some("Alice"), false)).await;
-        exercise(users.authenticate(&username, &password)).await;
-        exercise(users.get_user(1)).await;
-        exercise(users.get_user_by_username(&username)).await;
-        exercise(users.update_profile(
-            1,
-            &ProfileUpdate {
-                display_name: Some("Alice"),
-                bio: Some("Bio"),
-            },
-        ))
-        .await;
-        exercise(users.set_email(1, Some(&email), true)).await;
-        exercise(users.set_password(1, &password)).await;
 
         let sessions = PostgresSessionStorage::new(pool.clone());
         exercise(sessions.create_session(1, Some("device"))).await;
