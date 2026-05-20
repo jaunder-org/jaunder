@@ -343,6 +343,11 @@ pub(crate) fn password_reset_claim_error(
 
 #[tracing::instrument(name = "crypto.password.hash", skip(password))]
 pub(crate) async fn hash_password(password: common::password::Password) -> io::Result<String> {
+    #[cfg(test)]
+    if password.as_str() == "force-hash-error-for-test-coverage" {
+        return Err(io::Error::new(io::ErrorKind::Other, "forced hash error"));
+    }
+
     tokio::task::spawn_blocking(move || password.hash())
         .await
         .map_err(io::Error::other)?
@@ -354,6 +359,11 @@ pub(crate) async fn verify_password(
     password: common::password::Password,
     hash: String,
 ) -> io::Result<bool> {
+    #[cfg(test)]
+    if password.as_str() == "force-verify-error-for-test-coverage" {
+        return Err(io::Error::new(io::ErrorKind::Other, "forced verify error"));
+    }
+
     tokio::task::spawn_blocking(move || password.verify(&hash))
         .await
         .map_err(io::Error::other)?
