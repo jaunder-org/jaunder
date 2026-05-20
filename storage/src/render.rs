@@ -367,8 +367,8 @@ pub enum PerformCreationError {
     EmptyPost,
     #[error("post must contain at least one ASCII letter or digit for its slug")]
     NoSlugFromPost,
-    #[error("invalid slug")]
-    InvalidSlug,
+    #[error("{0}")]
+    InvalidSlug(String),
     #[error("unable to allocate a unique slug after {0} attempts")]
     Exhausted(usize),
     #[error(transparent)]
@@ -412,7 +412,7 @@ pub async fn perform_post_creation(
         Some(raw) => raw
             .to_ascii_lowercase()
             .parse::<Slug>()
-            .map_err(|_| PerformCreationError::InvalidSlug)?
+            .map_err(|e| PerformCreationError::InvalidSlug(e.to_string()))?
             .to_string(),
         None => slugify_title(&metadata.slug_seed).ok_or(PerformCreationError::NoSlugFromPost)?,
     };
@@ -421,7 +421,7 @@ pub async fn perform_post_creation(
         let slug_string = candidate_slug(&slug_seed, attempt);
         let slug = slug_string
             .parse::<Slug>()
-            .map_err(|_| PerformCreationError::InvalidSlug)?;
+            .map_err(|e| PerformCreationError::InvalidSlug(e.to_string()))?;
 
         match create_rendered_post(
             storage,
@@ -926,7 +926,7 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert!(matches!(err, PerformCreationError::InvalidSlug));
+        assert!(matches!(err, PerformCreationError::InvalidSlug(_)));
     }
 
     #[tokio::test]
@@ -1069,8 +1069,8 @@ mod tests {
             "post must contain at least one ASCII letter or digit for its slug"
         );
 
-        let err = PerformCreationError::InvalidSlug;
-        assert_eq!(err.to_string(), "invalid slug");
+        let err = PerformCreationError::InvalidSlug("invalid slug message".to_string());
+        assert_eq!(err.to_string(), "invalid slug message");
 
         let err = PerformCreationError::Exhausted(10);
         assert_eq!(
