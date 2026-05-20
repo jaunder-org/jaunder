@@ -3,7 +3,7 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::storage::{BackupMode, DbConnectOptions};
+use storage::{BackupMode, DbConnectOptions};
 
 #[derive(Parser, Clone)]
 #[command(name = "jaunder", about = "A self-hosted social reader")]

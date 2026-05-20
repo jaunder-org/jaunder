@@ -18,18 +18,17 @@ pub struct ProfileData {
 #[cfg(feature = "ssr")]
 use crate::auth::require_auth;
 #[cfg(feature = "ssr")]
-use common::storage::{AppState, ProfileUpdate};
-#[cfg(feature = "ssr")]
 use std::sync::Arc;
+#[cfg(feature = "ssr")]
+use storage::{ProfileUpdate, UserStorage};
 
 /// Returns the authenticated user's profile.
 #[server(endpoint = "/get_profile")]
 pub async fn get_profile() -> WebResult<ProfileData> {
     crate::web_server_fn!("get_profile", => {
         let auth = require_auth().await?;
-        let state = expect_context::<Arc<AppState>>();
-        let user = state
-            .users
+        let users = expect_context::<Arc<dyn UserStorage>>();
+        let user = users
             .get_user(auth.user_id)
             .await
             .map_err(InternalError::storage)?
@@ -50,7 +49,7 @@ pub async fn get_profile() -> WebResult<ProfileData> {
 pub async fn update_profile(display_name: String, bio: String) -> WebResult<()> {
     crate::web_server_fn!("update_profile", display_name, bio => {
         let auth = require_auth().await?;
-        let state = expect_context::<Arc<AppState>>();
+        let users = expect_context::<Arc<dyn UserStorage>>();
         let dn = if display_name.is_empty() {
             None
         } else {
@@ -61,8 +60,7 @@ pub async fn update_profile(display_name: String, bio: String) -> WebResult<()> 
         } else {
             Some(bio.as_str())
         };
-        state
-            .users
+        users
             .update_profile(
                 auth.user_id,
                 &ProfileUpdate {

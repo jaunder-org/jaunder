@@ -7,8 +7,8 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use chrono::Utc;
-use jaunder::storage::AppState;
-use jaunder::username::Username;
+use common::username::Username;
+use storage::AppState;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -16,6 +16,7 @@ use helpers::{ensure_server_fns_registered, test_options, test_state_with_mailer
 
 async fn post_form(
     state: Arc<AppState>,
+    mailer: Arc<dyn common::mailer::MailSender>,
     uri: &str,
     body: impl Into<String>,
     cookie: Option<&str>,
@@ -31,7 +32,13 @@ async fn post_form(
     }
     let request = builder.body(Body::from(body.into())).unwrap();
 
-    let app = jaunder::create_router(test_options(), state, true, helpers::tmp_storage_path());
+    let app = jaunder::create_router(
+        test_options(),
+        state,
+        mailer,
+        true,
+        helpers::tmp_storage_path(),
+    );
     let response = app.oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -61,6 +68,7 @@ async fn request_email_verification_creates_row_and_sends_email() {
 
     let (status, _body) = post_form(
         Arc::clone(&state),
+        mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/request_email_verification",
         "email=alice%40example.com",
         Some(&cookie),
@@ -84,7 +92,7 @@ async fn request_email_verification_creates_row_and_sends_email() {
 #[tokio::test]
 async fn verify_email_with_valid_token_sets_email_verified() {
     let base = TempDir::new().unwrap();
-    let (state, _mailer) = test_state_with_mailer(&base).await;
+    let (state, mailer) = test_state_with_mailer(&base).await;
 
     let user_id = state
         .users
@@ -106,6 +114,7 @@ async fn verify_email_with_valid_token_sets_email_verified() {
 
     let (status, _body) = post_form(
         Arc::clone(&state),
+        mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/verify_email",
         format!("token={raw_token}"),
         None,
@@ -126,7 +135,7 @@ async fn verify_email_with_valid_token_sets_email_verified() {
 #[tokio::test]
 async fn verify_email_with_expired_token_returns_error() {
     let base = TempDir::new().unwrap();
-    let (state, _mailer) = test_state_with_mailer(&base).await;
+    let (state, mailer) = test_state_with_mailer(&base).await;
 
     let user_id = state
         .users
@@ -148,6 +157,7 @@ async fn verify_email_with_expired_token_returns_error() {
 
     let (status, _body) = post_form(
         Arc::clone(&state),
+        mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/verify_email",
         format!("token={raw_token}"),
         None,
@@ -161,10 +171,11 @@ async fn verify_email_with_expired_token_returns_error() {
 #[tokio::test]
 async fn verify_email_with_unknown_token_returns_error() {
     let base = TempDir::new().unwrap();
-    let (state, _mailer) = test_state_with_mailer(&base).await;
+    let (state, mailer) = test_state_with_mailer(&base).await;
 
     let (status, _body) = post_form(
         Arc::clone(&state),
+        mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/verify_email",
         "token=this_token_does_not_exist",
         None,
@@ -177,11 +188,12 @@ async fn verify_email_with_unknown_token_returns_error() {
 #[tokio::test]
 async fn request_email_verification_unauthorized_returns_error() {
     let base = TempDir::new().unwrap();
-    let (state, _) = test_state_with_mailer(&base).await;
+    let (state, mailer) = test_state_with_mailer(&base).await;
 
     // No cookie provided
     let (status, _) = post_form(
         state,
+        mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/request_email_verification",
         "email=alice@example.com",
         None,
@@ -195,7 +207,7 @@ async fn request_email_verification_unauthorized_returns_error() {
 #[tokio::test]
 async fn request_email_verification_invalid_email_returns_error() {
     let base = TempDir::new().unwrap();
-    let (state, _) = test_state_with_mailer(&base).await;
+    let (state, mailer) = test_state_with_mailer(&base).await;
 
     // Create user and session
     let username: Username = "alice".parse().unwrap();
@@ -209,6 +221,7 @@ async fn request_email_verification_invalid_email_returns_error() {
 
     let (status, _) = post_form(
         state,
+        mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/request_email_verification",
         "email=invalid",
         Some(&cookie_header),

@@ -1,11 +1,11 @@
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
-use crate::slug::{slugify_title, Slug};
-use crate::storage::{
+use crate::{
     CreatePostError, CreatePostInput, PostFormat, PostRecord, PostStorage, UpdatePostError,
     UpdatePostInput,
 };
+use common::slug::{slugify_title, Slug};
 
 // ---------------------------------------------------------------------------
 // Render errors
@@ -621,14 +621,14 @@ mod tests {
 
     #[test]
     fn create_rendered_post_error_from_storage_display() {
-        use crate::storage::CreatePostError;
+        use crate::CreatePostError;
         let err: CreateRenderedPostError = CreatePostError::SlugConflict.into();
         assert!(err.to_string().contains("slug"));
     }
 
     #[test]
     fn create_rendered_post_error_from_storage_debug() {
-        use crate::storage::CreatePostError;
+        use crate::CreatePostError;
         let err: CreateRenderedPostError = CreatePostError::SlugConflict.into();
         let debug = format!("{:?}", err);
         assert!(debug.contains("Storage"));
@@ -636,14 +636,14 @@ mod tests {
 
     #[test]
     fn update_rendered_post_error_from_storage_display() {
-        use crate::storage::UpdatePostError;
+        use crate::UpdatePostError;
         let err: UpdateRenderedPostError = UpdatePostError::NotFound.into();
         assert!(err.to_string().contains("not found"));
     }
 
     #[test]
     fn update_rendered_post_error_from_storage_debug() {
-        use crate::storage::UpdatePostError;
+        use crate::UpdatePostError;
         let err: UpdateRenderedPostError = UpdatePostError::NotFound.into();
         let debug = format!("{:?}", err);
         assert!(debug.contains("Storage"));
@@ -689,14 +689,14 @@ mod tests {
 
     #[test]
     fn perform_update_error_from_update_post_not_found() {
-        use crate::storage::UpdatePostError;
+        use crate::UpdatePostError;
         let err: PerformUpdateError = UpdatePostError::NotFound.into();
         assert!(matches!(err, PerformUpdateError::NotFound));
     }
 
     #[test]
     fn perform_update_error_from_update_post_unauthorized() {
-        use crate::storage::UpdatePostError;
+        use crate::UpdatePostError;
         let err: PerformUpdateError = UpdatePostError::Unauthorized.into();
         assert!(matches!(err, PerformUpdateError::Unauthorized));
     }

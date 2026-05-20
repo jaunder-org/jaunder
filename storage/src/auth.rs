@@ -1,11 +1,76 @@
-// RegistrationPolicy, load_registration_policy live in `common` (shared by
-// both `web` and `server`).  AuthUser and require_auth are defined in `web`
-// (they use Leptos/Axum types) and re-exported here for server-crate callers.
-pub use common::auth::{load_registration_policy, InvalidRegistrationPolicy, RegistrationPolicy};
-pub use web::auth::{require_auth, AuthUser};
+use std::{fmt, str::FromStr};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand::RngCore;
+use thiserror::Error;
+
+use crate::SiteConfigStorage;
+
+// ---------------------------------------------------------------------------
+// RegistrationPolicy
+// ---------------------------------------------------------------------------
+
+/// The site's user-registration access policy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RegistrationPolicy {
+    /// Anyone may register without a code.
+    Open,
+    /// New accounts require a valid, unused invite code.
+    InviteOnly,
+    /// Registration is disabled; no new accounts can be created.
+    Closed,
+}
+
+impl fmt::Display for RegistrationPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RegistrationPolicy::Open => write!(f, "open"),
+            RegistrationPolicy::InviteOnly => write!(f, "invite_only"),
+            RegistrationPolicy::Closed => write!(f, "closed"),
+        }
+    }
+}
+
+/// Error returned when a string does not name a valid [`RegistrationPolicy`].
+#[derive(Debug, Error)]
+#[error("invalid registration policy: {0:?}")]
+pub struct InvalidRegistrationPolicy(String);
+
+impl FromStr for RegistrationPolicy {
+    type Err = InvalidRegistrationPolicy;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "open" => Ok(RegistrationPolicy::Open),
+            "invite_only" => Ok(RegistrationPolicy::InviteOnly),
+            "closed" => Ok(RegistrationPolicy::Closed),
+            other => Err(InvalidRegistrationPolicy(other.to_owned())),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// load_registration_policy
+// ---------------------------------------------------------------------------
+
+/// Reads `site.registration_policy` from the config store and parses it.
+///
+/// Returns [`RegistrationPolicy::Closed`] when the key is absent or its
+/// value cannot be parsed — a safe default that prevents unintended open
+/// registration on a freshly initialised instance.
+pub async fn load_registration_policy(store: &dyn SiteConfigStorage) -> RegistrationPolicy {
+    store
+        .get("site.registration_policy")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(RegistrationPolicy::Closed)
+}
+
+// ---------------------------------------------------------------------------
+// Token generation / hashing
+// ---------------------------------------------------------------------------
 
 /// Generates an opaque session token: 32 cryptographically random bytes encoded
 /// as base64url without padding (43 characters).
@@ -37,16 +102,14 @@ pub fn hash_token(raw_token: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{SiteConfigStorage, SqliteSiteConfigStorage};
+    use crate::SqliteSiteConfigStorage;
 
     // --- FromStr / Display ---
 
     #[test]
     fn open_parses() {
         assert_eq!(
-            "open"
-                .parse::<RegistrationPolicy>()
-                .expect("\"open\" is a valid RegistrationPolicy"),
+            "open".parse::<RegistrationPolicy>().unwrap(),
             RegistrationPolicy::Open
         );
     }
@@ -54,9 +117,7 @@ mod tests {
     #[test]
     fn invite_only_parses() {
         assert_eq!(
-            "invite_only"
-                .parse::<RegistrationPolicy>()
-                .expect("\"invite_only\" is a valid RegistrationPolicy"),
+            "invite_only".parse::<RegistrationPolicy>().unwrap(),
             RegistrationPolicy::InviteOnly
         );
     }
@@ -64,9 +125,7 @@ mod tests {
     #[test]
     fn closed_parses() {
         assert_eq!(
-            "closed"
-                .parse::<RegistrationPolicy>()
-                .expect("\"closed\" is a valid RegistrationPolicy"),
+            "closed".parse::<RegistrationPolicy>().unwrap(),
             RegistrationPolicy::Closed
         );
     }
@@ -84,10 +143,7 @@ mod tests {
             RegistrationPolicy::Closed,
         ] {
             assert_eq!(
-                policy
-                    .to_string()
-                    .parse::<RegistrationPolicy>()
-                    .expect("Display output should round-trip through FromStr"),
+                policy.to_string().parse::<RegistrationPolicy>().unwrap(),
                 policy
             );
         }
@@ -96,13 +152,11 @@ mod tests {
     // --- load_registration_policy ---
 
     async fn in_memory_store() -> SqliteSiteConfigStorage {
-        let pool = sqlx::SqlitePool::connect(":memory:")
-            .await
-            .expect("in-memory SQLite pool should open");
+        let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
         sqlx::migrate!("./migrations/sqlite")
             .run(&pool)
             .await
-            .expect("migrations should run on in-memory pool");
+            .unwrap();
         SqliteSiteConfigStorage::new(pool)
     }
 
@@ -118,10 +172,7 @@ mod tests {
     #[tokio::test]
     async fn key_set_to_open_returns_open() {
         let store = in_memory_store().await;
-        store
-            .set("site.registration_policy", "open")
-            .await
-            .expect("set should succeed");
+        store.set("site.registration_policy", "open").await.unwrap();
         assert_eq!(
             load_registration_policy(&store).await,
             RegistrationPolicy::Open
@@ -134,7 +185,7 @@ mod tests {
         store
             .set("site.registration_policy", "invite_only")
             .await
-            .expect("set should succeed");
+            .unwrap();
         assert_eq!(
             load_registration_policy(&store).await,
             RegistrationPolicy::InviteOnly
@@ -147,7 +198,7 @@ mod tests {
         store
             .set("site.registration_policy", "garbage")
             .await
-            .expect("set should succeed");
+            .unwrap();
         assert_eq!(
             load_registration_policy(&store).await,
             RegistrationPolicy::Closed
@@ -168,7 +219,7 @@ mod tests {
     #[test]
     fn hash_token_roundtrips() {
         let raw = generate_token();
-        let hash = hash_token(&raw).expect("hashing should succeed");
+        let hash = hash_token(&raw).unwrap();
         assert!(!hash.is_empty());
         assert_ne!(raw, hash);
     }

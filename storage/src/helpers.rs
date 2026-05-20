@@ -1,0 +1,808 @@
+//! Helper functions for row type conversions and cryptographic operations.
+
+use std::io;
+
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
+
+use crate::{
+    InviteRecord, MediaRecord, MediaSource, PostFormat, PostRecord, PostTag, SessionRecord,
+    UserRecord,
+};
+use common::slug::Slug;
+use common::tag::Tag;
+use common::username::Username;
+
+// ---------------------------------------------------------------------------
+// UserRecord helpers
+// ---------------------------------------------------------------------------
+
+pub(crate) type UserRecordParts = (
+    i64,
+    String,
+    Option<String>,
+    Option<String>,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+    Option<String>,
+    bool,
+    bool,
+);
+
+pub(crate) fn build_user_record(
+    (
+        user_id,
+        username,
+        display_name,
+        bio,
+        created_at,
+        last_authenticated_at,
+        email,
+        email_verified,
+        is_operator,
+    ): UserRecordParts,
+) -> sqlx::Result<UserRecord> {
+    let username = username
+        .parse()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let email = email
+        .map(|s| s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e))))
+        .transpose()?;
+    Ok(UserRecord {
+        user_id,
+        username,
+        display_name,
+        bio,
+        created_at,
+        last_authenticated_at,
+        email,
+        email_verified,
+        is_operator,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// SessionRecord helpers
+// ---------------------------------------------------------------------------
+
+pub(crate) fn build_session_record(
+    token_hash: String,
+    user_id: i64,
+    username: &str,
+    label: Option<String>,
+    created_at: DateTime<Utc>,
+    last_used_at: DateTime<Utc>,
+) -> sqlx::Result<SessionRecord> {
+    let username = username
+        .parse()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    Ok(SessionRecord {
+        token_hash,
+        user_id,
+        username,
+        label,
+        created_at,
+        last_used_at,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// InviteRecord helpers
+// ---------------------------------------------------------------------------
+
+pub(crate) fn build_invite_record(
+    code: String,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    used_at: Option<DateTime<Utc>>,
+    used_by: Option<i64>,
+) -> InviteRecord {
+    InviteRecord {
+        code,
+        created_at,
+        expires_at,
+        used_at,
+        used_by,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PostRecord helpers
+// ---------------------------------------------------------------------------
+
+pub(crate) type PostRecordParts = (
+    i64,
+    i64,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+    String,
+    DateTime<Utc>,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+    Option<DateTime<Utc>>,
+    String,
+);
+
+/// Row shape for the JSON-aggregated tags column. Field names match the SQL
+/// `json_object` keys verbatim, hence the matching `tag_` prefixes.
+#[allow(clippy::struct_field_names)]
+#[derive(Deserialize)]
+struct PostTagJson {
+    tag_id: i64,
+    tag_slug: String,
+    tag_display: String,
+}
+
+fn parse_post_tags_json(json: &str, post_id: i64) -> sqlx::Result<Vec<PostTag>> {
+    let raw: Vec<PostTagJson> =
+        serde_json::from_str(json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    raw.into_iter()
+        .map(|r| {
+            let tag_slug: Tag = r
+                .tag_slug
+                .parse()
+                .map_err(|_| sqlx::Error::Decode("invalid tag slug in db".into()))?;
+            Ok(PostTag {
+                post_id,
+                tag_id: r.tag_id,
+                tag_slug,
+                tag_display: r.tag_display,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn build_post_record(
+    (
+        post_id,
+        user_id,
+        author_username,
+        title,
+        slug,
+        body,
+        format,
+        rendered_html,
+        created_at,
+        updated_at,
+        published_at,
+        deleted_at,
+        tags_json,
+    ): PostRecordParts,
+) -> sqlx::Result<PostRecord> {
+    let author_username = author_username
+        .parse::<Username>()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let slug = slug
+        .parse::<Slug>()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let format = format
+        .parse::<PostFormat>()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let tags = parse_post_tags_json(&tags_json, post_id)?;
+
+    Ok(PostRecord {
+        post_id,
+        user_id,
+        author_username,
+        title,
+        slug,
+        body,
+        format,
+        rendered_html,
+        created_at,
+        updated_at,
+        published_at,
+        deleted_at,
+        tags,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Row types and conversions
+// ---------------------------------------------------------------------------
+
+pub(crate) type UserRow = (
+    i64,
+    String,
+    Option<String>,
+    Option<String>,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+    Option<String>,
+    bool,
+    bool,
+);
+
+pub(crate) fn user_record_from_row(row: UserRow) -> sqlx::Result<UserRecord> {
+    build_user_record(row)
+}
+
+pub(crate) type SessionRow = (
+    String,
+    i64,
+    String,
+    Option<String>,
+    DateTime<Utc>,
+    DateTime<Utc>,
+);
+
+pub(crate) fn session_record_from_row(row: SessionRow) -> sqlx::Result<SessionRecord> {
+    let (token_hash, user_id, username, label, created_at, last_used_at) = row;
+    build_session_record(
+        token_hash,
+        user_id,
+        &username,
+        label,
+        created_at,
+        last_used_at,
+    )
+}
+
+pub(crate) type InviteRow = (
+    String,
+    DateTime<Utc>,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+    Option<i64>,
+);
+
+pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
+    let (code, created_at, expires_at, used_at, used_by) = row;
+    build_invite_record(code, created_at, expires_at, used_at, used_by)
+}
+
+pub(crate) type PostRow = (
+    i64,
+    i64,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+    String,
+    DateTime<Utc>,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+    Option<DateTime<Utc>>,
+    String,
+);
+
+pub(crate) fn post_record_from_row(row: PostRow) -> sqlx::Result<PostRecord> {
+    build_post_record(row)
+}
+
+pub(crate) type MediaRow = (
+    i64,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    Option<String>,
+    DateTime<Utc>,
+);
+
+pub(crate) fn media_record_from_row(row: MediaRow) -> sqlx::Result<MediaRecord> {
+    let (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at) = row;
+    let source: MediaSource = source
+        .parse()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    Ok(MediaRecord {
+        user_id,
+        sha256,
+        filename,
+        source,
+        content_type,
+        size_bytes,
+        source_url,
+        created_at,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Token and password helpers
+// ---------------------------------------------------------------------------
+
+pub(crate) fn generate_hashed_token() -> sqlx::Result<(String, String)> {
+    let raw_token = crate::auth::generate_token();
+    let token_hash = crate::auth::hash_token(&raw_token)
+        .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
+    Ok((raw_token, token_hash))
+}
+
+// ---------------------------------------------------------------------------
+// Claim verification error helpers
+// ---------------------------------------------------------------------------
+
+pub(crate) fn email_verification_claim_error(
+    row: Option<(Option<DateTime<Utc>>, DateTime<Utc>)>,
+) -> crate::UseEmailVerificationError {
+    match row {
+        None => crate::UseEmailVerificationError::NotFound,
+        Some((Some(_), _)) => crate::UseEmailVerificationError::AlreadyUsed,
+        Some((None, _)) => crate::UseEmailVerificationError::Expired,
+    }
+}
+
+pub(crate) fn password_reset_claim_error(
+    row: Option<(Option<DateTime<Utc>>, DateTime<Utc>)>,
+) -> crate::UsePasswordResetError {
+    match row {
+        None => crate::UsePasswordResetError::NotFound,
+        Some((Some(_), _)) => crate::UsePasswordResetError::AlreadyUsed,
+        Some((None, _)) => crate::UsePasswordResetError::Expired,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cryptographic operations
+// ---------------------------------------------------------------------------
+
+#[tracing::instrument(name = "crypto.password.hash", skip(password))]
+pub(crate) async fn hash_password(password: common::password::Password) -> io::Result<String> {
+    #[cfg(test)]
+    if password.as_str() == "force-hash-error-for-test-coverage" {
+        return Err(io::Error::new(io::ErrorKind::Other, "forced hash error"));
+    }
+
+    tokio::task::spawn_blocking(move || password.hash())
+        .await
+        .map_err(io::Error::other)?
+        .map_err(io::Error::other)
+}
+
+#[tracing::instrument(name = "crypto.password.verify", skip(password, hash))]
+pub(crate) async fn verify_password(
+    password: common::password::Password,
+    hash: String,
+) -> io::Result<bool> {
+    #[cfg(test)]
+    if password.as_str() == "force-verify-error-for-test-coverage" {
+        return Err(io::Error::new(io::ErrorKind::Other, "forced verify error"));
+    }
+
+    tokio::task::spawn_blocking(move || password.verify(&hash))
+        .await
+        .map_err(io::Error::other)?
+        .map_err(io::Error::other)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[test]
+    fn test_build_user_record() {
+        let now = Utc::now();
+        let parts: UserRecordParts = (
+            1,
+            "alice".to_string(),
+            Some("Alice".to_string()),
+            Some("Bio".to_string()),
+            now,
+            Some(now),
+            Some("alice@example.com".to_string()),
+            true,
+            false,
+        );
+        let record = build_user_record(parts).unwrap();
+        assert_eq!(record.user_id, 1);
+        assert_eq!(record.username.as_str(), "alice");
+        assert_eq!(record.email.as_ref().unwrap().as_str(), "alice@example.com");
+    }
+
+    #[test]
+    fn test_build_session_record() {
+        let now = Utc::now();
+        let record = build_session_record(
+            "hash".to_string(),
+            1,
+            "alice",
+            Some("label".to_string()),
+            now,
+            now,
+        )
+        .unwrap();
+        assert_eq!(record.token_hash, "hash");
+        assert_eq!(record.username.as_str(), "alice");
+    }
+
+    #[test]
+    fn test_build_invite_record() {
+        let created_at = Utc::now();
+        let expires_at = created_at + chrono::Duration::days(7);
+        let used_at = created_at + chrono::Duration::hours(1);
+        let record = build_invite_record(
+            "invite-code".to_string(),
+            created_at,
+            expires_at,
+            Some(used_at),
+            Some(7),
+        );
+
+        assert_eq!(record.code, "invite-code");
+        assert_eq!(record.created_at, created_at);
+        assert_eq!(record.expires_at, expires_at);
+        assert_eq!(record.used_at, Some(used_at));
+        assert_eq!(record.used_by, Some(7));
+    }
+
+    #[test]
+    fn test_build_post_record() {
+        let now = Utc::now();
+        let record = build_post_record((
+            10,
+            20,
+            "alice".to_string(),
+            Some("Hello".to_string()),
+            "hello-world".to_string(),
+            "Body".to_string(),
+            "markdown".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            Some(now),
+            None,
+            "[]".to_string(),
+        ))
+        .unwrap();
+
+        assert_eq!(record.post_id, 10);
+        assert_eq!(record.user_id, 20);
+        assert_eq!(record.author_username.as_str(), "alice");
+        assert_eq!(record.slug.as_str(), "hello-world");
+        assert_eq!(record.format, PostFormat::Markdown);
+        assert_eq!(record.published_at, Some(now));
+        assert_eq!(record.deleted_at, None);
+        assert!(record.tags.is_empty());
+    }
+
+    #[test]
+    fn test_build_post_record_rejects_invalid_slug() {
+        let now = Utc::now();
+        let err = build_post_record((
+            10,
+            20,
+            "alice".to_string(),
+            Some("Hello".to_string()),
+            "not a slug".to_string(),
+            "Body".to_string(),
+            "markdown".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            None,
+            None,
+            "[]".to_string(),
+        ))
+        .unwrap_err();
+
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[test]
+    fn test_build_post_record_rejects_invalid_format() {
+        let now = Utc::now();
+        let err = build_post_record((
+            10,
+            20,
+            "alice".to_string(),
+            Some("Hello".to_string()),
+            "hello-world".to_string(),
+            "Body".to_string(),
+            "html".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            None,
+            None,
+            "[]".to_string(),
+        ))
+        .unwrap_err();
+
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[test]
+    fn test_build_post_record_rejects_invalid_username() {
+        let now = Utc::now();
+        let err = build_post_record((
+            10,
+            20,
+            "Invalid Username".to_string(),
+            Some("Hello".to_string()),
+            "hello-world".to_string(),
+            "Body".to_string(),
+            "markdown".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            None,
+            None,
+            "[]".to_string(),
+        ))
+        .unwrap_err();
+
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[tokio::test]
+    async fn test_hash_and_verify_password() {
+        let password: common::password::Password = "password123".parse().unwrap();
+        let hash = hash_password(password.clone()).await.unwrap();
+
+        assert!(verify_password(password.clone(), hash.clone())
+            .await
+            .unwrap());
+        assert!(!verify_password("other-pass".parse().unwrap(), hash)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_verify_password_rejects_invalid_hash() {
+        let err = verify_password("password123".parse().unwrap(), "not-a-hash".to_string())
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+    }
+
+    #[test]
+    fn build_user_record_rejects_invalid_username() {
+        let parts: UserRecordParts = (
+            1,
+            "Invalid Username".to_string(),
+            None,
+            None,
+            Utc::now(),
+            None,
+            None,
+            false,
+            false,
+        );
+        let err = build_user_record(parts).unwrap_err();
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[test]
+    fn build_user_record_rejects_invalid_email() {
+        let parts: UserRecordParts = (
+            1,
+            "alice".to_string(),
+            None,
+            None,
+            Utc::now(),
+            None,
+            Some("not-an-email".to_string()),
+            false,
+            false,
+        );
+        let err = build_user_record(parts).unwrap_err();
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[test]
+    fn build_session_record_rejects_invalid_username() {
+        let err = build_session_record(
+            "hash".to_string(),
+            1,
+            "Invalid Username",
+            None,
+            Utc::now(),
+            Utc::now(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[test]
+    fn build_post_record_with_valid_tags_json_parses_tags() {
+        let now = Utc::now();
+        let tags_json = r#"[{"tag_id": 1, "tag_slug": "rust", "tag_display": "Rust"}]"#;
+        let record = build_post_record((
+            10,
+            20,
+            "alice".to_string(),
+            None,
+            "hello-world".to_string(),
+            "Body".to_string(),
+            "markdown".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            None,
+            None,
+            tags_json.to_string(),
+        ))
+        .unwrap();
+        assert_eq!(record.tags.len(), 1);
+        assert_eq!(record.tags[0].tag_id, 1);
+        assert_eq!(record.tags[0].tag_slug.as_str(), "rust");
+        assert_eq!(record.tags[0].tag_display, "Rust");
+    }
+
+    #[test]
+    fn build_post_record_rejects_invalid_tags_json() {
+        let now = Utc::now();
+        let err = build_post_record((
+            10,
+            20,
+            "alice".to_string(),
+            None,
+            "hello-world".to_string(),
+            "Body".to_string(),
+            "markdown".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            None,
+            None,
+            "not-json".to_string(),
+        ))
+        .unwrap_err();
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[test]
+    fn build_post_record_rejects_invalid_tag_slug_in_json() {
+        let now = Utc::now();
+        let tags_json =
+            r#"[{"tag_id": 1, "tag_slug": "Not A Slug", "tag_display": "Bad"}]"#.to_string();
+        let err = build_post_record((
+            10,
+            20,
+            "alice".to_string(),
+            None,
+            "hello-world".to_string(),
+            "Body".to_string(),
+            "markdown".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            None,
+            None,
+            tags_json,
+        ))
+        .unwrap_err();
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[test]
+    fn media_record_from_row_rejects_invalid_source() {
+        let row: MediaRow = (
+            1,
+            "sha256".to_string(),
+            "file.png".to_string(),
+            "not-a-source".to_string(),
+            "image/png".to_string(),
+            42,
+            None,
+            Utc::now(),
+        );
+        let err = media_record_from_row(row).unwrap_err();
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[test]
+    fn media_record_from_row_accepts_valid_source() {
+        let row: MediaRow = (
+            1,
+            "sha256".to_string(),
+            "file.png".to_string(),
+            "upload".to_string(),
+            "image/png".to_string(),
+            42,
+            None,
+            Utc::now(),
+        );
+        let record = media_record_from_row(row).unwrap();
+        assert_eq!(record.user_id, 1);
+        assert_eq!(record.source, MediaSource::Upload);
+    }
+
+    #[test]
+    fn session_and_invite_row_helpers_round_trip() {
+        let now = Utc::now();
+        let session: SessionRow = (
+            "tokenhash".to_string(),
+            1,
+            "alice".to_string(),
+            None,
+            now,
+            now,
+        );
+        let session_record = session_record_from_row(session).unwrap();
+        assert_eq!(session_record.user_id, 1);
+
+        let invite: InviteRow = ("code".to_string(), now, now, None, None);
+        let invite_record = invite_record_from_row(invite);
+        assert_eq!(invite_record.code, "code");
+    }
+
+    #[test]
+    fn user_row_helper_delegates_to_build_user_record() {
+        let now = Utc::now();
+        let row: UserRow = (
+            1,
+            "alice".to_string(),
+            None,
+            None,
+            now,
+            None,
+            None,
+            false,
+            false,
+        );
+        let record = user_record_from_row(row).unwrap();
+        assert_eq!(record.user_id, 1);
+    }
+
+    #[test]
+    fn post_row_helper_delegates_to_build_post_record() {
+        let now = Utc::now();
+        let row: PostRow = (
+            10,
+            20,
+            "alice".to_string(),
+            None,
+            "hello-world".to_string(),
+            "Body".to_string(),
+            "markdown".to_string(),
+            "<p>Body</p>".to_string(),
+            now,
+            now,
+            None,
+            None,
+            "[]".to_string(),
+        );
+        let record = post_record_from_row(row).unwrap();
+        assert_eq!(record.post_id, 10);
+    }
+
+    #[test]
+    fn email_verification_claim_error_distinguishes_all_arms() {
+        let now = Utc::now();
+        assert!(matches!(
+            email_verification_claim_error(None),
+            crate::UseEmailVerificationError::NotFound
+        ));
+        assert!(matches!(
+            email_verification_claim_error(Some((Some(now), now))),
+            crate::UseEmailVerificationError::AlreadyUsed
+        ));
+        assert!(matches!(
+            email_verification_claim_error(Some((None, now))),
+            crate::UseEmailVerificationError::Expired
+        ));
+    }
+
+    #[test]
+    fn password_reset_claim_error_distinguishes_all_arms() {
+        let now = Utc::now();
+        assert!(matches!(
+            password_reset_claim_error(None),
+            crate::UsePasswordResetError::NotFound
+        ));
+        assert!(matches!(
+            password_reset_claim_error(Some((Some(now), now))),
+            crate::UsePasswordResetError::AlreadyUsed
+        ));
+        assert!(matches!(
+            password_reset_claim_error(Some((None, now))),
+            crate::UsePasswordResetError::Expired
+        ));
+    }
+
+    #[test]
+    fn generate_hashed_token_returns_token_and_hash() {
+        let (raw, hash) = generate_hashed_token().unwrap();
+        assert!(!raw.is_empty());
+        assert!(!hash.is_empty());
+        assert_ne!(raw, hash);
+    }
+}

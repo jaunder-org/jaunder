@@ -5,8 +5,8 @@ use chrono::{DateTime, Utc};
 use email_address::EmailAddress;
 use thiserror::Error;
 
-use crate::password::Password;
-use crate::username::Username;
+use common::password::Password;
+use common::username::Username;
 
 /// A user account record returned by [`UserStorage`] queries.
 ///

@@ -1,13 +1,13 @@
 #[cfg(feature = "ssr")]
-use common::mailer::EmailMessage;
+use common::mailer::{EmailMessage, MailSender};
 #[cfg(feature = "ssr")]
 use common::password::Password;
-#[cfg(feature = "ssr")]
-use common::storage::AppState;
 #[cfg(feature = "ssr")]
 use common::username::Username;
 #[cfg(feature = "ssr")]
 use std::sync::Arc;
+#[cfg(feature = "ssr")]
+use storage::{AtomicOps, PasswordResetStorage, UserStorage};
 
 #[cfg(feature = "ssr")]
 use crate::error::InternalError;
@@ -21,15 +21,16 @@ use leptos::prelude::*;
 #[server(endpoint = "/request_password_reset")]
 pub async fn request_password_reset(username: String) -> WebResult<()> {
     crate::web_server_fn!("request_password_reset", username => {
-        let state = expect_context::<Arc<AppState>>();
+        let users = expect_context::<Arc<dyn UserStorage>>();
+        let password_resets = expect_context::<Arc<dyn PasswordResetStorage>>();
+        let mailer = expect_context::<Arc<dyn MailSender>>();
 
         let parsed_username = username
             .to_lowercase()
             .parse::<Username>()
             .map_err(|e| InternalError::validation(e.to_string()))?;
 
-        let user = state
-            .users
+        let user = users
             .get_user_by_username(&parsed_username)
             .await
             .map_err(InternalError::storage)?;
@@ -52,8 +53,7 @@ pub async fn request_password_reset(username: String) -> WebResult<()> {
             })?;
 
         let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
-        let raw_token = state
-            .password_resets
+        let raw_token = password_resets
             .create_password_reset(user_id, expires_at)
             .await
             .map_err(InternalError::storage)?;
@@ -68,8 +68,7 @@ pub async fn request_password_reset(username: String) -> WebResult<()> {
             ),
         };
 
-        state
-            .mailer
+        mailer
             .send_email(&message)
             .await
             .map_err(InternalError::server)?;
@@ -83,14 +82,13 @@ pub async fn request_password_reset(username: String) -> WebResult<()> {
 #[server(endpoint = "/confirm_password_reset")]
 pub async fn confirm_password_reset(token: String, new_password: String) -> WebResult<()> {
     crate::web_server_fn!("confirm_password_reset", token, new_password => {
-        let state = expect_context::<Arc<AppState>>();
+        let atomic = expect_context::<Arc<dyn AtomicOps>>();
 
         let password = new_password
             .parse::<Password>()
             .map_err(|e| InternalError::validation(e.to_string()))?;
 
-        state
-            .atomic
+        atomic
             .confirm_password_reset(&token, &password)
             .await
             .map_err(InternalError::storage)?;

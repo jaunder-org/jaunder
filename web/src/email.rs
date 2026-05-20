@@ -4,11 +4,11 @@ use crate::auth::require_auth;
 use crate::error::InternalError;
 use crate::error::WebResult;
 #[cfg(feature = "ssr")]
-use common::mailer::EmailMessage;
-#[cfg(feature = "ssr")]
-use common::storage::AppState;
+use common::mailer::{EmailMessage, MailSender};
 #[cfg(feature = "ssr")]
 use std::sync::Arc;
+#[cfg(feature = "ssr")]
+use storage::{EmailVerificationStorage, UserStorage};
 
 use leptos::prelude::*;
 
@@ -20,15 +20,15 @@ use leptos::prelude::*;
 pub async fn request_email_verification(email: String) -> WebResult<()> {
     crate::web_server_fn!("request_email_verification", email => {
         let auth = require_auth().await?;
-        let state = expect_context::<Arc<AppState>>();
+        let email_verifications = expect_context::<Arc<dyn EmailVerificationStorage>>();
+        let mailer = expect_context::<Arc<dyn MailSender>>();
 
         let email_addr = email
             .parse::<email_address::EmailAddress>()
             .map_err(|e| InternalError::validation(e.to_string()))?;
 
         let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
-        let raw_token = state
-            .email_verifications
+        let raw_token = email_verifications
             .create_email_verification(auth.user_id, &email, expires_at)
             .await
             .map_err(InternalError::storage)?;
@@ -43,8 +43,7 @@ pub async fn request_email_verification(email: String) -> WebResult<()> {
             ),
         };
 
-        state
-            .mailer
+        mailer
             .send_email(&message)
             .await
             .map_err(InternalError::server)?;
@@ -58,10 +57,10 @@ pub async fn request_email_verification(email: String) -> WebResult<()> {
 #[server(endpoint = "/verify_email")]
 pub async fn verify_email(token: String) -> WebResult<()> {
     crate::web_server_fn!("verify_email", token => {
-        let state = expect_context::<Arc<AppState>>();
+        let email_verifications = expect_context::<Arc<dyn EmailVerificationStorage>>();
+        let users = expect_context::<Arc<dyn UserStorage>>();
 
-        let (user_id, email_str) = state
-            .email_verifications
+        let (user_id, email_str) = email_verifications
             .use_email_verification(&token)
             .await
             .map_err(InternalError::storage)?;
@@ -70,8 +69,7 @@ pub async fn verify_email(token: String) -> WebResult<()> {
             .parse::<email_address::EmailAddress>()
             .map_err(|e| InternalError::validation(e.to_string()))?;
 
-        state
-            .users
+        users
             .set_email(user_id, Some(&email_addr), true)
             .await
             .map_err(InternalError::storage)

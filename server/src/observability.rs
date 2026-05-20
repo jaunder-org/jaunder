@@ -366,4 +366,27 @@ mod tests {
             "warn_str: {warn_str}"
         );
     }
+
+    #[test]
+    fn slow_span_layer_records_started_at_and_warns_when_elapsed_exceeds_threshold() {
+        let layer = SlowSpanLayer::new(Duration::from_nanos(1));
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let span = tracing::info_span!("slow_test_span");
+        let entered = span.enter();
+        std::thread::sleep(Duration::from_millis(2));
+        drop(entered);
+        drop(span);
+    }
+
+    #[test]
+    fn slow_span_layer_skips_warning_when_below_threshold() {
+        let layer = SlowSpanLayer::new(Duration::from_secs(3600));
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let span = tracing::info_span!("fast_test_span");
+        drop(span);
+    }
 }

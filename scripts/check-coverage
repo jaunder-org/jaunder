@@ -1,52 +1,163 @@
 #!/usr/bin/env bash
-# Check that line coverage has not dropped below the committed baseline.
+# Check that source-line coverage has not dropped below the committed
+# baseline per file.
 #
 # Usage:
-#   scripts/check-coverage           — fail if coverage < baseline
-#   scripts/check-coverage --update  — write current coverage as the new baseline
+#   scripts/check-coverage             — run tests, check growth, fail on regression
+#   scripts/check-coverage --update    — force update manifest (be careful)
+#   scripts/check-coverage --investigate — re-analyze last report without re-running tests
 #
-# The baseline is stored in .coverage-baseline at the repository root and
-# should be committed alongside the code that establishes it.
+# Coverage metric: We parse `cargo llvm-cov report --text` per-file output and
+# count source lines with at least one execution. This is the true source-line
+# coverage. We deliberately do NOT use `summary.lines.percent` from
+# `cargo llvm-cov nextest --json`, because that count is inflated by
+# per-compile-unit instantiations: a generic function compiled once for the
+# `web` lib-test binary and once for the `jaunder` integration-test binary
+# contributes its instantiation counters twice, and tests that exercise the
+# integration-test instantiation leave the lib-test instantiation unhit even
+# though every source line is covered.
+#
+# The manifest is stored in .coverage-manifest.json and should be committed.
 set -euo pipefail
 
-ROOT="$(git rev-parse --show-toplevel)"
-BASELINE_FILE="$ROOT/.coverage-baseline"
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo ".")"
+MANIFEST_FILE="$ROOT/.coverage-manifest.json"
+REPORT_FILE="$ROOT/.coverage-report.txt"
 UPDATE=false
+INVESTIGATE=false
 
 for arg in "$@"; do
     case "$arg" in
         --update) UPDATE=true ;;
+        --investigate) INVESTIGATE=true ;;
         *) echo "error: unknown argument: $arg" >&2; exit 1 ;;
     esac
 done
 
-echo "--- coverage: running cargo llvm-cov ---"
-CURRENT=$(cargo llvm-cov nextest --json --summary-only \
-    --ignore-filename-regex 'web/src/pages|server/src/assets|server/src/storage/postgres.rs|server/src/storage/backup/postgres.rs' 2>/dev/null \
-    | jq '.data[0].totals.lines.percent' \
-    | awk '{ printf "%.2f", $1 }')
+if [[ "$INVESTIGATE" == "true" ]]; then
+    if [[ ! -f "$REPORT_FILE" ]]; then
+        echo "error: no report found at $REPORT_FILE. Run without --investigate first." >&2
+        exit 1
+    fi
+    echo "--- coverage: investigating cached report ---"
+else
+    echo "--- coverage: running cargo llvm-cov ---"
+    cargo llvm-cov nextest --show-progress none > /dev/null
+    cargo llvm-cov report --text > "$REPORT_FILE"
+fi
 
-if $UPDATE; then
-    awk "BEGIN { printf \"%.2f\\n\", $CURRENT }" > "$BASELINE_FILE"
-    echo "Coverage baseline updated to $(cat "$BASELINE_FILE")%"
+ABS_ROOT="$(pwd)"
+
+# Parse the per-file text output into a JSON object mapping relative-path → percent.
+# A source line is "executable" if its second pipe-separated column is a number
+# (e.g. `0`, `86`, `1.36k`). A line whose second column is blank is
+# non-executable (comments, blank lines, braces). A line is "covered" if its
+# count is anything other than literal `0`.
+NEW_MANIFEST=$(mktemp)
+awk -v root="$ABS_ROOT/" '
+    BEGIN { current = ""; print "{" }
+    /^\/.*\.rs:$/ {
+        if (current != "" && total > 0) {
+            pct = (covered * 100.0) / total
+            printf "%s  \"%s\": %s", (first ? "" : ",\n"), current, pct
+            first = 0
+        }
+        current = $0
+        sub(/:$/, "", current)
+        sub(root, "", current)
+        if (first == "") first = 1
+        total = 0; covered = 0
+        next
+    }
+    current != "" && /^[[:space:]]*[0-9]+\|[[:space:]]+[^|]+\|/ {
+        # Extract the second column (between first and second |)
+        line = $0
+        n = split(line, parts, "|")
+        if (n >= 3) {
+            count = parts[2]
+            gsub(/[[:space:]]/, "", count)
+            if (count != "") {
+                total++
+                if (count != "0") covered++
+            }
+        }
+    }
+    END {
+        if (current != "" && total > 0) {
+            pct = (covered * 100.0) / total
+            printf "%s  \"%s\": %s", (first ? "" : ",\n"), current, pct
+        }
+        print "\n}"
+    }
+' "$REPORT_FILE" > "$NEW_MANIFEST"
+
+# Validate it's well-formed JSON.
+if ! jq empty "$NEW_MANIFEST" 2>/dev/null; then
+    echo "error: generated manifest is not valid JSON; awk parser likely broken" >&2
+    cat "$NEW_MANIFEST" >&2
+    exit 2
+fi
+
+if [[ "$UPDATE" == "true" ]]; then
+    mv "$NEW_MANIFEST" "$MANIFEST_FILE"
+    echo "Coverage manifest updated."
     exit 0
 fi
 
-if [[ ! -f "$BASELINE_FILE" ]]; then
-    echo "error: no coverage baseline found at $BASELINE_FILE" >&2
-    echo "Run: scripts/check-coverage --update" >&2
+if [[ ! -f "$MANIFEST_FILE" ]]; then
+    echo "No manifest found. Creating initial manifest."
+    mv "$NEW_MANIFEST" "$MANIFEST_FILE"
+    exit 0
+fi
+
+# Compare
+echo "Comparing against baseline..."
+# We use a 0.05% epsilon to ignore floating point noise
+REGRESSIONS=$(jq -n \
+    --slurpfile new "$NEW_MANIFEST" \
+    --slurpfile old "$MANIFEST_FILE" \
+    '$new[0] | to_entries | map(
+        .key as $k |
+        .value as $v |
+        ($old[0][$k] // 100.0) as $o |
+        select($v < $o - 0.05) |
+        {key: $k, new: $v, old: $o}
+    )')
+
+if [[ "$(echo "$REGRESSIONS" | jq 'length')" -gt 0 ]]; then
+    echo "error: coverage regressions detected:" >&2
+    echo "$REGRESSIONS" | jq -r '.[] | "\(.key): \(.old)% -> \(.new)% (DROP)"' >&2
+
+    if [[ "$INVESTIGATE" == "true" ]]; then
+        echo "" >&2
+        echo "--- Missing Lines for Regressed Files ---" >&2
+
+        # Build a list of absolute paths for regressed files
+        REGRESSED_ABS_PATHS=$(echo "$REGRESSIONS" | jq -r --arg root "$ROOT/" '.[] | ($root + .key)')
+
+        # Filter the cached report to only show the regressing files,
+        # printing each file's text block (which includes per-line counts).
+        awk -v paths="$REGRESSED_ABS_PATHS" '
+            BEGIN {
+                split(paths, path_arr, "\n");
+                for (i in path_arr) {
+                    target_paths[path_arr[i]] = 1;
+                }
+            }
+            /^\/.*\.rs:$/ {
+                file = $0;
+                sub(/:$/, "", file);
+                printing = (file in target_paths) ? 1 : 0;
+            }
+            printing { print $0 }
+        ' "$REPORT_FILE" >&2
+    else
+        echo "" >&2
+        echo "To investigate the missing lines, run: scripts/check-coverage --investigate" >&2
+    fi
     exit 1
 fi
 
-BASELINE=$(cat "$BASELINE_FILE")
-
-echo "Current coverage:  ${CURRENT}%"
-echo "Baseline coverage: ${BASELINE}%"
-
-if awk "BEGIN { exit !($CURRENT < $BASELINE) }"; then
-    echo "error: coverage dropped below baseline (${CURRENT}% < ${BASELINE}%)" >&2
-    echo "Fix coverage or run: scripts/check-coverage --update" >&2
-    exit 1
-fi
-
-echo "Coverage OK (${CURRENT}% >= ${BASELINE}%)"
+# If all good, update
+mv "$NEW_MANIFEST" "$MANIFEST_FILE"
+echo "Coverage OK (all files at or above baseline)."

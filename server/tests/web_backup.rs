@@ -6,10 +6,10 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
-use common::storage::{
+use common::{password::Password, username::Username};
+use storage::{
     BACKUP_DESTINATION_PATH_KEY, BACKUP_MODE_KEY, BACKUP_RETENTION_COUNT_KEY, BACKUP_SCHEDULE_KEY,
 };
-use jaunder::{password::Password, username::Username};
 use tempfile::TempDir;
 use tower::ServiceExt;
 use web::backup::BackupSettings;
@@ -17,7 +17,7 @@ use web::backup::BackupSettings;
 use helpers::{ensure_server_fns_registered, test_options, test_state};
 
 async fn post_form(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     uri: &str,
     body: impl Into<String>,
     cookie: Option<&str>,
@@ -33,7 +33,13 @@ async fn post_form(
     }
     let request = builder.body(Body::from(body.into())).unwrap();
 
-    let app = jaunder::create_router(test_options(), state, true, helpers::tmp_storage_path());
+    let app = jaunder::create_router(
+        test_options(),
+        state,
+        helpers::noop_mailer(),
+        true,
+        helpers::tmp_storage_path(),
+    );
     let response = app.oneshot(request).await.unwrap();
 
     let status = response.status();
@@ -336,7 +342,7 @@ async fn non_operator_cannot_update_backup_settings() {
 }
 
 async fn create_session_cookie(
-    state: &Arc<jaunder::storage::AppState>,
+    state: &Arc<storage::AppState>,
     username: &str,
     is_operator: bool,
 ) -> String {

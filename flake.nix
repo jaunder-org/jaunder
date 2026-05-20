@@ -263,6 +263,7 @@
             path: type:
             (pkgs.lib.hasSuffix ".sql" path)
             || (pkgs.lib.hasSuffix ".css" path)
+            || (builtins.match "scripts/.*" path != null)
             || (craneLib.filterCargoSources path type);
         };
 
@@ -319,15 +320,15 @@
         );
 
         wasm-bindgen-cli = pkgs.wasm-bindgen-cli.overrideAttrs (old: rec {
-          version = "0.2.115";
+          version = "0.2.121";
           src = pkgs.fetchCrate {
             pname = "wasm-bindgen-cli";
             inherit version;
-            hash = "sha256-wRynyZKYEMoIhX64n4DkGG2iepU6rE5qdBjT1LkUgtE=";
+            hash = "sha256-ZOMgFNOcGkO66Jz/Z83eoIu+DIzo3Z/vq6Z5g6BDY/w=";
           };
           cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
             inherit src;
-            hash = "sha256-+7hgX56dOo/GErpf/unRprv72Kkars5dOFew+NfZZMY=";
+            hash = "sha256-DPdCDPTAPBrbqLUqnCwQu1dePs9lGg85JCJOCIr9qjU=";
           };
         });
 
@@ -465,17 +466,17 @@
           commonArgs
           // {
             inherit cargoArtifacts;
-            cargoExtraArgs = "-p jaunder" + pkgs.lib.concatMapStrings (m: " --test ${m}") integrationTestModules;
+            cargoExtraArgs =
+              "-p jaunder" + pkgs.lib.concatMapStrings (m: " --test ${m}") integrationTestModules;
             doCheck = false;
-            installPhaseCommand =
-              ''
-                mkdir -p $out/lib $out/tests
-                ln -s ${pkgs.openssl.out}/lib/libssl.so.3 $out/lib/libssl.so.3
-                ln -s ${pkgs.openssl.out}/lib/libcrypto.so.3 $out/lib/libcrypto.so.3
-              ''
-              + pkgs.lib.concatMapStrings (m: ''
-                cp "$(find target/release/deps -maxdepth 1 -type f -executable -name '${m}-*' | head -n 1)" $out/tests/${m}
-              '') integrationTestModules;
+            installPhaseCommand = ''
+              mkdir -p $out/lib $out/tests
+              ln -s ${pkgs.openssl.out}/lib/libssl.so.3 $out/lib/libssl.so.3
+              ln -s ${pkgs.openssl.out}/lib/libcrypto.so.3 $out/lib/libcrypto.so.3
+            ''
+            + pkgs.lib.concatMapStrings (m: ''
+              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name '${m}-*' | head -n 1)" $out/tests/${m}
+            '') integrationTestModules;
           }
         );
 
@@ -819,18 +820,14 @@
           e2e-checks = pkgs.symlinkJoin {
             name = "jaunder-e2e-checks";
             paths = builtins.attrValues (
-              pkgs.lib.filterAttrs
-                (name: _: pkgs.lib.hasPrefix "e2e-" name)
-                self.checks.${system}
+              pkgs.lib.filterAttrs (name: _: pkgs.lib.hasPrefix "e2e-" name) self.checks.${system}
             );
           };
 
           postgres-integration-checks = pkgs.symlinkJoin {
             name = "jaunder-postgres-integration-checks";
             paths = builtins.attrValues (
-              pkgs.lib.filterAttrs
-                (name: _: pkgs.lib.hasPrefix "postgres-" name)
-                self.checks.${system}
+              pkgs.lib.filterAttrs (name: _: pkgs.lib.hasPrefix "postgres-" name) self.checks.${system}
             );
           };
 
@@ -880,13 +877,15 @@
                 checkKey = "postgres-" + pkgs.lib.replaceStrings [ "_" ] [ "-" ] m;
                 overrides = testModuleOverrides.${m} or { };
               in
-              pkgs.lib.nameValuePair checkKey (postgresTestBinaryCheck (
-                {
-                  checkName = "jaunder-${checkKey}";
-                  testBinary = m;
-                }
-                // overrides
-              ))
+              pkgs.lib.nameValuePair checkKey (
+                postgresTestBinaryCheck (
+                  {
+                    checkName = "jaunder-${checkKey}";
+                    testBinary = m;
+                  }
+                  // overrides
+                )
+              )
             ) integrationTestModules
           )
           // {
@@ -929,6 +928,7 @@
             coverage = craneLib.mkCargoDerivation (
               commonArgs
               // {
+                src = ./.;
                 inherit cargoArtifacts;
                 pname = "jaunder-coverage";
                 nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
@@ -939,23 +939,7 @@
                 ];
                 buildPhaseCargoCommand = ''
                   export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:''${LD_LIBRARY_PATH:-}"
-
-                  BASELINE=$(cat ${./.coverage-baseline})
-
-                  CURRENT=$(cargo llvm-cov nextest --json --summary-only \
-                    --ignore-filename-regex 'web/src/pages|server/src/assets|server/src/storage/postgres.rs|server/src/storage/backup/postgres.rs' \
-                    | jq '.data[0].totals.lines.percent' \
-                    | awk '{ printf "%.2f", $1 }')
-
-                  echo "Current coverage:  ''${CURRENT}%"
-                  echo "Baseline coverage: ''${BASELINE}%"
-
-                  if awk "BEGIN { exit !(''${CURRENT} < ''${BASELINE}) }"; then
-                    echo "error: coverage dropped below baseline (''${CURRENT}% < ''${BASELINE}%)"
-                    exit 1
-                  fi
-
-                  echo "Coverage OK (''${CURRENT}% >= ''${BASELINE}%)"
+                  bash ./scripts/check-coverage
                 '';
                 installPhaseCommand = "mkdir -p $out && touch $out/coverage-ok";
               }

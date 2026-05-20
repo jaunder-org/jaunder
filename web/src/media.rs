@@ -5,12 +5,12 @@ use serde::{Deserialize, Serialize};
 use crate::auth::require_auth;
 use crate::error::WebResult;
 #[cfg(feature = "ssr")]
-use common::storage::{
-    AppState, MediaSource, DEFAULT_MAX_FILE_SIZE_BYTES, DEFAULT_USER_QUOTA_BYTES,
-    MEDIA_MAX_FILE_SIZE_BYTES_KEY, MEDIA_USER_QUOTA_BYTES_KEY,
-};
-#[cfg(feature = "ssr")]
 use std::sync::Arc;
+#[cfg(feature = "ssr")]
+use storage::{
+    MediaSource, MediaStorage, PostStorage, SiteConfigStorage, DEFAULT_MAX_FILE_SIZE_BYTES,
+    DEFAULT_USER_QUOTA_BYTES, MEDIA_MAX_FILE_SIZE_BYTES_KEY, MEDIA_USER_QUOTA_BYTES_KEY,
+};
 
 /// A media item returned by [`list_my_media`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,7 +50,7 @@ pub async fn list_my_media(
         use crate::error::InternalError;
 
         let auth = require_auth().await?;
-        let state = expect_context::<Arc<AppState>>();
+        let media = expect_context::<Arc<dyn MediaStorage>>();
 
         let source_filter = source
             .as_deref()
@@ -58,8 +58,7 @@ pub async fn list_my_media(
             .transpose()
             .map_err(|e| InternalError::validation(e.to_string()))?;
 
-        let records = state
-            .media
+        let records = media
             .list_media(
                 auth.user_id,
                 source_filter.as_ref(),
@@ -94,24 +93,22 @@ pub async fn media_usage() -> WebResult<MediaUsageData> {
         use crate::error::InternalError;
 
         let auth = require_auth().await?;
-        let state = expect_context::<Arc<AppState>>();
+        let media = expect_context::<Arc<dyn MediaStorage>>();
+        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
 
-        let used_bytes = state
-            .media
+        let used_bytes = media
             .get_user_upload_usage(auth.user_id)
             .await
             .map_err(InternalError::storage)?;
 
-        let quota_bytes = state
-            .site_config
+        let quota_bytes = site_config
             .get(MEDIA_USER_QUOTA_BYTES_KEY)
             .await
             .map_err(InternalError::storage)?
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(DEFAULT_USER_QUOTA_BYTES);
 
-        let max_file_size_bytes = state
-            .site_config
+        let max_file_size_bytes = site_config
             .get(MEDIA_MAX_FILE_SIZE_BYTES_KEY)
             .await
             .map_err(InternalError::storage)?
@@ -141,7 +138,8 @@ pub async fn delete_media(
         use crate::error::InternalError;
 
         let auth = require_auth().await?;
-        let state = expect_context::<Arc<AppState>>();
+        let media = expect_context::<Arc<dyn MediaStorage>>();
+        let posts = expect_context::<Arc<dyn PostStorage>>();
 
         let source_enum = source
             .parse::<MediaSource>()
@@ -149,14 +147,12 @@ pub async fn delete_media(
 
         let url = common::media::media_url(source_enum.as_str(), &sha256, &filename);
 
-        let published = state
-            .posts
+        let published = posts
             .list_published_by_user(&auth.username, None, 1000)
             .await
             .map_err(InternalError::storage)?;
 
-        let drafts = state
-            .posts
+        let drafts = posts
             .list_drafts_by_user(auth.user_id, None, 1000)
             .await
             .map_err(InternalError::storage)?;
@@ -175,8 +171,7 @@ pub async fn delete_media(
             });
         }
 
-        state
-            .media
+        media
             .delete_media(auth.user_id, &sha256, &filename, &source_enum)
             .await
             .map_err(InternalError::storage)?;

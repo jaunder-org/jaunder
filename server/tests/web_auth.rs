@@ -7,7 +7,7 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use chrono::Utc;
-use jaunder::username::Username;
+use common::username::Username;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -16,7 +16,7 @@ use helpers::{ensure_server_fns_registered, test_options, test_state};
 /// Sends a form-encoded POST request through a fresh router built from `state`.
 /// Returns (status, Set-Cookie header value, response body).
 async fn post_form(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     uri: &str,
     body: impl Into<String>,
     cookie: Option<&str>,
@@ -36,6 +36,7 @@ async fn post_form(
     let app = jaunder::create_router(
         test_options(),
         state,
+        helpers::noop_mailer(),
         secure_cookies,
         helpers::tmp_storage_path(),
     );
@@ -55,7 +56,7 @@ async fn post_form(
 }
 
 async fn get_html(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     uri: &str,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
@@ -68,8 +69,13 @@ async fn get_html(
     let local = tokio::task::LocalSet::new();
     let (status, body_str) = local
         .run_until(async {
-            let app =
-                jaunder::create_router(test_options(), state, true, helpers::tmp_storage_path());
+            let app = jaunder::create_router(
+                test_options(),
+                state,
+                helpers::noop_mailer(),
+                true,
+                helpers::tmp_storage_path(),
+            );
             let response = app.oneshot(request).await.unwrap();
 
             let status = response.status();
@@ -88,7 +94,7 @@ async fn get_html(
 /// attaching an `Authorization: Bearer <token>` header instead of a cookie.
 /// Returns (status, Set-Cookie header value, response body).
 async fn post_form_with_bearer(
-    state: Arc<jaunder::storage::AppState>,
+    state: Arc<storage::AppState>,
     uri: &str,
     body: impl Into<String>,
     bearer_token: &str,
@@ -103,7 +109,13 @@ async fn post_form_with_bearer(
         .body(Body::from(body.into()))
         .expect("failed to build request with bearer token");
 
-    let app = jaunder::create_router(test_options(), state, true, helpers::tmp_storage_path());
+    let app = jaunder::create_router(
+        test_options(),
+        state,
+        helpers::noop_mailer(),
+        true,
+        helpers::tmp_storage_path(),
+    );
     let response = app.oneshot(request).await.expect("router oneshot failed");
 
     let status = response.status();

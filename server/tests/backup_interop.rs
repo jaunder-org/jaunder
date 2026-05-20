@@ -1,11 +1,11 @@
 mod helpers;
 
 use chrono::Utc;
+use common::password::Password;
+use common::username::Username;
 use jaunder::cli::StorageArgs;
 use jaunder::commands::{cmd_backup, cmd_init, cmd_restore};
-use jaunder::password::Password;
-use jaunder::storage::{open_existing_database, BackupMode, CreatePostInput, PostFormat};
-use jaunder::username::Username;
+use storage::{open_existing_database, BackupMode, CreatePostInput, PostFormat};
 use tempfile::TempDir;
 
 use helpers::{postgres_testing_enabled, unique_postgres_url};

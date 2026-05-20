@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
-use crate::password::Password;
-use crate::username::Username;
+use common::password::Password;
+use common::username::Username;
 
 /// Errors that can occur during atomic invite-and-user creation.
 #[derive(Debug, Error)]
