@@ -1,7 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
-use email_address::EmailAddress;
 use log::LevelFilter;
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode},
@@ -13,28 +12,27 @@ use async_trait::async_trait;
 mod site_config;
 pub use site_config::SqliteSiteConfigStorage;
 
-use crate::{
-    AppState, AtomicOps, ConfirmPasswordResetError, CreateMediaError, CreatePostError,
-    CreatePostInput, CreateUserError, DeleteMediaError, EmailVerificationStorage, InviteRecord,
-    InviteStorage, ListByTagError, MediaRecord, MediaSource, MediaStorage, PasswordResetStorage,
-    PostCursor, PostRecord, PostStorage, PostTag, ProfileUpdate, RegisterWithInviteError,
-    SessionAuthError, SessionRecord, SessionStorage, TagRecord, TaggingError, UpdatePostError,
-    UpdatePostInput, UseEmailVerificationError, UseInviteError, UsePasswordResetError,
-    UserAuthError, UserConfigStorage, UserRecord, UserStorage,
-};
-use common::password::Password;
-use common::slug::Slug;
-use common::tag::Tag;
-use common::username::Username;
-use tracing::Instrument;
+mod users;
+pub use users::SqliteUserStorage;
 
 use crate::db::sql_slow_query_threshold;
 use crate::helpers::{
     email_verification_claim_error, generate_hashed_token, invite_record_from_row,
     media_record_from_row, password_reset_claim_error, post_record_from_row,
-    session_record_from_row, user_record_from_row, InviteRow, MediaRow, PostRow, SessionRow,
-    UserRow,
+    session_record_from_row, InviteRow, MediaRow, PostRow, SessionRow,
 };
+use crate::{
+    AppState, AtomicOps, ConfirmPasswordResetError, CreateMediaError, CreatePostError,
+    CreatePostInput, DeleteMediaError, EmailVerificationStorage, InviteRecord, InviteStorage,
+    ListByTagError, MediaRecord, MediaSource, MediaStorage, PasswordResetStorage, PostCursor,
+    PostRecord, PostStorage, PostTag, RegisterWithInviteError, SessionAuthError, SessionRecord,
+    SessionStorage, TagRecord, TaggingError, UpdatePostError, UpdatePostInput,
+    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserConfigStorage,
+};
+use common::password::Password;
+use common::slug::Slug;
+use common::tag::Tag;
+use common::username::Username;
 
 // ---------------------------------------------------------------------------
 // Database helpers
@@ -86,220 +84,6 @@ pub(super) async fn open_sqlite_database(
 
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     Ok(make_app_state(pool))
-}
-
-// ---------------------------------------------------------------------------
-// Users
-// ---------------------------------------------------------------------------
-
-/// SQLite-backed [`UserStorage`].
-pub struct SqliteUserStorage {
-    pool: SqlitePool,
-}
-
-impl SqliteUserStorage {
-    #[must_use]
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait]
-impl UserStorage for SqliteUserStorage {
-    #[tracing::instrument(
-        name = "storage.sqlite.user.create_user",
-        skip(self, password, display_name),
-        fields(username = %username.as_str())
-    )]
-    async fn create_user(
-        &self,
-        username: &Username,
-        password: &Password,
-        display_name: Option<&str>,
-        is_operator: bool,
-    ) -> Result<i64, CreateUserError> {
-        let password_hash = crate::helpers::hash_password(password.clone())
-            .instrument(tracing::info_span!(
-                "storage.sqlite.user.create_user.hash_password"
-            ))
-            .await
-            .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(e)))?;
-
-        let now = Utc::now();
-
-        let result = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
-             VALUES ($1, $2, $3, $4, $5)
-             RETURNING user_id",
-        )
-        .bind(username.as_str())
-        .bind(&password_hash)
-        .bind(display_name)
-        .bind(now)
-        .bind(is_operator)
-        .fetch_one(&self.pool)
-        .instrument(tracing::info_span!(
-            "storage.sqlite.user.create_user.insert_user_row"
-        ))
-        .await;
-
-        match result {
-            Ok(id) => Ok(id),
-            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-                Err(CreateUserError::UsernameTaken)
-            }
-            Err(e) => Err(CreateUserError::Internal(e)),
-        }
-    }
-
-    #[tracing::instrument(
-        name = "storage.sqlite.user.authenticate",
-        skip(self, password),
-        fields(username = %username.as_str())
-    )]
-    async fn authenticate(
-        &self,
-        username: &Username,
-        password: &Password,
-    ) -> Result<UserRecord, UserAuthError> {
-        let row = sqlx::query_as::<
-            _,
-            (
-                i64,
-                String,
-                Option<String>,
-                Option<String>,
-                DateTime<Utc>,
-                Option<DateTime<Utc>>,
-                String,
-                Option<String>,
-                bool,
-                bool,
-            ),
-        >(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, password_hash, email, email_verified, is_operator
-             FROM users WHERE username = $1",
-        )
-        .bind(username.as_str())
-        .fetch_optional(&self.pool)
-        .instrument(tracing::info_span!(
-            "storage.sqlite.user.authenticate.lookup_user"
-        ))
-        .await
-        .map_err(|e| UserAuthError::Internal(e.to_string()))?;
-
-        let Some((
-            user_id,
-            username,
-            display_name,
-            bio,
-            created_at,
-            _last_authenticated_at,
-            hash,
-            email,
-            email_verified,
-            is_operator,
-        )) = row
-        else {
-            return Err(UserAuthError::InvalidCredentials);
-        };
-
-        let valid = crate::helpers::verify_password(password.clone(), hash)
-            .instrument(tracing::info_span!(
-                "storage.sqlite.user.authenticate.verify_password"
-            ))
-            .await
-            .map_err(|e| UserAuthError::Internal(e.to_string()))?;
-
-        if !valid {
-            return Err(UserAuthError::InvalidCredentials);
-        }
-
-        let now = Utc::now();
-
-        sqlx::query("UPDATE users SET last_authenticated_at = $1 WHERE user_id = $2")
-            .bind(now)
-            .bind(user_id)
-            .execute(&self.pool)
-            .instrument(tracing::info_span!(
-                "storage.sqlite.user.authenticate.update_last_authenticated_at"
-            ))
-            .await
-            .map_err(|e| UserAuthError::Internal(e.to_string()))?;
-
-        crate::helpers::build_user_record((
-            user_id,
-            username,
-            display_name,
-            bio,
-            created_at,
-            Some(now),
-            email,
-            email_verified,
-            is_operator,
-        ))
-        .map_err(|e| UserAuthError::Internal(e.to_string()))
-    }
-
-    async fn get_user(&self, user_id: i64) -> sqlx::Result<Option<UserRecord>> {
-        let row = sqlx::query_as::<_, UserRow>(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, email, email_verified, is_operator
-             FROM users WHERE user_id = $1",
-        )
-        .bind(user_id)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row.map(user_record_from_row).transpose()?)
-    }
-
-    async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>> {
-        let row = sqlx::query_as::<_, UserRow>(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at, email, email_verified, is_operator
-             FROM users WHERE username = $1",
-        )
-        .bind(username.as_str())
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row.map(user_record_from_row).transpose()?)
-    }
-
-    async fn set_email(
-        &self,
-        user_id: i64,
-        email: Option<&EmailAddress>,
-        verified: bool,
-    ) -> sqlx::Result<()> {
-        sqlx::query("UPDATE users SET email = $1, email_verified = $2 WHERE user_id = $3")
-            .bind(email.map(EmailAddress::as_str))
-            .bind(verified)
-            .bind(user_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    async fn update_profile(&self, user_id: i64, update: &ProfileUpdate<'_>) -> sqlx::Result<()> {
-        sqlx::query("UPDATE users SET display_name = $1, bio = $2 WHERE user_id = $3")
-            .bind(update.display_name)
-            .bind(update.bio)
-            .bind(user_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    async fn set_password(&self, user_id: i64, new_password: &Password) -> sqlx::Result<()> {
-        let password_hash = crate::helpers::hash_password(new_password.clone())
-            .await
-            .map_err(sqlx::Error::Io)?;
-
-        sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
-            .bind(&password_hash)
-            .bind(user_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1645,43 +1429,18 @@ impl UserConfigStorage for SqliteUserConfigStorage {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{UserAuthError, UserStorage};
-    use common::password::Password;
-    use common::username::Username;
-
-    async fn in_memory_pool() -> SqlitePool {
-        let opts = sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(":memory:")
-            .create_if_missing(true);
-        let pool = sqlx::pool::PoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations/sqlite")
-            .run(&pool)
-            .await
-            .unwrap();
-        pool
-    }
-
-    #[tokio::test]
-    async fn authenticate_with_corrupted_hash_returns_internal_error() {
-        let pool = in_memory_pool().await;
-        sqlx::query(
-            "INSERT INTO users (username, password_hash, created_at, is_operator)
-             VALUES ('alice', 'not-a-bcrypt-hash', datetime('now'), false)",
-        )
-        .execute(&pool)
+pub(crate) async fn sqlite_pool() -> SqlitePool {
+    let opts = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(":memory:")
+        .create_if_missing(true);
+    let pool = sqlx::pool::PoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
         .await
         .unwrap();
-
-        let storage = SqliteUserStorage::new(pool);
-        let username: Username = "alice".parse().unwrap();
-        let password: Password = "password123".parse().unwrap();
-        let result = storage.authenticate(&username, &password).await;
-        assert!(matches!(result, Err(UserAuthError::Internal(_))));
-    }
+    sqlx::migrate!("./migrations/sqlite")
+        .run(&pool)
+        .await
+        .unwrap();
+    pool
 }
