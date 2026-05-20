@@ -3,7 +3,7 @@ use leptos::server_fn::codec::Json;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "ssr")]
-use crate::auth::{require_auth, AuthUser};
+use crate::auth::{AuthUser, require_auth};
 use crate::error::WebResult;
 #[cfg(feature = "ssr")]
 use crate::error::{InternalError, InternalResult, WebError};
@@ -11,17 +11,13 @@ use crate::tags::TagSummary;
 #[cfg(feature = "ssr")]
 use chrono::{Datelike, NaiveDate, Utc};
 #[cfg(feature = "ssr")]
-use common::{
-    slug::{slugify_title, Slug},
-    username::Username,
-};
+use common::{slug::Slug, username::Username};
 #[cfg(feature = "ssr")]
 use std::sync::Arc;
 #[cfg(feature = "ssr")]
 use storage::{
-    create_rendered_post, derive_post_metadata, perform_post_update, CreatePostError,
-    CreateRenderedPostError, PerformUpdateError, PostCursor, PostFormat, PostRecord, PostStorage,
-    UpdatePostInput, UserStorage,
+    CreatePostError, CreateRenderedPostError, PerformUpdateError, PostCursor, PostFormat,
+    PostRecord, PostStorage, UpdatePostInput, UserStorage, perform_post_update,
 };
 
 /// Result returned by [`create_post`].
@@ -132,36 +128,43 @@ pub async fn create_post(
         let format = format
             .parse::<PostFormat>()
             .map_err(|e| InternalError::validation(e.to_string()))?;
-        let metadata = derive_post_metadata(None, &body, &format)
-            .ok_or_else(|| InternalError::validation("post body is required"))?;
         let published_at = publish.then(Utc::now);
-        let slug_seed = slug_override
-            .as_deref()
-            .map(str::trim)
-            .filter(|slug| !slug.is_empty())
-            .map(str::to_ascii_lowercase)
-            .map(|slug| slug.parse::<Slug>())
-            .transpose()
-            .map_err(|e| InternalError::validation(e.to_string()))?
-            .map(|slug| slug.to_string())
-            .or_else(|| slugify_title(&metadata.slug_seed))
-            .ok_or_else(|| {
-                InternalError::validation(
-                    "post must contain at least one ASCII letter or digit for its slug",
-                )
-            })?;
 
-        let created = create_post_with_unique_slug(
+        let record = storage::perform_post_creation(
             posts.as_ref(),
             auth.user_id,
-            &auth.username,
-            metadata.title,
-            body, // verbatim — no stripping
+            body,
             format,
-            slug_seed,
+            slug_override.as_deref(),
             published_at,
+            100,
         )
-        .await?;
+        .await
+        .map_err(|err| match err {
+            storage::PerformCreationError::EmptyPost => InternalError::validation("post body is required"),
+            storage::PerformCreationError::NoSlugFromPost => InternalError::validation("post must contain at least one ASCII letter or digit for its slug"),
+            storage::PerformCreationError::InvalidSlug(msg) => InternalError::validation(msg),
+            storage::PerformCreationError::Exhausted(_) => InternalError::server_message("unable to allocate a unique slug after 100 attempts"),
+            storage::PerformCreationError::Render(e) => InternalError::validation(e.to_string()),
+            storage::PerformCreationError::CreatedNotFound => InternalError::server_message("created post not found"),
+            storage::PerformCreationError::Storage(e) => InternalError::storage(e),
+        })?;
+
+        let created_at = record.created_at.to_rfc3339();
+        let published_at_str = record.published_at.map(|timestamp| timestamp.to_rfc3339());
+        let permalink = record
+            .published_at
+            .map(|ts| build_permalink(&auth.username, ts, &record.slug));
+        let preview_url = format!("/draft/{}/preview", record.post_id);
+
+        let created = CreatePostResult {
+            post_id: record.post_id,
+            slug: record.slug.to_string(),
+            created_at,
+            published_at: published_at_str,
+            preview_url,
+            permalink,
+        };
 
         for display in &validated_tags {
             posts
@@ -652,78 +655,6 @@ pub async fn list_user_posts_by_tag(
 }
 
 #[cfg(feature = "ssr")]
-#[allow(clippy::too_many_arguments)]
-async fn create_post_with_unique_slug(
-    posts: &dyn PostStorage,
-    user_id: i64,
-    username: &Username,
-    title: Option<String>,
-    body: String,
-    format: PostFormat,
-    slug_seed: String,
-    published_at: Option<chrono::DateTime<Utc>>,
-) -> InternalResult<CreatePostResult> {
-    for attempt in 0..100 {
-        let slug_string = candidate_slug(&slug_seed, attempt);
-        let slug = slug_string
-            .parse::<Slug>()
-            .map_err(|e| InternalError::validation(e.to_string()))?;
-
-        match create_rendered_post(
-            posts,
-            user_id,
-            title.clone(),
-            slug,
-            body.clone(),
-            format.clone(),
-            published_at,
-        )
-        .await
-        {
-            Ok(post_id) => {
-                let record = posts
-                    .get_post_by_id(post_id)
-                    .await
-                    .map_err(InternalError::storage)?
-                    .ok_or_else(|| InternalError::server_message("created post not found"))?;
-
-                let created_at = record.created_at.to_rfc3339();
-                let published_at = record.published_at.map(|timestamp| timestamp.to_rfc3339());
-                let permalink = record
-                    .published_at
-                    .map(|ts| build_permalink(username, ts, &record.slug));
-
-                let preview_url = format!("/draft/{post_id}/preview");
-
-                return Ok(CreatePostResult {
-                    post_id,
-                    slug: record.slug.to_string(),
-                    created_at,
-                    published_at,
-                    preview_url,
-                    permalink,
-                });
-            }
-            Err(storage::CreateRenderedPostError::Storage(CreatePostError::SlugConflict)) => {}
-            Err(err) => return Err(create_rendered_post_error(err)),
-        }
-    }
-
-    Err(InternalError::server_message(
-        "unable to allocate a unique slug after 100 attempts",
-    ))
-}
-
-#[cfg(any(feature = "ssr", test))]
-fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
-    if attempt == 0 {
-        slug_seed.to_owned()
-    } else {
-        format!("{slug_seed}-{}", attempt + 1)
-    }
-}
-
-#[cfg(feature = "ssr")]
 fn timeline_post_summary(
     post: PostRecord,
     viewer_user_id: Option<i64>,
@@ -987,19 +918,6 @@ fn perform_update_error(error: PerformUpdateError) -> InternalError {
     }
 }
 
-#[cfg(feature = "ssr")]
-fn create_rendered_post_error(error: CreateRenderedPostError) -> InternalError {
-    match error {
-        CreateRenderedPostError::Storage(CreatePostError::SlugConflict) => {
-            InternalError::conflict("slug already taken for this user on this date")
-        }
-        CreateRenderedPostError::Storage(CreatePostError::Internal(error)) => {
-            InternalError::storage(error)
-        }
-        CreateRenderedPostError::Render(error) => InternalError::server(error),
-    }
-}
-
 /// Soft-deletes a post owned by the authenticated user.
 #[server(endpoint = "/delete_post")]
 pub async fn delete_post(post_id: i64) -> WebResult<()> {
@@ -1062,7 +980,7 @@ fn build_permalink(username: &Username, timestamp: chrono::DateTime<Utc>, slug: 
 
 #[cfg(test)]
 mod tests {
-    use super::candidate_slug;
+    use storage::candidate_slug;
 
     #[cfg(feature = "ssr")]
     use super::{
@@ -1280,36 +1198,6 @@ mod tests {
         ));
         assert!(matches!(
             perform_update_error(PerformUpdateError::Render(storage::RenderError::OrgRender(
-                "bad".to_string()
-            )))
-            .public(),
-            WebError::Server { .. }
-        ));
-    }
-
-    #[cfg(feature = "ssr")]
-    #[test]
-    fn create_rendered_post_error_maps_each_arm() {
-        use super::create_rendered_post_error;
-        use crate::error::WebError;
-        use storage::{CreatePostError, CreateRenderedPostError, RenderError};
-
-        assert!(matches!(
-            create_rendered_post_error(CreateRenderedPostError::Storage(
-                CreatePostError::SlugConflict
-            ))
-            .public(),
-            WebError::Conflict { .. }
-        ));
-        assert!(matches!(
-            create_rendered_post_error(CreateRenderedPostError::Storage(
-                CreatePostError::Internal(sqlx::Error::PoolClosed)
-            ))
-            .public(),
-            WebError::Storage { .. }
-        ));
-        assert!(matches!(
-            create_rendered_post_error(CreateRenderedPostError::Render(RenderError::OrgRender(
                 "bad".to_string()
             )))
             .public(),
