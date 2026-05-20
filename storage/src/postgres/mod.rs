@@ -17,190 +17,26 @@ pub use users::PostgresUserStorage;
 mod sessions;
 pub use sessions::PostgresSessionStorage;
 
+mod invites;
+pub use invites::PostgresInviteStorage;
+
+mod email_verifications;
+pub use email_verifications::PostgresEmailVerificationStorage;
+
 use crate::helpers::{
-    email_verification_claim_error, generate_hashed_token, invite_record_from_row,
-    media_record_from_row, password_reset_claim_error, post_record_from_row, InviteRow, MediaRow,
-    PostRow,
+    generate_hashed_token, media_record_from_row, password_reset_claim_error, post_record_from_row,
+    MediaRow, PostRow,
 };
 use crate::{
     AtomicOps, ConfirmPasswordResetError, CreateMediaError, CreatePostError, CreatePostInput,
-    DeleteMediaError, EmailVerificationStorage, InviteRecord, InviteStorage, ListByTagError,
-    MediaRecord, MediaSource, MediaStorage, PasswordResetStorage, PostCursor, PostRecord,
-    PostStorage, PostTag, RegisterWithInviteError, TagRecord, TaggingError, UpdatePostError,
-    UpdatePostInput, UseEmailVerificationError, UseInviteError, UsePasswordResetError,
-    UserConfigStorage,
+    DeleteMediaError, ListByTagError, MediaRecord, MediaSource, MediaStorage, PasswordResetStorage,
+    PostCursor, PostRecord, PostStorage, PostTag, RegisterWithInviteError, TagRecord, TaggingError,
+    UpdatePostError, UpdatePostInput, UsePasswordResetError, UserConfigStorage,
 };
 use common::password::Password;
 use common::slug::Slug;
 use common::tag::Tag;
 use common::username::Username;
-
-// ---------------------------------------------------------------------------
-// Invites
-// ---------------------------------------------------------------------------
-
-pub struct PostgresInviteStorage {
-    pool: PgPool,
-}
-
-impl PostgresInviteStorage {
-    #[must_use]
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait]
-impl InviteStorage for PostgresInviteStorage {
-    async fn create_invite(&self, expires_at: DateTime<Utc>) -> sqlx::Result<String> {
-        let code = crate::auth::generate_token();
-        let now = Utc::now();
-
-        sqlx::query("INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)")
-            .bind(&code)
-            .bind(now)
-            .bind(expires_at)
-            .execute(&self.pool)
-            .await?;
-
-        Ok(code)
-    }
-
-    async fn use_invite(&self, code: &str, user_id: i64) -> Result<(), UseInviteError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| UseInviteError::NotFound)?;
-        let row = sqlx::query_as::<_, InviteRow>(
-            "SELECT code, created_at, expires_at, used_at, used_by
-             FROM invites WHERE code = $1",
-        )
-        .bind(code)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|_| UseInviteError::NotFound)?
-        .ok_or(UseInviteError::NotFound)?;
-
-        let record = invite_record_from_row(row);
-        if record.used_at.is_some() {
-            return Err(UseInviteError::AlreadyUsed);
-        }
-
-        let now = Utc::now();
-        if record.expires_at <= now {
-            return Err(UseInviteError::Expired);
-        }
-
-        sqlx::query("UPDATE invites SET used_at = $1, used_by = $2 WHERE code = $3")
-            .bind(now)
-            .bind(user_id)
-            .bind(code)
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| UseInviteError::NotFound)?;
-
-        tx.commit().await.map_err(|_| UseInviteError::NotFound)?;
-        Ok(())
-    }
-
-    async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>> {
-        let rows = sqlx::query_as::<_, InviteRow>(
-            "SELECT code, created_at, expires_at, used_at, used_by FROM invites",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows.into_iter().map(invite_record_from_row).collect())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// EmailVerifications
-// ---------------------------------------------------------------------------
-
-pub struct PostgresEmailVerificationStorage {
-    pool: PgPool,
-}
-
-impl PostgresEmailVerificationStorage {
-    #[must_use]
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait]
-impl EmailVerificationStorage for PostgresEmailVerificationStorage {
-    async fn create_email_verification(
-        &self,
-        user_id: i64,
-        email: &str,
-        expires_at: DateTime<Utc>,
-    ) -> sqlx::Result<String> {
-        let (raw_token, token_hash) = generate_hashed_token()?;
-        let now = Utc::now();
-
-        let mut tx = self.pool.begin().await?;
-        sqlx::query(
-            "UPDATE email_verifications
-             SET expires_at = created_at
-             WHERE user_id = $1 AND used_at IS NULL AND expires_at > $2",
-        )
-        .bind(user_id)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            "INSERT INTO email_verifications
-             (token_hash, user_id, email, created_at, expires_at)
-             VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(&token_hash)
-        .bind(user_id)
-        .bind(email)
-        .bind(now)
-        .bind(expires_at)
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
-        Ok(raw_token)
-    }
-
-    async fn use_email_verification(
-        &self,
-        raw_token: &str,
-    ) -> Result<(i64, String), UseEmailVerificationError> {
-        let token_hash =
-            crate::auth::hash_token(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
-        let now = Utc::now();
-
-        let claimed = sqlx::query_as::<_, (i64, String)>(
-            "UPDATE email_verifications SET used_at = $1
-             WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
-             RETURNING user_id, email",
-        )
-        .bind(now)
-        .bind(&token_hash)
-        .bind(now)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        if let Some((user_id, email)) = claimed {
-            return Ok((user_id, email));
-        }
-
-        let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
-            "SELECT used_at, expires_at FROM email_verifications WHERE token_hash = $1",
-        )
-        .bind(&token_hash)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Err(email_verification_claim_error(row))
-    }
-}
 
 // ---------------------------------------------------------------------------
 // PasswordResets
@@ -1312,7 +1148,10 @@ pub(crate) async fn postgres_pool() -> PgPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::helpers::{session_record_from_row, user_record_from_row, SessionRow, UserRow};
+    use crate::helpers::{
+        invite_record_from_row, session_record_from_row, user_record_from_row, InviteRow,
+        SessionRow, UserRow,
+    };
     use crate::*;
     use chrono::Utc;
     use common::password::Password;
@@ -1483,20 +1322,6 @@ mod tests {
         let site_config = PostgresSiteConfigStorage::new(pool.clone());
         exercise(site_config.get("site.registration_policy")).await;
         exercise(site_config.set("site.registration_policy", "open")).await;
-
-        let invites = PostgresInviteStorage::new(pool.clone());
-        exercise(invites.create_invite(now)).await;
-        exercise(invites.use_invite("invite-code", 1)).await;
-        exercise(invites.list_invites()).await;
-
-        let email_verifications = PostgresEmailVerificationStorage::new(pool.clone());
-        exercise(email_verifications.create_email_verification(1, "alice@example.com", now)).await;
-        assert!(matches!(
-            email_verifications
-                .use_email_verification("not-base64")
-                .await,
-            Err(UseEmailVerificationError::NotFound)
-        ));
 
         let password_resets = PostgresPasswordResetStorage::new(pool.clone());
         exercise(password_resets.create_password_reset(1, now)).await;
