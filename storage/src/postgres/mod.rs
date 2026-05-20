@@ -23,90 +23,20 @@ pub use invites::PostgresInviteStorage;
 mod email_verifications;
 pub use email_verifications::PostgresEmailVerificationStorage;
 
-use crate::helpers::{
-    generate_hashed_token, media_record_from_row, password_reset_claim_error, post_record_from_row,
-    MediaRow, PostRow,
-};
+mod password_resets;
+pub use password_resets::PostgresPasswordResetStorage;
+
+use crate::helpers::{media_record_from_row, post_record_from_row, MediaRow, PostRow};
 use crate::{
     AtomicOps, ConfirmPasswordResetError, CreateMediaError, CreatePostError, CreatePostInput,
-    DeleteMediaError, ListByTagError, MediaRecord, MediaSource, MediaStorage, PasswordResetStorage,
-    PostCursor, PostRecord, PostStorage, PostTag, RegisterWithInviteError, TagRecord, TaggingError,
-    UpdatePostError, UpdatePostInput, UsePasswordResetError, UserConfigStorage,
+    DeleteMediaError, ListByTagError, MediaRecord, MediaSource, MediaStorage, PostCursor,
+    PostRecord, PostStorage, PostTag, RegisterWithInviteError, TagRecord, TaggingError,
+    UpdatePostError, UpdatePostInput, UserConfigStorage,
 };
 use common::password::Password;
 use common::slug::Slug;
 use common::tag::Tag;
 use common::username::Username;
-
-// ---------------------------------------------------------------------------
-// PasswordResets
-// ---------------------------------------------------------------------------
-
-pub struct PostgresPasswordResetStorage {
-    pool: PgPool,
-}
-
-impl PostgresPasswordResetStorage {
-    #[must_use]
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait]
-impl PasswordResetStorage for PostgresPasswordResetStorage {
-    async fn create_password_reset(
-        &self,
-        user_id: i64,
-        expires_at: DateTime<Utc>,
-    ) -> sqlx::Result<String> {
-        let (raw_token, token_hash) = generate_hashed_token()?;
-        let now = Utc::now();
-
-        sqlx::query(
-            "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at)
-             VALUES ($1, $2, $3, $4)",
-        )
-        .bind(&token_hash)
-        .bind(user_id)
-        .bind(now)
-        .bind(expires_at)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(raw_token)
-    }
-
-    async fn use_password_reset(&self, raw_token: &str) -> Result<i64, UsePasswordResetError> {
-        let token_hash =
-            crate::auth::hash_token(raw_token).map_err(|_| UsePasswordResetError::NotFound)?;
-        let now = Utc::now();
-
-        let claimed = sqlx::query_as::<_, (i64,)>(
-            "UPDATE password_resets SET used_at = $1
-             WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
-             RETURNING user_id",
-        )
-        .bind(now)
-        .bind(&token_hash)
-        .bind(now)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        if let Some((user_id,)) = claimed {
-            return Ok(user_id);
-        }
-
-        let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
-            "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
-        )
-        .bind(&token_hash)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Err(password_reset_claim_error(row))
-    }
-}
 
 // ---------------------------------------------------------------------------
 // AtomicOps
@@ -1317,18 +1247,10 @@ mod tests {
         let pool = lazy_pool();
         let username: Username = "alice".parse().unwrap();
         let password: Password = "password123".parse().unwrap();
-        let now = Utc::now();
 
         let site_config = PostgresSiteConfigStorage::new(pool.clone());
         exercise(site_config.get("site.registration_policy")).await;
         exercise(site_config.set("site.registration_policy", "open")).await;
-
-        let password_resets = PostgresPasswordResetStorage::new(pool.clone());
-        exercise(password_resets.create_password_reset(1, now)).await;
-        assert!(matches!(
-            password_resets.use_password_reset("not-base64").await,
-            Err(UsePasswordResetError::NotFound)
-        ));
 
         let atomic = PostgresAtomicOps::new(pool.clone());
         exercise(atomic.create_user_with_invite(
