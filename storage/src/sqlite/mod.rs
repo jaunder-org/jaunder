@@ -18,19 +18,23 @@ pub use users::SqliteUserStorage;
 mod sessions;
 pub use sessions::SqliteSessionStorage;
 
+mod invites;
+pub use invites::SqliteInviteStorage;
+
+mod email_verifications;
+pub use email_verifications::SqliteEmailVerificationStorage;
+
 use crate::db::sql_slow_query_threshold;
 use crate::helpers::{
-    email_verification_claim_error, generate_hashed_token, invite_record_from_row,
-    media_record_from_row, password_reset_claim_error, post_record_from_row, InviteRow, MediaRow,
-    PostRow,
+    generate_hashed_token, media_record_from_row, password_reset_claim_error, post_record_from_row,
+    MediaRow, PostRow,
 };
 use crate::{
     AppState, AtomicOps, ConfirmPasswordResetError, CreateMediaError, CreatePostError,
-    CreatePostInput, DeleteMediaError, EmailVerificationStorage, InviteRecord, InviteStorage,
-    ListByTagError, MediaRecord, MediaSource, MediaStorage, PasswordResetStorage, PostCursor,
-    PostRecord, PostStorage, PostTag, RegisterWithInviteError, TagRecord, TaggingError,
-    UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
-    UsePasswordResetError, UserConfigStorage,
+    CreatePostInput, DeleteMediaError, ListByTagError, MediaRecord, MediaSource, MediaStorage,
+    PasswordResetStorage, PostCursor, PostRecord, PostStorage, PostTag, RegisterWithInviteError,
+    TagRecord, TaggingError, UpdatePostError, UpdatePostInput, UsePasswordResetError,
+    UserConfigStorage,
 };
 use common::password::Password;
 use common::slug::Slug;
@@ -87,190 +91,6 @@ pub(super) async fn open_sqlite_database(
 
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     Ok(make_app_state(pool))
-}
-
-// ---------------------------------------------------------------------------
-// Invites
-// ---------------------------------------------------------------------------
-
-/// SQLite-backed [`InviteStorage`].
-pub struct SqliteInviteStorage {
-    pool: SqlitePool,
-}
-
-impl SqliteInviteStorage {
-    #[must_use]
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait]
-impl InviteStorage for SqliteInviteStorage {
-    async fn create_invite(&self, expires_at: DateTime<Utc>) -> sqlx::Result<String> {
-        let code = crate::auth::generate_token();
-        let now = Utc::now();
-
-        sqlx::query("INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)")
-            .bind(&code)
-            .bind(now)
-            .bind(expires_at)
-            .execute(&self.pool)
-            .await?;
-
-        Ok(code)
-    }
-
-    async fn use_invite(&self, code: &str, user_id: i64) -> Result<(), UseInviteError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| UseInviteError::NotFound)?;
-
-        let row = sqlx::query_as::<_, InviteRow>(
-            "SELECT code, created_at, expires_at, used_at, used_by
-             FROM invites WHERE code = $1",
-        )
-        .bind(code)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|_| UseInviteError::NotFound)?
-        .ok_or(UseInviteError::NotFound)?;
-
-        let record = invite_record_from_row(row);
-
-        if record.used_at.is_some() {
-            return Err(UseInviteError::AlreadyUsed);
-        }
-
-        let now = Utc::now();
-        if record.expires_at <= now {
-            return Err(UseInviteError::Expired);
-        }
-
-        sqlx::query("UPDATE invites SET used_at = $1, used_by = $2 WHERE code = $3")
-            .bind(now)
-            .bind(user_id)
-            .bind(code)
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| UseInviteError::NotFound)?;
-
-        tx.commit().await.map_err(|_| UseInviteError::NotFound)?;
-
-        Ok(())
-    }
-
-    async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>> {
-        let rows = sqlx::query_as::<_, InviteRow>(
-            "SELECT code, created_at, expires_at, used_at, used_by FROM invites",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows.into_iter().map(invite_record_from_row).collect())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// EmailVerifications
-// ---------------------------------------------------------------------------
-
-/// SQLite-backed [`EmailVerificationStorage`].
-pub struct SqliteEmailVerificationStorage {
-    pool: SqlitePool,
-}
-
-impl SqliteEmailVerificationStorage {
-    #[must_use]
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait]
-impl EmailVerificationStorage for SqliteEmailVerificationStorage {
-    async fn create_email_verification(
-        &self,
-        user_id: i64,
-        email: &str,
-        expires_at: DateTime<Utc>,
-    ) -> sqlx::Result<String> {
-        let (raw_token, token_hash) = generate_hashed_token()?;
-        let now = Utc::now();
-
-        let mut tx = self.pool.begin().await?;
-
-        // Supersede any existing pending token for this user by setting its
-        // expires_at to its created_at, making it appear immediately expired.
-        sqlx::query(
-            "UPDATE email_verifications
-             SET expires_at = created_at
-             WHERE user_id = $1 AND used_at IS NULL AND expires_at > $2",
-        )
-        .bind(user_id)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            "INSERT INTO email_verifications
-             (token_hash, user_id, email, created_at, expires_at)
-             VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(&token_hash)
-        .bind(user_id)
-        .bind(email)
-        .bind(now)
-        .bind(expires_at)
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
-
-        Ok(raw_token)
-    }
-
-    async fn use_email_verification(
-        &self,
-        raw_token: &str,
-    ) -> Result<(i64, String), UseEmailVerificationError> {
-        let token_hash =
-            crate::auth::hash_token(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
-
-        let now = Utc::now();
-
-        // Atomically claim the token: the UPDATE succeeds only when the token
-        // exists, has not yet been used, and has not expired.  This single
-        // statement is the "claim" — no separate read is needed first, so two
-        // concurrent requests cannot both succeed.  RETURNING gives us the
-        // data we need without a second round-trip.
-        let claimed = sqlx::query_as::<_, (i64, String)>(
-            "UPDATE email_verifications SET used_at = $1
-             WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
-             RETURNING user_id, email",
-        )
-        .bind(now)
-        .bind(&token_hash)
-        .bind(now)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        if let Some((user_id, email)) = claimed {
-            return Ok((user_id, email));
-        }
-
-        // Zero rows affected — inspect the row to return the right error.
-        let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
-            "SELECT used_at, expires_at FROM email_verifications WHERE token_hash = $1",
-        )
-        .bind(&token_hash)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Err(email_verification_claim_error(row))
-    }
 }
 
 // ---------------------------------------------------------------------------
