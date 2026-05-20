@@ -14,118 +14,26 @@ pub use site_config::PostgresSiteConfigStorage;
 mod users;
 pub use users::PostgresUserStorage;
 
+mod sessions;
+pub use sessions::PostgresSessionStorage;
+
 use crate::helpers::{
     email_verification_claim_error, generate_hashed_token, invite_record_from_row,
-    media_record_from_row, password_reset_claim_error, post_record_from_row,
-    session_record_from_row, InviteRow, MediaRow, PostRow, SessionRow,
+    media_record_from_row, password_reset_claim_error, post_record_from_row, InviteRow, MediaRow,
+    PostRow,
 };
 use crate::{
     AtomicOps, ConfirmPasswordResetError, CreateMediaError, CreatePostError, CreatePostInput,
     DeleteMediaError, EmailVerificationStorage, InviteRecord, InviteStorage, ListByTagError,
     MediaRecord, MediaSource, MediaStorage, PasswordResetStorage, PostCursor, PostRecord,
-    PostStorage, PostTag, RegisterWithInviteError, SessionAuthError, SessionRecord, SessionStorage,
-    TagRecord, TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError,
-    UseInviteError, UsePasswordResetError, UserConfigStorage,
+    PostStorage, PostTag, RegisterWithInviteError, TagRecord, TaggingError, UpdatePostError,
+    UpdatePostInput, UseEmailVerificationError, UseInviteError, UsePasswordResetError,
+    UserConfigStorage,
 };
 use common::password::Password;
 use common::slug::Slug;
 use common::tag::Tag;
 use common::username::Username;
-
-// ---------------------------------------------------------------------------
-// Sessions
-// ---------------------------------------------------------------------------
-
-pub struct PostgresSessionStorage {
-    pool: PgPool,
-}
-
-impl PostgresSessionStorage {
-    #[must_use]
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait]
-impl SessionStorage for PostgresSessionStorage {
-    #[tracing::instrument(
-        name = "storage.postgres.session.create",
-        skip(self, label),
-        fields(user_id)
-    )]
-    async fn create_session(&self, user_id: i64, label: Option<&str>) -> sqlx::Result<String> {
-        let (raw_token, token_hash) = generate_hashed_token()?;
-        let now = Utc::now();
-
-        sqlx::query(
-            "INSERT INTO sessions (token_hash, user_id, label, created_at, last_used_at)
-             VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(&token_hash)
-        .bind(user_id)
-        .bind(label)
-        .bind(now)
-        .bind(now)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(raw_token)
-    }
-
-    #[tracing::instrument(name = "storage.postgres.session.authenticate", skip(self, raw_token))]
-    async fn authenticate(&self, raw_token: &str) -> Result<SessionRecord, SessionAuthError> {
-        let token_hash =
-            crate::auth::hash_token(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
-
-        let now = Utc::now();
-
-        // Perform an atomic update and read in a single statement.
-        // PostgreSQL's data-modifying CTEs (WITH UPDATE ...) are used
-        // here to achievement atomicity while joining the results with
-        // another table.
-        let row = sqlx::query_as::<_, SessionRow>(
-            "WITH updated AS (
-                UPDATE sessions
-                SET last_used_at = $1
-                WHERE token_hash = $2
-                RETURNING token_hash, user_id, label, created_at, last_used_at
-             )
-             SELECT updated.token_hash, updated.user_id, u.username, updated.label, updated.created_at, updated.last_used_at
-             FROM updated
-             JOIN users u ON updated.user_id = u.user_id",
-        )
-        .bind(now)
-        .bind(&token_hash)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or(SessionAuthError::SessionNotFound)?;
-
-        let record = session_record_from_row(row)?;
-        Ok(record)
-    }
-
-    #[tracing::instrument(name = "storage.postgres.session.revoke", skip(self, token_hash))]
-    async fn revoke_session(&self, token_hash: &str) -> sqlx::Result<()> {
-        sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
-            .bind(token_hash)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    async fn list_sessions(&self, user_id: i64) -> sqlx::Result<Vec<SessionRecord>> {
-        let rows = sqlx::query_as::<_, SessionRow>(
-            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
-             FROM sessions s JOIN users u ON s.user_id = u.user_id
-             WHERE s.user_id = $1",
-        )
-        .bind(user_id)
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter().map(session_record_from_row).collect()
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Invites
@@ -1404,7 +1312,7 @@ pub(crate) async fn postgres_pool() -> PgPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::helpers::{user_record_from_row, UserRow};
+    use crate::helpers::{session_record_from_row, user_record_from_row, SessionRow, UserRow};
     use crate::*;
     use chrono::Utc;
     use common::password::Password;
@@ -1575,15 +1483,6 @@ mod tests {
         let site_config = PostgresSiteConfigStorage::new(pool.clone());
         exercise(site_config.get("site.registration_policy")).await;
         exercise(site_config.set("site.registration_policy", "open")).await;
-
-        let sessions = PostgresSessionStorage::new(pool.clone());
-        exercise(sessions.create_session(1, Some("device"))).await;
-        assert!(matches!(
-            sessions.authenticate("not-base64").await,
-            Err(SessionAuthError::InvalidToken)
-        ));
-        exercise(sessions.revoke_session("token-hash")).await;
-        exercise(sessions.list_sessions(1)).await;
 
         let invites = PostgresInviteStorage::new(pool.clone());
         exercise(invites.create_invite(now)).await;

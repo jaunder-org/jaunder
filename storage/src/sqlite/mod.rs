@@ -15,19 +15,22 @@ pub use site_config::SqliteSiteConfigStorage;
 mod users;
 pub use users::SqliteUserStorage;
 
+mod sessions;
+pub use sessions::SqliteSessionStorage;
+
 use crate::db::sql_slow_query_threshold;
 use crate::helpers::{
     email_verification_claim_error, generate_hashed_token, invite_record_from_row,
-    media_record_from_row, password_reset_claim_error, post_record_from_row,
-    session_record_from_row, InviteRow, MediaRow, PostRow, SessionRow,
+    media_record_from_row, password_reset_claim_error, post_record_from_row, InviteRow, MediaRow,
+    PostRow,
 };
 use crate::{
     AppState, AtomicOps, ConfirmPasswordResetError, CreateMediaError, CreatePostError,
     CreatePostInput, DeleteMediaError, EmailVerificationStorage, InviteRecord, InviteStorage,
     ListByTagError, MediaRecord, MediaSource, MediaStorage, PasswordResetStorage, PostCursor,
-    PostRecord, PostStorage, PostTag, RegisterWithInviteError, SessionAuthError, SessionRecord,
-    SessionStorage, TagRecord, TaggingError, UpdatePostError, UpdatePostInput,
-    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserConfigStorage,
+    PostRecord, PostStorage, PostTag, RegisterWithInviteError, TagRecord, TaggingError,
+    UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserConfigStorage,
 };
 use common::password::Password;
 use common::slug::Slug;
@@ -84,110 +87,6 @@ pub(super) async fn open_sqlite_database(
 
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     Ok(make_app_state(pool))
-}
-
-// ---------------------------------------------------------------------------
-// Sessions
-// ---------------------------------------------------------------------------
-
-/// SQLite-backed [`SessionStorage`].
-pub struct SqliteSessionStorage {
-    pool: SqlitePool,
-}
-
-impl SqliteSessionStorage {
-    #[must_use]
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait]
-impl SessionStorage for SqliteSessionStorage {
-    #[tracing::instrument(
-        name = "storage.sqlite.session.create",
-        skip(self, label),
-        fields(user_id)
-    )]
-    async fn create_session(&self, user_id: i64, label: Option<&str>) -> sqlx::Result<String> {
-        let (raw_token, token_hash) = generate_hashed_token()?;
-        let now = Utc::now();
-
-        sqlx::query(
-            "INSERT INTO sessions (token_hash, user_id, label, created_at, last_used_at)
-             VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(&token_hash)
-        .bind(user_id)
-        .bind(label)
-        .bind(now)
-        .bind(now)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(raw_token)
-    }
-
-    #[tracing::instrument(name = "storage.sqlite.session.authenticate", skip(self, raw_token))]
-    async fn authenticate(&self, raw_token: &str) -> Result<SessionRecord, SessionAuthError> {
-        let token_hash =
-            crate::auth::hash_token(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
-
-        let now = Utc::now();
-
-        // Perform an atomic update and read in a single statement. This
-        // avoids the need for a multi-statement transaction, which can
-        // cause SQLITE_BUSY contention in high-concurrency environments.
-        //
-        // Note: SQLite's RETURNING clause is used with a correlated subquery
-        // Split the update and select into two operations to avoid the
-        // subquery overhead in the RETURNING clause and potentially
-        // reduce disk I/O contention.
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE sessions SET last_used_at = $1 WHERE token_hash = $2")
-            .bind(now)
-            .bind(&token_hash)
-            .execute(&mut *tx)
-            .await?;
-
-        let row = sqlx::query_as::<_, SessionRow>(
-            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
-             FROM sessions s
-             JOIN users u ON u.user_id = s.user_id
-             WHERE s.token_hash = $1",
-        )
-        .bind(&token_hash)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(SessionAuthError::SessionNotFound)?;
-
-        tx.commit().await?;
-
-        let record = session_record_from_row(row)?;
-        Ok(record)
-    }
-
-    #[tracing::instrument(name = "storage.sqlite.session.revoke", skip(self, token_hash))]
-    async fn revoke_session(&self, token_hash: &str) -> sqlx::Result<()> {
-        sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
-            .bind(token_hash)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    async fn list_sessions(&self, user_id: i64) -> sqlx::Result<Vec<SessionRecord>> {
-        let rows = sqlx::query_as::<_, SessionRow>(
-            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
-             FROM sessions s JOIN users u ON s.user_id = u.user_id
-             WHERE s.user_id = $1",
-        )
-        .bind(user_id)
-        .fetch_all(&self.pool)
-        .await?;
-
-        rows.into_iter().map(session_record_from_row).collect()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1425,6 +1324,66 @@ impl UserConfigStorage for SqliteUserConfigStorage {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError, UserStorage};
+
+    #[tokio::test]
+    async fn create_user_with_invite_hash_failure_returns_internal_error() {
+        let pool = sqlite_pool().await;
+        let now = chrono::Utc::now();
+        sqlx::query(
+            "INSERT INTO invites (code, created_at, expires_at) VALUES ('testcode', $1, $2)",
+        )
+        .bind(now)
+        .bind(now + chrono::Duration::hours(1))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let storage = SqliteAtomicOps::new(pool);
+        let username: common::username::Username = "alice".parse().unwrap();
+        let password: common::password::Password =
+            "force-hash-error-for-test-coverage".parse().unwrap();
+        let result = storage
+            .create_user_with_invite(&username, &password, None, false, "testcode")
+            .await;
+        assert!(matches!(result, Err(RegisterWithInviteError::Internal(_))));
+    }
+
+    #[tokio::test]
+    async fn confirm_password_reset_hash_failure_returns_internal_error() {
+        let pool = sqlite_pool().await;
+        let now = chrono::Utc::now();
+        let expires_at = now + chrono::Duration::hours(1);
+        let good_password: common::password::Password = "password123".parse().unwrap();
+        let user_id = SqliteUserStorage::new(pool.clone())
+            .create_user(&"alice".parse().unwrap(), &good_password, None, false)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at)
+             VALUES ('dGVzdA', $1, $2, $3)",
+        )
+        .bind(user_id)
+        .bind(now)
+        .bind(expires_at)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let storage = SqliteAtomicOps::new(pool);
+        let bad_password: common::password::Password =
+            "force-hash-error-for-test-coverage".parse().unwrap();
+        let result = storage
+            .confirm_password_reset("dGVzdA", &bad_password)
+            .await;
+        assert!(matches!(
+            result,
+            Err(ConfirmPasswordResetError::Internal(_))
+        ));
     }
 }
 

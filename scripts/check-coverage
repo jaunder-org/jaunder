@@ -42,7 +42,7 @@ if [[ "$INVESTIGATE" == "true" ]]; then
     echo "--- coverage: investigating cached report ---"
 else
     echo "--- coverage: running cargo llvm-cov ---"
-    cargo llvm-cov nextest > /dev/null
+    cargo llvm-cov nextest --show-progress none > /dev/null
     cargo llvm-cov report --text > "$REPORT_FILE"
 fi
 
