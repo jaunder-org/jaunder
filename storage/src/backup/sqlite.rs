@@ -390,4 +390,32 @@ mod tests {
         assert!(matches!(error, BackupError::ConstraintViolation(_)));
         Ok(())
     }
+
+    #[tokio::test]
+    async fn schema_version_returns_migration_count() -> Result<(), BackupError> {
+        let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:").await?;
+        sqlx::migrate!("./migrations/sqlite")
+            .run(&mut connection)
+            .await
+            .map_err(|e| BackupError::Io(std::io::Error::other(e.to_string())))?;
+        let version = schema_version(&mut connection).await?;
+        assert_eq!(version, 13, "expected one entry per migration file");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn schema_checksum_returns_nonempty_hex_string() -> Result<(), BackupError> {
+        let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:").await?;
+        sqlx::migrate!("./migrations/sqlite")
+            .run(&mut connection)
+            .await
+            .map_err(|e| BackupError::Io(std::io::Error::other(e.to_string())))?;
+        let checksum = schema_checksum(&mut connection).await?;
+        assert_eq!(checksum.len(), 64, "SHA-256 hex string must be 64 chars");
+        assert!(
+            checksum.chars().all(|c| c.is_ascii_hexdigit()),
+            "checksum must be lowercase hex"
+        );
+        Ok(())
+    }
 }
