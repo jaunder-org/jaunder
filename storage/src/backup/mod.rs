@@ -710,6 +710,23 @@ mod tests {
     }
 
     #[test]
+    fn previous_directory_backup_excludes_dirs_without_both_marker_files() -> Result<(), BackupError>
+    {
+        let temp = TempDir::new()?;
+        let current = temp.path().join("2026-04-30");
+        // Has manifest.json but no media/ — must not be treated as a valid previous backup.
+        let manifest_only = temp.path().join("2026-04-29");
+        fs::create_dir_all(&manifest_only)?;
+        fs::write(manifest_only.join("manifest.json"), "{}")?;
+        // Has media/ but no manifest.json — also invalid.
+        let media_only = temp.path().join("2026-04-28");
+        fs::create_dir_all(media_only.join("media"))?;
+
+        assert_eq!(previous_directory_backup(&current)?, None);
+        Ok(())
+    }
+
+    #[test]
     fn read_manifest_rejects_missing_manifest() -> Result<(), BackupError> {
         let temp = TempDir::new()?;
         let error = read_manifest(temp.path()).expect_err("missing manifest");
