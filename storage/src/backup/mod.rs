@@ -591,6 +591,31 @@ mod tests {
             "\"post_id\", \"tag_id\""
         );
         assert_eq!(
+            order_by_clause("sessions", quote_test_identifier),
+            "\"token_hash\""
+        );
+        assert_eq!(
+            order_by_clause("email_verifications", quote_test_identifier),
+            "\"token_hash\""
+        );
+        assert_eq!(
+            order_by_clause("password_resets", quote_test_identifier),
+            "\"token_hash\""
+        );
+        assert_eq!(
+            order_by_clause("invites", quote_test_identifier),
+            "\"code\""
+        );
+        assert_eq!(
+            order_by_clause("posts", quote_test_identifier),
+            "\"post_id\""
+        );
+        assert_eq!(
+            order_by_clause("post_revisions", quote_test_identifier),
+            "\"revision_id\""
+        );
+        assert_eq!(order_by_clause("tags", quote_test_identifier), "\"tag_id\"");
+        assert_eq!(
             order_by_clause("unknown", quote_test_identifier),
             "\"rowid\""
         );
