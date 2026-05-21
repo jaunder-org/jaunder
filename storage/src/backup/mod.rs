@@ -695,6 +695,17 @@ mod tests {
     }
 
     #[test]
+    fn files_have_same_content_returns_true_for_identical_files() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let a = temp.path().join("a.txt");
+        let b = temp.path().join("b.txt");
+        fs::write(&a, "identical")?;
+        fs::write(&b, "identical")?;
+        assert!(files_have_same_content(&a, &b)?);
+        Ok(())
+    }
+
+    #[test]
     fn previous_directory_backup_selects_latest_manifest_directory() -> Result<(), BackupError> {
         let temp = TempDir::new()?;
         let first = temp.path().join("2026-04-28");
