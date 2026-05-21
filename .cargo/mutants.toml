@@ -1,0 +1,25 @@
+# .cargo/mutants.toml
+
+# Skip files that are structurally untestable:
+# - main.rs: binary entry point, no unit tests possible
+# - hydrate/src/lib.rs: WASM client-side hydration, never runs in test harness
+# - server/src/observability.rs: logging/tracing setup, no logic to mutate
+# - server/src/assets.rs: static asset serving setup
+# - storage/src/postgres/**:  cargo nextest uses sqlite::memory:, so mutations
+#   to postgres code are never exercised by any test — every postgres mutant
+#   would survive, producing pure noise. Postgres coverage lives in the Nix
+#   VM e2e tests, which cargo mutants cannot drive.
+exclude_globs = [
+    "server/src/main.rs",
+    "hydrate/src/lib.rs",
+    "server/src/observability.rs",
+    "server/src/assets.rs",
+    "storage/src/postgres/**",
+    "storage/src/backup/postgres.rs",
+]
+
+# Auto-set timeout relative to baseline; add 20% headroom
+timeout_multiplier = 1.2
+
+# Cap lints so warning-as-errors don't make mutants unviable
+cap_lints = true
