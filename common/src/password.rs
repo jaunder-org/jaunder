@@ -111,7 +111,9 @@ mod tests {
     fn debug_does_not_expose_value() {
         let val = std::iter::repeat('a').take(10).collect::<String>();
         let p: Password = val.parse().unwrap();
-        assert!(!format!("{p:?}").contains(&val));
+        let debug_output = format!("{p:?}");
+        assert!(!debug_output.contains(&val));
+        assert_eq!(debug_output, "Password([redacted])");
     }
 
     #[test]
