@@ -14,6 +14,7 @@
   "server/src/mailer.rs": 94.7059,
   "server/src/main.rs": 94.0141,
   "server/src/media.rs": 92.1659,
+  "server/src/media_manager.rs": 98.4615,
   "server/src/observability.rs": 98.0469,
   "storage/src/auth.rs": 100,
   "storage/src/backup/mod.rs": 96.5414,
