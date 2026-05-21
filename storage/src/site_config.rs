@@ -13,6 +13,16 @@ pub trait SiteConfigStorage: Send + Sync {
 
     /// Sets or updates the value for a configuration key.
     async fn set(&self, key: &str, value: &str) -> sqlx::Result<()>;
+
+    /// Returns the integer value for a configuration key, or the default if not set/invalid.
+    async fn get_int(&self, key: &str, default: i64) -> i64 {
+        self.get(key)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(default)
+    }
 }
 
 /// Key for the site configuration setting for backup destination path.
