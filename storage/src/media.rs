@@ -157,6 +157,12 @@ mod tests {
         assert_eq!(MediaSource::Upload.as_str(), "upload");
         assert_eq!(MediaSource::Cached.as_str(), "cached");
     }
+
+    #[test]
+    fn media_source_display_produces_correct_string_for_each_variant() {
+        assert_eq!(MediaSource::Upload.to_string(), "upload");
+        assert_eq!(MediaSource::Cached.to_string(), "cached");
+    }
 }
 
 /// Key for the site configuration setting for maximum file upload size.
