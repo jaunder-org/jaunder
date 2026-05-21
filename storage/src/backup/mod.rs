@@ -648,6 +648,20 @@ mod tests {
     }
 
     #[test]
+    fn temporary_backup_directory_drop_removes_directory() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let destination = temp.path().join("backup");
+        let path = {
+            let tmp = TemporaryBackupDirectory::near(&destination)?;
+            let p = tmp.path().to_path_buf();
+            assert!(p.exists(), "directory should exist before drop");
+            p
+        };
+        assert!(!path.exists(), "directory should be removed after drop");
+        Ok(())
+    }
+
+    #[test]
     fn missing_media_directory_creates_empty_destination() -> Result<(), BackupError> {
         let temp = TempDir::new()?;
         let source = temp.path().join("missing");
