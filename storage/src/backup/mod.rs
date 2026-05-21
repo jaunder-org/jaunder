@@ -638,6 +638,16 @@ mod tests {
     }
 
     #[test]
+    fn ensure_absent_rejects_existing_path() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let existing = temp.path().join("exists");
+        fs::create_dir(&existing)?;
+        let error = ensure_absent(&existing);
+        assert!(matches!(error, Err(BackupError::DestinationExists(_))));
+        Ok(())
+    }
+
+    #[test]
     fn missing_media_directory_creates_empty_destination() -> Result<(), BackupError> {
         let temp = TempDir::new()?;
         let source = temp.path().join("missing");
