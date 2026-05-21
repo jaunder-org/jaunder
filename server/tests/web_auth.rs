@@ -867,6 +867,48 @@ async fn logout_clears_cookie_without_secure_attribute_when_disabled() {
 }
 
 #[tokio::test]
+async fn current_user_returns_username_when_authenticated() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"alice".parse::<Username>().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+
+    let cookie_header = format!("session={raw_token}");
+    let (status, _, body) = post_form(
+        Arc::clone(&state),
+        "/api/current_user",
+        "",
+        Some(&cookie_header),
+        true,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.trim(), "\"alice\"");
+}
+
+#[tokio::test]
+async fn current_user_returns_null_when_unauthenticated() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, _, body) =
+        post_form(Arc::clone(&state), "/api/current_user", "", None, true).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.trim(), "null");
+}
+
+#[tokio::test]
 async fn register_sets_cookie_without_secure_attribute_when_disabled() {
     let base = TempDir::new().unwrap();
     let state = test_state(&base).await;
