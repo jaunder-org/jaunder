@@ -963,6 +963,7 @@
             pkgs.cargo-generate
             pkgs.cargo-leptos
             pkgs.cargo-llvm-cov
+            pkgs.cargo-mutants
             pkgs.cargo-nextest
             pkgs.dart-sass
             pkgs.jq

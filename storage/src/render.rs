@@ -357,6 +357,105 @@ pub async fn perform_post_update(
 }
 
 // ---------------------------------------------------------------------------
+// High-level post-creation orchestration
+// ---------------------------------------------------------------------------
+
+/// Errors that can occur during high-level post creation.
+#[derive(Debug, Error)]
+pub enum PerformCreationError {
+    #[error("post body is required")]
+    EmptyPost,
+    #[error("post must contain at least one ASCII letter or digit for its slug")]
+    NoSlugFromPost,
+    #[error("{0}")]
+    InvalidSlug(String),
+    #[error("unable to allocate a unique slug after {0} attempts")]
+    Exhausted(usize),
+    #[error(transparent)]
+    Render(#[from] RenderError),
+    #[error("created post not found")]
+    CreatedNotFound,
+    #[error(transparent)]
+    Storage(sqlx::Error),
+}
+
+/// Generates a unique slug attempt using a suffix for attempts > 0.
+#[must_use]
+pub fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
+    if attempt == 0 {
+        slug_seed.to_owned()
+    } else {
+        format!("{slug_seed}-{}", attempt + 1)
+    }
+}
+
+/// Validates inputs, computes the slug, renders the body, and atomically
+/// creates the post in storage, retrying on slug collision.
+///
+/// # Errors
+///
+/// Returns `Err(PerformCreationError)` if rendering fails, slug validation
+/// fails, attempts to find a unique slug are exhausted, or storage fails.
+pub async fn perform_post_creation(
+    storage: &dyn PostStorage,
+    user_id: i64,
+    body: String,
+    format: PostFormat,
+    slug_override: Option<&str>,
+    published_at: Option<DateTime<Utc>>,
+    max_attempts: usize,
+) -> Result<PostRecord, PerformCreationError> {
+    let metadata =
+        derive_post_metadata(None, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
+
+    let slug_seed = match slug_override.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(raw) => raw
+            .to_ascii_lowercase()
+            .parse::<Slug>()
+            .map_err(|e| PerformCreationError::InvalidSlug(e.to_string()))?
+            .to_string(),
+        None => slugify_title(&metadata.slug_seed).ok_or(PerformCreationError::NoSlugFromPost)?,
+    };
+
+    for attempt in 0..max_attempts {
+        let slug_string = candidate_slug(&slug_seed, attempt);
+        let slug = slug_string
+            .parse::<Slug>()
+            .map_err(|e| PerformCreationError::InvalidSlug(e.to_string()))?;
+
+        match create_rendered_post(
+            storage,
+            user_id,
+            metadata.title.clone(),
+            slug,
+            body.clone(),
+            format.clone(),
+            published_at,
+        )
+        .await
+        {
+            Ok(post_id) => {
+                let record = storage
+                    .get_post_by_id(post_id)
+                    .await
+                    .map_err(PerformCreationError::Storage)?
+                    .ok_or(PerformCreationError::CreatedNotFound)?;
+                return Ok(record);
+            }
+            Err(CreateRenderedPostError::Storage(CreatePostError::SlugConflict)) => {}
+            Err(CreateRenderedPostError::Storage(CreatePostError::Internal(e))) => {
+                return Err(PerformCreationError::Storage(e));
+            }
+            Err(CreateRenderedPostError::Render(e)) => {
+                return Err(PerformCreationError::Render(e));
+            }
+        }
+    }
+
+    Err(PerformCreationError::Exhausted(max_attempts))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -724,6 +823,26 @@ mod tests {
     }
 
     #[test]
+    fn extract_org_title_skips_blank_lines_inside_kv_block() {
+        // Blank lines inside the KV header block must be skipped so the
+        // following heading is still recognized as the title. This pins the
+        // `if !past_kv_block { continue }` arm against a flipped-sign mutation.
+        let result = extract_org_title("\n#+AUTHOR: Me\n\n#+DATE: today\n* My Title\n\nBody");
+        assert_eq!(result, Some(("My Title".to_string(), "Body".to_string())));
+    }
+
+    #[test]
+    fn extract_org_title_blank_line_after_kv_without_title_returns_none() {
+        // A blank line that appears *after* a heading-less KV block should
+        // terminate the search with no title. This pins the
+        // `past_kv_block` arm in the empty-line branch.
+        let result = extract_org_title("#+AUTHOR: Me\n* Heading\n\nBody\n\nMore");
+        // Title should still come from the heading; trailing blank lines
+        // after a found title are appended to the body.
+        assert!(result.is_some());
+    }
+
+    #[test]
     fn extract_org_title_title_takes_precedence_over_heading() {
         let result = extract_org_title("#+TITLE: Meta\n* Heading\n\nBody");
         assert_eq!(
@@ -752,5 +871,234 @@ mod tests {
             derive_post_metadata(None, "* Org Heading\n\nBody text", &PostFormat::Org).unwrap();
         assert_eq!(metadata.title.as_deref(), Some("Org Heading"));
         assert_eq!(metadata.slug_seed, "Org Heading");
+    }
+
+    // -- perform_post_creation tests --
+
+    async fn setup_test_db() -> (sqlx::SqlitePool, crate::SqlitePostStorage) {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations/sqlite")
+            .run(&pool)
+            .await
+            .unwrap();
+
+        sqlx::query("INSERT INTO users (user_id, username, password_hash, created_at) VALUES (1, 'testuser', 'some_hash', '2026-05-20T12:00:00Z')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let storage = crate::SqlitePostStorage::new(pool.clone());
+        (pool, storage)
+    }
+
+    #[tokio::test]
+    async fn test_perform_post_creation_success() {
+        let (_pool, storage) = setup_test_db().await;
+        let record = perform_post_creation(
+            &storage,
+            1,
+            "Hello, world!".to_owned(),
+            PostFormat::Markdown,
+            None,
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(record.user_id, 1);
+        assert_eq!(record.slug.as_str(), "hello-world");
+        assert_eq!(record.body, "Hello, world!");
+        assert_eq!(record.format, PostFormat::Markdown);
+        assert!(record.rendered_html.contains("<p>Hello, world!</p>"));
+    }
+
+    #[tokio::test]
+    async fn test_perform_post_creation_slug_override() {
+        let (_pool, storage) = setup_test_db().await;
+        let record = perform_post_creation(
+            &storage,
+            1,
+            "Hello, world!".to_owned(),
+            PostFormat::Markdown,
+            Some("my-custom-slug"),
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(record.slug.as_str(), "my-custom-slug");
+    }
+
+    #[tokio::test]
+    async fn test_perform_post_creation_invalid_slug_override() {
+        let (_pool, storage) = setup_test_db().await;
+        let err = perform_post_creation(
+            &storage,
+            1,
+            "Hello, world!".to_owned(),
+            PostFormat::Markdown,
+            Some("Invalid Slug!"),
+            None,
+            100,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, PerformCreationError::InvalidSlug(_)));
+    }
+
+    #[tokio::test]
+    async fn test_perform_post_creation_empty_body() {
+        let (_pool, storage) = setup_test_db().await;
+        let err = perform_post_creation(
+            &storage,
+            1,
+            "   ".to_owned(),
+            PostFormat::Markdown,
+            None,
+            None,
+            100,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, PerformCreationError::EmptyPost));
+    }
+
+    #[tokio::test]
+    async fn test_perform_post_creation_no_slug_from_body() {
+        let (_pool, storage) = setup_test_db().await;
+        let err = perform_post_creation(
+            &storage,
+            1,
+            "!!!".to_owned(),
+            PostFormat::Markdown,
+            None,
+            None,
+            100,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, PerformCreationError::NoSlugFromPost));
+    }
+
+    #[tokio::test]
+    async fn test_perform_post_creation_slug_conflict_retries() {
+        let (_pool, storage) = setup_test_db().await;
+
+        let r1 = perform_post_creation(
+            &storage,
+            1,
+            "Hello, world!".to_owned(),
+            PostFormat::Markdown,
+            None,
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+
+        let r2 = perform_post_creation(
+            &storage,
+            1,
+            "Hello, world!".to_owned(),
+            PostFormat::Markdown,
+            None,
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+
+        let r3 = perform_post_creation(
+            &storage,
+            1,
+            "Hello, world!".to_owned(),
+            PostFormat::Markdown,
+            None,
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(r1.slug.as_str(), "hello-world");
+        assert_eq!(r2.slug.as_str(), "hello-world-2");
+        assert_eq!(r3.slug.as_str(), "hello-world-3");
+    }
+
+    #[tokio::test]
+    async fn test_perform_post_creation_slug_exhaustion() {
+        let (_pool, storage) = setup_test_db().await;
+
+        let r1 = perform_post_creation(
+            &storage,
+            1,
+            "Hello, world!".to_owned(),
+            PostFormat::Markdown,
+            None,
+            None,
+            2,
+        )
+        .await
+        .unwrap();
+
+        let r2 = perform_post_creation(
+            &storage,
+            1,
+            "Hello, world!".to_owned(),
+            PostFormat::Markdown,
+            None,
+            None,
+            2,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(r1.slug.as_str(), "hello-world");
+        assert_eq!(r2.slug.as_str(), "hello-world-2");
+
+        let err = perform_post_creation(
+            &storage,
+            1,
+            "Hello, world!".to_owned(),
+            PostFormat::Markdown,
+            None,
+            None,
+            2,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, PerformCreationError::Exhausted(2)));
+    }
+
+    #[test]
+    fn test_perform_creation_error_display_and_debug() {
+        let err = PerformCreationError::EmptyPost;
+        assert_eq!(err.to_string(), "post body is required");
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("EmptyPost"));
+
+        let err = PerformCreationError::NoSlugFromPost;
+        assert_eq!(
+            err.to_string(),
+            "post must contain at least one ASCII letter or digit for its slug"
+        );
+
+        let err = PerformCreationError::InvalidSlug("invalid slug message".to_string());
+        assert_eq!(err.to_string(), "invalid slug message");
+
+        let err = PerformCreationError::Exhausted(10);
+        assert_eq!(
+            err.to_string(),
+            "unable to allocate a unique slug after 10 attempts"
+        );
+
+        let err = PerformCreationError::CreatedNotFound;
+        assert_eq!(err.to_string(), "created post not found");
     }
 }

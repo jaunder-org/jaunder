@@ -21,5 +21,7 @@ playwright/.cache/
 .worktrees/
 .coverage-report.json
 .coverage-report.txt
+mutants.out/
+mutants.out.old/
 
 /coverage-report.txt
