@@ -9,6 +9,7 @@ pub mod commands;
 pub mod context;
 pub mod mailer;
 pub mod media;
+pub mod media_manager;
 pub mod observability;
 
 use std::{
