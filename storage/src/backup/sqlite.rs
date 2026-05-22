@@ -304,6 +304,7 @@ fn quote_literal(value: &str) -> String {
 mod tests {
     use super::*;
     use sqlx::Connection;
+    use tempfile::TempDir;
 
     #[test]
     fn json_select_marks_boolean_values_as_json_booleans() {
@@ -363,6 +364,53 @@ mod tests {
             let query = sqlx::query("SELECT ?1");
             let _query = bind_json_value(query, &value);
         }
+    }
+
+    #[tokio::test]
+    async fn export_database_triggers_rollback_on_write_failure() -> Result<(), BackupError> {
+        let pool = SqlitePool::connect("sqlite::memory:").await?;
+        sqlx::migrate!("./migrations/sqlite")
+            .run(&pool)
+            .await
+            .map_err(|e| BackupError::Io(std::io::Error::other(e.to_string())))?;
+        let temp = TempDir::new()?;
+        // No "db" subdirectory — File::create in export_table will fail
+        let result = export_database(&pool, temp.path(), BackupMode::Directory).await;
+        assert!(
+            result.is_err(),
+            "export should fail when db subdir is missing"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restore_database_triggers_rollback_on_import_failure() -> Result<(), BackupError> {
+        let pool = SqlitePool::connect("sqlite::memory:").await?;
+        sqlx::migrate!("./migrations/sqlite")
+            .run(&pool)
+            .await
+            .map_err(|e| BackupError::Io(std::io::Error::other(e.to_string())))?;
+        let temp = TempDir::new()?;
+        let backup_dir = temp.path().join("backup");
+        std::fs::create_dir_all(backup_dir.join("db"))?;
+        let manifest = export_database(&pool, &backup_dir, BackupMode::Directory).await?;
+
+        // Corrupt the first table's ndjson with a non-object row to trigger InvalidBackup
+        if let Some(first_table) = manifest.tables.first() {
+            use std::io::Write;
+            let ndjson_path = backup_dir.join("db").join(format!("{first_table}.ndjson"));
+            let mut file = std::fs::OpenOptions::new().append(true).open(ndjson_path)?;
+            writeln!(file, "[1, 2, 3]")?;
+        }
+
+        let dest_pool = SqlitePool::connect("sqlite::memory:").await?;
+        sqlx::migrate!("./migrations/sqlite")
+            .run(&dest_pool)
+            .await
+            .map_err(|e| BackupError::Io(std::io::Error::other(e.to_string())))?;
+        let result = restore_database(&dest_pool, &backup_dir, &manifest).await;
+        assert!(result.is_err(), "restore should fail on corrupted backup");
+        Ok(())
     }
 
     #[tokio::test]
