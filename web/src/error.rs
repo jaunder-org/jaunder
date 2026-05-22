@@ -218,7 +218,7 @@ pub fn error_with_sources(error: &(dyn Error + 'static)) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{error_with_sources, WebError};
+    use super::{error_with_sources, WebError, WebResult};
     #[cfg(feature = "ssr")]
     use super::{server_boundary, InternalError};
     use leptos::prelude::FromServerFnError;
@@ -423,6 +423,37 @@ mod tests {
                 message: "server operation failed".to_string()
             })
         );
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn internal_error_constructors_set_correct_public_variants() {
+        let unauth = InternalError::unauthorized("not allowed");
+        assert_eq!(unauth.public(), &WebError::Unauthorized);
+        assert_eq!(unauth.operator_message(), "not allowed");
+
+        let not_found = InternalError::not_found("Post");
+        assert_eq!(not_found.public(), &WebError::not_found("Post"));
+
+        let validation = InternalError::validation("bad input");
+        assert_eq!(validation.public(), &WebError::validation("bad input"));
+
+        let conflict = InternalError::conflict("already exists");
+        assert_eq!(conflict.public(), &WebError::conflict("already exists"));
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn into_public_consumes_error_and_returns_public_variant() {
+        let error = InternalError::unauthorized("reason");
+        assert_eq!(error.into_public(), WebError::Unauthorized);
+    }
+
+    #[cfg(feature = "ssr")]
+    #[tokio::test]
+    async fn server_boundary_passes_through_ok_value() {
+        let result: WebResult<u32> = server_boundary("test_fn", async { Ok(42) }).await;
+        assert_eq!(result, Ok(42));
     }
 
     #[cfg(feature = "ssr")]
