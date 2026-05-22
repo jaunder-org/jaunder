@@ -340,22 +340,14 @@ mod tests {
     }
 
     #[cfg(feature = "ssr")]
-    #[test]
-    fn server_boundary_logs_and_returns_public_error() {
-        use std::future::Future;
-        use std::task::{Context, Poll, Waker};
-
-        let mut future = Box::pin(server_boundary("test_fn", async {
+    #[tokio::test]
+    async fn server_boundary_logs_and_returns_public_error() {
+        let result: Result<(), WebError> = server_boundary("test_fn", async {
             Err(InternalError::storage(OuterError {
                 source: SourceError,
             }))
-        }));
-        let waker = Waker::noop();
-        let mut context = Context::from_waker(waker);
-        let result: Result<(), WebError> = match future.as_mut().poll(&mut context) {
-            Poll::Ready(result) => result,
-            Poll::Pending => panic!("server_boundary test future should complete immediately"),
-        };
+        })
+        .await;
 
         assert_eq!(
             result,
@@ -395,10 +387,8 @@ mod tests {
     }
 
     #[cfg(feature = "ssr")]
-    #[test]
-    fn server_boundary_evaluates_tracing_fields_when_subscriber_is_active() {
-        use std::future::Future;
-        use std::task::{Context, Poll, Waker};
+    #[tokio::test]
+    async fn server_boundary_evaluates_tracing_fields_when_subscriber_is_active() {
         use tracing_subscriber::fmt;
 
         let subscriber = fmt()
@@ -407,17 +397,12 @@ mod tests {
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
 
-        let mut future = Box::pin(server_boundary("test_fn", async {
+        let result = server_boundary("test_fn", async {
             Err::<(), _>(InternalError::server(OuterError {
                 source: SourceError,
             }))
-        }));
-        let waker = Waker::noop();
-        let mut context = Context::from_waker(waker);
-        let result = match future.as_mut().poll(&mut context) {
-            Poll::Ready(result) => result,
-            Poll::Pending => panic!("server_boundary test future should complete immediately"),
-        };
+        })
+        .await;
 
         assert_eq!(
             result,
