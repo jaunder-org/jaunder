@@ -192,10 +192,12 @@ pub async fn server_boundary<T>(
     match future.await {
         Ok(value) => Ok(value),
         Err(error) => {
+            let public = error.public();
+            let operator = error.operator_message();
             tracing::error!(
                 server_fn,
-                public_error = ?error.public(),
-                operator_message = %error.operator_message(),
+                public_error = ?public,
+                operator_message = %operator,
                 "server function failed"
             );
             Err(error.into_public())
