@@ -719,6 +719,25 @@ mod tests {
     }
 
     #[test]
+    fn files_have_same_content_returns_false_for_different_size_files() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let a = temp.path().join("a.txt");
+        let b = temp.path().join("b.txt");
+        fs::write(&a, "short")?;
+        fs::write(&b, "longer content")?;
+        assert!(!files_have_same_content(&a, &b)?);
+        Ok(())
+    }
+
+    #[test]
+    fn previous_directory_backup_returns_none_for_nonexistent_parent() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let destination = temp.path().join("nonexistent_parent").join("backup");
+        assert_eq!(previous_directory_backup(&destination)?, None);
+        Ok(())
+    }
+
+    #[test]
     fn files_have_same_content_returns_true_for_identical_files() -> Result<(), BackupError> {
         let temp = TempDir::new()?;
         let a = temp.path().join("a.txt");
