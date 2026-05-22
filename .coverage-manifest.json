@@ -17,7 +17,7 @@
   "server/src/media_manager.rs": 98.8462,
   "server/src/observability.rs": 98.0469,
   "storage/src/auth.rs": 100,
-  "storage/src/backup/mod.rs": 96.9317,
+  "storage/src/backup/mod.rs": 97.2678,
   "storage/src/backup/postgres.rs": 13.4454,
   "storage/src/backup/sqlite.rs": 96.2264,
   "storage/src/db.rs": 100,
