@@ -537,6 +537,163 @@ async fn upload_quota_exceeded_returns_507() {
 }
 
 #[tokio::test]
+async fn upload_at_max_file_size_boundary_succeeds() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    state
+        .site_config
+        .set("media.max_file_size_bytes", "5")
+        .await
+        .unwrap();
+
+    let user_id = state
+        .users
+        .create_user(
+            &"sizebound".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let storage = TempDir::new().unwrap();
+    let app = make_app(Arc::clone(&state), &storage).await;
+
+    let (boundary, body_bytes) = multipart_body("exact.txt", "text/plain", b"hello");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/media/upload")
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .header(header::COOKIE, cookie)
+                .body(Body::from(body_bytes))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::CREATED,
+        "file exactly at max size must be accepted"
+    );
+}
+
+#[tokio::test]
+async fn upload_one_byte_over_max_file_size_is_rejected() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    state
+        .site_config
+        .set("media.max_file_size_bytes", "5")
+        .await
+        .unwrap();
+
+    let user_id = state
+        .users
+        .create_user(
+            &"sizeover".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let storage = TempDir::new().unwrap();
+    let app = make_app(Arc::clone(&state), &storage).await;
+
+    let (boundary, body_bytes) = multipart_body("toobig.txt", "text/plain", b"hello!");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/media/upload")
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .header(header::COOKIE, cookie)
+                .body(Body::from(body_bytes))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "file one byte over max size must be rejected"
+    );
+}
+
+#[tokio::test]
+async fn upload_at_exact_quota_succeeds() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    state
+        .site_config
+        .set("media.user_quota_bytes", "5")
+        .await
+        .unwrap();
+
+    let user_id = state
+        .users
+        .create_user(
+            &"quotaexact".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let cookie = format!("session={token}");
+
+    let storage = TempDir::new().unwrap();
+    let app = make_app(Arc::clone(&state), &storage).await;
+
+    let (boundary, body_bytes) = multipart_body("quota.txt", "text/plain", b"hello");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/media/upload")
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .header(header::COOKIE, cookie)
+                .body(Body::from(body_bytes))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // current_usage (0) + 5 > 5 is false — upload must be accepted.
+    assert_eq!(
+        response.status(),
+        StatusCode::CREATED,
+        "file that exactly fills remaining quota must be accepted"
+    );
+}
+
+#[tokio::test]
 async fn proxy_rejects_mismatched_user_id() {
     let base = TempDir::new().unwrap();
     let state = test_state(&base).await;
