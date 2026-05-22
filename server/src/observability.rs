@@ -102,9 +102,11 @@ where
         let elapsed = started_at.0.elapsed();
         if let Some((elapsed_ms, threshold_ms)) = slow_span_values(elapsed, self.threshold) {
             let metadata = span.metadata();
+            let span_name = metadata.name();
+            let span_target = metadata.target();
             tracing::warn!(
-                span_name = metadata.name(),
-                span_target = metadata.target(),
+                span_name,
+                span_target,
                 elapsed_ms,
                 threshold_ms,
                 "slow span detected"
@@ -388,5 +390,16 @@ mod tests {
 
         let span = tracing::info_span!("fast_test_span");
         drop(span);
+    }
+
+    #[test]
+    fn lock_env_recovers_from_poisoned_mutex() {
+        // Poison ENV_LOCK by panicking while holding it inside catch_unwind.
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            panic!("poison the mutex");
+        });
+        // lock_env() must recover gracefully from the poisoned mutex.
+        let _guard = lock_env();
     }
 }
