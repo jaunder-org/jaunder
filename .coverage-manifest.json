@@ -1,7 +1,7 @@
 {
   "common/src/mailer.rs": 100,
-  "common/src/media.rs": 99.1071,
-  "common/src/password.rs": 98.5507,
+  "common/src/media.rs": 100,
+  "common/src/password.rs": 100,
   "common/src/slug.rs": 100,
   "common/src/tag.rs": 100,
   "common/src/username.rs": 100,
