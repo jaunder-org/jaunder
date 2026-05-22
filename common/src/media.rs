@@ -10,11 +10,7 @@ pub fn sanitize_filename(name: &str) -> String {
         return String::new();
     };
     let s = file_name.to_string_lossy();
-    let sanitized = s.replace('\0', "_");
-    if sanitized.is_empty() {
-        return String::new();
-    }
-    sanitized
+    s.replace('\0', "_")
 }
 
 /// Returns `"<source>/<p1>/<p2>/<full-sha256>/<filename>"`.
@@ -97,6 +93,7 @@ mod tests {
     #[test]
     fn sanitize_replaces_unsafe_chars() {
         assert_eq!(sanitize_filename("file\0name.txt"), "file_name.txt");
+        assert_eq!(sanitize_filename("\0"), "_");
     }
 
     #[test]

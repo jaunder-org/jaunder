@@ -149,4 +149,19 @@ mod tests {
         let p: Password = val.parse().unwrap();
         assert!(p.verify("not a valid argon2 hash").is_err());
     }
+
+    #[test]
+    fn verify_returns_error_for_non_password_argon2_failure() {
+        // v=1 is not a supported argon2 version (only 16 and 19 are valid).
+        // PasswordHash::new parses it; verify_password returns Error::Version,
+        // which is not Error::Password, so the Err(e) arm in verify() is hit.
+        let p: Password = "password1".parse().expect("minimum length");
+        let hash =
+            "$argon2id$v=1$m=65536,t=2,p=1$c29tZXNhbHQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let result = p.verify(hash);
+        assert!(
+            matches!(result.unwrap_err(), PasswordError::VerificationFailed(_)),
+            "non-Password argon2 error must return VerificationFailed"
+        );
+    }
 }
