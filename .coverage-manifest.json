@@ -34,7 +34,7 @@
   "storage/src/postgres/user_config.rs": 100,
   "storage/src/postgres/users.rs": 10.3448,
   "storage/src/posts.rs": 100,
-  "storage/src/render.rs": 98.3051,
+  "storage/src/render.rs": 98.7569,
   "storage/src/site_config.rs": 100,
   "storage/src/smtp.rs": 100,
   "storage/src/sqlite/email_verifications.rs": 100,

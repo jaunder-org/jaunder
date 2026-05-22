@@ -873,6 +873,37 @@ mod tests {
         assert_eq!(metadata.slug_seed, "Org Heading");
     }
 
+    #[test]
+    fn extract_org_title_empty_title_value_skipped_heading_used() {
+        // #+TITLE: with empty value: the empty-title branch falls through;
+        // key.starts_with("#+") is true so we continue and find the heading.
+        let result = extract_org_title("#+TITLE:\n* Heading\n\nBody");
+        assert_eq!(result, Some(("Heading".to_string(), "Body".to_string())));
+    }
+
+    #[test]
+    fn extract_org_title_non_kv_colon_line_returns_none() {
+        // "author: Me" has a colon but key doesn't start with #+.
+        // Falls through the split block to the heading check then return None.
+        let result = extract_org_title("author: Me\n* Heading\n\nBody");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn extract_org_title_empty_heading_returns_none() {
+        // "* " with nothing after the space: heading.trim() is empty,
+        // so the heading if-block is skipped and we fall to return None.
+        let result = extract_org_title("* ");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn perform_update_error_from_update_post_internal() {
+        use crate::UpdatePostError;
+        let err: PerformUpdateError = UpdatePostError::Internal(sqlx::Error::RowNotFound).into();
+        assert!(matches!(err, PerformUpdateError::Storage(_)));
+    }
+
     // -- perform_post_creation tests --
 
     async fn setup_test_db() -> (sqlx::SqlitePool, crate::SqlitePostStorage) {
