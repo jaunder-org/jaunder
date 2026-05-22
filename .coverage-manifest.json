@@ -19,7 +19,7 @@
   "storage/src/auth.rs": 100,
   "storage/src/backup/mod.rs": 97.2678,
   "storage/src/backup/postgres.rs": 13.4454,
-  "storage/src/backup/sqlite.rs": 96.2264,
+  "storage/src/backup/sqlite.rs": 98.8701,
   "storage/src/db.rs": 100,
   "storage/src/helpers.rs": 100,
   "storage/src/media.rs": 100,
