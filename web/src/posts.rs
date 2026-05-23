@@ -535,7 +535,6 @@ pub async fn list_posts_by_tag(
     limit: Option<u32>,
 ) -> WebResult<TimelinePage> {
     crate::web_server_fn!("list_posts_by_tag", tag, cursor_created_at, cursor_post_id, limit => {
-        use storage::ListByTagError;
         use common::tag::Tag;
 
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -552,14 +551,9 @@ pub async fn list_posts_by_tag(
         let page_size = limit.unwrap_or(50).clamp(1, 50);
         let fetch_limit = page_size.saturating_add(1);
 
-        let rows = match posts
-            .list_posts_by_tag(&tag_slug, cursor.as_ref(), fetch_limit)
-            .await
-        {
-            Ok(rows) => rows,
-            Err(ListByTagError::TagNotFound) => Vec::new(),
-            Err(ListByTagError::Internal(e)) => return Err(InternalError::storage(e)),
-        };
+        let rows = list_by_tag_rows(
+            posts.list_posts_by_tag(&tag_slug, cursor.as_ref(), fetch_limit).await,
+        )?;
 
         let has_more = rows.len() > page_size as usize;
         let mut rows = rows;
@@ -590,7 +584,6 @@ pub async fn list_user_posts_by_tag(
     limit: Option<u32>,
 ) -> WebResult<TimelinePage> {
     crate::web_server_fn!("list_user_posts_by_tag", username, tag, cursor_created_at, cursor_post_id, limit => {
-        use storage::ListByTagError;
         use common::tag::Tag;
 
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -618,14 +611,9 @@ pub async fn list_user_posts_by_tag(
         let page_size = limit.unwrap_or(50).clamp(1, 50);
         let fetch_limit = page_size.saturating_add(1);
 
-        let rows = match posts
-            .list_user_posts_by_tag(author.user_id, &tag_slug, cursor.as_ref(), fetch_limit)
-            .await
-        {
-            Ok(rows) => rows,
-            Err(ListByTagError::TagNotFound) => Vec::new(),
-            Err(ListByTagError::Internal(e)) => return Err(InternalError::storage(e)),
-        };
+        let rows = list_by_tag_rows(
+            posts.list_user_posts_by_tag(author.user_id, &tag_slug, cursor.as_ref(), fetch_limit).await,
+        )?;
 
         let has_more = rows.len() > page_size as usize;
         let mut rows = rows;
@@ -687,6 +675,17 @@ fn post_tags_to_summaries(tags: Vec<storage::PostTag>) -> Vec<TagSummary> {
             display: t.tag_display,
         })
         .collect()
+}
+
+#[cfg(feature = "ssr")]
+fn list_by_tag_rows(
+    result: Result<Vec<PostRecord>, storage::ListByTagError>,
+) -> InternalResult<Vec<PostRecord>> {
+    match result {
+        Ok(rows) => Ok(rows),
+        Err(storage::ListByTagError::TagNotFound) => Ok(Vec::new()),
+        Err(storage::ListByTagError::Internal(e)) => Err(InternalError::storage(e)),
+    }
 }
 
 /// Diff the existing tag set against `desired` (a Vec of validated display
@@ -1257,5 +1256,52 @@ mod tests {
             perform_creation_error(PerformCreationError::Storage(sqlx::Error::PoolClosed)).public(),
             WebError::Storage { .. }
         ));
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn list_by_tag_rows_maps_each_arm() {
+        use super::list_by_tag_rows;
+        use storage::ListByTagError;
+
+        let ok = list_by_tag_rows(Ok(vec![]));
+        assert!(ok.is_ok());
+
+        let tag_not_found = list_by_tag_rows(Err(ListByTagError::TagNotFound));
+        assert!(matches!(tag_not_found, Ok(rows) if rows.is_empty()));
+
+        let internal = list_by_tag_rows(Err(ListByTagError::Internal(sqlx::Error::PoolClosed)));
+        assert!(internal.is_err());
+    }
+
+    #[cfg(feature = "ssr")]
+    mod sqlite_storage_tests {
+        use super::super::{apply_post_tag_diff, find_draft_by_permalink_for_user};
+        use common::slug::Slug;
+
+        async fn in_memory_post_storage() -> storage::SqlitePostStorage {
+            let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+            sqlx::migrate!("../storage/migrations/sqlite")
+                .run(&pool)
+                .await
+                .unwrap();
+            storage::SqlitePostStorage::new(pool)
+        }
+
+        #[tokio::test]
+        async fn apply_post_tag_diff_skips_invalid_tag_display() {
+            let posts = in_memory_post_storage().await;
+            // "hello_world" contains an underscore → Tag::from_str fails → continue (line 721)
+            let result = apply_post_tag_diff(&posts, 1, &["hello_world".to_string()]).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn find_draft_by_permalink_for_user_returns_none_when_no_drafts() {
+            let posts = in_memory_post_storage().await;
+            let slug: Slug = "my-draft".parse().unwrap();
+            let result = find_draft_by_permalink_for_user(&posts, 1, 2026, 5, 22, &slug).await;
+            assert!(matches!(result, Ok(None)));
+        }
     }
 }
