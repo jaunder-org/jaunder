@@ -47,7 +47,7 @@
   "storage/src/sqlite/site_config.rs": 100,
   "storage/src/sqlite/user_config.rs": 100,
   "storage/src/sqlite/users.rs": 100,
-  "web/src/auth.rs": 98.1752,
+  "web/src/auth.rs": 100,
   "web/src/backup.rs": 98.227,
   "web/src/email.rs": 100,
   "web/src/error.rs": 100,

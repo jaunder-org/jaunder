@@ -745,6 +745,23 @@ async fn logout_with_bearer_token_revokes_session() {
     );
 }
 
+// Unauthenticated logout: no session cookie → skips revoke, still clears cookie.
+#[tokio::test]
+async fn logout_without_session_still_clears_cookie() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, set_cookie, _body) =
+        post_form(Arc::clone(&state), "/api/logout", "", None, true).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let clear_cookie = set_cookie.expect("Set-Cookie header should be present on logout");
+    assert!(
+        clear_cookie.contains("Max-Age=0"),
+        "logout should clear cookie via Max-Age=0, got: {clear_cookie}"
+    );
+}
+
 #[tokio::test]
 async fn debug_api_routes_exist() {
     let base = TempDir::new().unwrap();
