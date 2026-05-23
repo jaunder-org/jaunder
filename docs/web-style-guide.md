@@ -166,12 +166,12 @@ toolbar) into a second place, lift it into `ui.rs`.
 Two anti-patterns to avoid (both have caused production panics — see
 the saved `bd memories`):
 
-1. **`Effect::new_isomorphic` that copies a `Resource` into `RwSignal`s.**
+1. **`Effect::new_isomorphic` (or unwrapped `Effect::new`) that copies a `Resource` into `RwSignal`s.**
    The future can resolve on a tokio worker after the per-request
-   reactive owner is disposed, and the isomorphic effect fires
-   post-disposal. Use plain `Effect::new` so the seed happens only on
-   the client; SSR renders whatever placeholder the initial signal
-   values produce.
+   reactive owner is disposed. An isomorphic effect firing then would access disposed
+   signals and panic. Even a plain `Effect::new` runs its closure once initially on the server during SSR, and can rerun if the resource resolves before SSR finishes, causing random/flaky server-side test coverage (e.g., in `home.rs` or `posts.rs`).
+   
+   **Always wrap client-only `Effect::new` calls (and their containing blocks if necessary) in `#[cfg(target_arch = "wasm32")]`** so they are completely stripped from server-side compilation, ensuring 100% deterministic server-side test coverage and avoiding unnecessary execution.
 
 2. **SSR-eager `Resource` calling `expect_context::<Arc<AppState>>()`.**
    The same disposal race can hit the context lookup. Use
@@ -180,6 +180,6 @@ the saved `bd memories`):
    `LocalResource` as a structural fix; it never resolves inside an
    SSR-rendered `Suspense`.
 
-When in doubt, mirror `home.rs`: a plain `Effect::new` that copies the
+When in doubt, mirror `home.rs`: a plain `Effect::new` (gated with `#[cfg(target_arch = "wasm32")]`) that copies the
 resolved page into signals and only writes when the value actually
 changes (to prevent remounting child components).

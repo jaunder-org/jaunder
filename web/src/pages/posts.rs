@@ -221,6 +221,7 @@ pub fn UserTimelinePage() -> impl IntoView {
     let mutate_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let initial_page = Resource::new(
         move || (username.get(), mutate_version.get()),
         |(username, _)| async move {
@@ -244,6 +245,7 @@ pub fn UserTimelinePage() -> impl IntoView {
     // disposal because the Resource future can resolve on a tokio worker after
     // the per-request owner is gone, panicking on signal access. SSR renders
     // the loading placeholder; signals seed on the client after hydration.
+    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
@@ -267,6 +269,7 @@ pub fn UserTimelinePage() -> impl IntoView {
 
     // ServerAction dispatches happen only on the client, so this effect's body
     // never fires server-side; using `Effect::new` matches that reality.
+    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = load_more_action.value().get() {
             match result {
@@ -470,6 +473,7 @@ pub fn EditPostPage() -> impl IntoView {
     // ServerAction dispatches happen only on the client; this redirect-on-publish
     // effect only ever fires there. `Effect::new_isomorphic` would needlessly
     // schedule on the server.
+    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(Ok(ref updated)) = update_post_action.value().get() {
             if updated.published_at.is_some() {
@@ -846,6 +850,7 @@ pub fn SiteTagPage() -> impl IntoView {
     let mutate_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let initial_page = Resource::new(
         move || (tag.get(), mutate_version.get()),
         |(tag, _)| async move {
@@ -865,6 +870,7 @@ pub fn SiteTagPage() -> impl IntoView {
 
     let load_more_action = ServerAction::<ListPostsByTag>::new();
 
+    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
@@ -886,6 +892,7 @@ pub fn SiteTagPage() -> impl IntoView {
         }
     });
 
+    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = load_more_action.value().get() {
             match result {
@@ -988,6 +995,7 @@ pub fn UserTagPage() -> impl IntoView {
     let mutate_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let initial_page = Resource::new(
         move || (username.get(), tag.get(), mutate_version.get()),
         |(username, tag, _)| async move {
@@ -1010,6 +1018,7 @@ pub fn UserTagPage() -> impl IntoView {
 
     let load_more_action = ServerAction::<ListUserPostsByTag>::new();
 
+    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
@@ -1031,6 +1040,7 @@ pub fn UserTagPage() -> impl IntoView {
         }
     });
 
+    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = load_more_action.value().get() {
             match result {

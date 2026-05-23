@@ -151,6 +151,7 @@ pub fn LoginPage() -> impl IntoView {
 pub fn LogoutPage() -> impl IntoView {
     let logout_action = ServerAction::<Logout>::new();
 
+    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         logout_action.dispatch(Logout {});
     });
