@@ -123,7 +123,8 @@ pub async fn create_post(
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let validated_tags = crate::tags::parse_and_validate_tags(tags.unwrap_or_default())?;
+        let validated_tags = common::tag::parse_and_validate_tags(tags.unwrap_or_default())
+            .map_err(InternalError::validation)?;
 
         let format = format
             .parse::<PostFormat>()
@@ -144,9 +145,8 @@ pub async fn create_post(
 
         let created_at = record.created_at.to_rfc3339();
         let published_at_str = record.published_at.map(|timestamp| timestamp.to_rfc3339());
-        let permalink = record
-            .published_at
-            .map(|ts| build_permalink(&auth.username, ts, &record.slug));
+        // Only published posts have a public permalink. For drafts, the permalink is None.
+        let permalink = record.published_at.is_some().then(|| record.permalink());
         let preview_url = format!("/draft/{}/preview", record.post_id);
 
         let created = CreatePostResult {
@@ -265,7 +265,7 @@ pub async fn update_post(
         // Validate tags up-front so a malformed input rejects before any
         // post mutation lands.
         let new_tags = tags
-            .map(crate::tags::parse_and_validate_tags)
+            .map(|t| common::tag::parse_and_validate_tags(t).map_err(InternalError::validation))
             .transpose()?;
 
         let format = format
@@ -294,9 +294,8 @@ pub async fn update_post(
         }
 
         let published_at_str = record.published_at.map(|t| t.to_rfc3339());
-        let permalink = record
-            .published_at
-            .map(|ts| build_permalink(&auth.username, ts, &record.slug));
+        // Only published posts have a public permalink. For drafts, the permalink is None.
+        let permalink = record.published_at.is_some().then(|| record.permalink());
 
         Ok(UpdatePostResult {
             post_id,
@@ -329,11 +328,11 @@ pub async fn list_drafts(
         Ok(drafts
             .into_iter()
             .map(|draft| {
-                let permalink = build_permalink(&auth.username, draft.created_at, &draft.slug);
+                let permalink = draft.permalink();
                 DraftSummary {
                     post_id: draft.post_id,
                     title: draft.title.clone(),
-                    summary_label: fallback_summary_label(&draft),
+                    summary_label: draft.fallback_summary_label(),
                     slug: draft.slug.to_string(),
                     created_at: draft.created_at.to_rfc3339(),
                     updated_at: draft.updated_at.to_rfc3339(),
@@ -391,7 +390,7 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
             post_id: updated.post_id,
             slug: updated.slug.to_string(),
             published_at: published_at.to_rfc3339(),
-            permalink: build_permalink(&auth.username, published_at, &updated.slug),
+            permalink: updated.permalink(),
         })
     })
 }
@@ -638,6 +637,8 @@ fn timeline_post_summary(
     post: PostRecord,
     viewer_user_id: Option<i64>,
 ) -> Option<TimelinePostSummary> {
+    let published_at = post.published_at?;
+    let permalink = post.permalink();
     let PostRecord {
         post_id,
         user_id,
@@ -646,12 +647,9 @@ fn timeline_post_summary(
         slug,
         rendered_html,
         created_at,
-        published_at,
         tags,
         ..
     } = post;
-    let published_at = published_at?;
-    let permalink = build_permalink(&author_username, published_at, &slug);
     Some(TimelinePostSummary {
         post_id,
         username: author_username.to_string(),
@@ -747,7 +745,8 @@ fn to_post_cursor(post: &PostRecord) -> PostCursor {
 
 #[cfg(feature = "ssr")]
 fn post_response(post: PostRecord, is_author: bool) -> PostResponse {
-    use chrono::Datelike;
+    // Only published posts have a public permalink. For drafts, the permalink is None.
+    let permalink = post.published_at.is_some().then(|| post.permalink());
     let PostRecord {
         post_id,
         author_username,
@@ -761,16 +760,6 @@ fn post_response(post: PostRecord, is_author: bool) -> PostResponse {
         tags,
         ..
     } = post;
-    let permalink = published_at.as_ref().map(|t| {
-        format!(
-            "/~{}/{:04}/{:02}/{:02}/{}",
-            author_username.as_str(),
-            t.year(),
-            t.month(),
-            t.day(),
-            slug.as_str()
-        )
-    });
     PostResponse {
         post_id,
         username: author_username.to_string(),
@@ -786,18 +775,6 @@ fn post_response(post: PostRecord, is_author: bool) -> PostResponse {
         tags: post_tags_to_summaries(tags),
         permalink,
     }
-}
-
-#[cfg(feature = "ssr")]
-fn fallback_summary_label(post: &PostRecord) -> String {
-    post.body
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(|line| line.chars().take(100).collect::<String>())
-        .filter(|line| !line.is_empty())
-        .or_else(|| post.title.clone())
-        .unwrap_or_else(|| post.slug.to_string())
 }
 
 #[cfg(feature = "ssr")]
@@ -977,27 +954,12 @@ pub async fn unpublish_post(post_id: i64) -> WebResult<()> {
     })
 }
 
-#[cfg(feature = "ssr")]
-fn build_permalink(username: &Username, timestamp: chrono::DateTime<Utc>, slug: &Slug) -> String {
-    format!(
-        "/~{}/{:04}/{:02}/{:02}/{}",
-        username.as_str(),
-        timestamp.year(),
-        timestamp.month(),
-        timestamp.day(),
-        slug.as_str()
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use storage::candidate_slug;
 
     #[cfg(feature = "ssr")]
-    use super::{
-        build_permalink, fallback_summary_label, parse_post_cursor, post_response,
-        timeline_post_summary,
-    };
+    use super::{parse_post_cursor, post_response, timeline_post_summary};
     #[cfg(feature = "ssr")]
     use chrono::{TimeZone, Utc};
     #[cfg(feature = "ssr")]
@@ -1018,80 +980,9 @@ mod tests {
 
     #[cfg(feature = "ssr")]
     #[test]
-    fn build_permalink_formats_username_date_and_slug() {
-        let username = "author".parse::<Username>().unwrap();
-        let slug = "hello-world".parse::<Slug>().unwrap();
-        let timestamp = Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap();
-
-        let permalink = build_permalink(&username, timestamp, &slug);
-
-        assert_eq!(permalink, "/~author/2026/04/12/hello-world");
-    }
-
-    #[cfg(feature = "ssr")]
-    #[test]
     fn parse_post_cursor_accepts_empty_cursor() {
         let cursor = parse_post_cursor(None, None).unwrap();
         assert!(cursor.is_none());
-    }
-
-    #[cfg(feature = "ssr")]
-    #[test]
-    fn fallback_summary_label_prefers_body_then_title_then_slug() {
-        let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
-        let author_username = "author".parse::<Username>().unwrap();
-        let slug = "hello-world".parse::<Slug>().unwrap();
-
-        let body_label = fallback_summary_label(&PostRecord {
-            post_id: 1,
-            user_id: 2,
-            author_username: author_username.clone(),
-            title: Some("Stored Title".to_string()),
-            slug: slug.clone(),
-            body: "\nBody label\nmore".to_string(),
-            format: PostFormat::Markdown,
-            rendered_html: "<p>Body label</p>".to_string(),
-            created_at: base_time,
-            updated_at: base_time,
-            published_at: None,
-            deleted_at: None,
-            tags: vec![],
-        });
-        assert_eq!(body_label, "Body label");
-
-        let title_label = fallback_summary_label(&PostRecord {
-            post_id: 1,
-            user_id: 2,
-            author_username: author_username.clone(),
-            title: Some("Stored Title".to_string()),
-            slug: slug.clone(),
-            body: "".to_string(),
-            format: PostFormat::Markdown,
-            rendered_html: "".to_string(),
-            created_at: base_time,
-            updated_at: base_time,
-            published_at: None,
-            deleted_at: None,
-            tags: vec![],
-        });
-        assert_eq!(title_label, "Stored Title");
-
-        let slug_label = fallback_summary_label(&PostRecord {
-            post_id: 1,
-            user_id: 2,
-            author_username,
-            title: None,
-            slug,
-            body: "".to_string(),
-            format: PostFormat::Markdown,
-            rendered_html: "".to_string(),
-            created_at: base_time,
-            updated_at: base_time,
-            published_at: None,
-            deleted_at: None,
-            tags: vec![],
-        });
-        assert_eq!(slug_label, "hello-world");
     }
 
     #[cfg(feature = "ssr")]
