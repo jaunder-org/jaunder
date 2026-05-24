@@ -53,7 +53,7 @@
   "web/src/error.rs": 100,
   "web/src/invites/mod.rs": 100,
   "web/src/lib.rs": 100,
-  "web/src/media.rs": 100,
+  "web/src/media/mod.rs": 100,
   "web/src/pages/auth.rs": 82.1918,
   "web/src/pages/backup.rs": 0,
   "web/src/pages/email.rs": 0,
