@@ -1,15 +1,13 @@
 #[cfg(feature = "ssr")]
-use crate::auth::require_auth;
-#[cfg(feature = "ssr")]
-use crate::error::InternalError;
-use crate::error::WebResult;
-#[cfg(feature = "ssr")]
-use common::mailer::{EmailMessage, MailSender};
-#[cfg(feature = "ssr")]
-use std::sync::Arc;
-#[cfg(feature = "ssr")]
-use storage::{EmailVerificationStorage, UserStorage};
+use {
+    crate::auth::require_auth,
+    crate::error::InternalError,
+    common::mailer::{EmailMessage, MailSender},
+    std::sync::Arc,
+    storage::{EmailVerificationStorage, UserStorage},
+};
 
+use crate::error::WebResult;
 use leptos::prelude::*;
 
 /// Sends a verification email to `email`. Requires authentication.
@@ -18,7 +16,7 @@ use leptos::prelude::*;
 /// via the configured mailer.
 #[server(endpoint = "/request_email_verification")]
 pub async fn request_email_verification(email: String) -> WebResult<()> {
-    crate::web_server_fn!("request_email_verification", email => {
+    boundary!("request_email_verification", {
         let auth = require_auth().await?;
         let email_verifications = expect_context::<Arc<dyn EmailVerificationStorage>>();
         let mailer = expect_context::<Arc<dyn MailSender>>();
@@ -56,7 +54,7 @@ pub async fn request_email_verification(email: String) -> WebResult<()> {
 /// on the user account.
 #[server(endpoint = "/verify_email")]
 pub async fn verify_email(token: String) -> WebResult<()> {
-    crate::web_server_fn!("verify_email", token => {
+    boundary!("verify_email", {
         let email_verifications = expect_context::<Arc<dyn EmailVerificationStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
 
