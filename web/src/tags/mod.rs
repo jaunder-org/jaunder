@@ -3,13 +3,9 @@ use leptos::server_fn::codec::Json;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "ssr")]
-use crate::error::InternalError;
-use crate::error::WebResult;
+use {crate::error::InternalError, std::sync::Arc, storage::PostStorage};
 
-#[cfg(feature = "ssr")]
-use std::sync::Arc;
-#[cfg(feature = "ssr")]
-use storage::PostStorage;
+use crate::error::WebResult;
 
 /// Default number of suggestions returned to the autocomplete dropdown when
 /// the caller doesn't specify a limit.
@@ -39,15 +35,13 @@ pub struct TagSummary {
 /// defaults to [`DEFAULT_TAG_LIMIT`] and is clamped at [`MAX_TAG_LIMIT`].
 #[server(endpoint = "/list_tags", input = Json)]
 pub async fn list_tags(prefix: Option<String>, limit: Option<u32>) -> WebResult<Vec<TagSummary>> {
-    crate::web_server_fn!("list_tags", prefix, limit => {
+    boundary!("list_tags", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
         let resolved_limit = limit.unwrap_or(DEFAULT_TAG_LIMIT).clamp(1, MAX_TAG_LIMIT);
         let records = posts
             .list_tags(prefix.as_deref(), resolved_limit)
             .await
             .map_err(InternalError::storage)?;
-        // `display` mirrors the canonical slug for now; the next milestone step
-        // populates a real display string once the tag input emits one.
         Ok(records
             .into_iter()
             .map(|rec| TagSummary {
