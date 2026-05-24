@@ -1,28 +1,14 @@
-use crate::error::WebResult;
-#[cfg(feature = "ssr")]
 use crate::error::{InternalError, InternalResult};
-#[cfg(feature = "ssr")]
 use axum::{
     extract::FromRequestParts,
     http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
 };
-#[cfg(feature = "ssr")]
-use common::password::Password;
-#[cfg(feature = "ssr")]
 use common::username::Username;
-#[cfg(feature = "ssr")]
 use std::sync::Arc;
-#[cfg(feature = "ssr")]
-use storage::{
-    load_registration_policy, AppState, AtomicOps, RegistrationPolicy, SessionStorage,
-    SiteConfigStorage, UserStorage,
-};
-#[cfg(feature = "ssr")]
-use tracing::Instrument;
+use storage::AppState;
 
 /// Cookie settings derived from the public deployment scheme.
-#[cfg(feature = "ssr")]
 #[derive(Clone, Copy)]
 pub struct CookieSettings {
     pub secure: bool,
@@ -33,7 +19,6 @@ pub struct CookieSettings {
 // ---------------------------------------------------------------------------
 
 /// The authenticated user extracted from a valid session cookie or Bearer token.
-#[cfg(feature = "ssr")]
 #[derive(Debug)]
 pub struct AuthUser {
     pub user_id: i64,
@@ -41,7 +26,6 @@ pub struct AuthUser {
     pub token_hash: String,
 }
 
-#[cfg(feature = "ssr")]
 #[derive(Debug)]
 pub enum AuthRejection {
     MissingToken,
@@ -49,7 +33,6 @@ pub enum AuthRejection {
     Session(storage::SessionAuthError),
 }
 
-#[cfg(feature = "ssr")]
 impl IntoResponse for AuthRejection {
     fn into_response(self) -> Response {
         match self {
@@ -67,7 +50,6 @@ impl IntoResponse for AuthRejection {
     }
 }
 
-#[cfg(feature = "ssr")]
 impl<S> FromRequestParts<S> for AuthUser
 where
     S: Send + Sync,
@@ -121,7 +103,6 @@ where
 ///
 /// Returns `Err` if `parts` is `None` (missing Leptos request context) or if
 /// the session token is absent, invalid, or not found in storage.
-#[cfg(feature = "ssr")]
 pub async fn require_auth_with_parts(parts: Option<Parts>) -> InternalResult<AuthUser> {
     let mut parts = parts.ok_or_else(|| {
         InternalError::server_message("missing request Parts context in require_auth")
@@ -137,13 +118,11 @@ pub async fn require_auth_with_parts(parts: Option<Parts>) -> InternalResult<Aut
 /// # Errors
 ///
 /// Returns `Err` if the request is not authenticated (missing or invalid session token).
-#[cfg(feature = "ssr")]
 #[tracing::instrument(name = "web.auth.require_auth")]
 pub async fn require_auth() -> InternalResult<AuthUser> {
     require_auth_with_parts(leptos::context::use_context::<Parts>()).await
 }
 
-#[cfg(feature = "ssr")]
 fn auth_rejection_error(error: AuthRejection) -> InternalError {
     match error {
         AuthRejection::MissingToken => InternalError::unauthorized("missing session token"),
@@ -164,8 +143,7 @@ fn auth_rejection_error(error: AuthRejection) -> InternalError {
 // Cookie helpers
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "ssr")]
-fn set_session_cookie(raw_token: &str) {
+pub fn set_session_cookie(raw_token: &str) {
     use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
 
@@ -183,8 +161,7 @@ fn set_session_cookie(raw_token: &str) {
     }
 }
 
-#[cfg(feature = "ssr")]
-fn clear_session_cookie() {
+pub fn clear_session_cookie() {
     use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
 
@@ -203,30 +180,12 @@ fn clear_session_cookie() {
 }
 
 // ---------------------------------------------------------------------------
-// Server functions
+// Server function helpers
 // ---------------------------------------------------------------------------
-
-use leptos::prelude::*;
-
-/// Returns the site's current registration policy as a string.
-/// Possible values: `"open"`, `"invite_only"`, `"closed"`.
-#[server(endpoint = "/get_registration_policy")]
-#[cfg_attr(
-    feature = "ssr",
-    tracing::instrument(name = "web.auth.get_registration_policy")
-)]
-pub async fn get_registration_policy() -> WebResult<String> {
-    crate::web_server_fn!("get_registration_policy", => {
-        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-        let policy = load_registration_policy(&*site_config).await;
-        Ok(policy.to_string())
-    })
-}
 
 /// Maps a `require_auth` result to the `current_user` response shape:
 /// `Ok` → username, `Unauthorized` error → `None`, other errors propagate.
-#[cfg(feature = "ssr")]
-fn classify_current_user(result: InternalResult<AuthUser>) -> InternalResult<Option<String>> {
+pub fn classify_current_user(result: InternalResult<AuthUser>) -> InternalResult<Option<String>> {
     match result {
         Ok(auth) => Ok(Some(auth.username.to_string())),
         Err(error) if matches!(error.public(), crate::error::WebError::Unauthorized) => Ok(None),
@@ -234,147 +193,7 @@ fn classify_current_user(result: InternalResult<AuthUser>) -> InternalResult<Opt
     }
 }
 
-/// Returns the current logged-in username, if any.
-#[server(endpoint = "/current_user")]
-#[cfg_attr(feature = "ssr", tracing::instrument(name = "web.auth.current_user"))]
-pub async fn current_user() -> WebResult<Option<String>> {
-    crate::web_server_fn!("current_user", => {
-        classify_current_user(require_auth().await)
-    })
-}
-
-/// Registers a new user.  Returns the raw session token on success and sets
-/// the `session` cookie.
-#[server(endpoint = "/register")]
-#[cfg_attr(
-    feature = "ssr",
-    tracing::instrument(name = "web.auth.register", skip(password, invite_code))
-)]
-pub async fn register(
-    username: String,
-    password: String,
-    invite_code: Option<String>,
-) -> WebResult<String> {
-    crate::web_server_fn!("register", username, password, invite_code => {
-        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-        let users = expect_context::<Arc<dyn UserStorage>>();
-        let atomic = expect_context::<Arc<dyn AtomicOps>>();
-        let sessions = expect_context::<Arc<dyn SessionStorage>>();
-        let username = {
-            let _phase = tracing::info_span!("web.auth.register.parse_username").entered();
-            username
-                .to_lowercase()
-                .parse::<Username>()
-                .map_err(|e| InternalError::validation(e.to_string()))?
-        };
-        let password = {
-            let _phase = tracing::info_span!("web.auth.register.parse_password").entered();
-            password
-                .parse::<Password>()
-                .map_err(|e| InternalError::validation(e.to_string()))?
-        };
-        let policy = load_registration_policy(&*site_config)
-            .instrument(tracing::info_span!(
-                "web.auth.register.load_registration_policy"
-            ))
-            .await;
-
-        let user_id = match policy {
-            RegistrationPolicy::Open => users
-                .create_user(&username, &password, None, false)
-                .instrument(tracing::info_span!("web.auth.register.create_user_open"))
-                .await
-                .map_err(register_open_error)?,
-            RegistrationPolicy::InviteOnly => {
-                let code = invite_code
-                    .filter(|s| !s.is_empty())
-                    .ok_or_else(|| InternalError::validation("invite code required"))?;
-                atomic
-                    .create_user_with_invite(&username, &password, None, false, &code)
-                    .instrument(tracing::info_span!("web.auth.register.create_user_invite"))
-                    .await
-                    .map_err(register_invite_error)?
-            }
-            RegistrationPolicy::Closed => {
-                return Err(InternalError::validation("registration is closed"));
-            }
-        };
-
-        let raw_token = sessions
-            .create_session(user_id, None)
-            .instrument(tracing::info_span!("web.auth.register.create_session"))
-            .await
-            .map_err(InternalError::storage)?;
-
-        set_session_cookie(&raw_token);
-        leptos_axum::redirect("/");
-        Ok(raw_token)
-    })
-}
-
-/// Authenticates a user.  Returns the raw session token on success and sets
-/// the `session` cookie.
-#[server(endpoint = "/login")]
-#[cfg_attr(
-    feature = "ssr",
-    tracing::instrument(name = "web.auth.login", skip(password, label))
-)]
-pub async fn login(username: String, password: String, label: Option<String>) -> WebResult<String> {
-    crate::web_server_fn!("login", username, password, label => {
-        let users = expect_context::<Arc<dyn UserStorage>>();
-        let sessions = expect_context::<Arc<dyn SessionStorage>>();
-        let username = {
-            let _phase = tracing::info_span!("web.auth.login.parse_username").entered();
-            username
-                .to_lowercase()
-                .parse::<Username>()
-                .map_err(|e| InternalError::validation(e.to_string()))?
-        };
-        let password = {
-            let _phase = tracing::info_span!("web.auth.login.parse_password").entered();
-            password
-                .parse::<Password>()
-                .map_err(|e| InternalError::validation(e.to_string()))?
-        };
-        let record = users
-            .authenticate(&username, &password)
-            .instrument(tracing::info_span!("web.auth.login.authenticate_user"))
-            .await
-            .map_err(login_error)?;
-
-        let label = label.filter(|s| !s.is_empty());
-        let raw_token = sessions
-            .create_session(record.user_id, label.as_deref())
-            .instrument(tracing::info_span!("web.auth.login.create_session"))
-            .await
-            .map_err(InternalError::storage)?;
-
-        set_session_cookie(&raw_token);
-        leptos_axum::redirect("/");
-        Ok(raw_token)
-    })
-}
-
-/// Revokes the current session and clears the `session` cookie.
-#[server(endpoint = "/logout")]
-#[cfg_attr(feature = "ssr", tracing::instrument(name = "web.auth.logout"))]
-pub async fn logout() -> WebResult<()> {
-    crate::web_server_fn!("logout", => {
-        if let Ok(auth) = require_auth().await {
-            let sessions = expect_context::<Arc<dyn SessionStorage>>();
-            sessions
-                .revoke_session(&auth.token_hash)
-                .await
-                .map_err(InternalError::storage)?;
-        }
-        clear_session_cookie();
-        leptos_axum::redirect("/");
-        Ok(())
-    })
-}
-
-#[cfg(feature = "ssr")]
-fn register_open_error(error: storage::CreateUserError) -> InternalError {
+pub fn register_open_error(error: storage::CreateUserError) -> InternalError {
     match error {
         storage::CreateUserError::UsernameTaken => {
             InternalError::conflict("username is already taken")
@@ -383,8 +202,7 @@ fn register_open_error(error: storage::CreateUserError) -> InternalError {
     }
 }
 
-#[cfg(feature = "ssr")]
-fn register_invite_error(error: storage::RegisterWithInviteError) -> InternalError {
+pub fn register_invite_error(error: storage::RegisterWithInviteError) -> InternalError {
     match error {
         storage::RegisterWithInviteError::UsernameTaken => {
             InternalError::conflict("username is already taken")
@@ -402,8 +220,7 @@ fn register_invite_error(error: storage::RegisterWithInviteError) -> InternalErr
     }
 }
 
-#[cfg(feature = "ssr")]
-fn login_error(error: storage::UserAuthError) -> InternalError {
+pub fn login_error(error: storage::UserAuthError) -> InternalError {
     match error {
         storage::UserAuthError::InvalidCredentials => {
             InternalError::unauthorized("invalid credentials")
@@ -412,7 +229,7 @@ fn login_error(error: storage::UserAuthError) -> InternalError {
     }
 }
 
-#[cfg(all(test, feature = "ssr"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use leptos::prelude::{provide_context, Owner};
