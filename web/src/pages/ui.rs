@@ -1103,19 +1103,17 @@ pub fn TagInput(
                     error.set(Some(format!("Invalid tag \"{text}\"")));
                 }
             }
-            "Backspace" => {
-                if input_text.get().is_empty() {
-                    tags.update(|t| {
-                        t.pop();
-                    });
-                }
+            "Backspace" if input_text.get().is_empty() => {
+                tags.update(|t| {
+                    t.pop();
+                });
             }
             "ArrowDown" => {
                 ev.prevent_default();
                 let len = suggestions.get().len();
                 if len > 0 {
                     selected_idx.update(|i| {
-                        *i = Some(i.map(|n| (n + 1).min(len - 1)).unwrap_or(0));
+                        *i = Some(i.map_or(0, |n| (n + 1).min(len - 1)));
                     });
                 }
             }
