@@ -199,8 +199,7 @@ pub async fn get_post(
         {
             let is_author = require_auth()
                 .await
-                .map(|auth| auth.user_id == post.user_id)
-                .unwrap_or(false);
+                .is_ok_and(|auth| auth.user_id == post.user_id);
             return Ok(post_response(post, is_author));
         }
 
