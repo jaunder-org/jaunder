@@ -114,6 +114,23 @@ where
     }
 }
 
+/// Inner implementation of [`require_auth`] — accepts the already-extracted
+/// `Parts` option so pure unit tests can exercise the missing-context path.
+///
+/// # Errors
+///
+/// Returns `Err` if `parts` is `None` (missing Leptos request context) or if
+/// the session token is absent, invalid, or not found in storage.
+#[cfg(feature = "ssr")]
+pub async fn require_auth_with_parts(parts: Option<Parts>) -> InternalResult<AuthUser> {
+    let mut parts = parts.ok_or_else(|| {
+        InternalError::server_message("missing request Parts context in require_auth")
+    })?;
+    AuthUser::from_request_parts(&mut parts, &())
+        .await
+        .map_err(auth_rejection_error)
+}
+
 /// Extracts the authenticated user inside a Leptos server function.
 /// Returns an internal auth error when no valid session is present.
 ///
@@ -123,13 +140,7 @@ where
 #[cfg(feature = "ssr")]
 #[tracing::instrument(name = "web.auth.require_auth")]
 pub async fn require_auth() -> InternalResult<AuthUser> {
-    let mut parts = leptos::context::use_context::<Parts>().ok_or_else(|| {
-        InternalError::server_message("missing request Parts context in require_auth")
-    })?;
-
-    AuthUser::from_request_parts(&mut parts, &())
-        .await
-        .map_err(auth_rejection_error)
+    require_auth_with_parts(leptos::context::use_context::<Parts>()).await
 }
 
 #[cfg(feature = "ssr")]
@@ -212,16 +223,23 @@ pub async fn get_registration_policy() -> WebResult<String> {
     })
 }
 
+/// Maps a `require_auth` result to the `current_user` response shape:
+/// `Ok` → username, `Unauthorized` error → `None`, other errors propagate.
+#[cfg(feature = "ssr")]
+fn classify_current_user(result: InternalResult<AuthUser>) -> InternalResult<Option<String>> {
+    match result {
+        Ok(auth) => Ok(Some(auth.username.to_string())),
+        Err(error) if matches!(error.public(), crate::error::WebError::Unauthorized) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 /// Returns the current logged-in username, if any.
 #[server(endpoint = "/current_user")]
 #[cfg_attr(feature = "ssr", tracing::instrument(name = "web.auth.current_user"))]
 pub async fn current_user() -> WebResult<Option<String>> {
     crate::web_server_fn!("current_user", => {
-        match require_auth().await {
-            Ok(auth) => Ok(Some(auth.username.to_string())),
-            Err(error) if matches!(error.public(), crate::error::WebError::Unauthorized) => Ok(None),
-            Err(error) => Err(error),
-        }
+        classify_current_user(require_auth().await)
     })
 }
 
@@ -524,5 +542,29 @@ mod tests {
             invalid.public(),
             crate::error::WebError::Unauthorized
         ));
+    }
+
+    #[tokio::test]
+    async fn require_auth_with_parts_returns_server_error_when_parts_missing() {
+        let result = require_auth_with_parts(None).await;
+        assert!(
+            matches!(result, Err(e) if matches!(e.public(), crate::error::WebError::Server { .. }))
+        );
+    }
+
+    #[test]
+    fn classify_current_user_returns_none_for_unauthorized_error() {
+        let err = InternalError::unauthorized("test");
+        let result = classify_current_user(Err(err));
+        assert!(matches!(result, Ok(None)));
+    }
+
+    #[test]
+    fn classify_current_user_propagates_non_unauthorized_errors() {
+        let err = InternalError::storage(sqlx::Error::PoolClosed);
+        let result = classify_current_user(Err(err));
+        assert!(
+            matches!(result, Err(e) if matches!(e.public(), crate::error::WebError::Storage { .. }))
+        );
     }
 }

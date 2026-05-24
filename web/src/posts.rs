@@ -123,7 +123,8 @@ pub async fn create_post(
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let validated_tags = crate::tags::parse_and_validate_tags(tags.unwrap_or_default())?;
+        let validated_tags = common::tag::parse_and_validate_tags(tags.unwrap_or_default())
+            .map_err(InternalError::validation)?;
 
         let format = format
             .parse::<PostFormat>()
@@ -144,9 +145,8 @@ pub async fn create_post(
 
         let created_at = record.created_at.to_rfc3339();
         let published_at_str = record.published_at.map(|timestamp| timestamp.to_rfc3339());
-        let permalink = record
-            .published_at
-            .map(|ts| build_permalink(&auth.username, ts, &record.slug));
+        // Only published posts have a public permalink. For drafts, the permalink is None.
+        let permalink = record.published_at.is_some().then(|| record.permalink());
         let preview_url = format!("/draft/{}/preview", record.post_id);
 
         let created = CreatePostResult {
@@ -199,8 +199,7 @@ pub async fn get_post(
         {
             let is_author = require_auth()
                 .await
-                .map(|auth| auth.user_id == post.user_id)
-                .unwrap_or(false);
+                .is_ok_and(|auth| auth.user_id == post.user_id);
             return Ok(post_response(post, is_author));
         }
 
@@ -266,7 +265,7 @@ pub async fn update_post(
         // Validate tags up-front so a malformed input rejects before any
         // post mutation lands.
         let new_tags = tags
-            .map(crate::tags::parse_and_validate_tags)
+            .map(|t| common::tag::parse_and_validate_tags(t).map_err(InternalError::validation))
             .transpose()?;
 
         let format = format
@@ -295,9 +294,8 @@ pub async fn update_post(
         }
 
         let published_at_str = record.published_at.map(|t| t.to_rfc3339());
-        let permalink = record
-            .published_at
-            .map(|ts| build_permalink(&auth.username, ts, &record.slug));
+        // Only published posts have a public permalink. For drafts, the permalink is None.
+        let permalink = record.published_at.is_some().then(|| record.permalink());
 
         Ok(UpdatePostResult {
             post_id,
@@ -330,11 +328,11 @@ pub async fn list_drafts(
         Ok(drafts
             .into_iter()
             .map(|draft| {
-                let permalink = build_permalink(&auth.username, draft.created_at, &draft.slug);
+                let permalink = draft.permalink();
                 DraftSummary {
                     post_id: draft.post_id,
                     title: draft.title.clone(),
-                    summary_label: fallback_summary_label(&draft),
+                    summary_label: draft.fallback_summary_label(),
                     slug: draft.slug.to_string(),
                     created_at: draft.created_at.to_rfc3339(),
                     updated_at: draft.updated_at.to_rfc3339(),
@@ -392,7 +390,7 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
             post_id: updated.post_id,
             slug: updated.slug.to_string(),
             published_at: published_at.to_rfc3339(),
-            permalink: build_permalink(&auth.username, published_at, &updated.slug),
+            permalink: updated.permalink(),
         })
     })
 }
@@ -535,7 +533,6 @@ pub async fn list_posts_by_tag(
     limit: Option<u32>,
 ) -> WebResult<TimelinePage> {
     crate::web_server_fn!("list_posts_by_tag", tag, cursor_created_at, cursor_post_id, limit => {
-        use storage::ListByTagError;
         use common::tag::Tag;
 
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -552,14 +549,9 @@ pub async fn list_posts_by_tag(
         let page_size = limit.unwrap_or(50).clamp(1, 50);
         let fetch_limit = page_size.saturating_add(1);
 
-        let rows = match posts
-            .list_posts_by_tag(&tag_slug, cursor.as_ref(), fetch_limit)
-            .await
-        {
-            Ok(rows) => rows,
-            Err(ListByTagError::TagNotFound) => Vec::new(),
-            Err(ListByTagError::Internal(e)) => return Err(InternalError::storage(e)),
-        };
+        let rows = list_by_tag_rows(
+            posts.list_posts_by_tag(&tag_slug, cursor.as_ref(), fetch_limit).await,
+        )?;
 
         let has_more = rows.len() > page_size as usize;
         let mut rows = rows;
@@ -590,7 +582,6 @@ pub async fn list_user_posts_by_tag(
     limit: Option<u32>,
 ) -> WebResult<TimelinePage> {
     crate::web_server_fn!("list_user_posts_by_tag", username, tag, cursor_created_at, cursor_post_id, limit => {
-        use storage::ListByTagError;
         use common::tag::Tag;
 
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -618,14 +609,9 @@ pub async fn list_user_posts_by_tag(
         let page_size = limit.unwrap_or(50).clamp(1, 50);
         let fetch_limit = page_size.saturating_add(1);
 
-        let rows = match posts
-            .list_user_posts_by_tag(author.user_id, &tag_slug, cursor.as_ref(), fetch_limit)
-            .await
-        {
-            Ok(rows) => rows,
-            Err(ListByTagError::TagNotFound) => Vec::new(),
-            Err(ListByTagError::Internal(e)) => return Err(InternalError::storage(e)),
-        };
+        let rows = list_by_tag_rows(
+            posts.list_user_posts_by_tag(author.user_id, &tag_slug, cursor.as_ref(), fetch_limit).await,
+        )?;
 
         let has_more = rows.len() > page_size as usize;
         let mut rows = rows;
@@ -651,6 +637,8 @@ fn timeline_post_summary(
     post: PostRecord,
     viewer_user_id: Option<i64>,
 ) -> Option<TimelinePostSummary> {
+    let published_at = post.published_at?;
+    let permalink = post.permalink();
     let PostRecord {
         post_id,
         user_id,
@@ -659,12 +647,9 @@ fn timeline_post_summary(
         slug,
         rendered_html,
         created_at,
-        published_at,
         tags,
         ..
     } = post;
-    let published_at = published_at?;
-    let permalink = build_permalink(&author_username, published_at, &slug);
     Some(TimelinePostSummary {
         post_id,
         username: author_username.to_string(),
@@ -687,6 +672,17 @@ fn post_tags_to_summaries(tags: Vec<storage::PostTag>) -> Vec<TagSummary> {
             display: t.tag_display,
         })
         .collect()
+}
+
+#[cfg(feature = "ssr")]
+fn list_by_tag_rows(
+    result: Result<Vec<PostRecord>, storage::ListByTagError>,
+) -> InternalResult<Vec<PostRecord>> {
+    match result {
+        Ok(rows) => Ok(rows),
+        Err(storage::ListByTagError::TagNotFound) => Ok(Vec::new()),
+        Err(storage::ListByTagError::Internal(e)) => Err(InternalError::storage(e)),
+    }
 }
 
 /// Diff the existing tag set against `desired` (a Vec of validated display
@@ -749,7 +745,8 @@ fn to_post_cursor(post: &PostRecord) -> PostCursor {
 
 #[cfg(feature = "ssr")]
 fn post_response(post: PostRecord, is_author: bool) -> PostResponse {
-    use chrono::Datelike;
+    // Only published posts have a public permalink. For drafts, the permalink is None.
+    let permalink = post.published_at.is_some().then(|| post.permalink());
     let PostRecord {
         post_id,
         author_username,
@@ -763,16 +760,6 @@ fn post_response(post: PostRecord, is_author: bool) -> PostResponse {
         tags,
         ..
     } = post;
-    let permalink = published_at.as_ref().map(|t| {
-        format!(
-            "/~{}/{:04}/{:02}/{:02}/{}",
-            author_username.as_str(),
-            t.year(),
-            t.month(),
-            t.day(),
-            slug.as_str()
-        )
-    });
     PostResponse {
         post_id,
         username: author_username.to_string(),
@@ -788,18 +775,6 @@ fn post_response(post: PostRecord, is_author: bool) -> PostResponse {
         tags: post_tags_to_summaries(tags),
         permalink,
     }
-}
-
-#[cfg(feature = "ssr")]
-fn fallback_summary_label(post: &PostRecord) -> String {
-    post.body
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(|line| line.chars().take(100).collect::<String>())
-        .filter(|line| !line.is_empty())
-        .or_else(|| post.title.clone())
-        .unwrap_or_else(|| post.slug.to_string())
 }
 
 #[cfg(feature = "ssr")]
@@ -979,27 +954,12 @@ pub async fn unpublish_post(post_id: i64) -> WebResult<()> {
     })
 }
 
-#[cfg(feature = "ssr")]
-fn build_permalink(username: &Username, timestamp: chrono::DateTime<Utc>, slug: &Slug) -> String {
-    format!(
-        "/~{}/{:04}/{:02}/{:02}/{}",
-        username.as_str(),
-        timestamp.year(),
-        timestamp.month(),
-        timestamp.day(),
-        slug.as_str()
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use storage::candidate_slug;
 
     #[cfg(feature = "ssr")]
-    use super::{
-        build_permalink, fallback_summary_label, parse_post_cursor, post_response,
-        timeline_post_summary,
-    };
+    use super::{parse_post_cursor, post_response, timeline_post_summary};
     #[cfg(feature = "ssr")]
     use chrono::{TimeZone, Utc};
     #[cfg(feature = "ssr")]
@@ -1020,80 +980,9 @@ mod tests {
 
     #[cfg(feature = "ssr")]
     #[test]
-    fn build_permalink_formats_username_date_and_slug() {
-        let username = "author".parse::<Username>().unwrap();
-        let slug = "hello-world".parse::<Slug>().unwrap();
-        let timestamp = Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap();
-
-        let permalink = build_permalink(&username, timestamp, &slug);
-
-        assert_eq!(permalink, "/~author/2026/04/12/hello-world");
-    }
-
-    #[cfg(feature = "ssr")]
-    #[test]
     fn parse_post_cursor_accepts_empty_cursor() {
         let cursor = parse_post_cursor(None, None).unwrap();
         assert!(cursor.is_none());
-    }
-
-    #[cfg(feature = "ssr")]
-    #[test]
-    fn fallback_summary_label_prefers_body_then_title_then_slug() {
-        let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
-        let author_username = "author".parse::<Username>().unwrap();
-        let slug = "hello-world".parse::<Slug>().unwrap();
-
-        let body_label = fallback_summary_label(&PostRecord {
-            post_id: 1,
-            user_id: 2,
-            author_username: author_username.clone(),
-            title: Some("Stored Title".to_string()),
-            slug: slug.clone(),
-            body: "\nBody label\nmore".to_string(),
-            format: PostFormat::Markdown,
-            rendered_html: "<p>Body label</p>".to_string(),
-            created_at: base_time,
-            updated_at: base_time,
-            published_at: None,
-            deleted_at: None,
-            tags: vec![],
-        });
-        assert_eq!(body_label, "Body label");
-
-        let title_label = fallback_summary_label(&PostRecord {
-            post_id: 1,
-            user_id: 2,
-            author_username: author_username.clone(),
-            title: Some("Stored Title".to_string()),
-            slug: slug.clone(),
-            body: "".to_string(),
-            format: PostFormat::Markdown,
-            rendered_html: "".to_string(),
-            created_at: base_time,
-            updated_at: base_time,
-            published_at: None,
-            deleted_at: None,
-            tags: vec![],
-        });
-        assert_eq!(title_label, "Stored Title");
-
-        let slug_label = fallback_summary_label(&PostRecord {
-            post_id: 1,
-            user_id: 2,
-            author_username,
-            title: None,
-            slug,
-            body: "".to_string(),
-            format: PostFormat::Markdown,
-            rendered_html: "".to_string(),
-            created_at: base_time,
-            updated_at: base_time,
-            published_at: None,
-            deleted_at: None,
-            tags: vec![],
-        });
-        assert_eq!(slug_label, "hello-world");
     }
 
     #[cfg(feature = "ssr")]
@@ -1257,5 +1146,52 @@ mod tests {
             perform_creation_error(PerformCreationError::Storage(sqlx::Error::PoolClosed)).public(),
             WebError::Storage { .. }
         ));
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn list_by_tag_rows_maps_each_arm() {
+        use super::list_by_tag_rows;
+        use storage::ListByTagError;
+
+        let ok = list_by_tag_rows(Ok(vec![]));
+        assert!(ok.is_ok());
+
+        let tag_not_found = list_by_tag_rows(Err(ListByTagError::TagNotFound));
+        assert!(matches!(tag_not_found, Ok(rows) if rows.is_empty()));
+
+        let internal = list_by_tag_rows(Err(ListByTagError::Internal(sqlx::Error::PoolClosed)));
+        assert!(internal.is_err());
+    }
+
+    #[cfg(feature = "ssr")]
+    mod sqlite_storage_tests {
+        use super::super::{apply_post_tag_diff, find_draft_by_permalink_for_user};
+        use common::slug::Slug;
+
+        async fn in_memory_post_storage() -> storage::SqlitePostStorage {
+            let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+            sqlx::migrate!("../storage/migrations/sqlite")
+                .run(&pool)
+                .await
+                .unwrap();
+            storage::SqlitePostStorage::new(pool)
+        }
+
+        #[tokio::test]
+        async fn apply_post_tag_diff_skips_invalid_tag_display() {
+            let posts = in_memory_post_storage().await;
+            // "hello_world" contains an underscore → Tag::from_str fails → continue (line 721)
+            let result = apply_post_tag_diff(&posts, 1, &["hello_world".to_string()]).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn find_draft_by_permalink_for_user_returns_none_when_no_drafts() {
+            let posts = in_memory_post_storage().await;
+            let slug: Slug = "my-draft".parse().unwrap();
+            let result = find_draft_by_permalink_for_user(&posts, 1, 2026, 5, 22, &slug).await;
+            assert!(matches!(result, Ok(None)));
+        }
     }
 }

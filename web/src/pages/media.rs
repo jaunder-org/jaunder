@@ -197,3 +197,31 @@ fn render_media_row(item: MediaItem, delete_action: ServerAction<DeleteMedia>) -
         </tr>
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_bytes_displays_bytes_below_kb() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(1023), "1023 B");
+    }
+
+    #[test]
+    fn format_bytes_displays_kb_range() {
+        assert_eq!(format_bytes(1024), "1.0 KB");
+        assert_eq!(format_bytes(1536), "1.5 KB");
+    }
+
+    #[test]
+    fn format_bytes_displays_mb_range() {
+        assert_eq!(format_bytes(1024 * 1024), "1.0 MB");
+        assert_eq!(format_bytes(1024 * 1024 * 2), "2.0 MB");
+    }
+
+    #[test]
+    fn format_bytes_displays_gb_range() {
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.0 GB");
+    }
+}

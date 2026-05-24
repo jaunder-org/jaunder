@@ -400,6 +400,35 @@ mod tests {
         Arc::new(common::mailer::NoopMailSender)
     }
 
+    #[test]
+    fn timestamped_backup_name_has_expected_format() {
+        let name = timestamped_backup_name();
+        assert!(
+            name.starts_with("backup-"),
+            "name must start with 'backup-', got: {name}"
+        );
+        let suffix = name.strip_prefix("backup-").unwrap();
+        // Format: YYYYMMDDTHHMMSSz (16 chars)
+        assert_eq!(
+            suffix.len(),
+            16,
+            "timestamp suffix must be 16 chars, got: {suffix}"
+        );
+        assert!(suffix.ends_with('Z'), "timestamp must end with 'Z'");
+        assert!(suffix.contains('T'), "timestamp must contain 'T'");
+    }
+
+    #[test]
+    fn default_backup_schedule_is_daily_at_midnight() {
+        let schedule = default_backup_schedule();
+        assert_eq!(schedule, "0 0 0 * * *");
+    }
+
+    #[test]
+    fn default_backup_retention_count_is_seven() {
+        assert_eq!(default_backup_retention_count(), 7);
+    }
+
     #[tokio::test]
     async fn backup_worker_disabled_without_destination_path() {
         let state = test_state().await;

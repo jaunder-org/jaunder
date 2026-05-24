@@ -81,6 +81,36 @@ pub struct PostRecord {
     pub tags: Vec<PostTag>,
 }
 
+impl PostRecord {
+    /// Returns the canonical permalink for this post.
+    /// Uses the publication timestamp if published; otherwise falls back to the creation timestamp.
+    #[must_use]
+    pub fn permalink(&self) -> String {
+        use chrono::Datelike;
+        let timestamp = self.published_at.unwrap_or(self.created_at);
+        format!(
+            "/~{}/{:04}/{:02}/{:02}/{}",
+            self.author_username.as_str(),
+            timestamp.year(),
+            timestamp.month(),
+            timestamp.day(),
+            self.slug.as_str()
+        )
+    }
+
+    /// Generates a fallback plain-text summary from the post's body, title, or slug.
+    pub fn fallback_summary_label(&self) -> String {
+        self.body
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(|line| line.chars().take(100).collect::<String>())
+            .filter(|line| !line.is_empty())
+            .or_else(|| self.title.clone())
+            .unwrap_or_else(|| self.slug.to_string())
+    }
+}
+
 /// A post revision record returned by [`PostStorage`] queries.
 ///
 /// Revisions are created automatically whenever a post is updated.
@@ -398,5 +428,61 @@ mod tests {
         let fmt2 = PostFormat::Org;
         let debug_str2 = format!("{:?}", fmt2);
         assert_eq!(debug_str2, "Org");
+    }
+
+    #[test]
+    fn fallback_summary_label_prefers_body_then_title_then_slug() {
+        let mut post = PostRecord {
+            post_id: 1,
+            user_id: 1,
+            author_username: "author".parse().unwrap(),
+            title: Some("My Title".to_string()),
+            slug: "my-slug".parse().unwrap(),
+            body: "\n\n   The first non-empty line of the body is here. \n\n Another line."
+                .to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>The first non-empty line of the body is here.</p>".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            published_at: None,
+            deleted_at: None,
+            tags: vec![],
+        };
+
+        // Case 1: Body is populated. It should use the first non-empty line.
+        assert_eq!(
+            post.fallback_summary_label(),
+            "The first non-empty line of the body is here."
+        );
+
+        // Case 2: Body is empty but title is populated.
+        post.body = "".to_string();
+        assert_eq!(post.fallback_summary_label(), "My Title");
+
+        // Case 3: Body and title are empty. It should use the slug.
+        post.title = None;
+        assert_eq!(post.fallback_summary_label(), "my-slug");
+    }
+
+    #[test]
+    fn permalink_formats_username_date_and_slug() {
+        use chrono::TimeZone;
+        let post = PostRecord {
+            post_id: 1,
+            user_id: 1,
+            author_username: "author".parse().unwrap(),
+            title: Some("My Title".to_string()),
+            slug: "hello-world".parse().unwrap(),
+            body: "My body".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>My body</p>".to_string(),
+            created_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
+            updated_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
+            published_at: Some(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
+            deleted_at: None,
+            tags: vec![],
+        };
+
+        assert_eq!(post.permalink(), "/~author/2026/04/12/hello-world");
     }
 }

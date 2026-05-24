@@ -192,10 +192,12 @@ pub async fn server_boundary<T>(
     match future.await {
         Ok(value) => Ok(value),
         Err(error) => {
+            let public = error.public();
+            let operator = error.operator_message();
             tracing::error!(
                 server_fn,
-                public_error = ?error.public(),
-                operator_message = %error.operator_message(),
+                public_error = ?public,
+                operator_message = %operator,
                 "server function failed"
             );
             Err(error.into_public())
@@ -218,7 +220,7 @@ pub fn error_with_sources(error: &(dyn Error + 'static)) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{error_with_sources, WebError};
+    use super::{error_with_sources, WebError, WebResult};
     #[cfg(feature = "ssr")]
     use super::{server_boundary, InternalError};
     use leptos::prelude::FromServerFnError;
@@ -338,22 +340,14 @@ mod tests {
     }
 
     #[cfg(feature = "ssr")]
-    #[test]
-    fn server_boundary_logs_and_returns_public_error() {
-        use std::future::Future;
-        use std::task::{Context, Poll, Waker};
-
-        let mut future = Box::pin(server_boundary("test_fn", async {
+    #[tokio::test]
+    async fn server_boundary_logs_and_returns_public_error() {
+        let result: Result<(), WebError> = server_boundary("test_fn", async {
             Err(InternalError::storage(OuterError {
                 source: SourceError,
             }))
-        }));
-        let waker = Waker::noop();
-        let mut context = Context::from_waker(waker);
-        let result: Result<(), WebError> = match future.as_mut().poll(&mut context) {
-            Poll::Ready(result) => result,
-            Poll::Pending => panic!("server_boundary test future should complete immediately"),
-        };
+        })
+        .await;
 
         assert_eq!(
             result,
@@ -393,10 +387,8 @@ mod tests {
     }
 
     #[cfg(feature = "ssr")]
-    #[test]
-    fn server_boundary_evaluates_tracing_fields_when_subscriber_is_active() {
-        use std::future::Future;
-        use std::task::{Context, Poll, Waker};
+    #[tokio::test]
+    async fn server_boundary_evaluates_tracing_fields_when_subscriber_is_active() {
         use tracing_subscriber::fmt;
 
         let subscriber = fmt()
@@ -405,17 +397,12 @@ mod tests {
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
 
-        let mut future = Box::pin(server_boundary("test_fn", async {
+        let result = server_boundary("test_fn", async {
             Err::<(), _>(InternalError::server(OuterError {
                 source: SourceError,
             }))
-        }));
-        let waker = Waker::noop();
-        let mut context = Context::from_waker(waker);
-        let result = match future.as_mut().poll(&mut context) {
-            Poll::Ready(result) => result,
-            Poll::Pending => panic!("server_boundary test future should complete immediately"),
-        };
+        })
+        .await;
 
         assert_eq!(
             result,
@@ -423,6 +410,37 @@ mod tests {
                 message: "server operation failed".to_string()
             })
         );
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn internal_error_constructors_set_correct_public_variants() {
+        let unauth = InternalError::unauthorized("not allowed");
+        assert_eq!(unauth.public(), &WebError::Unauthorized);
+        assert_eq!(unauth.operator_message(), "not allowed");
+
+        let not_found = InternalError::not_found("Post");
+        assert_eq!(not_found.public(), &WebError::not_found("Post"));
+
+        let validation = InternalError::validation("bad input");
+        assert_eq!(validation.public(), &WebError::validation("bad input"));
+
+        let conflict = InternalError::conflict("already exists");
+        assert_eq!(conflict.public(), &WebError::conflict("already exists"));
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn into_public_consumes_error_and_returns_public_variant() {
+        let error = InternalError::unauthorized("reason");
+        assert_eq!(error.into_public(), WebError::Unauthorized);
+    }
+
+    #[cfg(feature = "ssr")]
+    #[tokio::test]
+    async fn server_boundary_passes_through_ok_value() {
+        let result: WebResult<u32> = server_boundary("test_fn", async { Ok(42) }).await;
+        assert_eq!(result, Ok(42));
     }
 
     #[cfg(feature = "ssr")]

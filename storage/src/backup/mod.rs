@@ -591,6 +591,31 @@ mod tests {
             "\"post_id\", \"tag_id\""
         );
         assert_eq!(
+            order_by_clause("sessions", quote_test_identifier),
+            "\"token_hash\""
+        );
+        assert_eq!(
+            order_by_clause("email_verifications", quote_test_identifier),
+            "\"token_hash\""
+        );
+        assert_eq!(
+            order_by_clause("password_resets", quote_test_identifier),
+            "\"token_hash\""
+        );
+        assert_eq!(
+            order_by_clause("invites", quote_test_identifier),
+            "\"code\""
+        );
+        assert_eq!(
+            order_by_clause("posts", quote_test_identifier),
+            "\"post_id\""
+        );
+        assert_eq!(
+            order_by_clause("post_revisions", quote_test_identifier),
+            "\"revision_id\""
+        );
+        assert_eq!(order_by_clause("tags", quote_test_identifier), "\"tag_id\"");
+        assert_eq!(
             order_by_clause("unknown", quote_test_identifier),
             "\"rowid\""
         );
@@ -609,6 +634,30 @@ mod tests {
         fs::write(empty.join("file"), "content")?;
         let error = ensure_empty_or_absent(&empty);
         assert!(matches!(error, Err(BackupError::DestinationNotEmpty(_))));
+        Ok(())
+    }
+
+    #[test]
+    fn ensure_absent_rejects_existing_path() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let existing = temp.path().join("exists");
+        fs::create_dir(&existing)?;
+        let error = ensure_absent(&existing);
+        assert!(matches!(error, Err(BackupError::DestinationExists(_))));
+        Ok(())
+    }
+
+    #[test]
+    fn temporary_backup_directory_drop_removes_directory() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let destination = temp.path().join("backup");
+        let path = {
+            let tmp = TemporaryBackupDirectory::near(&destination)?;
+            let p = tmp.path().to_path_buf();
+            assert!(p.exists(), "directory should exist before drop");
+            p
+        };
+        assert!(!path.exists(), "directory should be removed after drop");
         Ok(())
     }
 
@@ -670,6 +719,36 @@ mod tests {
     }
 
     #[test]
+    fn files_have_same_content_returns_false_for_different_size_files() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let a = temp.path().join("a.txt");
+        let b = temp.path().join("b.txt");
+        fs::write(&a, "short")?;
+        fs::write(&b, "longer content")?;
+        assert!(!files_have_same_content(&a, &b)?);
+        Ok(())
+    }
+
+    #[test]
+    fn previous_directory_backup_returns_none_for_nonexistent_parent() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let destination = temp.path().join("nonexistent_parent").join("backup");
+        assert_eq!(previous_directory_backup(&destination)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn files_have_same_content_returns_true_for_identical_files() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let a = temp.path().join("a.txt");
+        let b = temp.path().join("b.txt");
+        fs::write(&a, "identical")?;
+        fs::write(&b, "identical")?;
+        assert!(files_have_same_content(&a, &b)?);
+        Ok(())
+    }
+
+    #[test]
     fn previous_directory_backup_selects_latest_manifest_directory() -> Result<(), BackupError> {
         let temp = TempDir::new()?;
         let first = temp.path().join("2026-04-28");
@@ -681,6 +760,23 @@ mod tests {
         }
 
         assert_eq!(previous_directory_backup(&current)?, Some(second));
+        Ok(())
+    }
+
+    #[test]
+    fn previous_directory_backup_excludes_dirs_without_both_marker_files() -> Result<(), BackupError>
+    {
+        let temp = TempDir::new()?;
+        let current = temp.path().join("2026-04-30");
+        // Has manifest.json but no media/ — must not be treated as a valid previous backup.
+        let manifest_only = temp.path().join("2026-04-29");
+        fs::create_dir_all(&manifest_only)?;
+        fs::write(manifest_only.join("manifest.json"), "{}")?;
+        // Has media/ but no manifest.json — also invalid.
+        let media_only = temp.path().join("2026-04-28");
+        fs::create_dir_all(media_only.join("media"))?;
+
+        assert_eq!(previous_directory_backup(&current)?, None);
         Ok(())
     }
 

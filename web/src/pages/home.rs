@@ -22,7 +22,9 @@ enum TimelineMode {
 pub fn HomePage() -> impl IntoView {
     let timeline_mode = RwSignal::new(None::<TimelineMode>);
     let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let next_cursor_created_at = RwSignal::new(None::<String>);
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let next_cursor_post_id = RwSignal::new(None::<i64>);
     let has_more = RwSignal::new(false);
     let loading_more = RwSignal::new(false);
@@ -31,6 +33,7 @@ pub fn HomePage() -> impl IntoView {
     let refresh_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| refresh_version.update(|v| *v += 1));
 
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let initial_page = Resource::new(
         move || refresh_version.get(),
         |_| async move {
@@ -53,6 +56,7 @@ pub fn HomePage() -> impl IntoView {
     // signals from a tokio worker and panic. SSR renders the "Loading\u{2026}"
     // placeholder; the resource is re-resolved and signals are seeded on the
     // client after hydration.
+    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {

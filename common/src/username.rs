@@ -69,4 +69,10 @@ mod tests {
         assert!("".parse::<Username>().is_err());
         assert!("a@b".parse::<Username>().is_err());
     }
+
+    #[test]
+    fn username_display_produces_the_username_string() {
+        let u: Username = "alice".parse().unwrap();
+        assert_eq!(u.to_string(), "alice");
+    }
 }
