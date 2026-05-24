@@ -34,7 +34,7 @@ use {
     tracing::instrument(name = "web.auth.get_registration_policy")
 )]
 pub async fn get_registration_policy() -> WebResult<String> {
-    crate::web_server_fn!("get_registration_policy", => {
+    boundary!("get_registration_policy", {
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let policy = load_registration_policy(&*site_config).await;
         Ok(policy.to_string())
@@ -45,7 +45,7 @@ pub async fn get_registration_policy() -> WebResult<String> {
 #[server(endpoint = "/current_user")]
 #[cfg_attr(feature = "ssr", tracing::instrument(name = "web.auth.current_user"))]
 pub async fn current_user() -> WebResult<Option<String>> {
-    crate::web_server_fn!("current_user", => {
+    boundary!("current_user", {
         classify_current_user(require_auth().await)
     })
 }
@@ -62,7 +62,7 @@ pub async fn register(
     password: String,
     invite_code: Option<String>,
 ) -> WebResult<String> {
-    crate::web_server_fn!("register", username, password, invite_code => {
+    boundary!("register", {
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
         let atomic = expect_context::<Arc<dyn AtomicOps>>();
@@ -127,7 +127,7 @@ pub async fn register(
     tracing::instrument(name = "web.auth.login", skip(password, label))
 )]
 pub async fn login(username: String, password: String, label: Option<String>) -> WebResult<String> {
-    crate::web_server_fn!("login", username, password, label => {
+    boundary!("login", {
         let users = expect_context::<Arc<dyn UserStorage>>();
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
         let username = {
@@ -166,7 +166,7 @@ pub async fn login(username: String, password: String, label: Option<String>) ->
 #[server(endpoint = "/logout")]
 #[cfg_attr(feature = "ssr", tracing::instrument(name = "web.auth.logout"))]
 pub async fn logout() -> WebResult<()> {
-    crate::web_server_fn!("logout", => {
+    boundary!("logout", {
         if let Ok(auth) = require_auth().await {
             let sessions = expect_context::<Arc<dyn SessionStorage>>();
             sessions
