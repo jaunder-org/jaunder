@@ -17,6 +17,13 @@ macro_rules! web_ssr {
 }
 
 #[macro_export]
+macro_rules! boundary {
+    ($name:expr, $body:block) => {
+        $crate::error::server_boundary($name, async move $body).await
+    };
+}
+
+#[macro_export]
 macro_rules! web_server_fn {
     ($name:expr, $($param:ident),* => $body:block) => {
         {
@@ -30,13 +37,6 @@ macro_rules! web_server_fn {
                 Err($crate::error::WebError::server_function("Not implemented"))
             }
         }
-    };
-}
-
-#[macro_export]
-macro_rules! boundary {
-    ($name:expr, $body:block) => {
-        $crate::error::server_boundary($name, async move $body).await
     };
 }
 
