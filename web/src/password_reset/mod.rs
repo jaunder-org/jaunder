@@ -1,26 +1,21 @@
 #[cfg(feature = "ssr")]
-use common::mailer::{EmailMessage, MailSender};
-#[cfg(feature = "ssr")]
-use common::password::Password;
-#[cfg(feature = "ssr")]
-use common::username::Username;
-#[cfg(feature = "ssr")]
-use std::sync::Arc;
-#[cfg(feature = "ssr")]
-use storage::{AtomicOps, PasswordResetStorage, UserStorage};
+use {
+    chrono::Duration,
+    common::mailer::{EmailMessage, MailSender},
+    common::password::Password,
+    common::username::Username,
+    std::sync::Arc,
+    storage::{AtomicOps, PasswordResetStorage, UserStorage},
+};
 
 #[cfg(feature = "ssr")]
 use crate::error::InternalError;
 use crate::error::WebResult;
 use leptos::prelude::*;
 
-/// Looks up the user by username, checks for a verified email, creates a reset
-/// token, and sends a password-reset link. Returns an error when the user has
-/// no verified email on file; does **not** distinguish between "user not found"
-/// and "no verified email" in the error message to avoid username enumeration.
 #[server(endpoint = "/request_password_reset")]
 pub async fn request_password_reset(username: String) -> WebResult<()> {
-    crate::web_server_fn!("request_password_reset", username => {
+    boundary!("request_password_reset", {
         let users = expect_context::<Arc<dyn UserStorage>>();
         let password_resets = expect_context::<Arc<dyn PasswordResetStorage>>();
         let mailer = expect_context::<Arc<dyn MailSender>>();
@@ -52,7 +47,7 @@ pub async fn request_password_reset(username: String) -> WebResult<()> {
                 )
             })?;
 
-        let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+        let expires_at = chrono::Utc::now() + Duration::hours(1);
         let raw_token = password_resets
             .create_password_reset(user_id, expires_at)
             .await
@@ -77,11 +72,9 @@ pub async fn request_password_reset(username: String) -> WebResult<()> {
     })
 }
 
-/// Validates a password-reset token, sets the new password, and revokes all
-/// existing sessions for that user in one atomic database transaction.
 #[server(endpoint = "/confirm_password_reset")]
 pub async fn confirm_password_reset(token: String, new_password: String) -> WebResult<()> {
-    crate::web_server_fn!("confirm_password_reset", token, new_password => {
+    boundary!("confirm_password_reset", {
         let atomic = expect_context::<Arc<dyn AtomicOps>>();
 
         let password = new_password
