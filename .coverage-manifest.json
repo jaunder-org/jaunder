@@ -70,6 +70,6 @@
   "web/src/password_reset.rs": 100,
   "web/src/posts.rs": 99.0826,
   "web/src/profile/mod.rs": 100,
-  "web/src/sessions.rs": 100,
+  "web/src/sessions/mod.rs": 100,
   "web/src/tags/mod.rs": 100
 }
