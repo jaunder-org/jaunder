@@ -1,9 +1,16 @@
+// Shared imports (no cfg needed)
+use crate::error::WebResult;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
+// All server-only imports in one place
 #[cfg(feature = "ssr")]
-use crate::error::InternalError;
-use crate::error::WebResult;
+use {
+    crate::auth::require_auth,
+    crate::error::InternalError,
+    std::sync::Arc,
+    storage::{ProfileUpdate, UserStorage},
+};
 
 /// Profile data returned by [`get_profile`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,17 +22,10 @@ pub struct ProfileData {
     pub email_verified: bool,
 }
 
-#[cfg(feature = "ssr")]
-use crate::auth::require_auth;
-#[cfg(feature = "ssr")]
-use std::sync::Arc;
-#[cfg(feature = "ssr")]
-use storage::{ProfileUpdate, UserStorage};
-
 /// Returns the authenticated user's profile.
 #[server(endpoint = "/get_profile")]
 pub async fn get_profile() -> WebResult<ProfileData> {
-    crate::web_server_fn!("get_profile", => {
+    boundary!("get_profile", {
         let auth = require_auth().await?;
         let users = expect_context::<Arc<dyn UserStorage>>();
         let user = users
@@ -47,7 +47,7 @@ pub async fn get_profile() -> WebResult<ProfileData> {
 /// Empty string clears the field.
 #[server(endpoint = "/update_profile")]
 pub async fn update_profile(display_name: String, bio: String) -> WebResult<()> {
-    crate::web_server_fn!("update_profile", display_name, bio => {
+    boundary!("update_profile", {
         let auth = require_auth().await?;
         let users = expect_context::<Arc<dyn UserStorage>>();
         let dn = if display_name.is_empty() {
