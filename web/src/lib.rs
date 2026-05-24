@@ -33,6 +33,13 @@ macro_rules! web_server_fn {
     };
 }
 
+#[macro_export]
+macro_rules! boundary {
+    ($name:expr, $body:block) => {
+        $crate::error::server_boundary($name, async move $body).await
+    };
+}
+
 pub mod auth;
 pub mod backup;
 pub mod email;
