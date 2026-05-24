@@ -317,6 +317,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_password_updates_stored_credential() {
+        let pool = sqlite_pool().await;
+        let storage = SqliteUserStorage::new(pool);
+        let username: Username = "alice".parse().unwrap();
+        let old_password: Password = "oldpassword123".parse().unwrap();
+        let new_password: Password = "newpassword456".parse().unwrap();
+        storage
+            .create_user(&username, &old_password, None, false)
+            .await
+            .unwrap();
+        let user = storage
+            .get_user_by_username(&username)
+            .await
+            .unwrap()
+            .unwrap();
+        storage
+            .set_password(user.user_id, &new_password)
+            .await
+            .unwrap();
+        assert!(matches!(
+            storage.authenticate(&username, &old_password).await,
+            Err(UserAuthError::InvalidCredentials)
+        ));
+        assert!(storage.authenticate(&username, &new_password).await.is_ok());
+    }
+
+    #[tokio::test]
     async fn authenticate_with_verify_error_returns_internal_error() {
         let pool = sqlite_pool().await;
         let password: Password = "force-verify-error-for-test-coverage".parse().unwrap();

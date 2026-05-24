@@ -148,6 +148,31 @@ pub trait MediaStorage: Send + Sync {
     ) -> sqlx::Result<Option<MediaRecord>>;
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_source_as_str_returns_correct_value_for_each_variant() {
+        assert_eq!(MediaSource::Upload.as_str(), "upload");
+        assert_eq!(MediaSource::Cached.as_str(), "cached");
+    }
+
+    #[test]
+    fn media_source_display_produces_correct_string_for_each_variant() {
+        assert_eq!(MediaSource::Upload.to_string(), "upload");
+        assert_eq!(MediaSource::Cached.to_string(), "cached");
+    }
+
+    #[test]
+    fn media_source_from_str_parses_cached_variant() {
+        assert_eq!(
+            "cached".parse::<MediaSource>().unwrap(),
+            MediaSource::Cached
+        );
+    }
+}
+
 /// Key for the site configuration setting for maximum file upload size.
 pub const MEDIA_MAX_FILE_SIZE_BYTES_KEY: &str = "media.max_file_size_bytes";
 /// Key for the site configuration setting for per-user upload quota.

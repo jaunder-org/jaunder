@@ -745,6 +745,23 @@ async fn logout_with_bearer_token_revokes_session() {
     );
 }
 
+// Unauthenticated logout: no session cookie → skips revoke, still clears cookie.
+#[tokio::test]
+async fn logout_without_session_still_clears_cookie() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, set_cookie, _body) =
+        post_form(Arc::clone(&state), "/api/logout", "", None, true).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let clear_cookie = set_cookie.expect("Set-Cookie header should be present on logout");
+    assert!(
+        clear_cookie.contains("Max-Age=0"),
+        "logout should clear cookie via Max-Age=0, got: {clear_cookie}"
+    );
+}
+
 #[tokio::test]
 async fn debug_api_routes_exist() {
     let base = TempDir::new().unwrap();
@@ -864,6 +881,48 @@ async fn logout_clears_cookie_without_secure_attribute_when_disabled() {
     let clear_cookie = set_cookie.expect("Set-Cookie header should be present");
     assert!(clear_cookie.contains("Max-Age=0"));
     assert!(!clear_cookie.contains("Secure"));
+}
+
+#[tokio::test]
+async fn current_user_returns_username_when_authenticated() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let user_id = state
+        .users
+        .create_user(
+            &"alice".parse::<Username>().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+
+    let cookie_header = format!("session={raw_token}");
+    let (status, _, body) = post_form(
+        Arc::clone(&state),
+        "/api/current_user",
+        "",
+        Some(&cookie_header),
+        true,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.trim(), "\"alice\"");
+}
+
+#[tokio::test]
+async fn current_user_returns_null_when_unauthenticated() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, _, body) =
+        post_form(Arc::clone(&state), "/api/current_user", "", None, true).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.trim(), "null");
 }
 
 #[tokio::test]

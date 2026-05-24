@@ -66,6 +66,10 @@ fn quote_postgres_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+fn pg_error_code_matches(code: Option<&str>, expected: &str) -> bool {
+    code == Some(expected)
+}
+
 async fn execute_postgres_utility(
     conn: &mut PgConnection,
     sql: &str,
@@ -74,8 +78,8 @@ async fn execute_postgres_utility(
 ) -> anyhow::Result<()> {
     if let Err(error) = sqlx::query(sql).execute(conn).await {
         return match error {
-            sqlx::Error::Database(db_error)
-                if db_error.code().as_deref() == Some(expected_error_code) =>
+            sqlx::Error::Database(ref db_error)
+                if pg_error_code_matches(db_error.code().as_deref(), expected_error_code) =>
             {
                 Err(anyhow::anyhow!(expected_error_message))
             }
@@ -430,6 +434,22 @@ pub async fn cmd_serve(
 mod tests {
     use super::*;
     use storage::DbConnectOptions;
+    use tempfile::TempDir;
+
+    #[test]
+    fn pg_error_code_matches_returns_true_for_exact_match() {
+        assert!(pg_error_code_matches(Some("42710"), "42710"));
+    }
+
+    #[test]
+    fn pg_error_code_matches_returns_false_for_different_code() {
+        assert!(!pg_error_code_matches(Some("42000"), "42710"));
+    }
+
+    #[test]
+    fn pg_error_code_matches_returns_false_when_no_code() {
+        assert!(!pg_error_code_matches(None, "42710"));
+    }
 
     #[test]
     fn test_quote_postgres_identifier() {
@@ -523,5 +543,33 @@ mod tests {
         std::fs::create_dir(&nested).expect("nested dir");
         std::fs::write(nested.join("file.txt"), "content").expect("nested file");
         assert!(directory_has_entries(temp.path()).expect("nested"));
+    }
+
+    #[tokio::test]
+    async fn cmd_user_invite_creates_invite_expiring_in_the_future() {
+        let temp = TempDir::new().expect("temp dir");
+        let db_path = temp.path().join("jaunder.db");
+        let db_url = format!("sqlite:{}", db_path.display());
+        let opts: DbConnectOptions = db_url.parse().expect("parse sqlite url");
+
+        let state = storage::open_database(&opts).await.expect("open db");
+
+        let storage_args = StorageArgs {
+            storage_path: temp.path().to_path_buf(),
+            db: opts,
+        };
+
+        let before = chrono::Utc::now();
+        cmd_user_invite(&storage_args, Some(24))
+            .await
+            .expect("create invite");
+
+        let invites = state.invites.list_invites().await.expect("list invites");
+        assert_eq!(invites.len(), 1, "exactly one invite must be created");
+        assert!(
+            invites[0].expires_at > before,
+            "invite must expire in the future, got: {}",
+            invites[0].expires_at
+        );
     }
 }
