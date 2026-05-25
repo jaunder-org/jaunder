@@ -1,6 +1,7 @@
-use crate::backup::{get_backup_settings, BackupSettings, UpdateBackupSettings};
+use crate::backup::{get_backup_settings, UpdateBackupSettings};
 use crate::error::WebError;
 use crate::pages::Topbar;
+use common::backup::{BackupConfig, BackupMode};
 use leptos::prelude::*;
 
 #[allow(clippy::must_use_candidate)]
@@ -44,9 +45,13 @@ pub fn BackupSettingsPage() -> impl IntoView {
 }
 
 fn backup_settings_form(
-    settings: BackupSettings,
+    settings: BackupConfig,
     update_action: ServerAction<UpdateBackupSettings>,
 ) -> impl IntoView {
+    let mode_str = match settings.mode {
+        BackupMode::Directory => "directory",
+        BackupMode::Archive => "archive",
+    };
     view! {
         <ActionForm action=update_action attr:class="j-card j-backup-form">
             <div class="j-card-head">
@@ -65,7 +70,7 @@ fn backup_settings_form(
                         type="text"
                         name="destination_path"
                         placeholder="/srv/jaunder/backups"
-                        prop:value=settings.destination_path
+                        prop:value=settings.destination_path.unwrap_or_default()
                     />
                 </label>
                 <label class="j-backup-field j-backup-field-wide">
@@ -75,7 +80,7 @@ fn backup_settings_form(
                         type="text"
                         name="schedule"
                         placeholder="0 0 0 * * *"
-                        prop:value=settings.schedule
+                        prop:value=settings.schedule.as_str().to_owned()
                         aria-describedby="backup-schedule-help"
                     />
                     <span id="backup-schedule-help" class="j-backup-help">
@@ -89,12 +94,12 @@ fn backup_settings_form(
                         type="number"
                         min="0"
                         name="retention_count"
-                        prop:value=settings.retention_count
+                        prop:value=settings.retention_count.to_string()
                     />
                 </label>
                 <label class="j-backup-field">
                     <span class="j-edit-form-label">"Mode"</span>
-                    <select class="j-backup-input" name="mode" prop:value=settings.mode>
+                    <select class="j-backup-input" name="mode" prop:value=mode_str>
                         <option value="directory">"Directory"</option>
                         <option value="archive">"Archive"</option>
                     </select>
