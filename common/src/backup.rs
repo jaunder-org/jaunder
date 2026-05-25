@@ -1,17 +1,12 @@
 use croner::Cron;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BackupMode {
+    #[default]
     Directory,
     Archive,
-}
-
-impl Default for BackupMode {
-    fn default() -> Self {
-        Self::Directory
-    }
 }
 
 /// A validated six-field cron schedule expression.
