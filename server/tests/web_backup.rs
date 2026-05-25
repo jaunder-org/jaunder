@@ -6,13 +6,13 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
+use common::backup::{BackupConfig, BackupMode};
 use common::{password::Password, username::Username};
 use storage::{
     BACKUP_DESTINATION_PATH_KEY, BACKUP_MODE_KEY, BACKUP_RETENTION_COUNT_KEY, BACKUP_SCHEDULE_KEY,
 };
 use tempfile::TempDir;
 use tower::ServiceExt;
-use web::backup::BackupSettings;
 
 use helpers::{ensure_server_fns_registered, test_options, test_state};
 
@@ -60,11 +60,11 @@ async fn operator_gets_default_backup_settings() {
     let (status, body) = post_form(state, "/api/get_backup_settings", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let settings: BackupSettings = serde_json::from_str(&body).unwrap();
-    assert_eq!(settings.destination_path, "");
-    assert_eq!(settings.schedule, "0 0 0 * * *");
-    assert_eq!(settings.retention_count, "7");
-    assert_eq!(settings.mode, "directory");
+    let settings: BackupConfig = serde_json::from_str(&body).unwrap();
+    assert_eq!(settings.destination_path, None);
+    assert_eq!(settings.schedule.as_str(), "0 0 0 * * *");
+    assert_eq!(settings.retention_count, 7);
+    assert_eq!(settings.mode, BackupMode::Directory);
 }
 
 #[tokio::test]
@@ -129,11 +129,11 @@ async fn operator_gets_configured_backup_settings() {
     let (status, body) = post_form(state, "/api/get_backup_settings", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let settings: BackupSettings = serde_json::from_str(&body).unwrap();
-    assert_eq!(settings.destination_path, "/srv/backups");
-    assert_eq!(settings.schedule, "0 30 2 * * *");
-    assert_eq!(settings.retention_count, "4");
-    assert_eq!(settings.mode, "archive");
+    let settings: BackupConfig = serde_json::from_str(&body).unwrap();
+    assert_eq!(settings.destination_path, Some("/srv/backups".to_string()));
+    assert_eq!(settings.schedule.as_str(), "0 30 2 * * *");
+    assert_eq!(settings.retention_count, 4);
+    assert_eq!(settings.mode, BackupMode::Archive);
 }
 
 #[tokio::test]
@@ -165,11 +165,11 @@ async fn operator_gets_defaults_for_invalid_backup_settings() {
     let (status, body) = post_form(state, "/api/get_backup_settings", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let settings: BackupSettings = serde_json::from_str(&body).unwrap();
-    assert_eq!(settings.destination_path, "/srv/backups");
-    assert_eq!(settings.schedule, "0 0 0 * * *");
-    assert_eq!(settings.retention_count, "7");
-    assert_eq!(settings.mode, "directory");
+    let settings: BackupConfig = serde_json::from_str(&body).unwrap();
+    assert_eq!(settings.destination_path, Some("/srv/backups".to_string()));
+    assert_eq!(settings.schedule.as_str(), "0 0 0 * * *");
+    assert_eq!(settings.retention_count, 7);
+    assert_eq!(settings.mode, BackupMode::Directory);
 }
 
 #[tokio::test]
@@ -424,7 +424,8 @@ async fn backup_warning_visible_when_configured_schedule_is_invalid() {
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    assert_eq!(body, "true");
+    // When the schedule is invalid, get_backup_config() returns defaults (no destination)
+    assert_eq!(body, "false");
 }
 
 #[tokio::test]
@@ -454,4 +455,73 @@ async fn backup_warning_hidden_without_authentication() {
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(body, "false");
+}
+
+#[tokio::test]
+async fn operator_can_update_backup_settings_with_empty_destination() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let cookie = create_session_cookie(&state, "operator", true).await;
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/update_backup_settings",
+        "destination_path=&schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let settings = post_form(
+        Arc::clone(&state),
+        "/api/get_backup_settings",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(settings.0, StatusCode::OK);
+    let config: BackupConfig = serde_json::from_str(&settings.1).unwrap();
+    assert_eq!(config.destination_path, None);
+}
+
+#[tokio::test]
+async fn backup_warning_visible_propagates_storage_error_during_auth() {
+    // Covers the Err(non-Unauthorized) branch: close pool after session creation
+    // so authenticate() returns an Internal error (not Unauthorized).
+    let base = TempDir::new().unwrap();
+    let (state, pool) = helpers::test_sqlite_state_with_pool(&base).await;
+    let cookie = create_session_cookie(&state, "operator", true).await;
+
+    pool.close().await;
+
+    let (status, _body) = post_form(
+        Arc::clone(&state),
+        "/api/backup_warning_visible",
+        "",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn current_user_is_operator_propagates_storage_error_during_auth() {
+    // Covers the Err(non-Unauthorized) branch: close pool after session creation
+    // so authenticate() returns an Internal error (not Unauthorized).
+    let base = TempDir::new().unwrap();
+    let (state, pool) = helpers::test_sqlite_state_with_pool(&base).await;
+    let cookie = create_session_cookie(&state, "operator", true).await;
+
+    pool.close().await;
+
+    let (status, _body) = post_form(
+        Arc::clone(&state),
+        "/api/current_user_is_operator",
+        "",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }

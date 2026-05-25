@@ -11,11 +11,9 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{resolved_postgres_options, DbConnectOptions};
+pub use common::backup::BackupMode;
 
-mod postgres;
-mod sqlite;
-
-pub(super) const TABLES_IN_EXPORT_ORDER: &[&str] = &[
+pub(crate) const TABLES_IN_EXPORT_ORDER: &[&str] = &[
     "site_config",
     "users",
     "sessions",
@@ -27,13 +25,6 @@ pub(super) const TABLES_IN_EXPORT_ORDER: &[&str] = &[
     "tags",
     "post_tags",
 ];
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, clap::ValueEnum, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BackupMode {
-    Directory,
-    Archive,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupManifest {
@@ -95,9 +86,9 @@ pub enum BackupError {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct ColumnInfo {
-    pub(super) name: String,
-    pub(super) type_name: String,
+pub(crate) struct ColumnInfo {
+    pub(crate) name: String,
+    pub(crate) type_name: String,
 }
 
 /// # Errors
@@ -173,7 +164,8 @@ async fn export_directory_backup(
     let manifest = match options.database {
         DbConnectOptions::Sqlite(connect_options) => {
             let pool = sqlx::SqlitePool::connect_with(connect_options.clone()).await?;
-            sqlite::export_database(&pool, options.destination_path, options.mode).await?
+            crate::sqlite::backup::export_database(&pool, options.destination_path, options.mode)
+                .await?
         }
         DbConnectOptions::Postgres {
             options: pg_options,
@@ -181,7 +173,8 @@ async fn export_directory_backup(
         } => {
             let resolved = resolved_postgres_options(pg_options)?;
             let pool = sqlx::PgPool::connect_with(resolved).await?;
-            postgres::export_database(&pool, options.destination_path, options.mode).await?
+            crate::postgres::backup::export_database(&pool, options.destination_path, options.mode)
+                .await?
         }
     };
 
@@ -210,7 +203,7 @@ async fn restore_directory_backup(
     match options.database {
         DbConnectOptions::Sqlite(connect_options) => {
             let pool = sqlx::SqlitePool::connect_with(connect_options.clone()).await?;
-            sqlite::restore_database(&pool, options.source_path, manifest).await
+            crate::sqlite::backup::restore_database(&pool, options.source_path, manifest).await
         }
         DbConnectOptions::Postgres {
             options: pg_options,
@@ -218,12 +211,12 @@ async fn restore_directory_backup(
         } => {
             let resolved = resolved_postgres_options(pg_options)?;
             let pool = sqlx::PgPool::connect_with(resolved).await?;
-            postgres::restore_database(&pool, options.source_path, manifest).await
+            crate::postgres::backup::restore_database(&pool, options.source_path, manifest).await
         }
     }
 }
 
-pub(super) fn build_manifest(
+pub(crate) fn build_manifest(
     schema_version: i64,
     schema_checksum: String,
     mode: BackupMode,
@@ -239,7 +232,7 @@ pub(super) fn build_manifest(
     }
 }
 
-pub(super) fn order_by_clause(table: &str, quote_identifier: fn(&str) -> String) -> String {
+pub(crate) fn order_by_clause(table: &str, quote_identifier: fn(&str) -> String) -> String {
     let columns = match table {
         "site_config" => &["key"][..],
         "users" => &["user_id"],
@@ -291,7 +284,7 @@ fn validate_manifest(manifest: &BackupManifest) -> Result<(), BackupError> {
     Ok(())
 }
 
-pub(super) fn ensure_schema_version(
+pub(crate) fn ensure_schema_version(
     manifest: &BackupManifest,
     target_version: i64,
 ) -> Result<(), BackupError> {
@@ -304,7 +297,7 @@ pub(super) fn ensure_schema_version(
     Ok(())
 }
 
-pub(super) fn read_table_rows(
+pub(crate) fn read_table_rows(
     source_path: &Path,
     table: &str,
 ) -> Result<Vec<serde_json::Map<String, serde_json::Value>>, BackupError> {
@@ -335,7 +328,7 @@ pub(super) fn read_table_rows(
     Ok(rows)
 }
 
-pub(super) fn json_value_as_restore_text(value: &serde_json::Value) -> Option<String> {
+pub(crate) fn json_value_as_restore_text(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::Null => None,
         serde_json::Value::String(value) => Some(value.clone()),

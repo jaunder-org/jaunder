@@ -36,6 +36,8 @@ pub use media::SqliteMediaStorage;
 mod posts;
 pub use posts::SqlitePostStorage;
 
+pub(crate) mod backup;
+
 use crate::db::sql_slow_query_threshold;
 use crate::{AppState, AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
 use common::password::Password;

@@ -9,12 +9,12 @@ use futures_util::TryStreamExt;
 use sha2::{Digest, Sha256};
 use sqlx::{Row, SqliteConnection, SqlitePool};
 
-use super::{
+use crate::backup::{
     build_manifest, ensure_schema_version, order_by_clause, read_table_rows, BackupError,
     BackupManifest, BackupMode, ColumnInfo, TABLES_IN_EXPORT_ORDER,
 };
 
-pub(super) async fn export_database(
+pub(crate) async fn export_database(
     pool: &SqlitePool,
     destination_path: &Path,
     mode: BackupMode,
@@ -55,7 +55,7 @@ pub(super) async fn export_database(
     }
 }
 
-pub(super) async fn restore_database(
+pub(crate) async fn restore_database(
     pool: &SqlitePool,
     source_path: &Path,
     manifest: &BackupManifest,
