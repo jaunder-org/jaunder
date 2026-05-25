@@ -456,3 +456,30 @@ async fn backup_warning_hidden_without_authentication() {
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(body, "false");
 }
+
+#[tokio::test]
+async fn operator_can_update_backup_settings_with_empty_destination() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let cookie = create_session_cookie(&state, "operator", true).await;
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/update_backup_settings",
+        "destination_path=&schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let settings = post_form(
+        Arc::clone(&state),
+        "/api/get_backup_settings",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(settings.0, StatusCode::OK);
+    let config: BackupConfig = serde_json::from_str(&settings.1).unwrap();
+    assert_eq!(config.destination_path, None);
+}
