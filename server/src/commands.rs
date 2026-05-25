@@ -8,13 +8,14 @@ use sqlx::{postgres::PgConnectOptions, Connection, PgConnection, PgPool, SqliteP
 
 use crate::cli::StorageArgs;
 use crate::mailer::LettreMailSender;
+use common::backup::BackupMode;
 use common::mailer::{EmailMessage, MailSender};
 use common::password::Password;
 use common::username::Username;
 use leptos::prelude::{Env, LeptosOptions};
 use storage::load_smtp_config;
 use storage::{
-    export_backup, resolved_postgres_options, restore_backup, BackupExportOptions, BackupMode,
+    export_backup, resolved_postgres_options, restore_backup, BackupExportOptions,
     BackupRestoreOptions, DbConnectOptions,
 };
 use storage::{init_storage, open_database, open_existing_database};

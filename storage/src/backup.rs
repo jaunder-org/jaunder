@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{resolved_postgres_options, DbConnectOptions};
+pub use common::backup::BackupMode;
 
 pub(crate) const TABLES_IN_EXPORT_ORDER: &[&str] = &[
     "site_config",
@@ -24,13 +25,6 @@ pub(crate) const TABLES_IN_EXPORT_ORDER: &[&str] = &[
     "tags",
     "post_tags",
 ];
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, clap::ValueEnum, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BackupMode {
-    Directory,
-    Archive,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupManifest {
