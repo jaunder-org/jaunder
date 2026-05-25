@@ -260,3 +260,33 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
 pub fn noop_mailer() -> Arc<dyn MailSender> {
     Arc::new(NoopMailSender)
 }
+
+/// Like [`test_state`] but also returns the underlying SQLite pool for raw SQL access.
+/// Only available when Postgres testing is disabled; panics otherwise.
+pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx::SqlitePool) {
+    let pool = sqlx::SqlitePool::connect_with(
+        format!("sqlite:{}", base.path().join("test.db").display())
+            .parse::<sqlx::sqlite::SqliteConnectOptions>()
+            .unwrap()
+            .create_if_missing(true),
+    )
+    .await
+    .unwrap();
+    sqlx::migrate!("../storage/migrations/sqlite")
+        .run(&pool)
+        .await
+        .unwrap();
+    let state = Arc::new(AppState {
+        site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
+        users: Arc::new(SqliteUserStorage::new(pool.clone())),
+        sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
+        invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
+        atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
+        email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
+        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
+        posts: Arc::new(SqlitePostStorage::new(pool.clone())),
+        media: Arc::new(SqliteMediaStorage::new(pool.clone())),
+        user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
+    });
+    (state, pool)
+}

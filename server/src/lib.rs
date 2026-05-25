@@ -488,6 +488,21 @@ mod tests {
         prune_backups(&temp.path().join("missing"), 1).expect("prune missing root");
     }
 
+    #[test]
+    fn backup_path_for_mode_returns_tar_gz_for_archive_mode() {
+        let root = std::path::Path::new("/backups");
+        let path = backup_path_for_mode(root, BackupMode::Archive);
+        let name = path.file_name().unwrap().to_string_lossy();
+        assert!(
+            name.ends_with(".tar.gz"),
+            "expected .tar.gz extension, got: {name}"
+        );
+        assert!(
+            name.starts_with("backup-"),
+            "expected backup- prefix, got: {name}"
+        );
+    }
+
     #[tokio::test]
     async fn home_route_returns_ok() {
         let local = tokio::task::LocalSet::new();
