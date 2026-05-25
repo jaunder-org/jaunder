@@ -5,16 +5,19 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "ssr")]
-use crate::{
-    auth::require_auth,
-    error::{InternalError, InternalResult, WebError},
-};
+mod server;
 #[cfg(feature = "ssr")]
-use std::sync::Arc;
+use server::require_operator;
+
 #[cfg(feature = "ssr")]
-use storage::{
-    SiteConfigStorage, UserStorage, BACKUP_DESTINATION_PATH_KEY, BACKUP_MODE_KEY,
-    BACKUP_RETENTION_COUNT_KEY, BACKUP_SCHEDULE_KEY,
+use {
+    crate::auth::require_auth,
+    crate::error::{InternalError, WebError},
+    std::sync::Arc,
+    storage::{
+        SiteConfigStorage, UserStorage, BACKUP_DESTINATION_PATH_KEY, BACKUP_MODE_KEY,
+        BACKUP_RETENTION_COUNT_KEY, BACKUP_SCHEDULE_KEY,
+    },
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -102,32 +105,13 @@ fn backup_configuration_complete_and_valid(
         && optional_backup_mode_valid(mode)
 }
 
-#[cfg(feature = "ssr")]
-async fn require_operator() -> InternalResult<()> {
-    let auth = require_auth().await?;
-    let users = expect_context::<Arc<dyn UserStorage>>();
-    let Some(user) = users
-        .get_user(auth.user_id)
-        .await
-        .map_err(InternalError::storage)?
-    else {
-        return Err(InternalError::unauthorized("user does not exist"));
-    };
-
-    if !user.is_operator {
-        return Err(InternalError::unauthorized("operator access required"));
-    }
-
-    Ok(())
-}
-
 #[server(endpoint = "/backup_warning_visible")]
 #[cfg_attr(
     feature = "ssr",
     tracing::instrument(name = "web.backup.warning_visible")
 )]
 pub async fn backup_warning_visible() -> WebResult<bool> {
-    crate::web_server_fn!("backup_warning_visible", => {
+    boundary!("backup_warning_visible", {
         let auth = match require_auth().await {
             Ok(auth) => auth,
             Err(error) if matches!(error.public(), WebError::Unauthorized) => return Ok(false),
@@ -180,7 +164,7 @@ pub async fn backup_warning_visible() -> WebResult<bool> {
     tracing::instrument(name = "web.backup.current_user_is_operator")
 )]
 pub async fn current_user_is_operator() -> WebResult<bool> {
-    crate::web_server_fn!("current_user_is_operator", => {
+    boundary!("current_user_is_operator", {
         let auth = match require_auth().await {
             Ok(auth) => auth,
             Err(error) if matches!(error.public(), WebError::Unauthorized) => return Ok(false),
@@ -203,7 +187,7 @@ pub async fn current_user_is_operator() -> WebResult<bool> {
 #[server(endpoint = "/get_backup_settings")]
 #[cfg_attr(feature = "ssr", tracing::instrument(name = "web.backup.get_settings"))]
 pub async fn get_backup_settings() -> WebResult<BackupSettings> {
-    crate::web_server_fn!("get_backup_settings", => {
+    boundary!("get_backup_settings", {
         require_operator().await?;
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let destination_path = site_config
@@ -211,18 +195,24 @@ pub async fn get_backup_settings() -> WebResult<BackupSettings> {
             .await
             .map_err(InternalError::storage)?
             .unwrap_or_default();
-        let schedule = backup_schedule_value(site_config
-            .get(BACKUP_SCHEDULE_KEY)
-            .await
-            .map_err(InternalError::storage)?);
-        let retention_count = backup_retention_count_value(site_config
-            .get(BACKUP_RETENTION_COUNT_KEY)
-            .await
-            .map_err(InternalError::storage)?);
-        let mode = backup_mode_value(site_config
-            .get(BACKUP_MODE_KEY)
-            .await
-            .map_err(InternalError::storage)?);
+        let schedule = backup_schedule_value(
+            site_config
+                .get(BACKUP_SCHEDULE_KEY)
+                .await
+                .map_err(InternalError::storage)?,
+        );
+        let retention_count = backup_retention_count_value(
+            site_config
+                .get(BACKUP_RETENTION_COUNT_KEY)
+                .await
+                .map_err(InternalError::storage)?,
+        );
+        let mode = backup_mode_value(
+            site_config
+                .get(BACKUP_MODE_KEY)
+                .await
+                .map_err(InternalError::storage)?,
+        );
 
         Ok(BackupSettings {
             destination_path,
@@ -247,7 +237,7 @@ pub async fn update_backup_settings(
     retention_count: String,
     mode: String,
 ) -> WebResult<()> {
-    crate::web_server_fn!("update_backup_settings", destination_path, schedule, retention_count, mode => {
+    boundary!("update_backup_settings", {
         require_operator().await?;
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let destination_path = destination_path.trim();
