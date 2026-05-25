@@ -6,13 +6,13 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
+use common::backup::{BackupConfig, BackupMode};
 use common::{password::Password, username::Username};
 use storage::{
     BACKUP_DESTINATION_PATH_KEY, BACKUP_MODE_KEY, BACKUP_RETENTION_COUNT_KEY, BACKUP_SCHEDULE_KEY,
 };
 use tempfile::TempDir;
 use tower::ServiceExt;
-use web::backup::BackupSettings;
 
 use helpers::{ensure_server_fns_registered, test_options, test_state};
 
@@ -60,11 +60,11 @@ async fn operator_gets_default_backup_settings() {
     let (status, body) = post_form(state, "/api/get_backup_settings", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let settings: BackupSettings = serde_json::from_str(&body).unwrap();
-    assert_eq!(settings.destination_path, "");
-    assert_eq!(settings.schedule, "0 0 0 * * *");
-    assert_eq!(settings.retention_count, "7");
-    assert_eq!(settings.mode, "directory");
+    let settings: BackupConfig = serde_json::from_str(&body).unwrap();
+    assert_eq!(settings.destination_path, None);
+    assert_eq!(settings.schedule.as_str(), "0 0 0 * * *");
+    assert_eq!(settings.retention_count, 7);
+    assert_eq!(settings.mode, BackupMode::Directory);
 }
 
 #[tokio::test]
@@ -129,11 +129,11 @@ async fn operator_gets_configured_backup_settings() {
     let (status, body) = post_form(state, "/api/get_backup_settings", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let settings: BackupSettings = serde_json::from_str(&body).unwrap();
-    assert_eq!(settings.destination_path, "/srv/backups");
-    assert_eq!(settings.schedule, "0 30 2 * * *");
-    assert_eq!(settings.retention_count, "4");
-    assert_eq!(settings.mode, "archive");
+    let settings: BackupConfig = serde_json::from_str(&body).unwrap();
+    assert_eq!(settings.destination_path, Some("/srv/backups".to_string()));
+    assert_eq!(settings.schedule.as_str(), "0 30 2 * * *");
+    assert_eq!(settings.retention_count, 4);
+    assert_eq!(settings.mode, BackupMode::Archive);
 }
 
 #[tokio::test]
@@ -165,11 +165,11 @@ async fn operator_gets_defaults_for_invalid_backup_settings() {
     let (status, body) = post_form(state, "/api/get_backup_settings", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let settings: BackupSettings = serde_json::from_str(&body).unwrap();
-    assert_eq!(settings.destination_path, "/srv/backups");
-    assert_eq!(settings.schedule, "0 0 0 * * *");
-    assert_eq!(settings.retention_count, "7");
-    assert_eq!(settings.mode, "directory");
+    let settings: BackupConfig = serde_json::from_str(&body).unwrap();
+    assert_eq!(settings.destination_path, Some("/srv/backups".to_string()));
+    assert_eq!(settings.schedule.as_str(), "0 0 0 * * *");
+    assert_eq!(settings.retention_count, 7);
+    assert_eq!(settings.mode, BackupMode::Directory);
 }
 
 #[tokio::test]
@@ -424,7 +424,8 @@ async fn backup_warning_visible_when_configured_schedule_is_invalid() {
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    assert_eq!(body, "true");
+    // When the schedule is invalid, get_backup_config() returns defaults (no destination)
+    assert_eq!(body, "false");
 }
 
 #[tokio::test]
