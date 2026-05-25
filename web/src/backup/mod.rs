@@ -35,8 +35,7 @@ pub async fn backup_warning_visible() -> WebResult<bool> {
             .get_user(auth.user_id)
             .await
             .map_err(InternalError::storage)?
-            .map(|u| u.is_operator)
-            .unwrap_or(false);
+            .is_some_and(|u| u.is_operator);
 
         if !is_operator {
             return Ok(false);
@@ -69,8 +68,7 @@ pub async fn current_user_is_operator() -> WebResult<bool> {
             .get_user(auth.user_id)
             .await
             .map_err(InternalError::storage)?
-            .map(|u| u.is_operator)
-            .unwrap_or(false))
+            .is_some_and(|u| u.is_operator))
     })
 }
 
