@@ -22,6 +22,7 @@ impl Default for BackupMode {
 pub struct BackupSchedule(String);
 
 impl BackupSchedule {
+    #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         Cron::new(s.trim())
             .with_seconds_required()
@@ -30,6 +31,7 @@ impl BackupSchedule {
             .map(|_| Self(s.trim().to_owned()))
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
