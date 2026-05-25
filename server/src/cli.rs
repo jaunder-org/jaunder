@@ -614,4 +614,22 @@ mod tests {
         assert_eq!(DeploymentEnv::Dev.to_string(), "dev");
         assert_eq!(DeploymentEnv::Prod.to_string(), "prod");
     }
+
+    // --- backup_mode conversion ---
+
+    #[test]
+    fn cli_backup_mode_converts_directory() {
+        assert_eq!(
+            BackupMode::from(CliBackupMode::Directory),
+            BackupMode::Directory
+        );
+    }
+
+    #[test]
+    fn cli_backup_mode_converts_archive() {
+        assert_eq!(
+            BackupMode::from(CliBackupMode::Archive),
+            BackupMode::Archive
+        );
+    }
 }

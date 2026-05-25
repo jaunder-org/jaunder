@@ -156,4 +156,13 @@ mod tests {
         let config = storage.get_backup_config().await.unwrap();
         assert_eq!(config, BackupConfig::default());
     }
+
+    #[tokio::test]
+    async fn get_backup_config_treats_empty_destination_as_none() {
+        let pool = test_pool().await;
+        let storage = SqliteSiteConfigStorage::new(pool);
+        storage.set("backup.destination_path", "").await.unwrap();
+        let config = storage.get_backup_config().await.unwrap();
+        assert_eq!(config.destination_path, None);
+    }
 }
