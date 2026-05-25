@@ -3,7 +3,8 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand};
 
-use storage::{BackupMode, DbConnectOptions};
+use common::backup::BackupMode;
+use storage::DbConnectOptions;
 
 #[derive(Parser, Clone)]
 #[command(name = "jaunder", about = "A self-hosted social reader")]
@@ -47,6 +48,21 @@ pub struct PgBootstrapArgs {
     /// Password to set on the application role being created.
     #[arg(long)]
     pub app_role_password: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+pub enum CliBackupMode {
+    Directory,
+    Archive,
+}
+
+impl From<CliBackupMode> for BackupMode {
+    fn from(m: CliBackupMode) -> Self {
+        match m {
+            CliBackupMode::Directory => BackupMode::Directory,
+            CliBackupMode::Archive => BackupMode::Archive,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -173,7 +189,7 @@ pub enum Commands {
 
         /// Backup format to write.
         #[arg(long, value_enum, default_value = "directory")]
-        mode: BackupMode,
+        mode: CliBackupMode,
 
         /// Destination directory or .tar.gz archive path for this backup.
         #[arg(long)]
@@ -543,7 +559,7 @@ mod tests {
         let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
             panic!("wrong variant");
         };
-        assert_eq!(mode, BackupMode::Directory);
+        assert_eq!(mode, CliBackupMode::Directory);
         assert_eq!(path, None);
     }
 
@@ -570,7 +586,7 @@ mod tests {
         let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
             panic!("wrong variant");
         };
-        assert_eq!(mode, BackupMode::Archive);
+        assert_eq!(mode, CliBackupMode::Archive);
         assert_eq!(path, Some(PathBuf::from("/tmp/backup.tar.gz")));
     }
 

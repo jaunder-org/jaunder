@@ -103,7 +103,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             mode,
             path,
         } => {
-            jaunder::commands::cmd_backup(&storage, mode, path).await?;
+            jaunder::commands::cmd_backup(&storage, mode.into(), path).await?;
         }
         Commands::Restore { storage, path } => {
             jaunder::commands::cmd_restore(&storage, &path).await?;
