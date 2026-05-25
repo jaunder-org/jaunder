@@ -483,3 +483,45 @@ async fn operator_can_update_backup_settings_with_empty_destination() {
     let config: BackupConfig = serde_json::from_str(&settings.1).unwrap();
     assert_eq!(config.destination_path, None);
 }
+
+#[tokio::test]
+async fn backup_warning_visible_propagates_storage_error_during_auth() {
+    // Covers the Err(non-Unauthorized) branch: close pool after session creation
+    // so authenticate() returns an Internal error (not Unauthorized).
+    let base = TempDir::new().unwrap();
+    let (state, pool) = helpers::test_sqlite_state_with_pool(&base).await;
+    let cookie = create_session_cookie(&state, "operator", true).await;
+
+    pool.close().await;
+
+    let (status, _body) = post_form(
+        Arc::clone(&state),
+        "/api/backup_warning_visible",
+        "",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn current_user_is_operator_propagates_storage_error_during_auth() {
+    // Covers the Err(non-Unauthorized) branch: close pool after session creation
+    // so authenticate() returns an Internal error (not Unauthorized).
+    let base = TempDir::new().unwrap();
+    let (state, pool) = helpers::test_sqlite_state_with_pool(&base).await;
+    let cookie = create_session_cookie(&state, "operator", true).await;
+
+    pool.close().await;
+
+    let (status, _body) = post_form(
+        Arc::clone(&state),
+        "/api/current_user_is_operator",
+        "",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
