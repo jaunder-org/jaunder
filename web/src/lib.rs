@@ -2,34 +2,9 @@
 pub use common::username;
 
 #[macro_export]
-macro_rules! web_ssr {
-    ($($param:ident),* => $body:block) => {
-        {
-            #[cfg(feature = "ssr")]
-            $body
-            #[cfg(not(feature = "ssr"))]
-            {
-                $(let _ = $param;)*
-                Err($crate::error::WebError::server_function("Not implemented"))
-            }
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! web_server_fn {
-    ($name:expr, $($param:ident),* => $body:block) => {
-        {
-            #[cfg(feature = "ssr")]
-            {
-                $crate::error::server_boundary($name, async move $body).await
-            }
-            #[cfg(not(feature = "ssr"))]
-            {
-                $(let _ = $param;)*
-                Err($crate::error::WebError::server_function("Not implemented"))
-            }
-        }
+macro_rules! boundary {
+    ($name:expr, $body:block) => {
+        $crate::error::server_boundary($name, async move $body).await
     };
 }
 

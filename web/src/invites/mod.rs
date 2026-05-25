@@ -1,9 +1,15 @@
+#[cfg(feature = "ssr")]
+use {
+    crate::auth::require_auth,
+    crate::error::InternalError,
+    chrono::Utc,
+    std::sync::Arc,
+    storage::{load_registration_policy, InviteStorage, RegistrationPolicy, SiteConfigStorage},
+};
+
+use crate::error::WebResult;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
-
-#[cfg(feature = "ssr")]
-use crate::error::InternalError;
-use crate::error::WebResult;
 
 /// Invite info returned by [`list_invites`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,20 +21,11 @@ pub struct InviteInfo {
     pub used_by: Option<i64>,
 }
 
-#[cfg(feature = "ssr")]
-use crate::auth::require_auth;
-#[cfg(feature = "ssr")]
-use chrono::Utc;
-#[cfg(feature = "ssr")]
-use std::sync::Arc;
-#[cfg(feature = "ssr")]
-use storage::{load_registration_policy, InviteStorage, RegistrationPolicy, SiteConfigStorage};
-
 /// Creates an invite code expiring in `expires_in_hours` (default 168 = 7 days).
 /// Requires authentication.
 #[server(endpoint = "/create_invite")]
 pub async fn create_invite(expires_in_hours: Option<u64>) -> WebResult<String> {
-    crate::web_server_fn!("create_invite", expires_in_hours => {
+    boundary!("create_invite", {
         let _auth = require_auth().await?;
         let invites = expect_context::<Arc<dyn InviteStorage>>();
         let hours = expires_in_hours.unwrap_or(168);
@@ -48,7 +45,7 @@ pub async fn create_invite(expires_in_hours: Option<u64>) -> WebResult<String> {
 /// returns an error otherwise.
 #[server(endpoint = "/list_invites")]
 pub async fn list_invites() -> WebResult<Vec<InviteInfo>> {
-    crate::web_server_fn!("list_invites", => {
+    boundary!("list_invites", {
         let _auth = require_auth().await?;
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let invites = expect_context::<Arc<dyn InviteStorage>>();

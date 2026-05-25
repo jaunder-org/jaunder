@@ -2,15 +2,17 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "ssr")]
-use crate::auth::require_auth;
-use crate::error::WebResult;
-#[cfg(feature = "ssr")]
-use std::sync::Arc;
-#[cfg(feature = "ssr")]
-use storage::{
-    MediaSource, MediaStorage, PostStorage, SiteConfigStorage, DEFAULT_MAX_FILE_SIZE_BYTES,
-    DEFAULT_USER_QUOTA_BYTES, MEDIA_MAX_FILE_SIZE_BYTES_KEY, MEDIA_USER_QUOTA_BYTES_KEY,
+use {
+    crate::auth::require_auth,
+    crate::error::InternalError,
+    std::sync::Arc,
+    storage::{
+        MediaSource, MediaStorage, PostStorage, SiteConfigStorage, DEFAULT_MAX_FILE_SIZE_BYTES,
+        DEFAULT_USER_QUOTA_BYTES, MEDIA_MAX_FILE_SIZE_BYTES_KEY, MEDIA_USER_QUOTA_BYTES_KEY,
+    },
 };
+
+use crate::error::WebResult;
 
 /// A media item returned by [`list_my_media`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -46,9 +48,7 @@ pub async fn list_my_media(
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> WebResult<Vec<MediaItem>> {
-    crate::web_server_fn!("list_my_media", source, limit, offset => {
-        use crate::error::InternalError;
-
+    boundary!("list_my_media", {
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
 
@@ -89,9 +89,7 @@ pub async fn list_my_media(
 /// Returns storage usage for the authenticated user.
 #[server(endpoint = "/media_usage")]
 pub async fn media_usage() -> WebResult<MediaUsageData> {
-    crate::web_server_fn!("media_usage", => {
-        use crate::error::InternalError;
-
+    boundary!("media_usage", {
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -134,9 +132,7 @@ pub async fn delete_media(
     source: String,
     force: Option<bool>,
 ) -> WebResult<DeleteMediaResult> {
-    crate::web_server_fn!("delete_media", sha256, filename, source, force => {
-        use crate::error::InternalError;
-
+    boundary!("delete_media", {
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let posts = expect_context::<Arc<dyn PostStorage>>();

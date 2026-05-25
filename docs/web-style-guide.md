@@ -161,7 +161,39 @@ toolbar) into a second place, lift it into `ui.rs`.
   (`margin-top:8px`, dynamic colors). Repeated patterns belong in a
   class — the page gutter is `.j-page`, not inline `padding:16px 32px`.
 
-## 8. SSR-safe Resource patterns
+## 8. Server function module structure
+
+Feature modules in `web/src/` follow the **server submodule pattern** — see
+[ADR-0013](../decisions/0013-server-submodule-pattern.md) for the full
+rationale.
+
+Each feature is a directory module:
+
+```text
+web/src/feature/
+├── mod.rs     # Shared DTOs + #[server] functions with real bodies
+└── server.rs  # Module-private helpers and tests (omit if not needed)
+```
+
+At the top of `mod.rs`:
+
+```rust
+#[cfg(feature = "ssr")]
+mod server;
+#[cfg(feature = "ssr")]
+use server::*;   // all server-only helpers come into scope here
+```
+
+Every `#[server]` body is wrapped with `boundary!("function_name", { ... })`.
+No per-import `#[cfg(feature = "ssr")]` annotations appear inside function
+bodies — the `#[server]` proc-macro already cfg-gates bodies to SSR, and
+`use server::*` covers all server-only imports in one place.
+
+`server.rs` is only created when the module has genuine private helpers worth
+naming (multi-step transactions, helpers shared across multiple server
+functions, unit tests). Small features may keep everything in `mod.rs`.
+
+## 9. SSR-safe Resource patterns
 
 Two anti-patterns to avoid (both have caused production panics — see
 the saved `bd memories`):
