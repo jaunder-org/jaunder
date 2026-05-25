@@ -21,7 +21,6 @@ use std::{
 use axum::http::HeaderName;
 use axum::Router;
 use axum_embed::ServeEmbed;
-use croner::Cron;
 use leptos::prelude::*;
 use leptos_axum::{generate_route_list, LeptosRoutes};
 use opentelemetry::propagation::Extractor;
@@ -34,10 +33,8 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use web::{shell, App};
 
 use crate::assets::StaticAssets;
-use ::storage::{
-    AppState, SiteConfigStorage, BACKUP_DESTINATION_PATH_KEY, BACKUP_MODE_KEY,
-    BACKUP_RETENTION_COUNT_KEY, BACKUP_SCHEDULE_KEY,
-};
+use ::storage::AppState;
+use common::backup::BackupConfig;
 use storage::{export_backup, BackupExportOptions, BackupMode, DbConnectOptions};
 
 pub fn create_router(
@@ -134,67 +131,6 @@ pub fn create_router(
         .with_state(leptos_options)
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct BackupWorkerConfig {
-    destination_path: Option<PathBuf>,
-    schedule: String,
-    retention_count: usize,
-    mode: BackupMode,
-    invalid_keys: Vec<&'static str>,
-}
-
-impl BackupWorkerConfig {
-    async fn load(site_config: &dyn SiteConfigStorage) -> anyhow::Result<Self> {
-        let mut invalid_keys = Vec::new();
-        let destination_path = site_config
-            .get(BACKUP_DESTINATION_PATH_KEY)
-            .await?
-            .and_then(|path| non_empty_path(&path));
-        let schedule = match site_config.get(BACKUP_SCHEDULE_KEY).await? {
-            Some(value) if backup_schedule_valid(value.trim()) => value.trim().to_owned(),
-            Some(_) => {
-                invalid_keys.push(BACKUP_SCHEDULE_KEY);
-                default_backup_schedule()
-            }
-            None => default_backup_schedule(),
-        };
-        let retention_count = match site_config.get(BACKUP_RETENTION_COUNT_KEY).await? {
-            Some(value) => {
-                if let Ok(value) = value.parse::<usize>() {
-                    value
-                } else {
-                    invalid_keys.push(BACKUP_RETENTION_COUNT_KEY);
-                    default_backup_retention_count()
-                }
-            }
-            None => default_backup_retention_count(),
-        };
-        let mode = match site_config.get(BACKUP_MODE_KEY).await? {
-            Some(value) => {
-                if let Some(mode) = parse_backup_mode(&value) {
-                    mode
-                } else {
-                    invalid_keys.push(BACKUP_MODE_KEY);
-                    default_backup_mode()
-                }
-            }
-            None => default_backup_mode(),
-        };
-
-        Ok(Self {
-            destination_path,
-            schedule,
-            retention_count,
-            mode,
-            invalid_keys,
-        })
-    }
-
-    fn has_invalid_values(&self) -> bool {
-        !self.invalid_keys.is_empty()
-    }
-}
-
 /// Starts the background backup worker if configured.
 ///
 /// # Errors
@@ -206,21 +142,14 @@ pub async fn start_backup_worker(
     database: DbConnectOptions,
     storage_path: PathBuf,
 ) -> anyhow::Result<Option<JobScheduler>> {
-    let config = BackupWorkerConfig::load(state.site_config.as_ref()).await?;
-    let Some(destination_root) = config.destination_path.clone() else {
+    let config = state.site_config.get_backup_config().await?;
+    let Some(destination_root) = config.destination_path.as_deref().map(PathBuf::from) else {
         tracing::warn!("backup worker disabled: backup.destination_path is not configured");
         return Ok(None);
     };
-    if config.has_invalid_values() {
-        tracing::error!(
-            invalid_keys = ?config.invalid_keys,
-            "scheduled backup worker disabled: backup configuration is invalid and needs urgent operator attention"
-        );
-        return Ok(None);
-    }
 
     let scheduler = JobScheduler::new().await?;
-    let schedule = config.schedule.clone();
+    let schedule = config.schedule.as_str().to_owned();
     let job = Job::new_async(schedule.as_str(), move |_uuid, _lock| {
         let database = database.clone();
         let media_path = storage_path.join("media");
@@ -243,7 +172,7 @@ async fn run_scheduled_backup(
     database: &DbConnectOptions,
     media_path: &Path,
     destination_root: &Path,
-    config: &BackupWorkerConfig,
+    config: &BackupConfig,
 ) -> anyhow::Result<PathBuf> {
     fs::create_dir_all(destination_root)?;
     let destination_path = backup_path_for_mode(destination_root, config.mode);
@@ -300,39 +229,6 @@ fn backup_path_for_mode(destination_root: &Path, mode: BackupMode) -> PathBuf {
     }
 }
 
-fn default_backup_schedule() -> String {
-    "0 0 0 * * *".to_owned()
-}
-
-fn default_backup_retention_count() -> usize {
-    7
-}
-
-fn default_backup_mode() -> BackupMode {
-    BackupMode::Directory
-}
-
-fn backup_schedule_valid(schedule: &str) -> bool {
-    Cron::new(schedule).with_seconds_required().parse().is_ok()
-}
-
-fn parse_backup_mode(value: &str) -> Option<BackupMode> {
-    match value.trim() {
-        "directory" => Some(BackupMode::Directory),
-        "archive" => Some(BackupMode::Archive),
-        _ => None,
-    }
-}
-
-fn non_empty_path(value: &str) -> Option<PathBuf> {
-    let value = value.trim();
-    if value.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(value))
-    }
-}
-
 #[derive(Clone)]
 struct ExtractedTraceContext(opentelemetry::Context);
 
@@ -369,6 +265,7 @@ mod tests {
         http::{HeaderMap, Request, StatusCode},
     };
     use leptos::prelude::LeptosOptions;
+    use storage::{BACKUP_DESTINATION_PATH_KEY, BACKUP_SCHEDULE_KEY};
     use tempfile::TempDir;
     use tower::ServiceExt;
 
@@ -416,17 +313,6 @@ mod tests {
         );
         assert!(suffix.ends_with('Z'), "timestamp must end with 'Z'");
         assert!(suffix.contains('T'), "timestamp must contain 'T'");
-    }
-
-    #[test]
-    fn default_backup_schedule_is_daily_at_midnight() {
-        let schedule = default_backup_schedule();
-        assert_eq!(schedule, "0 0 0 * * *");
-    }
-
-    #[test]
-    fn default_backup_retention_count_is_seven() {
-        assert_eq!(default_backup_retention_count(), 7);
     }
 
     #[tokio::test]
@@ -524,105 +410,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn backup_worker_config_loads_site_config_values() {
-        let state = test_state().await;
-        state
-            .site_config
-            .set(BACKUP_DESTINATION_PATH_KEY, "/tmp/jaunder-backups")
-            .await
-            .expect("set destination");
-        state
-            .site_config
-            .set(BACKUP_SCHEDULE_KEY, "0 15 2 * * *")
-            .await
-            .expect("set schedule");
-        state
-            .site_config
-            .set(BACKUP_RETENTION_COUNT_KEY, "3")
-            .await
-            .expect("set retention");
-        state
-            .site_config
-            .set(BACKUP_MODE_KEY, "directory")
-            .await
-            .expect("set mode");
-
-        let config = BackupWorkerConfig::load(state.site_config.as_ref())
-            .await
-            .expect("load config");
-
-        assert_eq!(
-            config.destination_path,
-            Some(PathBuf::from("/tmp/jaunder-backups"))
-        );
-        assert_eq!(config.schedule, "0 15 2 * * *");
-        assert_eq!(config.retention_count, 3);
-        assert_eq!(config.mode, BackupMode::Directory);
-    }
-
-    #[tokio::test]
-    async fn backup_worker_config_accepts_archive_mode() {
-        let state = test_state().await;
-        state
-            .site_config
-            .set(BACKUP_MODE_KEY, "archive")
-            .await
-            .expect("set mode");
-
-        let config = BackupWorkerConfig::load(state.site_config.as_ref())
-            .await
-            .expect("load config");
-
-        assert_eq!(config.mode, BackupMode::Archive);
-    }
-
-    #[tokio::test]
-    async fn backup_worker_config_rejects_unknown_mode() {
-        let state = test_state().await;
-        state
-            .site_config
-            .set(BACKUP_MODE_KEY, "surprise")
-            .await
-            .expect("set mode");
-
-        let config = BackupWorkerConfig::load(state.site_config.as_ref())
-            .await
-            .expect("load config");
-
-        assert_eq!(config.mode, BackupMode::Directory);
-        assert_eq!(config.invalid_keys, vec![BACKUP_MODE_KEY]);
-    }
-
-    #[tokio::test]
-    async fn backup_worker_disabled_when_schedule_is_invalid() {
-        let state = test_state().await;
-        let storage = TempDir::new().expect("temp dir");
-        state
-            .site_config
-            .set(
-                BACKUP_DESTINATION_PATH_KEY,
-                storage.path().join("backups").to_str().expect("utf-8 path"),
-            )
-            .await
-            .expect("set destination");
-        state
-            .site_config
-            .set(BACKUP_SCHEDULE_KEY, "not-a-schedule")
-            .await
-            .expect("set schedule");
-
-        let scheduler = start_backup_worker(
-            state,
-            "sqlite::memory:".parse().expect("sqlite options"),
-            storage.path().to_path_buf(),
-        )
-        .await
-        .expect("worker start");
-
-        assert!(scheduler.is_none());
-    }
-
-    #[tokio::test]
     async fn run_scheduled_backup_writes_backup_and_prunes_old_ones() {
         let temp = TempDir::new().expect("temp dir");
         let db_url = format!("sqlite:{}", temp.path().join("jaunder.db").display());
@@ -641,12 +428,11 @@ mod tests {
             std::fs::write(backup.join("manifest.json"), "{}").expect("manifest");
         }
 
-        let config = BackupWorkerConfig {
-            destination_path: Some(destination_root.clone()),
-            schedule: "0 0 0 1 1 *".to_owned(),
+        let config = BackupConfig {
+            destination_path: Some(destination_root.to_string_lossy().into_owned()),
+            schedule: common::backup::BackupSchedule::parse("0 0 0 1 1 *").expect("valid schedule"),
             retention_count: 1,
             mode: BackupMode::Directory,
-            invalid_keys: Vec::new(),
         };
         let written = run_scheduled_backup(
             &db_url.parse().expect("db options"),
@@ -700,18 +486,6 @@ mod tests {
     fn prune_backups_accepts_missing_destination_root() {
         let temp = TempDir::new().expect("temp dir");
         prune_backups(&temp.path().join("missing"), 1).expect("prune missing root");
-    }
-
-    #[test]
-    fn backup_path_helpers_parse_empty_and_nonempty_values() {
-        assert_eq!(non_empty_path("   "), None);
-        assert_eq!(
-            non_empty_path(" /tmp/backups "),
-            Some(PathBuf::from("/tmp/backups"))
-        );
-        assert_eq!(parse_backup_mode(""), None);
-        assert_eq!(parse_backup_mode("directory"), Some(BackupMode::Directory));
-        assert_eq!(parse_backup_mode("archive"), Some(BackupMode::Archive));
     }
 
     #[tokio::test]
