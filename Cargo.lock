@@ -506,9 +506,11 @@ dependencies = [
  "argon2",
  "async-trait",
  "chrono",
+ "croner",
  "email_address",
  "orgize",
  "pulldown-cmark",
+ "serde",
  "thiserror 2.0.18",
  "tokio",
 ]

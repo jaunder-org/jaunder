@@ -14,7 +14,7 @@ leptos_router.workspace = true
 leptos_axum = { workspace = true, optional = true }
 
 axum = { workspace = true, optional = true }
-common = { workspace = true, optional = true }
+common.workspace = true
 storage = { workspace = true, optional = true }
 http.workspace = true
 cfg-if.workspace = true
@@ -57,7 +57,6 @@ ssr = [
     "dep:leptos_axum",
     "dep:axum",
     "dep:chrono",
-    "dep:common",
     "dep:storage",
     "dep:email_address",
     "dep:tracing",
