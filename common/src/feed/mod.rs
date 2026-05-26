@@ -3,3 +3,6 @@ pub use feed_path::{canonicalize, parse, FeedFormat, FeedSurface};
 
 pub mod window;
 pub use window::{HasPublishedAt, HybridWindow};
+
+pub mod metadata;
+pub use metadata::{feed_etag, FeedItem, FeedMetadata};
