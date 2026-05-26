@@ -9,3 +9,6 @@ pub use metadata::{feed_etag, FeedItem, FeedMetadata};
 
 pub mod rss;
 pub use rss::render_rss;
+
+pub mod atom;
+pub use atom::render_atom;
