@@ -6,6 +6,8 @@ mod auth;
 mod backup;
 mod db;
 mod email;
+mod feed_cache;
+mod feed_events;
 mod helpers;
 mod invites;
 mod media;
@@ -29,6 +31,8 @@ pub use backup::{
 };
 pub use db::*;
 pub use email::*;
+pub use feed_cache::*;
+pub use feed_events::*;
 pub use invites::*;
 pub use media::*;
 pub use password::*;
