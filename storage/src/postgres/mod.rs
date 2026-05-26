@@ -23,6 +23,12 @@ pub use invites::PostgresInviteStorage;
 mod email_verifications;
 pub use email_verifications::PostgresEmailVerificationStorage;
 
+mod feed_cache;
+pub use feed_cache::PostgresFeedCacheStorage;
+
+mod feed_events;
+pub use feed_events::PostgresFeedEventStorage;
+
 mod password_resets;
 pub use password_resets::PostgresPasswordResetStorage;
 
