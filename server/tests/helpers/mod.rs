@@ -9,11 +9,13 @@ use std::sync::{
 };
 use storage::{
     open_database, AppState, DbConnectOptions, PostgresAtomicOps, PostgresEmailVerificationStorage,
-    PostgresInviteStorage, PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
+    PostgresFeedCacheStorage, PostgresFeedEventStorage, PostgresInviteStorage,
+    PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
     PostgresSessionStorage, PostgresSiteConfigStorage, PostgresUserConfigStorage,
-    PostgresUserStorage, SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
-    SqliteMediaStorage, SqlitePasswordResetStorage, SqlitePostStorage, SqliteSessionStorage,
-    SqliteSiteConfigStorage, SqliteUserConfigStorage, SqliteUserStorage,
+    PostgresUserStorage, SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
+    SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage,
+    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserConfigStorage,
+    SqliteUserStorage,
 };
 use tempfile::TempDir;
 
@@ -224,7 +226,9 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             password_resets: Arc::new(PostgresPasswordResetStorage::new(pool.clone())),
             posts: Arc::new(PostgresPostStorage::new(pool.clone())),
             media: Arc::new(PostgresMediaStorage::new(pool.clone())),
-            user_config: Arc::new(PostgresUserConfigStorage::new(pool)),
+            user_config: Arc::new(PostgresUserConfigStorage::new(pool.clone())),
+            feed_cache: Arc::new(PostgresFeedCacheStorage::new(pool.clone())),
+            feed_events: Arc::new(PostgresFeedEventStorage::new(pool)),
         })
     } else {
         let pool = sqlx::SqlitePool::connect_with(
@@ -249,7 +253,9 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
             posts: Arc::new(SqlitePostStorage::new(pool.clone())),
             media: Arc::new(SqliteMediaStorage::new(pool.clone())),
-            user_config: Arc::new(SqliteUserConfigStorage::new(pool)),
+            user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
+            feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
+            feed_events: Arc::new(SqliteFeedEventStorage::new(pool)),
         })
     };
     (state, mailer)
@@ -287,6 +293,8 @@ pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx
         posts: Arc::new(SqlitePostStorage::new(pool.clone())),
         media: Arc::new(SqliteMediaStorage::new(pool.clone())),
         user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
+        feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
+        feed_events: Arc::new(SqliteFeedEventStorage::new(pool.clone())),
     });
     (state, pool)
 }

@@ -14,18 +14,6 @@ pub enum FeedEventStatus {
     Failed,
 }
 
-impl FeedEventStatus {
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            FeedEventStatus::Pending => "pending",
-            FeedEventStatus::Claimed => "claimed",
-            FeedEventStatus::Done => "done",
-            FeedEventStatus::Failed => "failed",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedEventRecord {
     pub id: i64,

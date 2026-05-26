@@ -64,7 +64,9 @@ fn make_app_state(pool: SqlitePool) -> Arc<AppState> {
         password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
         posts: Arc::new(SqlitePostStorage::new(pool.clone())),
         media: Arc::new(SqliteMediaStorage::new(pool.clone())),
-        user_config: Arc::new(SqliteUserConfigStorage::new(pool)),
+        user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
+        feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
+        feed_events: Arc::new(SqliteFeedEventStorage::new(pool)),
     })
 }
 
