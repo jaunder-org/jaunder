@@ -1,12 +1,17 @@
-use crate::feed::metadata::{FeedItem, FeedMetadata};
+use atom_syndication::Link as AtomLink;
+use rss::extension::atom::AtomExtension;
 use rss::{ChannelBuilder, GuidBuilder, ItemBuilder};
+
+use crate::feed::metadata::{FeedItem, FeedMetadata};
 
 /// Render an RSS 2.0 feed document.
 ///
-/// # Panics
-///
-/// Panics if the underlying RSS writer fails to produce valid UTF-8 output,
-/// which should not happen for well-formed `FeedMetadata` and `FeedItem` inputs.
+/// RSS 2.0 has no native element for declaring the feed's own URL or a `WebSub`
+/// hub — both `<self>` and `<hub>` links are conventionally emitted using
+/// Atom's `<link>` element via the Atom namespace. The W3C Feed Validator
+/// expects `<atom:link rel="self">`, and the `WebSub` Recommendation requires
+/// `<atom:link rel="hub">` for RSS publishers (there is no RSS-native
+/// alternative for either).
 #[must_use]
 pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> String {
     let rss_items: Vec<rss::Item> = items
@@ -27,42 +32,45 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> String {
         })
         .collect();
 
+    let mut atom_links = vec![AtomLink {
+        href: meta.self_url.clone(),
+        rel: "self".into(),
+        mime_type: Some("application/rss+xml".into()),
+        ..Default::default()
+    }];
+    if let Some(hub) = &meta.hub_url {
+        atom_links.push(AtomLink {
+            href: hub.clone(),
+            rel: "hub".into(),
+            ..Default::default()
+        });
+    }
+
     let mut builder = ChannelBuilder::default();
     builder
         .title(meta.title.clone())
         .link(meta.canonical_url.clone())
         .description(meta.description.clone().unwrap_or_default())
         .last_build_date(Some(meta.updated_at.to_rfc2822()))
+        .atom_ext(Some(AtomExtension { links: atom_links }))
         .items(rss_items);
 
-    let mut channel = builder.build();
-    // atom:link rel=self
-    let mut ns = std::collections::BTreeMap::new();
-    ns.insert(
-        "atom".to_string(),
-        "http://www.w3.org/2005/Atom".to_string(),
-    );
-    channel.set_namespaces(ns);
-
-    let mut buf = Vec::new();
-    channel
-        .pretty_write_to(&mut buf, b' ', 2)
-        .expect("write rss");
-    String::from_utf8(buf).expect("rss is utf-8")
+    builder.build().to_string()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::TimeZone;
 
-    fn meta() -> FeedMetadata {
+    use super::*;
+
+    fn meta(hub: Option<&str>) -> FeedMetadata {
         FeedMetadata {
             title: "Site".into(),
             description: Some("A site".into()),
             canonical_url: "https://example.com/".into(),
             self_url: "https://example.com/feed.rss".into(),
-            hub_url: None,
+            hub_url: hub.map(str::to_string),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
         }
     }
@@ -82,7 +90,7 @@ mod tests {
 
     #[test]
     fn renders_empty_feed() {
-        let out = render_rss(&meta(), &[]);
+        let out = render_rss(&meta(None), &[]);
         assert!(out.contains("<rss"));
         assert!(out.contains("<title>Site</title>"));
         assert!(!out.contains("<item>"));
@@ -90,16 +98,38 @@ mod tests {
 
     #[test]
     fn renders_post_with_title() {
-        let out = render_rss(&meta(), &[item(Some("Hello"))]);
+        let out = render_rss(&meta(None), &[item(Some("Hello"))]);
         assert!(out.contains("<title>Hello</title>"));
         assert!(out.contains("<link>https://example.com/~alice/posts/1</link>"));
     }
 
     #[test]
     fn renders_titleless_post() {
-        let out = render_rss(&meta(), &[item(None)]);
+        let out = render_rss(&meta(None), &[item(None)]);
         assert!(out.contains("<item>"));
         // Description still emitted
         assert!(out.contains("<description>"));
+    }
+
+    #[test]
+    fn emits_atom_self_link() {
+        let out = render_rss(&meta(None), &[]);
+        assert!(out.contains("xmlns:atom=\"http://www.w3.org/2005/Atom\""));
+        assert!(out.contains("<atom:link"));
+        assert!(out.contains("rel=\"self\""));
+        assert!(out.contains("href=\"https://example.com/feed.rss\""));
+    }
+
+    #[test]
+    fn emits_atom_hub_link_when_configured() {
+        let out = render_rss(&meta(Some("https://hub.example.com/")), &[]);
+        assert!(out.contains("rel=\"hub\""));
+        assert!(out.contains("href=\"https://hub.example.com/\""));
+    }
+
+    #[test]
+    fn omits_atom_hub_link_when_unset() {
+        let out = render_rss(&meta(None), &[]);
+        assert!(!out.contains("rel=\"hub\""));
     }
 }
