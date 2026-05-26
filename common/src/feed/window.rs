@@ -62,6 +62,13 @@ mod tests {
     }
 
     #[test]
+    fn default_window_uses_documented_defaults() {
+        let w = HybridWindow::default();
+        assert_eq!(w.min_items, 20);
+        assert_eq!(w.min_days, 30);
+    }
+
+    #[test]
     fn empty_input_returns_empty() {
         let w = HybridWindow {
             min_items: 20,

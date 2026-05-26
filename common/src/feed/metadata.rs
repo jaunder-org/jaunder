@@ -69,6 +69,18 @@ mod tests {
     }
 
     #[test]
+    fn feed_item_implements_has_published_at() {
+        use crate::feed::window::{HasPublishedAt, HybridWindow};
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let i = item(1, now);
+        assert_eq!(<FeedItem as HasPublishedAt>::published_at(&i), now);
+        // And exercise it through HybridWindow::select to confirm trait wiring.
+        let items = [item(1, now)];
+        let kept = HybridWindow::default().select(&items, now);
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
     fn etag_stable_for_identical_input() {
         let now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
         let items = vec![item(1, now), item(2, now)];
