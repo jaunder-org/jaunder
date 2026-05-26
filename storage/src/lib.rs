@@ -48,9 +48,10 @@ pub use sessions::*;
 pub use site_config::*;
 pub use smtp::*;
 pub use sqlite::{
-    SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage, SqliteMediaStorage,
-    SqlitePasswordResetStorage, SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage,
-    SqliteUserConfigStorage, SqliteUserStorage,
+    SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
+    SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage,
+    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserConfigStorage,
+    SqliteUserStorage,
 };
 pub use user_config::*;
 pub use users::*;
