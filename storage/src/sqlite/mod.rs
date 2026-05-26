@@ -24,6 +24,12 @@ pub use invites::SqliteInviteStorage;
 mod email_verifications;
 pub use email_verifications::SqliteEmailVerificationStorage;
 
+mod feed_cache;
+pub use feed_cache::SqliteFeedCacheStorage;
+
+mod feed_events;
+pub use feed_events::SqliteFeedEventStorage;
+
 mod password_resets;
 pub use password_resets::SqlitePasswordResetStorage;
 
