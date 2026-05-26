@@ -86,6 +86,13 @@ mod tests {
     }
 
     #[test]
+    fn emits_feed_url_as_self() {
+        let out = render_json(&meta(None), &[]);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["feed_url"], "https://example.com/feed.json");
+    }
+
+    #[test]
     fn includes_hub_when_set() {
         let out = render_json(&meta(Some("https://hub.example.com/")), &[]);
         let v: Value = serde_json::from_str(&out).unwrap();
