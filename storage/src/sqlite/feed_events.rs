@@ -25,7 +25,7 @@ fn parse_status(s: &str) -> FeedEventStatus {
 }
 
 fn placeholders(n: usize) -> String {
-    std::iter::repeat("?").take(n).collect::<Vec<_>>().join(",")
+    std::iter::repeat_n("?", n).collect::<Vec<_>>().join(",")
 }
 
 #[async_trait]

@@ -38,7 +38,8 @@ pub use media::*;
 pub use password::*;
 pub use postgres::{
     resolved_postgres_options, PostgresAtomicOps, PostgresEmailVerificationStorage,
-    PostgresInviteStorage, PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
+    PostgresFeedCacheStorage, PostgresFeedEventStorage, PostgresInviteStorage,
+    PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
     PostgresSessionStorage, PostgresSiteConfigStorage, PostgresUserConfigStorage,
     PostgresUserStorage,
 };
