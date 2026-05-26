@@ -35,6 +35,8 @@ pub use media::PostgresMediaStorage;
 mod posts;
 pub use posts::PostgresPostStorage;
 
+pub(crate) mod backup;
+
 use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
 use common::password::Password;
 use common::username::Username;

@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod mailer;
 pub mod media;
 pub mod password;

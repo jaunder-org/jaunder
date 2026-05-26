@@ -15,7 +15,6 @@ exclude_globs = [
     "server/src/observability.rs",
     "server/src/assets.rs",
     "storage/src/postgres/**",
-    "storage/src/backup/postgres.rs",
 ]
 
 # Auto-set timeout relative to baseline; add 20% headroom

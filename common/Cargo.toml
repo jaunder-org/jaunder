@@ -9,9 +9,14 @@ argon2 = { workspace = true }
 async-trait.workspace = true
 email_address.workspace = true
 chrono.workspace = true
+croner.workspace = true
 orgize.workspace = true
 pulldown-cmark.workspace = true
+serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
 
 [features]
 test-utils = []
