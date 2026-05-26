@@ -61,6 +61,41 @@ pub trait SiteConfigStorage: Send + Sync {
         })
     }
 
+    /// Returns the configured `feeds.min_items` value, falling back to the
+    /// default ([`DEFAULT_FEEDS_MIN_ITEMS`]) if unset or unparseable.
+    async fn get_feeds_min_items(&self) -> sqlx::Result<u32> {
+        Ok(self
+            .get(FEEDS_MIN_ITEMS_KEY)
+            .await?
+            .as_deref()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .unwrap_or(DEFAULT_FEEDS_MIN_ITEMS))
+    }
+
+    /// Returns the configured `feeds.min_days` value, falling back to the
+    /// default ([`DEFAULT_FEEDS_MIN_DAYS`]) if unset or unparseable.
+    async fn get_feeds_min_days(&self) -> sqlx::Result<u32> {
+        Ok(self
+            .get(FEEDS_MIN_DAYS_KEY)
+            .await?
+            .as_deref()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .unwrap_or(DEFAULT_FEEDS_MIN_DAYS))
+    }
+
+    /// Returns the configured `WebSub` hub URL, if any. An empty stored value
+    /// is treated as unset.
+    async fn get_feeds_websub_hub_url(&self) -> sqlx::Result<Option<String>> {
+        Ok(self.get(FEEDS_WEBSUB_HUB_URL_KEY).await?.and_then(|v| {
+            let v = v.trim().to_owned();
+            if v.is_empty() {
+                None
+            } else {
+                Some(v)
+            }
+        }))
+    }
+
     /// Stores the backup configuration to the site config storage.
     async fn set_backup_config(&self, config: &BackupConfig) -> sqlx::Result<()> {
         self.set(
@@ -89,6 +124,20 @@ pub const BACKUP_SCHEDULE_KEY: &str = "backup.schedule";
 pub const BACKUP_RETENTION_COUNT_KEY: &str = "backup.retention_count";
 /// Key for the site configuration setting for the backup mode (Archive/Directory).
 pub const BACKUP_MODE_KEY: &str = "backup.mode";
+
+/// Key for the minimum number of items to include in any feed, regardless of age.
+pub const FEEDS_MIN_ITEMS_KEY: &str = "feeds.min_items";
+/// Key for the minimum age window (in days) of items to include in any feed,
+/// regardless of count.
+pub const FEEDS_MIN_DAYS_KEY: &str = "feeds.min_days";
+/// Key for the absolute URL of the configured `WebSub` hub. Unset (or empty)
+/// disables `WebSub` pings.
+pub const FEEDS_WEBSUB_HUB_URL_KEY: &str = "feeds.websub_hub_url";
+
+/// Default for [`FEEDS_MIN_ITEMS_KEY`]: include at least 20 items in every feed.
+pub const DEFAULT_FEEDS_MIN_ITEMS: u32 = 20;
+/// Default for [`FEEDS_MIN_DAYS_KEY`]: include items from the last 30 days.
+pub const DEFAULT_FEEDS_MIN_DAYS: u32 = 30;
 
 fn parse_backup_mode(value: &str) -> Option<BackupMode> {
     match value.trim() {
@@ -155,6 +204,80 @@ mod tests {
         storage.set("backup.mode", "floppy").await.unwrap();
         let config = storage.get_backup_config().await.unwrap();
         assert_eq!(config, BackupConfig::default());
+    }
+
+    #[tokio::test]
+    async fn feeds_min_items_returns_default_when_unset() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        assert_eq!(
+            storage.get_feeds_min_items().await.unwrap(),
+            super::DEFAULT_FEEDS_MIN_ITEMS
+        );
+    }
+
+    #[tokio::test]
+    async fn feeds_min_items_returns_override_value() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        storage.set(super::FEEDS_MIN_ITEMS_KEY, "50").await.unwrap();
+        assert_eq!(storage.get_feeds_min_items().await.unwrap(), 50);
+    }
+
+    #[tokio::test]
+    async fn feeds_min_items_falls_back_when_invalid() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        storage
+            .set(super::FEEDS_MIN_ITEMS_KEY, "not a number")
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.get_feeds_min_items().await.unwrap(),
+            super::DEFAULT_FEEDS_MIN_ITEMS
+        );
+    }
+
+    #[tokio::test]
+    async fn feeds_min_days_returns_default_when_unset() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        assert_eq!(
+            storage.get_feeds_min_days().await.unwrap(),
+            super::DEFAULT_FEEDS_MIN_DAYS
+        );
+    }
+
+    #[tokio::test]
+    async fn feeds_min_days_returns_override_value() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        storage.set(super::FEEDS_MIN_DAYS_KEY, "60").await.unwrap();
+        assert_eq!(storage.get_feeds_min_days().await.unwrap(), 60);
+    }
+
+    #[tokio::test]
+    async fn feeds_websub_hub_url_returns_none_when_unset() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        assert!(storage.get_feeds_websub_hub_url().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn feeds_websub_hub_url_returns_some_when_set() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        storage
+            .set(super::FEEDS_WEBSUB_HUB_URL_KEY, "https://hub.example.com/")
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.get_feeds_websub_hub_url().await.unwrap().as_deref(),
+            Some("https://hub.example.com/")
+        );
+    }
+
+    #[tokio::test]
+    async fn feeds_websub_hub_url_treats_empty_as_none() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        storage
+            .set(super::FEEDS_WEBSUB_HUB_URL_KEY, "")
+            .await
+            .unwrap();
+        assert!(storage.get_feeds_websub_hub_url().await.unwrap().is_none());
     }
 
     #[tokio::test]
