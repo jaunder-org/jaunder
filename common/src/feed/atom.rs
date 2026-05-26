@@ -111,6 +111,13 @@ mod tests {
     }
 
     #[test]
+    fn emits_self_link() {
+        let out = render_atom(&meta(None), &[]);
+        assert!(out.contains("rel=\"self\""));
+        assert!(out.contains("href=\"https://example.com/feed.atom\""));
+    }
+
+    #[test]
     fn includes_hub_link_when_set() {
         let out = render_atom(&meta(Some("https://hub.example.com/")), &[item()]);
         assert!(out.contains("rel=\"hub\""));
