@@ -2,6 +2,7 @@ use atom_syndication::{Category, Content, Entry, Feed, Link, Text};
 
 use crate::feed::metadata::{FeedItem, FeedMetadata};
 
+#[must_use]
 pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> String {
     let mut links = vec![
         Link {

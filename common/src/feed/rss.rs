@@ -1,6 +1,13 @@
 use crate::feed::metadata::{FeedItem, FeedMetadata};
 use rss::{ChannelBuilder, GuidBuilder, ItemBuilder};
 
+/// Render an RSS 2.0 feed document.
+///
+/// # Panics
+///
+/// Panics if the underlying RSS writer fails to produce valid UTF-8 output,
+/// which should not happen for well-formed `FeedMetadata` and `FeedItem` inputs.
+#[must_use]
 pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> String {
     let rss_items: Vec<rss::Item> = items
         .iter()

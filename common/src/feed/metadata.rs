@@ -30,6 +30,7 @@ impl crate::feed::window::HasPublishedAt for FeedItem {
 }
 
 /// Strong validator. Format: `"sha256-<hex32>"`.
+#[must_use]
 pub fn feed_etag(items: &[FeedItem], generated_at: DateTime<Utc>) -> String {
     let mut hasher = Sha256::new();
     let max_updated = items
@@ -37,13 +38,14 @@ pub fn feed_etag(items: &[FeedItem], generated_at: DateTime<Utc>) -> String {
         .map(|i| i.updated_at)
         .max()
         .unwrap_or(generated_at);
-    let last_id = items.last().map(|i| i.id).unwrap_or(0);
+    let last_id = items.last().map_or(0, |i| i.id);
     hasher.update(max_updated.to_rfc3339().as_bytes());
     hasher.update(b"|");
     hasher.update((items.len() as u64).to_le_bytes());
     hasher.update(b"|");
     hasher.update(last_id.to_le_bytes());
     let digest = hasher.finalize();
+    #[allow(clippy::format_collect)]
     let hex: String = digest.iter().take(16).map(|b| format!("{b:02x}")).collect();
     format!("\"sha256-{hex}\"")
 }
@@ -64,6 +66,18 @@ mod tests {
             updated_at: ts,
             tags: vec![],
         }
+    }
+
+    #[test]
+    fn feed_item_implements_has_published_at() {
+        use crate::feed::window::{HasPublishedAt, HybridWindow};
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let i = item(1, now);
+        assert_eq!(<FeedItem as HasPublishedAt>::published_at(&i), now);
+        // And exercise it through HybridWindow::select to confirm trait wiring.
+        let items = [item(1, now)];
+        let kept = HybridWindow::default().select(&items, now);
+        assert_eq!(kept.len(), 1);
     }
 
     #[test]

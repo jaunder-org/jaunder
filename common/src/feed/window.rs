@@ -20,18 +20,22 @@ pub trait HasPublishedAt {
 }
 
 impl HybridWindow {
+    #[must_use]
     pub fn cutoff_date(&self, now: DateTime<Utc>) -> DateTime<Utc> {
-        now - Duration::days(self.min_days as i64)
+        now - Duration::days(i64::from(self.min_days))
     }
 
     /// `posts` must be ordered by `published_at DESC`.
     /// Returns the prefix of posts where, for index `i`,
     /// `i < min_items` OR `published_at >= cutoff_date`.
+    #[must_use]
     pub fn select<'a, P: HasPublishedAt>(&self, posts: &'a [P], now: DateTime<Utc>) -> &'a [P] {
         let cutoff = self.cutoff_date(now);
         let mut end = 0usize;
         for (i, p) in posts.iter().enumerate() {
-            if (i as u32) < self.min_items || p.published_at() >= cutoff {
+            #[allow(clippy::cast_possible_truncation)]
+            let i_u32 = i as u32;
+            if i_u32 < self.min_items || p.published_at() >= cutoff {
                 end = i + 1;
             } else {
                 break;
@@ -55,6 +59,13 @@ mod tests {
 
     fn at(days_ago: i64, now: DateTime<Utc>) -> P {
         P(now - Duration::days(days_ago))
+    }
+
+    #[test]
+    fn default_window_uses_documented_defaults() {
+        let w = HybridWindow::default();
+        assert_eq!(w.min_items, 20);
+        assert_eq!(w.min_days, 30);
     }
 
     #[test]

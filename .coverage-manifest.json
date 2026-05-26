@@ -1,5 +1,11 @@
 {
   "common/src/backup.rs": 100,
+  "common/src/feed/atom.rs": 100,
+  "common/src/feed/feed_path.rs": 100,
+  "common/src/feed/json.rs": 100,
+  "common/src/feed/metadata.rs": 100,
+  "common/src/feed/rss.rs": 100,
+  "common/src/feed/window.rs": 100,
   "common/src/mailer.rs": 100,
   "common/src/media.rs": 100,
   "common/src/password.rs": 100,

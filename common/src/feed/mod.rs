@@ -12,3 +12,6 @@ pub use rss::render_rss;
 
 pub mod atom;
 pub use atom::render_atom;
+
+pub mod json;
+pub use json::render_json;

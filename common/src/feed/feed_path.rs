@@ -8,6 +8,7 @@ pub enum FeedFormat {
 }
 
 impl FeedFormat {
+    #[must_use]
     pub fn ext(self) -> &'static str {
         match self {
             FeedFormat::Rss => "rss",
@@ -15,6 +16,7 @@ impl FeedFormat {
             FeedFormat::Json => "json",
         }
     }
+    #[must_use]
     pub fn content_type(self) -> &'static str {
         match self {
             FeedFormat::Rss => "application/rss+xml; charset=utf-8",
@@ -32,6 +34,7 @@ pub enum FeedSurface {
     UserTag { username: String, tag: String },
 }
 
+#[must_use]
 pub fn canonicalize(surface: &FeedSurface, format: FeedFormat) -> String {
     let ext = format.ext();
     match surface {
@@ -42,6 +45,7 @@ pub fn canonicalize(surface: &FeedSurface, format: FeedFormat) -> String {
     }
 }
 
+#[must_use]
 pub fn parse(path: &str) -> Option<(FeedSurface, FeedFormat)> {
     // Strip leading '/'
     let rest = path.strip_prefix('/')?;
@@ -152,6 +156,41 @@ mod tests {
             },
             FeedFormat::Json,
         );
+    }
+
+    #[test]
+    fn format_content_types() {
+        assert_eq!(
+            FeedFormat::Rss.content_type(),
+            "application/rss+xml; charset=utf-8"
+        );
+        assert_eq!(
+            FeedFormat::Atom.content_type(),
+            "application/atom+xml; charset=utf-8"
+        );
+        assert_eq!(FeedFormat::Json.content_type(), "application/feed+json");
+    }
+
+    #[test]
+    fn rejects_path_without_feed_suffix_in_subpath() {
+        assert!(parse("/something/else.rss").is_none());
+    }
+
+    #[test]
+    fn rejects_completely_unrecognized_path() {
+        assert!(parse("/random/stuff/here.rss").is_none());
+    }
+
+    #[test]
+    fn rejects_double_leading_slash() {
+        // "//feed.rss" → head = "/feed", strip_suffix yields empty surface_part.
+        assert!(parse("//feed.rss").is_none());
+    }
+
+    #[test]
+    fn rejects_non_tag_non_user_prefix() {
+        // surface_part = "something" — not tags/, not ~, no match.
+        assert!(parse("/something/feed.rss").is_none());
     }
 
     #[test]
