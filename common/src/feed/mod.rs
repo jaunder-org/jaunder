@@ -6,3 +6,6 @@ pub use window::{HasPublishedAt, HybridWindow};
 
 pub mod metadata;
 pub use metadata::{feed_etag, FeedItem, FeedMetadata};
+
+pub mod rss;
+pub use rss::render_rss;
