@@ -36,7 +36,7 @@
   "storage/src/postgres/media.rs": 5.08475,
   "storage/src/postgres/mod.rs": 93.1579,
   "storage/src/postgres/password_resets.rs": 13.6364,
-  "storage/src/postgres/posts.rs": 3.33333,
+  "storage/src/postgres/posts.rs": 1.74419,
   "storage/src/postgres/sessions.rs": 9.09091,
   "storage/src/postgres/site_config.rs": 100,
   "storage/src/postgres/user_config.rs": 100,
