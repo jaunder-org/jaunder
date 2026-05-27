@@ -96,6 +96,32 @@ pub trait SiteConfigStorage: Send + Sync {
         }))
     }
 
+    /// Returns the configured site title, falling back to
+    /// [`DEFAULT_SITE_TITLE`] when unset or empty.
+    async fn get_site_title(&self) -> sqlx::Result<String> {
+        Ok(self
+            .get(SITE_TITLE_KEY)
+            .await?
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| DEFAULT_SITE_TITLE.to_owned()))
+    }
+
+    /// Returns the configured public base URL (scheme + host, no trailing
+    /// slash), if any. An empty stored value is treated as unset. Callers
+    /// that need absolute URLs (e.g. feed self/canonical links) should
+    /// prepend this when present; otherwise emit root-relative paths.
+    async fn get_site_base_url(&self) -> sqlx::Result<Option<String>> {
+        Ok(self.get(SITE_BASE_URL_KEY).await?.and_then(|v| {
+            let trimmed = v.trim().trim_end_matches('/').to_owned();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        }))
+    }
+
     /// Stores the backup configuration to the site config storage.
     async fn set_backup_config(&self, config: &BackupConfig) -> sqlx::Result<()> {
         self.set(
@@ -138,6 +164,15 @@ pub const FEEDS_WEBSUB_HUB_URL_KEY: &str = "feeds.websub_hub_url";
 pub const DEFAULT_FEEDS_MIN_ITEMS: u32 = 20;
 /// Default for [`FEEDS_MIN_DAYS_KEY`]: include items from the last 30 days.
 pub const DEFAULT_FEEDS_MIN_DAYS: u32 = 30;
+
+/// Key for the human-facing site title used in feed metadata and similar.
+pub const SITE_TITLE_KEY: &str = "site.title";
+/// Key for the public-facing base URL of the site (scheme + host, no
+/// trailing slash). Unset (or empty) means callers should emit
+/// root-relative URLs.
+pub const SITE_BASE_URL_KEY: &str = "site.base_url";
+/// Default for [`SITE_TITLE_KEY`].
+pub const DEFAULT_SITE_TITLE: &str = "Jaunder";
 
 fn parse_backup_mode(value: &str) -> Option<BackupMode> {
     match value.trim() {
@@ -278,6 +313,58 @@ mod tests {
             .await
             .unwrap();
         assert!(storage.get_feeds_websub_hub_url().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn site_title_returns_default_when_unset() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        assert_eq!(
+            storage.get_site_title().await.unwrap(),
+            super::DEFAULT_SITE_TITLE
+        );
+    }
+
+    #[tokio::test]
+    async fn site_title_returns_override_value() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        storage.set(super::SITE_TITLE_KEY, "My Blog").await.unwrap();
+        assert_eq!(storage.get_site_title().await.unwrap(), "My Blog");
+    }
+
+    #[tokio::test]
+    async fn site_title_treats_empty_as_unset() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        storage.set(super::SITE_TITLE_KEY, "   ").await.unwrap();
+        assert_eq!(
+            storage.get_site_title().await.unwrap(),
+            super::DEFAULT_SITE_TITLE
+        );
+    }
+
+    #[tokio::test]
+    async fn site_base_url_returns_none_when_unset() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        assert!(storage.get_site_base_url().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn site_base_url_returns_some_and_strips_trailing_slash() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        storage
+            .set(super::SITE_BASE_URL_KEY, "https://example.com/")
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.get_site_base_url().await.unwrap().as_deref(),
+            Some("https://example.com")
+        );
+    }
+
+    #[tokio::test]
+    async fn site_base_url_treats_empty_as_none() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        storage.set(super::SITE_BASE_URL_KEY, "").await.unwrap();
+        assert!(storage.get_site_base_url().await.unwrap().is_none());
     }
 
     #[tokio::test]

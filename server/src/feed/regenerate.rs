@@ -47,6 +47,16 @@ pub async fn regenerate_feed(
         .get_feeds_websub_hub_url()
         .await
         .map_err(storage_err)?;
+    let site_title = state
+        .site_config
+        .get_site_title()
+        .await
+        .map_err(storage_err)?;
+    let base_url = state
+        .site_config
+        .get_site_base_url()
+        .await
+        .map_err(storage_err)?;
 
     let window = HybridWindow {
         min_items,
@@ -61,18 +71,19 @@ pub async fn regenerate_feed(
 
     let items = build_feed_items(state, &posts).await?;
 
-    let self_url = percent_encode_path(feed_url);
+    let base = base_url.as_deref().unwrap_or("");
+    let self_url = format!("{base}{}", percent_encode_path(feed_url));
     let canonical_url = match &surface {
-        FeedSurface::Site => "/".to_string(),
-        FeedSurface::SiteTag { tag } => format!("/tags/{}/", urlencoding::encode(tag)),
-        FeedSurface::User { username } => format!("/~{username}/"),
+        FeedSurface::Site => format!("{base}/"),
+        FeedSurface::SiteTag { tag } => format!("{base}/tags/{}/", urlencoding::encode(tag)),
+        FeedSurface::User { username } => format!("{base}/~{username}/"),
         FeedSurface::UserTag { username, tag } => {
-            format!("/~{username}/tags/{}/", urlencoding::encode(tag))
+            format!("{base}/~{username}/tags/{}/", urlencoding::encode(tag))
         }
     };
 
     let updated_at = items.iter().map(|i| i.updated_at).max().unwrap_or(now);
-    let title = compute_title(&surface);
+    let title = compute_title(&site_title, &surface);
 
     let meta = FeedMetadata {
         title,
@@ -154,9 +165,7 @@ async fn build_feed_items(
     Ok(items)
 }
 
-// Site title is hardcoded until site_config gains a title key.
-fn compute_title(surface: &FeedSurface) -> String {
-    let site_title = "Jaunder";
+fn compute_title(site_title: &str, surface: &FeedSurface) -> String {
     match surface {
         FeedSurface::Site => site_title.to_string(),
         FeedSurface::SiteTag { tag } => format!("{site_title} — #{tag}"),
@@ -179,16 +188,23 @@ mod tests {
 
     #[test]
     fn compute_title_for_each_surface() {
-        assert_eq!(compute_title(&FeedSurface::Site), "Jaunder");
-        assert!(compute_title(&FeedSurface::SiteTag { tag: "rust".into() }).contains("rust"));
-        let user = compute_title(&FeedSurface::User {
-            username: "alice".into(),
-        });
-        assert!(user.contains("alice"));
-        let user_tag = compute_title(&FeedSurface::UserTag {
-            username: "alice".into(),
-            tag: "rust".into(),
-        });
+        assert_eq!(compute_title("Jaunder", &FeedSurface::Site), "Jaunder");
+        let site_tag = compute_title("Jaunder", &FeedSurface::SiteTag { tag: "rust".into() });
+        assert!(site_tag.contains("rust"));
+        let user = compute_title(
+            "My Blog",
+            &FeedSurface::User {
+                username: "alice".into(),
+            },
+        );
+        assert!(user.contains("My Blog") && user.contains("alice"));
+        let user_tag = compute_title(
+            "Jaunder",
+            &FeedSurface::UserTag {
+                username: "alice".into(),
+                tag: "rust".into(),
+            },
+        );
         assert!(user_tag.contains("alice") && user_tag.contains("rust"));
     }
 }
