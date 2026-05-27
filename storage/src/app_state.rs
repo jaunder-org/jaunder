@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use common::websub::WebSubClient;
+
 use super::{
     AtomicOps, EmailVerificationStorage, FeedCacheStorage, FeedEventStorage, InviteStorage,
     MediaStorage, PasswordResetStorage, PostStorage, SessionStorage, SiteConfigStorage,
@@ -47,4 +49,10 @@ pub struct AppState {
     pub feed_cache: Arc<dyn FeedCacheStorage>,
     /// Queue of feed-regeneration events drained by the feed worker.
     pub feed_events: Arc<dyn FeedEventStorage>,
+    /// `WebSub` publisher used to notify subscribers when feeds change.
+    ///
+    /// Defaults to [`common::websub::NoopWebSubClient`]; replaced with
+    /// [`common::websub::HttpWebSubClient`] at server startup when
+    /// `feeds.websub_hub_url` is configured.
+    pub websub: Arc<dyn WebSubClient>,
 }

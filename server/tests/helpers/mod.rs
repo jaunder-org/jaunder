@@ -229,6 +229,7 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             user_config: Arc::new(PostgresUserConfigStorage::new(pool.clone())),
             feed_cache: Arc::new(PostgresFeedCacheStorage::new(pool.clone())),
             feed_events: Arc::new(PostgresFeedEventStorage::new(pool)),
+            websub: Arc::new(common::websub::NoopWebSubClient),
         })
     } else {
         let pool = sqlx::SqlitePool::connect_with(
@@ -256,6 +257,7 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
             feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
             feed_events: Arc::new(SqliteFeedEventStorage::new(pool)),
+            websub: Arc::new(common::websub::NoopWebSubClient),
         })
     };
     (state, mailer)
@@ -295,6 +297,7 @@ pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx
         user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
         feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
         feed_events: Arc::new(SqliteFeedEventStorage::new(pool.clone())),
+        websub: Arc::new(common::websub::NoopWebSubClient),
     });
     (state, pool)
 }

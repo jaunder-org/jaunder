@@ -67,6 +67,7 @@ fn make_app_state(pool: SqlitePool) -> Arc<AppState> {
         user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
         feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
         feed_events: Arc::new(SqliteFeedEventStorage::new(pool)),
+        websub: Arc::new(common::websub::NoopWebSubClient),
     })
 }
 
