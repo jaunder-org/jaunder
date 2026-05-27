@@ -110,6 +110,22 @@ pub fn create_router(
                 )
             }),
         )
+        .route(
+            "/feed.{ext}",
+            axum::routing::get(crate::feed::handlers::feed_site),
+        )
+        .route(
+            "/tags/{tag}/feed.{ext}",
+            axum::routing::get(crate::feed::handlers::feed_site_tag),
+        )
+        .route(
+            "/~{username}/feed.{ext}",
+            axum::routing::get(crate::feed::handlers::feed_user),
+        )
+        .route(
+            "/~{username}/tags/{tag}/feed.{ext}",
+            axum::routing::get(crate::feed::handlers::feed_user_tag),
+        )
         .leptos_routes_with_context(
             &leptos_options,
             routes,
