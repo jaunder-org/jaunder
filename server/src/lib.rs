@@ -7,6 +7,7 @@ pub mod assets;
 pub mod cli;
 pub mod commands;
 pub mod context;
+pub mod feed;
 pub mod mailer;
 pub mod media;
 pub mod media_manager;

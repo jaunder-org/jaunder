@@ -626,7 +626,7 @@ impl PostStorage for PostgresPostStorage {
 }
 
 const TAGS_SUBQUERY: &str =
-    "COALESCE((SELECT jsonb_agg(jsonb_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::jsonb)";
+    "COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::json)::text";
 
 async fn list_published_in_window_postgres(
     pool: &PgPool,
