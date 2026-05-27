@@ -524,6 +524,7 @@ dependencies = [
  "argon2",
  "async-trait",
  "atom_syndication",
+ "axum",
  "chrono",
  "croner",
  "email_address",
