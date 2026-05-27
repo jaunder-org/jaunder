@@ -1622,6 +1622,200 @@ async fn sqlite_soft_delete_excludes_post_from_lists() {
     assert_soft_delete_excludes_from_lists(&state).await;
 }
 
+async fn assert_list_published_in_window(state: &std::sync::Arc<storage::AppState>) {
+    use chrono::Duration;
+    use common::feed::{FeedSurface, HybridWindow};
+
+    let alice_id = state
+        .users
+        .create_user(&username("walice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let bob_id = state
+        .users
+        .create_user(&username("wbob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    let make_post = |user_id: i64, slug: &str, days_ago: i64| {
+        let mut input = make_create_post_input(user_id, slug);
+        input.published_at = Some(now - Duration::days(days_ago));
+        input
+    };
+
+    // Alice: 4 posts published 1, 2, 100, 200 days ago.
+    state
+        .posts
+        .create_post(&make_post(alice_id, "alice-recent-1", 1))
+        .await
+        .unwrap();
+    state
+        .posts
+        .create_post(&make_post(alice_id, "alice-recent-2", 2))
+        .await
+        .unwrap();
+    state
+        .posts
+        .create_post(&make_post(alice_id, "alice-old-1", 100))
+        .await
+        .unwrap();
+    state
+        .posts
+        .create_post(&make_post(alice_id, "alice-old-2", 200))
+        .await
+        .unwrap();
+
+    // Bob: 1 post published 5 days ago.
+    state
+        .posts
+        .create_post(&make_post(bob_id, "bob-recent", 5))
+        .await
+        .unwrap();
+
+    // Future-dated draft-equivalent (excluded).
+    let mut future_input = make_create_post_input(alice_id, "alice-future");
+    future_input.published_at = Some(now + Duration::days(1));
+    state.posts.create_post(&future_input).await.unwrap();
+
+    // Site feed, window {3 items, 30 days} → union of "top 3" and "in last 30
+    // days". Alice 1d+2d and Bob 5d are in-window (3 posts). Alice 100d/200d
+    // and the future post are excluded by their respective filters; the union
+    // still picks at least 3 by ROW_NUMBER, so we get exactly those 3.
+    let window = HybridWindow {
+        min_items: 3,
+        min_days: 30,
+    };
+    let site = state
+        .posts
+        .list_published_in_window(&FeedSurface::Site, &window, now)
+        .await
+        .unwrap();
+    assert_eq!(site.len(), 3, "site feed in {{3 items, 30 days}}");
+    assert!(site
+        .iter()
+        .all(|p| p.published_at.unwrap() >= now - Duration::days(30)));
+
+    // Site feed with min_items=5: top 5 includes all four real posts plus
+    // Bob's, regardless of age — total 5 (alice-old-2 included by count).
+    let big = HybridWindow {
+        min_items: 5,
+        min_days: 30,
+    };
+    let site_big = state
+        .posts
+        .list_published_in_window(&FeedSurface::Site, &big, now)
+        .await
+        .unwrap();
+    assert_eq!(site_big.len(), 5, "min_items=5 pulls in older posts");
+
+    // User feed for Alice, {2 items, 30 days}: union of "Alice's top 2"
+    // (alice-recent-1, alice-recent-2) and "Alice's posts in last 30 days"
+    // (same two) → 2. The 100/200-day-old posts and future are excluded.
+    let alice_window = HybridWindow {
+        min_items: 2,
+        min_days: 30,
+    };
+    let alice_feed = state
+        .posts
+        .list_published_in_window(
+            &FeedSurface::User {
+                username: "walice".to_string(),
+            },
+            &alice_window,
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(alice_feed.len(), 2);
+    assert!(alice_feed.iter().all(|p| p.user_id == alice_id));
+
+    // User feed: bob has only 1 post, returned even with min_items=10.
+    let bob_feed = state
+        .posts
+        .list_published_in_window(
+            &FeedSurface::User {
+                username: "wbob".to_string(),
+            },
+            &HybridWindow {
+                min_items: 10,
+                min_days: 1,
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(bob_feed.len(), 1);
+    assert_eq!(bob_feed[0].user_id, bob_id);
+
+    // Add a tag to alice-recent-1 and verify site-tag / user-tag feeds.
+    let alice_recent_1 = state
+        .posts
+        .list_published_by_user(&username("walice"), None, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|p| p.slug.as_str() == "alice-recent-1")
+        .unwrap();
+    state
+        .posts
+        .tag_post(alice_recent_1.post_id, "rust")
+        .await
+        .unwrap();
+
+    let tag_site = state
+        .posts
+        .list_published_in_window(
+            &FeedSurface::SiteTag {
+                tag: "rust".to_string(),
+            },
+            &HybridWindow {
+                min_items: 20,
+                min_days: 30,
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(tag_site.len(), 1);
+    assert_eq!(tag_site[0].slug.as_str(), "alice-recent-1");
+
+    let tag_user = state
+        .posts
+        .list_published_in_window(
+            &FeedSurface::UserTag {
+                username: "walice".to_string(),
+                tag: "rust".to_string(),
+            },
+            &HybridWindow {
+                min_items: 20,
+                min_days: 30,
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(tag_user.len(), 1);
+
+    // User-tag for bob+rust: bob has no rust post → empty.
+    let bob_tag = state
+        .posts
+        .list_published_in_window(
+            &FeedSurface::UserTag {
+                username: "wbob".to_string(),
+                tag: "rust".to_string(),
+            },
+            &HybridWindow {
+                min_items: 20,
+                min_days: 30,
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    assert!(bob_tag.is_empty());
+}
+
 #[tokio::test]
 async fn sqlite_list_published_by_user_returns_only_user_posts() {
     let (_base, state) = sqlite_state().await;
@@ -1632,6 +1826,12 @@ async fn sqlite_list_published_by_user_returns_only_user_posts() {
 async fn sqlite_list_published_returns_published_non_deleted_posts() {
     let (_base, state) = sqlite_state().await;
     assert_list_published_returns_all_published(&state).await;
+}
+
+#[tokio::test]
+async fn sqlite_list_published_in_window_applies_hybrid_rule_across_surfaces() {
+    let (_base, state) = sqlite_state().await;
+    assert_list_published_in_window(&state).await;
 }
 
 #[tokio::test]
@@ -1714,6 +1914,13 @@ async fn postgres_list_published_by_user_returns_only_user_posts() {
 async fn postgres_list_published_returns_published_non_deleted_posts() {
     let state = postgres_state().await;
     assert_list_published_returns_all_published(&state).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
+async fn postgres_list_published_in_window_applies_hybrid_rule_across_surfaces() {
+    let state = postgres_state().await;
+    assert_list_published_in_window(&state).await;
 }
 
 #[tokio::test]
