@@ -12,6 +12,7 @@ pub mod auth;
 pub mod backup;
 pub mod email;
 pub mod error;
+pub mod feed_discovery;
 pub mod invites;
 pub mod media;
 pub mod pages;
