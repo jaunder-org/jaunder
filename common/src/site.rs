@@ -1,5 +1,7 @@
+use serde::{Deserialize, Serialize};
+
 /// Site-wide identity and configuration.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SiteIdentity {
     /// Human-facing title for the site, used in feed metadata and similar contexts.
     pub title: String,

@@ -19,6 +19,7 @@ pub mod password_reset;
 pub mod posts;
 pub mod profile;
 pub mod sessions;
+pub mod site;
 pub mod tags;
 
 pub use pages::App;

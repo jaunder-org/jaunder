@@ -3,7 +3,7 @@ use common::backup::BackupConfig;
 use leptos::prelude::*;
 
 #[cfg(feature = "ssr")]
-mod server;
+pub(crate) mod server;
 #[cfg(feature = "ssr")]
 use server::require_operator;
 
