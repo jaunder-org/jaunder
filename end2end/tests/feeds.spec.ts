@@ -38,8 +38,8 @@ test("auto-discovery links are present on site home and user timeline, and resol
     expect(res.headers()["content-type"]).toContain(fmt.mime);
   }
 
-  // Test user timeline feed discovery
-  await goto(page, `/${username}`);
+  // Test user timeline feed discovery (canonical user URL is ~-prefixed)
+  await goto(page, `/~${username}`);
   const userLinks = await page.$$eval('head link[rel="alternate"]', (els) =>
     els.map((e) => ({
       href: (e as HTMLLinkElement).href,
@@ -50,7 +50,7 @@ test("auto-discovery links are present on site home and user timeline, and resol
   // Verify all three formats exist on user timeline
   for (const fmt of FORMATS) {
     const link = userLinks.find((l) => l.type === fmt.mime);
-    expect(link, `${fmt.mime} on /${username}`).toBeTruthy();
+    expect(link, `${fmt.mime} on /~${username}`).toBeTruthy();
     const res = await page.request.get(link!.href);
     expect(res.status()).toBe(200);
     expect(res.headers()["content-type"]).toContain(fmt.mime);
