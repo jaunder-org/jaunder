@@ -47,14 +47,9 @@ pub async fn regenerate_feed(
         .get_feeds_websub_hub_url()
         .await
         .map_err(storage_err)?;
-    let site_title = state
+    let identity = state
         .site_config
-        .get_site_title()
-        .await
-        .map_err(storage_err)?;
-    let base_url = state
-        .site_config
-        .get_site_base_url()
+        .get_identity()
         .await
         .map_err(storage_err)?;
 
@@ -71,7 +66,7 @@ pub async fn regenerate_feed(
 
     let items = build_feed_items(state, &posts).await?;
 
-    let base = base_url.as_deref().unwrap_or("");
+    let base = identity.base_url.as_deref().unwrap_or("");
     let self_url = format!("{base}{}", percent_encode_path(feed_url));
     let canonical_url = match &surface {
         FeedSurface::Site => format!("{base}/"),
@@ -83,7 +78,7 @@ pub async fn regenerate_feed(
     };
 
     let updated_at = items.iter().map(|i| i.updated_at).max().unwrap_or(now);
-    let title = compute_title(&site_title, &surface);
+    let title = compute_title(&identity.title, &surface);
 
     let meta = FeedMetadata {
         title,
