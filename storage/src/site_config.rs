@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DEFAULT_BACKUP_RETENTION_COUNT};
+use common::site::{SiteIdentity, DEFAULT_SITE_TITLE};
 
 /// Async operations on the `site_config` key-value table.
 ///
@@ -96,30 +97,36 @@ pub trait SiteConfigStorage: Send + Sync {
         }))
     }
 
-    /// Returns the configured site title, falling back to
-    /// [`DEFAULT_SITE_TITLE`] when unset or empty.
-    async fn get_site_title(&self) -> sqlx::Result<String> {
-        Ok(self
+    /// Returns the site identity (title and base URL).
+    async fn get_identity(&self) -> sqlx::Result<SiteIdentity> {
+        let title = self
             .get(SITE_TITLE_KEY)
             .await?
             .map(|v| v.trim().to_owned())
             .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| DEFAULT_SITE_TITLE.to_owned()))
-    }
-
-    /// Returns the configured public base URL (scheme + host, no trailing
-    /// slash), if any. An empty stored value is treated as unset. Callers
-    /// that need absolute URLs (e.g. feed self/canonical links) should
-    /// prepend this when present; otherwise emit root-relative paths.
-    async fn get_site_base_url(&self) -> sqlx::Result<Option<String>> {
-        Ok(self.get(SITE_BASE_URL_KEY).await?.and_then(|v| {
+            .unwrap_or_else(|| DEFAULT_SITE_TITLE.to_owned());
+        let base_url = self.get(SITE_BASE_URL_KEY).await?.and_then(|v| {
             let trimmed = v.trim().trim_end_matches('/').to_owned();
             if trimmed.is_empty() {
                 None
             } else {
                 Some(trimmed)
             }
-        }))
+        });
+        Ok(SiteIdentity { title, base_url })
+    }
+
+    /// Stores the site identity (title and base URL).
+    /// For `base_url`, an empty string is stored when `None` is provided.
+    /// Trailing slashes on the base URL are stripped on write.
+    async fn set_identity(&self, config: &SiteIdentity) -> sqlx::Result<()> {
+        self.set(SITE_TITLE_KEY, &config.title).await?;
+        let base_url_value = config
+            .base_url
+            .as_deref()
+            .map_or("", |v| v.trim_end_matches('/'));
+        self.set(SITE_BASE_URL_KEY, base_url_value).await?;
+        Ok(())
     }
 
     /// Stores the backup configuration to the site config storage.
@@ -171,8 +178,6 @@ pub const SITE_TITLE_KEY: &str = "site.title";
 /// trailing slash). Unset (or empty) means callers should emit
 /// root-relative URLs.
 pub const SITE_BASE_URL_KEY: &str = "site.base_url";
-/// Default for [`SITE_TITLE_KEY`].
-pub const DEFAULT_SITE_TITLE: &str = "Jaunder";
 
 fn parse_backup_mode(value: &str) -> Option<BackupMode> {
     match value.trim() {
@@ -316,55 +321,60 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn site_title_returns_default_when_unset() {
+    async fn identity_returns_defaults_when_unset() {
         let storage = SqliteSiteConfigStorage::new(test_pool().await);
-        assert_eq!(
-            storage.get_site_title().await.unwrap(),
-            super::DEFAULT_SITE_TITLE
-        );
+        let identity = storage.get_identity().await.expect("get_identity");
+        assert_eq!(identity.title, common::site::DEFAULT_SITE_TITLE);
+        assert_eq!(identity.base_url, None);
     }
 
     #[tokio::test]
-    async fn site_title_returns_override_value() {
+    async fn identity_returns_override_when_title_set() {
         let storage = SqliteSiteConfigStorage::new(test_pool().await);
         storage.set(super::SITE_TITLE_KEY, "My Blog").await.unwrap();
-        assert_eq!(storage.get_site_title().await.unwrap(), "My Blog");
+        let identity = storage.get_identity().await.expect("get_identity");
+        assert_eq!(identity.title, "My Blog");
+        assert_eq!(identity.base_url, None);
     }
 
     #[tokio::test]
-    async fn site_title_treats_empty_as_unset() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
-        storage.set(super::SITE_TITLE_KEY, "   ").await.unwrap();
-        assert_eq!(
-            storage.get_site_title().await.unwrap(),
-            super::DEFAULT_SITE_TITLE
-        );
-    }
-
-    #[tokio::test]
-    async fn site_base_url_returns_none_when_unset() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
-        assert!(storage.get_site_base_url().await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn site_base_url_returns_some_and_strips_trailing_slash() {
+    async fn identity_returns_some_base_url_when_set_with_trailing_slash_stripped() {
         let storage = SqliteSiteConfigStorage::new(test_pool().await);
         storage
             .set(super::SITE_BASE_URL_KEY, "https://example.com/")
             .await
             .unwrap();
-        assert_eq!(
-            storage.get_site_base_url().await.unwrap().as_deref(),
-            Some("https://example.com")
-        );
+        let identity = storage.get_identity().await.expect("get_identity");
+        assert_eq!(identity.title, common::site::DEFAULT_SITE_TITLE);
+        assert_eq!(identity.base_url.as_deref(), Some("https://example.com"));
     }
 
     #[tokio::test]
-    async fn site_base_url_treats_empty_as_none() {
+    async fn identity_treats_empty_title_as_unset() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        storage.set(super::SITE_TITLE_KEY, "   ").await.unwrap();
+        let identity = storage.get_identity().await.expect("get_identity");
+        assert_eq!(identity.title, common::site::DEFAULT_SITE_TITLE);
+    }
+
+    #[tokio::test]
+    async fn identity_treats_empty_base_url_as_none() {
         let storage = SqliteSiteConfigStorage::new(test_pool().await);
         storage.set(super::SITE_BASE_URL_KEY, "").await.unwrap();
-        assert!(storage.get_site_base_url().await.unwrap().is_none());
+        let identity = storage.get_identity().await.expect("get_identity");
+        assert_eq!(identity.base_url, None);
+    }
+
+    #[tokio::test]
+    async fn set_identity_round_trips_via_get_identity() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        let original = common::site::SiteIdentity {
+            title: "Test Site".to_string(),
+            base_url: Some("https://test.example.com".to_string()),
+        };
+        storage.set_identity(&original).await.expect("set_identity");
+        let retrieved = storage.get_identity().await.expect("get_identity");
+        assert_eq!(retrieved, original);
     }
 
     #[tokio::test]
