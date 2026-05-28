@@ -9,6 +9,7 @@ pub mod posts;
 pub mod profile;
 pub mod sessions;
 pub(crate) mod signal_read;
+pub mod site;
 pub mod ui;
 pub mod upload;
 pub use ui::{
@@ -36,6 +37,7 @@ use crate::pages::posts::{
 };
 use crate::pages::profile::ProfilePage;
 use crate::pages::sessions::SessionsPage;
+use crate::pages::site::SiteSettingsPage;
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, Stylesheet, Title};
 use leptos_router::{
@@ -131,6 +133,10 @@ pub fn App() -> impl IntoView {
                     <Route
                         path=(StaticSegment("admin"), StaticSegment("backups"))
                         view=BackupSettingsPage
+                    />
+                    <Route
+                        path=(StaticSegment("admin"), StaticSegment("site"))
+                        view=SiteSettingsPage
                     />
                     <Route
                         path=(StaticSegment("posts"), StaticSegment("new"))

@@ -188,7 +188,10 @@ pub fn BackupBanner() -> impl IntoView {
                         view! {
                             <div class="j-backup-banner" role="alert">
                                 <span>"Backups are not configured. Your data is at risk."</span>
-                                <a href="/admin/backups">"Configure Backups"</a>
+                                <div>
+                                    <a href="/admin/backups">"Configure Backups"</a>
+                                    <a href="/admin/site">"Site Settings"</a>
+                                </div>
                             </div>
                         }
                             .into_any()
@@ -910,10 +913,16 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
                                 {if is_operator {
                                     view! {
                                         <SidebarNavItem
-                                            label="Admin"
+                                            label="Configure Backups"
                                             icon_path=Icons::SHIELD
-                                            active=active_key == "admin"
+                                            active=active_key == "admin-backups"
                                             href=Some("/admin/backups")
+                                        />
+                                        <SidebarNavItem
+                                            label="Site Settings"
+                                            icon_path=Icons::SHIELD
+                                            active=active_key == "admin-site"
+                                            href=Some("/admin/site")
                                         />
                                     }
                                         .into_any()
