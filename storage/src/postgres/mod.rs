@@ -205,7 +205,7 @@ fn make_postgres_app_state(pool: PgPool) -> Arc<crate::AppState> {
         user_config: Arc::new(PostgresUserConfigStorage::new(pool.clone())),
         feed_cache: Arc::new(PostgresFeedCacheStorage::new(pool.clone())),
         feed_events: Arc::new(PostgresFeedEventStorage::new(pool)),
-        websub: Arc::new(common::websub::NoopWebSubClient),
+        websub: common::websub::default_client_from_env(),
     })
 }
 

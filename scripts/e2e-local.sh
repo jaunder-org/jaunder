@@ -25,6 +25,7 @@ export JAUNDER_STORAGE_PATH="$TMPDIR/storage"
 export JAUNDER_DB="sqlite:$TMPDIR/jaunder.db"
 export JAUNDER_DB_PATH="$TMPDIR/jaunder.db"
 export JAUNDER_MAIL_CAPTURE_FILE="$TMPDIR/mail.jsonl"
+export JAUNDER_WEBSUB_CAPTURE_FILE="$TMPDIR/websub.jsonl"
 mkdir -p "$JAUNDER_STORAGE_PATH"
 
 exec cargo leptos end-to-end "$@"

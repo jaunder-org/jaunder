@@ -51,8 +51,12 @@ pub struct AppState {
     pub feed_events: Arc<dyn FeedEventStorage>,
     /// `WebSub` publisher used to notify subscribers when feeds change.
     ///
-    /// Defaults to [`common::websub::NoopWebSubClient`]; replaced with
-    /// [`common::websub::HttpWebSubClient`] at server startup when
-    /// `feeds.websub_hub_url` is configured.
+    /// Production builders select the client via
+    /// [`common::websub::default_client_from_env`]: a
+    /// [`common::websub::FileCapturingWebSubClient`] when
+    /// `JAUNDER_WEBSUB_CAPTURE_FILE` is set (e2e capture), otherwise the live
+    /// [`common::websub::HttpWebSubClient`]. The worker only pings when
+    /// `feeds.websub_hub_url` is configured. Test helpers use
+    /// [`common::websub::NoopWebSubClient`].
     pub websub: Arc<dyn WebSubClient>,
 }
