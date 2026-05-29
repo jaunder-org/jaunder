@@ -78,6 +78,8 @@ pub struct PostRecord {
     pub published_at: Option<DateTime<Utc>>,
     /// When the post was soft-deleted (None if active).
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Optional summary/excerpt of the post.
+    pub summary: Option<String>,
     pub tags: Vec<PostTag>,
 }
 
@@ -180,6 +182,8 @@ pub struct CreatePostInput {
     pub rendered_html: String,
     /// If Some, the post is created in a published state.
     pub published_at: Option<DateTime<Utc>>,
+    /// Optional summary/excerpt of the post.
+    pub summary: Option<String>,
 }
 
 /// Input for updating an existing post.
@@ -194,6 +198,8 @@ pub struct UpdatePostInput {
     /// If `true`, publish the post (sets `published_at` to now if not already set).
     /// If `false`, un-publish the post (clears `published_at`).
     pub publish: bool,
+    /// Optional summary/excerpt of the post.
+    pub summary: Option<String>,
 }
 
 /// A tag record returned by [`PostStorage`] tag queries.
@@ -460,6 +466,7 @@ mod tests {
             updated_at: Utc::now(),
             published_at: None,
             deleted_at: None,
+            summary: None,
             tags: vec![],
         };
 
@@ -494,9 +501,51 @@ mod tests {
             updated_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
             published_at: Some(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
             deleted_at: None,
+            summary: None,
             tags: vec![],
         };
 
         assert_eq!(post.permalink(), "/~author/2026/04/12/hello-world");
+    }
+
+    #[tokio::test]
+    async fn create_post_persists_summary() {
+        use crate::sqlite::SqlitePostStorage;
+        use chrono::Utc;
+
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("../storage/migrations/sqlite")
+            .run(&pool)
+            .await
+            .unwrap();
+
+        // Create a test user
+        sqlx::query(
+            "INSERT INTO users (username, password_hash, created_at, is_operator) VALUES (?, ?, ?, ?)",
+        )
+        .bind("testuser")
+        .bind("hash")
+        .bind(Utc::now())
+        .bind(false)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let posts = SqlitePostStorage::new(pool);
+        let input = CreatePostInput {
+            user_id: 1,
+            title: Some("Test Title".into()),
+            slug: "test-slug".parse().unwrap(),
+            body: "Test body".into(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>Test body</p>".into(),
+            published_at: None,
+            summary: Some("the summary".into()),
+        };
+
+        let post_id = posts.create_post(&input).await.unwrap();
+        let post = posts.get_post_by_id(post_id).await.unwrap().unwrap();
+
+        assert_eq!(post.summary, Some("the summary".into()));
     }
 }

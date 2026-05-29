@@ -346,6 +346,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced() {
             format: PostFormat::Markdown,
             rendered_html: format!("<p><img src=\"{media_url}\"></p>"),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("create_post failed");

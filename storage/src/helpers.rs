@@ -123,6 +123,7 @@ pub(crate) type PostRecordParts = (
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<DateTime<Utc>>,
+    Option<String>,
     String,
 );
 
@@ -169,6 +170,7 @@ pub(crate) fn build_post_record(
         updated_at,
         published_at,
         deleted_at,
+        summary,
         tags_json,
     ): PostRecordParts,
 ) -> sqlx::Result<PostRecord> {
@@ -196,6 +198,7 @@ pub(crate) fn build_post_record(
         updated_at,
         published_at,
         deleted_at,
+        summary,
         tags,
     })
 }
@@ -267,6 +270,7 @@ pub(crate) type PostRow = (
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<DateTime<Utc>>,
+    Option<String>,
     String,
 );
 
@@ -447,6 +451,7 @@ mod tests {
             now,
             Some(now),
             None,
+            None,
             "[]".to_string(),
         ))
         .unwrap();
@@ -477,6 +482,7 @@ mod tests {
             now,
             None,
             None,
+            None,
             "[]".to_string(),
         ))
         .unwrap_err();
@@ -500,6 +506,7 @@ mod tests {
             now,
             None,
             None,
+            None,
             "[]".to_string(),
         ))
         .unwrap_err();
@@ -521,6 +528,7 @@ mod tests {
             "<p>Body</p>".to_string(),
             now,
             now,
+            None,
             None,
             None,
             "[]".to_string(),
@@ -617,6 +625,7 @@ mod tests {
             now,
             None,
             None,
+            None,
             tags_json.to_string(),
         ))
         .unwrap();
@@ -642,6 +651,7 @@ mod tests {
             now,
             None,
             None,
+            None,
             "not-json".to_string(),
         ))
         .unwrap_err();
@@ -664,6 +674,7 @@ mod tests {
             "<p>Body</p>".to_string(),
             now,
             now,
+            None,
             None,
             None,
             tags_json,
@@ -756,6 +767,7 @@ mod tests {
             "<p>Body</p>".to_string(),
             now,
             now,
+            None,
             None,
             None,
             "[]".to_string(),

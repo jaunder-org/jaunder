@@ -244,6 +244,7 @@ pub async fn create_rendered_post(
         format,
         rendered_html,
         published_at,
+        summary: None,
     };
     Ok(storage.create_post(&input).await?)
 }
@@ -272,6 +273,7 @@ pub async fn update_rendered_post(
         format,
         rendered_html,
         publish,
+        summary: None,
     };
     Ok(storage.update_post(post_id, editor_user_id, &input).await?)
 }
@@ -349,6 +351,7 @@ pub async fn perform_post_update(
         format,
         rendered_html,
         publish,
+        summary: None,
     };
     storage
         .update_post(post_id, editor_user_id, &input)

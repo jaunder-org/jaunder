@@ -1285,12 +1285,14 @@ fn make_create_post_input(user_id: i64, slug: &str) -> CreatePostInput {
         format: PostFormat::Markdown,
         rendered_html: "<p>body text</p>".to_string(),
         published_at: None,
+        summary: None,
     }
 }
 
 fn make_published_create_post_input(user_id: i64, slug: &str) -> CreatePostInput {
     CreatePostInput {
         published_at: Some(Utc::now()),
+        summary: None,
         ..make_create_post_input(user_id, slug)
     }
 }
@@ -1332,11 +1334,13 @@ async fn assert_post_slug_conflict(state: &std::sync::Arc<storage::AppState>) {
         format: PostFormat::Markdown,
         rendered_html: "<p>body</p>".to_string(),
         published_at: None,
+        summary: None,
     };
     state.posts.create_post(&input1).await.unwrap();
 
     let input2 = CreatePostInput {
         published_at: Some(now),
+        summary: None,
         ..input1.clone()
     };
     // The unique index is on (user_id, date(COALESCE(published_at, created_at)), slug).
@@ -1356,6 +1360,7 @@ async fn assert_post_slug_conflict(state: &std::sync::Arc<storage::AppState>) {
         format: PostFormat::Markdown,
         rendered_html: "<p>body</p>".to_string(),
         published_at: Some(now),
+        summary: None,
     };
     state.posts.create_post(&pub_input.clone()).await.unwrap();
 
@@ -1386,6 +1391,7 @@ async fn assert_post_update_creates_revision(state: &std::sync::Arc<storage::App
         format: PostFormat::Org,
         rendered_html: "<p>updated body</p>".to_string(),
         publish: false,
+        summary: None,
     };
     let record = state
         .posts
@@ -1406,6 +1412,7 @@ async fn assert_post_update_not_found(state: &std::sync::Arc<storage::AppState>)
         format: PostFormat::Markdown,
         rendered_html: "<p>body</p>".to_string(),
         publish: false,
+        summary: None,
     };
     let err = state
         .posts
@@ -1595,6 +1602,7 @@ async fn sqlite_post_slug_conflict_returns_slug_conflict() {
         format: PostFormat::Markdown,
         rendered_html: "<p>body</p>".to_string(),
         published_at: Some(now),
+        summary: None,
     };
     posts.create_post(&input).await.unwrap();
     let err = posts.create_post(&input).await.unwrap_err();
@@ -1957,6 +1965,7 @@ async fn assert_multiple_tags_on_single_post(state: &std::sync::Arc<storage::App
             format: PostFormat::Markdown,
             rendered_html: "<p>Content with many tags</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2015,6 +2024,7 @@ async fn assert_empty_tag_list(state: &std::sync::Arc<storage::AppState>) {
             format: PostFormat::Markdown,
             rendered_html: "<p>Untagged post</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2052,6 +2062,7 @@ async fn assert_tag_case_preservation_variants(state: &std::sync::Arc<storage::A
             format: PostFormat::Markdown,
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2066,6 +2077,7 @@ async fn assert_tag_case_preservation_variants(state: &std::sync::Arc<storage::A
             format: PostFormat::Markdown,
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2133,6 +2145,7 @@ async fn assert_invalid_tag_input(state: &std::sync::Arc<storage::AppState>) {
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2177,6 +2190,7 @@ async fn assert_tag_list_pagination(state: &std::sync::Arc<storage::AppState>) {
                 format: PostFormat::Markdown,
                 rendered_html: format!("<p>Content {}</p>", i),
                 published_at: Some(Utc::now()),
+                summary: None,
             })
             .await
             .expect("post creation failed");
@@ -2239,6 +2253,7 @@ async fn assert_list_user_posts_by_tag_excludes_other_users(
             format: PostFormat::Markdown,
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2253,6 +2268,7 @@ async fn assert_list_user_posts_by_tag_excludes_other_users(
             format: PostFormat::Markdown,
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2313,6 +2329,7 @@ async fn assert_selective_untag(state: &std::sync::Arc<storage::AppState>) {
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2386,6 +2403,7 @@ async fn assert_numeric_tag(state: &std::sync::Arc<storage::AppState>) {
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2444,6 +2462,7 @@ async fn assert_retag_same_post_with_same_tag_fails(state: &std::sync::Arc<stora
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2542,6 +2561,7 @@ async fn assert_many_tags_many_posts(state: &std::sync::Arc<storage::AppState>) 
                 format: PostFormat::Markdown,
                 rendered_html: format!("<p>Content {}</p>", i),
                 published_at: Some(Utc::now()),
+                summary: None,
             })
             .await
             .expect("post creation failed");
@@ -2601,6 +2621,7 @@ async fn assert_tag_all_numeric(state: &std::sync::Arc<storage::AppState>) {
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2652,6 +2673,7 @@ async fn assert_tag_hyphen_boundaries(state: &std::sync::Arc<storage::AppState>)
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2714,6 +2736,7 @@ async fn assert_tag_with_long_display(state: &std::sync::Arc<storage::AppState>)
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2760,6 +2783,7 @@ async fn assert_tag_list_ordering(state: &std::sync::Arc<storage::AppState>) {
             format: PostFormat::Markdown,
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2774,6 +2798,7 @@ async fn assert_tag_list_ordering(state: &std::sync::Arc<storage::AppState>) {
             format: PostFormat::Markdown,
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2847,6 +2872,7 @@ async fn assert_tags_for_multiple_posts(state: &std::sync::Arc<storage::AppState
             format: PostFormat::Markdown,
             rendered_html: "<p>Content A</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2861,6 +2887,7 @@ async fn assert_tags_for_multiple_posts(state: &std::sync::Arc<storage::AppState
             format: PostFormat::Markdown,
             rendered_html: "<p>Content B</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2913,6 +2940,7 @@ async fn assert_tag_mixed_alphanumeric(state: &std::sync::Arc<storage::AppState>
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -2970,6 +2998,7 @@ async fn assert_simple_tag_lifecycle(state: &std::sync::Arc<storage::AppState>) 
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -3046,6 +3075,7 @@ async fn assert_tag_creation_and_retrieval(state: &std::sync::Arc<storage::AppSt
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -3087,6 +3117,7 @@ async fn assert_tag_normalization(state: &std::sync::Arc<storage::AppState>) {
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -3133,6 +3164,7 @@ async fn assert_untag_post(state: &std::sync::Arc<storage::AppState>) {
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -3192,6 +3224,7 @@ async fn assert_duplicate_tag_error(state: &std::sync::Arc<storage::AppState>) {
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -3243,6 +3276,7 @@ async fn assert_list_posts_by_tag(state: &std::sync::Arc<storage::AppState>) {
             format: PostFormat::Markdown,
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -3257,6 +3291,7 @@ async fn assert_list_posts_by_tag(state: &std::sync::Arc<storage::AppState>) {
             format: PostFormat::Markdown,
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -3321,6 +3356,7 @@ async fn assert_list_user_posts_by_tag(state: &std::sync::Arc<storage::AppState>
             format: PostFormat::Markdown,
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -3335,6 +3371,7 @@ async fn assert_list_user_posts_by_tag(state: &std::sync::Arc<storage::AppState>
             format: PostFormat::Markdown,
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -3349,6 +3386,7 @@ async fn assert_list_user_posts_by_tag(state: &std::sync::Arc<storage::AppState>
             format: PostFormat::Markdown,
             rendered_html: "<p>Content 3</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -3420,6 +3458,7 @@ async fn assert_soft_deleted_posts_excluded_from_tag_list(
             format: PostFormat::Markdown,
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -3434,6 +3473,7 @@ async fn assert_soft_deleted_posts_excluded_from_tag_list(
             format: PostFormat::Markdown,
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -3503,6 +3543,7 @@ async fn assert_untag_nonexistent_tag_error(state: &std::sync::Arc<storage::AppS
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -3540,7 +3581,8 @@ async fn assert_draft_posts_excluded_from_tag_list(state: &std::sync::Arc<storag
             body: "Draft content".to_string(),
             format: PostFormat::Markdown,
             rendered_html: "<p>Draft</p>".to_string(),
-            published_at: None, // Draft
+            published_at: None, // Draft,
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -3555,6 +3597,7 @@ async fn assert_draft_posts_excluded_from_tag_list(state: &std::sync::Arc<storag
             format: PostFormat::Markdown,
             rendered_html: "<p>Published</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -4035,6 +4078,7 @@ async fn assert_post_update_invalid_slug(state: &std::sync::Arc<storage::AppStat
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: None,
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -4050,6 +4094,7 @@ async fn assert_post_update_invalid_slug(state: &std::sync::Arc<storage::AppStat
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: None,
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -4067,6 +4112,7 @@ async fn assert_post_update_invalid_slug(state: &std::sync::Arc<storage::AppStat
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Updated</p>".to_string(),
                 publish: false,
+                summary: None,
             },
         )
         .await;
@@ -4106,6 +4152,7 @@ async fn assert_list_published_cursor_boundary(state: &std::sync::Arc<storage::A
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Content</p>".to_string(),
                 published_at: Some(now),
+                summary: None,
             })
             .await
             .expect("post creation failed");
@@ -4169,6 +4216,7 @@ async fn assert_list_drafts_cursor_boundary(state: &std::sync::Arc<storage::AppS
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Content</p>".to_string(),
                 published_at: None,
+                summary: None,
             })
             .await
             .expect("post creation failed");
@@ -4232,6 +4280,7 @@ async fn assert_list_user_posts_by_tag_cursor(state: &std::sync::Arc<storage::Ap
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Content</p>".to_string(),
                 published_at: Some(now),
+                summary: None,
             })
             .await
             .expect("post creation failed");
@@ -4303,6 +4352,7 @@ async fn assert_list_posts_by_tag_cursor(state: &std::sync::Arc<storage::AppStat
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Content</p>".to_string(),
                 published_at: Some(now),
+                summary: None,
             })
             .await
             .expect("post creation failed");
@@ -4370,6 +4420,7 @@ async fn assert_soft_delete_then_operations(state: &std::sync::Arc<storage::AppS
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -4510,6 +4561,7 @@ async fn assert_tag_post_multiple_attempts(state: &std::sync::Arc<storage::AppSt
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -4605,6 +4657,7 @@ async fn assert_get_by_permalink_soft_deleted(state: &std::sync::Arc<storage::Ap
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(created_at),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -4668,6 +4721,7 @@ async fn assert_update_soft_deleted_post(state: &std::sync::Arc<storage::AppStat
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: None,
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -4692,6 +4746,7 @@ async fn assert_update_soft_deleted_post(state: &std::sync::Arc<storage::AppStat
                 format: PostFormat::Markdown,
                 rendered_html: "<p>New</p>".to_string(),
                 publish: true,
+                summary: None,
             },
         )
         .await;
@@ -4729,6 +4784,7 @@ async fn assert_tag_edge_case_formats(state: &std::sync::Arc<storage::AppState>)
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -4872,6 +4928,7 @@ async fn assert_list_published_with_cursor_same_timestamp(
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Content</p>".to_string(),
                 published_at: Some(now),
+                summary: None,
             })
             .await
             .expect("post creation failed");
@@ -4925,6 +4982,7 @@ async fn assert_post_revisions_created(state: &std::sync::Arc<storage::AppState>
             format: PostFormat::Markdown,
             rendered_html: "<p>Original</p>".to_string(),
             published_at: None,
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -4942,6 +5000,7 @@ async fn assert_post_revisions_created(state: &std::sync::Arc<storage::AppState>
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Updated</p>".to_string(),
                 publish: true,
+                summary: None,
             },
         )
         .await
@@ -4976,6 +5035,7 @@ async fn assert_tag_display_preservation(state: &std::sync::Arc<storage::AppStat
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -5023,6 +5083,7 @@ async fn assert_untag_preserves_other_tags(state: &std::sync::Arc<storage::AppSt
             format: PostFormat::Markdown,
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -6215,6 +6276,7 @@ async fn assert_list_tags_returns_alphabetical_with_prefix(
             format: PostFormat::Markdown,
             rendered_html: "<p>body</p>".to_string(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("post creation failed");
@@ -6279,6 +6341,7 @@ async fn assert_post_record_carries_tags(state: &std::sync::Arc<storage::AppStat
                 format: PostFormat::Markdown,
                 rendered_html: format!("<p>body {n}</p>"),
                 published_at: Some(Utc::now()),
+                summary: None,
             })
             .await
             .expect("post creation failed");

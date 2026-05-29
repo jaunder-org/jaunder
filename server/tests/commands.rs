@@ -66,6 +66,7 @@ async fn populate_backup_fixture(args: &StorageArgs) -> i64 {
             format: PostFormat::Markdown,
             rendered_html: "<p>body text</p>".to_owned(),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("create post");
