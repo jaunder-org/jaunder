@@ -27,6 +27,8 @@ getrandom = { version = "0.2", features = ["js"] }
 test-utils = []
 
 [dev-dependencies]
+axum = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true }
 
 [lints]

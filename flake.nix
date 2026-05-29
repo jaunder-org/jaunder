@@ -36,6 +36,7 @@
       postgresTestingVmSystem = "x86_64-linux";
       mailCaptureEnv = {
         JAUNDER_MAIL_CAPTURE_FILE = "/var/lib/jaunder/mail.jsonl";
+        JAUNDER_WEBSUB_CAPTURE_FILE = "/var/lib/jaunder/websub.jsonl";
       };
 
       jaunderModule =
@@ -252,7 +253,7 @@
         pkgs = nixpkgs.legacyPackages.${system};
         toolchain = fenix.packages.${system}.fromToolchainFile {
           file = ./rust-toolchain.toml;
-          sha256 = "sha256-zC8E38iDVJ1oPIzCqTk/Ujo9+9kx9dXq7wAwPMpkpg0=";
+          sha256 = "sha256-gh/xTkxKHL4eiRXzWv8KP7vfjSk61Iq48x47BEDFgfk=";
         };
 
         craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
@@ -614,6 +615,7 @@
                 machine.wait_for_unit("jaunder.service", timeout=60)
                 machine.wait_for_open_port(3000, timeout=30)
                 machine.succeed("sqlite3 /var/lib/jaunder/data/jaunder.db \"INSERT OR REPLACE INTO site_config (key, value) VALUES ('site.registration_policy', 'open')\"")
+                machine.succeed("sqlite3 /var/lib/jaunder/data/jaunder.db \"INSERT OR REPLACE INTO site_config (key, value) VALUES ('feeds.websub_hub_url', 'https://hub.test.local/')\"")
                 machine.succeed(
                   "cd /var/lib/jaunder"
                   + " && JAUNDER_BIN=${jaunderBin}/bin/jaunder"
@@ -639,6 +641,7 @@
                 + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
                 + "${warmupEnv}"
                 + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                + " JAUNDER_WEBSUB_CAPTURE_FILE=/var/lib/jaunder/websub.jsonl"
                 + " JAUNDER_E2E_TRACE_ID=11111111111111111111111111111111"
                 + " JAUNDER_E2E_TRACEPARENT=00-11111111111111111111111111111111-1111111111111111-01"
                 + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
@@ -653,6 +656,7 @@
                 + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
                 + "${warmupEnv}"
                 + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                + " JAUNDER_WEBSUB_CAPTURE_FILE=/var/lib/jaunder/websub.jsonl"
                 + " JAUNDER_E2E_TRACE_ID=22222222222222222222222222222222"
                 + " JAUNDER_E2E_TRACEPARENT=00-22222222222222222222222222222222-2222222222222222-01"
                 + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
@@ -756,6 +760,7 @@
                   + " END LOOP; END \\$\\$;\""
                 )
                 machine.succeed("sudo -u postgres psql -d jaunder -c \"INSERT INTO site_config (key, value) VALUES ('site.registration_policy', 'open')\"")
+                machine.succeed("sudo -u postgres psql -d jaunder -c \"INSERT INTO site_config (key, value) VALUES ('feeds.websub_hub_url', 'https://hub.test.local/')\"")
                 machine.succeed(
                   "cd /var/lib/jaunder"
                   + " && JAUNDER_BIN=${jaunderBin}/bin/jaunder"
@@ -774,6 +779,7 @@
                 + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
                 + "${warmupEnv}"
                 + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                + " JAUNDER_WEBSUB_CAPTURE_FILE=/var/lib/jaunder/websub.jsonl"
                 + " JAUNDER_E2E_TRACE_ID=33333333333333333333333333333333"
                 + " JAUNDER_E2E_TRACEPARENT=00-33333333333333333333333333333333-3333333333333333-01"
                 + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
@@ -788,6 +794,7 @@
                 + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
                 + "${warmupEnv}"
                 + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+                + " JAUNDER_WEBSUB_CAPTURE_FILE=/var/lib/jaunder/websub.jsonl"
                 + " JAUNDER_E2E_TRACE_ID=44444444444444444444444444444444"
                 + " JAUNDER_E2E_TRACEPARENT=00-44444444444444444444444444444444-4444444444444444-01"
                 + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"

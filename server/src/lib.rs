@@ -7,6 +7,7 @@ pub mod assets;
 pub mod cli;
 pub mod commands;
 pub mod context;
+pub mod feed;
 pub mod mailer;
 pub mod media;
 pub mod media_manager;
@@ -108,6 +109,22 @@ pub fn create_router(
                     req,
                 )
             }),
+        )
+        .route(
+            "/feed.{ext}",
+            axum::routing::get(crate::feed::handlers::feed_site),
+        )
+        .route(
+            "/tags/{tag}/feed.{ext}",
+            axum::routing::get(crate::feed::handlers::feed_site_tag),
+        )
+        .route(
+            "/~{username}/feed.{ext}",
+            axum::routing::get(crate::feed::handlers::feed_user),
+        )
+        .route(
+            "/~{username}/tags/{tag}/feed.{ext}",
+            axum::routing::get(crate::feed::handlers::feed_user_tag),
         )
         .leptos_routes_with_context(
             &leptos_options,

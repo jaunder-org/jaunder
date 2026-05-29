@@ -21,6 +21,7 @@ fi
 export JAUNDER_BIN="$BIN"
 export JAUNDER_DB_PATH="${JAUNDER_DB_PATH:-../data/jaunder.db}"
 export JAUNDER_MAIL_CAPTURE_FILE="${JAUNDER_MAIL_CAPTURE_FILE:-/tmp/jaunder-mail.jsonl}"
+export JAUNDER_WEBSUB_CAPTURE_FILE="${JAUNDER_WEBSUB_CAPTURE_FILE:-/tmp/jaunder-websub.jsonl}"
 
 # Wait for the server to be ready (cargo-leptos may still be starting it).
 for _ in $(seq 1 30); do

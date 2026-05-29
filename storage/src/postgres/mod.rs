@@ -23,6 +23,12 @@ pub use invites::PostgresInviteStorage;
 mod email_verifications;
 pub use email_verifications::PostgresEmailVerificationStorage;
 
+mod feed_cache;
+pub use feed_cache::PostgresFeedCacheStorage;
+
+mod feed_events;
+pub use feed_events::PostgresFeedEventStorage;
+
 mod password_resets;
 pub use password_resets::PostgresPasswordResetStorage;
 
@@ -196,7 +202,10 @@ fn make_postgres_app_state(pool: PgPool) -> Arc<crate::AppState> {
         password_resets: Arc::new(PostgresPasswordResetStorage::new(pool.clone())),
         posts: Arc::new(PostgresPostStorage::new(pool.clone())),
         media: Arc::new(PostgresMediaStorage::new(pool.clone())),
-        user_config: Arc::new(PostgresUserConfigStorage::new(pool)),
+        user_config: Arc::new(PostgresUserConfigStorage::new(pool.clone())),
+        feed_cache: Arc::new(PostgresFeedCacheStorage::new(pool.clone())),
+        feed_events: Arc::new(PostgresFeedEventStorage::new(pool)),
+        websub: common::websub::default_client_from_env(),
     })
 }
 

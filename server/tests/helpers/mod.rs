@@ -9,11 +9,13 @@ use std::sync::{
 };
 use storage::{
     open_database, AppState, DbConnectOptions, PostgresAtomicOps, PostgresEmailVerificationStorage,
-    PostgresInviteStorage, PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
+    PostgresFeedCacheStorage, PostgresFeedEventStorage, PostgresInviteStorage,
+    PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
     PostgresSessionStorage, PostgresSiteConfigStorage, PostgresUserConfigStorage,
-    PostgresUserStorage, SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
-    SqliteMediaStorage, SqlitePasswordResetStorage, SqlitePostStorage, SqliteSessionStorage,
-    SqliteSiteConfigStorage, SqliteUserConfigStorage, SqliteUserStorage,
+    PostgresUserStorage, SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
+    SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage,
+    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserConfigStorage,
+    SqliteUserStorage,
 };
 use tempfile::TempDir;
 
@@ -50,6 +52,8 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::posts::ListHomeFeed>();
         server_fn::axum::register_explicit::<web::posts::ListPostsByTag>();
         server_fn::axum::register_explicit::<web::posts::ListUserPostsByTag>();
+        server_fn::axum::register_explicit::<web::site::GetSiteIdentity>();
+        server_fn::axum::register_explicit::<web::site::UpdateSiteIdentity>();
         server_fn::axum::register_explicit::<web::tags::ListTags>();
     });
 }
@@ -224,7 +228,10 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             password_resets: Arc::new(PostgresPasswordResetStorage::new(pool.clone())),
             posts: Arc::new(PostgresPostStorage::new(pool.clone())),
             media: Arc::new(PostgresMediaStorage::new(pool.clone())),
-            user_config: Arc::new(PostgresUserConfigStorage::new(pool)),
+            user_config: Arc::new(PostgresUserConfigStorage::new(pool.clone())),
+            feed_cache: Arc::new(PostgresFeedCacheStorage::new(pool.clone())),
+            feed_events: Arc::new(PostgresFeedEventStorage::new(pool)),
+            websub: Arc::new(common::websub::NoopWebSubClient),
         })
     } else {
         let pool = sqlx::SqlitePool::connect_with(
@@ -249,7 +256,10 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
             posts: Arc::new(SqlitePostStorage::new(pool.clone())),
             media: Arc::new(SqliteMediaStorage::new(pool.clone())),
-            user_config: Arc::new(SqliteUserConfigStorage::new(pool)),
+            user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
+            feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
+            feed_events: Arc::new(SqliteFeedEventStorage::new(pool)),
+            websub: Arc::new(common::websub::NoopWebSubClient),
         })
     };
     (state, mailer)
@@ -287,6 +297,43 @@ pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx
         posts: Arc::new(SqlitePostStorage::new(pool.clone())),
         media: Arc::new(SqliteMediaStorage::new(pool.clone())),
         user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
+        feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
+        feed_events: Arc::new(SqliteFeedEventStorage::new(pool.clone())),
+        websub: Arc::new(common::websub::NoopWebSubClient),
     });
     (state, pool)
+}
+
+pub async fn test_state_with_websub(
+    base: &TempDir,
+) -> (Arc<AppState>, Arc<common::websub::CapturingWebSubClient>) {
+    let capturing = Arc::new(common::websub::CapturingWebSubClient::default());
+    let pool = sqlx::SqlitePool::connect_with(
+        format!("sqlite:{}", base.path().join("test.db").display())
+            .parse::<sqlx::sqlite::SqliteConnectOptions>()
+            .unwrap()
+            .create_if_missing(true),
+    )
+    .await
+    .unwrap();
+    sqlx::migrate!("../storage/migrations/sqlite")
+        .run(&pool)
+        .await
+        .unwrap();
+    let state = Arc::new(AppState {
+        site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
+        users: Arc::new(SqliteUserStorage::new(pool.clone())),
+        sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
+        invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
+        atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
+        email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
+        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
+        posts: Arc::new(SqlitePostStorage::new(pool.clone())),
+        media: Arc::new(SqliteMediaStorage::new(pool.clone())),
+        user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
+        feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
+        feed_events: Arc::new(SqliteFeedEventStorage::new(pool)),
+        websub: capturing.clone(),
+    });
+    (state, capturing)
 }

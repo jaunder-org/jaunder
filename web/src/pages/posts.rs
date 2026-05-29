@@ -2,6 +2,7 @@ use crate::tags::TagSummary;
 use crate::{
     auth::current_user,
     error::WebError,
+    feed_discovery::FeedDiscovery,
     pages::{
         signal_read::read_signal,
         ui::{ComposerFields, PostCard, PostCreateForm, PostDisplay, TagContext, TagInput, Topbar},
@@ -14,6 +15,7 @@ use crate::{
         UpdatePost, UpdatePostResult,
     },
 };
+use common::feed::FeedSurface;
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
@@ -309,6 +311,13 @@ pub fn UserTimelinePage() -> impl IntoView {
     let read_pending = move || read_signal!(load_more_action.pending());
 
     view! {
+        {move || {
+            view! {
+                <FeedDiscovery surface=FeedSurface::User {
+                    username: username.get(),
+                } />
+            }
+        }}
         <Topbar
             title=move || format!("Posts by {}", display_username())
             sub="User timeline".to_string()
@@ -934,6 +943,13 @@ pub fn SiteTagPage() -> impl IntoView {
     let read_pending = move || read_signal!(load_more_action.pending());
 
     view! {
+        {move || {
+            view! {
+                <FeedDiscovery surface=FeedSurface::SiteTag {
+                    tag: tag.get(),
+                } />
+            }
+        }}
         <Topbar
             title=Signal::derive(move || format!("#{}", read_tag()))
             sub="Posts on this instance".to_string()
@@ -1085,6 +1101,14 @@ pub fn UserTagPage() -> impl IntoView {
     let read_pending = move || read_signal!(load_more_action.pending());
 
     view! {
+        {move || {
+            view! {
+                <FeedDiscovery surface=FeedSurface::UserTag {
+                    username: username.get(),
+                    tag: tag.get(),
+                } />
+            }
+        }}
         <Topbar
             title=Signal::derive(move || format!("#{}", read_tag()))
             sub=Signal::derive(move || format!("Posts by ~{}", read_username()))

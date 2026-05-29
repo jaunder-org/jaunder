@@ -2,9 +2,12 @@
 
 use std::sync::Arc;
 
+use common::websub::WebSubClient;
+
 use super::{
-    AtomicOps, EmailVerificationStorage, InviteStorage, MediaStorage, PasswordResetStorage,
-    PostStorage, SessionStorage, SiteConfigStorage, UserConfigStorage, UserStorage,
+    AtomicOps, EmailVerificationStorage, FeedCacheStorage, FeedEventStorage, InviteStorage,
+    MediaStorage, PasswordResetStorage, PostStorage, SessionStorage, SiteConfigStorage,
+    UserConfigStorage, UserStorage,
 };
 
 /// Bundle of every storage handle the application needs.
@@ -42,4 +45,18 @@ pub struct AppState {
     pub media: Arc<dyn MediaStorage>,
     /// Interface for per-user preference storage.
     pub user_config: Arc<dyn UserConfigStorage>,
+    /// Cache of fully-rendered feed bodies, keyed by canonical feed URL.
+    pub feed_cache: Arc<dyn FeedCacheStorage>,
+    /// Queue of feed-regeneration events drained by the feed worker.
+    pub feed_events: Arc<dyn FeedEventStorage>,
+    /// `WebSub` publisher used to notify subscribers when feeds change.
+    ///
+    /// Production builders select the client via
+    /// [`common::websub::default_client_from_env`]: a
+    /// [`common::websub::FileCapturingWebSubClient`] when
+    /// `JAUNDER_WEBSUB_CAPTURE_FILE` is set (e2e capture), otherwise the live
+    /// [`common::websub::HttpWebSubClient`]. The worker only pings when
+    /// `feeds.websub_hub_url` is configured. Test helpers use
+    /// [`common::websub::NoopWebSubClient`].
+    pub websub: Arc<dyn WebSubClient>,
 }

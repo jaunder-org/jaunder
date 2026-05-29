@@ -14,7 +14,7 @@ use std::sync::Arc;
 use common::mailer::MailSender;
 use leptos::prelude::provide_context;
 use storage::{
-    AppState, AtomicOps, EmailVerificationStorage, InviteStorage, MediaStorage,
+    AppState, AtomicOps, EmailVerificationStorage, FeedEventStorage, InviteStorage, MediaStorage,
     PasswordResetStorage, PostStorage, SessionStorage, SiteConfigStorage, UserConfigStorage,
     UserStorage,
 };
@@ -33,6 +33,7 @@ pub fn provide_app_state_contexts(state: &Arc<AppState>) {
     provide_context::<Arc<dyn MediaStorage>>(state.media.clone());
     provide_context::<Arc<dyn UserConfigStorage>>(state.user_config.clone());
     provide_context::<Arc<dyn SiteConfigStorage>>(state.site_config.clone());
+    provide_context::<Arc<dyn FeedEventStorage>>(state.feed_events.clone());
 }
 
 /// Place the mailer in the current Leptos context. Server functions that

@@ -1,0 +1,163 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use chrono::Utc;
+use storage::AppState;
+use storage::FeedEventRecord;
+
+use super::regenerate::regenerate_feed;
+
+const BATCH_LIMIT: usize = 200;
+#[allow(clippy::duration_suboptimal_units)]
+const LEASE_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
+const BACKOFFS_SECS: &[u64] = &[60, 300, 1800, 7200, 7200, 7200];
+
+/// Processes a batch of pending feed events: regenerates feeds and pings the `WebSub` hub.
+/// Groups events by `feed_url` to avoid redundant regeneration.
+#[allow(clippy::too_many_lines)]
+pub async fn tick(state: Arc<AppState>) {
+    let claimed = match state
+        .feed_events
+        .claim_pending_batch(
+            BATCH_LIMIT,
+            chrono::Duration::from_std(LEASE_TIMEOUT).unwrap_or(chrono::Duration::seconds(300)),
+        )
+        .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "feed worker claim failed");
+            return;
+        }
+    };
+    if claimed.is_empty() {
+        return;
+    }
+
+    // Group by feed_url to avoid redundant regeneration
+    let mut groups: HashMap<String, Vec<FeedEventRecord>> = HashMap::new();
+    for rec in claimed {
+        groups.entry(rec.feed_url.clone()).or_default().push(rec);
+    }
+
+    // Read hub URL and site identity once per tick
+    let hub_url = state
+        .site_config
+        .get_feeds_websub_hub_url()
+        .await
+        .ok()
+        .flatten();
+    let identity = state.site_config.get_identity().await.ok();
+
+    for (feed_url, recs) in groups {
+        let ids: Vec<i64> = recs.iter().map(|r| r.id).collect();
+        let started = std::time::Instant::now();
+
+        match regenerate_feed(&state, &feed_url).await {
+            Ok(row) => {
+                let _ = state.feed_events.mark_regenerated(&ids).await;
+                tracing::info!(
+                    feed_url,
+                    item_bytes = row.body.len(),
+                    duration_ms = started.elapsed().as_millis(),
+                    "feed.regen.completed"
+                );
+
+                let attempt = recs.iter().map(|r| r.attempts).max().unwrap_or(0) + 1;
+                match &hub_url {
+                    Some(hub) => {
+                        let base = identity
+                            .as_ref()
+                            .and_then(|i| i.base_url.as_deref())
+                            .unwrap_or("")
+                            .trim_end_matches('/');
+                        let absolute = format!("{base}{feed_url}");
+                        tracing::info!(feed_url, hub, attempt, "feed.websub.ping.attempted");
+
+                        let result = state.websub.send_publish(hub, &absolute).await;
+                        match result {
+                            Ok(()) => {
+                                tracing::info!(
+                                    feed_url,
+                                    hub,
+                                    attempt,
+                                    "feed.websub.ping.succeeded"
+                                );
+                                let _ = state.feed_events.mark_pinged(&ids).await;
+                            }
+                            Err(e) => {
+                                let attempt_usize = usize::try_from(attempt).unwrap_or(0);
+                                let next_attempt_idx = attempt_usize.saturating_sub(1);
+                                if next_attempt_idx >= BACKOFFS_SECS.len() {
+                                    tracing::warn!(feed_url, hub, "feed.websub.ping.exhausted");
+                                    let _ = state
+                                        .feed_events
+                                        .mark_exhausted(&ids, &e.to_string())
+                                        .await;
+                                } else {
+                                    let delay = chrono::Duration::seconds(
+                                        i64::try_from(BACKOFFS_SECS[next_attempt_idx])
+                                            .unwrap_or(60),
+                                    );
+                                    let next = Utc::now() + delay;
+                                    tracing::warn!(feed_url, hub, attempt, error = %e, "feed.websub.ping.failed");
+                                    let _ = state
+                                        .feed_events
+                                        .mark_failed(&ids, &e.to_string(), next)
+                                        .await;
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        // No hub configured — treat as complete.
+                        let _ = state.feed_events.mark_pinged(&ids).await;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, feed_url, "feed.regen.failed");
+                let attempt = recs.iter().map(|r| r.attempts).max().unwrap_or(0) + 1;
+                let attempt_usize = usize::try_from(attempt).unwrap_or(0);
+                let next_attempt_idx = attempt_usize.saturating_sub(1);
+                if next_attempt_idx >= BACKOFFS_SECS.len() {
+                    let _ = state.feed_events.mark_exhausted(&ids, &e.to_string()).await;
+                } else {
+                    let next = Utc::now()
+                        + chrono::Duration::seconds(
+                            i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
+                        );
+                    let _ = state
+                        .feed_events
+                        .mark_failed(&ids, &e.to_string(), next)
+                        .await;
+                }
+            }
+        }
+    }
+}
+
+/// Starts the feed worker scheduler, which runs `tick` periodically.
+/// Returns the scheduler; the caller must keep it alive for the worker to run.
+///
+/// # Errors
+///
+/// Returns an error if the scheduler fails to start.
+pub async fn start_feed_worker(
+    state: Arc<AppState>,
+) -> anyhow::Result<tokio_cron_scheduler::JobScheduler> {
+    let scheduler = tokio_cron_scheduler::JobScheduler::new().await?;
+    let job = tokio_cron_scheduler::Job::new_repeated_async(
+        Duration::from_secs(10),
+        move |_uuid, _lock| {
+            let state = state.clone();
+            Box::pin(async move {
+                tick(state).await;
+            })
+        },
+    )?;
+    scheduler.add(job).await?;
+    scheduler.start().await?;
+    Ok(scheduler)
+}

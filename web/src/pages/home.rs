@@ -2,9 +2,11 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::current_user;
+use crate::feed_discovery::FeedDiscovery;
 use crate::pages::signal_read::read_signal;
 use crate::pages::ui::{InlineComposer, PostCard, Topbar};
 use crate::posts::{list_home_feed, list_local_timeline, TimelinePostSummary};
+use common::feed::FeedSurface;
 
 #[cfg(target_arch = "wasm32")]
 use leptos::task::spawn_local;
@@ -153,6 +155,7 @@ pub fn HomePage() -> impl IntoView {
     };
 
     view! {
+        <FeedDiscovery surface=FeedSurface::Site />
         {move || {
             if let Some(err) = read_error() {
                 return view! { <p class="error">{err}</p> }.into_any();

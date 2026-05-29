@@ -33,5 +33,6 @@ set -euo pipefail
 
 "$JAUNDER_BIN" user-create --username testlogin --password testpassword123
 "$JAUNDER_BIN" user-create --username testnoemail --password testpassword123
+"$JAUNDER_BIN" user-create --username testoperator --password testpassword123 --operator
 
 rm -f "$JAUNDER_MAIL_CAPTURE_FILE"
