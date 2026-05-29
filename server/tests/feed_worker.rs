@@ -187,6 +187,48 @@ async fn worker_groups_duplicate_events_into_single_regen() {
 }
 
 #[tokio::test]
+async fn worker_applies_backoff_on_regen_failure() {
+    let base = TempDir::new().expect("temp dir");
+    let (state, capture) = helpers::test_state_with_websub(&base).await;
+
+    // Enqueue an event whose feed_url cannot be parsed into a feed surface;
+    // regenerate_feed returns BadUrl before any hub logic runs.
+    let feed_url = "/this-is-not-a-feed-url";
+    state
+        .feed_events
+        .enqueue(feed_url)
+        .await
+        .expect("enqueue feed event");
+
+    // Run the worker - regeneration will fail.
+    tick(state.clone()).await;
+
+    // No cache row should have been written.
+    let cache = state.feed_cache.get(feed_url).await.expect("get cache");
+    assert!(
+        cache.is_none(),
+        "no cache row should exist on regen failure"
+    );
+
+    // No ping should have been attempted (regen failed first).
+    assert!(
+        capture.pings().is_empty(),
+        "no ping should be sent when regeneration fails"
+    );
+
+    // The event is scheduled for a future retry, not immediately claimable.
+    let immediately_claimable = state
+        .feed_events
+        .claim_pending_batch(10, chrono::Duration::minutes(5))
+        .await
+        .expect("claim pending");
+    assert!(
+        immediately_claimable.is_empty(),
+        "event should be scheduled for retry, not immediately claimable"
+    );
+}
+
+#[tokio::test]
 async fn worker_applies_backoff_on_ping_failure() {
     let base = TempDir::new().expect("temp dir");
     let pool = sqlx::SqlitePool::connect_with(
