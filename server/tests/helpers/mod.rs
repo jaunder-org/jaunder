@@ -303,3 +303,37 @@ pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx
     });
     (state, pool)
 }
+
+pub async fn test_state_with_websub(
+    base: &TempDir,
+) -> (Arc<AppState>, Arc<common::websub::CapturingWebSubClient>) {
+    let capturing = Arc::new(common::websub::CapturingWebSubClient::default());
+    let pool = sqlx::SqlitePool::connect_with(
+        format!("sqlite:{}", base.path().join("test.db").display())
+            .parse::<sqlx::sqlite::SqliteConnectOptions>()
+            .unwrap()
+            .create_if_missing(true),
+    )
+    .await
+    .unwrap();
+    sqlx::migrate!("../storage/migrations/sqlite")
+        .run(&pool)
+        .await
+        .unwrap();
+    let state = Arc::new(AppState {
+        site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
+        users: Arc::new(SqliteUserStorage::new(pool.clone())),
+        sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
+        invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
+        atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
+        email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
+        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
+        posts: Arc::new(SqlitePostStorage::new(pool.clone())),
+        media: Arc::new(SqliteMediaStorage::new(pool.clone())),
+        user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
+        feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
+        feed_events: Arc::new(SqliteFeedEventStorage::new(pool)),
+        websub: capturing.clone(),
+    });
+    (state, capturing)
+}
