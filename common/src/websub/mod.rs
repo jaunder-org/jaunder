@@ -26,3 +26,6 @@ pub mod capturing;
 #[cfg(not(target_arch = "wasm32"))]
 pub use http::HttpWebSubClient;
 pub use noop::NoopWebSubClient;
+
+#[cfg(any(test, feature = "test-utils"))]
+pub use capturing::CapturingWebSubClient;

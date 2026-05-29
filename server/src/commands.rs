@@ -416,6 +416,7 @@ pub async fn cmd_serve(
     let backup_scheduler =
         crate::start_backup_worker(db.clone(), storage.db.clone(), storage.storage_path.clone())
             .await?;
+    let feed_scheduler = crate::feed::worker::start_feed_worker(db.clone()).await?;
     let mailer = crate::mailer::build_mailer(db.site_config.as_ref()).await;
     let router = crate::create_router(
         leptos_options,
@@ -427,6 +428,7 @@ pub async fn cmd_serve(
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!(bind = %bind, prod, "starting HTTP server");
     let _backup_scheduler = backup_scheduler;
+    let _feed_scheduler = feed_scheduler;
     axum::serve(listener, router).await?;
     Ok(())
 }
