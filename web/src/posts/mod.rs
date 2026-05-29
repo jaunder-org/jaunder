@@ -19,13 +19,14 @@ use crate::tags::TagSummary;
 use {
     crate::auth::{require_auth, AuthUser},
     crate::error::InternalError,
+    crate::feed_events::enqueue_feed_events,
     chrono::{NaiveDate, Utc},
     common::{slug::Slug, tag::Tag, username::Username},
     leptos_axum,
-    std::sync::Arc,
+    std::{collections::BTreeSet, sync::Arc},
     storage::{
-        perform_post_creation, perform_post_update, PerformUpdateError, PostFormat, PostStorage,
-        UpdatePostError, UpdatePostInput, UserStorage,
+        perform_post_creation, perform_post_update, FeedEventStorage, PerformUpdateError,
+        PostFormat, PostStorage, UpdatePostError, UpdatePostInput, UserStorage,
     },
 };
 
@@ -174,6 +175,19 @@ pub async fn create_post(
                 .map_err(|e| InternalError::server_message(e.to_string()))?;
         }
 
+        let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+        let tag_post_tags = posts
+            .get_tags_for_post(created.post_id)
+            .await
+            .map_err(InternalError::storage)?;
+        let tag_slugs: BTreeSet<String> = tag_post_tags
+            .iter()
+            .map(|t| t.tag_slug.as_str().to_string())
+            .collect();
+        enqueue_feed_events(feed_events.as_ref(), auth.username.as_str(), &tag_slugs)
+            .await
+            .map_err(InternalError::storage)?;
+
         Ok(created)
     })
 }
@@ -266,6 +280,21 @@ pub async fn update_post(
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
+        // Load old tags before mutation to union with new tags
+        let old = posts
+            .get_post_by_id(post_id)
+            .await
+            .map_err(InternalError::storage)?;
+        let old_tag_slugs: BTreeSet<String> = old
+            .as_ref()
+            .map(|p| {
+                p.tags
+                    .iter()
+                    .map(|t| t.tag_slug.as_str().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+
         // Validate tags up-front so a malformed input rejects before any
         // post mutation lands.
         let new_tags = tags
@@ -296,6 +325,21 @@ pub async fn update_post(
         if let Some(new_tags) = new_tags {
             apply_post_tag_diff(posts.as_ref(), post_id, &new_tags).await?;
         }
+
+        // Fetch current tags after mutation and union with old tags
+        let current_tags = posts
+            .get_tags_for_post(post_id)
+            .await
+            .map_err(InternalError::storage)?;
+        let mut all_tag_slugs: BTreeSet<String> = old_tag_slugs;
+        for tag in current_tags {
+            all_tag_slugs.insert(tag.tag_slug.as_str().to_string());
+        }
+
+        let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+        enqueue_feed_events(feed_events.as_ref(), auth.username.as_str(), &all_tag_slugs)
+            .await
+            .map_err(InternalError::storage)?;
 
         let published_at_str = record.published_at.map(|t| t.to_rfc3339());
         // Only published posts have a public permalink. For drafts, the permalink is None.
@@ -390,6 +434,20 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
         let published_at = updated
             .published_at
             .ok_or_else(|| InternalError::not_found("Post"))?;
+
+        let tag_slugs: BTreeSet<String> = updated
+            .tags
+            .iter()
+            .map(|t| t.tag_slug.as_str().to_string())
+            .collect();
+        let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+        enqueue_feed_events(
+            feed_events.as_ref(),
+            updated.author_username.as_str(),
+            &tag_slugs,
+        )
+        .await
+        .map_err(InternalError::storage)?;
 
         Ok(PublishPostResult {
             post_id: updated.post_id,
@@ -657,7 +715,26 @@ pub async fn delete_post(post_id: i64) -> WebResult<()> {
         posts
             .soft_delete_post(post_id)
             .await
-            .map_err(InternalError::storage)
+            .map_err(InternalError::storage)?;
+
+        // Only enqueue feed events for published posts
+        if existing.published_at.is_some() {
+            let tag_slugs: BTreeSet<String> = existing
+                .tags
+                .iter()
+                .map(|t| t.tag_slug.as_str().to_string())
+                .collect();
+            let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+            enqueue_feed_events(
+                feed_events.as_ref(),
+                existing.author_username.as_str(),
+                &tag_slugs,
+            )
+            .await
+            .map_err(InternalError::storage)?;
+        }
+
+        Ok(())
     })
 }
 
@@ -681,7 +758,23 @@ pub async fn unpublish_post(post_id: i64) -> WebResult<()> {
         posts
             .unpublish_post(post_id)
             .await
-            .map_err(InternalError::storage)
+            .map_err(InternalError::storage)?;
+
+        let tag_slugs: BTreeSet<String> = existing
+            .tags
+            .iter()
+            .map(|t| t.tag_slug.as_str().to_string())
+            .collect();
+        let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+        enqueue_feed_events(
+            feed_events.as_ref(),
+            existing.author_username.as_str(),
+            &tag_slugs,
+        )
+        .await
+        .map_err(InternalError::storage)?;
+
+        Ok(())
     })
 }
 

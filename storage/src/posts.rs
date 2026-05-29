@@ -335,6 +335,20 @@ pub trait PostStorage: Send + Sync {
     /// on the slug). An empty / `None` prefix returns all tags, alphabetically,
     /// up to `limit`.
     async fn list_tags(&self, prefix: Option<&str>, limit: u32) -> sqlx::Result<Vec<TagRecord>>;
+
+    /// Lists published posts matching `surface`, applying the
+    /// [`HybridWindow`](common::feed::HybridWindow) selection rule (union of
+    /// "the most recent `min_items` items" and "all items published within the
+    /// last `min_days`"). Results are ordered by `published_at DESC`.
+    ///
+    /// `now` is passed in so callers can supply a deterministic clock in
+    /// tests. Posts with `published_at > now` (future-dated) are excluded.
+    async fn list_published_in_window(
+        &self,
+        surface: &common::feed::FeedSurface,
+        window: &common::feed::HybridWindow,
+        now: DateTime<Utc>,
+    ) -> sqlx::Result<Vec<PostRecord>>;
 }
 
 #[cfg(test)]

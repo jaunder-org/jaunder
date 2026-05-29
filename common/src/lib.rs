@@ -1,7 +1,10 @@
 pub mod backup;
+pub mod feed;
 pub mod mailer;
 pub mod media;
 pub mod password;
+pub mod site;
 pub mod slug;
 pub mod tag;
 pub mod username;
+pub mod websub;

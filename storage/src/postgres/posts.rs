@@ -6,7 +6,7 @@ use crate::{
     CreatePostError, CreatePostInput, ListByTagError, PostCursor, PostRecord, PostStorage, PostTag,
     TaggingError, UpdatePostError, UpdatePostInput,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use common::slug::Slug;
 use common::tag::Tag;
 use common::username::Username;
@@ -610,6 +610,190 @@ impl PostStorage for PostgresPostStorage {
             })
             .collect()
     }
+
+    async fn list_published_in_window(
+        &self,
+        surface: &common::feed::FeedSurface,
+        window: &common::feed::HybridWindow,
+        now: DateTime<Utc>,
+    ) -> sqlx::Result<Vec<PostRecord>> {
+        let cutoff = window.cutoff_date(now);
+        let min_items = i64::from(window.min_items);
+        let rows =
+            list_published_in_window_postgres(&self.pool, surface, now, cutoff, min_items).await?;
+        rows.into_iter().map(post_record_from_row).collect()
+    }
+}
+
+const TAGS_SUBQUERY: &str =
+    "COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::json)::text";
+
+async fn list_published_in_window_postgres(
+    pool: &PgPool,
+    surface: &common::feed::FeedSurface,
+    now: DateTime<Utc>,
+    cutoff: DateTime<Utc>,
+    min_items: i64,
+) -> sqlx::Result<Vec<PostRow>> {
+    use common::feed::FeedSurface;
+    match surface {
+        FeedSurface::Site => window_site_postgres(pool, now, cutoff, min_items).await,
+        FeedSurface::User { username } => {
+            window_user_postgres(pool, username, now, cutoff, min_items).await
+        }
+        FeedSurface::SiteTag { tag } => {
+            window_site_tag_postgres(pool, tag, now, cutoff, min_items).await
+        }
+        FeedSurface::UserTag { username, tag } => {
+            window_user_tag_postgres(pool, username, tag, now, cutoff, min_items).await
+        }
+    }
+}
+
+async fn window_site_postgres(
+    pool: &PgPool,
+    now: DateTime<Utc>,
+    cutoff: DateTime<Utc>,
+    min_items: i64,
+) -> sqlx::Result<Vec<PostRow>> {
+    let sql = format!(
+        "WITH ranked AS (
+     SELECT p.post_id, p.published_at,
+            ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
+     FROM posts p
+     WHERE p.published_at IS NOT NULL
+       AND p.deleted_at IS NULL
+       AND p.published_at <= $1
+ )
+ SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+        {TAGS_SUBQUERY} AS tags
+ FROM ranked r
+ JOIN posts p ON p.post_id = r.post_id
+ JOIN users u ON p.user_id = u.user_id
+ WHERE r.rn <= $2 OR r.published_at >= $3
+ ORDER BY p.published_at DESC, p.post_id DESC"
+    );
+    sqlx::query_as::<_, PostRow>(&sql)
+        .bind(now)
+        .bind(min_items)
+        .bind(cutoff)
+        .fetch_all(pool)
+        .await
+}
+
+async fn window_user_postgres(
+    pool: &PgPool,
+    username: &str,
+    now: DateTime<Utc>,
+    cutoff: DateTime<Utc>,
+    min_items: i64,
+) -> sqlx::Result<Vec<PostRow>> {
+    let sql = format!(
+        "WITH ranked AS (
+     SELECT p.post_id, p.published_at,
+            ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
+     FROM posts p
+     JOIN users u ON p.user_id = u.user_id
+     WHERE p.published_at IS NOT NULL
+       AND p.deleted_at IS NULL
+       AND p.published_at <= $1
+       AND u.username = $2
+ )
+ SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+        {TAGS_SUBQUERY} AS tags
+ FROM ranked r
+ JOIN posts p ON p.post_id = r.post_id
+ JOIN users u ON p.user_id = u.user_id
+ WHERE r.rn <= $3 OR r.published_at >= $4
+ ORDER BY p.published_at DESC, p.post_id DESC"
+    );
+    sqlx::query_as::<_, PostRow>(&sql)
+        .bind(now)
+        .bind(username)
+        .bind(min_items)
+        .bind(cutoff)
+        .fetch_all(pool)
+        .await
+}
+
+async fn window_site_tag_postgres(
+    pool: &PgPool,
+    tag: &str,
+    now: DateTime<Utc>,
+    cutoff: DateTime<Utc>,
+    min_items: i64,
+) -> sqlx::Result<Vec<PostRow>> {
+    let sql = format!(
+        "WITH ranked AS (
+     SELECT p.post_id, p.published_at,
+            ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
+     FROM posts p
+     JOIN post_tags pt ON p.post_id = pt.post_id
+     JOIN tags t ON pt.tag_id = t.tag_id
+     WHERE p.published_at IS NOT NULL
+       AND p.deleted_at IS NULL
+       AND p.published_at <= $1
+       AND t.tag_slug = $2
+ )
+ SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+        {TAGS_SUBQUERY} AS tags
+ FROM ranked r
+ JOIN posts p ON p.post_id = r.post_id
+ JOIN users u ON p.user_id = u.user_id
+ WHERE r.rn <= $3 OR r.published_at >= $4
+ ORDER BY p.published_at DESC, p.post_id DESC"
+    );
+    sqlx::query_as::<_, PostRow>(&sql)
+        .bind(now)
+        .bind(tag)
+        .bind(min_items)
+        .bind(cutoff)
+        .fetch_all(pool)
+        .await
+}
+
+async fn window_user_tag_postgres(
+    pool: &PgPool,
+    username: &str,
+    tag: &str,
+    now: DateTime<Utc>,
+    cutoff: DateTime<Utc>,
+    min_items: i64,
+) -> sqlx::Result<Vec<PostRow>> {
+    let sql = format!(
+        "WITH ranked AS (
+     SELECT p.post_id, p.published_at,
+            ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
+     FROM posts p
+     JOIN users u ON p.user_id = u.user_id
+     JOIN post_tags pt ON p.post_id = pt.post_id
+     JOIN tags t ON pt.tag_id = t.tag_id
+     WHERE p.published_at IS NOT NULL
+       AND p.deleted_at IS NULL
+       AND p.published_at <= $1
+       AND u.username = $2
+       AND t.tag_slug = $3
+ )
+ SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+        p.created_at, p.updated_at, p.published_at, p.deleted_at,
+        {TAGS_SUBQUERY} AS tags
+ FROM ranked r
+ JOIN posts p ON p.post_id = r.post_id
+ JOIN users u ON p.user_id = u.user_id
+ WHERE r.rn <= $4 OR r.published_at >= $5
+ ORDER BY p.published_at DESC, p.post_id DESC"
+    );
+    sqlx::query_as::<_, PostRow>(&sql)
+        .bind(now)
+        .bind(username)
+        .bind(tag)
+        .bind(min_items)
+        .bind(cutoff)
+        .fetch_all(pool)
+        .await
 }
 
 #[cfg(test)]

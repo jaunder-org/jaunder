@@ -24,6 +24,12 @@ pub use invites::SqliteInviteStorage;
 mod email_verifications;
 pub use email_verifications::SqliteEmailVerificationStorage;
 
+mod feed_cache;
+pub use feed_cache::SqliteFeedCacheStorage;
+
+mod feed_events;
+pub use feed_events::SqliteFeedEventStorage;
+
 mod password_resets;
 pub use password_resets::SqlitePasswordResetStorage;
 
@@ -58,7 +64,10 @@ fn make_app_state(pool: SqlitePool) -> Arc<AppState> {
         password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
         posts: Arc::new(SqlitePostStorage::new(pool.clone())),
         media: Arc::new(SqliteMediaStorage::new(pool.clone())),
-        user_config: Arc::new(SqliteUserConfigStorage::new(pool)),
+        user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
+        feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
+        feed_events: Arc::new(SqliteFeedEventStorage::new(pool)),
+        websub: common::websub::default_client_from_env(),
     })
 }
 
