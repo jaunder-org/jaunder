@@ -17,11 +17,13 @@ pub enum PostFormat {
     Markdown,
     /// Emacs Org-mode format.
     Org,
+    /// Pre-rendered HTML.
+    Html,
 }
 
 /// Error returned when a string cannot be parsed as a [`PostFormat`].
 #[derive(Debug, Error)]
-#[error("post format must be \"markdown\" or \"org\"")]
+#[error("post format must be \"markdown\", \"org\", or \"html\"")]
 pub struct InvalidPostFormat;
 
 impl fmt::Display for PostFormat {
@@ -29,6 +31,7 @@ impl fmt::Display for PostFormat {
         match self {
             PostFormat::Markdown => f.write_str("markdown"),
             PostFormat::Org => f.write_str("org"),
+            PostFormat::Html => f.write_str("html"),
         }
     }
 }
@@ -40,6 +43,7 @@ impl FromStr for PostFormat {
         match s {
             "markdown" => Ok(PostFormat::Markdown),
             "org" => Ok(PostFormat::Org),
+            "html" => Ok(PostFormat::Html),
             _ => Err(InvalidPostFormat),
         }
     }
@@ -432,10 +436,10 @@ mod tests {
 
     #[test]
     fn post_format_rejects_invalid_value() {
-        let err = "html".parse::<PostFormat>().unwrap_err();
+        let err = "invalid".parse::<PostFormat>().unwrap_err();
         assert_eq!(
             err.to_string(),
-            "post format must be \"markdown\" or \"org\""
+            "post format must be \"markdown\", \"org\", or \"html\""
         );
     }
 
@@ -547,5 +551,11 @@ mod tests {
         let post = posts.get_post_by_id(post_id).await.unwrap().unwrap();
 
         assert_eq!(post.summary, Some("the summary".into()));
+    }
+
+    #[test]
+    fn post_format_html_roundtrips_via_display_and_from_str() {
+        assert_eq!("html".parse::<PostFormat>().unwrap(), PostFormat::Html);
+        assert_eq!(PostFormat::Html.to_string(), "html");
     }
 }

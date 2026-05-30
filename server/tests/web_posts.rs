@@ -508,7 +508,7 @@ async fn create_post_rejects_invalid_format() {
     let (status, body) = create_post_json(
         Arc::clone(&state),
         "body",
-        "html",
+        "invalid_format",
         None,
         false,
         Some(&cookie),
@@ -1345,7 +1345,7 @@ async fn update_post_rejects_invalid_format() {
         Arc::clone(&state),
         created.post_id,
         "body",
-        "html",
+        "invalid_format",
         None,
         false,
         Some(&cookie),

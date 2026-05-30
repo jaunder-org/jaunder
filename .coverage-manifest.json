@@ -50,7 +50,7 @@
   "storage/src/postgres/user_config.rs": 100,
   "storage/src/postgres/users.rs": 10.3448,
   "storage/src/posts.rs": 100,
-  "storage/src/render.rs": 98.7887,
+  "storage/src/render.rs": 98.8064,
   "storage/src/site_config.rs": 100,
   "storage/src/smtp.rs": 100,
   "storage/src/sqlite/backup.rs": 98.8701,

@@ -500,7 +500,7 @@ mod tests {
             Some("Hello".to_string()),
             "hello-world".to_string(),
             "Body".to_string(),
-            "html".to_string(),
+            "invalid_format".to_string(),
             "<p>Body</p>".to_string(),
             now,
             now,

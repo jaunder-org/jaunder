@@ -30,6 +30,7 @@ pub fn render(body: &str, format: &PostFormat) -> Result<String, RenderError> {
     match format {
         PostFormat::Markdown => Ok(render_markdown(body)),
         PostFormat::Org => render_org(body),
+        PostFormat::Html => Ok(body.to_string()),
     }
 }
 
@@ -66,6 +67,7 @@ pub fn derive_post_metadata(
     let extracted_title = match format {
         PostFormat::Markdown => extract_markdown_title(body).map(|(title, _)| title),
         PostFormat::Org => extract_org_title(body).map(|(title, _)| title),
+        PostFormat::Html => None,
     };
 
     if let Some(title) = extracted_title {
@@ -667,6 +669,13 @@ mod tests {
     }
 
     #[test]
+    fn derive_metadata_for_html_extracts_no_title_but_keeps_fallback_label() {
+        let metadata = derive_post_metadata(None, "<p>Hello world</p>", &PostFormat::Html).unwrap();
+        assert_eq!(metadata.title, None);
+        assert!(!metadata.summary_label.is_empty());
+    }
+
+    #[test]
     fn derive_metadata_allows_titleless_notes() {
         let metadata = derive_post_metadata(
             None,
@@ -1152,5 +1161,11 @@ mod tests {
 
         let err = PerformCreationError::CreatedNotFound;
         assert_eq!(err.to_string(), "created post not found");
+    }
+
+    #[test]
+    fn render_html_format_is_identity() {
+        let body = "<p>hi <b>there</b></p>";
+        assert_eq!(render(body, &PostFormat::Html).unwrap(), body.to_string());
     }
 }
