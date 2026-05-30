@@ -175,6 +175,16 @@ pub struct PostCursor {
     pub post_id: i64,
 }
 
+/// Cursor for keyset pagination of the editor-facing per-user collection
+/// (ordered by `updated_at DESC, post_id DESC`).
+#[derive(Clone, Copy)]
+pub struct CollectionCursor {
+    /// Update timestamp of the last item in the previous page.
+    pub updated_at: DateTime<Utc>,
+    /// ID of the last item in the previous page (used for stable ordering).
+    pub post_id: i64,
+}
+
 /// Input for creating a new post.
 #[derive(Clone)]
 pub struct CreatePostInput {
@@ -312,6 +322,16 @@ pub trait PostStorage: Send + Sync {
         &self,
         user_id: i64,
         cursor: Option<&PostCursor>,
+        limit: u32,
+    ) -> sqlx::Result<Vec<PostRecord>>;
+
+    /// Lists all of a user's non-soft-deleted posts (drafts + published)
+    /// ordered by `updated_at DESC, post_id DESC` for the `AtomPub` Collection
+    /// surface. Tags are hydrated.
+    async fn list_collection_by_user(
+        &self,
+        user_id: i64,
+        cursor: Option<&CollectionCursor>,
         limit: u32,
     ) -> sqlx::Result<Vec<PostRecord>>;
 

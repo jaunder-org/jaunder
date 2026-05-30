@@ -325,6 +325,51 @@ impl PostStorage for PostgresPostStorage {
         rows.into_iter().map(post_record_from_row).collect()
     }
 
+    async fn list_collection_by_user(
+        &self,
+        user_id: i64,
+        cursor: Option<&crate::CollectionCursor>,
+        limit: u32,
+    ) -> sqlx::Result<Vec<PostRecord>> {
+        let rows = if let Some(cursor) = cursor {
+            sqlx::query_as::<_, PostRow>(
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+                        COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::json)::text AS tags
+                 FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 WHERE p.user_id = $1
+                   AND p.deleted_at IS NULL
+                   AND (p.updated_at, p.post_id) < ($2, $3)
+                 ORDER BY p.updated_at DESC, p.post_id DESC
+                 LIMIT $4",
+            )
+            .bind(user_id)
+            .bind(cursor.updated_at)
+            .bind(cursor.post_id)
+            .bind(i64::from(limit))
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, PostRow>(
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+                        COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::json)::text AS tags
+                 FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 WHERE p.user_id = $1
+                   AND p.deleted_at IS NULL
+                 ORDER BY p.updated_at DESC, p.post_id DESC
+                 LIMIT $2",
+            )
+            .bind(user_id)
+            .bind(i64::from(limit))
+            .fetch_all(&self.pool)
+            .await?
+        };
+        rows.into_iter().map(post_record_from_row).collect()
+    }
+
     async fn tag_post(&self, post_id: i64, tag_display: &str) -> Result<(), TaggingError> {
         let tag: Tag = tag_display.parse().map_err(|_| {
             TaggingError::Internal(sqlx::Error::Decode("invalid tag format".into()))

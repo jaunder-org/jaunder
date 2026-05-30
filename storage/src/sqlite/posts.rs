@@ -325,6 +325,51 @@ impl PostStorage for SqlitePostStorage {
         rows.into_iter().map(post_record_from_row).collect()
     }
 
+    async fn list_collection_by_user(
+        &self,
+        user_id: i64,
+        cursor: Option<&crate::CollectionCursor>,
+        limit: u32,
+    ) -> sqlx::Result<Vec<PostRecord>> {
+        let rows = if let Some(cursor) = cursor {
+            sqlx::query_as::<_, PostRow>(
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+                        COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]') AS tags
+                 FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 WHERE p.user_id = $1
+                   AND p.deleted_at IS NULL
+                   AND (p.updated_at, p.post_id) < ($2, $3)
+                 ORDER BY p.updated_at DESC, p.post_id DESC
+                 LIMIT $4",
+            )
+            .bind(user_id)
+            .bind(cursor.updated_at)
+            .bind(cursor.post_id)
+            .bind(i64::from(limit))
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, PostRow>(
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+                        COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]') AS tags
+                 FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 WHERE p.user_id = $1
+                   AND p.deleted_at IS NULL
+                 ORDER BY p.updated_at DESC, p.post_id DESC
+                 LIMIT $2",
+            )
+            .bind(user_id)
+            .bind(i64::from(limit))
+            .fetch_all(&self.pool)
+            .await?
+        };
+        rows.into_iter().map(post_record_from_row).collect()
+    }
+
     async fn tag_post(&self, post_id: i64, tag_display: &str) -> Result<(), TaggingError> {
         let tag: Tag = tag_display.parse().map_err(|_| {
             TaggingError::Internal(sqlx::Error::Decode("invalid tag format".into()))
@@ -840,5 +885,114 @@ mod tests {
         pool.close().await;
         let result = storage.list_published(None, 10).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_collection_by_user_orders_by_updated_at_desc_and_excludes_deleted() {
+        let pool = sqlite_pool().await;
+        let storage = SqlitePostStorage::new(pool.clone());
+
+        // Create a test user
+        sqlx::query(
+            "INSERT INTO users (username, password_hash, created_at, is_operator) VALUES (?, ?, ?, ?)",
+        )
+        .bind("testuser")
+        .bind("hash")
+        .bind(Utc::now())
+        .bind(false)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let user_id = 1i64;
+        let now = Utc::now();
+
+        // Create 3 posts with different updated_at times
+        // Post 1: draft (published_at = NULL)
+        let post1_id = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             RETURNING post_id",
+        )
+        .bind(user_id)
+        .bind("Draft Post")
+        .bind("draft-post")
+        .bind("draft content")
+        .bind("markdown")
+        .bind("<p>draft content</p>")
+        .bind(now - chrono::Duration::hours(3))
+        .bind(now - chrono::Duration::hours(2))
+        .bind(None::<chrono::DateTime<Utc>>)
+        .bind(None::<String>)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Post 2: published
+        let post2_id = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             RETURNING post_id",
+        )
+        .bind(user_id)
+        .bind("Published Post")
+        .bind("published-post")
+        .bind("published content")
+        .bind("markdown")
+        .bind("<p>published content</p>")
+        .bind(now - chrono::Duration::hours(2))
+        .bind(now - chrono::Duration::hours(1))
+        .bind(Some(now - chrono::Duration::minutes(30)))
+        .bind(None::<String>)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Post 3: soft-deleted (will be excluded)
+        let post3_id = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, deleted_at, summary)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             RETURNING post_id",
+        )
+        .bind(user_id)
+        .bind("Deleted Post")
+        .bind("deleted-post")
+        .bind("deleted content")
+        .bind("markdown")
+        .bind("<p>deleted content</p>")
+        .bind(now - chrono::Duration::hours(1))
+        .bind(now)
+        .bind(Some(now - chrono::Duration::minutes(10)))
+        .bind(Some(Utc::now()))
+        .bind(None::<String>)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // List all posts in collection
+        let results = storage
+            .list_collection_by_user(user_id, None, 10)
+            .await
+            .unwrap();
+
+        // Should have 2 posts (draft and published, not deleted)
+        assert_eq!(results.len(), 2);
+
+        // Check they are ordered by updated_at DESC (post2 updated more recently)
+        assert_eq!(results[0].post_id, post2_id);
+        assert_eq!(results[1].post_id, post1_id);
+
+        // Verify draft is included
+        assert!(results
+            .iter()
+            .any(|p| p.post_id == post1_id && p.published_at.is_none()));
+
+        // Verify published is included
+        assert!(results
+            .iter()
+            .any(|p| p.post_id == post2_id && p.published_at.is_some()));
+
+        // Verify deleted is not included
+        assert!(!results.iter().any(|p| p.post_id == post3_id));
     }
 }
