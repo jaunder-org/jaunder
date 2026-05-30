@@ -245,7 +245,7 @@ async fn create_session_cookie(
         .expect("create_user");
     let token = state
         .sessions
-        .create_session(user_id, None)
+        .create_session(user_id, "test session")
         .await
         .expect("create_session");
 

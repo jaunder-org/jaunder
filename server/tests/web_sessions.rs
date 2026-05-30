@@ -59,7 +59,11 @@ async fn create_user_and_session(
         )
         .await
         .unwrap();
-    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+    let raw_token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={raw_token}");
     (user_id, raw_token, cookie)
 }
@@ -72,7 +76,7 @@ async fn list_sessions_returns_sessions_for_authenticated_user() {
     // Create a second session with a label.
     state
         .sessions
-        .create_session(user_id, Some("mobile"))
+        .create_session(user_id, "mobile")
         .await
         .unwrap();
 
@@ -124,7 +128,11 @@ async fn revoke_session_removes_session_for_authenticated_user() {
     let state = test_state(&base).await;
     let (user_id, raw_token1, cookie1) = create_user_and_session(&state, "alice").await;
     // Create a second session to revoke.
-    let raw_token2 = state.sessions.create_session(user_id, None).await.unwrap();
+    let raw_token2 = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let token_hash2 = state
         .sessions
         .authenticate(&raw_token2)

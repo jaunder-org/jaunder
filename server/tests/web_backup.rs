@@ -353,7 +353,11 @@ async fn create_session_cookie(
         .create_user(&username, &password, None, is_operator)
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
 
     format!("session={token}")
 }

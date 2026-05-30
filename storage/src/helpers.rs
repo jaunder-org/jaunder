@@ -69,7 +69,7 @@ pub(crate) fn build_session_record(
     token_hash: String,
     user_id: i64,
     username: &str,
-    label: Option<String>,
+    label: String,
     created_at: DateTime<Utc>,
     last_used_at: DateTime<Utc>,
 ) -> sqlx::Result<SessionRecord> {
@@ -223,14 +223,7 @@ pub(crate) fn user_record_from_row(row: UserRow) -> sqlx::Result<UserRecord> {
     build_user_record(row)
 }
 
-pub(crate) type SessionRow = (
-    String,
-    i64,
-    String,
-    Option<String>,
-    DateTime<Utc>,
-    DateTime<Utc>,
-);
+pub(crate) type SessionRow = (String, i64, String, String, DateTime<Utc>, DateTime<Utc>);
 
 pub(crate) fn session_record_from_row(row: SessionRow) -> sqlx::Result<SessionRecord> {
     let (token_hash, user_id, username, label, created_at, last_used_at) = row;
@@ -406,7 +399,7 @@ mod tests {
             "hash".to_string(),
             1,
             "alice",
-            Some("label".to_string()),
+            "label".to_string(),
             now,
             now,
         )
@@ -600,7 +593,7 @@ mod tests {
             "hash".to_string(),
             1,
             "Invalid Username",
-            None,
+            "label".to_string(),
             Utc::now(),
             Utc::now(),
         )
@@ -723,7 +716,7 @@ mod tests {
             "tokenhash".to_string(),
             1,
             "alice".to_string(),
-            None,
+            "label".to_string(),
             now,
             now,
         );

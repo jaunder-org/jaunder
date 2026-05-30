@@ -80,7 +80,11 @@ async fn get_profile_returns_display_name_and_bio() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, _, body) =
@@ -110,7 +114,11 @@ async fn get_profile_with_email_returns_email() {
         .await
         .unwrap();
 
-    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+    let raw_token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie_header = format!("session={raw_token}");
 
     let (status, _, body) = post_form(state, "/api/get_profile", "", Some(&cookie_header)).await;
@@ -133,7 +141,11 @@ async fn update_profile_persists_changes() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, _, _) = post_form(
@@ -186,13 +198,13 @@ async fn list_sessions_returns_only_authenticated_users_sessions() {
 
     let token1 = state
         .sessions
-        .create_session(user1_id, Some("carol-session"))
+        .create_session(user1_id, "carol-session")
         .await
         .unwrap();
     // Create a session for user2 — should NOT appear in user1's list.
     state
         .sessions
-        .create_session(user2_id, Some("dave-session"))
+        .create_session(user2_id, "dave-session")
         .await
         .unwrap();
 
@@ -228,8 +240,16 @@ async fn revoke_session_removes_session_and_reauth_fails() {
         .unwrap();
 
     // Create two sessions: use token_a to authenticate, revoke token_b's hash.
-    let token_a = state.sessions.create_session(user_id, None).await.unwrap();
-    let token_b = state.sessions.create_session(user_id, None).await.unwrap();
+    let token_a = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
+    let token_b = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
 
     // Authenticate token_b to get its hash from the session record.
     let record_b = state.sessions.authenticate(&token_b).await.unwrap();
@@ -286,7 +306,11 @@ async fn create_invite_appears_in_list_invites() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, _, body) = post_form(
@@ -340,7 +364,11 @@ async fn create_invite_large_hours_returns_error() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status1, _, _) = post_form(
@@ -379,7 +407,11 @@ async fn revoke_session_unknown_hash_returns_error() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (_status, _, _) = post_form(
@@ -419,8 +451,16 @@ async fn revoke_session_other_user_hash_returns_error() {
         .await
         .unwrap();
 
-    let token1 = state.sessions.create_session(user1_id, None).await.unwrap();
-    let token2 = state.sessions.create_session(user2_id, None).await.unwrap();
+    let token1 = state
+        .sessions
+        .create_session(user1_id, "test session")
+        .await
+        .unwrap();
+    let token2 = state
+        .sessions
+        .create_session(user2_id, "test session")
+        .await
+        .unwrap();
     let record2 = state.sessions.authenticate(&token2).await.unwrap();
 
     let cookie1 = format!("session={token1}");
@@ -452,7 +492,11 @@ async fn list_invites_returns_error_when_policy_not_invite_only() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, _, _) =
@@ -517,7 +561,11 @@ async fn update_profile_with_empty_fields_sets_to_none() {
         .await
         .unwrap();
 
-    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+    let raw_token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie_header = format!("session={raw_token}");
 
     let (status, _, _) = post_form(

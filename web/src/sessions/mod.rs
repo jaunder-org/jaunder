@@ -12,7 +12,7 @@ use {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub token_hash: String,
-    pub label: Option<String>,
+    pub label: String,
     pub created_at: String,
     pub last_used_at: String,
     pub is_current: bool,

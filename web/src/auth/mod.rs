@@ -108,7 +108,7 @@ pub async fn register(
         };
 
         let raw_token = sessions
-            .create_session(user_id, None)
+            .create_session(user_id, "Sign-up session")
             .instrument(tracing::info_span!("web.auth.register.create_session"))
             .await
             .map_err(InternalError::storage)?;
@@ -149,9 +149,30 @@ pub async fn login(username: String, password: String, label: Option<String>) ->
             .await
             .map_err(login_error)?;
 
-        let label = label.filter(|s| !s.is_empty());
+        // Prefer explicit label if provided; otherwise derive from User-Agent header
+        let derived_label = if let Some(l) = label.filter(|s| !s.is_empty()) {
+            l
+        } else {
+            // Extract User-Agent from request headers and truncate to 200 chars
+            let ua = leptos_axum::extract::<axum::http::HeaderMap>()
+                .await
+                .ok()
+                .and_then(|headers| {
+                    headers
+                        .get("user-agent")
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| "Unknown device".to_string());
+            if ua.len() > 200 {
+                ua.chars().take(200).collect::<String>()
+            } else {
+                ua
+            }
+        };
+
         let raw_token = sessions
-            .create_session(record.user_id, label.as_deref())
+            .create_session(record.user_id, &derived_label)
             .instrument(tracing::info_span!("web.auth.login.create_session"))
             .await
             .map_err(InternalError::storage)?;

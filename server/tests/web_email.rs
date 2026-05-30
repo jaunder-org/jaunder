@@ -63,7 +63,11 @@ async fn request_email_verification_creates_row_and_sends_email() {
         )
         .await
         .unwrap();
-    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+    let raw_token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={raw_token}");
 
     let (status, _body) = post_form(
@@ -216,7 +220,11 @@ async fn request_email_verification_invalid_email_returns_error() {
         .create_user(&username, &"password123".parse().unwrap(), None, false)
         .await
         .unwrap();
-    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+    let raw_token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie_header = format!("session={raw_token}");
 
     let (status, _) = post_form(

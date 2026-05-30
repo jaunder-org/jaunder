@@ -143,7 +143,7 @@ async fn assert_session_lifecycle(state: &std::sync::Arc<storage::AppState>) {
 
     let raw_token = state
         .sessions
-        .create_session(user_id, Some("Laptop"))
+        .create_session(user_id, "Laptop")
         .await
         .unwrap();
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
@@ -606,15 +606,12 @@ async fn create_session_then_authenticate_returns_correct_record() {
         .await
         .unwrap();
 
-    let raw_token = sessions
-        .create_session(user_id, Some("test"))
-        .await
-        .unwrap();
+    let raw_token = sessions.create_session(user_id, "test").await.unwrap();
     let record = sessions.authenticate(&raw_token).await.unwrap();
 
     assert_eq!(record.user_id, user_id);
     assert_eq!(record.username.as_str(), "alice");
-    assert_eq!(record.label.as_deref(), Some("test"));
+    assert_eq!(record.label, "test");
     assert!(!record.token_hash.is_empty());
 }
 
@@ -628,7 +625,10 @@ async fn authenticate_updates_last_used_at() {
         .await
         .unwrap();
 
-    let raw_token = sessions.create_session(user_id, None).await.unwrap();
+    let raw_token = sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let first = sessions.authenticate(&raw_token).await.unwrap();
     let second = sessions.authenticate(&raw_token).await.unwrap();
 
@@ -645,7 +645,10 @@ async fn revoke_session_then_authenticate_returns_session_not_found() {
         .await
         .unwrap();
 
-    let raw_token = sessions.create_session(user_id, None).await.unwrap();
+    let raw_token = sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let record = sessions.authenticate(&raw_token).await.unwrap();
 
     sessions.revoke_session(&record.token_hash).await.unwrap();
@@ -677,18 +680,9 @@ async fn list_sessions_returns_only_sessions_for_given_user() {
         .await
         .unwrap();
 
-    sessions
-        .create_session(alice_id, Some("alice-1"))
-        .await
-        .unwrap();
-    sessions
-        .create_session(alice_id, Some("alice-2"))
-        .await
-        .unwrap();
-    sessions
-        .create_session(bob_id, Some("bob-1"))
-        .await
-        .unwrap();
+    sessions.create_session(alice_id, "alice-1").await.unwrap();
+    sessions.create_session(alice_id, "alice-2").await.unwrap();
+    sessions.create_session(bob_id, "bob-1").await.unwrap();
 
     let alice_sessions = sessions.list_sessions(alice_id).await.unwrap();
     assert_eq!(alice_sessions.len(), 2);
@@ -5255,19 +5249,19 @@ async fn assert_session_list_operations(state: &std::sync::Arc<storage::AppState
     // Create multiple sessions
     let _session1 = state
         .sessions
-        .create_session(user, Some("session 1"))
+        .create_session(user, "session 1")
         .await
         .expect("create_session 1 failed");
 
     let _session2 = state
         .sessions
-        .create_session(user, Some("session 2"))
+        .create_session(user, "session 2")
         .await
         .expect("create_session 2 failed");
 
     let _session3 = state
         .sessions
-        .create_session(user, None)
+        .create_session(user, "test session")
         .await
         .expect("create_session 3 failed");
 
@@ -5281,10 +5275,10 @@ async fn assert_session_list_operations(state: &std::sync::Arc<storage::AppState
     assert_eq!(sessions.len(), 3);
 
     // Verify labels are preserved
-    let labels: Vec<_> = sessions.iter().map(|s| s.label.as_deref()).collect();
-    assert!(labels.contains(&Some("session 1")));
-    assert!(labels.contains(&Some("session 2")));
-    assert!(labels.contains(&None));
+    let labels: Vec<_> = sessions.iter().map(|s| s.label.as_str()).collect();
+    assert!(labels.contains(&"session 1"));
+    assert!(labels.contains(&"session 2"));
+    assert!(labels.contains(&"test session"));
 
     // Verify we can authenticate with one of the tokens
     let record = state
