@@ -25,8 +25,10 @@ use {
     leptos_axum,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
-        perform_post_creation, perform_post_update, FeedEventStorage, PerformUpdateError,
-        PostFormat, PostStorage, UpdatePostError, UpdatePostInput, UserStorage,
+        get_default_post_format as storage_get_default_post_format, perform_post_creation,
+        perform_post_update, set_default_post_format as storage_set_default_post_format,
+        FeedEventStorage, PerformUpdateError, PostFormat, PostStorage, UpdatePostError,
+        UpdatePostInput, UserConfigStorage, UserStorage,
     },
 };
 
@@ -482,6 +484,35 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
             published_at: published_at.to_rfc3339(),
             permalink: updated.permalink(),
         })
+    })
+}
+
+/// Retrieves the authenticated user's default post format preference.
+#[server(endpoint = "/get_default_post_format")]
+pub async fn get_default_post_format() -> WebResult<String> {
+    boundary!("get_default_post_format", {
+        let auth = require_auth().await?;
+        let config = expect_context::<Arc<dyn UserConfigStorage>>();
+        let format = storage_get_default_post_format(config.as_ref(), auth.user_id)
+            .await
+            .map_err(InternalError::storage)?;
+        Ok(format.to_string())
+    })
+}
+
+/// Sets the authenticated user's default post format preference.
+#[server(endpoint = "/set_default_post_format")]
+pub async fn set_default_post_format(format: String) -> WebResult<()> {
+    boundary!("set_default_post_format", {
+        let auth = require_auth().await?;
+        let config = expect_context::<Arc<dyn UserConfigStorage>>();
+        let post_format = format
+            .parse::<PostFormat>()
+            .map_err(|e| InternalError::validation(e.to_string()))?;
+        storage_set_default_post_format(config.as_ref(), auth.user_id, post_format)
+            .await
+            .map_err(InternalError::storage)?;
+        Ok(())
     })
 }
 

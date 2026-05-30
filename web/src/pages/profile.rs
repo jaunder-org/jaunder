@@ -1,5 +1,6 @@
 use crate::error::WebError;
 use crate::pages::Topbar;
+use crate::posts::{get_default_post_format, SetDefaultPostFormat};
 use crate::profile::{get_profile, UpdateProfile};
 use leptos::prelude::*;
 
@@ -42,6 +43,7 @@ pub fn ProfilePage() -> impl IntoView {
                                             "Update Profile"
                                         </button>
                                     </ActionForm>
+                                    <DefaultPostFormatControl />
                                 }
                                     .into_any()
                             }
@@ -58,5 +60,38 @@ pub fn ProfilePage() -> impl IntoView {
                 }}
             </div>
         </div>
+    }
+}
+
+/// Control for setting the user's default post format preference.
+#[allow(clippy::must_use_candidate)]
+#[component]
+fn DefaultPostFormatControl() -> impl IntoView {
+    let action = ServerAction::<SetDefaultPostFormat>::new();
+    let initial = Resource::new(|| (), |()| get_default_post_format());
+
+    view! {
+        <Suspense fallback=|| ()>
+            {move || Suspend::new(async move {
+                let current = initial.await.unwrap_or_else(|_| "html".to_string());
+                view! {
+                    <ActionForm action=action>
+                        <label class="j-field-label">"Default post format"</label>
+                        <select class="j-field-val" name="format">
+                            <option value="markdown" selected=current == "markdown">
+                                "Markdown"
+                            </option>
+                            <option value="org" selected=current == "org">
+                                "Org"
+                            </option>
+                            <option value="html" selected=current == "html">
+                                "HTML"
+                            </option>
+                        </select>
+                        <button type="submit">"Save"</button>
+                    </ActionForm>
+                }
+            })}
+        </Suspense>
     }
 }

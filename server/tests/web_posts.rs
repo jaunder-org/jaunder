@@ -3203,3 +3203,47 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone() {
     let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_str()).collect();
     assert_eq!(slugs, vec!["keep"]);
 }
+
+#[tokio::test]
+async fn get_default_post_format_returns_html_by_default() {
+    let (_base, state, cookie) = login_and_state().await;
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/get_default_post_format",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "get body: {body}");
+    assert_eq!(body, "\"html\"", "expected default format to be html");
+}
+
+#[tokio::test]
+async fn set_default_post_format_persists_and_retrieves_markdown() {
+    let (_base, state, cookie) = login_and_state().await;
+
+    // Set format to markdown
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/set_default_post_format",
+        "format=markdown",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "set body: {body}");
+
+    // Retrieve and verify it was set
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/get_default_post_format",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "get body: {body}");
+    assert_eq!(
+        body, "\"markdown\"",
+        "expected format to be markdown after setting"
+    );
+}
