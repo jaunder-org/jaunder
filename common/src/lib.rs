@@ -1,3 +1,4 @@
+pub mod atompub;
 pub mod backup;
 pub mod feed;
 pub mod mailer;

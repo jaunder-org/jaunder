@@ -1,4 +1,6 @@
 {
+  "common/src/atompub/entry.rs": 99.3902,
+  "common/src/atompub/mod.rs": 100,
   "common/src/backup.rs": 100,
   "common/src/feed/atom.rs": 100,
   "common/src/feed/feed_path.rs": 100,

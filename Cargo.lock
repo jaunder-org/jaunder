@@ -531,6 +531,7 @@ dependencies = [
  "getrandom 0.2.17",
  "orgize",
  "pulldown-cmark",
+ "quick-xml",
  "reqwest",
  "rss",
  "serde",
