@@ -5390,6 +5390,7 @@ async fn assert_create_rendered_post_markdown(state: &std::sync::Arc<storage::Ap
         "**bold**".to_string(),
         PostFormat::Markdown,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -5422,6 +5423,7 @@ async fn assert_create_rendered_post_org(state: &std::sync::Arc<storage::AppStat
         "rendered-org".parse().unwrap(),
         "*bold*".to_string(),
         PostFormat::Org,
+        None,
         None,
     )
     .await
@@ -5461,6 +5463,7 @@ async fn assert_create_rendered_post_slug_conflict(state: &std::sync::Arc<storag
         "body".to_string(),
         PostFormat::Markdown,
         Some(now),
+        None,
     )
     .await
     .unwrap();
@@ -5474,6 +5477,7 @@ async fn assert_create_rendered_post_slug_conflict(state: &std::sync::Arc<storag
         "body".to_string(),
         PostFormat::Markdown,
         Some(now),
+        None,
     )
     .await
     .unwrap_err();
@@ -5516,6 +5520,7 @@ async fn assert_update_rendered_post_markdown(state: &std::sync::Arc<storage::Ap
         "**updated**".to_string(),
         PostFormat::Markdown,
         false,
+        None,
     )
     .await
     .unwrap();
@@ -5555,6 +5560,7 @@ async fn assert_update_rendered_post_org(state: &std::sync::Arc<storage::AppStat
         "*bold org*".to_string(),
         PostFormat::Org,
         false,
+        None,
     )
     .await
     .unwrap();
@@ -5579,6 +5585,7 @@ async fn assert_update_rendered_post_not_found(state: &std::sync::Arc<storage::A
         "body".to_string(),
         PostFormat::Markdown,
         false,
+        None,
     )
     .await
     .unwrap_err();

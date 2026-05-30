@@ -234,6 +234,7 @@ pub async fn create_rendered_post(
     body: String,
     format: PostFormat,
     published_at: Option<DateTime<Utc>>,
+    summary: Option<String>,
 ) -> Result<i64, CreateRenderedPostError> {
     let rendered_html = render(&body, &format)?;
     let input = CreatePostInput {
@@ -244,7 +245,7 @@ pub async fn create_rendered_post(
         format,
         rendered_html,
         published_at,
-        summary: None,
+        summary,
     };
     Ok(storage.create_post(&input).await?)
 }
@@ -264,6 +265,7 @@ pub async fn update_rendered_post(
     body: String,
     format: PostFormat,
     publish: bool,
+    summary: Option<String>,
 ) -> Result<PostRecord, UpdateRenderedPostError> {
     let rendered_html = render(&body, &format)?;
     let input = UpdatePostInput {
@@ -273,7 +275,7 @@ pub async fn update_rendered_post(
         format,
         rendered_html,
         publish,
-        summary: None,
+        summary,
     };
     Ok(storage.update_post(post_id, editor_user_id, &input).await?)
 }
@@ -320,6 +322,7 @@ impl From<UpdatePostError> for PerformUpdateError {
 /// # Errors
 ///
 /// Returns `Err(PerformUpdateError)` if rendering fails or the storage layer returns an error.
+#[allow(clippy::too_many_arguments)]
 pub async fn perform_post_update(
     storage: &dyn PostStorage,
     post_id: i64,
@@ -328,6 +331,7 @@ pub async fn perform_post_update(
     format: PostFormat,
     slug_override: Option<&str>,
     publish: bool,
+    summary: Option<String>,
 ) -> Result<PostRecord, PerformUpdateError> {
     let metadata =
         derive_post_metadata(None, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
@@ -351,7 +355,7 @@ pub async fn perform_post_update(
         format,
         rendered_html,
         publish,
-        summary: None,
+        summary,
     };
     storage
         .update_post(post_id, editor_user_id, &input)
@@ -399,6 +403,7 @@ pub fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
 ///
 /// Returns `Err(PerformCreationError)` if rendering fails, slug validation
 /// fails, attempts to find a unique slug are exhausted, or storage fails.
+#[allow(clippy::too_many_arguments)]
 pub async fn perform_post_creation(
     storage: &dyn PostStorage,
     user_id: i64,
@@ -407,6 +412,7 @@ pub async fn perform_post_creation(
     slug_override: Option<&str>,
     published_at: Option<DateTime<Utc>>,
     max_attempts: usize,
+    summary: Option<String>,
 ) -> Result<PostRecord, PerformCreationError> {
     let metadata =
         derive_post_metadata(None, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
@@ -434,6 +440,7 @@ pub async fn perform_post_creation(
             body.clone(),
             format.clone(),
             published_at,
+            summary.clone(),
         )
         .await
         {
@@ -936,6 +943,7 @@ mod tests {
             None,
             None,
             100,
+            None,
         )
         .await
         .unwrap();
@@ -958,6 +966,7 @@ mod tests {
             Some("my-custom-slug"),
             None,
             100,
+            None,
         )
         .await
         .unwrap();
@@ -976,6 +985,7 @@ mod tests {
             Some("Invalid Slug!"),
             None,
             100,
+            None,
         )
         .await
         .unwrap_err();
@@ -994,6 +1004,7 @@ mod tests {
             None,
             None,
             100,
+            None,
         )
         .await
         .unwrap_err();
@@ -1012,6 +1023,7 @@ mod tests {
             None,
             None,
             100,
+            None,
         )
         .await
         .unwrap_err();
@@ -1031,6 +1043,7 @@ mod tests {
             None,
             None,
             100,
+            None,
         )
         .await
         .unwrap();
@@ -1043,6 +1056,7 @@ mod tests {
             None,
             None,
             100,
+            None,
         )
         .await
         .unwrap();
@@ -1055,6 +1069,7 @@ mod tests {
             None,
             None,
             100,
+            None,
         )
         .await
         .unwrap();
@@ -1076,6 +1091,7 @@ mod tests {
             None,
             None,
             2,
+            None,
         )
         .await
         .unwrap();
@@ -1088,6 +1104,7 @@ mod tests {
             None,
             None,
             2,
+            None,
         )
         .await
         .unwrap();
@@ -1103,6 +1120,7 @@ mod tests {
             None,
             None,
             2,
+            None,
         )
         .await
         .unwrap_err();

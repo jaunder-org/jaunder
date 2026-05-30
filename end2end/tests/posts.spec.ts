@@ -55,6 +55,36 @@ test("authenticated user can create a post through the UI", async ({
   );
 });
 
+test("authenticated user can create a post with a summary", async ({
+  page,
+}, testInfo) => {
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+
+  await goto(page, "/posts/new");
+
+  await expect(page.locator(".j-topbar h1")).toHaveText("New post");
+  await page.fill('textarea[name="body"]', "# Summary Test\n\nBody text");
+  await page.fill("#compose-summary", "This is a summary");
+  await click(page, 'button[name="publish"][value="true"]');
+  await waitForSelector(page, ".j-save-summary");
+
+  await expect(page.locator(".j-save-summary")).toContainText(
+    "Post published.",
+  );
+
+  const permalinkLink = page.locator('[data-test="permalink-link"]');
+  const permalinkHref = await permalinkLink.getAttribute("href");
+  expect(permalinkHref).toBeTruthy();
+
+  await goto(page, permalinkHref!);
+
+  await expect(page.locator("article h1")).toHaveText("Summary Test");
+  await expect(page.locator("article")).toContainText("This is a summary");
+});
+
 test("authenticated user can save a draft through the UI", async ({
   page,
 }, testInfo) => {

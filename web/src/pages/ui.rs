@@ -359,6 +359,7 @@ pub fn PostDisplay(
                             }
                         })}
                     {banner.map(|b| view! { <p class="draft-banner">{b}</p> })}
+                    {post.summary.clone().map(|s| view! { <p class="j-post-summary">{s}</p> })}
                     <div class="j-post-body" inner_html=post.rendered_html.clone()></div>
                     <footer class="j-post-foot">
                         <TagList tags=post_tags context=tag_context />
@@ -480,6 +481,7 @@ pub fn PostCreateForm(
     let create_action = ServerAction::<CreatePost>::new();
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
+    let summary = RwSignal::new(String::new());
     let tags: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());
 
     #[cfg(target_arch = "wasm32")]
@@ -489,6 +491,7 @@ pub fn PostCreateForm(
                 let created = created.clone();
                 on_success.run(created);
                 body.set(String::new());
+                summary.set(String::new());
                 tags.set(Vec::new());
             }
         });
@@ -507,6 +510,7 @@ pub fn PostCreateForm(
                 slug_override: None,
                 publish: false,
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
+                summary: Some(summary.get()),
             });
         };
         let dispatch_publish = move |_| {
@@ -516,6 +520,7 @@ pub fn PostCreateForm(
                 slug_override: None,
                 publish: true,
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
+                summary: Some(summary.get()),
             });
         };
         view! {
@@ -532,6 +537,19 @@ pub fn PostCreateForm(
                         on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))
                     />
                     <MediaPanel />
+                    <div style="margin-top:10px">
+                        <label class="j-field-label">"Summary"</label>
+                        <textarea
+                            id="compose-summary"
+                            class="j-field-val"
+                            rows=3
+                            placeholder="Optional summary or excerpt"
+                            prop:value=summary
+                            on:input=move |ev| {
+                                summary.set(event_target_value(&ev));
+                            }
+                        />
+                    </div>
                     <TagInput tags=tags />
                     <div class="j-composer-toolbar">
                         <div class="j-seg">
@@ -610,6 +628,7 @@ pub fn PostCreateForm(
                 slug_override,
                 publish,
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
+                summary: Some(summary.get()),
             });
         };
         view! {
@@ -640,6 +659,22 @@ pub fn PostCreateForm(
                                 class="j-field-val"
                                 prop:value=slug_override
                                 on:input=move |ev| slug_override.set(event_target_value(&ev))
+                            />
+                        </div>
+                        <div style="margin-top:10px">
+                            <label class="j-field-label" for="compose-summary">
+                                "Summary"
+                            </label>
+                            <textarea
+                                id="compose-summary"
+                                name="summary"
+                                placeholder="Optional summary or excerpt"
+                                class="j-field-val"
+                                rows=3
+                                prop:value=summary
+                                on:input=move |ev| {
+                                    summary.set(event_target_value(&ev));
+                                }
                             />
                         </div>
                         <div style="margin-top:10px">

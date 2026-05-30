@@ -22,6 +22,7 @@ pub fn timeline_post_summary(
         user_id,
         author_username,
         title,
+        summary,
         slug,
         rendered_html,
         created_at,
@@ -32,6 +33,7 @@ pub fn timeline_post_summary(
         post_id,
         username: author_username.to_string(),
         title,
+        summary,
         slug: slug.to_string(),
         rendered_html,
         created_at: created_at.to_rfc3339(),
@@ -128,6 +130,7 @@ pub fn post_response(post: PostRecord, is_author: bool) -> super::PostResponse {
         rendered_html,
         created_at,
         published_at,
+        summary,
         tags,
         ..
     } = post;
@@ -145,6 +148,7 @@ pub fn post_response(post: PostRecord, is_author: bool) -> super::PostResponse {
         is_author,
         tags: post_tags_to_summaries(tags),
         permalink,
+        summary,
     }
 }
 
@@ -355,6 +359,40 @@ mod tests {
 
         let internal = list_by_tag_rows(Err(ListByTagError::Internal(sqlx::Error::PoolClosed)));
         assert!(internal.is_err());
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn post_response_carries_summary() {
+        use crate::posts::server::post_response;
+        use chrono::{TimeZone, Utc};
+        use common::{slug::Slug, username::Username};
+        use storage::{PostFormat, PostRecord};
+
+        let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
+        let author_username = "author".parse::<Username>().unwrap();
+        let slug = "hello-world".parse::<Slug>().unwrap();
+
+        let response = post_response(
+            PostRecord {
+                post_id: 1,
+                user_id: 2,
+                author_username,
+                title: Some("Title".to_string()),
+                slug,
+                body: "body".to_string(),
+                format: PostFormat::Markdown,
+                rendered_html: "<p>body</p>".to_string(),
+                created_at: base_time,
+                updated_at: base_time,
+                published_at: Some(base_time),
+                deleted_at: None,
+                summary: Some("the summary".into()),
+                tags: vec![],
+            },
+            true,
+        );
+        assert_eq!(response.summary, Some("the summary".into()));
     }
 
     mod sqlite_storage_tests {
