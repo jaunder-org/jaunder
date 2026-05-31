@@ -24,6 +24,7 @@
   "common/src/websub/noop.rs": 100,
   "hydrate/src/lib.rs": 0,
   "server/src/assets.rs": 0,
+  "server/src/atompub/mapping.rs": 100,
   "server/src/cli.rs": 90.3654,
   "server/src/commands.rs": 84.6154,
   "server/src/context.rs": 100,

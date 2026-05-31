@@ -4,6 +4,7 @@
 #![recursion_limit = "512"]
 
 pub mod assets;
+pub mod atompub;
 pub mod cli;
 pub mod commands;
 pub mod context;

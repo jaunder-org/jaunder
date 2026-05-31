@@ -20,8 +20,9 @@ pub use categories::render_categories_document;
 pub mod rsd;
 pub use rsd::render_rsd_document;
 
-/// Re-export of the canonical Atom entry model used across the `AtomPub` surface.
-pub use atom_syndication::Entry;
+/// Re-export of the canonical Atom entry model and its component types,
+/// used across the `AtomPub` surface (including the server-side mapping boundary).
+pub use atom_syndication::{Category, Content, Entry, Link, Text};
 
 use thiserror::Error;
 
