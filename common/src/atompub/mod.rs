@@ -11,6 +11,15 @@
 pub mod entry;
 pub use entry::{entry_from_xml, entry_to_xml, is_draft, set_draft};
 
+pub mod service;
+pub use service::{render_service_document, CollectionDecl, ServiceDocument};
+
+pub mod categories;
+pub use categories::render_categories_document;
+
+pub mod rsd;
+pub use rsd::render_rsd_document;
+
 /// Re-export of the canonical Atom entry model used across the `AtomPub` surface.
 pub use atom_syndication::Entry;
 
