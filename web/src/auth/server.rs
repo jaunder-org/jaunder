@@ -31,6 +31,7 @@ pub enum AuthRejection {
     MissingToken,
     MissingAppState,
     Session(storage::SessionAuthError),
+    BasicUsernameMismatch,
 }
 
 impl IntoResponse for AuthRejection {
@@ -41,6 +42,7 @@ impl IntoResponse for AuthRejection {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
             AuthRejection::MissingToken
+            | AuthRejection::BasicUsernameMismatch
             | AuthRejection::Session(
                 storage::SessionAuthError::InvalidToken
                 | storage::SessionAuthError::SessionNotFound,
@@ -57,40 +59,22 @@ where
     type Rejection = AuthRejection;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        // Cookie takes precedence over Authorization header.
-        let raw_token = parts
-            .headers
-            .get(axum::http::header::COOKIE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| {
-                s.split(';')
-                    .map(str::trim)
-                    .find(|c| c.starts_with("session="))
-                    .and_then(|c| c.strip_prefix("session="))
-                    .map(str::to_string)
-            })
-            .or_else(|| {
-                parts
-                    .headers
-                    .get(axum::http::header::AUTHORIZATION)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|s| s.strip_prefix("Bearer "))
-                    .map(str::to_string)
-            });
-
-        let raw_token = raw_token.ok_or(AuthRejection::MissingToken)?;
+        let credential = resolve_credential(&parts.headers).ok_or(AuthRejection::MissingToken)?;
 
         let state = parts
             .extensions
             .get::<Arc<AppState>>()
             .ok_or(AuthRejection::MissingAppState)?;
 
-        match state.sessions.authenticate(&raw_token).await {
-            Ok(record) => Ok(AuthUser {
-                user_id: record.user_id,
-                username: record.username,
-                token_hash: record.token_hash,
-            }),
+        match state.sessions.authenticate(&credential.token).await {
+            Ok(record) => {
+                verify_basic_username(&record.username, credential.expected_username.as_deref())?;
+                Ok(AuthUser {
+                    user_id: record.user_id,
+                    username: record.username,
+                    token_hash: record.token_hash,
+                })
+            }
             Err(error) => Err(AuthRejection::Session(error)),
         }
     }
@@ -127,6 +111,9 @@ fn auth_rejection_error(error: AuthRejection) -> InternalError {
     match error {
         AuthRejection::MissingToken => InternalError::unauthorized("missing session token"),
         AuthRejection::MissingAppState => InternalError::server_message("missing AppState context"),
+        AuthRejection::BasicUsernameMismatch => {
+            InternalError::unauthorized("basic auth username mismatch")
+        }
         AuthRejection::Session(storage::SessionAuthError::InvalidToken) => {
             InternalError::unauthorized("invalid session token")
         }
@@ -137,6 +124,93 @@ fn auth_rejection_error(error: AuthRejection) -> InternalError {
             InternalError::storage(error)
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Credential resolution
+// ---------------------------------------------------------------------------
+
+/// A session token resolved from request headers, plus — for HTTP Basic auth —
+/// the username the authenticated session must belong to.
+struct Credential {
+    /// The raw session token to authenticate.
+    token: String,
+    /// For Basic auth, the username supplied alongside the token, which must
+    /// match the authenticated session's user. `None` for cookie/Bearer auth.
+    expected_username: Option<String>,
+}
+
+/// Resolves the session credential from request headers.
+///
+/// Precedence: the `session=` cookie, then `Authorization: Bearer <token>`,
+/// then `Authorization: Basic <base64(user:token)>` (app passwords). Returns
+/// `None` when no recognized credential is present.
+fn resolve_credential(headers: &axum::http::HeaderMap) -> Option<Credential> {
+    let from_cookie = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| {
+            s.split(';')
+                .map(str::trim)
+                .find_map(|c| c.strip_prefix("session="))
+                .map(|token| Credential {
+                    token: token.to_string(),
+                    expected_username: None,
+                })
+        });
+    if from_cookie.is_some() {
+        return from_cookie;
+    }
+
+    let header = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())?;
+    if let Some(token) = header.strip_prefix("Bearer ") {
+        Some(Credential {
+            token: token.to_string(),
+            expected_username: None,
+        })
+    } else {
+        let (username, password) = parse_basic_auth(header)?;
+        Some(Credential {
+            token: password,
+            expected_username: Some(username),
+        })
+    }
+}
+
+/// Verifies that an app-password (Basic auth) request authenticated as the
+/// user it claimed. Cookie/Bearer requests carry no expected username and
+/// always pass.
+///
+/// # Errors
+///
+/// Returns [`AuthRejection::BasicUsernameMismatch`] when the Basic username
+/// does not match the authenticated session's user.
+fn verify_basic_username(
+    authenticated: &Username,
+    expected: Option<&str>,
+) -> Result<(), AuthRejection> {
+    match expected {
+        Some(expected) if authenticated.as_str() != expected => {
+            Err(AuthRejection::BasicUsernameMismatch)
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Parses an HTTP `Authorization: Basic` header value into `(username, password)`.
+/// Returns `None` for non-Basic schemes or malformed/undecodable credentials.
+fn parse_basic_auth(header: &str) -> Option<(String, String)> {
+    use base64::Engine as _;
+
+    let rest = header.strip_prefix("Basic ")?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(rest)
+        .ok()?;
+    let credentials = String::from_utf8(decoded).ok()?;
+    let (username, password) = credentials.split_once(':')?;
+    Some((username.to_string(), password.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -235,6 +309,88 @@ mod tests {
     use leptos::prelude::{provide_context, Owner};
 
     #[test]
+    fn parse_basic_auth_decodes_credentials() {
+        // base64("alice:tok123") == "YWxpY2U6dG9rMTIz"
+        assert_eq!(
+            parse_basic_auth("Basic YWxpY2U6dG9rMTIz"),
+            Some(("alice".to_string(), "tok123".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_basic_auth_rejects_non_basic_and_malformed() {
+        use base64::Engine as _;
+        assert_eq!(parse_basic_auth("Bearer abc"), None);
+        assert_eq!(parse_basic_auth("Basic !!!notbase64!!!"), None);
+        // decodes but has no colon
+        let no_colon = base64::engine::general_purpose::STANDARD.encode("nocolon");
+        assert_eq!(parse_basic_auth(&format!("Basic {no_colon}")), None);
+    }
+
+    fn headers_with(name: axum::http::HeaderName, value: &str) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(name, axum::http::HeaderValue::from_str(value).unwrap());
+        headers
+    }
+
+    #[test]
+    fn resolve_credential_prefers_cookie_over_authorization() {
+        let mut headers = headers_with(axum::http::header::COOKIE, "session=cookie-token");
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            axum::http::HeaderValue::from_static("Bearer bearer-token"),
+        );
+        let credential = resolve_credential(&headers).expect("credential");
+        assert_eq!(credential.token, "cookie-token");
+        assert_eq!(credential.expected_username, None);
+    }
+
+    #[test]
+    fn resolve_credential_reads_bearer_token() {
+        let headers = headers_with(axum::http::header::AUTHORIZATION, "Bearer bearer-token");
+        let credential = resolve_credential(&headers).expect("credential");
+        assert_eq!(credential.token, "bearer-token");
+        assert_eq!(credential.expected_username, None);
+    }
+
+    #[test]
+    fn resolve_credential_reads_basic_app_password() {
+        // base64("alice:tok123") == "YWxpY2U6dG9rMTIz"
+        let headers = headers_with(axum::http::header::AUTHORIZATION, "Basic YWxpY2U6dG9rMTIz");
+        let credential = resolve_credential(&headers).expect("credential");
+        assert_eq!(credential.token, "tok123");
+        assert_eq!(credential.expected_username.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn resolve_credential_returns_none_without_recognized_header() {
+        assert!(resolve_credential(&axum::http::HeaderMap::new()).is_none());
+        let headers = headers_with(axum::http::header::AUTHORIZATION, "Negotiate xyz");
+        assert!(resolve_credential(&headers).is_none());
+    }
+
+    #[test]
+    fn verify_basic_username_passes_without_expected_username() {
+        let user: Username = "alice".parse().unwrap();
+        assert!(verify_basic_username(&user, None).is_ok());
+    }
+
+    #[test]
+    fn verify_basic_username_passes_on_match() {
+        let user: Username = "alice".parse().unwrap();
+        assert!(verify_basic_username(&user, Some("alice")).is_ok());
+    }
+
+    #[test]
+    fn verify_basic_username_rejects_mismatch() {
+        let user: Username = "alice".parse().unwrap();
+        assert!(matches!(
+            verify_basic_username(&user, Some("mallory")),
+            Err(AuthRejection::BasicUsernameMismatch)
+        ));
+    }
+
+    #[test]
     fn set_session_cookie_without_response_options_context_is_noop() {
         Owner::new().with(|| {
             provide_context(CookieSettings { secure: true });
@@ -276,6 +432,12 @@ mod tests {
         assert!(matches!(
             missing_state.public(),
             crate::error::WebError::Server { .. }
+        ));
+
+        let basic_mismatch = auth_rejection_error(AuthRejection::BasicUsernameMismatch);
+        assert!(matches!(
+            basic_mismatch.public(),
+            crate::error::WebError::Unauthorized
         ));
 
         let invalid = auth_rejection_error(AuthRejection::Session(

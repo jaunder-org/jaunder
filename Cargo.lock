@@ -4876,6 +4876,7 @@ name = "web"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "cfg-if",
  "chrono",
  "common",
