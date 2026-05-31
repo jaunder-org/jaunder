@@ -330,13 +330,14 @@ pub async fn perform_post_update(
     post_id: i64,
     editor_user_id: i64,
     body: String,
+    title: Option<&str>,
     format: PostFormat,
     slug_override: Option<&str>,
     publish: bool,
     summary: Option<String>,
 ) -> Result<PostRecord, PerformUpdateError> {
     let metadata =
-        derive_post_metadata(None, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
+        derive_post_metadata(title, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
 
     let slug = match slug_override.map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => raw
@@ -410,6 +411,7 @@ pub async fn perform_post_creation(
     storage: &dyn PostStorage,
     user_id: i64,
     body: String,
+    title: Option<&str>,
     format: PostFormat,
     slug_override: Option<&str>,
     published_at: Option<DateTime<Utc>>,
@@ -417,7 +419,7 @@ pub async fn perform_post_creation(
     summary: Option<String>,
 ) -> Result<PostRecord, PerformCreationError> {
     let metadata =
-        derive_post_metadata(None, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
+        derive_post_metadata(title, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
 
     let slug_seed = match slug_override.map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => raw
@@ -948,6 +950,7 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
@@ -965,12 +968,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_perform_post_creation_uses_explicit_title() {
+        let (_pool, storage) = setup_test_db().await;
+        // The body has no heading, so any title must come from the explicit arg,
+        // which also seeds the slug.
+        let record = perform_post_creation(
+            &storage,
+            1,
+            "Body without a heading.".to_owned(),
+            Some("Explicit Title"),
+            PostFormat::Markdown,
+            None,
+            None,
+            100,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(record.title.as_deref(), Some("Explicit Title"));
+        assert_eq!(record.slug.as_str(), "explicit-title");
+    }
+
+    #[tokio::test]
     async fn test_perform_post_creation_slug_override() {
         let (_pool, storage) = setup_test_db().await;
         let record = perform_post_creation(
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             Some("my-custom-slug"),
             None,
@@ -990,6 +1017,7 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             Some("Invalid Slug!"),
             None,
@@ -1009,6 +1037,7 @@ mod tests {
             &storage,
             1,
             "   ".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
@@ -1028,6 +1057,7 @@ mod tests {
             &storage,
             1,
             "!!!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
@@ -1048,6 +1078,7 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
@@ -1061,6 +1092,7 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
@@ -1074,6 +1106,7 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
@@ -1096,6 +1129,7 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
@@ -1109,6 +1143,7 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
@@ -1125,6 +1160,7 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,

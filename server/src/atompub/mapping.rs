@@ -11,6 +11,8 @@ use storage::{PostFormat, PostRecord};
 /// The post-shaped data carried by an incoming `AtomPub` `Entry`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostFields {
+    /// Explicit title carried by the entry (`None` when absent/blank).
+    pub title: Option<String>,
     /// Raw source body (in the selected format).
     pub body: String,
     /// Format/markup language of the body.
@@ -43,6 +45,10 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
     };
 
     let body = value.to_string();
+    let title = {
+        let trimmed = entry.title().as_str().trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    };
     let summary = entry.summary().map(|t| t.as_str().to_string());
     let categories = entry
         .categories()
@@ -52,6 +58,7 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
     let is_draft = is_draft(entry);
 
     PostFields {
+        title,
         body,
         format,
         summary,
@@ -307,6 +314,37 @@ mod tests {
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
         assert!(!fields.is_draft);
+    }
+
+    #[test]
+    fn entry_to_post_fields_extracts_title() {
+        let xml = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>My Post Title</title>
+  <id>id</id>
+  <updated>2026-05-31T00:00:00Z</updated>
+  <content type="text">body</content>
+</entry>"#;
+
+        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+
+        assert_eq!(fields.title.as_deref(), Some("My Post Title"));
+    }
+
+    #[test]
+    fn entry_to_post_fields_absent_title_is_none() {
+        let xml = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <id>id</id>
+  <updated>2026-05-31T00:00:00Z</updated>
+  <content type="text">body</content>
+</entry>"#;
+
+        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+
+        assert_eq!(fields.title, None);
     }
 
     // -----------------------------------------------------------------------
