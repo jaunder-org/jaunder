@@ -33,6 +33,15 @@ pub struct MediaManager {
     storage_path: Arc<PathBuf>,
 }
 
+/// File metadata for upload finalization.
+#[derive(Debug)]
+struct UploadMetadata {
+    filename: String,
+    content_type: String,
+    sha256_hex: String,
+    size_bytes: i64,
+}
+
 impl MediaManager {
     #[must_use]
     pub fn new(state: Arc<AppState>, storage_path: Arc<PathBuf>) -> Self {
@@ -69,42 +78,15 @@ impl MediaManager {
             .stream_to_temp(&mut field, &tmp_path, max_file_size)
             .await?;
 
-        // Cleanup on failure
-        if let Err(e) = self
-            .check_quota(auth_user.user_id, size_bytes, user_quota)
-            .await
-        {
-            let _ = fs::remove_file(&tmp_path).await;
-            return Err(e);
-        }
-
-        let relative_path = media_path("upload", &sha256_hex, &filename);
-        let target_path = self.storage_path.join("media").join(&relative_path);
-        let hash_dir = target_path
-            .parent()
-            .expect("target_path should have parent")
-            .to_path_buf();
-
-        self.handle_deduplication(&tmp_path, &target_path, &hash_dir)
-            .await?;
-
-        self.register_in_db(
-            auth_user.user_id,
-            &sha256_hex,
-            &filename,
-            &content_type,
-            size_bytes,
-        )
-        .await?;
-
-        let url = media_url("upload", &sha256_hex, &filename);
-        Ok(crate::media::UploadResponse {
-            sha256: sha256_hex,
+        let metadata = UploadMetadata {
             filename,
             content_type,
+            sha256_hex,
             size_bytes,
-            url,
-        })
+        };
+
+        self.finalize_upload(auth_user.user_id, metadata, &tmp_path, user_quota)
+            .await
     }
 
     /// Validates a filename and returns a sanitized version.
@@ -227,6 +209,100 @@ impl MediaManager {
                 Err(anyhow::anyhow!(MediaError::Internal(e.to_string())))
             }
         }
+    }
+
+    /// Shared finalization for an upload whose bytes are already written to
+    /// `tmp_path` with a known content hash and size: enforces quota, content-
+    /// addresses the file (dedup via hard-link), records it in the DB, and builds
+    /// the response. The temp file is consumed (moved, linked, or removed).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the content-addressed target path has no parent directory.
+    async fn finalize_upload(
+        &self,
+        user_id: i64,
+        metadata: UploadMetadata,
+        tmp_path: &Path,
+        user_quota: i64,
+    ) -> anyhow::Result<crate::media::UploadResponse> {
+        if let Err(e) = self
+            .check_quota(user_id, metadata.size_bytes, user_quota)
+            .await
+        {
+            let _ = fs::remove_file(tmp_path).await;
+            return Err(e);
+        }
+        let relative_path = media_path("upload", &metadata.sha256_hex, &metadata.filename);
+        let target_path = self.storage_path.join("media").join(&relative_path);
+        let hash_dir = target_path
+            .parent()
+            .expect("target_path should have parent")
+            .to_path_buf();
+        self.handle_deduplication(&tmp_path.to_path_buf(), &target_path, &hash_dir)
+            .await?;
+        self.register_in_db(
+            user_id,
+            &metadata.sha256_hex,
+            &metadata.filename,
+            &metadata.content_type,
+            metadata.size_bytes,
+        )
+        .await?;
+        let url = media_url("upload", &metadata.sha256_hex, &metadata.filename);
+        Ok(crate::media::UploadResponse {
+            sha256: metadata.sha256_hex,
+            filename: metadata.filename,
+            content_type: metadata.content_type,
+            size_bytes: metadata.size_bytes,
+            url,
+        })
+    }
+
+    /// Uploads raw in-memory bytes (e.g. an `AtomPub` media POST), reusing the same
+    /// content-addressing, dedup, quota, and DB-record path as multipart uploads.
+    /// Returns the existing record's response when identical content was already
+    /// stored (idempotent).
+    ///
+    /// # Errors
+    ///
+    /// Returns `anyhow::Error` on an invalid filename, oversized payload, quota
+    /// exhaustion, I/O failure, or DB error.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the content-addressed target path has no parent directory.
+    pub async fn upload_bytes(
+        &self,
+        auth_user: &AuthUser,
+        filename: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> anyhow::Result<crate::media::UploadResponse> {
+        let (max_file_size, user_quota) = self.get_limits().await?;
+        let filename = Self::validate_filename(Some(filename))?;
+        let content_type = Self::get_content_type(Some(content_type), &filename);
+
+        let size_bytes = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
+        if size_bytes > max_file_size {
+            anyhow::bail!(MediaError::PayloadTooLarge);
+        }
+
+        let digest = Sha256::digest(bytes);
+        let sha256_hex = format!("{digest:x}");
+
+        let tmp_path = self.create_temp_file().await?;
+        fs::write(&tmp_path, bytes).await?;
+
+        let metadata = UploadMetadata {
+            filename,
+            content_type,
+            sha256_hex,
+            size_bytes,
+        };
+
+        self.finalize_upload(auth_user.user_id, metadata, &tmp_path, user_quota)
+            .await
     }
 
     async fn stream_to_temp(
@@ -401,5 +477,90 @@ mod tests {
             MediaManager::map_error(&anyhow::anyhow!("unknown")),
             StatusCode::INTERNAL_SERVER_ERROR
         );
+    }
+
+    #[tokio::test]
+    async fn upload_bytes_is_content_addressed_and_idempotent() {
+        let temp = TempDir::new().unwrap();
+        let state = storage::open_database(&"sqlite::memory:".parse().unwrap())
+            .await
+            .unwrap();
+        let user_id = state
+            .users
+            .create_user(
+                &"uploader".parse().unwrap(),
+                &"password123".parse().unwrap(),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        let storage_path = Arc::new(temp.path().to_path_buf());
+        let manager = MediaManager::new(state, storage_path);
+
+        let auth = web::auth::AuthUser {
+            user_id,
+            username: "uploader".parse().unwrap(),
+            token_hash: String::new(),
+        };
+
+        // A tiny PNG signature + IHDR-ish bytes (content need not be a valid image).
+        let bytes: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02, 0x03,
+        ];
+        let expected_sha = format!("{:x}", Sha256::digest(bytes));
+
+        let first = manager
+            .upload_bytes(&auth, "pic.png", "image/png", bytes)
+            .await
+            .unwrap();
+        assert_eq!(first.sha256, expected_sha);
+        assert_eq!(first.filename, "pic.png");
+        assert_eq!(first.content_type, "image/png");
+        assert_eq!(first.size_bytes, i64::try_from(bytes.len()).unwrap());
+
+        // Identical re-upload must succeed and dedup to the same record.
+        let second = manager
+            .upload_bytes(&auth, "pic.png", "image/png", bytes)
+            .await
+            .unwrap();
+        assert_eq!(second.sha256, first.sha256);
+        assert_eq!(second.url, first.url);
+    }
+
+    #[tokio::test]
+    async fn upload_bytes_rejects_oversized_payload() {
+        let temp = TempDir::new().unwrap();
+        let state = storage::open_database(&"sqlite::memory:".parse().unwrap())
+            .await
+            .unwrap();
+        // Cap the per-file limit well below the payload size.
+        state
+            .site_config
+            .set(MEDIA_MAX_FILE_SIZE_BYTES_KEY, "5")
+            .await
+            .unwrap();
+        let user_id = state
+            .users
+            .create_user(
+                &"uploader".parse().unwrap(),
+                &"password123".parse().unwrap(),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        let manager = MediaManager::new(state, Arc::new(temp.path().to_path_buf()));
+        let auth = web::auth::AuthUser {
+            user_id,
+            username: "uploader".parse().unwrap(),
+            token_hash: String::new(),
+        };
+
+        let err = manager
+            .upload_bytes(&auth, "big.bin", "application/octet-stream", &[0_u8; 11])
+            .await
+            .unwrap_err();
+        assert_eq!(MediaManager::map_error(&err), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }
