@@ -9,7 +9,7 @@
 //! along.
 
 pub mod entry;
-pub use entry::{entry_from_xml, entry_to_xml, is_draft, set_draft};
+pub use entry::{entry_from_xml, entry_to_xml, is_draft, render_feed, set_draft, FeedMeta};
 
 pub mod service;
 pub use service::{render_service_document, CollectionDecl, ServiceDocument};

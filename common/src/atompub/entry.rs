@@ -379,23 +379,46 @@ fn decode_text(e: &BytesText) -> Result<String, AtomPubError> {
 pub fn entry_to_xml(entry: &Entry) -> Result<String, AtomPubError> {
     let mut writer = Writer::new(Vec::new());
     writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)))?;
+    write_entry(&mut writer, entry, true)?;
+    String::from_utf8(writer.into_inner()).map_err(|e| AtomPubError::Malformed(e.to_string()))
+}
 
+/// Writes an `<entry>…</entry>` element to the provided writer.
+///
+/// # Parameters
+///
+/// - `writer`: The XML writer to emit events to.
+/// - `entry`: The entry to serialize.
+/// - `declare_namespaces`: If `true`, emits `xmlns` and `xmlns:app` attributes on
+///   the entry element. If `false`, assumes the namespaces are already declared
+///   by an enclosing element (e.g., a `<feed>`).
+///
+/// # Errors
+///
+/// Returns [`AtomPubError::Malformed`] if the XML writer fails.
+fn write_entry(
+    writer: &mut Writer<Vec<u8>>,
+    entry: &Entry,
+    declare_namespaces: bool,
+) -> Result<(), AtomPubError> {
     let draft = is_draft(entry);
     let mut root = BytesStart::new("entry");
-    root.push_attribute(("xmlns", ATOM_NS));
-    if draft {
-        root.push_attribute(("xmlns:app", APP_NS));
+    if declare_namespaces {
+        root.push_attribute(("xmlns", ATOM_NS));
+        if draft {
+            root.push_attribute(("xmlns:app", APP_NS));
+        }
     }
     writer.write_event(Event::Start(root))?;
 
-    write_text_element(&mut writer, "id", entry.id())?;
-    write_text_element(&mut writer, "title", entry.title().as_str())?;
-    write_text_element(&mut writer, "updated", &entry.updated().to_rfc3339())?;
+    write_text_element(writer, "id", entry.id())?;
+    write_text_element(writer, "title", entry.title().as_str())?;
+    write_text_element(writer, "updated", &entry.updated().to_rfc3339())?;
     if let Some(published) = entry.published() {
-        write_text_element(&mut writer, "published", &published.to_rfc3339())?;
+        write_text_element(writer, "published", &published.to_rfc3339())?;
     }
     if let Some(summary) = entry.summary() {
-        write_text_element(&mut writer, "summary", summary.as_str())?;
+        write_text_element(writer, "summary", summary.as_str())?;
     }
     if let Some(content) = entry.content() {
         let mut start = BytesStart::new("content");
@@ -405,7 +428,7 @@ pub fn entry_to_xml(entry: &Entry) -> Result<String, AtomPubError> {
         writer.write_event(Event::End(BytesEnd::new("content")))?;
     }
     for link in entry.links() {
-        write_link(&mut writer, link.rel(), link.href())?;
+        write_link(writer, link.rel(), link.href())?;
     }
     for category in entry.categories() {
         let mut start = BytesStart::new("category");
@@ -414,13 +437,12 @@ pub fn entry_to_xml(entry: &Entry) -> Result<String, AtomPubError> {
     }
     if draft {
         writer.write_event(Event::Start(BytesStart::new("app:control")))?;
-        write_text_element(&mut writer, "app:draft", "yes")?;
+        write_text_element(writer, "app:draft", "yes")?;
         writer.write_event(Event::End(BytesEnd::new("app:control")))?;
     }
 
     writer.write_event(Event::End(BytesEnd::new("entry")))?;
-
-    String::from_utf8(writer.into_inner()).map_err(|e| AtomPubError::Malformed(e.to_string()))
+    Ok(())
 }
 
 fn write_text_element(
@@ -440,6 +462,67 @@ fn write_link(writer: &mut Writer<Vec<u8>>, rel: &str, href: &str) -> Result<(),
     link.push_attribute(("href", href));
     writer.write_event(Event::Empty(link))?;
     Ok(())
+}
+
+/// Feed-level metadata for an `AtomPub` collection document.
+///
+/// Used to wrap multiple entries in a `<feed>` with RFC 5005 paging links.
+#[derive(Debug, Clone)]
+pub struct FeedMeta {
+    /// Stable feed id (an IRI).
+    pub id: String,
+    /// Human-readable collection title.
+    pub title: String,
+    /// Feed `updated` timestamp, RFC 3339.
+    pub updated_rfc3339: String,
+    /// `rel="self"` href (the collection URL for this page).
+    pub self_url: String,
+    /// `rel="first"` href, when paging.
+    pub first: Option<String>,
+    /// `rel="next"` href, when a next page exists.
+    pub next: Option<String>,
+    /// `rel="previous"` href, when a previous page exists.
+    pub previous: Option<String>,
+}
+
+/// Serializes a collection `<feed>` wrapping the given entries, with RFC 5005
+/// paging links.
+///
+/// The entries are embedded without redeclaring the Atom namespace; the `<feed>`
+/// root declares both `xmlns` and `xmlns:app`.
+///
+/// # Errors
+///
+/// Returns [`AtomPubError::Malformed`] if the XML writer fails.
+pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPubError> {
+    let mut writer = Writer::new(Vec::new());
+    writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)))?;
+
+    let mut root = BytesStart::new("feed");
+    root.push_attribute(("xmlns", ATOM_NS));
+    root.push_attribute(("xmlns:app", APP_NS));
+    writer.write_event(Event::Start(root))?;
+
+    write_text_element(&mut writer, "id", &meta.id)?;
+    write_text_element(&mut writer, "title", &meta.title)?;
+    write_text_element(&mut writer, "updated", &meta.updated_rfc3339)?;
+    write_link(&mut writer, "self", &meta.self_url)?;
+    if let Some(href) = &meta.first {
+        write_link(&mut writer, "first", href)?;
+    }
+    if let Some(href) = &meta.previous {
+        write_link(&mut writer, "previous", href)?;
+    }
+    if let Some(href) = &meta.next {
+        write_link(&mut writer, "next", href)?;
+    }
+
+    for entry in entries {
+        write_entry(&mut writer, entry, false)?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("feed")))?;
+    String::from_utf8(writer.into_inner()).map_err(|e| AtomPubError::Malformed(e.to_string()))
 }
 
 #[cfg(test)]
@@ -663,5 +746,91 @@ mod tests {
         assert!(!entry_to_xml(&entry)
             .expect("serialize")
             .contains("app:draft"));
+    }
+
+    #[test]
+    fn render_feed_wraps_entries_with_paging() {
+        let mut entry1 = sample_entry();
+        entry1.id = "tag:example.com,2026:post/1".to_string();
+        entry1.title = Text::plain("First");
+
+        let mut entry2 = sample_entry();
+        entry2.id = "tag:example.com,2026:post/2".to_string();
+        entry2.title = Text::plain("Second");
+
+        let meta = FeedMeta {
+            id: "tag:example.com,2026:collection/user/alice".to_string(),
+            title: "Alice's Posts".to_string(),
+            updated_rfc3339: "2026-05-31T12:00:00Z".to_string(),
+            self_url: "https://example.com/atompub/alice/posts".to_string(),
+            first: Some("https://example.com/atompub/alice/posts?page=1".to_string()),
+            next: Some("https://example.com/atompub/alice/posts?page=2".to_string()),
+            previous: Some("https://example.com/atompub/alice/posts?page=0".to_string()),
+        };
+
+        let out = render_feed(&meta, &[entry1, entry2]).expect("render feed");
+
+        // Feed structure and metadata
+        assert!(out.contains("<feed"), "out: {out}");
+        assert!(out.contains("xmlns:app"), "out: {out}");
+        assert!(out.contains("Alice"), "out: {out}");
+        assert!(
+            out.contains("xmlns=\"http://www.w3.org/2005/Atom\""),
+            "out: {out}"
+        );
+
+        // Paging links
+        assert!(out.contains("rel=\"self\""), "out: {out}");
+        assert!(out.contains("rel=\"first\""), "out: {out}");
+        assert!(out.contains("rel=\"next\""), "out: {out}");
+        assert!(out.contains("rel=\"previous\""), "out: {out}");
+        assert!(out.contains("page=2"), "out: {out}");
+        assert!(out.contains("page=0"), "out: {out}");
+
+        // Entry titles present
+        assert!(out.contains(">First<"), "out: {out}");
+        assert!(out.contains(">Second<"), "out: {out}");
+
+        // Embedded entries should NOT redeclare the Atom namespace on their own
+        // They should not have xmlns="..." as an attribute on the entry element
+        let entry_with_xmlns = out.contains("<entry xmlns=\"");
+        assert!(
+            !entry_with_xmlns,
+            "Entries should not redeclare xmlns; out: {out}"
+        );
+
+        // Feed closing tag present
+        assert!(out.contains("</feed>"), "out: {out}");
+    }
+
+    #[test]
+    fn render_feed_without_paging_omits_optional_links() {
+        let mut entry = sample_entry();
+        entry.title = Text::plain("Single");
+
+        let meta = FeedMeta {
+            id: "tag:example.com,2026:collection/user/bob".to_string(),
+            title: "Bob's Posts".to_string(),
+            updated_rfc3339: "2026-05-31T13:00:00Z".to_string(),
+            self_url: "https://example.com/atompub/bob/posts".to_string(),
+            first: None,
+            next: None,
+            previous: None,
+        };
+
+        let out = render_feed(&meta, &[entry]).expect("render feed");
+
+        // Required elements present
+        assert!(out.contains("<feed"), "out: {out}");
+        assert!(out.contains("Bob"), "out: {out}");
+        assert!(out.contains("rel=\"self\""), "out: {out}");
+
+        // Optional paging links absent
+        assert!(!out.contains("rel=\"next\""), "out: {out}");
+        assert!(!out.contains("rel=\"previous\""), "out: {out}");
+        assert!(!out.contains("rel=\"first\""), "out: {out}");
+
+        // Entry present
+        assert!(out.contains(">Single<"), "out: {out}");
     }
 }
