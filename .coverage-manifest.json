@@ -25,6 +25,7 @@
   "hydrate/src/lib.rs": 0,
   "server/src/assets.rs": 0,
   "server/src/atompub/mapping.rs": 100,
+  "server/src/atompub/media.rs": 100,
   "server/src/atompub/mod.rs": 100,
   "server/src/atompub/posts.rs": 100,
   "server/src/atompub/service.rs": 100,
