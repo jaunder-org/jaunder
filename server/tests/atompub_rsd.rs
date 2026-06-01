@@ -69,3 +69,37 @@ async fn rsd_document_advertises_service_url() {
     );
     assert!(body.contains("https://example.test/~alice"), "{body}");
 }
+
+#[tokio::test]
+async fn user_page_includes_rsd_autodiscovery_link() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    state
+        .users
+        .create_user(
+            &"alice".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let app = make_app(state, &base).await;
+
+    // Rendering the user page (server-side) hoists the EditURI autodiscovery
+    // link into the document head.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/~alice")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    assert!(body.contains("rel=\"EditURI\""), "{body}");
+    assert!(body.contains("/~alice/rsd.xml"), "{body}");
+}
