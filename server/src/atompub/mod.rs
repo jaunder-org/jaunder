@@ -6,6 +6,7 @@ use axum::Router;
 use storage::AppState;
 
 pub mod mapping;
+pub mod posts;
 pub mod service;
 
 /// Builds the `AtomPub` routes (mergeable into the main application router).
@@ -16,7 +17,13 @@ pub fn router<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    Router::new().route("/atompub/service", get(service::service_document))
+    Router::new()
+        .route("/atompub/service", get(service::service_document))
+        .route("/atompub/{username}/posts", get(posts::collection_get))
+        .route(
+            "/atompub/{username}/posts/{post_id}",
+            get(posts::member_get).delete(posts::member_delete),
+        )
 }
 
 /// Returns the site's public base URL (scheme + host, no trailing slash), or an
