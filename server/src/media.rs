@@ -4,7 +4,8 @@ use std::sync::Arc;
 use axum::extract::{Multipart, Path, Query};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::{Extension, Json};
+use axum::routing::{get, post};
+use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio_util::io::ReaderStream;
@@ -12,6 +13,23 @@ use tokio_util::io::ReaderStream;
 use common::media::{detect_content_type, should_inline};
 use storage::{AppState, MediaSource};
 use web::auth::AuthUser;
+
+/// Builds the media routes (upload, content-addressed serve, remote proxy).
+///
+/// The handlers read shared state via `Extension`, so the routes are generic
+/// over the application's router state type.
+pub fn router<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/media/upload", post(upload_handler))
+        .route(
+            "/media/{source}/{p1}/{p2}/{hash}/{filename}",
+            get(serve_handler),
+        )
+        .route("/media/proxy", get(proxy_handler))
+}
 
 // ---------------------------------------------------------------------------
 // Response types
