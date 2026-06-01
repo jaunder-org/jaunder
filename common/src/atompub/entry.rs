@@ -525,6 +525,60 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPub
     String::from_utf8(writer.into_inner()).map_err(|e| AtomPubError::Malformed(e.to_string()))
 }
 
+/// A media-link entry (RFC 5023 §9.6): the Atom `<entry>` a server returns for
+/// an uploaded media resource. Its `<content>` references the binary by `src`
+/// rather than embedding it, and it carries both an `edit` link (the member)
+/// and an `edit-media` link (the binary).
+#[derive(Debug, Clone)]
+pub struct MediaLinkEntry {
+    /// Stable entry id (an IRI).
+    pub id: String,
+    /// Human-readable title (typically the filename).
+    pub title: String,
+    /// `rel="edit"` href — the media-link member resource.
+    pub edit_uri: String,
+    /// `rel="edit-media"` href — the binary media resource.
+    pub edit_media_uri: String,
+    /// `<content src=...>` — the absolute URL of the binary.
+    pub content_src: String,
+    /// MIME type of the binary.
+    pub content_type: String,
+    /// Publication timestamp, RFC 3339.
+    pub published_rfc3339: String,
+    /// Last-update timestamp, RFC 3339.
+    pub updated_rfc3339: String,
+}
+
+/// Serializes a [`MediaLinkEntry`] to a standalone `<entry>` document.
+///
+/// # Errors
+///
+/// Returns [`AtomPubError::Malformed`] if the XML writer fails.
+pub fn render_media_link_entry(entry: &MediaLinkEntry) -> Result<String, AtomPubError> {
+    let mut writer = Writer::new(Vec::new());
+    writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)))?;
+
+    let mut root = BytesStart::new("entry");
+    root.push_attribute(("xmlns", ATOM_NS));
+    writer.write_event(Event::Start(root))?;
+
+    write_text_element(&mut writer, "id", &entry.id)?;
+    write_text_element(&mut writer, "title", &entry.title)?;
+    write_text_element(&mut writer, "updated", &entry.updated_rfc3339)?;
+    write_text_element(&mut writer, "published", &entry.published_rfc3339)?;
+
+    let mut content = BytesStart::new("content");
+    content.push_attribute(("type", entry.content_type.as_str()));
+    content.push_attribute(("src", entry.content_src.as_str()));
+    writer.write_event(Event::Empty(content))?;
+
+    write_link(&mut writer, "edit", &entry.edit_uri)?;
+    write_link(&mut writer, "edit-media", &entry.edit_media_uri)?;
+
+    writer.write_event(Event::End(BytesEnd::new("entry")))?;
+    String::from_utf8(writer.into_inner()).map_err(|e| AtomPubError::Malformed(e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -832,5 +886,30 @@ mod tests {
 
         // Entry present
         assert!(out.contains(">Single<"), "out: {out}");
+    }
+
+    #[test]
+    fn render_media_link_entry_references_binary_by_src() {
+        let out = render_media_link_entry(&MediaLinkEntry {
+            id: "https://h/atompub/alice/media/abc/pic.png".to_string(),
+            title: "pic.png".to_string(),
+            edit_uri: "https://h/atompub/alice/media/abc/pic.png".to_string(),
+            edit_media_uri: "https://h/media/upload/ab/c0/abc/pic.png".to_string(),
+            content_src: "https://h/media/upload/ab/c0/abc/pic.png".to_string(),
+            content_type: "image/png".to_string(),
+            published_rfc3339: "2026-06-01T00:00:00Z".to_string(),
+            updated_rfc3339: "2026-06-01T00:00:00Z".to_string(),
+        })
+        .expect("render");
+
+        assert!(out.contains("<entry"), "out: {out}");
+        assert!(out.contains("type=\"image/png\""), "out: {out}");
+        assert!(
+            out.contains("src=\"https://h/media/upload/ab/c0/abc/pic.png\""),
+            "out: {out}"
+        );
+        assert!(out.contains("rel=\"edit-media\""), "out: {out}");
+        assert!(out.contains("rel=\"edit\""), "out: {out}");
+        assert!(out.contains(">pic.png<"), "out: {out}");
     }
 }
