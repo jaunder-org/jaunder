@@ -19,10 +19,15 @@ where
 {
     Router::new()
         .route("/atompub/service", get(service::service_document))
-        .route("/atompub/{username}/posts", get(posts::collection_get))
+        .route(
+            "/atompub/{username}/posts",
+            get(posts::collection_get).post(posts::collection_post),
+        )
         .route(
             "/atompub/{username}/posts/{post_id}",
-            get(posts::member_get).delete(posts::member_delete),
+            get(posts::member_get)
+                .put(posts::member_put)
+                .delete(posts::member_delete),
         )
 }
 

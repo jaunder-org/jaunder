@@ -1,19 +1,19 @@
-//! `AtomPub` posts collection read/delete handlers.
+//! `AtomPub` posts collection read/delete/create/update handlers.
 
 use std::sync::Arc;
 
 use axum::extract::{Path, Query};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use serde::Deserialize;
 
-use common::atompub::{entry_to_xml, render_feed, FeedMeta};
+use common::atompub::{entry_from_xml, entry_to_xml, render_feed, FeedMeta};
 use storage::{AppState, CollectionCursor, PostRecord};
 use web::auth::AuthUser;
 
 use super::base_url;
-use super::mapping::post_to_entry;
+use super::mapping::{entry_to_post_fields, post_to_entry};
 
 const FEED_CONTENT_TYPE: &str = "application/atom+xml;type=feed;charset=utf-8";
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
@@ -174,6 +174,76 @@ pub async fn member_get(
         .into_response())
 }
 
+/// Maps a `PerformCreationError` to the appropriate HTTP status code.
+fn creation_status(err: &storage::PerformCreationError) -> StatusCode {
+    match err {
+        storage::PerformCreationError::EmptyPost
+        | storage::PerformCreationError::NoSlugFromPost
+        | storage::PerformCreationError::InvalidSlug(_) => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+/// Maps a `PerformUpdateError` to the appropriate HTTP status code.
+fn update_status(err: &storage::PerformUpdateError) -> StatusCode {
+    match err {
+        storage::PerformUpdateError::EmptyPost
+        | storage::PerformUpdateError::NoSlugFromPost
+        | storage::PerformUpdateError::InvalidSlug => StatusCode::BAD_REQUEST,
+        storage::PerformUpdateError::NotFound | storage::PerformUpdateError::Unauthorized => {
+            StatusCode::NOT_FOUND
+        }
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+/// Reconciles the post's tags with a desired set of category terms.
+///
+/// Tags missing from `desired` are removed; desired categories not yet tagged
+/// are added. Invalid tag names (in the sense that they fail to parse as `Tag`)
+/// are skipped.
+async fn apply_categories(
+    posts: &dyn storage::PostStorage,
+    post_id: i64,
+    desired: &[String],
+) -> Result<(), StatusCode> {
+    use common::tag::Tag;
+    use std::collections::HashSet;
+    use std::str::FromStr;
+
+    let existing = posts
+        .get_tags_for_post(post_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let existing_slugs: HashSet<String> = existing.iter().map(|t| t.tag_slug.to_string()).collect();
+    let desired_slugs: HashSet<String> = desired
+        .iter()
+        .filter_map(|d| Tag::from_str(d).ok())
+        .map(|t| t.to_string())
+        .collect();
+
+    for display in desired {
+        let Ok(slug) = Tag::from_str(display) else {
+            continue;
+        };
+        if !existing_slugs.contains(&slug.to_string()) {
+            posts
+                .tag_post(post_id, display)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+    }
+    for tag in &existing {
+        if !desired_slugs.contains(&tag.tag_slug.to_string()) {
+            posts
+                .untag_post(post_id, &tag.tag_slug)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+    }
+    Ok(())
+}
+
 /// `DELETE /atompub/{username}/posts/{post_id}` — soft-deletes a post.
 ///
 /// # Errors
@@ -193,4 +263,203 @@ pub async fn member_delete(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// `POST /atompub/{username}/posts` — create a post from an `AtomPub` entry.
+///
+/// # Errors
+///
+/// Returns `400` if the entry is malformed or invalid for post creation.
+/// Returns `403` if the authenticated user does not match the target username.
+/// Returns `500` if storage or serialization fails.
+pub async fn collection_post(
+    Extension(state): Extension<Arc<AppState>>,
+    auth_user: AuthUser,
+    Path(username): Path<String>,
+    body: String,
+) -> Result<Response, StatusCode> {
+    if auth_user.username.as_str() != username {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let entry = entry_from_xml(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let default_format =
+        storage::get_default_post_format(state.user_config.as_ref(), auth_user.user_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let fields = entry_to_post_fields(&entry, default_format);
+    let published_at = if fields.is_draft {
+        None
+    } else {
+        Some(chrono::Utc::now())
+    };
+
+    let created = storage::perform_post_creation(
+        state.posts.as_ref(),
+        auth_user.user_id,
+        fields.body,
+        fields.title.as_deref(),
+        fields.format,
+        None,
+        published_at,
+        100,
+        fields.summary,
+    )
+    .await
+    .map_err(|e| creation_status(&e))?;
+
+    apply_categories(state.posts.as_ref(), created.post_id, &fields.categories).await?;
+
+    // Re-fetch so the response entry includes the freshly applied tags.
+    let post = state
+        .posts
+        .get_post_by_id(created.post_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let base = base_url(&state).await;
+    let location = format!("{base}/atompub/{username}/posts/{}", post.post_id);
+    let entry_out = post_to_entry(&post, &base);
+    let xml = entry_to_xml(&entry_out).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok((
+        StatusCode::CREATED,
+        [
+            (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
+            (header::LOCATION, location),
+            (header::ETAG, etag_for(&post)),
+        ],
+        xml,
+    )
+        .into_response())
+}
+
+/// `PUT /atompub/{username}/posts/{post_id}` — replace a post from an `AtomPub` entry.
+///
+/// Honors `If-Match` (a stale `ETag` yields `412`). `app:draft` toggles publication.
+///
+/// # Errors
+///
+/// Returns `400` if the entry is malformed.
+/// Returns `403` if the authenticated user does not match the target username.
+/// Returns `404` if the post is not found, is deleted, or belongs to another user.
+/// Returns `412` if `If-Match` is present and stale.
+/// Returns `500` if storage or serialization fails.
+pub async fn member_put(
+    Extension(state): Extension<Arc<AppState>>,
+    auth_user: AuthUser,
+    Path((username, post_id)): Path<(String, i64)>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<Response, StatusCode> {
+    let current = owned_post(&state, &auth_user, &username, post_id).await?;
+
+    if let Some(if_match) = headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()) {
+        if if_match != "*" && if_match != etag_for(&current) {
+            return Err(StatusCode::PRECONDITION_FAILED);
+        }
+    }
+
+    let entry = entry_from_xml(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let default_format =
+        storage::get_default_post_format(state.user_config.as_ref(), auth_user.user_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let fields = entry_to_post_fields(&entry, default_format);
+
+    storage::perform_post_update(
+        state.posts.as_ref(),
+        post_id,
+        auth_user.user_id,
+        fields.body,
+        fields.title.as_deref(),
+        fields.format,
+        None,
+        !fields.is_draft,
+        fields.summary,
+    )
+    .await
+    .map_err(|e| update_status(&e))?;
+
+    apply_categories(state.posts.as_ref(), post_id, &fields.categories).await?;
+
+    let post = state
+        .posts
+        .get_post_by_id(post_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let base = base_url(&state).await;
+    let entry_out = post_to_entry(&post, &base);
+    let xml = entry_to_xml(&entry_out).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
+            (header::ETAG, etag_for(&post)),
+        ],
+        xml,
+    )
+        .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{creation_status, update_status};
+    use axum::http::StatusCode;
+    use storage::{PerformCreationError, PerformUpdateError, RenderError};
+
+    #[test]
+    fn creation_status_maps_validation_to_400_else_500() {
+        assert_eq!(
+            creation_status(&PerformCreationError::EmptyPost),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            creation_status(&PerformCreationError::NoSlugFromPost),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            creation_status(&PerformCreationError::InvalidSlug("x".to_string())),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            creation_status(&PerformCreationError::Render(RenderError::OrgRender(
+                "e".to_string()
+            ))),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn update_status_maps_each_error_class() {
+        assert_eq!(
+            update_status(&PerformUpdateError::EmptyPost),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            update_status(&PerformUpdateError::NoSlugFromPost),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            update_status(&PerformUpdateError::InvalidSlug),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            update_status(&PerformUpdateError::NotFound),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            update_status(&PerformUpdateError::Unauthorized),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            update_status(&PerformUpdateError::Render(RenderError::OrgRender(
+                "e".to_string()
+            ))),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
 }

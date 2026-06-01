@@ -508,3 +508,663 @@ async fn member_forbids_other_user() {
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
+
+fn entry_xml(title: &str, content_type: &str, content: &str) -> String {
+    format!(
+        r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>{title}</title>
+  <content type="{content_type}">{content}</content>
+  <category term="rust"/>
+</entry>"#
+    )
+}
+
+#[tokio::test]
+async fn create_post_returns_201_and_is_retrievable() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (user_id, token) = seed_alice(&state).await;
+    // Set default format to Markdown so text entries round-trip properly
+    storage::set_default_post_format(
+        state.user_config.as_ref(),
+        user_id,
+        storage::PostFormat::Markdown,
+    )
+    .await
+    .unwrap();
+    let app = make_app(state.clone(), &base).await;
+
+    let xml = entry_xml("Hello", "text", "the body");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let loc = response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    assert!(
+        loc.is_some(),
+        "response should have Location header: {:?}",
+        loc
+    );
+
+    // Now GET that location.
+    let app2 = make_app(state, &base).await;
+    let loc_path = loc.unwrap();
+    let get_response = app2
+        .oneshot(
+            Request::builder()
+                .uri(&loc_path)
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let body = body_string(get_response).await;
+    assert!(
+        body.contains("the body"),
+        "retrieved entry should contain body"
+    );
+    assert!(
+        body.contains("type=\"text\""),
+        "retrieved entry should have text content type"
+    );
+}
+
+#[tokio::test]
+async fn create_post_applies_categories() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (_, token) = seed_alice(&state).await;
+    let app = make_app(state, &base).await;
+
+    let xml = entry_xml("Hello", "text", "the body");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = body_string(response).await;
+    assert!(
+        body.contains("term=\"rust\""),
+        "returned entry should contain category term=rust"
+    );
+}
+
+#[tokio::test]
+async fn create_html_entry_is_stored_as_html() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (_, token) = seed_alice(&state).await;
+    let app = make_app(state, &base).await;
+
+    let xml = entry_xml("H", "html", "&lt;p&gt;hi&lt;/p&gt;");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = body_string(response).await;
+    assert!(
+        body.contains("type=\"html\""),
+        "entry should be stored with type=html"
+    );
+}
+
+#[tokio::test]
+async fn update_replaces_post_body() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (user_id, token) = seed_alice(&state).await;
+
+    // Create an initial post
+    let post = storage::perform_post_creation(
+        state.posts.as_ref(),
+        user_id,
+        "Old body".to_string(),
+        Some("Old"),
+        storage::PostFormat::Markdown,
+        None,
+        Some(chrono::Utc::now()),
+        100,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let app = make_app(state, &base).await;
+
+    let xml = entry_xml("New", "text", "new body");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&format!("/atompub/alice/posts/{}", post.post_id))
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    assert!(
+        body.contains("new body"),
+        "response entry should contain new body"
+    );
+}
+
+#[tokio::test]
+async fn update_with_stale_if_match_returns_412() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (user_id, token) = seed_alice(&state).await;
+
+    let post = storage::perform_post_creation(
+        state.posts.as_ref(),
+        user_id,
+        "Old body".to_string(),
+        Some("Old"),
+        storage::PostFormat::Markdown,
+        None,
+        Some(chrono::Utc::now()),
+        100,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let app = make_app(state, &base).await;
+
+    let xml = entry_xml("New", "text", "new body");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&format!("/atompub/alice/posts/{}", post.post_id))
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::IF_MATCH, "\"0\"") // Wrong ETag
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+}
+
+#[tokio::test]
+async fn update_forbids_other_user() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base).await;
+
+    let xml = entry_xml("New", "text", "new body");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/atompub/bob/posts/1")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn create_rejects_malformed_entry() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from("not xml"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn update_removes_categories_not_in_new_entry() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (user_id, token) = seed_alice(&state).await;
+
+    // Create a post with a tag
+    let post = storage::perform_post_creation(
+        state.posts.as_ref(),
+        user_id,
+        "Body".to_string(),
+        Some("Title"),
+        storage::PostFormat::Markdown,
+        None,
+        Some(chrono::Utc::now()),
+        100,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Tag it
+    state
+        .posts
+        .tag_post(post.post_id, "original-tag")
+        .await
+        .unwrap();
+
+    let app = make_app(state, &base).await;
+
+    // Update without the tag
+    let xml = entry_xml("Title", "text", "new body");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&format!("/atompub/alice/posts/{}", post.post_id))
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    // The original tag should not be in the response since we didn't include it
+    assert!(!body.contains("original-tag"));
+}
+
+#[tokio::test]
+async fn create_forbids_other_user() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base).await;
+
+    let xml = entry_xml("Hello", "text", "the body");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/bob/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn update_with_put_returns_200_and_etag() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (user_id, token) = seed_alice(&state).await;
+
+    let post = storage::perform_post_creation(
+        state.posts.as_ref(),
+        user_id,
+        "Original".to_string(),
+        Some("Title"),
+        storage::PostFormat::Markdown,
+        None,
+        Some(chrono::Utc::now()),
+        100,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let app = make_app(state, &base).await;
+
+    let xml = entry_xml("Updated", "text", "updated body");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&format!("/atompub/alice/posts/{}", post.post_id))
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let etag = response
+        .headers()
+        .get(header::ETAG)
+        .and_then(|v| v.to_str().ok());
+    assert!(etag.is_some(), "PUT response should include ETag header");
+}
+
+#[tokio::test]
+async fn create_with_no_title_or_content_returns_400() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base).await;
+
+    // Entry with neither title nor content - should fail with EmptyPost
+    let xml = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+</entry>"#;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn update_with_no_title_or_content_returns_400() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (user_id, token) = seed_alice(&state).await;
+
+    // Create an initial post
+    let post = storage::perform_post_creation(
+        state.posts.as_ref(),
+        user_id,
+        "Original body".to_string(),
+        Some("Original"),
+        storage::PostFormat::Markdown,
+        None,
+        Some(chrono::Utc::now()),
+        100,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let app = make_app(state, &base).await;
+
+    // Try to update with neither title nor content - should fail with EmptyPost
+    let xml = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+</entry>"#;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&format!("/atompub/alice/posts/{}", post.post_id))
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_draft_entry_is_unpublished() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base).await;
+
+    let xml = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app">
+  <title>Draft</title>
+  <content type="text">draft body</content>
+  <app:control><app:draft>yes</app:draft></app:control>
+</entry>"#;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let get = app
+        .oneshot(
+            Request::builder()
+                .uri(&location)
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+    let body = body_string(get).await;
+    // A draft post round-trips the app:draft marker.
+    assert!(body.contains("app:draft"), "draft marker missing: {body}");
+}
+
+#[tokio::test]
+async fn create_skips_invalid_category() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base).await;
+
+    let xml = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>Cat</title>
+  <content type="text">body</content>
+  <category term="has spaces"/>
+</entry>"#;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    // The invalid term was skipped, not stored.
+    let body = body_string(response).await;
+    assert!(
+        !body.contains("has spaces"),
+        "invalid category leaked: {body}"
+    );
+}
+
+#[tokio::test]
+async fn update_keeps_unchanged_category() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base).await;
+
+    let with_rust = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>T</title>
+  <content type="text">body</content>
+  <category term="rust"/>
+</entry>"#;
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(with_rust))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let location = created
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // PUT the same category back -> add-loop and remove-loop both take their
+    // "already in sync" branches.
+    let updated = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&location)
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(with_rust))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+    let body = body_string(updated).await;
+    assert!(body.contains("term=\"rust\""), "category dropped: {body}");
+}
+
+#[tokio::test]
+async fn update_with_matching_if_match_succeeds() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base).await;
+
+    let xml = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>T</title>
+  <content type="text">body</content>
+</entry>"#;
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let location = created
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let etag = created
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // A matching If-Match passes the precondition and the update proceeds.
+    let updated = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&location)
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::IF_MATCH, etag)
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+}
