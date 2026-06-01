@@ -25,10 +25,25 @@ use {
     leptos_axum,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
-        perform_post_creation, perform_post_update, FeedEventStorage, PerformUpdateError,
-        PostFormat, PostStorage, UpdatePostError, UpdatePostInput, UserStorage,
+        get_default_post_format as storage_get_default_post_format, perform_post_creation,
+        perform_post_update, set_default_post_format as storage_set_default_post_format,
+        FeedEventStorage, PerformUpdateError, PostFormat, PostStorage, UpdatePostError,
+        UpdatePostInput, UserConfigStorage, UserStorage,
     },
 };
+
+/// Normalizes an optional summary string: empty or whitespace-only strings become `None`.
+#[cfg(feature = "ssr")]
+fn normalize_summary(s: Option<String>) -> Option<String> {
+    s.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
 
 /// Result returned by [`create_post`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -39,6 +54,7 @@ pub struct CreatePostResult {
     pub published_at: Option<String>,
     pub preview_url: String,
     pub permalink: Option<String>,
+    pub summary: Option<String>,
 }
 
 /// Result returned by [`update_post`].
@@ -49,6 +65,7 @@ pub struct UpdatePostResult {
     pub published_at: Option<String>,
     pub preview_url: String,
     pub permalink: Option<String>,
+    pub summary: Option<String>,
 }
 
 /// A draft row returned by [`list_drafts`].
@@ -80,6 +97,7 @@ pub struct TimelinePostSummary {
     pub post_id: i64,
     pub username: String,
     pub title: Option<String>,
+    pub summary: Option<String>,
     pub slug: String,
     pub rendered_html: String,
     pub created_at: String,
@@ -118,6 +136,8 @@ pub struct PostResponse {
     pub permalink: Option<String>,
     /// Tags applied to this post, ordered by canonical slug.
     pub tags: Vec<TagSummary>,
+    /// Optional summary/excerpt of the post.
+    pub summary: Option<String>,
 }
 
 /// Creates a post for the authenticated user.
@@ -128,6 +148,7 @@ pub async fn create_post(
     slug_override: Option<String>,
     publish: bool,
     tags: Option<Vec<String>>,
+    summary: Option<String>,
 ) -> WebResult<CreatePostResult> {
     boundary!("create_post", {
         let auth = require_auth().await?;
@@ -140,15 +161,18 @@ pub async fn create_post(
             .parse::<PostFormat>()
             .map_err(|e| InternalError::validation(e.to_string()))?;
         let published_at = publish.then(Utc::now);
+        let normalized_summary = normalize_summary(summary);
 
         let record = perform_post_creation(
             posts.as_ref(),
             auth.user_id,
             body,
+            None,
             format,
             slug_override.as_deref(),
             published_at,
             100,
+            normalized_summary,
         )
         .await
         .map_err(perform_creation_error)?;
@@ -166,6 +190,7 @@ pub async fn create_post(
             published_at: published_at_str,
             preview_url,
             permalink,
+            summary: record.summary,
         };
 
         for display in &validated_tags {
@@ -275,6 +300,7 @@ pub async fn update_post(
     slug_override: Option<String>,
     publish: bool,
     tags: Option<Vec<String>>,
+    summary: Option<String>,
 ) -> WebResult<UpdatePostResult> {
     boundary!("update_post", {
         let auth = require_auth().await?;
@@ -304,15 +330,18 @@ pub async fn update_post(
         let format = format
             .parse::<PostFormat>()
             .map_err(|e| InternalError::validation(e.to_string()))?;
+        let normalized_summary = normalize_summary(summary);
 
         let record = perform_post_update(
             posts.as_ref(),
             post_id,
             auth.user_id,
             body,
+            None,
             format,
             slug_override.as_deref(),
             publish,
+            normalized_summary,
         )
         .await
         .map_err(|e| match e {
@@ -351,6 +380,7 @@ pub async fn update_post(
             published_at: published_at_str,
             preview_url: format!("/draft/{post_id}/preview"),
             permalink,
+            summary: record.summary,
         })
     })
 }
@@ -420,6 +450,7 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
                     body: existing.body,
                     format: existing.format,
                     rendered_html: existing.rendered_html,
+                    summary: existing.summary,
                     publish: true,
                 },
             )
@@ -455,6 +486,35 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
             published_at: published_at.to_rfc3339(),
             permalink: updated.permalink(),
         })
+    })
+}
+
+/// Retrieves the authenticated user's default post format preference.
+#[server(endpoint = "/get_default_post_format")]
+pub async fn get_default_post_format() -> WebResult<String> {
+    boundary!("get_default_post_format", {
+        let auth = require_auth().await?;
+        let config = expect_context::<Arc<dyn UserConfigStorage>>();
+        let format = storage_get_default_post_format(config.as_ref(), auth.user_id)
+            .await
+            .map_err(InternalError::storage)?;
+        Ok(format.to_string())
+    })
+}
+
+/// Sets the authenticated user's default post format preference.
+#[server(endpoint = "/set_default_post_format")]
+pub async fn set_default_post_format(format: String) -> WebResult<()> {
+    boundary!("set_default_post_format", {
+        let auth = require_auth().await?;
+        let config = expect_context::<Arc<dyn UserConfigStorage>>();
+        let post_format = format
+            .parse::<PostFormat>()
+            .map_err(|e| InternalError::validation(e.to_string()))?;
+        storage_set_default_post_format(config.as_ref(), auth.user_id, post_format)
+            .await
+            .map_err(InternalError::storage)?;
+        Ok(())
     })
 }
 
@@ -782,9 +842,25 @@ pub async fn unpublish_post(post_id: i64) -> WebResult<()> {
 mod tests {
     use storage::candidate_slug;
 
+    #[cfg(feature = "ssr")]
+    use super::normalize_summary;
+
     #[test]
     fn candidate_slug_returns_seed_for_first_attempt() {
         assert_eq!(candidate_slug("hello-world", 0), "hello-world");
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn normalize_summary_empty_and_whitespace_become_none() {
+        assert_eq!(normalize_summary(None), None);
+        assert_eq!(normalize_summary(Some(String::new())), None);
+        assert_eq!(normalize_summary(Some("   ".into())), None);
+        assert_eq!(
+            normalize_summary(Some("hello".into())),
+            Some("hello".into())
+        );
+        assert_eq!(normalize_summary(Some("  hi  ".into())), Some("hi".into()));
     }
 
     #[test]
@@ -827,6 +903,7 @@ mod tests {
                 updated_at: base_time,
                 published_at: Some(base_time),
                 deleted_at: None,
+                summary: None,
                 tags: vec![],
             },
             None,
@@ -864,6 +941,7 @@ mod tests {
                 updated_at: base_time,
                 published_at: None,
                 deleted_at: None,
+                summary: None,
                 tags: vec![],
             },
             true,
@@ -886,6 +964,7 @@ mod tests {
                 updated_at: base_time,
                 published_at: Some(base_time),
                 deleted_at: None,
+                summary: None,
                 tags: vec![],
             },
             false,

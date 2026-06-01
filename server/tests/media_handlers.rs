@@ -60,7 +60,11 @@ async fn upload_returns_201_with_json() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
@@ -148,7 +152,11 @@ async fn serve_returns_200_with_cache_headers() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
@@ -275,7 +283,11 @@ async fn proxy_redirects_authenticated() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
@@ -324,7 +336,11 @@ async fn serve_returns_304_on_if_none_match() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
@@ -409,7 +425,11 @@ async fn upload_returns_400_for_empty_multipart() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
@@ -451,7 +471,11 @@ async fn upload_deduplicates_same_content() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
@@ -509,7 +533,11 @@ async fn upload_quota_exceeded_returns_507() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
@@ -557,7 +585,11 @@ async fn upload_at_max_file_size_boundary_succeeds() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
@@ -609,7 +641,11 @@ async fn upload_one_byte_over_max_file_size_is_rejected() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
@@ -661,7 +697,11 @@ async fn upload_at_exact_quota_succeeds() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
@@ -708,7 +748,11 @@ async fn proxy_rejects_mismatched_user_id() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();

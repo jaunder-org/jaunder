@@ -69,7 +69,7 @@ pub(crate) fn build_session_record(
     token_hash: String,
     user_id: i64,
     username: &str,
-    label: Option<String>,
+    label: String,
     created_at: DateTime<Utc>,
     last_used_at: DateTime<Utc>,
 ) -> sqlx::Result<SessionRecord> {
@@ -123,6 +123,7 @@ pub(crate) type PostRecordParts = (
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<DateTime<Utc>>,
+    Option<String>,
     String,
 );
 
@@ -169,6 +170,7 @@ pub(crate) fn build_post_record(
         updated_at,
         published_at,
         deleted_at,
+        summary,
         tags_json,
     ): PostRecordParts,
 ) -> sqlx::Result<PostRecord> {
@@ -196,6 +198,7 @@ pub(crate) fn build_post_record(
         updated_at,
         published_at,
         deleted_at,
+        summary,
         tags,
     })
 }
@@ -220,14 +223,7 @@ pub(crate) fn user_record_from_row(row: UserRow) -> sqlx::Result<UserRecord> {
     build_user_record(row)
 }
 
-pub(crate) type SessionRow = (
-    String,
-    i64,
-    String,
-    Option<String>,
-    DateTime<Utc>,
-    DateTime<Utc>,
-);
+pub(crate) type SessionRow = (String, i64, String, String, DateTime<Utc>, DateTime<Utc>);
 
 pub(crate) fn session_record_from_row(row: SessionRow) -> sqlx::Result<SessionRecord> {
     let (token_hash, user_id, username, label, created_at, last_used_at) = row;
@@ -267,6 +263,7 @@ pub(crate) type PostRow = (
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<DateTime<Utc>>,
+    Option<String>,
     String,
 );
 
@@ -402,7 +399,7 @@ mod tests {
             "hash".to_string(),
             1,
             "alice",
-            Some("label".to_string()),
+            "label".to_string(),
             now,
             now,
         )
@@ -447,6 +444,7 @@ mod tests {
             now,
             Some(now),
             None,
+            None,
             "[]".to_string(),
         ))
         .unwrap();
@@ -477,6 +475,7 @@ mod tests {
             now,
             None,
             None,
+            None,
             "[]".to_string(),
         ))
         .unwrap_err();
@@ -494,10 +493,11 @@ mod tests {
             Some("Hello".to_string()),
             "hello-world".to_string(),
             "Body".to_string(),
-            "html".to_string(),
+            "invalid_format".to_string(),
             "<p>Body</p>".to_string(),
             now,
             now,
+            None,
             None,
             None,
             "[]".to_string(),
@@ -521,6 +521,7 @@ mod tests {
             "<p>Body</p>".to_string(),
             now,
             now,
+            None,
             None,
             None,
             "[]".to_string(),
@@ -592,7 +593,7 @@ mod tests {
             "hash".to_string(),
             1,
             "Invalid Username",
-            None,
+            "label".to_string(),
             Utc::now(),
             Utc::now(),
         )
@@ -615,6 +616,7 @@ mod tests {
             "<p>Body</p>".to_string(),
             now,
             now,
+            None,
             None,
             None,
             tags_json.to_string(),
@@ -642,6 +644,7 @@ mod tests {
             now,
             None,
             None,
+            None,
             "not-json".to_string(),
         ))
         .unwrap_err();
@@ -664,6 +667,7 @@ mod tests {
             "<p>Body</p>".to_string(),
             now,
             now,
+            None,
             None,
             None,
             tags_json,
@@ -712,7 +716,7 @@ mod tests {
             "tokenhash".to_string(),
             1,
             "alice".to_string(),
-            None,
+            "label".to_string(),
             now,
             now,
         );
@@ -756,6 +760,7 @@ mod tests {
             "<p>Body</p>".to_string(),
             now,
             now,
+            None,
             None,
             None,
             "[]".to_string(),

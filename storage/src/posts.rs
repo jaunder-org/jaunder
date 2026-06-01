@@ -17,11 +17,13 @@ pub enum PostFormat {
     Markdown,
     /// Emacs Org-mode format.
     Org,
+    /// Pre-rendered HTML.
+    Html,
 }
 
 /// Error returned when a string cannot be parsed as a [`PostFormat`].
 #[derive(Debug, Error)]
-#[error("post format must be \"markdown\" or \"org\"")]
+#[error("post format must be \"markdown\", \"org\", or \"html\"")]
 pub struct InvalidPostFormat;
 
 impl fmt::Display for PostFormat {
@@ -29,6 +31,7 @@ impl fmt::Display for PostFormat {
         match self {
             PostFormat::Markdown => f.write_str("markdown"),
             PostFormat::Org => f.write_str("org"),
+            PostFormat::Html => f.write_str("html"),
         }
     }
 }
@@ -40,6 +43,7 @@ impl FromStr for PostFormat {
         match s {
             "markdown" => Ok(PostFormat::Markdown),
             "org" => Ok(PostFormat::Org),
+            "html" => Ok(PostFormat::Html),
             _ => Err(InvalidPostFormat),
         }
     }
@@ -78,6 +82,8 @@ pub struct PostRecord {
     pub published_at: Option<DateTime<Utc>>,
     /// When the post was soft-deleted (None if active).
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Optional summary/excerpt of the post.
+    pub summary: Option<String>,
     pub tags: Vec<PostTag>,
 }
 
@@ -169,6 +175,16 @@ pub struct PostCursor {
     pub post_id: i64,
 }
 
+/// Cursor for keyset pagination of the editor-facing per-user collection
+/// (ordered by `updated_at DESC, post_id DESC`).
+#[derive(Clone, Copy)]
+pub struct CollectionCursor {
+    /// Update timestamp of the last item in the previous page.
+    pub updated_at: DateTime<Utc>,
+    /// ID of the last item in the previous page (used for stable ordering).
+    pub post_id: i64,
+}
+
 /// Input for creating a new post.
 #[derive(Clone)]
 pub struct CreatePostInput {
@@ -180,6 +196,8 @@ pub struct CreatePostInput {
     pub rendered_html: String,
     /// If Some, the post is created in a published state.
     pub published_at: Option<DateTime<Utc>>,
+    /// Optional summary/excerpt of the post.
+    pub summary: Option<String>,
 }
 
 /// Input for updating an existing post.
@@ -194,6 +212,8 @@ pub struct UpdatePostInput {
     /// If `true`, publish the post (sets `published_at` to now if not already set).
     /// If `false`, un-publish the post (clears `published_at`).
     pub publish: bool,
+    /// Optional summary/excerpt of the post.
+    pub summary: Option<String>,
 }
 
 /// A tag record returned by [`PostStorage`] tag queries.
@@ -302,6 +322,16 @@ pub trait PostStorage: Send + Sync {
         &self,
         user_id: i64,
         cursor: Option<&PostCursor>,
+        limit: u32,
+    ) -> sqlx::Result<Vec<PostRecord>>;
+
+    /// Lists all of a user's non-soft-deleted posts (drafts + published)
+    /// ordered by `updated_at DESC, post_id DESC` for the `AtomPub` Collection
+    /// surface. Tags are hydrated.
+    async fn list_collection_by_user(
+        &self,
+        user_id: i64,
+        cursor: Option<&CollectionCursor>,
         limit: u32,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
@@ -426,10 +456,10 @@ mod tests {
 
     #[test]
     fn post_format_rejects_invalid_value() {
-        let err = "html".parse::<PostFormat>().unwrap_err();
+        let err = "invalid".parse::<PostFormat>().unwrap_err();
         assert_eq!(
             err.to_string(),
-            "post format must be \"markdown\" or \"org\""
+            "post format must be \"markdown\", \"org\", or \"html\""
         );
     }
 
@@ -460,6 +490,7 @@ mod tests {
             updated_at: Utc::now(),
             published_at: None,
             deleted_at: None,
+            summary: None,
             tags: vec![],
         };
 
@@ -494,9 +525,57 @@ mod tests {
             updated_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
             published_at: Some(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
             deleted_at: None,
+            summary: None,
             tags: vec![],
         };
 
         assert_eq!(post.permalink(), "/~author/2026/04/12/hello-world");
+    }
+
+    #[tokio::test]
+    async fn create_post_persists_summary() {
+        use crate::sqlite::SqlitePostStorage;
+        use chrono::Utc;
+
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("../storage/migrations/sqlite")
+            .run(&pool)
+            .await
+            .unwrap();
+
+        // Create a test user
+        sqlx::query(
+            "INSERT INTO users (username, password_hash, created_at, is_operator) VALUES (?, ?, ?, ?)",
+        )
+        .bind("testuser")
+        .bind("hash")
+        .bind(Utc::now())
+        .bind(false)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let posts = SqlitePostStorage::new(pool);
+        let input = CreatePostInput {
+            user_id: 1,
+            title: Some("Test Title".into()),
+            slug: "test-slug".parse().unwrap(),
+            body: "Test body".into(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>Test body</p>".into(),
+            published_at: None,
+            summary: Some("the summary".into()),
+        };
+
+        let post_id = posts.create_post(&input).await.unwrap();
+        let post = posts.get_post_by_id(post_id).await.unwrap().unwrap();
+
+        assert_eq!(post.summary, Some("the summary".into()));
+    }
+
+    #[test]
+    fn post_format_html_roundtrips_via_display_and_from_str() {
+        assert_eq!("html".parse::<PostFormat>().unwrap(), PostFormat::Html);
+        assert_eq!(PostFormat::Html.to_string(), "html");
     }
 }

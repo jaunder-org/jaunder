@@ -69,7 +69,11 @@ async fn create_user_with_verified_email(
         .set_email(user_id, Some(&email_addr), true)
         .await
         .unwrap();
-    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+    let raw_token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     (user_id, raw_token)
 }
 
@@ -175,7 +179,11 @@ async fn confirm_password_reset_sets_password_and_revokes_sessions() {
     let (user_id, _session) =
         create_user_with_verified_email(&state, "carol", "carol@example.com").await;
     // Create a second session to ensure all are revoked
-    state.sessions.create_session(user_id, None).await.unwrap();
+    state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
 
     let expires_at = Utc::now() + chrono::Duration::hours(1);
     let raw_token = state

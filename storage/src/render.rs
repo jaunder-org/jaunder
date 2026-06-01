@@ -30,6 +30,7 @@ pub fn render(body: &str, format: &PostFormat) -> Result<String, RenderError> {
     match format {
         PostFormat::Markdown => Ok(render_markdown(body)),
         PostFormat::Org => render_org(body),
+        PostFormat::Html => Ok(body.to_string()),
     }
 }
 
@@ -66,6 +67,7 @@ pub fn derive_post_metadata(
     let extracted_title = match format {
         PostFormat::Markdown => extract_markdown_title(body).map(|(title, _)| title),
         PostFormat::Org => extract_org_title(body).map(|(title, _)| title),
+        PostFormat::Html => None,
     };
 
     if let Some(title) = extracted_title {
@@ -234,6 +236,7 @@ pub async fn create_rendered_post(
     body: String,
     format: PostFormat,
     published_at: Option<DateTime<Utc>>,
+    summary: Option<String>,
 ) -> Result<i64, CreateRenderedPostError> {
     let rendered_html = render(&body, &format)?;
     let input = CreatePostInput {
@@ -244,6 +247,7 @@ pub async fn create_rendered_post(
         format,
         rendered_html,
         published_at,
+        summary,
     };
     Ok(storage.create_post(&input).await?)
 }
@@ -263,6 +267,7 @@ pub async fn update_rendered_post(
     body: String,
     format: PostFormat,
     publish: bool,
+    summary: Option<String>,
 ) -> Result<PostRecord, UpdateRenderedPostError> {
     let rendered_html = render(&body, &format)?;
     let input = UpdatePostInput {
@@ -272,6 +277,7 @@ pub async fn update_rendered_post(
         format,
         rendered_html,
         publish,
+        summary,
     };
     Ok(storage.update_post(post_id, editor_user_id, &input).await?)
 }
@@ -318,17 +324,20 @@ impl From<UpdatePostError> for PerformUpdateError {
 /// # Errors
 ///
 /// Returns `Err(PerformUpdateError)` if rendering fails or the storage layer returns an error.
+#[allow(clippy::too_many_arguments)]
 pub async fn perform_post_update(
     storage: &dyn PostStorage,
     post_id: i64,
     editor_user_id: i64,
     body: String,
+    title: Option<&str>,
     format: PostFormat,
     slug_override: Option<&str>,
     publish: bool,
+    summary: Option<String>,
 ) -> Result<PostRecord, PerformUpdateError> {
     let metadata =
-        derive_post_metadata(None, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
+        derive_post_metadata(title, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
 
     let slug = match slug_override.map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => raw
@@ -349,6 +358,7 @@ pub async fn perform_post_update(
         format,
         rendered_html,
         publish,
+        summary,
     };
     storage
         .update_post(post_id, editor_user_id, &input)
@@ -396,17 +406,20 @@ pub fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
 ///
 /// Returns `Err(PerformCreationError)` if rendering fails, slug validation
 /// fails, attempts to find a unique slug are exhausted, or storage fails.
+#[allow(clippy::too_many_arguments)]
 pub async fn perform_post_creation(
     storage: &dyn PostStorage,
     user_id: i64,
     body: String,
+    title: Option<&str>,
     format: PostFormat,
     slug_override: Option<&str>,
     published_at: Option<DateTime<Utc>>,
     max_attempts: usize,
+    summary: Option<String>,
 ) -> Result<PostRecord, PerformCreationError> {
     let metadata =
-        derive_post_metadata(None, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
+        derive_post_metadata(title, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
 
     let slug_seed = match slug_override.map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => raw
@@ -431,6 +444,7 @@ pub async fn perform_post_creation(
             body.clone(),
             format.clone(),
             published_at,
+            summary.clone(),
         )
         .await
         {
@@ -654,6 +668,13 @@ mod tests {
         assert_eq!(metadata.title.as_deref(), Some("Org Title"));
         assert_eq!(metadata.slug_seed, "Org Title");
         // body is not a field of DerivedPostMetadata — the caller retains the original
+    }
+
+    #[test]
+    fn derive_metadata_for_html_extracts_no_title_but_keeps_fallback_label() {
+        let metadata = derive_post_metadata(None, "<p>Hello world</p>", &PostFormat::Html).unwrap();
+        assert_eq!(metadata.title, None);
+        assert!(!metadata.summary_label.is_empty());
     }
 
     #[test]
@@ -929,10 +950,12 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
             100,
+            None,
         )
         .await
         .unwrap();
@@ -945,16 +968,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_perform_post_creation_uses_explicit_title() {
+        let (_pool, storage) = setup_test_db().await;
+        // The body has no heading, so any title must come from the explicit arg,
+        // which also seeds the slug.
+        let record = perform_post_creation(
+            &storage,
+            1,
+            "Body without a heading.".to_owned(),
+            Some("Explicit Title"),
+            PostFormat::Markdown,
+            None,
+            None,
+            100,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(record.title.as_deref(), Some("Explicit Title"));
+        assert_eq!(record.slug.as_str(), "explicit-title");
+    }
+
+    #[tokio::test]
     async fn test_perform_post_creation_slug_override() {
         let (_pool, storage) = setup_test_db().await;
         let record = perform_post_creation(
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             Some("my-custom-slug"),
             None,
             100,
+            None,
         )
         .await
         .unwrap();
@@ -969,10 +1017,12 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             Some("Invalid Slug!"),
             None,
             100,
+            None,
         )
         .await
         .unwrap_err();
@@ -987,10 +1037,12 @@ mod tests {
             &storage,
             1,
             "   ".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
             100,
+            None,
         )
         .await
         .unwrap_err();
@@ -1005,10 +1057,12 @@ mod tests {
             &storage,
             1,
             "!!!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
             100,
+            None,
         )
         .await
         .unwrap_err();
@@ -1024,10 +1078,12 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
             100,
+            None,
         )
         .await
         .unwrap();
@@ -1036,10 +1092,12 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
             100,
+            None,
         )
         .await
         .unwrap();
@@ -1048,10 +1106,12 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
             100,
+            None,
         )
         .await
         .unwrap();
@@ -1069,10 +1129,12 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
             2,
+            None,
         )
         .await
         .unwrap();
@@ -1081,10 +1143,12 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
             2,
+            None,
         )
         .await
         .unwrap();
@@ -1096,10 +1160,12 @@ mod tests {
             &storage,
             1,
             "Hello, world!".to_owned(),
+            None,
             PostFormat::Markdown,
             None,
             None,
             2,
+            None,
         )
         .await
         .unwrap_err();
@@ -1131,5 +1197,11 @@ mod tests {
 
         let err = PerformCreationError::CreatedNotFound;
         assert_eq!(err.to_string(), "created post not found");
+    }
+
+    #[test]
+    fn render_html_format_is_identity() {
+        let body = "<p>hi <b>there</b></p>";
+        assert_eq!(render(body, &PostFormat::Html).unwrap(), body.to_string());
     }
 }

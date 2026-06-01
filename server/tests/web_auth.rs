@@ -55,6 +55,48 @@ async fn post_form(
     (status, set_cookie, body_str)
 }
 
+async fn post_form_with_ua(
+    state: Arc<storage::AppState>,
+    uri: &str,
+    body: impl Into<String>,
+    cookie: Option<&str>,
+    user_agent: &str,
+    secure_cookies: bool,
+) -> (StatusCode, Option<String>, String) {
+    ensure_server_fns_registered();
+
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header("user-agent", user_agent);
+    if let Some(c) = cookie {
+        builder = builder.header(header::COOKIE, c);
+    }
+    let request = builder.body(Body::from(body.into())).unwrap();
+
+    let app = jaunder::create_router(
+        test_options(),
+        state,
+        helpers::noop_mailer(),
+        secure_cookies,
+        helpers::tmp_storage_path(),
+    );
+    let response = app.oneshot(request).await.unwrap();
+
+    let status = response.status();
+    let set_cookie = response
+        .headers()
+        .get(header::SET_COOKIE)
+        .map(|v| v.to_str().unwrap().to_string());
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(bytes.to_vec()).unwrap();
+
+    (status, set_cookie, body_str)
+}
+
 async fn get_html(
     state: Arc<storage::AppState>,
     uri: &str,
@@ -477,7 +519,7 @@ async fn login_with_label_creates_session_with_label() {
     assert_eq!(status, StatusCode::OK);
     let raw_token = extract_token(&body);
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
-    assert_eq!(record.label.as_deref(), Some("my-device"));
+    assert_eq!(record.label, "my-device");
 }
 
 #[tokio::test]
@@ -511,7 +553,49 @@ async fn login_with_empty_label_creates_session_without_label() {
     assert_eq!(status, StatusCode::OK);
     let raw_token = extract_token(&body);
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
-    assert!(record.label.is_none());
+    // When no label provided, should default to "Unknown device"
+    assert_eq!(record.label, "Unknown device");
+}
+
+// M2.9.12: `login` with long User-Agent truncates to 200 chars.
+#[tokio::test]
+async fn login_truncates_long_user_agent() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    state
+        .site_config
+        .set("site.registration_policy", "open")
+        .await
+        .unwrap();
+    post_form(
+        Arc::clone(&state),
+        "/api/register",
+        "username=alice&password=password123",
+        None,
+        true,
+    )
+    .await;
+
+    // Build a long User-Agent string (>200 chars)
+    let long_ua = "a".repeat(250);
+
+    // Login with a long User-Agent header
+    let (status, _, body) = post_form_with_ua(
+        Arc::clone(&state),
+        "/api/login",
+        "username=alice&password=password123",
+        None,
+        &long_ua,
+        true,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let raw_token = extract_token(&body);
+    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    // Label should be truncated to 200 chars
+    assert_eq!(record.label.len(), 200);
+    assert_eq!(record.label, "a".repeat(200));
 }
 
 // M2.9.13: `login` with wrong password returns error.
@@ -562,7 +646,11 @@ async fn logout_revokes_session_and_clears_cookie() {
         )
         .await
         .unwrap();
-    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+    let raw_token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
 
     let sessions_before = state.sessions.list_sessions(user_id).await.unwrap();
     assert_eq!(
@@ -703,7 +791,7 @@ async fn logout_with_bearer_token_revokes_session() {
         .expect("failed to create user");
     let raw_token = state
         .sessions
-        .create_session(user_id, None)
+        .create_session(user_id, "test session")
         .await
         .expect("failed to create session");
 
@@ -865,7 +953,11 @@ async fn logout_clears_cookie_without_secure_attribute_when_disabled() {
         )
         .await
         .unwrap();
-    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+    let raw_token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
 
     let cookie_header = format!("session={raw_token}");
     let (status, set_cookie, _) = post_form(
@@ -897,7 +989,11 @@ async fn current_user_returns_username_when_authenticated() {
         )
         .await
         .unwrap();
-    let raw_token = state.sessions.create_session(user_id, None).await.unwrap();
+    let raw_token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
 
     let cookie_header = format!("session={raw_token}");
     let (status, _, body) = post_form(

@@ -174,7 +174,11 @@ async fn create_post_persists_rendered_published_post() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     // Title embedded as # heading in the body (verbatim storage)
@@ -243,7 +247,11 @@ async fn create_post_retries_slug_conflicts_for_same_user_and_date() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     // Title embedded as # heading; two posts with same heading produce conflicting slugs
@@ -303,7 +311,11 @@ async fn create_post_accepts_slug_override_and_saves_draft() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
@@ -352,7 +364,11 @@ async fn create_post_accepts_titleless_body() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
@@ -392,7 +408,11 @@ async fn create_post_extracts_markdown_heading_title() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
@@ -437,7 +457,11 @@ async fn create_post_rejects_empty_post() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
@@ -468,7 +492,11 @@ async fn create_post_rejects_post_without_slug_source() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
@@ -502,13 +530,17 @@ async fn create_post_rejects_invalid_format() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
         "body",
-        "html",
+        "invalid_format",
         None,
         false,
         Some(&cookie),
@@ -533,7 +565,11 @@ async fn create_post_rejects_invalid_slug_override() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
@@ -564,7 +600,11 @@ async fn create_post_rejects_title_without_ascii_slug_characters() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     // Heading with only em-dashes passes the empty check but cannot produce a slug
@@ -601,7 +641,11 @@ async fn get_post_returns_published_post() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
@@ -671,7 +715,7 @@ async fn get_post_returns_draft_to_author_only() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -679,7 +723,7 @@ async fn get_post_returns_draft_to_author_only() {
         "session={}",
         state
             .sessions
-            .create_session(stranger_id, None)
+            .create_session(stranger_id, "test session")
             .await
             .unwrap()
     );
@@ -782,7 +826,7 @@ async fn get_post_preview_shows_draft_to_author_only() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -790,7 +834,7 @@ async fn get_post_preview_shows_draft_to_author_only() {
         "session={}",
         state
             .sessions
-            .create_session(stranger_id, None)
+            .create_session(stranger_id, "test session")
             .await
             .unwrap()
     );
@@ -842,7 +886,7 @@ async fn get_post_hides_drafts_from_guests() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -1032,7 +1076,11 @@ async fn update_post_updates_draft_content_and_slug() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
@@ -1092,7 +1140,11 @@ async fn update_post_freezes_slug_when_published() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
@@ -1143,7 +1195,11 @@ async fn update_post_publishes_draft() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
@@ -1205,7 +1261,7 @@ async fn update_post_rejects_non_author() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -1213,7 +1269,7 @@ async fn update_post_rejects_non_author() {
         "session={}",
         state
             .sessions
-            .create_session(stranger_id, None)
+            .create_session(stranger_id, "test session")
             .await
             .unwrap()
     );
@@ -1279,7 +1335,11 @@ async fn update_post_rejects_empty_post() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
@@ -1326,7 +1386,11 @@ async fn update_post_rejects_invalid_format() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
@@ -1345,7 +1409,7 @@ async fn update_post_rejects_invalid_format() {
         Arc::clone(&state),
         created.post_id,
         "body",
-        "html",
+        "invalid_format",
         None,
         false,
         Some(&cookie),
@@ -1370,7 +1434,11 @@ async fn update_post_returns_not_found_for_missing_post() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = update_post_json(
@@ -1402,7 +1470,11 @@ async fn update_post_returns_not_found_for_deleted_post() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
@@ -1448,7 +1520,11 @@ async fn update_post_rejects_title_without_ascii_slug_characters() {
         )
         .await
         .unwrap();
-    let token = state.sessions.create_session(user_id, None).await.unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
     let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
@@ -1512,7 +1588,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -1520,7 +1596,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination() {
         "session={}",
         state
             .sessions
-            .create_session(stranger_id, None)
+            .create_session(stranger_id, "test session")
             .await
             .unwrap()
     );
@@ -1621,7 +1697,7 @@ async fn publish_post_publishes_draft_and_returns_permalink() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -1683,7 +1759,7 @@ async fn publish_post_rejects_non_author() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -1691,7 +1767,7 @@ async fn publish_post_rejects_non_author() {
         "session={}",
         state
             .sessions
-            .create_session(stranger_id, None)
+            .create_session(stranger_id, "test session")
             .await
             .unwrap()
     );
@@ -1739,7 +1815,11 @@ async fn list_drafts_rejects_invalid_cursor_inputs() {
         .unwrap();
     let cookie = format!(
         "session={}",
-        state.sessions.create_session(user_id, None).await.unwrap()
+        state
+            .sessions
+            .create_session(user_id, "test session")
+            .await
+            .unwrap()
     );
 
     let (status, body) = post_form(
@@ -1791,7 +1871,7 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -1836,7 +1916,7 @@ async fn get_post_finds_author_draft_across_multiple_pages() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -1911,13 +1991,17 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
     let other_cookie = format!(
         "session={}",
-        state.sessions.create_session(other_id, None).await.unwrap()
+        state
+            .sessions
+            .create_session(other_id, "test session")
+            .await
+            .unwrap()
     );
 
     for i in 0..51 {
@@ -2058,13 +2142,17 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
     let other_cookie = format!(
         "session={}",
-        state.sessions.create_session(other_id, None).await.unwrap()
+        state
+            .sessions
+            .create_session(other_id, "test session")
+            .await
+            .unwrap()
     );
 
     for i in 0..26 {
@@ -2217,13 +2305,17 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
     let other_cookie = format!(
         "session={}",
-        state.sessions.create_session(other_id, None).await.unwrap()
+        state
+            .sessions
+            .create_session(other_id, "test session")
+            .await
+            .unwrap()
     );
 
     for i in 0..51 {
@@ -2330,7 +2422,7 @@ async fn list_home_feed_rejects_invalid_cursor_inputs() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -2388,7 +2480,7 @@ async fn delete_post_soft_deletes_post() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -2446,7 +2538,7 @@ async fn delete_post_rejects_non_author() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -2454,7 +2546,7 @@ async fn delete_post_rejects_non_author() {
         "session={}",
         state
             .sessions
-            .create_session(stranger_id, None)
+            .create_session(stranger_id, "test session")
             .await
             .unwrap()
     );
@@ -2495,7 +2587,7 @@ async fn delete_post_rejects_unauthenticated() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -2535,7 +2627,7 @@ async fn delete_post_returns_not_found_for_already_deleted_post() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -2578,7 +2670,7 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -2658,7 +2750,7 @@ async fn unpublish_post_reverts_published_post_to_draft() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
@@ -2729,13 +2821,17 @@ async fn unpublish_post_rejects_non_author() {
         "session={}",
         state
             .sessions
-            .create_session(author_id, None)
+            .create_session(author_id, "test session")
             .await
             .unwrap()
     );
     let other_cookie = format!(
         "session={}",
-        state.sessions.create_session(other_id, None).await.unwrap()
+        state
+            .sessions
+            .create_session(other_id, "test session")
+            .await
+            .unwrap()
     );
 
     let (status, body) = create_post_json(
@@ -2773,7 +2869,11 @@ async fn list_user_posts_carries_tags_per_post() {
         .unwrap();
     let cookie = format!(
         "session={}",
-        state.sessions.create_session(user_id, None).await.unwrap()
+        state
+            .sessions
+            .create_session(user_id, "test session")
+            .await
+            .unwrap()
     );
 
     let (status, body) = create_post_json(
@@ -2822,7 +2922,11 @@ async fn get_post_carries_tags() {
         .unwrap();
     let cookie = format!(
         "session={}",
-        state.sessions.create_session(user_id, None).await.unwrap()
+        state
+            .sessions
+            .create_session(user_id, "test session")
+            .await
+            .unwrap()
     );
 
     let (status, body) = create_post_json(
@@ -2885,7 +2989,11 @@ async fn login_and_state() -> (TempDir, Arc<storage::AppState>, String) {
         .unwrap();
     let cookie = format!(
         "session={}",
-        state.sessions.create_session(user_id, None).await.unwrap()
+        state
+            .sessions
+            .create_session(user_id, "test session")
+            .await
+            .unwrap()
     );
     (base, state, cookie)
 }
@@ -3021,7 +3129,11 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users() {
         .unwrap();
     let alice_cookie = format!(
         "session={}",
-        state.sessions.create_session(alice_id, None).await.unwrap()
+        state
+            .sessions
+            .create_session(alice_id, "test session")
+            .await
+            .unwrap()
     );
     let bob_id = state
         .users
@@ -3035,7 +3147,11 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users() {
         .unwrap();
     let bob_cookie = format!(
         "session={}",
-        state.sessions.create_session(bob_id, None).await.unwrap()
+        state
+            .sessions
+            .create_session(bob_id, "test session")
+            .await
+            .unwrap()
     );
 
     let create = |cookie: String, body: &'static str, tags: serde_json::Value| {
@@ -3117,7 +3233,11 @@ async fn list_user_posts_by_tag_scopes_to_user() {
         .unwrap();
     let bob_cookie = format!(
         "session={}",
-        state.sessions.create_session(bob_id, None).await.unwrap()
+        state
+            .sessions
+            .create_session(bob_id, "test session")
+            .await
+            .unwrap()
     );
 
     // Alice ("author") + Bob each post with shared tag.
@@ -3202,4 +3322,48 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone() {
         .unwrap();
     let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_str()).collect();
     assert_eq!(slugs, vec!["keep"]);
+}
+
+#[tokio::test]
+async fn get_default_post_format_returns_html_by_default() {
+    let (_base, state, cookie) = login_and_state().await;
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/get_default_post_format",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "get body: {body}");
+    assert_eq!(body, "\"html\"", "expected default format to be html");
+}
+
+#[tokio::test]
+async fn set_default_post_format_persists_and_retrieves_markdown() {
+    let (_base, state, cookie) = login_and_state().await;
+
+    // Set format to markdown
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/set_default_post_format",
+        "format=markdown",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "set body: {body}");
+
+    // Retrieve and verify it was set
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/get_default_post_format",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "get body: {body}");
+    assert_eq!(
+        body, "\"markdown\"",
+        "expected format to be markdown after setting"
+    );
 }

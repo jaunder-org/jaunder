@@ -176,6 +176,7 @@ pub fn PostPage() -> impl IntoView {
                                     post_id: fetched.post_id,
                                     username: fetched.username.clone(),
                                     title: fetched.title.clone(),
+                                    summary: fetched.summary.clone(),
                                     slug: fetched.slug.clone(),
                                     rendered_html: fetched.rendered_html.clone(),
                                     created_at: fetched.created_at.clone(),
@@ -405,6 +406,7 @@ pub fn DraftPreviewPage() -> impl IntoView {
                                     post_id: fetched.post_id,
                                     username: fetched.username.clone(),
                                     title: fetched.title.clone(),
+                                    summary: fetched.summary.clone(),
                                     slug: fetched.slug.clone(),
                                     rendered_html: fetched.rendered_html.clone(),
                                     created_at: fetched.created_at.clone(),
@@ -482,6 +484,7 @@ pub fn EditPostPage() -> impl IntoView {
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
     let slug_override = RwSignal::new(String::new());
+    let summary = RwSignal::new(String::new());
     let post_tags: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());
     // ServerAction dispatches happen only on the client; this redirect-on-publish
     // effect only ever fires there. `Effect::new_isomorphic` would needlessly
@@ -522,6 +525,7 @@ pub fn EditPostPage() -> impl IntoView {
                         body.set(fetched.body.clone());
                         format.set(fetched.format.clone());
                         slug_override.set(fetched.slug.clone());
+                        summary.set(fetched.summary.clone().unwrap_or_default());
                         post_tags.set(fetched.tags.clone());
                         let post_id = fetched.post_id;
                         let is_published = fetched.published_at.is_some();
@@ -542,6 +546,10 @@ pub fn EditPostPage() -> impl IntoView {
                                     tags: Some(
                                         post_tags.get().into_iter().map(|t| t.display).collect(),
                                     ),
+                                    summary: {
+                                        let s = summary.get();
+                                        if s.is_empty() { None } else { Some(s) }
+                                    },
                                 });
                         };
                         view! {
@@ -582,6 +590,22 @@ pub fn EditPostPage() -> impl IntoView {
                                                     </div>
                                                 }
                                             })}
+                                        <div style="margin-top:10px">
+                                            <label class="j-field-label" for="edit-summary">
+                                                "Summary"
+                                            </label>
+                                            <textarea
+                                                id="edit-summary"
+                                                name="summary"
+                                                placeholder="Optional summary or excerpt"
+                                                class="j-field-val"
+                                                rows=3
+                                                prop:value=summary
+                                                on:input=move |ev| {
+                                                    summary.set(event_target_value(&ev));
+                                                }
+                                            />
+                                        </div>
                                         <div style="margin-top:10px">
                                             <TagInput tags=post_tags />
                                         </div>

@@ -23,7 +23,7 @@ impl SessionStorage for SqliteSessionStorage {
         skip(self, label),
         fields(user_id)
     )]
-    async fn create_session(&self, user_id: i64, label: Option<&str>) -> sqlx::Result<String> {
+    async fn create_session(&self, user_id: i64, label: &str) -> sqlx::Result<String> {
         let (raw_token, token_hash) = generate_hashed_token()?;
         let now = Utc::now();
 
@@ -123,7 +123,7 @@ mod tests {
         let pool = sqlite_pool().await;
         let storage = SqliteSessionStorage::new(pool.clone());
         pool.close().await;
-        let result = storage.create_session(1, Some("device")).await;
+        let result = storage.create_session(1, "device").await;
         assert!(result.is_err());
     }
 

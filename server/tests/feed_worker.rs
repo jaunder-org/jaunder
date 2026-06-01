@@ -33,6 +33,7 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub() {
             format: PostFormat::Markdown,
             rendered_html: "<h1>Test</h1>\n<p>Content</p>".to_string(),
             published_at: Some(now),
+            summary: None,
         })
         .await
         .expect("create post");
@@ -91,6 +92,7 @@ async fn worker_pings_hub_when_configured() {
             format: PostFormat::Markdown,
             rendered_html: "<h1>Test</h1>\n<p>Content</p>".to_string(),
             published_at: Some(now),
+            summary: None,
         })
         .await
         .expect("create post");
@@ -150,6 +152,7 @@ async fn worker_groups_duplicate_events_into_single_regen() {
             format: PostFormat::Markdown,
             rendered_html: "<h1>Test</h1>\n<p>Content</p>".to_string(),
             published_at: Some(now),
+            summary: None,
         })
         .await
         .expect("create post");
@@ -297,6 +300,7 @@ async fn worker_applies_backoff_on_ping_failure() {
             format: PostFormat::Markdown,
             rendered_html: "<h1>Test</h1>\n<p>Content</p>".to_string(),
             published_at: Some(now),
+            summary: None,
         })
         .await
         .expect("create post");

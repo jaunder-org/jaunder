@@ -73,7 +73,7 @@ async fn media_usage_returns_defaults_for_authenticated_user() {
         .expect("create_user failed");
     let token = state
         .sessions
-        .create_session(user_id, None)
+        .create_session(user_id, "test session")
         .await
         .expect("create_session failed");
     let cookie = format!("session={token}");
@@ -119,7 +119,7 @@ async fn list_my_media_returns_empty_for_new_user() {
         .expect("create_user failed");
     let token = state
         .sessions
-        .create_session(user_id, None)
+        .create_session(user_id, "test session")
         .await
         .expect("create_session failed");
     let cookie = format!("session={token}");
@@ -175,7 +175,7 @@ async fn list_my_media_returns_inserted_item() {
 
     let token = state
         .sessions
-        .create_session(user_id, None)
+        .create_session(user_id, "test session")
         .await
         .expect("create_session failed");
     let cookie = format!("session={token}");
@@ -226,7 +226,7 @@ async fn list_my_media_with_source_filter() {
 
     let token = state
         .sessions
-        .create_session(user_id, None)
+        .create_session(user_id, "test session")
         .await
         .expect("create_session failed");
     let cookie = format!("session={token}");
@@ -280,7 +280,7 @@ async fn delete_media_succeeds_for_existing_item() {
 
     let token = state
         .sessions
-        .create_session(user_id, None)
+        .create_session(user_id, "test session")
         .await
         .expect("create_session failed");
     let cookie = format!("session={token}");
@@ -346,13 +346,14 @@ async fn delete_media_reports_referencing_posts_when_not_forced() {
             format: PostFormat::Markdown,
             rendered_html: format!("<p><img src=\"{media_url}\"></p>"),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("create_post failed");
 
     let token = state
         .sessions
-        .create_session(user_id, None)
+        .create_session(user_id, "test session")
         .await
         .expect("create_session failed");
     let cookie = format!("session={token}");

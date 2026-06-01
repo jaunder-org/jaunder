@@ -72,6 +72,7 @@ async fn seed_user_and_tagged_post(
             format: PostFormat::Markdown,
             rendered_html: format!("<p>body {slug}</p>"),
             published_at: Some(Utc::now()),
+            summary: None,
         })
         .await
         .expect("create_post failed");

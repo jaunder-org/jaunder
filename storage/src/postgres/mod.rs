@@ -385,7 +385,7 @@ mod tests {
             "hash".to_string(),
             1,
             "alice".to_string(),
-            Some("label".to_string()),
+            "label".to_string(),
             now,
             now,
         );
@@ -393,7 +393,7 @@ mod tests {
         assert_eq!(record.token_hash, "hash");
         assert_eq!(record.user_id, 1);
         assert_eq!(record.username.as_str(), "alice");
-        assert_eq!(record.label, Some("label".to_string()));
+        assert_eq!(record.label, "label".to_string());
         assert_eq!(record.created_at, now);
         assert_eq!(record.last_used_at, now);
     }

@@ -34,6 +34,7 @@ async fn regenerate_writes_cache_row_for_user_feed() {
             format: PostFormat::Markdown,
             rendered_html: "<p>Post 1 body</p>".to_string(),
             published_at: Some(now),
+            summary: None,
         })
         .await
         .expect("create post 1");
@@ -48,6 +49,7 @@ async fn regenerate_writes_cache_row_for_user_feed() {
             format: PostFormat::Markdown,
             rendered_html: "<p>Post 2 body</p>".to_string(),
             published_at: Some(now),
+            summary: None,
         })
         .await
         .expect("create post 2");
@@ -141,6 +143,7 @@ async fn regenerate_writes_each_format() {
             format: PostFormat::Markdown,
             rendered_html: "<p>Test body</p>".to_string(),
             published_at: Some(now),
+            summary: None,
         })
         .await
         .expect("create post");

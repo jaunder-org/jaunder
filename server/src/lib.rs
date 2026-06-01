@@ -4,6 +4,7 @@
 #![recursion_limit = "512"]
 
 pub mod assets;
+pub mod atompub;
 pub mod cli;
 pub mod commands;
 pub mod context;
@@ -81,18 +82,8 @@ pub fn create_router(
     let storage_path_ext = Arc::new(storage_path);
     Router::new()
         .nest_service("/style", serve_assets)
-        .route(
-            "/media/upload",
-            axum::routing::post(crate::media::upload_handler),
-        )
-        .route(
-            "/media/{source}/{p1}/{p2}/{hash}/{filename}",
-            axum::routing::get(crate::media::serve_handler),
-        )
-        .route(
-            "/media/proxy",
-            axum::routing::get(crate::media::proxy_handler),
-        )
+        .merge(crate::media::router())
+        .merge(crate::atompub::router())
         .route(
             "/api/{*fn_name}",
             axum::routing::post(move |req: axum::extract::Request| {

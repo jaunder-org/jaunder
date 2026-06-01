@@ -150,7 +150,7 @@ async fn build_feed_items(
             id: p.post_id,
             title: p.title.clone(),
             permalink: p.permalink(),
-            summary: None,
+            summary: p.summary.clone(),
             content_html: p.rendered_html.clone(),
             published_at,
             updated_at: p.updated_at,

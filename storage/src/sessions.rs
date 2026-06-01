@@ -15,8 +15,8 @@ pub struct SessionRecord {
     pub user_id: i64,
     /// Username at the time of session creation.
     pub username: Username,
-    /// Optional user-provided label for the device/client (e.g., "Mobile App").
-    pub label: Option<String>,
+    /// Label for the device/client (e.g., "Mobile App", "Safari on macOS", "Sign-up session").
+    pub label: String,
     /// When the session was first created.
     pub created_at: DateTime<Utc>,
     /// When the session was last used to authenticate a request.
@@ -45,8 +45,11 @@ pub enum SessionAuthError {
 pub trait SessionStorage: Send + Sync {
     /// Creates a new session for a user.
     ///
+    /// The `label` should be a meaningful identifier for the session (e.g., browser/device name).
+    /// It is stored in the database and returned in session listings.
+    ///
     /// Returns the raw (un-hashed) token to be delivered to the client.
-    async fn create_session(&self, user_id: i64, label: Option<&str>) -> sqlx::Result<String>;
+    async fn create_session(&self, user_id: i64, label: &str) -> sqlx::Result<String>;
 
     /// Validates a raw session token and returns the associated record.
     ///

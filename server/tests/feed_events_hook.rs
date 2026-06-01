@@ -70,7 +70,7 @@ async fn create_published_post_enqueues_site_and_user_feeds() {
     // Create session
     let token = state
         .sessions
-        .create_session(user_id, None)
+        .create_session(user_id, "test session")
         .await
         .expect("create session");
     let cookie = create_session_cookie(token.as_str());
@@ -126,7 +126,7 @@ async fn create_post_with_two_tags_enqueues_tag_feeds_too() {
     // Create session
     let token = state
         .sessions
-        .create_session(user_id, None)
+        .create_session(user_id, "test session")
         .await
         .expect("create session");
     let cookie = create_session_cookie(token.as_str());
@@ -182,7 +182,7 @@ async fn update_with_tag_change_enqueues_old_and_new_tags() {
     // Create session
     let token = state
         .sessions
-        .create_session(user_id, None)
+        .create_session(user_id, "test session")
         .await
         .expect("create session");
     let cookie = create_session_cookie(token.as_str());
@@ -274,7 +274,7 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds() {
     // Create session
     let token = state
         .sessions
-        .create_session(user_id, None)
+        .create_session(user_id, "test session")
         .await
         .expect("create session");
     let cookie = create_session_cookie(token.as_str());
@@ -357,7 +357,7 @@ async fn delete_published_post_enqueues_feeds() {
     // Create session
     let token = state
         .sessions
-        .create_session(user_id, None)
+        .create_session(user_id, "test session")
         .await
         .expect("create session");
     let cookie = create_session_cookie(token.as_str());
@@ -440,7 +440,7 @@ async fn delete_draft_post_enqueues_nothing() {
     // Create session
     let token = state
         .sessions
-        .create_session(user_id, None)
+        .create_session(user_id, "test session")
         .await
         .expect("create session");
     let cookie = create_session_cookie(token.as_str());
