@@ -213,3 +213,61 @@ async fn revoke_session_requires_authentication() {
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+#[tokio::test]
+async fn create_app_password_mints_labelled_session() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (user_id, raw_token, cookie) = create_user_and_session(&state, "alice").await;
+    let _ = raw_token;
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_app_password",
+        "label=MarsEdit",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("\"token\""), "token missing: {body}");
+    assert!(body.contains("MarsEdit"), "label missing: {body}");
+
+    // The new app password appears as a session with its label.
+    let sessions = state.sessions.list_sessions(user_id).await.unwrap();
+    assert!(sessions.iter().any(|s| s.label == "MarsEdit"));
+}
+
+#[tokio::test]
+async fn create_app_password_rejects_blank_label() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+    let (_user_id, _raw_token, cookie) = create_user_and_session(&state, "alice").await;
+
+    let (status, _body) = post_form(
+        Arc::clone(&state),
+        "/api/create_app_password",
+        "label=%20%20",
+        Some(&cookie),
+    )
+    .await;
+
+    // Server-fn errors surface as 500 (the existing session-fn convention).
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn create_app_password_requires_authentication() {
+    let base = TempDir::new().unwrap();
+    let state = test_state(&base).await;
+
+    let (status, _body) = post_form(
+        Arc::clone(&state),
+        "/api/create_app_password",
+        "label=MarsEdit",
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}

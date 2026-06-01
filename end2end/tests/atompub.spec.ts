@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { goto, register } from "./helpers";
+import { goto, register, click } from "./helpers";
 import {
   hydrationHeavyTimeoutMs,
   hydrationHeavyFirstNavigationTimeoutMs,
@@ -37,4 +37,26 @@ test("RSD autodiscovery link is present on the user page and resolves", async ({
   const body = await res.text();
   expect(body).toContain("<engineName>Jaunder</engineName>");
   expect(body).toContain("/atompub/service");
+});
+
+test("an app password can be minted from the sessions page", async ({
+  page,
+}, info) => {
+  info.setTimeout(hydrationHeavyTimeoutMs(info, 60_000));
+  await register(page, hydrationHeavyFirstNavigationTimeoutMs(info, 30_000));
+
+  await goto(page, "/sessions");
+
+  // goto waits for hydration, so the label input is safe to fill.
+  await page.fill('input[name="label"]', "MarsEdit e2e");
+  await click(page, '.j-app-passwords button[type="submit"]');
+
+  // The raw token is shown exactly once.
+  const tokenEl = page.locator(".j-app-password-token code");
+  await tokenEl.waitFor({ state: "visible", timeout: 15_000 });
+  const token = ((await tokenEl.textContent()) ?? "").trim();
+  expect(token.length).toBeGreaterThan(10);
+
+  // The new app password appears in the session list under its label.
+  await expect(page.locator("li", { hasText: "MarsEdit e2e" })).toBeVisible();
 });
