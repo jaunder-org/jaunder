@@ -28,6 +28,7 @@
   "server/src/atompub/media.rs": 100,
   "server/src/atompub/mod.rs": 100,
   "server/src/atompub/posts.rs": 100,
+  "server/src/atompub/rsd.rs": 100,
   "server/src/atompub/service.rs": 100,
   "server/src/cli.rs": 90.3654,
   "server/src/commands.rs": 84.6154,

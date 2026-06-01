@@ -8,6 +8,7 @@ use storage::AppState;
 pub mod mapping;
 pub mod media;
 pub mod posts;
+pub mod rsd;
 pub mod service;
 
 /// Builds the `AtomPub` routes (mergeable into the main application router).
@@ -35,6 +36,7 @@ where
             "/atompub/{username}/media/{sha}/{filename}",
             get(media::member_get).delete(media::member_delete),
         )
+        .route("/~{username}/rsd.xml", get(rsd::rsd_document))
 }
 
 /// Returns the site's public base URL (scheme + host, no trailing slash), or an

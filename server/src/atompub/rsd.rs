@@ -1,0 +1,40 @@
+//! `RSD` (Really Simple Discovery) endpoint for `AtomPub` autodiscovery.
+//!
+//! Editors like `MarsEdit` fetch `/~{username}/rsd.xml` (linked from the user
+//! page via `<link rel="EditURI">`) to learn the `AtomPub` service URL.
+
+use std::sync::Arc;
+
+use axum::extract::Path;
+use axum::http::{header, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::Extension;
+
+use common::atompub::render_rsd_document;
+use storage::AppState;
+
+use super::base_url;
+
+/// `GET /~{username}/rsd.xml` — the public `RSD` discovery document.
+///
+/// This is intentionally unauthenticated: it only advertises the `AtomPub`
+/// service endpoint, which is itself protected.
+///
+/// # Errors
+///
+/// Infallible in practice; returns `Result` for handler-signature uniformity.
+pub async fn rsd_document(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(username): Path<String>,
+) -> Result<Response, StatusCode> {
+    let base = base_url(&state).await;
+    let service_url = format!("{base}/atompub/service");
+    let homepage_url = format!("{base}/~{username}");
+    let xml = render_rsd_document(&service_url, &homepage_url);
+
+    Ok((
+        [(header::CONTENT_TYPE, "application/rsd+xml;charset=utf-8")],
+        xml,
+    )
+        .into_response())
+}
