@@ -15,6 +15,7 @@ test-results/
 end2end/playwright-report/
 playwright/.cache/
 
+# Various bits of detritus
 /result
 /data/
 .crap-report.json
