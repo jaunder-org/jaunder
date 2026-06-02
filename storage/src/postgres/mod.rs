@@ -41,6 +41,9 @@ pub use media::PostgresMediaStorage;
 mod posts;
 pub use posts::PostgresPostStorage;
 
+mod bootstrap;
+pub use bootstrap::{create_postgres_database_and_role, PgBootstrapError};
+
 pub(crate) mod backup;
 
 use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};

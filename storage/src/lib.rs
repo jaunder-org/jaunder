@@ -37,11 +37,11 @@ pub use invites::*;
 pub use media::*;
 pub use password::*;
 pub use postgres::{
-    resolved_postgres_options, PostgresAtomicOps, PostgresEmailVerificationStorage,
-    PostgresFeedCacheStorage, PostgresFeedEventStorage, PostgresInviteStorage,
-    PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
-    PostgresSessionStorage, PostgresSiteConfigStorage, PostgresUserConfigStorage,
-    PostgresUserStorage,
+    create_postgres_database_and_role, resolved_postgres_options, PgBootstrapError,
+    PostgresAtomicOps, PostgresEmailVerificationStorage, PostgresFeedCacheStorage,
+    PostgresFeedEventStorage, PostgresInviteStorage, PostgresMediaStorage,
+    PostgresPasswordResetStorage, PostgresPostStorage, PostgresSessionStorage,
+    PostgresSiteConfigStorage, PostgresUserConfigStorage, PostgresUserStorage,
 };
 pub use posts::*;
 pub use render::*;
