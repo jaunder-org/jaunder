@@ -17,6 +17,8 @@ playwright/.cache/
 
 /result
 /data/
+.crap-report.json
+.coverage-report.lcov
 /jaunder-interactive-testing.qcow2
 .worktrees/
 .coverage-report.json

@@ -33,6 +33,28 @@ pub fn FeedDiscovery(surface: FeedSurface) -> impl IntoView {
     }
 }
 
+/// Renders the `RSD` (`EditURI`) autodiscovery link for a user's `AtomPub`
+/// publishing endpoint. Like [`FeedDiscovery`], it is invisible and only hoists
+/// a `<link>` into the document head; editors such as `MarsEdit` follow it.
+#[allow(clippy::must_use_candidate)]
+#[component]
+#[allow(clippy::needless_pass_by_value)]
+pub fn RsdDiscovery(username: String) -> impl IntoView {
+    view! {
+        <Link
+            rel="EditURI"
+            type_="application/rsd+xml"
+            title="AtomPub (RSD)"
+            href=rsd_href(&username)
+        />
+    }
+}
+
+/// Returns the `RSD` discovery URL for a user's page.
+fn rsd_href(username: &str) -> String {
+    format!("/~{username}/rsd.xml")
+}
+
 /// Generate a human-readable label for the feed based on the surface.
 fn surface_label(surface: &FeedSurface) -> String {
     match surface {
@@ -50,6 +72,11 @@ mod tests {
     #[test]
     fn labels_site_surface() {
         assert_eq!(surface_label(&FeedSurface::Site), "Site feed");
+    }
+
+    #[test]
+    fn rsd_href_targets_user_discovery_doc() {
+        assert_eq!(rsd_href("alice"), "/~alice/rsd.xml");
     }
 
     #[test]

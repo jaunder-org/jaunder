@@ -2,7 +2,7 @@ use crate::tags::TagSummary;
 use crate::{
     auth::current_user,
     error::WebError,
-    feed_discovery::FeedDiscovery,
+    feed_discovery::{FeedDiscovery, RsdDiscovery},
     pages::{
         signal_read::read_signal,
         ui::{ComposerFields, PostCard, PostCreateForm, PostDisplay, TagContext, TagInput, Topbar},
@@ -317,6 +317,7 @@ pub fn UserTimelinePage() -> impl IntoView {
                 <FeedDiscovery surface=FeedSurface::User {
                     username: username.get(),
                 } />
+                <RsdDiscovery username=username.get() />
             }
         }}
         <Topbar

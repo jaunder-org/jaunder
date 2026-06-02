@@ -1,12 +1,14 @@
 //! Server-side `AtomPub` surface: the boundary mapping Jaunder posts/media to
 //! `AtomPub` wire types, plus the HTTP handlers.
 
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use storage::AppState;
 
 pub mod mapping;
+pub mod media;
 pub mod posts;
+pub mod rsd;
 pub mod service;
 
 /// Builds the `AtomPub` routes (mergeable into the main application router).
@@ -29,6 +31,12 @@ where
                 .put(posts::member_put)
                 .delete(posts::member_delete),
         )
+        .route("/atompub/{username}/media", post(media::collection_post))
+        .route(
+            "/atompub/{username}/media/{sha}/{filename}",
+            get(media::member_get).delete(media::member_delete),
+        )
+        .route("/~{username}/rsd.xml", get(rsd::rsd_document))
 }
 
 /// Returns the site's public base URL (scheme + host, no trailing slash), or an

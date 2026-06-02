@@ -320,6 +320,48 @@
           }
         );
 
+        cargo-crap = pkgs.callPackage (
+          {
+            lib,
+            fetchCrate,
+            fetchFromGitHub,
+            rustPlatform,
+          }:
+          let
+            crateSrc = fetchCrate {
+              pname = "cargo-crap";
+              version = "0.2.2";
+              hash = "sha256-cZ30mdHHLXzpvMhkC6XoPMgfqAdsmdqhEfHq8T15Fmw=";
+            };
+          in
+          rustPlatform.buildRustPackage (finalAttrs: {
+            pname = "cargo-crap";
+            version = "0.2.2";
+
+            src = fetchFromGitHub {
+              owner = "minikin";
+              repo = "cargo-crap";
+              rev = "v${finalAttrs.version}";
+              hash = "sha256-yDoHqkMittJEFYxjpEb/C4+0sRg7ZnMpRO7a9aw5NvI=";
+            };
+
+            cargoLock.lockFile = "${crateSrc}/Cargo.lock";
+
+            postPatch = ''
+              ln -s ${crateSrc}/Cargo.lock Cargo.lock
+            '';
+
+            meta = {
+              description = "Compute the CRAP (Change Risk Anti-Patterns) metric for Rust projects";
+              mainProgram = "cargo-crap";
+              homepage = "https://github.com/minikin/cargo-crap";
+              changelog = "https://github.com/minikin/cargo-crap/blob/v${finalAttrs.version}/CHANGELOG.md";
+              license = lib.licenses.mit;
+              maintainers = [ lib.maintainers.mdorman ];
+            };
+          })
+        ) { };
+
         wasm-bindgen-cli = pkgs.wasm-bindgen-cli.overrideAttrs (old: rec {
           version = "0.2.121";
           src = pkgs.fetchCrate {
@@ -939,6 +981,7 @@
                 inherit cargoArtifacts;
                 pname = "jaunder-coverage";
                 nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
+                  cargo-crap
                   pkgs.cargo-llvm-cov
                   pkgs.cargo-nextest
                   pkgs.jq
@@ -966,6 +1009,7 @@
           buildInputs = [
             toolchain
             pkgs.cachix
+            cargo-crap
             pkgs.cargo-deny
             pkgs.cargo-generate
             pkgs.cargo-leptos
