@@ -246,6 +246,15 @@ pub(crate) async fn open_postgres_database(
     Ok(make_postgres_app_state(pool))
 }
 
+/// Returns `true` if the `PostgreSQL` database already contains at least one user.
+pub(crate) async fn database_has_users(options: &PgConnectOptions) -> sqlx::Result<bool> {
+    let options = resolved_postgres_options(options)?;
+    let pool = PgPool::connect_with(options).await?;
+    sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users LIMIT 1)")
+        .fetch_one(&pool)
+        .await
+}
+
 #[cfg(test)]
 pub(crate) async fn postgres_pool() -> PgPool {
     let url = std::env::var("JAUNDER_PG_TEST_URL")

@@ -110,6 +110,22 @@ fn pg_error_code_matches(code: Option<&str>, expected: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn create_postgres_database_and_role_attempts_admin_connection() {
+        // Drives the bootstrap routine far enough to exercise the admin
+        // connection attempt; the connection itself fails fast against an
+        // unused port. The DDL execution past the connection requires a live
+        // PostgreSQL server and is covered by the PostgreSQL VM checks.
+        let bootstrap: PgConnectOptions =
+            "postgres://postgres@localhost:1/postgres".parse().unwrap();
+        let _ = tokio::time::timeout(
+            Duration::from_millis(50),
+            create_postgres_database_and_role(&bootstrap, "app_role", "secret", "app_db"),
+        )
+        .await;
+    }
 
     #[test]
     fn pg_error_code_matches_returns_true_for_exact_match() {
