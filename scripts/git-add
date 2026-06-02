@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+FILE="${1:-}"
+
+# If no argument is provided, try to read from tool input (stdin)
+if [[ -z "$FILE" ]]; then
+    FILE=$(jq -r '.tool_input.file_path' 2>/dev/null || true)
+fi
+
+# If we still don't have a file, or it's 'null', just exit
+if [[ -z "$FILE" || "$FILE" == "null" ]]; then
+    exit 0
+fi
+
+# `git add` the file
+git add "$FILE"
