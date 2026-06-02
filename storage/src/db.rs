@@ -9,6 +9,7 @@ use std::{fmt, str::FromStr, sync::Arc};
 
 use sqlx::postgres::PgConnectOptions;
 use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::{PgPool, SqlitePool};
 
 use crate::postgres::open_postgres_database;
 use crate::sqlite::open_sqlite_database;
@@ -126,6 +127,37 @@ pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc
     match opts {
         DbConnectOptions::Sqlite(options) => open_sqlite_database(options, false).await,
         DbConnectOptions::Postgres { options, .. } => open_postgres_database(options).await,
+    }
+}
+
+/// Returns `true` if the target database already contains at least one user.
+///
+/// Used as a restore preflight: refusing to restore into a non-empty database.
+///
+/// # Errors
+///
+/// Returns the underlying [`sqlx::Error`] if the database cannot be reached or
+/// the query fails.
+pub async fn database_has_users(options: &DbConnectOptions) -> sqlx::Result<bool> {
+    match options {
+        DbConnectOptions::Sqlite(options) => {
+            let pool = SqlitePool::connect_with(options.clone()).await?;
+            Ok(
+                sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM users LIMIT 1)")
+                    .fetch_one(&pool)
+                    .await?
+                    != 0,
+            )
+        }
+        DbConnectOptions::Postgres { options, .. } => {
+            let options = crate::resolved_postgres_options(options)?;
+            let pool = PgPool::connect_with(options).await?;
+            Ok(
+                sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users LIMIT 1)")
+                    .fetch_one(&pool)
+                    .await?,
+            )
+        }
     }
 }
 
