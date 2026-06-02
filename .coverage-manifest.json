@@ -1,6 +1,6 @@
 {
   "common/src/atompub/categories.rs": 100,
-  "common/src/atompub/entry.rs": 99.5177,
+  "common/src/atompub/entry.rs": 99.6894,
   "common/src/atompub/mod.rs": 100,
   "common/src/atompub/rsd.rs": 100,
   "common/src/atompub/service.rs": 100,
@@ -55,7 +55,7 @@
   "storage/src/postgres/media.rs": 5.08475,
   "storage/src/postgres/mod.rs": 93.1937,
   "storage/src/postgres/password_resets.rs": 13.6364,
-  "storage/src/postgres/posts.rs": 1.7341,
+  "storage/src/postgres/posts.rs": 1.71429,
   "storage/src/postgres/sessions.rs": 9.09091,
   "storage/src/postgres/site_config.rs": 100,
   "storage/src/postgres/user_config.rs": 100,

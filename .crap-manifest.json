@@ -75,15 +75,6 @@
       "crate": "storage"
     },
     {
-      "file": "common/src/atompub/entry.rs",
-      "function": "entry_from_xml",
-      "line": 109,
-      "cyclomatic": 46.0,
-      "coverage": 98.9010989010989,
-      "crap": 46.00280796368225,
-      "crate": "common"
-    },
-    {
       "file": "storage/src/postgres/email_verifications.rs",
       "function": "PostgresEmailVerificationStorage::create_email_verification",
       "line": 21,
@@ -194,10 +185,19 @@
     {
       "file": "common/src/atompub/entry.rs",
       "function": "write_entry",
-      "line": 399,
+      "line": 426,
       "cyclomatic": 24.0,
       "coverage": 100.0,
       "crap": 24.0,
+      "crate": "common"
+    },
+    {
+      "file": "common/src/atompub/entry.rs",
+      "function": "read_xhtml_content",
+      "line": 234,
+      "cyclomatic": 21.0,
+      "coverage": 100.0,
+      "crap": 21.0,
       "crate": "common"
     },
     {
@@ -293,7 +293,7 @@
     {
       "file": "common/src/atompub/entry.rs",
       "function": "render_feed",
-      "line": 497,
+      "line": 524,
       "cyclomatic": 16.0,
       "coverage": 100.0,
       "crap": 16.0,
@@ -345,6 +345,24 @@
       "crate": "storage"
     },
     {
+      "file": "common/src/atompub/entry.rs",
+      "function": "Parser::start",
+      "line": 127,
+      "cyclomatic": 14.0,
+      "coverage": 100.0,
+      "crap": 14.0,
+      "crate": "common"
+    },
+    {
+      "file": "common/src/atompub/entry.rs",
+      "function": "entry_from_xml",
+      "line": 198,
+      "cyclomatic": 14.0,
+      "coverage": 100.0,
+      "crap": 14.0,
+      "crate": "common"
+    },
+    {
       "file": "server/src/commands.rs",
       "function": "database_has_users",
       "line": 334,
@@ -383,7 +401,7 @@
     {
       "file": "common/src/atompub/entry.rs",
       "function": "resolve_ref",
-      "line": 304,
+      "line": 331,
       "cyclomatic": 12.0,
       "coverage": 95.0,
       "crap": 12.018,
@@ -536,7 +554,7 @@
     {
       "file": "common/src/atompub/entry.rs",
       "function": "render_media_link_entry",
-      "line": 557,
+      "line": 584,
       "cyclomatic": 11.0,
       "coverage": 100.0,
       "crap": 11.0,
@@ -634,8 +652,8 @@
     },
     {
       "file": "common/src/atompub/entry.rs",
-      "function": "route_text",
-      "line": 281,
+      "function": "Parser::text",
+      "line": 167,
       "cyclomatic": 9.0,
       "coverage": 100.0,
       "crap": 9.0,
@@ -941,7 +959,7 @@
     {
       "file": "common/src/atompub/entry.rs",
       "function": "build_entry",
-      "line": 226,
+      "line": 268,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -1248,6 +1266,15 @@
       "file": "common/src/feed/feed_path.rs",
       "function": "canonicalize",
       "line": 38,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "common"
+    },
+    {
+      "file": "common/src/atompub/entry.rs",
+      "function": "Parser::empty",
+      "line": 153,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -1589,7 +1616,7 @@
     {
       "file": "common/src/atompub/entry.rs",
       "function": "write_text_element",
-      "line": 448,
+      "line": 475,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -2012,7 +2039,7 @@
     {
       "file": "common/src/atompub/entry.rs",
       "function": "append",
-      "line": 328,
+      "line": 355,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2021,7 +2048,7 @@
     {
       "file": "common/src/atompub/entry.rs",
       "function": "decode_text",
-      "line": 357,
+      "line": 384,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2030,7 +2057,7 @@
     {
       "file": "common/src/atompub/entry.rs",
       "function": "entry_to_xml",
-      "line": 379,
+      "line": 406,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2560,8 +2587,17 @@
     },
     {
       "file": "common/src/atompub/entry.rs",
+      "function": "Parser::end",
+      "line": 181,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "common"
+    },
+    {
+      "file": "common/src/atompub/entry.rs",
       "function": "capture_link",
-      "line": 294,
+      "line": 321,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -2570,7 +2606,7 @@
     {
       "file": "common/src/atompub/entry.rs",
       "function": "write_link",
-      "line": 459,
+      "line": 486,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -3938,7 +3974,7 @@
     {
       "file": "common/src/atompub/entry.rs",
       "function": "parse_dt",
-      "line": 269,
+      "line": 311,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3947,7 +3983,7 @@
     {
       "file": "common/src/atompub/entry.rs",
       "function": "trimmed",
-      "line": 273,
+      "line": 315,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3956,7 +3992,7 @@
     {
       "file": "common/src/atompub/entry.rs",
       "function": "local_name",
-      "line": 335,
+      "line": 362,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3965,7 +4001,7 @@
     {
       "file": "common/src/atompub/entry.rs",
       "function": "local_name_end",
-      "line": 339,
+      "line": 366,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3974,7 +4010,7 @@
     {
       "file": "common/src/atompub/entry.rs",
       "function": "attr_value",
-      "line": 343,
+      "line": 370,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
