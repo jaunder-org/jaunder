@@ -5,7 +5,7 @@
 # Usage:
 #   scripts/check-coverage             — run tests, check growth, fail on regression
 #   scripts/check-coverage --update    — force update manifest (be careful)
-#   scripts/check-coverage --investigate — re-analyze last report without re-running tests
+#   scripts/check-coverage --investigate — re-analyze last reports without re-running tests
 #
 # Coverage metric: We parse `cargo llvm-cov report --text` per-file output and
 # count source lines with at least one execution. This is the true source-line
@@ -23,6 +23,9 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo ".")"
 MANIFEST_FILE="$ROOT/.coverage-manifest.json"
 REPORT_FILE="$ROOT/.coverage-report.txt"
+LCOV_FILE="$ROOT/.coverage-report.lcov"
+CRAP_MANIFEST_FILE="$ROOT/.crap-manifest.json"
+CRAP_REPORT_FILE="$ROOT/.crap-report.json"
 UPDATE=false
 INVESTIGATE=false
 
@@ -34,19 +37,44 @@ for arg in "$@"; do
     esac
 done
 
+cd "$ROOT"
+ABS_ROOT="$(pwd)"
+
+normalize_crap_report() {
+    local input="$1"
+    local output="$2"
+
+    jq --arg root "$ABS_ROOT/" '
+        .entries |= map(.file |= (if startswith($root) then .[($root | length):] else . end))
+    ' "$input" > "$output"
+}
+
 if [[ "$INVESTIGATE" == "true" ]]; then
     if [[ ! -f "$REPORT_FILE" ]]; then
-        echo "error: no report found at $REPORT_FILE. Run without --investigate first." >&2
+        echo "error: no coverage report found at $REPORT_FILE. Run without --investigate first." >&2
         exit 1
     fi
-    echo "--- coverage: investigating cached report ---"
+    if [[ ! -f "$CRAP_REPORT_FILE" ]]; then
+        echo "error: no CRAP report found at $CRAP_REPORT_FILE. Run without --investigate first." >&2
+        exit 1
+    fi
+    echo "--- coverage: investigating cached reports ---"
 else
     echo "--- coverage: running cargo llvm-cov ---"
     cargo llvm-cov nextest --show-progress none > /dev/null
     cargo llvm-cov report --text > "$REPORT_FILE"
-fi
 
-ABS_ROOT="$(pwd)"
+    # Reuse the just-recorded llvm-cov profraw data to export LCOV for
+    # cargo-crap. Do not run `cargo llvm-cov --lcov` here: that would execute
+    # the test suite a second time.
+    echo "--- coverage: exporting LCOV for cargo-crap ---"
+    cargo llvm-cov report --lcov --output-path "$LCOV_FILE" > /dev/null
+
+    echo "--- coverage: running cargo-crap ---"
+    RAW_CRAP_REPORT=$(mktemp)
+    cargo crap --workspace --lcov "$LCOV_FILE" --exclude '**/tests/**' --format json --output "$RAW_CRAP_REPORT" > /dev/null
+    normalize_crap_report "$RAW_CRAP_REPORT" "$CRAP_REPORT_FILE"
+fi
 
 # Parse the per-file text output into a JSON object mapping relative-path → percent.
 # A source line is "executable" if its second pipe-separated column is a number
@@ -98,20 +126,39 @@ if ! jq empty "$NEW_MANIFEST" 2>/dev/null; then
     exit 2
 fi
 
+NEW_CRAP_MANIFEST=$(mktemp)
+cp "$CRAP_REPORT_FILE" "$NEW_CRAP_MANIFEST"
+
+if ! jq empty "$NEW_CRAP_MANIFEST" 2>/dev/null; then
+    echo "error: generated CRAP manifest is not valid JSON" >&2
+    cat "$NEW_CRAP_MANIFEST" >&2
+    exit 2
+fi
+
 if [[ "$UPDATE" == "true" ]]; then
     mv "$NEW_MANIFEST" "$MANIFEST_FILE"
-    echo "Coverage manifest updated."
+    mv "$NEW_CRAP_MANIFEST" "$CRAP_MANIFEST_FILE"
+    echo "Coverage and CRAP manifests updated."
     exit 0
 fi
 
+INITIALIZED=false
 if [[ ! -f "$MANIFEST_FILE" ]]; then
-    echo "No manifest found. Creating initial manifest."
+    echo "No coverage manifest found. Creating initial manifest."
     mv "$NEW_MANIFEST" "$MANIFEST_FILE"
+    INITIALIZED=true
+fi
+if [[ ! -f "$CRAP_MANIFEST_FILE" ]]; then
+    echo "No CRAP manifest found. Creating initial manifest."
+    mv "$NEW_CRAP_MANIFEST" "$CRAP_MANIFEST_FILE"
+    INITIALIZED=true
+fi
+if [[ "$INITIALIZED" == "true" ]]; then
     exit 0
 fi
 
 # Compare
-echo "Comparing against baseline..."
+echo "Comparing coverage against baseline..."
 # We use a 0.05% epsilon to ignore floating point noise
 REGRESSIONS=$(jq -n \
     --slurpfile new "$NEW_MANIFEST" \
@@ -158,6 +205,42 @@ if [[ "$(echo "$REGRESSIONS" | jq 'length')" -gt 0 ]]; then
     exit 1
 fi
 
+echo "Comparing CRAP scores against baseline..."
+# We use a 0.01 CRAP-score epsilon to ignore floating point noise.
+CRAP_REGRESSIONS=$(jq -n \
+    --slurpfile new "$NEW_CRAP_MANIFEST" \
+    --slurpfile old "$CRAP_MANIFEST_FILE" \
+    '
+    def key: ((.crate // "") + "|" + .file + "|" + .function);
+    (($old[0].entries // []) | map({(key): .}) | add // {}) as $old_by_key |
+    ($new[0].entries // []) | map(
+        . as $entry |
+        key as $k |
+        ($old_by_key[$k] // null) as $old_entry |
+        select($old_entry != null) |
+        select((.crap // 0) > (($old_entry.crap // 0) + 0.01)) |
+        {
+            crate: (.crate // ""),
+            file: .file,
+            function: .function,
+            old: $old_entry.crap,
+            new: .crap,
+            delta: (.crap - $old_entry.crap),
+            coverage: .coverage,
+            cyclomatic: .cyclomatic
+        }
+    )')
+
+if [[ "$(echo "$CRAP_REGRESSIONS" | jq 'length')" -gt 0 ]]; then
+    echo "error: CRAP score regressions detected:" >&2
+    echo "$CRAP_REGRESSIONS" | jq -r '
+        sort_by(.delta) | reverse | .[] |
+        "\(.file): \(.function): \(.old) -> \(.new) (Δ \(.delta), CC \(.cyclomatic), coverage \(.coverage // "n/a")%)"
+    ' >&2
+    exit 1
+fi
+
 # If all good, update
 mv "$NEW_MANIFEST" "$MANIFEST_FILE"
-echo "Coverage OK (all files at or above baseline)."
+mv "$NEW_CRAP_MANIFEST" "$CRAP_MANIFEST_FILE"
+echo "Coverage and CRAP OK (coverage at/above baseline, CRAP scores at/below baseline)."
