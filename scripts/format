@@ -19,7 +19,7 @@ case "$FILE" in
         leptosfmt "$FILE"
         rustfmt --edition 2021 "$FILE"
         ;;
-    *.js|*.ts)
+    *.js|*.ts|*.tsx)
         prettier --write "$FILE"
         ;;
 esac
