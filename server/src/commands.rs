@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use sqlx::{postgres::PgConnectOptions, Connection, PgConnection, PgPool, SqlitePool};
+use sqlx::postgres::PgConnectOptions;
 
 use crate::cli::StorageArgs;
 use crate::mailer::LettreMailSender;
@@ -15,8 +15,7 @@ use common::username::Username;
 use leptos::prelude::{Env, LeptosOptions};
 use storage::load_smtp_config;
 use storage::{
-    export_backup, resolved_postgres_options, restore_backup, BackupExportOptions,
-    BackupRestoreOptions, DbConnectOptions,
+    export_backup, restore_backup, BackupExportOptions, BackupRestoreOptions, DbConnectOptions,
 };
 use storage::{init_storage, open_database, open_existing_database};
 
@@ -51,44 +50,17 @@ fn require_postgres_options(
     }
 }
 
-fn quote_postgres_identifier(name: &str) -> String {
-    // PostgreSQL role/database names are identifiers, not data values, so they
-    // cannot be supplied through bind placeholders. Administrative utility
-    // statements such as CREATE ROLE and CREATE DATABASE therefore require
-    // validated identifier quoting when assembling SQL dynamically.
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
-fn quote_postgres_literal(value: &str) -> String {
-    // PostgreSQL also rejects prepared/bound parameters in these utility
-    // statements. For example, PREPARE ... AS ALTER ROLE ... PASSWORD $1 fails
-    // with a syntax error at ALTER. Password literals therefore need explicit
-    // SQL quoting when used in CREATE ROLE statements.
-    format!("'{}'", value.replace('\'', "''"))
-}
-
-fn pg_error_code_matches(code: Option<&str>, expected: &str) -> bool {
-    code == Some(expected)
-}
-
-async fn execute_postgres_utility(
-    conn: &mut PgConnection,
-    sql: &str,
-    expected_error_code: &str,
-    expected_error_message: String,
-) -> anyhow::Result<()> {
-    if let Err(error) = sqlx::query(sql).execute(conn).await {
-        return match error {
-            sqlx::Error::Database(ref db_error)
-                if pg_error_code_matches(db_error.code().as_deref(), expected_error_code) =>
-            {
-                Err(anyhow::anyhow!(expected_error_message))
-            }
-            other => Err(other.into()),
-        };
+/// Maps a [`storage::PgBootstrapError`] to a user-facing CLI error.
+fn describe_bootstrap_error(err: storage::PgBootstrapError) -> anyhow::Error {
+    match err {
+        storage::PgBootstrapError::RoleExists(role) => anyhow::anyhow!(
+            "application role '{role}' already exists; refusing to modify existing role state"
+        ),
+        storage::PgBootstrapError::DatabaseExists(name) => anyhow::anyhow!(
+            "database '{name}' already exists; refusing to modify existing database state"
+        ),
+        storage::PgBootstrapError::Sqlx(err) => err.into(),
     }
-
-    Ok(())
 }
 
 /// Bootstraps a `PostgreSQL` database and application role.
@@ -110,42 +82,14 @@ pub async fn cmd_create_pg_db(
         .ok_or_else(|| anyhow::anyhow!("--app-db must include a PostgreSQL database name"))?
         .to_owned();
 
-    let mut admin_conn = PgConnection::connect_with(&bootstrap_options).await?;
-
-    // The role name is an identifier and the password appears in a
-    // PostgreSQL utility statement, so this SQL has to be assembled using
-    // the quoting helpers above rather than regular query placeholders.
-    let role_sql = format!(
-        "CREATE ROLE {} WITH LOGIN PASSWORD {}",
-        quote_postgres_identifier(&app_role),
-        quote_postgres_literal(app_role_password),
-    );
-    execute_postgres_utility(
-        &mut admin_conn,
-        &role_sql,
-        "42710",
-        format!(
-            "application role '{app_role}' already exists; refusing to modify existing role state"
-        ),
+    storage::create_postgres_database_and_role(
+        &bootstrap_options,
+        &app_role,
+        app_role_password,
+        &database_name,
     )
-    .await?;
-
-    // CREATE DATABASE ... OWNER ... is another utility statement using
-    // identifiers, so placeholders are not usable here either.
-    let create_db_sql = format!(
-        "CREATE DATABASE {} OWNER {}",
-        quote_postgres_identifier(&database_name),
-        quote_postgres_identifier(&app_role),
-    );
-    execute_postgres_utility(
-        &mut admin_conn,
-        &create_db_sql,
-        "42P04",
-        format!(
-            "database '{database_name}' already exists; refusing to modify existing database state"
-        ),
-    )
-    .await?;
+    .await
+    .map_err(describe_bootstrap_error)?;
 
     println!("PostgreSQL ready: role='{app_role}' database='{database_name}' owner='{app_role}'");
     Ok(())
@@ -317,7 +261,7 @@ fn default_backup_path(storage: &StorageArgs, mode: BackupMode) -> PathBuf {
 }
 
 async fn ensure_restore_target_empty(storage: &StorageArgs) -> anyhow::Result<()> {
-    if database_has_users(&storage.db).await? {
+    if storage::database_has_users(&storage.db).await? {
         return Err(anyhow::anyhow!(
             "refusing to restore into a non-empty database"
         ));
@@ -329,29 +273,6 @@ async fn ensure_restore_target_empty(storage: &StorageArgs) -> anyhow::Result<()
         ));
     }
     Ok(())
-}
-
-async fn database_has_users(db: &DbConnectOptions) -> anyhow::Result<bool> {
-    match db {
-        DbConnectOptions::Sqlite(options) => {
-            let pool = SqlitePool::connect_with(options.clone()).await?;
-            Ok(
-                sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM users LIMIT 1)")
-                    .fetch_one(&pool)
-                    .await?
-                    != 0,
-            )
-        }
-        DbConnectOptions::Postgres { options, .. } => {
-            let options = resolved_postgres_options(options)?;
-            let pool = PgPool::connect_with(options).await?;
-            Ok(
-                sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users LIMIT 1)")
-                    .fetch_one(&pool)
-                    .await?,
-            )
-        }
-    }
 }
 
 fn directory_has_entries(path: &Path) -> io::Result<bool> {
@@ -440,30 +361,21 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn pg_error_code_matches_returns_true_for_exact_match() {
-        assert!(pg_error_code_matches(Some("42710"), "42710"));
+    fn describe_bootstrap_error_role_exists_message() {
+        let msg =
+            describe_bootstrap_error(storage::PgBootstrapError::RoleExists("alice".to_owned()))
+                .to_string();
+        assert!(msg.contains("application role 'alice' already exists"));
+        assert!(msg.contains("refusing to modify existing role state"));
     }
 
     #[test]
-    fn pg_error_code_matches_returns_false_for_different_code() {
-        assert!(!pg_error_code_matches(Some("42000"), "42710"));
-    }
-
-    #[test]
-    fn pg_error_code_matches_returns_false_when_no_code() {
-        assert!(!pg_error_code_matches(None, "42710"));
-    }
-
-    #[test]
-    fn test_quote_postgres_identifier() {
-        assert_eq!(quote_postgres_identifier("users"), "\"users\"");
-        assert_eq!(quote_postgres_identifier("user\"name"), "\"user\"\"name\"");
-    }
-
-    #[test]
-    fn test_quote_postgres_literal() {
-        assert_eq!(quote_postgres_literal("password"), "'password'");
-        assert_eq!(quote_postgres_literal("can't"), "'can''t'");
+    fn describe_bootstrap_error_database_exists_message() {
+        let msg =
+            describe_bootstrap_error(storage::PgBootstrapError::DatabaseExists("blog".to_owned()))
+                .to_string();
+        assert!(msg.contains("database 'blog' already exists"));
+        assert!(msg.contains("refusing to modify existing database state"));
     }
 
     #[test]
