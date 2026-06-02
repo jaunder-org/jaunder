@@ -13,13 +13,5 @@ if [[ -z "$FILE" || "$FILE" == "null" ]]; then
     exit 0
 fi
 
-# Apply formatters based on file extension
-case "$FILE" in
-    *.rs)
-        leptosfmt "$FILE"
-        rustfmt --edition 2021 "$FILE"
-        ;;
-    *.js|*.ts|*.tsx)
-        prettier --write "$FILE"
-        ;;
-esac
+# `git add` the file
+git add "$FILE"

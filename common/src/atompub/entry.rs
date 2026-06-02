@@ -96,6 +96,96 @@ struct Acc {
     draft: bool,
 }
 
+/// The simple text-bearing element whose character data is currently being
+/// collected into [`Acc`].
+#[derive(Clone, Copy)]
+enum Field {
+    Title,
+    Summary,
+    Id,
+    Updated,
+    Published,
+    Content,
+    Draft,
+}
+
+/// Streaming state for [`entry_from_xml`]. Each SAX event is dispatched to a
+/// small method so the top-level read loop stays a flat match.
+#[derive(Default)]
+struct Parser {
+    acc: Acc,
+    saw_entry: bool,
+    /// The element whose text is currently being routed, if any.
+    current: Option<Field>,
+    /// True while inside an `app:control` element (scopes the `draft` child).
+    in_control: bool,
+}
+
+impl Parser {
+    /// Handles a start tag. `<content type="xhtml">` is consumed eagerly via
+    /// [`read_xhtml_content`]; every other element just arms `current`.
+    fn start(&mut self, e: &BytesStart, reader: &mut Reader<&[u8]>) -> Result<(), AtomPubError> {
+        match local_name(e).as_str() {
+            "entry" => self.saw_entry = true,
+            "title" => self.current = Some(Field::Title),
+            "summary" => self.current = Some(Field::Summary),
+            "id" => self.current = Some(Field::Id),
+            "updated" => self.current = Some(Field::Updated),
+            "published" => self.current = Some(Field::Published),
+            "content" => {
+                let ctype = attr_value(e, b"type").unwrap_or_else(|| "text".to_string());
+                if ctype == "xhtml" {
+                    self.acc.content_value = Some(read_xhtml_content(reader)?);
+                } else {
+                    self.current = Some(Field::Content);
+                }
+                self.acc.content_type = Some(ctype);
+            }
+            "link" => capture_link(e, &mut self.acc),
+            "control" => self.in_control = true,
+            "draft" if self.in_control => self.current = Some(Field::Draft),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Handles an empty (self-closing) tag: `<category>` and `<link>`.
+    fn empty(&mut self, e: &BytesStart) {
+        match local_name(e).as_str() {
+            "category" => {
+                if let Some(term) = attr_value(e, b"term") {
+                    self.acc.categories.push(term);
+                }
+            }
+            "link" => capture_link(e, &mut self.acc),
+            _ => {}
+        }
+    }
+
+    /// Routes a decoded text/entity piece into the element named by `current`.
+    /// Shared by the `Text` and `GeneralRef` event arms.
+    fn text(&mut self, piece: &str) {
+        match self.current {
+            Some(Field::Title) => append(&mut self.acc.title, piece),
+            Some(Field::Summary) => append(&mut self.acc.summary, piece),
+            Some(Field::Id) => append(&mut self.acc.id, piece),
+            Some(Field::Updated) => append(&mut self.acc.updated, piece),
+            Some(Field::Published) => append(&mut self.acc.published, piece),
+            Some(Field::Content) => append(&mut self.acc.content_value, piece),
+            Some(Field::Draft) => self.acc.draft = piece.trim().eq_ignore_ascii_case("yes"),
+            None => {}
+        }
+    }
+
+    /// Handles an end tag, closing the current text element and `app:control`.
+    fn end(&mut self, e: &BytesEnd) {
+        if local_name_end(e) == "control" {
+            self.in_control = false;
+        }
+        self.current = None;
+    }
+}
+
 /// Parses a standalone `AtomPub` `<entry>` document into an [`Entry`].
 ///
 /// Server-owned fields a client omits (id, dates, links) are simply left at
@@ -105,122 +195,74 @@ struct Acc {
 ///
 /// Returns [`AtomPubError::Malformed`] when the bytes are not a well-formed
 /// `<entry>` document or contain an unsupported entity reference.
-#[allow(clippy::too_many_lines)]
 pub fn entry_from_xml(xml: &str) -> Result<Entry, AtomPubError> {
     // Text is NOT trimmed globally — that would strip significant whitespace
     // inside content. Inter-element indentation is harmless because text is
     // only routed when a target element (`current`) is active.
     let mut reader = Reader::from_str(xml);
-
-    let mut acc = Acc::default();
-    let mut saw_entry = false;
-    let mut current: Option<String> = None;
-    // For xhtml content, raw inner markup is re-serialized into this buffer.
-    let mut xhtml_buf: Option<Writer<Vec<u8>>> = None;
-    let mut xhtml_depth = 0u32;
-    let mut in_control = false;
+    let mut parser = Parser::default();
 
     loop {
-        let event = reader.read_event()?;
-        match event {
+        match reader.read_event()? {
             Event::Eof => break,
-            Event::Start(e) => {
-                if let Some(buf) = xhtml_buf.as_mut() {
-                    xhtml_depth += 1;
-                    buf.write_event(Event::Start(e.into_owned()))?;
-                    continue;
-                }
-                match local_name(&e).as_str() {
-                    "entry" => saw_entry = true,
-                    "title" => current = Some("title".to_string()),
-                    "summary" => current = Some("summary".to_string()),
-                    "id" => current = Some("id".to_string()),
-                    "updated" => current = Some("updated".to_string()),
-                    "published" => current = Some("published".to_string()),
-                    "content" => {
-                        let ctype = attr_value(&e, b"type").unwrap_or_else(|| "text".to_string());
-                        if ctype == "xhtml" {
-                            xhtml_buf = Some(Writer::new(Vec::new()));
-                            xhtml_depth = 0;
-                        } else {
-                            current = Some("content".to_string());
-                        }
-                        acc.content_type = Some(ctype);
-                    }
-                    "link" => capture_link(&e, &mut acc),
-                    "control" => in_control = true,
-                    "draft" if in_control => current = Some("draft".to_string()),
-                    _ => {}
-                }
-            }
-            Event::Empty(e) => {
-                if let Some(buf) = xhtml_buf.as_mut() {
-                    buf.write_event(Event::Empty(e.into_owned()))?;
-                    continue;
-                }
-                match local_name(&e).as_str() {
-                    "category" => {
-                        if let Some(term) = attr_value(&e, b"term") {
-                            acc.categories.push(term);
-                        }
-                    }
-                    "link" => capture_link(&e, &mut acc),
-                    _ => {}
-                }
-            }
-            Event::Text(e) => {
-                if let Some(buf) = xhtml_buf.as_mut() {
-                    buf.write_event(Event::Text(e))?;
-                    continue;
-                }
-                route_text(&mut acc, current.as_deref(), &decode_text(&e)?);
-            }
+            Event::Start(e) => parser.start(&e, &mut reader)?,
+            Event::Empty(e) => parser.empty(&e),
+            Event::Text(e) => parser.text(&decode_text(&e)?),
             // quick-xml 0.39 emits entity references (`&lt;`, `&#60;`) as
             // separate events rather than inlining them into Text.
-            Event::GeneralRef(e) => {
-                let piece = resolve_ref(&e)?;
-                if let Some(buf) = xhtml_buf.as_mut() {
-                    buf.write_event(Event::Text(BytesText::new(&piece)))?;
-                    continue;
-                }
-                route_text(&mut acc, current.as_deref(), &piece);
-            }
-            Event::CData(e) => {
-                if let Some(buf) = xhtml_buf.as_mut() {
-                    buf.write_event(Event::CData(e.into_owned()))?;
-                }
-            }
-            Event::End(e) => {
-                let local = local_name_end(&e);
-                if let Some(buf) = xhtml_buf.as_mut() {
-                    if local == "content" && xhtml_depth == 0 {
-                        let inner = buf.get_ref().clone();
-                        let html = String::from_utf8(inner)
-                            .map_err(|err| AtomPubError::Malformed(err.to_string()))?;
-                        acc.content_value = Some(html.trim().to_string());
-                        xhtml_buf = None;
-                    } else {
-                        xhtml_depth = xhtml_depth.saturating_sub(1);
-                        buf.write_event(Event::End(e.into_owned()))?;
-                    }
-                    continue;
-                }
-                if local == "control" {
-                    in_control = false;
-                }
-                current = None;
-            }
+            Event::GeneralRef(e) => parser.text(&resolve_ref(&e)?),
+            Event::End(e) => parser.end(&e),
             _ => {}
         }
     }
 
-    if !saw_entry {
+    if !parser.saw_entry {
         return Err(AtomPubError::Malformed(
             "document has no <entry> element".to_string(),
         ));
     }
 
-    Ok(build_entry(acc))
+    Ok(build_entry(parser.acc))
+}
+
+/// Re-serializes the raw inner markup of an `<content type="xhtml">` element
+/// into a string, consuming events up to and including the matching
+/// `</content>` end tag.
+///
+/// Called after the opening `<content>` tag has been read, so `depth` tracks
+/// nesting *within* the content; the close at depth 0 terminates capture.
+fn read_xhtml_content(reader: &mut Reader<&[u8]>) -> Result<String, AtomPubError> {
+    let mut buf = Writer::new(Vec::new());
+    let mut depth = 0u32;
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                depth += 1;
+                buf.write_event(Event::Start(e.into_owned()))?;
+            }
+            Event::End(e) => {
+                if local_name_end(&e) == "content" && depth == 0 {
+                    let html = String::from_utf8(buf.into_inner())
+                        .map_err(|err| AtomPubError::Malformed(err.to_string()))?;
+                    return Ok(html.trim().to_string());
+                }
+                depth = depth.saturating_sub(1);
+                buf.write_event(Event::End(e.into_owned()))?;
+            }
+            Event::Empty(e) => buf.write_event(Event::Empty(e.into_owned()))?,
+            Event::Text(e) => buf.write_event(Event::Text(e.into_owned()))?,
+            Event::GeneralRef(e) => {
+                buf.write_event(Event::Text(BytesText::new(&resolve_ref(&e)?)))?;
+            }
+            Event::CData(e) => buf.write_event(Event::CData(e.into_owned()))?,
+            Event::Eof => {
+                return Err(AtomPubError::Malformed(
+                    "unclosed <content type=\"xhtml\"> element".to_string(),
+                ))
+            }
+            _ => {}
+        }
+    }
 }
 
 fn build_entry(acc: Acc) -> Entry {
@@ -274,21 +316,6 @@ fn trimmed(value: Option<String>) -> Option<String> {
     value
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
-}
-
-/// Routes a decoded text/entity piece into the element currently being
-/// collected. Shared by the `Text` and `GeneralRef` event arms.
-fn route_text(acc: &mut Acc, current: Option<&str>, piece: &str) {
-    match current {
-        Some("title") => append(&mut acc.title, piece),
-        Some("summary") => append(&mut acc.summary, piece),
-        Some("id") => append(&mut acc.id, piece),
-        Some("updated") => append(&mut acc.updated, piece),
-        Some("published") => append(&mut acc.published, piece),
-        Some("content") => append(&mut acc.content_value, piece),
-        Some("draft") => acc.draft = piece.trim().eq_ignore_ascii_case("yes"),
-        _ => {}
-    }
 }
 
 fn capture_link(e: &BytesStart, acc: &mut Acc) {
@@ -625,6 +652,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_id_and_timestamps() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>T</title>
+  <id>tag:example.com,2026:post/7</id>
+  <published>2026-01-01T00:00:00Z</published>
+  <updated>2026-01-02T03:04:05Z</updated>
+</entry>"#;
+        let entry = entry_from_xml(xml).expect("parse");
+        assert_eq!(entry.id(), "tag:example.com,2026:post/7");
+        assert_eq!(
+            entry.published().map(|d| d.to_rfc3339()),
+            Some("2026-01-01T00:00:00+00:00".to_string())
+        );
+        assert_eq!(entry.updated().to_rfc3339(), "2026-01-02T03:04:05+00:00");
+    }
+
+    #[test]
     fn parses_numeric_and_named_char_refs_across_pieces() {
         let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
   <title>A&#66;C &quot;q&quot; &apos;a&apos;</title>
@@ -654,6 +698,29 @@ mod tests {
         let value = value.expect("xhtml value");
         assert!(value.contains("<br"), "value: {value}");
         assert!(value.contains('b'), "value: {value}");
+    }
+
+    #[test]
+    fn parses_nested_xhtml_preserving_inner_markup() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>X</title>
+  <content type="xhtml"><div><p>one</p><!-- note --><ul><li>two</li></ul></div></content>
+</entry>"#;
+        let entry = entry_from_xml(xml).expect("parse");
+        let (ctype, value) = content_parts(&entry);
+        assert_eq!(ctype, Some("xhtml"));
+        let value = value.expect("xhtml value");
+        assert!(value.contains("<ul>"), "value: {value}");
+        assert!(value.contains("<li>two</li>"), "value: {value}");
+        assert!(value.contains("</div>"), "value: {value}");
+    }
+
+    #[test]
+    fn unclosed_xhtml_content_is_an_error() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>X</title>
+  <content type="xhtml"><div>oops"#;
+        assert!(entry_from_xml(xml).is_err());
     }
 
     #[test]

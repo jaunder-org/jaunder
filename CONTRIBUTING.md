@@ -1,5 +1,23 @@
 # Contributing to jaunder
 
+This is the definitive working guide for both human contributors and coding agents. Agent-specific entry points such as `AGENTS.md` should point here instead of duplicating project policy.
+
+## Project guides
+
+- `docs/DESIGN.md`: project goals
+- `docs/ARCHITECTURE.md`: project architecture
+- `docs/ROADMAP.md`: project roadmap
+
+## Repository layout
+
+- `flake.nix`: development environment, comprehensive test environment, and PostgreSQL testing
+- `common/`: code shared between other packages
+- `end2end/`: Playwright end-to-end tests
+- `hydrate/`: frontend driver
+- `storage/`: storage traits, records, migrations, and backend-specific storage support
+- `server/`: backend, CLI, server runner, and integration tests
+- `web/`: Leptos server functions in `web/src/*.rs` and page components in `web/src/pages/`
+
 ## Development setup
 
 ### Prerequisites
@@ -19,8 +37,7 @@ nix run .#postgres-testing-vm
 export JAUNDER_DB=postgres://jaunder@127.0.0.1:55432/jaunder
 ```
 
-With that environment set, `jaunder init`, `jaunder serve`, and targeted storage tests will use the
-PostgreSQL test VM instead of SQLite.
+With that environment set, `jaunder init`, `jaunder serve`, and targeted storage tests will use the PostgreSQL test VM instead of SQLite.
 
 If a PostgreSQL URL omits the password, `jaunder` also supports:
 
@@ -30,17 +47,7 @@ export JAUNDER_DB_PASSWORD=secret
 export JAUNDER_DB_PASSWORD_FILE=/run/secrets/jaunder-db-password
 ```
 
-Those inputs are for steady-state connections. PostgreSQL database and role
-provisioning is handled separately by `jaunder create-pg-db`, which is intended
-for one-time administrative bootstrap before `jaunder init` runs migrations.
-Because `create-pg-db` is meant to be run manually by an experienced
-administrator, it takes its inputs explicitly via command-line flags rather than
-via `JAUNDER_*` environment variables.
-The command is intentionally simple: bootstrap URL, application database URL,
-and a separate application-role password. It fails if the requested role or
-database already exists.
-Use `--bootstrap-db` for the elevated connection and `--app-db` for the
-long-term application connection details.
+Those inputs are for steady-state connections. PostgreSQL database and role provisioning is handled separately by `jaunder create-pg-db`, which is intended for one-time administrative bootstrap before `jaunder init` runs migrations.  Because `create-pg-db` is meant to be run manually by an experienced administrator, it takes its inputs explicitly via command-line flags rather than via `JAUNDER_*` environment variables.  The command is intentionally simple: bootstrap URL, application database URL, and a separate application-role password. It fails if the requested role or database already exists.  Use `--bootstrap-db` for the elevated connection and `--app-db` for the long-term application connection details.
 
 ### Git hooks
 
@@ -68,13 +75,27 @@ To skip e2e tests on a WIP push:
 SKIP_E2E=1 git push
 ```
 
+## Development workflow
+
+- Track development work with `beads` (`bd`) rather than ad-hoc markdown TODO lists. Use beads for durable memory items when possible.
+- Prefer focused, atomic changes. The system should remain in a working state at each commit.
+- Write and commit preparatory refactors before the behavior changes that use them.
+- Every module should have comprehensive internal documentation.
+- Avoid `cat >>` or other append-only shell edits when modifying files; use structured editing tools.
+- Address all `clippy` lints.
+- Unless explicitly instructed otherwise, request review before committing.
+
 ## Testing
 
-There are several testing layers in this repository. Use the smallest one that
-matches the change first, then move up to the broader checks before pushing.
+There are several testing layers in this repository. Use the smallest one that matches the change first, then move up to the broader checks before pushing.  Never remove functionality to pass tests, and never bypass or suppress testing, coverage, or linting without explicit approval.
+
+Every HTTP endpoint must have both an integration test and an end-to-end test.  Unit tests belong in the same file as the code being tested. End-to-end tests belong in `end2end/` and use Playwright.
+
+For tests requiring a database, use `sqlite::memory:` and run migrations with `sqlx::migrate!("./migrations").run(&pool).await?` before creating the `AppState`.
 
 ### Fast local checks
 
+- `scripts/verify --fast` runs static checks for quick feedback while developing.
 - `scripts/verify` runs the full local verification sequence in the preferred order: formatting, build, tests, lint, coverage, then `nix flake check` (with warmup e2e checks by default).
   - By default it prints only `--- verify: ... ---` progress markers and captures step output.
   - Set `VERIFY_PASSTHROUGH=1` to stream full tool output directly.
@@ -85,14 +106,8 @@ matches the change first, then move up to the broader checks before pushing.
 - `prettier --check end2end` checks Playwright and other frontend test assets.
 - `cargo clippy -- -D warnings` checks the main workspace for lint errors.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
-- For e2e perf diagnostics, set `JAUNDER_E2E_WARMUP=1` before `playwright test`
-  to warm each test page context before test instrumentation; tune with
-  `JAUNDER_E2E_WARMUP_URL` and
-  `JAUNDER_E2E_WARMUP_TIMEOUT_MS`.
-- In hydration-heavy e2e tests, use
-  `hydrationHeavyTimeoutMs(testInfo, chromiumBudgetMs)` for whole-test budgets
-  and `hydrationHeavyFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)` for
-  first navigation waits (see [ADR-0012](docs/decisions/0012-environment-aware-timeouts.md)).
+- For e2e perf diagnostics, set `JAUNDER_E2E_WARMUP=1` before `playwright test` to warm each test page context before test instrumentation; tune with `JAUNDER_E2E_WARMUP_URL` and `JAUNDER_E2E_WARMUP_TIMEOUT_MS`.
+- In hydration-heavy e2e tests, use `hydrationHeavyTimeoutMs(testInfo, chromiumBudgetMs)` for whole-test budgets and `hydrationHeavyFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)` for first navigation waits (see [ADR-0012](docs/decisions/0012-environment-aware-timeouts.md)).
 
 ### Observability and Performance Analysis
 
@@ -137,8 +152,7 @@ When a change is confined to one area, run the relevant target directly.
   - `cargo test -p jaunder --test web_password_reset`
 - Library-only tests: `cargo test -p jaunder --lib`
 
-`cargo nextest list -p jaunder --tests` shows the currently registered Rust
-test targets if you need to confirm the target split.
+`cargo nextest list -p jaunder --tests` shows the currently registered Rust test targets if you need to confirm the target split.
 
 ### PostgreSQL-backed Rust tests
 
@@ -159,13 +173,24 @@ cargo test -p jaunder --test commands -- --ignored --test-threads=1
 cargo test -p jaunder --test storage -- --ignored --test-threads=1
 ```
 
-Those tests share one database and reset schema state between cases, so run
-them individually or with `--test-threads=1`.
+Those tests share one database and reset schema state between cases, so run them individually or with `--test-threads=1`.
 
 ### Coverage and dependency policy
 
 - `scripts/check-coverage` enforces the coverage requirement used by `pre-push`.
+- `scripts/check-coverage --investigate` provides detailed information about missing coverage.
 - `cargo deny check` verifies dependency policy, advisories, and licensing.
+
+Coverage is measured by `scripts/check-coverage`, which counts source lines with at least one execution hit across all test binaries. This deduplicates generic-function instantiations across compile units, unlike the inflated `cargo llvm-cov --json` summary percentages for code exercised by multiple test binaries.
+
+The baseline is stored in `.coverage-manifest.json`. Never lower or update it without user approval; approved changes to the baseline must be committed in the same commit as the file whose coverage changed. Coverage improvements are always allowed.
+
+Some areas have inherent host-side coverage gaps and should not be force-fitted with artificial tests:
+
+- **WASM entry point** (`hydrate/src/lib.rs`, 0%): runs only in the browser WASM context.
+- **Leptos page components** (`web/src/pages/*.rs`, varied): `#[component]` functions render view trees; correctness is validated by e2e tests in the Nix VM.
+- **PostgreSQL-only storage** (`storage/src/postgres/*.rs`, `storage/src/backup/postgres.rs`, 3–15%): tested in the Nix VM PostgreSQL environment. The `cargo nextest` suite uses SQLite in-memory.
+- **Asset serving** (`server/src/assets.rs`, 0%): compile-time embedded assets are not practical to unit test.
 
 ### Nix VM checks
 
@@ -191,9 +216,7 @@ Additional Nix-backed checks available as packages (not run by default):
 - `packages.x86_64-linux.e2e-sqlite-cold` — Playwright end-to-end flow against SQLite without warmup
 - `packages.x86_64-linux.e2e-postgres-cold` — Playwright end-to-end flow against PostgreSQL without warmup
 
-The PostgreSQL VM checks are split by Rust test binary rather than by
-individual test case. That keeps the flake readable while still making slow
-or failing PostgreSQL coverage easy to localize.
+The PostgreSQL VM checks are split by Rust test binary rather than by individual test case. That keeps the flake readable while still making slow or failing PostgreSQL coverage easy to localize.
 
 If you only need one of the VM-backed checks, you can run it directly:
 
@@ -209,10 +232,36 @@ nix build .#checks.x86_64-linux.postgres-web-auth
 
 ## Code conventions
 
+- Use Rust, except end-to-end tests, which use Playwright and TypeScript.
 - All Rust code is formatted with `cargo fmt`.
 - Files containing Leptos `view!` macros are additionally formatted with `leptosfmt` (run it first, then `cargo fmt`).
 - Commits reference the milestone item they address, e.g. `M0.1.1: Rename app/ to web/`.
-- Every commit must include appropriate tests; coverage must remain at 100%.
+- Every commit must include appropriate tests unless the user explicitly waives this requirement.
+- Never use `.unwrap()`.
+- Never use `.expect()` in production code.
+- Use Rust's type system to make invalid states impossible with infallible types.
+- At boundaries (`#[server]` functions, DB calls), parse data into infallible types, reject invalid data, and handle `Result`/`Option` conversion explicitly.
+- Keep data transformations pure where possible so they are easy to test and reason about.
+
+## Storage and web conventions
+
+- Use `sqlx` for database access.
+- Support SQLite and PostgreSQL, dynamically selected at runtime.
+- Store SQL migrations in `storage/migrations` using the `000x_description.sql` numbering convention.
+- Define storage traits such as `UserStorage` and `SessionStorage`, plus their record types, in `storage/src/*.rs`. This lets `web` and `server` use them without circular dependencies.
+- Keep concrete SQLite/PostgreSQL implementations in the `server` crate, for example `server/src/storage/sqlite.rs`, and re-export them from `server/src/storage/mod.rs` for the CLI and server runner.
+- Use specialized storage error enums in `common::storage`, such as `UserAuthError` and `CreateUserError`, with `thiserror`.
+- Use `sqlx` unique violation checks (`is_unique_violation()`) to handle "already exists" errors gracefully.
+- Use the `AppState` struct from `common::storage` to bundle storage handles. In web server functions, retrieve it with `expect_context::<Arc<AppState>>()`.
+- The web framework is Leptos with SSR via `cargo-leptos`.
+- Leptos components should only render data; business logic belongs in server functions or pure transformation functions.
+- API methods are automatically prefixed with `/api`.
+- Define `#[server]` functions in the relevant `web/src/*.rs` module, such as `web/src/auth.rs`. Use `#[cfg(feature = "ssr")]` for server-only imports and logic in those files.
+- Convert storage errors to `leptos::prelude::ServerFnError` using `.map_err(|e| ServerFnError::new(e.to_string()))`.
+- Use `require_auth().await?` at the start of any server function that requires a logged-in user. It returns an `AuthUser` containing `user_id`, `username`, and `token_hash`.
+- Use `set_session_cookie(raw_token)` and `clear_session_cookie()` from `web/src/auth.rs` to manage the `session` cookie in server functions.
+- Enforce lowercase usernames at the boundary before passing them to storage methods.
+- Production deployment is expected to run behind a reverse proxy providing HTTPS.
 
 ## Backend parity rules
 

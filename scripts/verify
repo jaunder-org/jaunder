@@ -2,7 +2,13 @@
 # Run the standard project verification sequence.
 #
 # Usage:
-#   scripts/verify          # default: capture output, show on failure
+#   scripts/verify          # the full gate: static checks, lint, coverage, nix VM
+#   scripts/verify --fast   # inner-loop: static checks + lint only (no test suite, no VM)
+#
+# --fast runs everything up to the test suite (fmt, leptosfmt, prettier,
+# cargo-deny, clippy) and stops before coverage and the nix VM. It is for fast
+# inner-loop feedback only; it does NOT certify a change. The full
+# `scripts/verify` is the only gate that does.
 #
 # Optional env:
 #   VERIFY_PASSTHROUGH=1         Stream each step output directly (sequential).
@@ -13,6 +19,18 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
+
+FAST=0
+for arg in "$@"; do
+    case "$arg" in
+        --fast) FAST=1 ;;
+        *)
+            echo "error: unknown argument: $arg" >&2
+            echo "usage: scripts/verify [--fast]" >&2
+            exit 2
+            ;;
+    esac
+done
 
 FAILURE_LOG_LINES="${VERIFY_FAILURE_LOG_LINES:-200}"
 
@@ -124,6 +142,11 @@ run_parallel \
 # ── Phase 2: Lint (compiles workspace) ────────────────────────────────
 
 run_step "cargo clippy -- -D warnings" cargo clippy -- -D warnings
+
+if [[ "$FAST" == "1" ]]; then
+    echo "--- verify: fast checks passed (skipped coverage + nix VM; run 'scripts/verify' for the full gate) ---"
+    exit 0
+fi
 
 # ── Phase 3: Coverage (runs full test suite with instrumentation) ─────
 
