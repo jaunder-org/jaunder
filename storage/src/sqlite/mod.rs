@@ -104,6 +104,17 @@ pub(super) async fn open_sqlite_database(
     Ok(make_app_state(pool))
 }
 
+/// Returns `true` if the `SQLite` database already contains at least one user.
+pub(super) async fn database_has_users(options: &SqliteConnectOptions) -> sqlx::Result<bool> {
+    let pool = SqlitePool::connect_with(options.clone()).await?;
+    Ok(
+        sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM users LIMIT 1)")
+            .fetch_one(&pool)
+            .await?
+            != 0,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // AtomicOps
 // ---------------------------------------------------------------------------

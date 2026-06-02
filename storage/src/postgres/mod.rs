@@ -41,6 +41,9 @@ pub use media::PostgresMediaStorage;
 mod posts;
 pub use posts::PostgresPostStorage;
 
+mod bootstrap;
+pub use bootstrap::{create_postgres_database_and_role, PgBootstrapError};
+
 pub(crate) mod backup;
 
 use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
@@ -241,6 +244,15 @@ pub(crate) async fn open_postgres_database(
     let pool = PgPool::connect_with(options).await?;
     sqlx::migrate!("./migrations/postgres").run(&pool).await?;
     Ok(make_postgres_app_state(pool))
+}
+
+/// Returns `true` if the `PostgreSQL` database already contains at least one user.
+pub(crate) async fn database_has_users(options: &PgConnectOptions) -> sqlx::Result<bool> {
+    let options = resolved_postgres_options(options)?;
+    let pool = PgPool::connect_with(options).await?;
+    sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users LIMIT 1)")
+        .fetch_one(&pool)
+        .await
 }
 
 #[cfg(test)]

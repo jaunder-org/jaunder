@@ -129,6 +129,23 @@ pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc
     }
 }
 
+/// Returns `true` if the target database already contains at least one user.
+///
+/// Used as a restore preflight: refusing to restore into a non-empty database.
+///
+/// # Errors
+///
+/// Returns the underlying [`sqlx::Error`] if the database cannot be reached or
+/// the query fails.
+pub async fn database_has_users(options: &DbConnectOptions) -> sqlx::Result<bool> {
+    match options {
+        DbConnectOptions::Sqlite(options) => crate::sqlite::database_has_users(options).await,
+        DbConnectOptions::Postgres { options, .. } => {
+            crate::postgres::database_has_users(options).await
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,6 +254,18 @@ mod tests {
         let _ = tokio::time::timeout(
             std::time::Duration::from_millis(50),
             open_existing_database(&opts),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn database_has_users_routes_to_postgres_backend() {
+        let opts = "postgres://localhost:1/db"
+            .parse::<DbConnectOptions>()
+            .unwrap();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            database_has_users(&opts),
         )
         .await;
     }

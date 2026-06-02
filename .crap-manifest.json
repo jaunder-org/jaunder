@@ -102,15 +102,6 @@
       "crate": "storage"
     },
     {
-      "file": "server/src/commands.rs",
-      "function": "cmd_create_pg_db",
-      "line": 100,
-      "cyclomatic": 9.0,
-      "coverage": 30.0,
-      "crap": 36.782999999999994,
-      "crate": "jaunder"
-    },
-    {
       "file": "storage/src/postgres/backup.rs",
       "function": "restore_type",
       "line": 168,
@@ -210,6 +201,15 @@
       "crate": "common"
     },
     {
+      "file": "storage/src/postgres/bootstrap.rs",
+      "function": "execute_utility",
+      "line": 75,
+      "cyclomatic": 4.0,
+      "coverage": 0.0,
+      "crap": 20.0,
+      "crate": "storage"
+    },
+    {
       "file": "storage/src/postgres/posts.rs",
       "function": "PostgresPostStorage::create_post",
       "line": 27,
@@ -255,18 +255,9 @@
       "crate": "storage"
     },
     {
-      "file": "server/src/commands.rs",
-      "function": "execute_postgres_utility",
-      "line": 74,
-      "cyclomatic": 4.0,
-      "coverage": 0.0,
-      "crap": 20.0,
-      "crate": "jaunder"
-    },
-    {
       "file": "storage/src/postgres/mod.rs",
       "function": "PostgresAtomicOps::confirm_password_reset",
-      "line": 130,
+      "line": 133,
       "cyclomatic": 13.0,
       "coverage": 66.66666666666666,
       "crap": 19.259259259259267,
@@ -275,7 +266,7 @@
     {
       "file": "storage/src/postgres/mod.rs",
       "function": "PostgresAtomicOps::create_user_with_invite",
-      "line": 67,
+      "line": 70,
       "cyclomatic": 12.0,
       "coverage": 66.66666666666666,
       "crap": 17.333333333333343,
@@ -327,6 +318,15 @@
       "crate": "jaunder"
     },
     {
+      "file": "storage/src/postgres/bootstrap.rs",
+      "function": "create_postgres_database_and_role",
+      "line": 38,
+      "cyclomatic": 6.0,
+      "coverage": 38.095238095238095,
+      "crap": 14.540330417881439,
+      "crate": "storage"
+    },
+    {
       "file": "server/src/feed/handlers.rs",
       "function": "serve",
       "line": 23,
@@ -363,15 +363,6 @@
       "crate": "common"
     },
     {
-      "file": "server/src/commands.rs",
-      "function": "database_has_users",
-      "line": 334,
-      "cyclomatic": 8.0,
-      "coverage": 57.14285714285714,
-      "crap": 13.03790087463557,
-      "crate": "jaunder"
-    },
-    {
       "file": "storage/src/sqlite/backup.rs",
       "function": "restore_database",
       "line": 58,
@@ -379,6 +370,15 @@
       "coverage": 100.0,
       "crap": 13.0,
       "crate": "storage"
+    },
+    {
+      "file": "server/src/commands.rs",
+      "function": "cmd_create_pg_db",
+      "line": 72,
+      "cyclomatic": 7.0,
+      "coverage": 52.17391304347826,
+      "crap": 12.36031889537273,
+      "crate": "jaunder"
     },
     {
       "file": "storage/src/backup.rs",
@@ -428,7 +428,7 @@
     {
       "file": "storage/src/sqlite/mod.rs",
       "function": "SqliteAtomicOps::create_user_with_invite",
-      "line": 128,
+      "line": 139,
       "cyclomatic": 12.0,
       "coverage": 100.0,
       "crap": 12.0,
@@ -437,7 +437,7 @@
     {
       "file": "storage/src/sqlite/mod.rs",
       "function": "SqliteAtomicOps::confirm_password_reset",
-      "line": 192,
+      "line": 203,
       "cyclomatic": 12.0,
       "coverage": 100.0,
       "crap": 12.0,
@@ -545,7 +545,7 @@
     {
       "file": "server/src/commands.rs",
       "function": "cmd_serve",
-      "line": 380,
+      "line": 301,
       "cyclomatic": 11.0,
       "coverage": 93.02325581395348,
       "crap": 11.041090721571685,
@@ -671,7 +671,7 @@
     {
       "file": "server/src/commands.rs",
       "function": "directory_has_entries",
-      "line": 357,
+      "line": 278,
       "cyclomatic": 9.0,
       "coverage": 100.0,
       "crap": 9.0,
@@ -698,7 +698,7 @@
     {
       "file": "server/src/commands.rs",
       "function": "cmd_user_create",
-      "line": 160,
+      "line": 104,
       "cyclomatic": 8.0,
       "coverage": 76.92307692307693,
       "crap": 8.786527082385069,
@@ -878,7 +878,7 @@
     {
       "file": "server/src/commands.rs",
       "function": "cmd_smtp_test",
-      "line": 219,
+      "line": 163,
       "cyclomatic": 7.0,
       "coverage": 100.0,
       "crap": 7.0,
@@ -1202,7 +1202,7 @@
     {
       "file": "server/src/commands.rs",
       "function": "cmd_init",
-      "line": 29,
+      "line": 28,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -1526,7 +1526,7 @@
     {
       "file": "server/src/commands.rs",
       "function": "ensure_restore_target_empty",
-      "line": 319,
+      "line": 263,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -1552,12 +1552,30 @@
     },
     {
       "file": "storage/src/postgres/mod.rs",
+      "function": "database_has_users",
+      "line": 250,
+      "cyclomatic": 3.0,
+      "coverage": 42.857142857142854,
+      "crap": 4.679300291545189,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/mod.rs",
       "function": "open_postgres_database",
-      "line": 237,
+      "line": 240,
       "cyclomatic": 4.0,
       "coverage": 75.0,
       "crap": 4.25,
       "crate": "storage"
+    },
+    {
+      "file": "server/src/commands.rs",
+      "function": "describe_bootstrap_error",
+      "line": 54,
+      "cyclomatic": 4.0,
+      "coverage": 83.33333333333334,
+      "crap": 4.0740740740740735,
+      "crate": "jaunder"
     },
     {
       "file": "web/src/pages/ui.rs",
@@ -1913,7 +1931,7 @@
     {
       "file": "server/src/commands.rs",
       "function": "cmd_user_invite",
-      "line": 198,
+      "line": 142,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -1922,7 +1940,7 @@
     {
       "file": "server/src/commands.rs",
       "function": "cmd_restore",
-      "line": 287,
+      "line": 231,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -2280,6 +2298,15 @@
       "crate": "storage"
     },
     {
+      "file": "storage/src/sqlite/mod.rs",
+      "function": "database_has_users",
+      "line": 108,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "storage"
+    },
+    {
       "file": "storage/src/media.rs",
       "function": "MediaSource::as_str",
       "line": 19,
@@ -2310,6 +2337,15 @@
       "file": "storage/src/db.rs",
       "function": "open_existing_database",
       "line": 125,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/db.rs",
+      "function": "database_has_users",
+      "line": 140,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2408,7 +2444,7 @@
     {
       "file": "storage/src/postgres/mod.rs",
       "function": "resolved_postgres_options",
-      "line": 227,
+      "line": 230,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2444,7 +2480,7 @@
     {
       "file": "server/src/commands.rs",
       "function": "require_postgres_options",
-      "line": 44,
+      "line": 43,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2453,7 +2489,7 @@
     {
       "file": "server/src/commands.rs",
       "function": "default_backup_path",
-      "line": 310,
+      "line": 254,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -3389,7 +3425,7 @@
     {
       "file": "storage/src/postgres/mod.rs",
       "function": "postgres_password_from_env",
-      "line": 212,
+      "line": 215,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -3398,7 +3434,7 @@
     {
       "file": "storage/src/postgres/mod.rs",
       "function": "postgres_pool",
-      "line": 247,
+      "line": 259,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -3497,7 +3533,7 @@
     {
       "file": "server/src/commands.rs",
       "function": "cmd_backup",
-      "line": 259,
+      "line": 203,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -5000,7 +5036,7 @@
     {
       "file": "storage/src/sqlite/mod.rs",
       "function": "SqliteAtomicOps::new",
-      "line": 121,
+      "line": 132,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -5009,7 +5045,7 @@
     {
       "file": "storage/src/sqlite/mod.rs",
       "function": "sqlite_pool",
-      "line": 312,
+      "line": 323,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -5142,6 +5178,33 @@
       "crate": "storage"
     },
     {
+      "file": "storage/src/postgres/bootstrap.rs",
+      "function": "quote_postgres_identifier",
+      "line": 91,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/bootstrap.rs",
+      "function": "quote_postgres_literal",
+      "line": 99,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/bootstrap.rs",
+      "function": "pg_error_code_matches",
+      "line": 106,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage"
+    },
+    {
       "file": "storage/src/postgres/site_config.rs",
       "function": "PostgresSiteConfigStorage::new",
       "line": 12,
@@ -5216,7 +5279,7 @@
     {
       "file": "storage/src/postgres/mod.rs",
       "function": "PostgresAtomicOps::new",
-      "line": 60,
+      "line": 63,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -5225,7 +5288,7 @@
     {
       "file": "storage/src/postgres/mod.rs",
       "function": "make_postgres_app_state",
-      "line": 194,
+      "line": 197,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -5370,33 +5433,6 @@
       "file": "server/src/mailer.rs",
       "function": "FileMailSender::new",
       "line": 129,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "jaunder"
-    },
-    {
-      "file": "server/src/commands.rs",
-      "function": "quote_postgres_identifier",
-      "line": 54,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "jaunder"
-    },
-    {
-      "file": "server/src/commands.rs",
-      "function": "quote_postgres_literal",
-      "line": 62,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "jaunder"
-    },
-    {
-      "file": "server/src/commands.rs",
-      "function": "pg_error_code_matches",
-      "line": 70,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
