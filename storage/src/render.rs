@@ -560,4 +560,126 @@ mod tests {
         let err = PerformCreationError::CreatedNotFound;
         assert_eq!(err.to_string(), "created post not found");
     }
+
+    #[test]
+    fn create_rendered_post_error_from_render() {
+        let err: CreateRenderedPostError = RenderError::OrgRender("bad".to_string()).into();
+        assert!(err.to_string().contains("org-mode render error"));
+    }
+
+    #[test]
+    fn update_rendered_post_error_from_render() {
+        let err: UpdateRenderedPostError = RenderError::OrgRender("bad".to_string()).into();
+        assert!(err.to_string().contains("org-mode render error"));
+    }
+
+    #[test]
+    fn create_rendered_post_error_debug() {
+        let err: CreateRenderedPostError = RenderError::OrgRender("x".to_string()).into();
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("Render"));
+    }
+
+    #[test]
+    fn update_rendered_post_error_debug() {
+        let err: UpdateRenderedPostError = RenderError::OrgRender("x".to_string()).into();
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("Render"));
+    }
+
+    #[test]
+    fn create_rendered_post_error_from_storage_display() {
+        use crate::CreatePostError;
+        let err: CreateRenderedPostError = CreatePostError::SlugConflict.into();
+        assert!(err.to_string().contains("slug"));
+    }
+
+    #[test]
+    fn create_rendered_post_error_from_storage_debug() {
+        use crate::CreatePostError;
+        let err: CreateRenderedPostError = CreatePostError::SlugConflict.into();
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("Storage"));
+    }
+
+    #[test]
+    fn update_rendered_post_error_from_storage_display() {
+        use crate::UpdatePostError;
+        let err: UpdateRenderedPostError = UpdatePostError::NotFound.into();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn update_rendered_post_error_from_storage_debug() {
+        use crate::UpdatePostError;
+        let err: UpdateRenderedPostError = UpdatePostError::NotFound.into();
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("Storage"));
+    }
+
+    // -- PerformUpdateError tests --
+
+    #[test]
+    fn perform_update_error_empty_title_display() {
+        let err = PerformUpdateError::EmptyPost;
+        assert_eq!(err.to_string(), "post body or title is required");
+    }
+
+    #[test]
+    fn perform_update_error_no_slug_from_title_display() {
+        let err = PerformUpdateError::NoSlugFromPost;
+        assert!(err.to_string().contains("ASCII"));
+    }
+
+    #[test]
+    fn perform_update_error_invalid_slug_display() {
+        let err = PerformUpdateError::InvalidSlug;
+        assert_eq!(err.to_string(), "invalid slug");
+    }
+
+    #[test]
+    fn perform_update_error_not_found_display() {
+        let err = PerformUpdateError::NotFound;
+        assert_eq!(err.to_string(), "post not found");
+    }
+
+    #[test]
+    fn perform_update_error_unauthorized_display() {
+        let err = PerformUpdateError::Unauthorized;
+        assert_eq!(err.to_string(), "not authorized");
+    }
+
+    #[test]
+    fn perform_update_error_from_render() {
+        let err: PerformUpdateError = RenderError::OrgRender("bad".to_string()).into();
+        assert!(err.to_string().contains("org-mode render error"));
+    }
+
+    #[test]
+    fn perform_update_error_from_update_post_not_found() {
+        use crate::UpdatePostError;
+        let err: PerformUpdateError = UpdatePostError::NotFound.into();
+        assert!(matches!(err, PerformUpdateError::NotFound));
+    }
+
+    #[test]
+    fn perform_update_error_from_update_post_unauthorized() {
+        use crate::UpdatePostError;
+        let err: PerformUpdateError = UpdatePostError::Unauthorized.into();
+        assert!(matches!(err, PerformUpdateError::Unauthorized));
+    }
+
+    #[test]
+    fn perform_update_error_debug() {
+        let err = PerformUpdateError::EmptyPost;
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("EmptyPost"));
+    }
+
+    #[test]
+    fn perform_update_error_from_update_post_internal() {
+        use crate::UpdatePostError;
+        let err: PerformUpdateError = UpdatePostError::Internal(sqlx::Error::RowNotFound).into();
+        assert!(matches!(err, PerformUpdateError::Storage(_)));
+    }
 }
