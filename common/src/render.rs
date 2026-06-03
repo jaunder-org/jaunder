@@ -145,12 +145,12 @@ fn extract_markdown_title(body: &str) -> Option<(String, String)> {
             if trimmed.is_empty() {
                 continue;
             }
+            // A `strip_prefix("# ")` match always leaves a non-empty remainder
+            // because `trimmed` has no trailing whitespace, so no empty-title
+            // guard is needed here.
             if let Some(title) = trimmed.strip_prefix("# ") {
-                let title = title.trim();
-                if !title.is_empty() {
-                    found = Some(title.to_owned());
-                    continue;
-                }
+                found = Some(title.trim().to_owned());
+                continue;
             }
         }
         output.push(line);
@@ -162,7 +162,6 @@ fn extract_markdown_title(body: &str) -> Option<(String, String)> {
 fn extract_org_title(body: &str) -> Option<(String, String)> {
     let mut output = Vec::new();
     let mut found = None;
-    let mut past_kv_block = false;
 
     for line in body.lines() {
         if found.is_some() {
@@ -173,12 +172,8 @@ fn extract_org_title(body: &str) -> Option<(String, String)> {
         let trimmed = line.trim();
 
         if trimmed.is_empty() {
-            // Blank lines are allowed inside the KV block
-            if !past_kv_block {
-                continue;
-            }
-            // Once we're past the KV block, a blank line without a title means no title
-            return None;
+            // Blank lines in the header block (before any title) are skipped.
+            continue;
         }
 
         // #+TITLE: value — standard org metadata title
@@ -196,14 +191,12 @@ fn extract_org_title(body: &str) -> Option<(String, String)> {
             }
         }
 
-        // * Top-level heading (exactly one asterisk followed by space)
+        // * Top-level heading (exactly one asterisk followed by space). As with
+        // the Markdown case, a match always leaves a non-empty heading because
+        // `trimmed` has no trailing whitespace.
         if let Some(heading) = trimmed.strip_prefix("* ") {
-            let title = heading.trim();
-            if !title.is_empty() {
-                found = Some(title.to_owned());
-                past_kv_block = true;
-                continue;
-            }
+            found = Some(heading.trim().to_owned());
+            continue;
         }
 
         // Any other non-blank, non-KV, non-heading content means no title
@@ -537,6 +530,15 @@ mod tests {
     }
 
     #[test]
+    fn extract_markdown_title_skips_leading_blanks_then_finds_heading() {
+        // Leading blank lines before the heading exercise the blank-skip branch.
+        // (`derive_post_metadata` trims the body first, so this branch is only
+        // reachable by calling the helper directly.)
+        let result = extract_markdown_title("\n\n# Title\n\nBody");
+        assert_eq!(result, Some(("Title".to_string(), "Body".to_string())));
+    }
+
+    #[test]
     fn extract_org_title_heading_after_kv_lines() {
         let result = extract_org_title("#+AUTHOR: Me\n* My Title\n\nBody");
         assert_eq!(result, Some(("My Title".to_string(), "Body".to_string())));
@@ -544,22 +546,21 @@ mod tests {
 
     #[test]
     fn extract_org_title_skips_blank_lines_inside_kv_block() {
-        // Blank lines inside the KV header block must be skipped so the
-        // following heading is still recognized as the title. This pins the
-        // `if !past_kv_block { continue }` arm against a flipped-sign mutation.
+        // Blank lines in the header block (before any title) must be skipped so
+        // the following heading is still recognized as the title.
         let result = extract_org_title("\n#+AUTHOR: Me\n\n#+DATE: today\n* My Title\n\nBody");
         assert_eq!(result, Some(("My Title".to_string(), "Body".to_string())));
     }
 
     #[test]
-    fn extract_org_title_blank_line_after_kv_without_title_returns_none() {
-        // A blank line that appears *after* a heading-less KV block should
-        // terminate the search with no title. This pins the
-        // `past_kv_block` arm in the empty-line branch.
+    fn extract_org_title_blank_lines_after_heading_are_appended_to_body() {
+        // Once a heading is found, every later line (including blank lines) is
+        // appended to the body, which is then trimmed.
         let result = extract_org_title("#+AUTHOR: Me\n* Heading\n\nBody\n\nMore");
-        // Title should still come from the heading; trailing blank lines
-        // after a found title are appended to the body.
-        assert!(result.is_some());
+        assert_eq!(
+            result,
+            Some(("Heading".to_string(), "Body\n\nMore".to_string()))
+        );
     }
 
     #[test]
