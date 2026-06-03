@@ -246,7 +246,6 @@ pub fn perform_update_error(error: PerformUpdateError) -> InternalError {
         PerformUpdateError::NotFound | PerformUpdateError::Unauthorized => {
             InternalError::not_found("Post")
         }
-        PerformUpdateError::Render(_) => InternalError::server(error),
         PerformUpdateError::Storage(error) => InternalError::storage(error),
     }
 }
@@ -261,7 +260,6 @@ pub fn perform_creation_error(err: PerformCreationError) -> InternalError {
         PerformCreationError::Exhausted(_) => {
             InternalError::server_message("unable to allocate a unique slug after 100 attempts")
         }
-        PerformCreationError::Render(e) => InternalError::validation(e.to_string()),
         PerformCreationError::CreatedNotFound => {
             InternalError::server_message("created post not found")
         }
@@ -302,13 +300,6 @@ mod tests {
             perform_update_error(PerformUpdateError::Storage(sqlx::Error::PoolClosed)).public(),
             WebError::Storage { .. }
         ));
-        assert!(matches!(
-            perform_update_error(PerformUpdateError::Render(storage::RenderError::OrgRender(
-                "bad".to_string()
-            )))
-            .public(),
-            WebError::Server { .. }
-        ));
     }
 
     #[test]
@@ -332,13 +323,6 @@ mod tests {
         assert!(matches!(
             perform_creation_error(PerformCreationError::Exhausted(5)).public(),
             WebError::Server { .. }
-        ));
-        assert!(matches!(
-            perform_creation_error(PerformCreationError::Render(
-                storage::RenderError::OrgRender("bad".to_string())
-            ))
-            .public(),
-            WebError::Validation { .. }
         ));
         assert!(matches!(
             perform_creation_error(PerformCreationError::CreatedNotFound).public(),

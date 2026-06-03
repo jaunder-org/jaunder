@@ -11,28 +11,8 @@ use crate::{
     CreatePostError, CreatePostInput, PostFormat, PostRecord, PostStorage, UpdatePostError,
     UpdatePostInput,
 };
-use common::render::{derive_post_metadata, render, RenderError};
+use common::render::{derive_post_metadata, render};
 use common::slug::{slugify_title, Slug};
-
-// ---------------------------------------------------------------------------
-// Orchestration error types
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Error)]
-pub enum CreateRenderedPostError {
-    #[error(transparent)]
-    Render(#[from] RenderError),
-    #[error(transparent)]
-    Storage(#[from] CreatePostError),
-}
-
-#[derive(Debug, Error)]
-pub enum UpdateRenderedPostError {
-    #[error(transparent)]
-    Render(#[from] RenderError),
-    #[error(transparent)]
-    Storage(#[from] UpdatePostError),
-}
 
 // ---------------------------------------------------------------------------
 // Orchestration helpers
@@ -42,7 +22,7 @@ pub enum UpdateRenderedPostError {
 ///
 /// # Errors
 ///
-/// Returns `Err(CreateRenderedPostError)` if rendering fails or the storage layer returns an error.
+/// Returns `Err(CreatePostError)` if the storage layer returns an error.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_rendered_post(
     storage: &dyn PostStorage,
@@ -53,8 +33,8 @@ pub async fn create_rendered_post(
     format: PostFormat,
     published_at: Option<DateTime<Utc>>,
     summary: Option<String>,
-) -> Result<i64, CreateRenderedPostError> {
-    let rendered_html = render(&body, &format)?;
+) -> Result<i64, CreatePostError> {
+    let rendered_html = render(&body, &format);
     let input = CreatePostInput {
         user_id,
         title,
@@ -65,14 +45,14 @@ pub async fn create_rendered_post(
         published_at,
         summary,
     };
-    Ok(storage.create_post(&input).await?)
+    storage.create_post(&input).await
 }
 
 /// Renders `body` according to `format` and updates the post via storage.
 ///
 /// # Errors
 ///
-/// Returns `Err(UpdateRenderedPostError)` if rendering fails or the storage layer returns an error.
+/// Returns `Err(UpdatePostError)` if the storage layer returns an error.
 #[allow(clippy::too_many_arguments)]
 pub async fn update_rendered_post(
     storage: &dyn PostStorage,
@@ -84,8 +64,8 @@ pub async fn update_rendered_post(
     format: PostFormat,
     publish: bool,
     summary: Option<String>,
-) -> Result<PostRecord, UpdateRenderedPostError> {
-    let rendered_html = render(&body, &format)?;
+) -> Result<PostRecord, UpdatePostError> {
+    let rendered_html = render(&body, &format);
     let input = UpdatePostInput {
         title,
         slug,
@@ -95,7 +75,7 @@ pub async fn update_rendered_post(
         publish,
         summary,
     };
-    Ok(storage.update_post(post_id, editor_user_id, &input).await?)
+    storage.update_post(post_id, editor_user_id, &input).await
 }
 
 // ---------------------------------------------------------------------------
@@ -111,8 +91,6 @@ pub enum PerformUpdateError {
     NoSlugFromPost,
     #[error("invalid slug")]
     InvalidSlug,
-    #[error(transparent)]
-    Render(#[from] RenderError),
     #[error("post not found")]
     NotFound,
     #[error("not authorized")]
@@ -166,7 +144,7 @@ pub async fn perform_post_update(
             .map_err(|_| PerformUpdateError::NoSlugFromPost)?,
     };
 
-    let rendered_html = render(&body, &format)?;
+    let rendered_html = render(&body, &format);
     let input = UpdatePostInput {
         title: metadata.title,
         slug,
@@ -197,8 +175,6 @@ pub enum PerformCreationError {
     InvalidSlug(String),
     #[error("unable to allocate a unique slug after {0} attempts")]
     Exhausted(usize),
-    #[error(transparent)]
-    Render(#[from] RenderError),
     #[error("created post not found")]
     CreatedNotFound,
     #[error(transparent)]
@@ -220,8 +196,8 @@ pub fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
 ///
 /// # Errors
 ///
-/// Returns `Err(PerformCreationError)` if rendering fails, slug validation
-/// fails, attempts to find a unique slug are exhausted, or storage fails.
+/// Returns `Err(PerformCreationError)` if slug validation fails, attempts to
+/// find a unique slug are exhausted, or storage fails.
 #[allow(clippy::too_many_arguments)]
 pub async fn perform_post_creation(
     storage: &dyn PostStorage,
@@ -272,12 +248,9 @@ pub async fn perform_post_creation(
                     .ok_or(PerformCreationError::CreatedNotFound)?;
                 return Ok(record);
             }
-            Err(CreateRenderedPostError::Storage(CreatePostError::SlugConflict)) => {}
-            Err(CreateRenderedPostError::Storage(CreatePostError::Internal(e))) => {
+            Err(CreatePostError::SlugConflict) => {}
+            Err(CreatePostError::Internal(e)) => {
                 return Err(PerformCreationError::Storage(e));
-            }
-            Err(CreateRenderedPostError::Render(e)) => {
-                return Err(PerformCreationError::Render(e));
             }
         }
     }
@@ -567,62 +540,6 @@ mod tests {
         assert_eq!(err.to_string(), "created post not found");
     }
 
-    #[test]
-    fn create_rendered_post_error_from_render() {
-        let err: CreateRenderedPostError = RenderError::OrgRender("bad".to_string()).into();
-        assert!(err.to_string().contains("org-mode render error"));
-    }
-
-    #[test]
-    fn update_rendered_post_error_from_render() {
-        let err: UpdateRenderedPostError = RenderError::OrgRender("bad".to_string()).into();
-        assert!(err.to_string().contains("org-mode render error"));
-    }
-
-    #[test]
-    fn create_rendered_post_error_debug() {
-        let err: CreateRenderedPostError = RenderError::OrgRender("x".to_string()).into();
-        let debug = format!("{:?}", err);
-        assert!(debug.contains("Render"));
-    }
-
-    #[test]
-    fn update_rendered_post_error_debug() {
-        let err: UpdateRenderedPostError = RenderError::OrgRender("x".to_string()).into();
-        let debug = format!("{:?}", err);
-        assert!(debug.contains("Render"));
-    }
-
-    #[test]
-    fn create_rendered_post_error_from_storage_display() {
-        use crate::CreatePostError;
-        let err: CreateRenderedPostError = CreatePostError::SlugConflict.into();
-        assert!(err.to_string().contains("slug"));
-    }
-
-    #[test]
-    fn create_rendered_post_error_from_storage_debug() {
-        use crate::CreatePostError;
-        let err: CreateRenderedPostError = CreatePostError::SlugConflict.into();
-        let debug = format!("{:?}", err);
-        assert!(debug.contains("Storage"));
-    }
-
-    #[test]
-    fn update_rendered_post_error_from_storage_display() {
-        use crate::UpdatePostError;
-        let err: UpdateRenderedPostError = UpdatePostError::NotFound.into();
-        assert!(err.to_string().contains("not found"));
-    }
-
-    #[test]
-    fn update_rendered_post_error_from_storage_debug() {
-        use crate::UpdatePostError;
-        let err: UpdateRenderedPostError = UpdatePostError::NotFound.into();
-        let debug = format!("{:?}", err);
-        assert!(debug.contains("Storage"));
-    }
-
     // -- PerformUpdateError tests --
 
     #[test]
@@ -653,12 +570,6 @@ mod tests {
     fn perform_update_error_unauthorized_display() {
         let err = PerformUpdateError::Unauthorized;
         assert_eq!(err.to_string(), "not authorized");
-    }
-
-    #[test]
-    fn perform_update_error_from_render() {
-        let err: PerformUpdateError = RenderError::OrgRender("bad".to_string()).into();
-        assert!(err.to_string().contains("org-mode render error"));
     }
 
     #[test]

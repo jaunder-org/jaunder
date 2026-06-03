@@ -56,8 +56,3 @@ pub use sqlite::{
 };
 pub use user_config::*;
 pub use users::*;
-
-// `RenderError` lives in `common::render` but is part of storage's public
-// surface: `web` and `server` match on it via the `Perform*Error::Render`
-// arms, so re-export it here to keep the `storage::RenderError` path stable.
-pub use common::render::RenderError;
