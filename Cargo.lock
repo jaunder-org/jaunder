@@ -3957,8 +3957,6 @@ dependencies = [
  "flate2",
  "futures-util",
  "log",
- "orgize",
- "pulldown-cmark",
  "rand 0.9.4",
  "serde",
  "serde_json",

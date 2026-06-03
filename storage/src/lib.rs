@@ -12,9 +12,9 @@ mod helpers;
 mod invites;
 mod media;
 mod password;
+mod post_service;
 mod postgres;
 mod posts;
-mod render;
 mod sessions;
 mod site_config;
 mod smtp;
@@ -36,6 +36,7 @@ pub use feed_events::*;
 pub use invites::*;
 pub use media::*;
 pub use password::*;
+pub use post_service::*;
 pub use postgres::{
     create_postgres_database_and_role, resolved_postgres_options, PgBootstrapError,
     PostgresAtomicOps, PostgresEmailVerificationStorage, PostgresFeedCacheStorage,
@@ -44,7 +45,6 @@ pub use postgres::{
     PostgresSiteConfigStorage, PostgresUserConfigStorage, PostgresUserStorage,
 };
 pub use posts::*;
-pub use render::*;
 pub use sessions::*;
 pub use site_config::*;
 pub use smtp::*;
@@ -56,3 +56,8 @@ pub use sqlite::{
 };
 pub use user_config::*;
 pub use users::*;
+
+// `RenderError` lives in `common::render` but is part of storage's public
+// surface: `web` and `server` match on it via the `Perform*Error::Render`
+// arms, so re-export it here to keep the `storage::RenderError` path stable.
+pub use common::render::RenderError;
