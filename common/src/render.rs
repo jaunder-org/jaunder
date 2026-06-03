@@ -48,29 +48,16 @@ impl FromStr for PostFormat {
 }
 
 // ---------------------------------------------------------------------------
-// Render errors
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Error)]
-pub enum RenderError {
-    #[error("org-mode render error: {0}")]
-    OrgRender(String),
-}
-
-// ---------------------------------------------------------------------------
 // Pure rendering functions
 // ---------------------------------------------------------------------------
 
-/// Renders `body` to HTML based on `format`. Pure function.
-///
-/// # Errors
-///
-/// Returns `Err(RenderError)` if the body cannot be rendered for the given format.
-pub fn render(body: &str, format: &PostFormat) -> Result<String, RenderError> {
+/// Renders `body` to HTML based on `format`. Pure, infallible function.
+#[must_use]
+pub fn render(body: &str, format: &PostFormat) -> String {
     match format {
-        PostFormat::Markdown => Ok(render_markdown(body)),
+        PostFormat::Markdown => render_markdown(body),
         PostFormat::Org => render_org(body),
-        PostFormat::Html => Ok(body.to_string()),
+        PostFormat::Html => body.to_string(),
     }
 }
 
@@ -223,12 +210,8 @@ fn render_markdown(body: &str) -> String {
 }
 
 /// Renders Org-mode to HTML using orgize.
-fn render_org(body: &str) -> Result<String, RenderError> {
-    let org = orgize::Org::parse(body);
-    let mut buf = Vec::new();
-    org.write_html(&mut buf)
-        .map_err(|e| RenderError::OrgRender(e.to_string()))?;
-    String::from_utf8(buf).map_err(|e| RenderError::OrgRender(e.to_string()))
+fn render_org(body: &str) -> String {
+    orgize::Org::parse(body).to_html()
 }
 
 #[cfg(test)]
@@ -372,20 +355,20 @@ mod tests {
 
     #[test]
     fn org_headings() {
-        let html = render_org("* H1\n** H2").unwrap();
+        let html = render_org("* H1\n** H2");
         assert!(html.contains("H1"));
         assert!(html.contains("H2"));
     }
 
     #[test]
     fn org_paragraph() {
-        let html = render_org("Hello, org world!").unwrap();
+        let html = render_org("Hello, org world!");
         assert!(html.contains("Hello, org world!"));
     }
 
     #[test]
     fn org_bold_italic_code() {
-        let html = render_org("*bold* /italic/ ~code~").unwrap();
+        let html = render_org("*bold* /italic/ ~code~");
         assert!(html.contains("<b>bold</b>"));
         assert!(html.contains("<i>italic</i>"));
         assert!(html.contains("<code>code</code>"));
@@ -393,27 +376,30 @@ mod tests {
 
     #[test]
     fn org_list() {
-        let html = render_org("- alpha\n- beta").unwrap();
+        let html = render_org("- alpha\n- beta");
         assert!(html.contains("alpha"));
         assert!(html.contains("beta"));
     }
 
     #[test]
     fn org_code_block() {
-        let html = render_org("#+BEGIN_SRC rust\nfn main() {}\n#+END_SRC").unwrap();
+        let html = render_org("#+BEGIN_SRC rust\nfn main() {}\n#+END_SRC");
         assert!(html.contains("fn main()"));
     }
 
     #[test]
     fn org_link() {
-        let html = render_org("[[https://example.com][example]]").unwrap();
-        assert!(html.contains("https://example.com"));
+        let html = render_org("[[https://example.com][example]]");
+        assert!(
+            html.contains("<a href=\"https://example.com\""),
+            "expected an anchor element, got: {html}"
+        );
         assert!(html.contains("example"));
     }
 
     #[test]
     fn org_empty_input() {
-        let html = render_org("").unwrap();
+        let html = render_org("");
         // Empty input should not contain any visible text content
         // (orgize may produce structural HTML tags for empty input)
         let stripped = html
@@ -431,13 +417,13 @@ mod tests {
 
     #[test]
     fn render_dispatches_markdown() {
-        let result = render("**bold**", &PostFormat::Markdown).unwrap();
+        let result = render("**bold**", &PostFormat::Markdown);
         assert!(result.contains("<strong>bold</strong>"));
     }
 
     #[test]
     fn render_dispatches_org() {
-        let result = render("*bold*", &PostFormat::Org).unwrap();
+        let result = render("*bold*", &PostFormat::Org);
         assert!(result.contains("<b>bold</b>"));
     }
 
@@ -503,21 +489,6 @@ mod tests {
             derive_post_metadata(None, "   \n\t", &PostFormat::Markdown),
             None
         );
-    }
-
-    // -- Error display tests --
-
-    #[test]
-    fn render_error_display() {
-        let err = RenderError::OrgRender("parse failed".to_string());
-        assert_eq!(err.to_string(), "org-mode render error: parse failed");
-    }
-
-    #[test]
-    fn render_error_debug() {
-        let err = RenderError::OrgRender("test".to_string());
-        let debug = format!("{:?}", err);
-        assert!(debug.contains("OrgRender"));
     }
 
     #[test]
@@ -621,6 +592,6 @@ mod tests {
     #[test]
     fn render_html_format_is_identity() {
         let body = "<p>hi <b>there</b></p>";
-        assert_eq!(render(body, &PostFormat::Html).unwrap(), body.to_string());
+        assert_eq!(render(body, &PostFormat::Html), body.to_string());
     }
 }

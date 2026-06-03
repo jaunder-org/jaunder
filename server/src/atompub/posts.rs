@@ -193,7 +193,7 @@ fn update_status(err: &storage::PerformUpdateError) -> StatusCode {
         storage::PerformUpdateError::NotFound | storage::PerformUpdateError::Unauthorized => {
             StatusCode::NOT_FOUND
         }
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
+        storage::PerformUpdateError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
@@ -409,7 +409,7 @@ pub async fn member_put(
 mod tests {
     use super::{creation_status, update_status};
     use axum::http::StatusCode;
-    use storage::{PerformCreationError, PerformUpdateError, RenderError};
+    use storage::{PerformCreationError, PerformUpdateError};
 
     #[test]
     fn creation_status_maps_validation_to_400_else_500() {
@@ -426,9 +426,7 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
-            creation_status(&PerformCreationError::Render(RenderError::OrgRender(
-                "e".to_string()
-            ))),
+            creation_status(&PerformCreationError::CreatedNotFound),
             StatusCode::INTERNAL_SERVER_ERROR
         );
     }
@@ -456,9 +454,7 @@ mod tests {
             StatusCode::NOT_FOUND
         );
         assert_eq!(
-            update_status(&PerformUpdateError::Render(RenderError::OrgRender(
-                "e".to_string()
-            ))),
+            update_status(&PerformUpdateError::Storage(sqlx::Error::PoolClosed)),
             StatusCode::INTERNAL_SERVER_ERROR
         );
     }

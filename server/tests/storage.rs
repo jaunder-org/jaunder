@@ -5433,7 +5433,7 @@ async fn assert_create_rendered_post_org(state: &std::sync::Arc<storage::AppStat
 }
 
 async fn assert_create_rendered_post_slug_conflict(state: &std::sync::Arc<storage::AppState>) {
-    use storage::CreateRenderedPostError;
+    use storage::CreatePostError;
 
     let user_id = state
         .users
@@ -5477,7 +5477,7 @@ async fn assert_create_rendered_post_slug_conflict(state: &std::sync::Arc<storag
     .unwrap_err();
 
     assert!(
-        matches!(err, CreateRenderedPostError::Storage(_)),
+        matches!(err, CreatePostError::SlugConflict),
         "expected Storage error, got {err:?}"
     );
     assert!(
@@ -5568,7 +5568,7 @@ async fn assert_update_rendered_post_org(state: &std::sync::Arc<storage::AppStat
 }
 
 async fn assert_update_rendered_post_not_found(state: &std::sync::Arc<storage::AppState>) {
-    use storage::UpdateRenderedPostError;
+    use storage::UpdatePostError;
 
     let err = update_rendered_post(
         state.posts.as_ref(),
@@ -5585,7 +5585,7 @@ async fn assert_update_rendered_post_not_found(state: &std::sync::Arc<storage::A
     .unwrap_err();
 
     assert!(
-        matches!(err, UpdateRenderedPostError::Storage(_)),
+        matches!(err, UpdatePostError::NotFound),
         "expected Storage error, got {err:?}"
     );
     assert!(
