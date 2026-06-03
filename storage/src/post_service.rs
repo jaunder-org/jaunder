@@ -1,3 +1,9 @@
+//! Post create/update orchestration over the [`PostStorage`] trait.
+//!
+//! Validates input, derives titles/slugs (via `common::render`), renders the
+//! body, and performs the storage write with slug-collision retry. Shared by
+//! the `web` and `server` `AtomPub` front-ends.
+
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
