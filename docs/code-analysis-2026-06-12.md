@@ -270,6 +270,12 @@ A handful of variants dissolve a structured error into `Display` text and must b
 
 Minor consistency fix alongside: `PerformUpdateError::Storage(sqlx::Error)` / `PerformCreationError::Storage(sqlx::Error)` retain the value but not via `#[from]`/`#[source]`, so it isn't wired into the `source()` chain.
 
+> **Implementation note (kq8w.15, 2026-06-13): two table rows oversimplified the source type.**
+> - **`UserAuthError::Internal` is heterogeneous, not just `sqlx::Error`.** Its 4 sites wrap a `sqlx::Error` (lookup, update), an `io::Error` (`verify_password`), *and* a record-conversion error (`build_user_record`). `#[from] sqlx::Error` would not compile. Shipped as `Internal(#[source] Box<dyn Error + Send + Sync>)` — preserves `source()` for every site; the boundary still `downcast_ref::<sqlx::Error>()` for SQLSTATE/timeout classification.
+> - **`MailError::Send` is likewise heterogeneous** (lettre `AddressError`, SMTP error, `serde_json::Error`, file-capture `io::Error`) → also `Send(#[source] Box<dyn Error + Send + Sync>)`.
+> - **`RegenerateError::BadUrl` carries the offending URL string as *context*, not a swallowed error** — its producer is `parse() -> Option`, so there is no underlying error object to preserve. Left as `BadUrl(String)`. (`RegenerateError::Storage` is single-source over the generic `storage_err` helper and became `Box`-sourced for consistency; the §3.5 `FeedSurface` work, kq8w.17, may later make `parse` fallible and give `BadUrl` a typed source.)
+> - `PerformCreationError::InvalidSlug` and the two `Storage(sqlx::Error)` consistency fixes landed via clean `#[from]`/`#[source]` as written.
+
 #### B. Make the internal carrier structured, and emit fields at the boundary *(the one structural change — contained to `web/src/error.rs`)*
 
 Replace `InternalError`'s flat `operator_message: String` (and the `error_with_sources` concatenation that feeds it) with discrete, queryable data:

@@ -10,7 +10,7 @@ pub enum RegenerateError {
     #[error("unparseable feed_url: {0}")]
     BadUrl(String),
     #[error("storage error: {0}")]
-    Storage(String),
+    Storage(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// Regenerates a feed for the given URL by fetching published posts and
@@ -114,8 +114,8 @@ pub async fn regenerate_feed(
     Ok(row)
 }
 
-fn storage_err<E: std::fmt::Display>(e: E) -> RegenerateError {
-    RegenerateError::Storage(e.to_string())
+fn storage_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> RegenerateError {
+    RegenerateError::Storage(Box::new(e))
 }
 
 fn percent_encode_path(path: &str) -> String {
@@ -179,6 +179,16 @@ mod tests {
     fn percent_encode_path_encodes_query_marker() {
         let encoded = percent_encode_path("/feed.rss?key=value");
         assert!(encoded.contains("%3F"));
+    }
+
+    #[test]
+    fn regenerate_error_storage_preserves_sqlx_source() {
+        use std::error::Error;
+        // §3.1a: storage_err boxes the originating error as a typed source
+        // (downcastable for classification) instead of stringifying it.
+        let err = storage_err(sqlx::Error::RowNotFound);
+        let source = err.source().expect("Storage should expose a source");
+        assert!(source.downcast_ref::<sqlx::Error>().is_some());
     }
 
     #[test]

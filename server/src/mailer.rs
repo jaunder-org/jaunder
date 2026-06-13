@@ -86,7 +86,7 @@ impl MailSender for LettreMailSender {
             .as_ref()
             .map(|a| a.to_string().parse())
             .transpose()
-            .map_err(|e: lettre::address::AddressError| MailError::Send(e.to_string()))?
+            .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))?
             .unwrap_or_else(|| self.sender.clone());
 
         let mut builder = Message::builder().from(from);
@@ -95,19 +95,19 @@ impl MailSender for LettreMailSender {
             let mailbox: Mailbox = to_addr
                 .to_string()
                 .parse()
-                .map_err(|e: lettre::address::AddressError| MailError::Send(e.to_string()))?;
+                .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))?;
             builder = builder.to(mailbox);
         }
 
         let email = builder
             .subject(&message.subject)
             .body(message.body_text.clone())
-            .map_err(|e| MailError::Send(e.to_string()))?;
+            .map_err(|e| MailError::Send(Box::new(e)))?;
 
         self.mailer
             .send(email)
             .await
-            .map_err(|e| MailError::Send(e.to_string()))?;
+            .map_err(|e| MailError::Send(Box::new(e)))?;
 
         Ok(())
     }
@@ -143,8 +143,7 @@ impl MailSender for FileMailSender {
             "subject": message.subject,
             "body_text": message.body_text,
         });
-        let mut line =
-            serde_json::to_string(&record).map_err(|e| MailError::Send(e.to_string()))?;
+        let mut line = serde_json::to_string(&record).map_err(|e| MailError::Send(Box::new(e)))?;
         line.push('\n');
 
         let path = self.path.clone();
@@ -153,13 +152,13 @@ impl MailSender for FileMailSender {
                 .create(true)
                 .append(true)
                 .open(&path)
-                .map_err(|e| MailError::Send(e.to_string()))?;
+                .map_err(|e| MailError::Send(Box::new(e)))?;
             file.write_all(line.as_bytes())
-                .map_err(|e| MailError::Send(e.to_string()))?;
+                .map_err(|e| MailError::Send(Box::new(e)))?;
             Ok::<(), MailError>(())
         })
         .await
-        .map_err(|e| MailError::Send(e.to_string()))?
+        .map_err(|e| MailError::Send(Box::new(e)))?
     }
 }
 

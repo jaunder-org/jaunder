@@ -256,7 +256,7 @@ pub fn perform_creation_error(err: PerformCreationError) -> InternalError {
         PerformCreationError::NoSlugFromPost => InternalError::validation(
             "post must contain at least one ASCII letter or digit for its slug",
         ),
-        PerformCreationError::InvalidSlug(msg) => InternalError::validation(msg),
+        PerformCreationError::InvalidSlug(e) => InternalError::validation(e.to_string()),
         PerformCreationError::Exhausted(_) => {
             InternalError::server_message("unable to allocate a unique slug after 100 attempts")
         }
@@ -316,7 +316,7 @@ mod tests {
             WebError::Validation { .. }
         ));
         assert!(matches!(
-            perform_creation_error(PerformCreationError::InvalidSlug("invalid".to_string()))
+            perform_creation_error(PerformCreationError::InvalidSlug(common::slug::InvalidSlug))
                 .public(),
             WebError::Validation { .. }
         ));

@@ -104,7 +104,7 @@ impl UserStorage for SqliteUserStorage {
             "storage.sqlite.user.authenticate.lookup_user"
         ))
         .await
-        .map_err(|e| UserAuthError::Internal(e.to_string()))?;
+        .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
 
         let Some((
             user_id,
@@ -135,7 +135,7 @@ impl UserStorage for SqliteUserStorage {
                 "storage.sqlite.user.authenticate.verify_password"
             ))
             .await
-            .map_err(|e| UserAuthError::Internal(e.to_string()))?;
+            .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
 
         if !valid {
             return Err(UserAuthError::InvalidCredentials);
@@ -151,7 +151,7 @@ impl UserStorage for SqliteUserStorage {
                 "storage.sqlite.user.authenticate.update_last_authenticated_at"
             ))
             .await
-            .map_err(|e| UserAuthError::Internal(e.to_string()))?;
+            .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
 
         crate::helpers::build_user_record((
             user_id,
@@ -164,7 +164,7 @@ impl UserStorage for SqliteUserStorage {
             email_verified,
             is_operator,
         ))
-        .map_err(|e| UserAuthError::Internal(e.to_string()))
+        .map_err(|e| UserAuthError::Internal(Box::new(e)))
     }
 
     async fn get_user(&self, user_id: i64) -> sqlx::Result<Option<UserRecord>> {
@@ -261,7 +261,16 @@ mod tests {
         let username: Username = "alice".parse().unwrap();
         let password: Password = "password123".parse().unwrap();
         let result = storage.authenticate(&username, &password).await;
-        assert!(matches!(result, Err(UserAuthError::Internal(_))));
+        // §3.1a: the underlying sqlx::Error is preserved as a typed source
+        // (not stringified), so the boundary can classify it.
+        assert!(
+            matches!(
+                result,
+                Err(UserAuthError::Internal(ref source))
+                    if source.downcast_ref::<sqlx::Error>().is_some()
+            ),
+            "expected Internal carrying a sqlx::Error source"
+        );
     }
 
     #[tokio::test]

@@ -30,8 +30,12 @@ pub enum MailError {
     #[error("mail sender is not configured")]
     NotConfigured,
     /// The underlying transport returned an error.
+    ///
+    /// Carries the originating error (lettre address/SMTP error, JSON
+    /// serialization, or file-capture I/O) as a typed source rather than a
+    /// flattened string.
     #[error("failed to send email: {0}")]
-    Send(String),
+    Send(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +144,17 @@ mod tests {
             matches!(result, Err(MailError::NotConfigured)),
             "expected NotConfigured, got {result:?}"
         );
+    }
+
+    #[test]
+    fn mail_error_send_preserves_typed_source() {
+        use std::error::Error;
+        // §3.1a: Send carries the originating error as a typed source rather
+        // than a flattened string.
+        let io = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+        let err = MailError::Send(Box::new(io));
+        let source = err.source().expect("Send should expose a source");
+        assert!(source.downcast_ref::<std::io::Error>().is_some());
     }
 
     #[tokio::test]

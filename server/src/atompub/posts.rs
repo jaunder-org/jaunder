@@ -422,7 +422,9 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
-            creation_status(&PerformCreationError::InvalidSlug("x".to_string())),
+            creation_status(&PerformCreationError::InvalidSlug(
+                common::slug::InvalidSlug
+            )),
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
