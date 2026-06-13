@@ -2102,7 +2102,7 @@
     {
       "file": "web/src/error.rs",
       "function": "server_boundary",
-      "line": 188,
+      "line": 176,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2903,7 +2903,7 @@
     {
       "file": "web/src/error.rs",
       "function": "error_with_sources",
-      "line": 208,
+      "line": 196,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -4315,7 +4315,7 @@
     },
     {
       "file": "web/src/error.rs",
-      "function": "WebError::storage",
+      "function": "WebError::server_message",
       "line": 52,
       "cyclomatic": 1.0,
       "coverage": 100.0,
@@ -4324,7 +4324,7 @@
     },
     {
       "file": "web/src/error.rs",
-      "function": "WebError::server",
+      "function": "WebError::server_function",
       "line": 58,
       "cyclomatic": 1.0,
       "coverage": 100.0,
@@ -4333,26 +4333,8 @@
     },
     {
       "file": "web/src/error.rs",
-      "function": "WebError::server_message",
-      "line": 64,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "web"
-    },
-    {
-      "file": "web/src/error.rs",
-      "function": "WebError::server_function",
-      "line": 70,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "web"
-    },
-    {
-      "file": "web/src/error.rs",
       "function": "WebError::from_server_fn_error",
-      "line": 80,
+      "line": 68,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4361,7 +4343,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::unauthorized",
-      "line": 94,
+      "line": 82,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4370,7 +4352,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::not_found",
-      "line": 98,
+      "line": 86,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4379,7 +4361,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::validation",
-      "line": 107,
+      "line": 95,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4388,7 +4370,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::conflict",
-      "line": 116,
+      "line": 104,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4397,7 +4379,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::storage",
-      "line": 125,
+      "line": 113,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4406,7 +4388,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::server",
-      "line": 135,
+      "line": 123,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4415,7 +4397,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::server_message",
-      "line": 145,
+      "line": 133,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4424,7 +4406,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::masked",
-      "line": 155,
+      "line": 143,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4433,7 +4415,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::public",
-      "line": 160,
+      "line": 148,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4442,7 +4424,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::operator_message",
-      "line": 165,
+      "line": 153,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4451,7 +4433,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::into_public",
-      "line": 170,
+      "line": 158,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4460,7 +4442,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::new",
-      "line": 174,
+      "line": 162,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,

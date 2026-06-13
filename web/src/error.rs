@@ -49,18 +49,6 @@ impl WebError {
         }
     }
 
-    pub fn storage(error: impl Error + 'static) -> Self {
-        Self::Storage {
-            message: error_with_sources(&error),
-        }
-    }
-
-    pub fn server(error: impl Error + 'static) -> Self {
-        Self::Server {
-            message: error_with_sources(&error),
-        }
-    }
-
     pub fn server_message(message: impl Into<String>) -> Self {
         Self::Server {
             message: message.into(),
@@ -205,7 +193,7 @@ pub async fn server_boundary<T>(
     }
 }
 
-pub fn error_with_sources(error: &(dyn Error + 'static)) -> String {
+pub(crate) fn error_with_sources(error: &(dyn Error + 'static)) -> String {
     let mut message = error.to_string();
     let mut source = error.source();
 
@@ -307,27 +295,32 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "ssr")]
     #[test]
-    fn storage_and_server_errors_preserve_source_chain() {
-        let storage = WebError::storage(OuterError {
-            source: SourceError,
-        });
-        let server = WebError::server(OuterError {
-            source: SourceError,
-        });
-
-        assert_eq!(
-            storage,
-            WebError::Storage {
-                message: "outer failure: source context".to_string()
-            }
-        );
-        assert_eq!(
-            server,
-            WebError::Server {
-                message: "outer failure: source context".to_string()
-            }
-        );
+    fn masked_internal_errors_never_leak_source_chain_to_public() {
+        // §2.4 regression guard: storage/server failures reach the client only
+        // through `InternalError`, which must mask. The raw source chain may
+        // appear in the operator message (logged) but never in the public
+        // `WebError` sent to the browser. The leaky `WebError::storage`/`server`
+        // constructors that embedded the chain were removed for this reason.
+        for internal in [
+            InternalError::storage(OuterError {
+                source: SourceError,
+            }),
+            InternalError::server(OuterError {
+                source: SourceError,
+            }),
+        ] {
+            assert!(
+                internal.operator_message().contains("source context"),
+                "operator message should retain the source chain for logs"
+            );
+            let public = internal.into_public();
+            assert!(
+                !public.to_string().contains("source context"),
+                "public error leaked source detail: {public}"
+            );
+        }
     }
 
     #[test]
