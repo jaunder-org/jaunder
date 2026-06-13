@@ -233,8 +233,7 @@ nix build .#checks.x86_64-linux.postgres-integration
 - Files containing Leptos `view!` macros are additionally formatted with `leptosfmt` (run it first, then `cargo fmt`).
 - Follow Conventional Commits: `<type>: <imperative summary, ≤72 chars>`, where `<type>` is one of `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `build`, `ci`, `chore` (optional scope, e.g. `fix(storage): …`). Reference the beads issue the commit addresses with a `Refs: <bead-id>` trailer (the bead carries milestone/epic context, so the subject needs no `M`/`§` prefix), and keep the `Co-Authored-By` trailer required of agent commits.
 - Every commit that changes behavior must include appropriate tests, unless the user explicitly waives this requirement. (Docs/build/chore commits with no behavior change are out of scope, not waivers.)
-- Never use `.unwrap()` anywhere, including tests — use `.expect("context")` in tests instead.
-- Never use `.expect()` in production code; it is permitted only in tests.
+- Never use `.unwrap()` or `.expect()` in production code; both are permitted in tests. This is enforced by clippy (`unwrap_used`/`expect_used` denied outside tests).
 - Use Rust's type system to make invalid states impossible with infallible types.
 - At boundaries (`#[server]` functions, DB calls), parse data into infallible types, reject invalid data, and handle `Result`/`Option` conversion explicitly.
 - Keep data transformations pure where possible so they are easy to test and reason about.

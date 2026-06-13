@@ -218,7 +218,9 @@ impl MediaManager {
     ///
     /// # Panics
     ///
-    /// Panics if the content-addressed target path has no parent directory.
+    /// Panics if the content-addressed target path has no parent directory,
+    /// which is unreachable: it is built by joining `media`/`relative_path`
+    /// onto the storage root, so it always ends in a filename component.
     async fn finalize_upload(
         &self,
         user_id: i64,
@@ -235,9 +237,12 @@ impl MediaManager {
         }
         let relative_path = media_path("upload", &metadata.sha256_hex, &metadata.filename);
         let target_path = self.storage_path.join("media").join(&relative_path);
+        // `target_path` always ends in a filename component, so it always has a
+        // parent; the expect is provably unreachable.
+        #[allow(clippy::expect_used)]
         let hash_dir = target_path
             .parent()
-            .expect("target_path should have parent")
+            .expect("target path has a parent")
             .to_path_buf();
         self.handle_deduplication(&tmp_path.to_path_buf(), &target_path, &hash_dir)
             .await?;

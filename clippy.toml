@@ -1,0 +1,6 @@
+# Allow `.unwrap()` and `.expect()` in test code. They remain denied in
+# production via `[workspace.lints.clippy]` in Cargo.toml, so the lint gate
+# catches either construct leaking into production while leaving test code
+# (including `--all-targets` runs) free to use them.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

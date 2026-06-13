@@ -167,7 +167,7 @@
     {
       "file": "server/src/main.rs",
       "function": "run",
-      "line": 21,
+      "line": 22,
       "cyclomatic": 23.0,
       "coverage": 81.66666666666667,
       "crap": 26.259717592592587,
@@ -887,7 +887,7 @@
     {
       "file": "server/src/media_manager.rs",
       "function": "MediaManager::stream_to_temp",
-      "line": 308,
+      "line": 313,
       "cyclomatic": 7.0,
       "coverage": 100.0,
       "crap": 7.0,
@@ -1220,7 +1220,7 @@
     {
       "file": "server/src/media_manager.rs",
       "function": "MediaManager::upload_bytes",
-      "line": 275,
+      "line": 280,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -1589,7 +1589,7 @@
     {
       "file": "web/src/pages/mod.rs",
       "function": "App",
-      "line": 68,
+      "line": 69,
       "cyclomatic": 4.0,
       "coverage": 90.0,
       "crap": 4.016,
@@ -1958,7 +1958,7 @@
     {
       "file": "server/src/media_manager.rs",
       "function": "MediaManager::finalize_upload",
-      "line": 222,
+      "line": 224,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -1967,7 +1967,7 @@
     {
       "file": "server/src/media_manager.rs",
       "function": "MediaManager::first_file_in_dir",
-      "line": 336,
+      "line": 341,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
