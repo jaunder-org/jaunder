@@ -40,7 +40,7 @@
   "server/src/lib.rs": 97.8962,
   "server/src/mailer.rs": 95.3608,
   "server/src/main.rs": 94.0141,
-  "server/src/media.rs": 95.7895,
+  "server/src/media.rs": 98.1013,
   "server/src/media_manager.rs": 99.2021,
   "server/src/observability.rs": 99.2366,
   "storage/src/auth.rs": 100,

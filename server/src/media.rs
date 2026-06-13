@@ -106,21 +106,7 @@ pub async fn serve_handler(
     Path(params): Path<ServeParams>,
     req_headers: axum::http::HeaderMap,
 ) -> Result<Response, StatusCode> {
-    // Validate source.
-    let source: MediaSource = params.source.parse().map_err(|_| StatusCode::NOT_FOUND)?;
-
-    // Validate prefix segments match hash.
-    if !params.hash.starts_with(&params.p1) || !params.hash[2..].starts_with(&params.p2) {
-        return Err(StatusCode::NOT_FOUND);
-    }
-
-    let file_path = storage_path
-        .join("media")
-        .join(source.as_str())
-        .join(&params.p1)
-        .join(&params.p2)
-        .join(&params.hash)
-        .join(&params.filename);
+    let (source, file_path) = resolve_media_path(&storage_path, &params)?;
 
     if !file_path.exists() {
         return Err(StatusCode::NOT_FOUND);
@@ -213,3 +199,123 @@ pub async fn proxy_handler(
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/// Validates the serve route's path parameters and resolves the on-disk file
+/// path, returning `NOT_FOUND` for any invalid component.
+///
+/// `hash` is an attacker-controlled URL segment, so it must be the canonical
+/// 64-char lowercase hex content hash *before* it is sliced or joined into a
+/// path — otherwise `params.hash[2..]` panics on a short or non-ASCII value,
+/// a denial-of-service vector. `p1`/`p2` must be the matching leading hex pairs
+/// of the hash.
+fn resolve_media_path(
+    storage_path: &std::path::Path,
+    params: &ServeParams,
+) -> Result<(MediaSource, PathBuf), StatusCode> {
+    let source: MediaSource = params.source.parse().map_err(|_| StatusCode::NOT_FOUND)?;
+
+    if !common::media::is_valid_content_hash(&params.hash) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    if !params.hash.starts_with(&params.p1) || !params.hash[2..].starts_with(&params.p2) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let file_path = storage_path
+        .join("media")
+        .join(source.as_str())
+        .join(&params.p1)
+        .join(&params.p2)
+        .join(&params.hash)
+        .join(&params.filename);
+
+    Ok((source, file_path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn params(source: &str, p1: &str, p2: &str, hash: &str, filename: &str) -> ServeParams {
+        ServeParams {
+            source: source.to_string(),
+            p1: p1.to_string(),
+            p2: p2.to_string(),
+            hash: hash.to_string(),
+            filename: filename.to_string(),
+        }
+    }
+
+    #[test]
+    fn resolve_media_path_builds_path_for_valid_params() {
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let p = params("upload", "e3", "b0", hash, "photo.jpg");
+
+        let (source, path) =
+            resolve_media_path(Path::new("/data"), &p).expect("valid params should resolve");
+
+        assert_eq!(source, MediaSource::Upload);
+        assert_eq!(
+            path,
+            Path::new("/data")
+                .join("media")
+                .join("upload")
+                .join("e3")
+                .join("b0")
+                .join(hash)
+                .join("photo.jpg")
+        );
+    }
+
+    #[test]
+    fn resolve_media_path_rejects_unknown_source() {
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let p = params("bogus", "e3", "b0", hash, "photo.jpg");
+        assert_eq!(
+            resolve_media_path(Path::new("/data"), &p),
+            Err(StatusCode::NOT_FOUND)
+        );
+    }
+
+    #[test]
+    fn resolve_media_path_rejects_short_hash() {
+        // The historical panic input: shorter than 2 bytes.
+        let p = params("upload", "a", "a", "a", "photo.jpg");
+        assert_eq!(
+            resolve_media_path(Path::new("/data"), &p),
+            Err(StatusCode::NOT_FOUND)
+        );
+    }
+
+    #[test]
+    fn resolve_media_path_rejects_non_hex_hash() {
+        let hash = "z".repeat(64);
+        let p = params("upload", "zz", "zz", &hash, "photo.jpg");
+        assert_eq!(
+            resolve_media_path(Path::new("/data"), &p),
+            Err(StatusCode::NOT_FOUND)
+        );
+    }
+
+    #[test]
+    fn resolve_media_path_rejects_p1_prefix_mismatch() {
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let p = params("upload", "ff", "b0", hash, "photo.jpg");
+        assert_eq!(
+            resolve_media_path(Path::new("/data"), &p),
+            Err(StatusCode::NOT_FOUND)
+        );
+    }
+
+    #[test]
+    fn resolve_media_path_rejects_p2_prefix_mismatch() {
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let p = params("upload", "e3", "ff", hash, "photo.jpg");
+        assert_eq!(
+            resolve_media_path(Path::new("/data"), &p),
+            Err(StatusCode::NOT_FOUND)
+        );
+    }
+}

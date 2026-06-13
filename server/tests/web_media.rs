@@ -391,3 +391,51 @@ async fn delete_media_rejects_unauthenticated_request() {
     );
     assert!(body_str.contains("unauthorized"), "body: {body_str}");
 }
+
+// ─── serve_handler hash validation (security: §2.2) ────────────
+
+async fn media_serve_get(state: Arc<storage::AppState>, uri: &str) -> StatusCode {
+    let request = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .expect("failed to build request");
+
+    let app = jaunder::create_router(
+        test_options(),
+        state,
+        helpers::noop_mailer(),
+        true,
+        helpers::tmp_storage_path(),
+    );
+    app.oneshot(request)
+        .await
+        .expect("router oneshot failed")
+        .status()
+}
+
+#[tokio::test]
+async fn serve_handler_rejects_short_hash_without_panicking() {
+    let base = TempDir::new().expect("failed to create temp dir");
+    let state = test_state(&base).await;
+
+    // A 1-byte hash historically panicked on `params.hash[2..]` because the
+    // prefix check (`hash.starts_with(p1)`) passes and the slice runs off the
+    // end of the string. It must be rejected with 404, not crash the task.
+    let status = media_serve_get(state, "/media/upload/a/a/a/file.txt").await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn serve_handler_rejects_non_hex_hash() {
+    let base = TempDir::new().expect("failed to create temp dir");
+    let state = test_state(&base).await;
+
+    // 64 characters but not lowercase hex — not a canonical content hash.
+    let hash = "z".repeat(64);
+    let uri = format!("/media/upload/zz/zz/{hash}/file.txt");
+    let status = media_serve_get(state, &uri).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

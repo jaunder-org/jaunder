@@ -183,15 +183,6 @@
       "crate": "storage"
     },
     {
-      "file": "server/src/media.rs",
-      "function": "serve_handler",
-      "line": 103,
-      "cyclomatic": 12.0,
-      "coverage": 93.10344827586206,
-      "crap": 12.047234408954857,
-      "crate": "jaunder"
-    },
-    {
       "file": "common/src/atompub/entry.rs",
       "function": "resolve_ref",
       "line": 331,
@@ -325,6 +316,15 @@
       "coverage": 90.625,
       "crap": 10.0823974609375,
       "crate": "storage"
+    },
+    {
+      "file": "server/src/media.rs",
+      "function": "serve_handler",
+      "line": 103,
+      "cyclomatic": 10.0,
+      "coverage": 93.75,
+      "crap": 10.0244140625,
+      "crate": "jaunder"
     },
     {
       "file": "web/src/pages/upload.rs",
@@ -1272,6 +1272,15 @@
       "crate": "jaunder"
     },
     {
+      "file": "server/src/media.rs",
+      "function": "resolve_media_path",
+      "line": 211,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "jaunder"
+    },
+    {
       "file": "server/src/commands.rs",
       "function": "ensure_restore_target_empty",
       "line": 263,
@@ -1832,7 +1841,7 @@
     {
       "file": "common/src/media.rs",
       "function": "detect_content_type",
-      "line": 52,
+      "line": 68,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2472,6 +2481,15 @@
       "file": "common/src/feed/rss.rs",
       "function": "render_rss",
       "line": 16,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "common"
+    },
+    {
+      "file": "common/src/media.rs",
+      "function": "is_valid_content_hash",
+      "line": 25,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -3416,7 +3434,7 @@
     {
       "file": "server/src/media.rs",
       "function": "proxy_handler",
-      "line": 202,
+      "line": 188,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -3785,7 +3803,7 @@
     {
       "file": "common/src/media.rs",
       "function": "media_path",
-      "line": 18,
+      "line": 34,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3794,7 +3812,7 @@
     {
       "file": "common/src/media.rs",
       "function": "media_url",
-      "line": 26,
+      "line": 42,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3803,7 +3821,7 @@
     {
       "file": "common/src/media.rs",
       "function": "should_inline",
-      "line": 32,
+      "line": 48,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
