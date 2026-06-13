@@ -351,6 +351,40 @@ pub(crate) async fn hash_password(password: common::password::Password) -> io::R
         .map_err(io::Error::other)
 }
 
+/// Throwaway password hashed once to seed [`dummy_password_hash`].
+const DUMMY_PASSWORD: &str = "jaunder-timing-equalization-dummy";
+
+/// Valid Argon2id hash (default parameters) used only if runtime hashing of
+/// [`DUMMY_PASSWORD`] ever fails, so initialization stays infallible (no
+/// `unwrap`/`expect` in production). Regenerate with the same parameters as
+/// `common::password::Password::hash` if the Argon2 defaults change.
+const DUMMY_PASSWORD_HASH_FALLBACK: &str =
+    "$argon2id$v=19$m=19456,t=2,p=1$MlXSqqFgPKBHXn92Klja9Q$FCo2fJCKGcEhWHiq+R7lVdfcP/TpFgrVKfK6bMoB3CM";
+
+/// Returns a fixed, valid Argon2id hash used to equalize authentication timing
+/// on the absent-user path, mitigating username enumeration via timing (see
+/// analysis §2.1).
+///
+/// `authenticate` runs a full Argon2 verification only when the username
+/// exists; an attacker can otherwise distinguish "no such user" (fast) from
+/// "wrong password" (slow). The absent path verifies against this hash so both
+/// outcomes take the same time. It is computed once with the same default
+/// Argon2 parameters as real password hashes (`Password::hash`), so the dummy
+/// verification costs the same as a genuine one.
+pub(crate) fn dummy_password_hash() -> &'static str {
+    use common::password::Password;
+    use std::str::FromStr;
+    use std::sync::OnceLock;
+
+    static HASH: OnceLock<String> = OnceLock::new();
+    HASH.get_or_init(|| {
+        Password::from_str(DUMMY_PASSWORD)
+            .ok()
+            .and_then(|p| p.hash().ok())
+            .unwrap_or_else(|| DUMMY_PASSWORD_HASH_FALLBACK.to_string())
+    })
+}
+
 #[tracing::instrument(name = "crypto.password.verify", skip(password, hash))]
 pub(crate) async fn verify_password(
     password: common::password::Password,
@@ -809,5 +843,35 @@ mod tests {
         assert!(!raw.is_empty());
         assert!(!hash.is_empty());
         assert_ne!(raw, hash);
+    }
+
+    #[tokio::test]
+    async fn dummy_password_hash_is_a_valid_verifiable_hash() {
+        // The absent-user authentication path verifies against this hash to
+        // equalize timing (§2.1). It must be a well-formed Argon2 hash so the
+        // verification does real work and returns Ok(false) for a non-matching
+        // password — not a fast Err that would reintroduce a timing oracle.
+        let wrong: common::password::Password = "definitely-not-the-dummy"
+            .parse()
+            .expect("meets minimum length");
+        let result = verify_password(wrong, dummy_password_hash().to_string())
+            .await
+            .expect("dummy hash must be well-formed");
+        assert!(!result, "a non-matching password must verify to false");
+    }
+
+    #[test]
+    fn dummy_password_hash_matches_real_hash_parameters() {
+        // Timing parity requires the dummy hash to carry the same Argon2
+        // parameters as real password hashes (verify cost is derived from the
+        // hash string's encoded params).
+        let real = "some-real-password"
+            .parse::<common::password::Password>()
+            .expect("meets minimum length")
+            .hash()
+            .expect("hashing succeeds");
+        // PHC format: $argon2id$v=19$<params>$<salt>$<hash>
+        let params = |h: &str| h.split('$').nth(3).map(str::to_owned);
+        assert_eq!(params(dummy_password_hash()), params(&real));
     }
 }

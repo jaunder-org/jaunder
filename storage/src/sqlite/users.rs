@@ -119,6 +119,14 @@ impl UserStorage for SqliteUserStorage {
             is_operator,
         )) = row
         else {
+            // Equalize timing with the present-user path to avoid a username
+            // enumeration oracle (§2.1): perform a dummy Argon2 verification
+            // before rejecting. The result is intentionally discarded.
+            let _ = crate::helpers::verify_password(
+                password.clone(),
+                crate::helpers::dummy_password_hash().to_string(),
+            )
+            .await;
             return Err(UserAuthError::InvalidCredentials);
         };
 
