@@ -248,6 +248,7 @@ nix build .#checks.x86_64-linux.postgres-integration
 - Use specialized storage error enums in `common::storage`, such as `UserAuthError` and `CreateUserError`, with `thiserror`.
 - Use `sqlx` unique violation checks (`is_unique_violation()`) to handle "already exists" errors gracefully.
 - Use the `AppState` struct from `common::storage` to bundle storage handles. In web server functions, retrieve it with `expect_context::<Arc<AppState>>()`.
+- **Dependency injection / composition-root invariant (see [ADR-0016](docs/decisions/0016-dependency-injection-and-appstate.md)):** No type may be both (a) a heterogeneous dependency holder and (b) passed beyond the composition root. Declare a component's dependencies as constructor parameters on the component that uses them — do not add a field to a shared bundle to make a dependency reachable. A storage `Backend` factory may mint storage handles, but only the composition root may hold it; it is never injected into a subsystem (that would be a service locator). Services (mailer, WebSub client, background workers) are constructed at the root and injected per-consumer; there is no "services bundle."
 - The web framework is Leptos with SSR via `cargo-leptos`.
 - Leptos components should only render data; business logic belongs in server functions or pure transformation functions.
 - API methods are automatically prefixed with `/api`.
