@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn slow_span_layer_skips_warning_when_below_threshold() {
-        let layer = SlowSpanLayer::new(Duration::from_secs(3600));
+        let layer = SlowSpanLayer::new(Duration::from_hours(1));
         let subscriber = tracing_subscriber::registry().with(layer);
         let _guard = tracing::subscriber::set_default(subscriber);
 
@@ -396,7 +396,9 @@ mod tests {
     fn lock_env_recovers_from_poisoned_mutex() {
         // Poison ENV_LOCK by panicking while holding it inside catch_unwind.
         let _ = std::panic::catch_unwind(|| {
-            let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let _guard = ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             panic!("poison the mutex");
         });
         // lock_env() must recover gracefully from the poisoned mutex.

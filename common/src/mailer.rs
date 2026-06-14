@@ -95,6 +95,7 @@ pub mod test_utils {
         /// # Panics
         ///
         /// Panics if the internal mutex is poisoned.
+        #[allow(clippy::expect_used)] // test double: panicking on a poisoned mutex is fine
         pub fn sent(&self) -> Vec<EmailMessage> {
             self.sent.lock().expect("mutex poisoned").clone()
         }
@@ -102,6 +103,7 @@ pub mod test_utils {
 
     #[async_trait]
     impl MailSender for CapturingMailSender {
+        #[allow(clippy::expect_used)] // test double: panicking on a poisoned mutex is fine
         async fn send_email(&self, message: &EmailMessage) -> Result<(), MailError> {
             self.sent
                 .lock()
@@ -151,7 +153,7 @@ mod tests {
         use std::error::Error;
         // §3.1a: Send carries the originating error as a typed source rather
         // than a flattened string.
-        let io = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+        let io = std::io::Error::other("boom");
         let err = MailError::Send(Box::new(io));
         let source = err.source().expect("Send should expose a source");
         assert!(source.downcast_ref::<std::io::Error>().is_some());
@@ -185,7 +187,7 @@ mod tests {
             body_text: "Hi there!".to_string(),
         };
         assert_eq!(
-            msg.from.as_ref().map(|a| a.as_str()),
+            msg.from.as_ref().map(email_address::EmailAddress::as_str),
             Some("sender@example.com")
         );
         assert_eq!(

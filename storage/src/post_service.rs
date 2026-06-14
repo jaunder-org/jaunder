@@ -518,7 +518,7 @@ mod tests {
     fn test_perform_creation_error_display_and_debug() {
         let err = PerformCreationError::EmptyPost;
         assert_eq!(err.to_string(), "post body is required");
-        let debug = format!("{:?}", err);
+        let debug = format!("{err:?}");
         assert!(debug.contains("EmptyPost"));
 
         let err = PerformCreationError::NoSlugFromPost;
@@ -602,7 +602,7 @@ mod tests {
     #[test]
     fn perform_update_error_debug() {
         let err = PerformUpdateError::EmptyPost;
-        let debug = format!("{:?}", err);
+        let debug = format!("{err:?}");
         assert!(debug.contains("EmptyPost"));
     }
 

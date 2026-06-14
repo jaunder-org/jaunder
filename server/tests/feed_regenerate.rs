@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::unused_async
+)]
+
 mod helpers;
 
 use chrono::Utc;
@@ -158,7 +167,7 @@ async fn regenerate_writes_each_format() {
     for (feed_url, expected_content_type) in &formats {
         let row = regenerate_feed(&state, feed_url)
             .await
-            .expect(&format!("regenerate {feed_url}"));
+            .unwrap_or_else(|_| panic!("regenerate {feed_url}"));
         assert_eq!(
             row.content_type, *expected_content_type,
             "content_type for {feed_url}"

@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn invalid_tag_error_debug() {
         let err: InvalidTag = InvalidTag;
-        let debug_str = format!("{:?}", err);
+        let debug_str = format!("{err:?}");
         assert_eq!(debug_str, "InvalidTag");
     }
 
@@ -239,14 +239,14 @@ mod tests {
         use std::fmt::Write;
         let tag: Tag = "format-test".parse().unwrap();
         let mut buf = String::new();
-        let _ = write!(buf, "{}", tag);
+        let _ = write!(buf, "{tag}");
         assert_eq!(buf, "format-test");
     }
 
     #[test]
     fn tag_debug_impl() {
         let tag: Tag = "debug-tag".parse().unwrap();
-        let debug_str = format!("{:?}", tag);
+        let debug_str = format!("{tag:?}");
         assert!(debug_str.contains("debug-tag"));
     }
 
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn parse_and_validate_tags_skips_empty_and_whitespace_only_tokens() {
         let tags = parse_and_validate_tags(vec![
-            "".to_string(),
+            String::new(),
             "   ".to_string(),
             "rust".to_string(),
             "\t".to_string(),

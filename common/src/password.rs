@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn debug_does_not_expose_value() {
-        let val = std::iter::repeat('a').take(10).collect::<String>();
+        let val = "a".repeat(10);
         let p: Password = val.parse().unwrap();
         let debug_output = format!("{p:?}");
         assert!(!debug_output.contains(&val));
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn hash_and_verify_roundtrip() {
-        let val = std::iter::repeat('a').take(10).collect::<String>();
+        let val = "a".repeat(10);
         let p: Password = val.parse().unwrap();
         let hash = p.hash().expect("hashing should succeed");
         assert!(p.verify(&hash).expect("verification should succeed"));
@@ -133,8 +133,8 @@ mod tests {
 
     #[test]
     fn verify_rejects_wrong_password() {
-        let v1 = std::iter::repeat('a').take(10).collect::<String>();
-        let v2 = std::iter::repeat('b').take(10).collect::<String>();
+        let v1 = "a".repeat(10);
+        let v2 = "b".repeat(10);
         let p1: Password = v1.parse().unwrap();
         let p2: Password = v2.parse().unwrap();
         let hash = p1.hash().unwrap();
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_invalid_hash() {
-        let val = std::iter::repeat('c').take(10).collect::<String>();
+        let val = "c".repeat(10);
         let p: Password = val.parse().unwrap();
         assert!(p.verify("not a valid argon2 hash").is_err());
     }

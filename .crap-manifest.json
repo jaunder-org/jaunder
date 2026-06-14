@@ -1184,7 +1184,7 @@
     {
       "file": "server/src/mailer.rs",
       "function": "build_mailer",
-      "line": 382,
+      "line": 184,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -3893,7 +3893,7 @@
     {
       "file": "common/src/websub/capturing.rs",
       "function": "CapturingWebSubClient::pings",
-      "line": 25,
+      "line": 26,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3902,7 +3902,7 @@
     {
       "file": "common/src/websub/capturing.rs",
       "function": "CapturingWebSubClient::send_publish",
-      "line": 32,
+      "line": 34,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3965,7 +3965,7 @@
     {
       "file": "common/src/mailer.rs",
       "function": "CapturingMailSender::sent",
-      "line": 98,
+      "line": 99,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3974,7 +3974,7 @@
     {
       "file": "common/src/mailer.rs",
       "function": "CapturingMailSender::send_email",
-      "line": 105,
+      "line": 107,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -5018,7 +5018,7 @@
     {
       "file": "storage/src/sqlite/mod.rs",
       "function": "sqlite_pool",
-      "line": 323,
+      "line": 263,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,

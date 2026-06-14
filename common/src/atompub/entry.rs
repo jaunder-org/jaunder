@@ -662,7 +662,7 @@ mod tests {
         let entry = entry_from_xml(xml).expect("parse");
         assert_eq!(entry.id(), "tag:example.com,2026:post/7");
         assert_eq!(
-            entry.published().map(|d| d.to_rfc3339()),
+            entry.published().map(chrono::DateTime::to_rfc3339),
             Some("2026-01-01T00:00:00+00:00".to_string())
         );
         assert_eq!(entry.updated().to_rfc3339(), "2026-01-02T03:04:05+00:00");
@@ -749,11 +749,12 @@ mod tests {
     }
 
     fn sample_entry() -> Entry {
-        let mut entry = Entry::default();
-        entry.id = "tag:example.com,2026:post/1".to_string();
-        entry.title = Text::plain("Hello");
-        entry.updated = chrono::DateTime::parse_from_rfc3339("2026-01-02T00:00:00Z").unwrap();
-        entry
+        Entry {
+            id: "tag:example.com,2026:post/1".to_string(),
+            title: Text::plain("Hello"),
+            updated: chrono::DateTime::parse_from_rfc3339("2026-01-02T00:00:00Z").unwrap(),
+            ..Default::default()
+        }
     }
 
     #[test]

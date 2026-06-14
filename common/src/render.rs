@@ -253,11 +253,11 @@ mod tests {
     #[test]
     fn post_format_debug() {
         let fmt = PostFormat::Markdown;
-        let debug_str = format!("{:?}", fmt);
+        let debug_str = format!("{fmt:?}");
         assert_eq!(debug_str, "Markdown");
 
         let fmt2 = PostFormat::Org;
-        let debug_str2 = format!("{:?}", fmt2);
+        let debug_str2 = format!("{fmt2:?}");
         assert_eq!(debug_str2, "Org");
     }
 

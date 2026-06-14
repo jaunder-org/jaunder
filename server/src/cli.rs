@@ -215,7 +215,7 @@ mod tests {
 
     /// Serializes all tests that read or write the env vars clap resolves at parse time.
     /// `cargo test` runs tests in parallel threads within the same process, so concurrent
-    /// set_var/remove_var calls race against each other.
+    /// `set_var/remove_var` calls race against each other.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn parse(args: &[&str]) -> Cli {

@@ -7,7 +7,7 @@ cargo fmt --check
 prettier --check end2end
 
 echo "--- pre-commit: linting ---"
-cargo clippy -- -D warnings
+cargo clippy --all-targets -- -D warnings
 
 echo "--- pre-commit: running tests ---"
 cargo nextest run

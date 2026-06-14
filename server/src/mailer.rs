@@ -163,6 +163,38 @@ impl MailSender for FileMailSender {
 }
 
 // ---------------------------------------------------------------------------
+// build_mailer
+// ---------------------------------------------------------------------------
+
+use std::sync::Arc;
+
+use common::mailer::NoopMailSender;
+use storage::{load_smtp_config, SiteConfigStorage};
+
+/// Picks a mailer implementation based on environment and stored SMTP config.
+///
+/// In e2e tests, `JAUNDER_MAIL_CAPTURE_FILE` short-circuits to the file-capture
+/// transport. Otherwise falls back to the configured SMTP transport, or the
+/// no-op sender if configuration is absent or invalid.
+///
+/// Lives in `server` (not `storage`) because it depends on lettre and
+/// file-capture transports — concerns that the storage crate is deliberately
+/// kept agnostic of.
+#[tracing::instrument(name = "server.mailer.build", skip(site_config))]
+pub async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender> {
+    if let Ok(path) = std::env::var("JAUNDER_MAIL_CAPTURE_FILE") {
+        return Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>;
+    }
+    match load_smtp_config(site_config).await {
+        Ok(Some(cfg)) => match LettreMailSender::from_config(&cfg) {
+            Ok(sender) => Arc::new(sender) as Arc<dyn MailSender>,
+            Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
+        },
+        Ok(None) | Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -180,7 +212,7 @@ mod tests {
     #[async_trait]
     impl storage::SiteConfigStorage for MapConfigStore {
         async fn get(&self, key: &str) -> sqlx::Result<Option<String>> {
-            Ok(self.0.get(key).map(|v| v.to_string()))
+            Ok(self.0.get(key).map(std::string::ToString::to_string))
         }
 
         async fn set(&self, _key: &str, _value: &str) -> sqlx::Result<()> {
@@ -357,37 +389,5 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("failed to send email"));
-    }
-}
-
-// ---------------------------------------------------------------------------
-// build_mailer
-// ---------------------------------------------------------------------------
-
-use std::sync::Arc;
-
-use common::mailer::NoopMailSender;
-use storage::{load_smtp_config, SiteConfigStorage};
-
-/// Picks a mailer implementation based on environment and stored SMTP config.
-///
-/// In e2e tests, `JAUNDER_MAIL_CAPTURE_FILE` short-circuits to the file-capture
-/// transport. Otherwise falls back to the configured SMTP transport, or the
-/// no-op sender if configuration is absent or invalid.
-///
-/// Lives in `server` (not `storage`) because it depends on lettre and
-/// file-capture transports — concerns that the storage crate is deliberately
-/// kept agnostic of.
-#[tracing::instrument(name = "server.mailer.build", skip(site_config))]
-pub async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender> {
-    if let Ok(path) = std::env::var("JAUNDER_MAIL_CAPTURE_FILE") {
-        return Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>;
-    }
-    match load_smtp_config(site_config).await {
-        Ok(Some(cfg)) => match LettreMailSender::from_config(&cfg) {
-            Ok(sender) => Arc::new(sender) as Arc<dyn MailSender>,
-            Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
-        },
-        Ok(None) | Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
     }
 }

@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::unused_async
+)]
+
 mod helpers;
 
 use chrono::{Datelike, Utc};
@@ -988,7 +997,10 @@ async fn set_email_persists_and_get_user_reflects_it() {
 
     let record = users.get_user(user_id).await.unwrap().unwrap();
     assert_eq!(
-        record.email.as_ref().map(|e| e.as_str()),
+        record
+            .email
+            .as_ref()
+            .map(email_address::EmailAddress::as_str),
         Some("alice@example.com")
     );
     assert!(record.email_verified);
@@ -2175,11 +2187,11 @@ async fn assert_tag_list_pagination(state: &std::sync::Arc<storage::AppState>) {
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: Some(format!("Post {}", i)),
-                slug: format!("post-{}", i).parse().unwrap(),
-                body: format!("Content {}", i),
+                title: Some(format!("Post {i}")),
+                slug: format!("post-{i}").parse().unwrap(),
+                body: format!("Content {i}"),
                 format: PostFormat::Markdown,
-                rendered_html: format!("<p>Content {}</p>", i),
+                rendered_html: format!("<p>Content {i}</p>"),
                 published_at: Some(Utc::now()),
                 summary: None,
             })
@@ -2546,11 +2558,11 @@ async fn assert_many_tags_many_posts(state: &std::sync::Arc<storage::AppState>) 
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: Some(format!("Post {}", i)),
-                slug: format!("post-many-{}", i).parse().unwrap(),
-                body: format!("Content {}", i),
+                title: Some(format!("Post {i}")),
+                slug: format!("post-many-{i}").parse().unwrap(),
+                body: format!("Content {i}"),
                 format: PostFormat::Markdown,
-                rendered_html: format!("<p>Content {}</p>", i),
+                rendered_html: format!("<p>Content {i}</p>"),
                 published_at: Some(Utc::now()),
                 summary: None,
             })
@@ -3233,7 +3245,7 @@ async fn assert_duplicate_tag_error(state: &std::sync::Arc<storage::AppState>) {
         Err(TaggingError::AlreadyTagged) => {
             // Expected
         }
-        other => panic!("Expected AlreadyTagged, got {:?}", other),
+        other => panic!("Expected AlreadyTagged, got {other:?}"),
     }
 }
 
@@ -3420,7 +3432,7 @@ async fn assert_tag_not_found_error(state: &std::sync::Arc<storage::AppState>) {
         Err(ListByTagError::TagNotFound) => {
             // Expected
         }
-        other => panic!("Expected TagNotFound, got {:?}", other),
+        other => panic!("Expected TagNotFound, got {other:?}"),
     }
 }
 
@@ -3507,7 +3519,7 @@ async fn assert_tag_post_nonexistent_post_error(state: &std::sync::Arc<storage::
         Err(TaggingError::PostNotFound) => {
             // Expected
         }
-        other => panic!("Expected PostNotFound, got {:?}", other),
+        other => panic!("Expected PostNotFound, got {other:?}"),
     }
 }
 
@@ -3546,7 +3558,7 @@ async fn assert_untag_nonexistent_tag_error(state: &std::sync::Arc<storage::AppS
         Err(TaggingError::TagNotFound) => {
             // Expected
         }
-        other => panic!("Expected TagNotFound, got {:?}", other),
+        other => panic!("Expected TagNotFound, got {other:?}"),
     }
 }
 
@@ -4112,7 +4124,7 @@ async fn assert_post_update_invalid_slug(state: &std::sync::Arc<storage::AppStat
         Err(UpdatePostError::Internal(_)) => {
             // Expected: unique constraint violation on slug
         }
-        other => panic!("Expected Internal error, got {:?}", other),
+        other => panic!("Expected Internal error, got {other:?}"),
     }
 }
 
@@ -4137,8 +4149,8 @@ async fn assert_list_published_cursor_boundary(state: &std::sync::Arc<storage::A
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: Some(format!("Post {}", i)),
-                slug: format!("post-{}", i).parse().unwrap(),
+                title: Some(format!("Post {i}")),
+                slug: format!("post-{i}").parse().unwrap(),
                 body: "Content".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Content</p>".to_string(),
@@ -4201,8 +4213,8 @@ async fn assert_list_drafts_cursor_boundary(state: &std::sync::Arc<storage::AppS
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: Some(format!("Draft {}", i)),
-                slug: format!("draft-{}", i).parse().unwrap(),
+                title: Some(format!("Draft {i}")),
+                slug: format!("draft-{i}").parse().unwrap(),
                 body: "Content".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Content</p>".to_string(),
@@ -4265,8 +4277,8 @@ async fn assert_list_user_posts_by_tag_cursor(state: &std::sync::Arc<storage::Ap
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: Some(format!("Tagged {}", i)),
-                slug: format!("tagged-{}", i).parse().unwrap(),
+                title: Some(format!("Tagged {i}")),
+                slug: format!("tagged-{i}").parse().unwrap(),
                 body: "Content".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Content</p>".to_string(),
@@ -4337,8 +4349,8 @@ async fn assert_list_posts_by_tag_cursor(state: &std::sync::Arc<storage::AppStat
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: Some(format!("Global {}", i)),
-                slug: format!("global-{}", i).parse().unwrap(),
+                title: Some(format!("Global {i}")),
+                slug: format!("global-{i}").parse().unwrap(),
                 body: "Content".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Content</p>".to_string(),
@@ -4577,7 +4589,7 @@ async fn assert_tag_post_multiple_attempts(state: &std::sync::Arc<storage::AppSt
         Err(TaggingError::AlreadyTagged) => {
             // Expected
         }
-        other => panic!("Expected AlreadyTagged, got {:?}", other),
+        other => panic!("Expected AlreadyTagged, got {other:?}"),
     }
 
     // Verify both tags are present
@@ -4880,12 +4892,12 @@ async fn postgres_tag_edge_case_formats() {
 
 // Test get_post_by_id with non-existent post
 async fn assert_get_post_by_id_nonexistent(state: &std::sync::Arc<storage::AppState>) {
-    let result = state.posts.get_post_by_id(999999).await;
+    let result = state.posts.get_post_by_id(999_999).await;
     match result {
         Ok(None) => {
             // Expected
         }
-        other => panic!("Expected Ok(None), got {:?}", other),
+        other => panic!("Expected Ok(None), got {other:?}"),
     }
 }
 
@@ -4913,8 +4925,8 @@ async fn assert_list_published_with_cursor_same_timestamp(
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: Some(format!("Post {}", i)),
-                slug: format!("post-cursor-same-{}", i).parse().unwrap(),
+                title: Some(format!("Post {i}")),
+                slug: format!("post-cursor-same-{i}").parse().unwrap(),
                 body: "Content".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Content</p>".to_string(),
@@ -5197,7 +5209,7 @@ async fn assert_site_config_operations(state: &std::sync::Arc<storage::AppState>
         Ok(None) => {
             // Expected
         }
-        other => panic!("Expected Ok(None), got {:?}", other),
+        other => panic!("Expected Ok(None), got {other:?}"),
     }
 
     // Test set and get
@@ -5212,7 +5224,7 @@ async fn assert_site_config_operations(state: &std::sync::Arc<storage::AppState>
         Ok(Some(v)) => {
             assert_eq!(v, "test.value");
         }
-        other => panic!("Expected Ok(Some), got {:?}", other),
+        other => panic!("Expected Ok(Some), got {other:?}"),
     }
 
     // Test update (overwrite)
@@ -5227,7 +5239,7 @@ async fn assert_site_config_operations(state: &std::sync::Arc<storage::AppState>
         Ok(Some(v)) => {
             assert_eq!(v, "updated.value");
         }
-        other => panic!("Expected updated value, got {:?}", other),
+        other => panic!("Expected updated value, got {other:?}"),
     }
 }
 
@@ -5244,7 +5256,7 @@ async fn assert_session_list_operations(state: &std::sync::Arc<storage::AppState
         .expect("user creation failed");
 
     // Create multiple sessions
-    let _session1 = state
+    let session1 = state
         .sessions
         .create_session(user, "session 1")
         .await
@@ -5280,7 +5292,7 @@ async fn assert_session_list_operations(state: &std::sync::Arc<storage::AppState
     // Verify we can authenticate with one of the tokens
     let record = state
         .sessions
-        .authenticate(&_session1)
+        .authenticate(&session1)
         .await
         .expect("authenticate failed");
     assert_eq!(record.user_id, user);
@@ -5479,8 +5491,7 @@ async fn assert_create_rendered_post_slug_conflict(state: &std::sync::Arc<storag
     );
     assert!(
         err.to_string().contains("slug"),
-        "expected slug conflict message, got: {}",
-        err
+        "expected slug conflict message, got: {err}"
     );
 }
 
@@ -5587,8 +5598,7 @@ async fn assert_update_rendered_post_not_found(state: &std::sync::Arc<storage::A
     );
     assert!(
         err.to_string().contains("not found"),
-        "expected 'not found' message, got: {}",
-        err
+        "expected 'not found' message, got: {err}"
     );
 }
 

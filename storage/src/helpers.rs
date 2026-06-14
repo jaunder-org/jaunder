@@ -342,7 +342,7 @@ pub(crate) fn password_reset_claim_error(
 pub(crate) async fn hash_password(password: common::password::Password) -> io::Result<String> {
     #[cfg(test)]
     if password.as_str() == "force-hash-error-for-test-coverage" {
-        return Err(io::Error::new(io::ErrorKind::Other, "forced hash error"));
+        return Err(io::Error::other("forced hash error"));
     }
 
     tokio::task::spawn_blocking(move || password.hash())
@@ -392,7 +392,7 @@ pub(crate) async fn verify_password(
 ) -> io::Result<bool> {
     #[cfg(test)]
     if password.as_str() == "force-verify-error-for-test-coverage" {
-        return Err(io::Error::new(io::ErrorKind::Other, "forced verify error"));
+        return Err(io::Error::other("forced verify error"));
     }
 
     tokio::task::spawn_blocking(move || password.verify(&hash))

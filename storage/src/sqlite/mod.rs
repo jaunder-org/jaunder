@@ -260,6 +260,23 @@ impl AtomicOps for SqliteAtomicOps {
 }
 
 #[cfg(test)]
+pub(crate) async fn sqlite_pool() -> SqlitePool {
+    let opts = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(":memory:")
+        .create_if_missing(true);
+    let pool = sqlx::pool::PoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .unwrap();
+    sqlx::migrate!("./migrations/sqlite")
+        .run(&pool)
+        .await
+        .unwrap();
+    pool
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError, UserStorage};
@@ -317,21 +334,4 @@ mod tests {
             Err(ConfirmPasswordResetError::Internal(_))
         ));
     }
-}
-
-#[cfg(test)]
-pub(crate) async fn sqlite_pool() -> SqlitePool {
-    let opts = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(":memory:")
-        .create_if_missing(true);
-    let pool = sqlx::pool::PoolOptions::new()
-        .max_connections(1)
-        .connect_with(opts)
-        .await
-        .unwrap();
-    sqlx::migrate!("./migrations/sqlite")
-        .run(&pool)
-        .await
-        .unwrap();
-    pool
 }

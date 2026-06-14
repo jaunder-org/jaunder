@@ -149,7 +149,7 @@ run_parallel \
 
 # ── Phase 2: Lint (compiles workspace) ────────────────────────────────
 
-run_step "cargo clippy -- -D warnings" cargo clippy -- -D warnings
+run_step "cargo clippy --all-targets -- -D warnings" cargo clippy --all-targets -- -D warnings
 
 if [[ "$FAST" == "1" ]]; then
     echo "--- verify: fast checks passed (skipped coverage + e2e + nix VM; run 'scripts/verify' for the commit gate) ---"

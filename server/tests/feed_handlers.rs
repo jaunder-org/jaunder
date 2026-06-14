@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::unused_async
+)]
+
 mod helpers;
 
 use std::sync::Arc;
@@ -299,7 +308,7 @@ async fn handler_returns_correct_content_type_per_format() {
         let app = make_app(state.clone(), &base).await;
         let req = Request::builder()
             .method("GET")
-            .uri(&format!("/~eve/feed.{}", ext))
+            .uri(format!("/~eve/feed.{ext}"))
             .body(Body::empty())
             .expect("build request");
 
@@ -311,7 +320,7 @@ async fn handler_returns_correct_content_type_per_format() {
             .headers()
             .get(header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .expect(&format!("content-type header for {ext}"));
+            .unwrap_or_else(|| panic!("content-type header for {ext}"));
         assert_eq!(
             content_type, *expected_content_type,
             "content type for {ext}"

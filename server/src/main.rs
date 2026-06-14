@@ -269,7 +269,7 @@ mod tests {
                 pg: PgBootstrapArgs {
                     bootstrap_db: "sqlite:/tmp/bootstrap.db".to_owned(),
                     app_db: "postgres://jaunder@localhost/jaunder".to_owned(),
-                    app_role_password: std::iter::repeat('z').take(20).collect(),
+                    app_role_password: std::iter::repeat_n('z', 20).collect(),
                 },
             }),
             verbose: false,

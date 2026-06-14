@@ -60,7 +60,7 @@ git config core.hooksPath .githooks
 **`pre-commit`** runs on every commit — fast formatting, lint, and the SQLite test suite:
 
 - `leptosfmt --check`, `cargo fmt --check`, `prettier --check end2end` — formatting
-- `cargo clippy -- -D warnings` — linting
+- `cargo clippy --all-targets -- -D warnings` — linting (incl. test/bench/example targets)
 - `cargo nextest run` — unit and integration tests (SQLite)
 
 **`pre-push`** runs `scripts/verify` (the commit gate): the static checks plus `scripts/check-coverage --check` (the SQLite + host-PostgreSQL suites under instrumentation, gating both test failures and coverage regressions) and the host e2e suite. The hermetic Nix VM checks are not run here — they run in CI, or locally via `scripts/verify --full`.
@@ -104,7 +104,7 @@ The verify ladder has three tiers:
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that contain Leptos `view!` macros.
 - `prettier --check end2end` checks Playwright and other frontend test assets.
-- `cargo clippy -- -D warnings` checks the main workspace for lint errors.
+- `cargo clippy --all-targets -- -D warnings` checks the whole workspace, including test, bench, and example targets, for lint errors.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
 - For e2e perf diagnostics, set `JAUNDER_E2E_WARMUP=1` before `playwright test` to warm each test page context before test instrumentation; tune with `JAUNDER_E2E_WARMUP_URL` and `JAUNDER_E2E_WARMUP_TIMEOUT_MS`.
 - In hydration-heavy e2e tests, use `hydrationHeavyTimeoutMs(testInfo, chromiumBudgetMs)` for whole-test budgets and `hydrationHeavyFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)` for first navigation waits (see [ADR-0012](docs/decisions/0012-environment-aware-timeouts.md)).
