@@ -155,7 +155,7 @@ pub async fn create_post(
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
         let validated_tags = common::tag::parse_and_validate_tags(tags.unwrap_or_default())
-            .map_err(InternalError::validation)?;
+            .map_err(|e| InternalError::validation(e.to_string()))?;
 
         let format = format
             .parse::<PostFormat>()
@@ -316,7 +316,10 @@ pub async fn update_post(
         // Validate tags up-front so a malformed input rejects before any
         // post mutation lands.
         let new_tags = tags
-            .map(|t| common::tag::parse_and_validate_tags(t).map_err(InternalError::validation))
+            .map(|t| {
+                common::tag::parse_and_validate_tags(t)
+                    .map_err(|e| InternalError::validation(e.to_string()))
+            })
             .transpose()?;
 
         let format = format

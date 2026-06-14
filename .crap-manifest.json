@@ -923,7 +923,7 @@
     {
       "file": "common/src/tag.rs",
       "function": "parse_and_validate_tags",
-      "line": 71,
+      "line": 92,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -3659,7 +3659,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "publish_post",
-      "line": 420,
+      "line": 423,
       "cyclomatic": 1.0,
       "coverage": 93.47826086956522,
       "crap": 1.0002773896605572,
@@ -3668,7 +3668,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_posts_by_tag",
-      "line": 636,
+      "line": 639,
       "cyclomatic": 1.0,
       "coverage": 97.2972972972973,
       "crap": 1.0000197421672952,
@@ -3677,7 +3677,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_user_posts_by_tag",
-      "line": 684,
+      "line": 687,
       "cyclomatic": 1.0,
       "coverage": 97.91666666666666,
       "crap": 1.0000090422453705,
@@ -4694,7 +4694,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_drafts",
-      "line": 382,
+      "line": 385,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4703,7 +4703,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "get_default_post_format",
-      "line": 478,
+      "line": 481,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4712,7 +4712,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "set_default_post_format",
-      "line": 491,
+      "line": 494,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4721,7 +4721,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_user_posts",
-      "line": 507,
+      "line": 510,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4730,7 +4730,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_local_timeline",
-      "line": 556,
+      "line": 559,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4739,7 +4739,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_home_feed",
-      "line": 598,
+      "line": 601,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4748,7 +4748,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "delete_post",
-      "line": 744,
+      "line": 747,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4757,7 +4757,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "unpublish_post",
-      "line": 780,
+      "line": 783,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
