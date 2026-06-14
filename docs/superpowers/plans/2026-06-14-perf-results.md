@@ -23,7 +23,7 @@ Tracking epic **jaunder-k4tb**. Methodology and per-phase steps: see
 | Metric | Baseline | After Phase 1 | After Phase 3 | Final |
 |--------|----------|---------------|---------------|-------|
 | `scripts/verify --fast` | 2.0s (warm; first run 49.7s incl. clippy-profile compile) | 2.0s (unchanged) | — | |
-| `scripts/check-coverage` (host; SQLite only at baseline) | 270.7s | 270.7s (still SQLite only) | — | |
+| `scripts/check-coverage` (host; SQLite only at baseline) | 270.7s | 270.7s (still SQLite only) | 533s (Phase 2: +host-PG pass; ~733s in Nix sandbox) | |
 | PostgreSQL integration run — serial (`--test-threads=1`) | 228s exec (643 tests; 448s wall on first run incl. test compile) | n/a (replaced by parallel) | — | — |
 | PostgreSQL integration run — parallel (default threads) | — | **28.5s exec** (median of 3: 28.3/28.5/28.6s; ~35s wall), 643 tests, 3× clean | — | |
 | One postgres VM check (cold, `postgres-commands`) | 42.8s | — | n/a | n/a |
@@ -78,6 +78,21 @@ Supporting / context:
   needed (the role-provisioning tests already use unique suffixed names).
 - `--fast` and `check-coverage` unchanged at this phase (coverage still
   SQLite-only until Phase 2 adds the host-PG pass).
+
+### After Phase 2 (host-PostgreSQL coverage pass, 2026-06-14)
+
+- **PostgreSQL storage coverage is now measured** (was a blanket 3–15% gap):
+  `backup.rs` 13%→95%, `bootstrap.rs` 63%→97%, `feed_cache.rs` 23%→100%,
+  `feed_events.rs` 14%→90%, `posts.rs` 2%→82%, plus smaller bumps elsewhere.
+  Remaining low and now *visible* (real gaps, not measurement artifacts):
+  `media.rs` ~5%, and partial `sessions`/`users`/`invites`.
+- **Cost:** `check-coverage` 270.7s (SQLite only) → ~533s host (2-pass) /
+  ~733s in the Nix `coverage` sandbox. The PG pass roughly doubles coverage
+  time (re-runs the jaunder suite against PG under instrumentation).
+- Postgres runs inside the Nix build sandbox (validated). The committed baseline
+  is **generated in that sandbox**, because the sandbox has no network and a few
+  files (`websub/http.rs`, `commands.rs`) report lower there than on a networked
+  host; a host-generated baseline would exceed what CI can reproduce.
 
 ### Resource behaviour
 

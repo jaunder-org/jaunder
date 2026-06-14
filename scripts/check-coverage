@@ -60,8 +60,27 @@ if [[ "$INVESTIGATE" == "true" ]]; then
     fi
     echo "--- coverage: investigating cached reports ---"
 else
-    echo "--- coverage: running cargo llvm-cov ---"
-    cargo llvm-cov nextest --show-progress none > /dev/null
+    # Coverage is collected in two passes that accumulate profraw data, then a
+    # single merged report. The default pass runs the whole suite against
+    # SQLite; the second pass re-runs the jaunder integration tests against a
+    # throwaway host PostgreSQL so that storage/src/postgres/* (only reachable
+    # with a live PG server) gets instrumented coverage too. Line coverage is a
+    # union of hits, so PG-only lines flip to covered while shared lines stay
+    # covered — no double-counting.
+    echo "--- coverage: cleaning stale llvm-cov artifacts ---"
+    cargo llvm-cov clean --workspace
+
+    echo "--- coverage: running cargo llvm-cov (SQLite pass) ---"
+    cargo llvm-cov --no-report nextest --show-progress none
+
+    echo "--- coverage: running cargo llvm-cov (PostgreSQL pass) ---"
+    # Invoke via `bash` rather than relying on the script's shebang: the Nix
+    # build sandbox (used by the `coverage` flake check) has no /usr/bin/env.
+    bash scripts/with-ephemeral-postgres \
+        cargo llvm-cov --no-report nextest --show-progress none \
+        -p jaunder --run-ignored all
+
+    echo "--- coverage: building merged text report ---"
     cargo llvm-cov report --text > "$REPORT_FILE"
 
     # Reuse the just-recorded llvm-cov profraw data to export LCOV for

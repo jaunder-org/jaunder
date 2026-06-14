@@ -986,6 +986,11 @@
                   pkgs.cargo-nextest
                   pkgs.jq
                   pkgs.gawk
+                  # check-coverage runs a host-PostgreSQL pass (via
+                  # scripts/with-ephemeral-postgres) so storage/src/postgres/*
+                  # gets instrumented coverage. The throwaway cluster needs
+                  # initdb/pg_ctl/psql available inside the build sandbox.
+                  pkgs.postgresql_16
                 ];
                 buildPhaseCargoCommand = ''
                   export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:''${LD_LIBRARY_PATH:-}"
