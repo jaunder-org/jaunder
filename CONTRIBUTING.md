@@ -95,8 +95,11 @@ For tests requiring a database, use `sqlite::memory:` and run migrations with `s
 
 ### Fast local checks
 
-- `scripts/verify --fast` runs static checks for quick feedback while developing.
-- `scripts/verify` runs the full local verification sequence in the preferred order: formatting, build, tests, lint, coverage, then `nix flake check` (with warmup e2e checks by default).
+The verify ladder has three tiers:
+
+- `scripts/verify --fast` — static checks (fmt, leptosfmt, prettier, cargo-deny) and clippy only. Quick inner-loop feedback; does not certify a change.
+- `scripts/verify` — the everyday pre-push gate: the `--fast` checks plus coverage, which runs the test suite against **both SQLite and a throwaway host PostgreSQL** (`scripts/check-coverage` via `scripts/with-ephemeral-postgres`). This exercises backend parity and gathers PostgreSQL coverage **with no VM**, so it is fast.
+- `scripts/verify --full` — the default gate plus the hermetic Nix VM checks (`nix-only-checks`: e2e + the consolidated PostgreSQL integration VM). CI enforces these VM checks on every PR, so running `--full` locally is optional.
   - By default it prints only `--- verify: ... ---` progress markers and captures step output.
   - Set `VERIFY_PASSTHROUGH=1` to stream full tool output directly.
   - Set `VERIFY_SHOW_STEP_OUTPUT=1` to print captured output for successful steps.
