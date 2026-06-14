@@ -197,6 +197,98 @@ pub async fn unique_postgres_url() -> DbConnectOptions {
     postgres_url_with_db_name(&db_name).parse().unwrap()
 }
 
+/// Name of the once-migrated template database that per-test databases are
+/// cloned from. Cloning via `CREATE DATABASE ... TEMPLATE` block-copies an
+/// already-migrated schema, so each test pays a fast copy instead of re-running
+/// every migration.
+const TEMPLATE_DB: &str = "jaunder_test_template";
+
+/// Advisory-lock key serialising template creation across nextest's
+/// process-per-test workers. The first worker migrates the template; the rest
+/// see it already exists and skip straight to cloning.
+const TEMPLATE_LOCK_KEY: i64 = 78_316_621;
+
+/// Ensures [`TEMPLATE_DB`] exists and is fully migrated. Safe to call
+/// concurrently from many processes: creation is guarded by a session-level
+/// advisory lock taken on the bootstrap connection.
+async fn ensure_template_db() {
+    let bootstrap: sqlx::postgres::PgConnectOptions = postgres_bootstrap_url().parse().unwrap();
+    let mut admin = sqlx::PgConnection::connect_with(&bootstrap).await.unwrap();
+
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(TEMPLATE_LOCK_KEY)
+        .execute(&mut admin)
+        .await
+        .unwrap();
+
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+            .bind(TEMPLATE_DB)
+            .fetch_one(&mut admin)
+            .await
+            .unwrap();
+
+    if !exists {
+        let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
+            panic!("expected postgres options");
+        };
+        let owner = options.get_username();
+        sqlx::query(&format!(
+            "CREATE DATABASE {} OWNER {}",
+            quote_postgres_identifier(TEMPLATE_DB),
+            quote_postgres_identifier(owner),
+        ))
+        .execute(&mut admin)
+        .await
+        .unwrap();
+
+        // Migrate the template through its own pool, then close it: a database
+        // can only serve as a CREATE DATABASE template when nobody is connected
+        // to it.
+        let pool = sqlx::PgPool::connect(&postgres_url_with_db_name(TEMPLATE_DB))
+            .await
+            .unwrap();
+        sqlx::migrate!("../storage/migrations/postgres")
+            .run(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(TEMPLATE_LOCK_KEY)
+        .execute(&mut admin)
+        .await
+        .unwrap();
+}
+
+/// Creates a fresh, already-migrated per-test database cloned from the template
+/// and returns its connection options. Owned by the same role as the configured
+/// test URL so the application user can access every cloned object.
+pub async fn template_postgres_url() -> DbConnectOptions {
+    ensure_template_db().await;
+
+    let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
+        panic!("expected postgres options");
+    };
+    let owner = options.get_username();
+    let db_name = unique_postgres_db_name();
+
+    let bootstrap: sqlx::postgres::PgConnectOptions = postgres_bootstrap_url().parse().unwrap();
+    let mut admin = sqlx::PgConnection::connect_with(&bootstrap).await.unwrap();
+    sqlx::query(&format!(
+        "CREATE DATABASE {} OWNER {} TEMPLATE {}",
+        quote_postgres_identifier(&db_name),
+        quote_postgres_identifier(owner),
+        quote_postgres_identifier(TEMPLATE_DB),
+    ))
+    .execute(&mut admin)
+    .await
+    .unwrap();
+
+    postgres_url_with_db_name(&db_name).parse().unwrap()
+}
+
 pub async fn test_state(base: &TempDir) -> Arc<AppState> {
     if postgres_testing_enabled() {
         reset_postgres_schema().await;
