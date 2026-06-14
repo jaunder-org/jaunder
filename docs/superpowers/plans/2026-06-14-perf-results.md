@@ -22,10 +22,10 @@ Tracking epic **jaunder-k4tb**. Methodology and per-phase steps: see
 
 | Metric | Baseline | After Phase 1 | After Phase 3 | Final |
 |--------|----------|---------------|---------------|-------|
-| `scripts/verify --fast` | 2.0s (warm; first run 49.7s incl. clippy-profile compile) | — | — | |
-| `scripts/check-coverage` (host; SQLite only at baseline) | 270.7s | | — | |
-| PostgreSQL integration run — serial (`--test-threads=1`) | 228s exec (643 tests; 448s wall on first run incl. test compile) | | — | — |
-| PostgreSQL integration run — parallel (default threads) | — | | — | |
+| `scripts/verify --fast` | 2.0s (warm; first run 49.7s incl. clippy-profile compile) | 2.0s (unchanged) | — | |
+| `scripts/check-coverage` (host; SQLite only at baseline) | 270.7s | 270.7s (still SQLite only) | — | |
+| PostgreSQL integration run — serial (`--test-threads=1`) | 228s exec (643 tests; 448s wall on first run incl. test compile) | n/a (replaced by parallel) | — | — |
+| PostgreSQL integration run — parallel (default threads) | — | **28.5s exec** (median of 3: 28.3/28.5/28.6s; ~35s wall), 643 tests, 3× clean | — | |
 | One postgres VM check (cold, `postgres-commands`) | 42.8s | — | n/a | n/a |
 | Postgres integration VMs total (`postgres-integration-checks`, 23 VMs cold) | 222.1s | — | | |
 | `nix build .#nix-only-checks` (cold) | see Notes (composite) | — | | |
@@ -68,6 +68,16 @@ Supporting / context:
   (fast → clippy → coverage → `nix-only-checks`). Felt cost ≈ clippy (~50s cold,
   ~2s warm) + coverage (271s, always) + the VM phase above. Cold ≈ ~16 min;
   warm (VMs cached, only coverage re-runs) ≈ ~5 min, coverage-dominated.
+
+### After Phase 1 (per-test PostgreSQL databases, 2026-06-14)
+
+- **PostgreSQL suite: 228s → 28.5s execution (~8× faster)** by dropping
+  `--test-threads=1` and giving each test its own template-cloned database.
+  643 tests, three consecutive clean runs (28.3 / 28.5 / 28.6s) — no flakes, no
+  cluster-global collisions, so the planned nextest serial test-group was not
+  needed (the role-provisioning tests already use unique suffixed names).
+- `--fast` and `check-coverage` unchanged at this phase (coverage still
+  SQLite-only until Phase 2 adds the host-PG pass).
 
 ### Resource behaviour
 
