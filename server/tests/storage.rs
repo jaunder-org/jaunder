@@ -17,7 +17,7 @@ use storage::{
 };
 use tempfile::TempDir;
 
-use helpers::{postgres_url, reset_postgres_schema, sqlite_url};
+use helpers::{sqlite_url, template_postgres_url, unique_postgres_url};
 
 // PostgreSQL parity tests below share a single database URL and reset the
 // schema before each run. Run them individually, or with `-- --test-threads=1`,
@@ -38,8 +38,8 @@ async fn open_pool(base: &TempDir) -> SqlitePool {
 }
 
 async fn postgres_state() -> std::sync::Arc<storage::AppState> {
-    reset_postgres_schema().await;
-    open_database(&postgres_url()).await.unwrap()
+    let url = template_postgres_url().await;
+    open_existing_database(&url).await.unwrap()
 }
 
 async fn sqlite_state() -> (TempDir, std::sync::Arc<storage::AppState>) {
@@ -353,23 +353,23 @@ fn unsupported_url_is_rejected_at_parse_time() {
 #[tokio::test]
 #[ignore = "requires PostgreSQL test VM"]
 async fn open_database_succeeds_on_postgres_test_vm() {
-    reset_postgres_schema().await;
-    open_database(&postgres_url()).await.unwrap();
+    let url = unique_postgres_url().await;
+    open_database(&url).await.unwrap();
 }
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL test VM"]
 async fn open_database_runs_postgres_migrations_on_existing_empty_db() {
-    reset_postgres_schema().await;
-    let state = open_database(&postgres_url()).await.unwrap();
+    let url = unique_postgres_url().await;
+    let state = open_database(&url).await.unwrap();
     assert_eq!(state.site_config.get("missing").await.unwrap(), None);
 }
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL test VM"]
 async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db() {
-    reset_postgres_schema().await;
-    let state = open_existing_database(&postgres_url()).await.unwrap();
+    let url = unique_postgres_url().await;
+    let state = open_existing_database(&url).await.unwrap();
     assert_eq!(state.site_config.get("missing").await.unwrap(), None);
 }
 
@@ -403,13 +403,10 @@ async fn postgres_site_config_set_then_get_roundtrips() {
 #[ignore = "requires PostgreSQL test VM"]
 async fn postgres_authenticate_with_corrupted_hash_returns_internal_error() {
     use storage::{PostgresUserStorage, UserAuthError, UserStorage};
-    reset_postgres_schema().await;
-    let url = helpers::postgres_url_string();
-    let pool = sqlx::PgPool::connect(&url).await.unwrap();
-    sqlx::migrate!("../storage/migrations/postgres")
-        .run(&pool)
-        .await
-        .unwrap();
+    let DbConnectOptions::Postgres { options, .. } = template_postgres_url().await else {
+        panic!("expected postgres options");
+    };
+    let pool = sqlx::PgPool::connect_with(options).await.unwrap();
     sqlx::query(
         "INSERT INTO users (username, password_hash, created_at, is_operator)
          VALUES ($1, $2, now(), false)",

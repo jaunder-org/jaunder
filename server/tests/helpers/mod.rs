@@ -118,22 +118,6 @@ pub fn postgres_test_authority() -> String {
     postgres_url_authority(&postgres_bootstrap_url())
 }
 
-pub async fn reset_postgres_schema() {
-    use sqlx::PgPool;
-    let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
-        panic!("expected postgres options");
-    };
-    let pool = PgPool::connect_with(options).await.unwrap();
-    sqlx::query("DROP SCHEMA public CASCADE")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("CREATE SCHEMA public")
-        .execute(&pool)
-        .await
-        .unwrap();
-}
-
 fn quote_postgres_identifier(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
