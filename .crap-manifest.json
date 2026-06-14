@@ -529,8 +529,8 @@
       "function": "cmd_serve",
       "line": 301,
       "cyclomatic": 11.0,
-      "coverage": 93.02325581395348,
-      "crap": 11.041090721571685,
+      "coverage": 86.04651162790698,
+      "crap": 11.328725772573483,
       "crate": "jaunder"
     },
     {
@@ -820,6 +820,15 @@
       "coverage": 100.0,
       "crap": 7.0,
       "crate": "common"
+    },
+    {
+      "file": "web/src/error.rs",
+      "function": "kind_class_for",
+      "line": 269,
+      "cyclomatic": 7.0,
+      "coverage": 100.0,
+      "crap": 7.0,
+      "crate": "web"
     },
     {
       "file": "web/src/auth/server.rs",
@@ -1677,6 +1686,24 @@
       "crate": "web"
     },
     {
+      "file": "web/src/error.rs",
+      "function": "ErrorClass::log_level",
+      "line": 110,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "web"
+    },
+    {
+      "file": "web/src/error.rs",
+      "function": "log_boundary_failure",
+      "line": 316,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "web"
+    },
+    {
       "file": "web/src/auth/server.rs",
       "function": "set_session_cookie",
       "line": 220,
@@ -2041,8 +2068,8 @@
       "function": "HttpWebSubClient::send_publish",
       "line": 30,
       "cyclomatic": 3.0,
-      "coverage": 100.0,
-      "crap": 3.0,
+      "coverage": 85.71428571428571,
+      "crap": 3.0262390670553936,
       "crate": "common"
     },
     {
@@ -2101,8 +2128,17 @@
     },
     {
       "file": "web/src/error.rs",
+      "function": "render_operator_message",
+      "line": 285,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web"
+    },
+    {
+      "file": "web/src/error.rs",
       "function": "server_boundary",
-      "line": 176,
+      "line": 298,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2897,15 +2933,6 @@
       "line": 1030,
       "cyclomatic": 1.0,
       "coverage": 0.0,
-      "crap": 2.0,
-      "crate": "web"
-    },
-    {
-      "file": "web/src/error.rs",
-      "function": "error_with_sources",
-      "line": 196,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
       "crap": 2.0,
       "crate": "web"
     },
@@ -4334,7 +4361,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::unauthorized",
-      "line": 82,
+      "line": 134,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4343,7 +4370,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::not_found",
-      "line": 86,
+      "line": 138,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4352,7 +4379,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::validation",
-      "line": 95,
+      "line": 142,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4361,7 +4388,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::conflict",
-      "line": 104,
+      "line": 146,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4370,7 +4397,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::storage",
-      "line": 113,
+      "line": 150,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4379,7 +4406,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::server",
-      "line": 123,
+      "line": 162,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4388,7 +4415,16 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::server_message",
-      "line": 133,
+      "line": 174,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web"
+    },
+    {
+      "file": "web/src/error.rs",
+      "function": "InternalError::external",
+      "line": 189,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4397,7 +4433,16 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::masked",
-      "line": 143,
+      "line": 203,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web"
+    },
+    {
+      "file": "web/src/error.rs",
+      "function": "InternalError::with_context",
+      "line": 217,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4406,7 +4451,34 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::public",
-      "line": 148,
+      "line": 223,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web"
+    },
+    {
+      "file": "web/src/error.rs",
+      "function": "InternalError::kind",
+      "line": 228,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web"
+    },
+    {
+      "file": "web/src/error.rs",
+      "function": "InternalError::class",
+      "line": 233,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web"
+    },
+    {
+      "file": "web/src/error.rs",
+      "function": "InternalError::context",
+      "line": 238,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4415,7 +4487,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::operator_message",
-      "line": 153,
+      "line": 246,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4424,7 +4496,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::into_public",
-      "line": 158,
+      "line": 251,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4432,8 +4504,8 @@
     },
     {
       "file": "web/src/error.rs",
-      "function": "InternalError::new",
-      "line": 162,
+      "function": "InternalError::client",
+      "line": 255,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
