@@ -8,9 +8,9 @@ use std::sync::{
     Arc, OnceLock,
 };
 use storage::{
-    open_database, AppState, DbConnectOptions, PostgresAtomicOps, PostgresEmailVerificationStorage,
-    PostgresFeedCacheStorage, PostgresFeedEventStorage, PostgresInviteStorage,
-    PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
+    open_database, open_existing_database, AppState, DbConnectOptions, PostgresAtomicOps,
+    PostgresEmailVerificationStorage, PostgresFeedCacheStorage, PostgresFeedEventStorage,
+    PostgresInviteStorage, PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
     PostgresSessionStorage, PostgresSiteConfigStorage, PostgresUserConfigStorage,
     PostgresUserStorage, SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
     SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage,
@@ -291,8 +291,8 @@ pub async fn template_postgres_url() -> DbConnectOptions {
 
 pub async fn test_state(base: &TempDir) -> Arc<AppState> {
     if postgres_testing_enabled() {
-        reset_postgres_schema().await;
-        open_database(&postgres_url()).await.unwrap()
+        let url = template_postgres_url().await;
+        open_existing_database(&url).await.unwrap()
     } else {
         open_database(&sqlite_url(base)).await.unwrap()
     }
@@ -301,15 +301,10 @@ pub async fn test_state(base: &TempDir) -> Arc<AppState> {
 pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<CapturingMailSender>) {
     let mailer = Arc::new(CapturingMailSender::new());
     let state = if postgres_testing_enabled() {
-        reset_postgres_schema().await;
-        let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
+        let DbConnectOptions::Postgres { options, .. } = template_postgres_url().await else {
             panic!("expected postgres options");
         };
         let pool = sqlx::PgPool::connect_with(options).await.unwrap();
-        sqlx::migrate!("../storage/migrations/postgres")
-            .run(&pool)
-            .await
-            .unwrap();
         Arc::new(AppState {
             site_config: Arc::new(PostgresSiteConfigStorage::new(pool.clone())),
             users: Arc::new(PostgresUserStorage::new(pool.clone())),
