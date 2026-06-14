@@ -3,6 +3,28 @@
 Tracking epic **jaunder-k4tb**. Methodology and per-phase steps: see
 `2026-06-14-postgres-parallel-tests-and-host-coverage.md`.
 
+## Summary (before → after)
+
+The goal was to make the tests fast. Headline outcomes:
+
+- **PostgreSQL integration suite: 228s → 28.5s (~8×).** Per-test databases
+  (template clones) let it run in parallel instead of `--test-threads=1`.
+- **Local pre-push gate: was ~16 min (cold, VM included) → 532.6s (~9 min) and
+  no QEMU at all.** `scripts/verify` now runs static + lint + coverage
+  (SQLite + host PostgreSQL) with no VM; the hermetic VM checks moved to
+  `--full`/CI. The fast inner loop (`--fast`) stays ~2s.
+- **CI PostgreSQL VM gate: 222s (23 VMs) → 64.2s (1 VM), ~3.5×**, and peak
+  memory dropped from up to ~16 GB of concurrent VMs to a single 4 GB VM — the
+  resource pressure that was the original pain.
+- **PostgreSQL storage coverage went from waived (3–15% blanket gap) to
+  measured** (e.g. `backup.rs` 13%→95%, `feed_cache.rs` 23%→100%), on the host
+  and in the Nix coverage sandbox.
+
+Not improved / deliberately unchanged: `--fast` (already fast); e2e VM checks
+(out of scope). Newly-visible gaps to consider later: PostgreSQL `media.rs` (~5%)
+and partial `sessions`/`users`/`invites` coverage — real gaps the new
+measurement exposed, not regressions.
+
 ## Environment
 - Host: 16 cores, 30 GiB RAM (~20 GiB available at capture)
 - Timing: bash builtin `time` (real/wall clock). GNU `/usr/bin/time` is not
@@ -22,16 +44,16 @@ Tracking epic **jaunder-k4tb**. Methodology and per-phase steps: see
 
 | Metric | Baseline | After Phase 1 | After Phase 3 | Final |
 |--------|----------|---------------|---------------|-------|
-| `scripts/verify --fast` | 2.0s (warm; first run 49.7s incl. clippy-profile compile) | 2.0s (unchanged) | — | |
-| `scripts/check-coverage` (host; SQLite only at baseline) | 270.7s | 270.7s (still SQLite only) | 533s (Phase 2: +host-PG pass; ~733s in Nix sandbox) | |
+| `scripts/verify --fast` | 2.0s (warm; first run 49.7s incl. clippy-profile compile) | 2.0s (unchanged) | — | **2.0s** |
+| `scripts/check-coverage` (host; SQLite only at baseline) | 270.7s | 270.7s (still SQLite only) | 533s (Phase 2: +host-PG pass; ~733s in Nix sandbox) | **533s** (now also covers PostgreSQL storage) |
 | PostgreSQL integration run — serial (`--test-threads=1`) | 228s exec (643 tests; 448s wall on first run incl. test compile) | n/a (replaced by parallel) | — | — |
-| PostgreSQL integration run — parallel (default threads) | — | **28.5s exec** (median of 3: 28.3/28.5/28.6s; ~35s wall), 643 tests, 3× clean | — | |
+| PostgreSQL integration run — parallel (default threads) | — | **28.5s exec** (median of 3: 28.3/28.5/28.6s; ~35s wall), 643 tests, 3× clean | — | **28.5s (~8× vs 228s serial)** |
 | One postgres VM check (cold, `postgres-commands`) | 42.8s | — | n/a | n/a |
-| Postgres integration VMs total (`postgres-integration-checks`, 23 VMs cold) | 222.1s | — | **64.2s** (1 VM, all binaries, multithreaded, fsync off) | |
-| `nix build .#nix-only-checks` (cold) | see Notes (composite) | — | | |
-| Full `scripts/verify` (default tier) | see Notes | | | |
-| Full `scripts/verify --full` (with VM) | n/a (no `--full` flag at baseline) | | | |
-| Peak memory / OOM notes | no OOM — `max-jobs=4` serialises VMs into batches | | | |
+| Postgres integration VMs total (`postgres-integration-checks`, 23 VMs cold) | 222.1s | — | **64.2s** (1 VM, all binaries, multithreaded, fsync off) | **64.2s (~3.5× vs 222s)** |
+| `nix build .#nix-only-checks` (cold) | see Notes (composite) | — | PG VM phase 222s→64s | **PG VM phase 222s→64s; e2e unchanged** |
+| Full `scripts/verify` (default tier, no VM) | old default *included* the VM (~16 min cold) | — | — | **532.6s (~8.9 min), no QEMU** |
+| Full `scripts/verify --full` (with VM) | n/a (no `--full` flag at baseline) | — | — | ≈ default 533s + `nix-only-checks` (PG VM now 64s) |
+| Peak memory / OOM notes | risk: 23×4 GB VMs vs 30 GB RAM (`max-jobs=4` serialised into batches) | — | — | default gate: **no VM/QEMU at all**; `--full`: one 4 GB VM vs former up to ~16 GB |
 
 ## Notes
 
