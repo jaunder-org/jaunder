@@ -156,24 +156,24 @@ When a change is confined to one area, run the relevant target directly.
 
 ### PostgreSQL-backed Rust tests
 
-Some ignored tests require a live PostgreSQL instance.
+The integration suite is backend-parametric: it runs against SQLite by default, and against PostgreSQL when `JAUNDER_PG_TEST_URL` is set. Each test creates its own database — a clone of a once-migrated template (see `server/tests/helpers/mod.rs`) — so the PostgreSQL tests run **in parallel** just like the SQLite ones. No `--test-threads=1` is needed.
 
-For local development:
+The simplest way to run them against a throwaway PostgreSQL is the wrapper, which starts an ephemeral cluster, exports the connection env, runs the command, and tears everything down:
+
+```bash
+scripts/with-ephemeral-postgres cargo nextest run -p jaunder --run-ignored all
+```
+
+To use a persistent instance instead (e.g. the dev VM), set the env yourself:
 
 ```bash
 nix run .#postgres-testing-vm
 export JAUNDER_PG_TEST_URL=postgres://jaunder@127.0.0.1:55432/jaunder
 export JAUNDER_PG_BOOTSTRAP_TEST_URL=postgres://postgres@127.0.0.1:55432/postgres
+cargo nextest run -p jaunder --run-ignored all
 ```
 
-With those set, you can run the PostgreSQL-only ignored tests:
-
-```bash
-cargo test -p jaunder --test commands -- --ignored --test-threads=1
-cargo test -p jaunder --test storage -- --ignored --test-threads=1
-```
-
-Those tests share one database and reset schema state between cases, so run them individually or with `--test-threads=1`.
+Per-test databases are not dropped after each run, so a persistent instance accumulates `jaunder_test_*` databases over time; the ephemeral wrapper avoids this by discarding the whole cluster.
 
 ### Coverage and dependency policy
 
@@ -206,19 +206,14 @@ Some areas have inherent host-side coverage gaps and should not be force-fitted 
 - `checks.x86_64-linux.deny` — cargo-deny
 - `checks.x86_64-linux.e2e-sqlite` — Playwright end-to-end flow against SQLite with `JAUNDER_E2E_WARMUP=1` (default)
 - `checks.x86_64-linux.e2e-postgres` — Playwright end-to-end flow against PostgreSQL with `JAUNDER_E2E_WARMUP=1` (default)
-- `checks.x86_64-linux.postgres-commands` — `server/tests/commands.rs` against PostgreSQL, including ignored PostgreSQL-only cases
-- `checks.x86_64-linux.postgres-storage` — `server/tests/storage.rs` against PostgreSQL, including ignored PostgreSQL-only cases
-- `checks.x86_64-linux.postgres-web-account` — `server/tests/web_account.rs` against PostgreSQL
-- `checks.x86_64-linux.postgres-web-auth` — `server/tests/web_auth.rs` against PostgreSQL
-- `checks.x86_64-linux.postgres-web-email` — `server/tests/web_email.rs` against PostgreSQL
-- `checks.x86_64-linux.postgres-web-password-reset` — `server/tests/web_password_reset.rs` against PostgreSQL
+- `checks.x86_64-linux.postgres-integration` — every `server/tests/*.rs` integration binary against PostgreSQL (including the ignored PostgreSQL-only cases), all in one VM
 
 Additional Nix-backed checks available as packages (not run by default):
 
 - `packages.x86_64-linux.e2e-sqlite-cold` — Playwright end-to-end flow against SQLite without warmup
 - `packages.x86_64-linux.e2e-postgres-cold` — Playwright end-to-end flow against PostgreSQL without warmup
 
-The PostgreSQL VM checks are split by Rust test binary rather than by individual test case. That keeps the flake readable while still making slow or failing PostgreSQL coverage easy to localize.
+All PostgreSQL integration binaries run in a **single** VM (`postgres-integration`): per-test databases isolate the tests, so they run with libtest's normal in-process parallelism rather than one VM per binary. This is much faster and far lighter on memory than the former per-binary matrix.
 
 If you only need one of the VM-backed checks, you can run it directly:
 
@@ -227,9 +222,7 @@ nix build .#checks.x86_64-linux.e2e-sqlite
 nix build .#checks.x86_64-linux.e2e-postgres
 nix build .#packages.x86_64-linux.e2e-sqlite-cold
 nix build .#packages.x86_64-linux.e2e-postgres-cold
-nix build .#checks.x86_64-linux.postgres-commands
-nix build .#checks.x86_64-linux.postgres-storage
-nix build .#checks.x86_64-linux.postgres-web-auth
+nix build .#checks.x86_64-linux.postgres-integration
 ```
 
 ## Code conventions
@@ -293,4 +286,4 @@ nix build .#checks.x86_64-linux.postgres-web-auth
 - Start it with `nix run .#postgres-testing-vm`.
 - The forwarded connection string is `postgres://jaunder@127.0.0.1:55432/jaunder`.
 - Point the app at it with `export JAUNDER_DB=postgres://jaunder@127.0.0.1:55432/jaunder`.
-- PostgreSQL storage tests in `server/tests/storage.rs` reset a shared schema. Run those tests individually, or with `-- --test-threads=1`, to avoid cross-test interference.
+- The PostgreSQL-backed tests each create their own database (template clones), so they run in parallel without interference; see "PostgreSQL-backed Rust tests" above. For a self-contained run, prefer `scripts/with-ephemeral-postgres`.

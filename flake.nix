@@ -291,10 +291,9 @@
           // {
             inherit cargoArtifacts;
             cargoExtraArgs = "-p jaunder";
-            # Tests are covered by the separate `nextest` check, which runs
-            # each test in its own process.  Disabling here avoids a duplicate
-            # `cargo test` run that shares a process across async tests and can
-            # cause Leptos reactive state to leak between parallel tests.
+            # Tests are covered by the separate `nextest` check; disabling here
+            # avoids a redundant `cargo test` compile + run during the package
+            # build.
             doCheck = false;
           }
         );
@@ -493,11 +492,13 @@
           map (pkgs.lib.removeSuffix ".rs") (builtins.attrNames rsFiles);
 
         # Non-default postgres check configs for specific test modules.
+        # Modules whose ignored PostgreSQL-only tests should also run. The
+        # bootstrap URL is now provided to every binary (per-test databases
+        # need it), so only the include-ignored flag is module-specific.
         testModuleOverrides = {
           # `commands` includes PostgreSQL-only ignored bootstrap tests.
           commands = {
             includeIgnored = true;
-            extraEnv = "JAUNDER_PG_BOOTSTRAP_TEST_URL=postgres://postgres@127.0.0.1/postgres ";
           };
           # `storage` carries ignored PostgreSQL-only parity/migration tests.
           storage = {
@@ -544,64 +545,84 @@
         # check. We keep one VM check per test binary: that is coarse enough to
         # avoid a derivation-per-test maintenance burden, but still fine-grained
         # enough that failures and long poles are easy to localize.
-        postgresTestBinaryCheck =
-          {
-            checkName,
-            testBinary,
-            includeIgnored ? false,
-            extraEnv ? "",
-            filter ? "",
-          }:
-          pkgs.testers.nixosTest {
-            name = checkName;
+        # PostgreSQL-backed Rust integration tests need a live database, so they
+        # run inside a NixOS VM. With per-test databases (template clones — see
+        # server/tests/helpers/mod.rs) every test is isolated, so all
+        # integration binaries run in ONE VM using libtest's normal in-process
+        # parallelism instead of one VM per binary serialised at
+        # --test-threads=1. (Multithreading was previously avoided for fear of
+        # Leptos reactive-arena races; verified 2026-06-14 the suite is clean
+        # multithreaded now that the SSR/dispose bugs are fixed and each test
+        # has its own database — see jaunder-k4tb.7.)
+        postgresIntegrationCheck = pkgs.testers.nixosTest {
+          name = "jaunder-postgres-integration";
 
-            nodes.machine =
-              { pkgs, lib, ... }:
-              {
-                virtualisation.memorySize = 4096;
-                virtualisation.diskSize = 4096;
+          nodes.machine =
+            { pkgs, lib, ... }:
+            {
+              virtualisation.memorySize = 4096;
+              virtualisation.cores = 4;
+              # Per-test databases are template clones that accumulate over a run
+              # (the VM is discarded afterwards); size the disk for the suite.
+              virtualisation.diskSize = 10240;
 
-                services.postgresql = {
-                  enable = true;
-                  package = pkgs.postgresql_16;
-                  ensureDatabases = [ "jaunder" ];
-                  ensureUsers = [
-                    {
-                      name = "jaunder";
-                      ensureDBOwnership = true;
-                    }
-                  ];
-                  authentication = ''
-                    local all all trust
-                    host all all 0.0.0.0/0 trust
-                  '';
-                  settings = {
-                    listen_addresses = lib.mkForce "*";
-                  };
-                };
-
-                environment.systemPackages = [
-                  pkgs.postgresql_16
+              services.postgresql = {
+                enable = true;
+                package = pkgs.postgresql_16;
+                ensureDatabases = [ "jaunder" ];
+                ensureUsers = [
+                  {
+                    name = "jaunder";
+                    ensureDBOwnership = true;
+                  }
                 ];
+                authentication = ''
+                  local all all trust
+                  host all all 0.0.0.0/0 trust
+                '';
+                settings = {
+                  listen_addresses = lib.mkForce "*";
+                  max_connections = 200;
+                  # Throwaway test VM: trade durability for speed. Creating a
+                  # per-test database for each of ~643 tests fsyncs heavily
+                  # otherwise (mirrors scripts/with-ephemeral-postgres).
+                  fsync = false;
+                  synchronous_commit = "off";
+                  full_page_writes = false;
+                };
               };
 
-            testScript = ''
-              machine.start()
-              machine.wait_for_unit("postgresql.service", timeout=60)
-              machine.wait_until_succeeds(
-                "sudo -u postgres psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname = 'jaunder'\" | grep -q 1"
-              )
-              machine.wait_until_succeeds(
-                "sudo -u postgres psql -tAc \"SELECT 1 FROM pg_database WHERE datname = 'jaunder'\" | grep -q 1"
-              )
+              environment.systemPackages = [
+                pkgs.postgresql_16
+              ];
+            };
+
+          testScript = ''
+            machine.start()
+            machine.wait_for_unit("postgresql.service", timeout=60)
+            machine.wait_until_succeeds(
+              "sudo -u postgres psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname = 'jaunder'\" | grep -q 1"
+            )
+            machine.wait_until_succeeds(
+              "sudo -u postgres psql -tAc \"SELECT 1 FROM pg_database WHERE datname = 'jaunder'\" | grep -q 1"
+            )
+          ''
+          + pkgs.lib.concatMapStrings (
+            m:
+            let
+              overrides = testModuleOverrides.${m} or { };
+              includeIgnored =
+                if (overrides.includeIgnored or false) then "--include-ignored " else "";
+            in
+            ''
               machine.succeed(
-                "${extraEnv}JAUNDER_PG_TEST_URL=postgres://jaunder@127.0.0.1/jaunder"
-                + " ${postgresIntegrationTests}/tests/${testBinary}"
-                + " ${if includeIgnored then "--include-ignored " else ""}--test-threads=1"
-                + " ${filter}"
+                "JAUNDER_PG_TEST_URL=postgres://jaunder@127.0.0.1/jaunder"
+                + " JAUNDER_PG_BOOTSTRAP_TEST_URL=postgres://postgres@127.0.0.1/postgres"
+                + " ${postgresIntegrationTests}/tests/${m} ${includeIgnored}"
               )
-            '';
-          };
+            ''
+          ) integrationTestModules;
+        };
 
         mkE2eSqliteCheck =
           {
@@ -873,11 +894,10 @@
             );
           };
 
+          # All PostgreSQL integration binaries now run in a single VM check.
           postgres-integration-checks = pkgs.symlinkJoin {
             name = "jaunder-postgres-integration-checks";
-            paths = builtins.attrValues (
-              pkgs.lib.filterAttrs (name: _: pkgs.lib.hasPrefix "postgres-" name) self.checks.${system}
-            );
+            paths = [ self.checks.${system}.postgres-integration ];
           };
 
           # Meta-package: all checks that require Nix (VM tests).
@@ -918,25 +938,8 @@
               warmupEnv = " JAUNDER_E2E_WARMUP=1";
             };
 
+            postgres-integration = postgresIntegrationCheck;
           }
-          // pkgs.lib.listToAttrs (
-            map (
-              m:
-              let
-                checkKey = "postgres-" + pkgs.lib.replaceStrings [ "_" ] [ "-" ] m;
-                overrides = testModuleOverrides.${m} or { };
-              in
-              pkgs.lib.nameValuePair checkKey (
-                postgresTestBinaryCheck (
-                  {
-                    checkName = "jaunder-${checkKey}";
-                    testBinary = m;
-                  }
-                  // overrides
-                )
-              )
-            ) integrationTestModules
-          )
           // {
             clippy = craneLib.cargoClippy (
               commonArgs

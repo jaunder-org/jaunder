@@ -27,7 +27,7 @@ Tracking epic **jaunder-k4tb**. Methodology and per-phase steps: see
 | PostgreSQL integration run — serial (`--test-threads=1`) | 228s exec (643 tests; 448s wall on first run incl. test compile) | n/a (replaced by parallel) | — | — |
 | PostgreSQL integration run — parallel (default threads) | — | **28.5s exec** (median of 3: 28.3/28.5/28.6s; ~35s wall), 643 tests, 3× clean | — | |
 | One postgres VM check (cold, `postgres-commands`) | 42.8s | — | n/a | n/a |
-| Postgres integration VMs total (`postgres-integration-checks`, 23 VMs cold) | 222.1s | — | | |
+| Postgres integration VMs total (`postgres-integration-checks`, 23 VMs cold) | 222.1s | — | **64.2s** (1 VM, all binaries, multithreaded, fsync off) | |
 | `nix build .#nix-only-checks` (cold) | see Notes (composite) | — | | |
 | Full `scripts/verify` (default tier) | see Notes | | | |
 | Full `scripts/verify --full` (with VM) | n/a (no `--full` flag at baseline) | | | |
@@ -93,6 +93,23 @@ Supporting / context:
   is **generated in that sandbox**, because the sandbox has no network and a few
   files (`websub/http.rs`, `commands.rs`) report lower there than on a networked
   host; a host-generated baseline would exceed what CI can reproduce.
+
+### After Phase 3 (consolidate 23 VMs → 1, 2026-06-14)
+
+- **PostgreSQL VM phase: 222s (23 VMs) → 64.2s (1 VM), ~3.5×**, and one 4 GB VM
+  instead of up to four concurrent 4 GB VMs — the resource/OOM win.
+- Key enabler: per-test databases (Phase 1) let the binaries run with libtest's
+  normal **in-process parallelism** (no `--test-threads=1`). The inherited
+  single-threaded rule was verified stale — `web_posts` ran 3/3 and the whole
+  suite 2/2 multithreaded against PG with no Leptos dispose panics. Upstream,
+  the reactive arena (`reactive_graph` `owner/arena.rs`) is a process-global
+  keyed `SlotMap`; the real hazard was async use-after-dispose (since fixed),
+  not slot collision, and process-per-test (nextest) remains the bulletproof
+  fallback if any flake ever appears.
+- **Durability matters in the VM:** the first consolidated build was 489s
+  because NixOS Postgres defaults to `fsync=on` and the suite creates ~643
+  template-clone databases. Setting `fsync/synchronous_commit/full_page_writes`
+  off (throwaway VM) dropped it to 64.2s.
 
 ### Resource behaviour
 
