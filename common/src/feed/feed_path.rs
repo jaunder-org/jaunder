@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::{tag::Tag, username::Username};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FeedFormat {
     Rss,
@@ -29,9 +31,9 @@ impl FeedFormat {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FeedSurface {
     Site,
-    SiteTag { tag: String },
-    User { username: String },
-    UserTag { username: String, tag: String },
+    SiteTag { tag: Tag },
+    User { username: Username },
+    UserTag { username: Username, tag: Tag },
 }
 
 #[must_use]
@@ -68,39 +70,22 @@ pub fn parse(path: &str) -> Option<(FeedSurface, FeedFormat)> {
     }
     // tags/:tag
     if let Some(tag) = surface_part.strip_prefix("tags/") {
-        if tag.is_empty() || tag.contains('/') {
-            return None;
-        }
-        return Some((
-            FeedSurface::SiteTag {
-                tag: tag.to_string(),
-            },
-            format,
-        ));
+        // `Tag::from_str` rejects empty input and any non-`[a-z0-9-]`
+        // character (including `/`), so it subsumes the prior ad-hoc checks
+        // while also rejecting inputs the old parser wrongly accepted
+        // (uppercase, dots, leading hyphen, non-ASCII).
+        let tag = tag.parse::<Tag>().ok()?;
+        return Some((FeedSurface::SiteTag { tag }, format));
     }
     // ~:username[/tags/:tag]
     if let Some(after_tilde) = surface_part.strip_prefix('~') {
         if let Some((username, tag_part)) = after_tilde.split_once("/tags/") {
-            if username.is_empty() || tag_part.is_empty() || tag_part.contains('/') {
-                return None;
-            }
-            return Some((
-                FeedSurface::UserTag {
-                    username: username.to_string(),
-                    tag: tag_part.to_string(),
-                },
-                format,
-            ));
+            let username = username.parse::<Username>().ok()?;
+            let tag = tag_part.parse::<Tag>().ok()?;
+            return Some((FeedSurface::UserTag { username, tag }, format));
         }
-        if after_tilde.contains('/') || after_tilde.is_empty() {
-            return None;
-        }
-        return Some((
-            FeedSurface::User {
-                username: after_tilde.to_string(),
-            },
-            format,
-        ));
+        let username = after_tilde.parse::<Username>().ok()?;
+        return Some((FeedSurface::User { username }, format));
     }
     None
 }
@@ -115,21 +100,29 @@ mod tests {
         assert_eq!(parsed, (surface, format));
     }
 
+    fn tag(s: &str) -> Tag {
+        s.parse().expect("valid tag")
+    }
+
+    fn user(s: &str) -> Username {
+        s.parse().expect("valid username")
+    }
+
     #[test]
     fn round_trips_all_surfaces_and_formats() {
         for format in [FeedFormat::Rss, FeedFormat::Atom, FeedFormat::Json] {
             rt(FeedSurface::Site, format);
-            rt(FeedSurface::SiteTag { tag: "rust".into() }, format);
+            rt(FeedSurface::SiteTag { tag: tag("rust") }, format);
             rt(
                 FeedSurface::User {
-                    username: "alice".into(),
+                    username: user("alice"),
                 },
                 format,
             );
             rt(
                 FeedSurface::UserTag {
-                    username: "alice".into(),
-                    tag: "rust".into(),
+                    username: user("alice"),
+                    tag: tag("rust"),
                 },
                 format,
             );
@@ -137,24 +130,47 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_tag_with_plus() {
-        rt(FeedSurface::SiteTag { tag: "c++".into() }, FeedFormat::Rss);
-    }
-
-    #[test]
-    fn round_trips_non_ascii_tag() {
+    fn round_trips_hyphenated_tag() {
         rt(
             FeedSurface::SiteTag {
-                tag: "日本語".into(),
+                tag: tag("hello-world"),
             },
-            FeedFormat::Atom,
+            FeedFormat::Rss,
         );
-        rt(
-            FeedSurface::UserTag {
-                username: "bob".into(),
-                tag: "日本語".into(),
-            },
-            FeedFormat::Json,
+    }
+
+    // Previously-divergent inputs: the old ad-hoc parser accepted these
+    // (anything without '/'), but the canonical `Tag`/`Username` validators
+    // reject them, so `parse()` must now refuse them too.
+    #[test]
+    fn rejects_inputs_the_canonical_validators_reject() {
+        // `+` is not in the tag/username grammar (old parser accepted "c++").
+        assert!(parse("/tags/c++/feed.rss").is_none());
+        // Non-ASCII (old parser accepted "日本語").
+        assert!(parse("/tags/日本語/feed.atom").is_none());
+        assert!(parse("/~bob/tags/日本語/feed.json").is_none());
+        // Leading hyphen is rejected by `Tag::from_str`.
+        assert!(parse("/tags/-rust/feed.rss").is_none());
+        // Dots in the username segment are rejected by `Username::from_str`.
+        assert!(parse("/~al.ice/feed.rss").is_none());
+    }
+
+    // The canonical validators lowercase their input, so a mixed-case path
+    // parses to the normalized newtype (and no longer round-trips verbatim).
+    #[test]
+    fn normalizes_case_via_canonical_validators() {
+        assert_eq!(
+            parse("/~Alice/feed.rss"),
+            Some((
+                FeedSurface::User {
+                    username: user("alice"),
+                },
+                FeedFormat::Rss,
+            ))
+        );
+        assert_eq!(
+            parse("/tags/Rust/feed.atom"),
+            Some((FeedSurface::SiteTag { tag: tag("rust") }, FeedFormat::Atom))
         );
     }
 

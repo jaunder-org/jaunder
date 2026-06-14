@@ -47,7 +47,8 @@ use leptos_router::{
 
 #[component]
 fn AppShell() -> impl IntoView {
-    let theme = use_context::<RwSignal<String>>().expect("theme context missing");
+    let theme = use_context::<RwSignal<String>>()
+        .unwrap_or_else(|| RwSignal::new(DEFAULT_THEME.to_string()));
     view! {
         <div class="j-root" attr:data-theme=move || theme.get()>
             <div class="j-shell">

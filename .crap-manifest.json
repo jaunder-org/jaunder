@@ -3,6 +3,51 @@
   "version": "0.2.2",
   "entries": [
     {
+      "file": "storage/src/postgres/backup.rs",
+      "function": "export_database",
+      "line": 17,
+      "cyclomatic": 12.0,
+      "coverage": 0.0,
+      "crap": 156.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/backup.rs",
+      "function": "restore_database",
+      "line": 58,
+      "cyclomatic": 11.0,
+      "coverage": 0.0,
+      "crap": 132.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "PostgresPostStorage::tag_post",
+      "line": 373,
+      "cyclomatic": 11.0,
+      "coverage": 0.0,
+      "crap": 132.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "PostgresPostStorage::update_post",
+      "line": 101,
+      "cyclomatic": 10.0,
+      "coverage": 0.0,
+      "crap": 110.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/backup.rs",
+      "function": "export_table",
+      "line": 219,
+      "cyclomatic": 8.0,
+      "coverage": 0.0,
+      "crap": 72.0,
+      "crate": "storage"
+    },
+    {
       "file": "storage/src/postgres/invites.rs",
       "function": "PostgresInviteStorage::use_invite",
       "line": 35,
@@ -12,9 +57,117 @@
       "crate": "storage"
     },
     {
+      "file": "storage/src/postgres/backup.rs",
+      "function": "import_table",
+      "line": 108,
+      "cyclomatic": 7.0,
+      "coverage": 0.0,
+      "crap": 56.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/backup.rs",
+      "function": "schema_checksum",
+      "line": 261,
+      "cyclomatic": 7.0,
+      "coverage": 0.0,
+      "crap": 56.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/email_verifications.rs",
+      "function": "PostgresEmailVerificationStorage::create_email_verification",
+      "line": 21,
+      "cyclomatic": 6.0,
+      "coverage": 0.0,
+      "crap": 42.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "PostgresPostStorage::list_posts_by_tag",
+      "line": 472,
+      "cyclomatic": 6.0,
+      "coverage": 0.0,
+      "crap": 42.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "PostgresPostStorage::list_user_posts_by_tag",
+      "line": 538,
+      "cyclomatic": 6.0,
+      "coverage": 0.0,
+      "crap": 42.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/backup.rs",
+      "function": "restore_type",
+      "line": 168,
+      "cyclomatic": 5.0,
+      "coverage": 0.0,
+      "crap": 30.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/feed_events.rs",
+      "function": "parse_status",
+      "line": 18,
+      "cyclomatic": 5.0,
+      "coverage": 0.0,
+      "crap": 30.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/email_verifications.rs",
+      "function": "PostgresEmailVerificationStorage::use_email_verification",
+      "line": 58,
+      "cyclomatic": 5.0,
+      "coverage": 0.0,
+      "crap": 30.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/users.rs",
+      "function": "PostgresUserStorage::authenticate",
+      "line": 77,
+      "cyclomatic": 5.0,
+      "coverage": 0.0,
+      "crap": 30.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/password_resets.rs",
+      "function": "PostgresPasswordResetStorage::use_password_reset",
+      "line": 44,
+      "cyclomatic": 5.0,
+      "coverage": 0.0,
+      "crap": 30.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "PostgresPostStorage::list_tags",
+      "line": 609,
+      "cyclomatic": 5.0,
+      "coverage": 0.0,
+      "crap": 30.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "list_published_in_window_postgres",
+      "line": 677,
+      "cyclomatic": 5.0,
+      "coverage": 0.0,
+      "crap": 30.0,
+      "crate": "storage"
+    },
+    {
       "file": "server/src/main.rs",
       "function": "run",
-      "line": 21,
+      "line": 22,
       "cyclomatic": 23.0,
       "coverage": 81.66666666666667,
       "crap": 26.259717592592587,
@@ -39,13 +192,58 @@
       "crate": "common"
     },
     {
-      "file": "common/src/feed/feed_path.rs",
-      "function": "parse",
-      "line": 49,
-      "cyclomatic": 20.0,
-      "coverage": 100.0,
+      "file": "storage/src/postgres/bootstrap.rs",
+      "function": "execute_utility",
+      "line": 75,
+      "cyclomatic": 4.0,
+      "coverage": 0.0,
       "crap": 20.0,
-      "crate": "common"
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "PostgresPostStorage::create_post",
+      "line": 27,
+      "cyclomatic": 4.0,
+      "coverage": 0.0,
+      "crap": 20.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "PostgresPostStorage::list_published_by_user",
+      "line": 189,
+      "cyclomatic": 4.0,
+      "coverage": 0.0,
+      "crap": 20.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "PostgresPostStorage::list_published",
+      "line": 237,
+      "cyclomatic": 4.0,
+      "coverage": 0.0,
+      "crap": 20.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "PostgresPostStorage::list_drafts_by_user",
+      "line": 280,
+      "cyclomatic": 4.0,
+      "coverage": 0.0,
+      "crap": 20.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "PostgresPostStorage::list_collection_by_user",
+      "line": 328,
+      "cyclomatic": 4.0,
+      "coverage": 0.0,
+      "crap": 20.0,
+      "crate": "storage"
     },
     {
       "file": "storage/src/postgres/mod.rs",
@@ -66,12 +264,21 @@
       "crate": "storage"
     },
     {
+      "file": "common/src/feed/feed_path.rs",
+      "function": "parse",
+      "line": 51,
+      "cyclomatic": 17.0,
+      "coverage": 100.0,
+      "crap": 17.0,
+      "crate": "common"
+    },
+    {
       "file": "server/src/feed/regenerate.rs",
       "function": "regenerate_feed",
       "line": 28,
       "cyclomatic": 16.0,
-      "coverage": 94.66666666666667,
-      "crap": 16.03883614814815,
+      "coverage": 98.7012987012987,
+      "crap": 16.000560748072974,
       "crate": "jaunder"
     },
     {
@@ -84,12 +291,12 @@
       "crate": "common"
     },
     {
-      "file": "storage/src/postgres/users.rs",
-      "function": "PostgresUserStorage::authenticate",
-      "line": 77,
-      "cyclomatic": 5.0,
-      "coverage": 25.0,
-      "crap": 15.546875,
+      "file": "storage/src/backup.rs",
+      "function": "export_directory_backup",
+      "line": 158,
+      "cyclomatic": 13.0,
+      "coverage": 75.0,
+      "crap": 15.640625,
       "crate": "storage"
     },
     {
@@ -111,9 +318,18 @@
       "crate": "jaunder"
     },
     {
+      "file": "storage/src/postgres/bootstrap.rs",
+      "function": "create_postgres_database_and_role",
+      "line": 38,
+      "cyclomatic": 6.0,
+      "coverage": 38.095238095238095,
+      "crap": 14.540330417881439,
+      "crate": "storage"
+    },
+    {
       "file": "server/src/feed/handlers.rs",
       "function": "serve",
-      "line": 23,
+      "line": 24,
       "cyclomatic": 14.0,
       "coverage": 88.37209302325581,
       "crap": 14.308148968015395,
@@ -147,15 +363,6 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/backup.rs",
-      "function": "export_directory_backup",
-      "line": 158,
-      "cyclomatic": 13.0,
-      "coverage": 95.83333333333334,
-      "crap": 13.01222511574074,
-      "crate": "storage"
-    },
-    {
       "file": "storage/src/sqlite/backup.rs",
       "function": "restore_database",
       "line": 58,
@@ -165,13 +372,13 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/backup.rs",
-      "function": "export_database",
-      "line": 17,
-      "cyclomatic": 12.0,
-      "coverage": 90.625,
-      "crap": 12.11865234375,
-      "crate": "storage"
+      "file": "server/src/commands.rs",
+      "function": "cmd_create_pg_db",
+      "line": 72,
+      "cyclomatic": 7.0,
+      "coverage": 52.17391304347826,
+      "crap": 12.36031889537273,
+      "crate": "jaunder"
     },
     {
       "file": "storage/src/backup.rs",
@@ -181,15 +388,6 @@
       "coverage": 91.66666666666666,
       "crap": 12.083333333333334,
       "crate": "storage"
-    },
-    {
-      "file": "server/src/media.rs",
-      "function": "serve_handler",
-      "line": 103,
-      "cyclomatic": 12.0,
-      "coverage": 93.10344827586206,
-      "crap": 12.047234408954857,
-      "crate": "jaunder"
     },
     {
       "file": "common/src/atompub/entry.rs",
@@ -237,9 +435,81 @@
       "crate": "storage"
     },
     {
+      "file": "storage/src/postgres/backup.rs",
+      "function": "existing_export_tables",
+      "line": 89,
+      "cyclomatic": 3.0,
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/backup.rs",
+      "function": "repair_sequences",
+      "line": 177,
+      "cyclomatic": 3.0,
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/users.rs",
+      "function": "PostgresUserStorage::get_user",
+      "line": 170,
+      "cyclomatic": 3.0,
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/users.rs",
+      "function": "PostgresUserStorage::get_user_by_username",
+      "line": 182,
+      "cyclomatic": 3.0,
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "storage"
+    },
+    {
       "file": "storage/src/postgres/users.rs",
       "function": "PostgresUserStorage::set_password",
-      "line": 211,
+      "line": 219,
+      "cyclomatic": 3.0,
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/password_resets.rs",
+      "function": "PostgresPasswordResetStorage::create_password_reset",
+      "line": 22,
+      "cyclomatic": 3.0,
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "PostgresPostStorage::get_post_by_id",
+      "line": 57,
+      "cyclomatic": 3.0,
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "PostgresPostStorage::get_post_by_permalink",
+      "line": 72,
+      "cyclomatic": 3.0,
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "PostgresPostStorage::untag_post",
+      "line": 426,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
@@ -262,15 +532,6 @@
       "coverage": 86.04651162790698,
       "crap": 11.328725772573483,
       "crate": "jaunder"
-    },
-    {
-      "file": "storage/src/postgres/backup.rs",
-      "function": "restore_database",
-      "line": 58,
-      "cyclomatic": 11.0,
-      "coverage": 86.95652173913044,
-      "crap": 11.268513191419414,
-      "crate": "storage"
     },
     {
       "file": "common/src/atompub/entry.rs",
@@ -300,15 +561,6 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::tag_post",
-      "line": 373,
-      "cyclomatic": 11.0,
-      "coverage": 100.0,
-      "crap": 11.0,
-      "crate": "storage"
-    },
-    {
       "file": "server/src/lib.rs",
       "function": "prune_backups",
       "line": 199,
@@ -325,6 +577,15 @@
       "coverage": 90.625,
       "crap": 10.0823974609375,
       "crate": "storage"
+    },
+    {
+      "file": "server/src/media.rs",
+      "function": "serve_handler",
+      "line": 103,
+      "cyclomatic": 10.0,
+      "coverage": 93.75,
+      "crap": 10.0244140625,
+      "crate": "jaunder"
     },
     {
       "file": "web/src/pages/upload.rs",
@@ -356,15 +617,6 @@
     {
       "file": "storage/src/sqlite/posts.rs",
       "function": "SqlitePostStorage::update_post",
-      "line": 101,
-      "cyclomatic": 10.0,
-      "coverage": 100.0,
-      "crap": 10.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::update_post",
       "line": 101,
       "cyclomatic": 10.0,
       "coverage": 100.0,
@@ -534,15 +786,6 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/backup.rs",
-      "function": "export_table",
-      "line": 219,
-      "cyclomatic": 8.0,
-      "coverage": 100.0,
-      "crap": 8.0,
-      "crate": "storage"
-    },
-    {
       "file": "server/src/atompub/posts.rs",
       "function": "apply_categories",
       "line": 205,
@@ -552,12 +795,12 @@
       "crate": "jaunder"
     },
     {
-      "file": "storage/src/postgres/backup.rs",
-      "function": "import_table",
-      "line": 108,
+      "file": "storage/src/backup.rs",
+      "function": "restore_directory_backup",
+      "line": 192,
       "cyclomatic": 7.0,
-      "coverage": 82.75862068965517,
-      "crap": 7.25113780802821,
+      "coverage": 78.94736842105263,
+      "crap": 7.457209505758857,
       "crate": "storage"
     },
     {
@@ -579,6 +822,15 @@
       "crate": "common"
     },
     {
+      "file": "web/src/error.rs",
+      "function": "kind_class_for",
+      "line": 269,
+      "cyclomatic": 7.0,
+      "coverage": 100.0,
+      "crap": 7.0,
+      "crate": "web"
+    },
+    {
       "file": "web/src/auth/server.rs",
       "function": "auth_rejection_error",
       "line": 110,
@@ -595,15 +847,6 @@
       "coverage": 100.0,
       "crap": 7.0,
       "crate": "web"
-    },
-    {
-      "file": "storage/src/backup.rs",
-      "function": "restore_directory_backup",
-      "line": 192,
-      "cyclomatic": 7.0,
-      "coverage": 100.0,
-      "crap": 7.0,
-      "crate": "storage"
     },
     {
       "file": "storage/src/backup.rs",
@@ -633,27 +876,9 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/backup.rs",
-      "function": "schema_checksum",
-      "line": 261,
-      "cyclomatic": 7.0,
-      "coverage": 100.0,
-      "crap": 7.0,
-      "crate": "storage"
-    },
-    {
       "file": "server/src/observability.rs",
       "function": "init_tracing_impl",
       "line": 127,
-      "cyclomatic": 7.0,
-      "coverage": 100.0,
-      "crap": 7.0,
-      "crate": "jaunder"
-    },
-    {
-      "file": "server/src/commands.rs",
-      "function": "cmd_create_pg_db",
-      "line": 72,
       "cyclomatic": 7.0,
       "coverage": 100.0,
       "crap": 7.0,
@@ -671,7 +896,7 @@
     {
       "file": "server/src/media_manager.rs",
       "function": "MediaManager::stream_to_temp",
-      "line": 308,
+      "line": 313,
       "cyclomatic": 7.0,
       "coverage": 100.0,
       "crap": 7.0,
@@ -696,15 +921,6 @@
       "crate": "jaunder"
     },
     {
-      "file": "storage/src/postgres/bootstrap.rs",
-      "function": "create_postgres_database_and_role",
-      "line": 38,
-      "cyclomatic": 6.0,
-      "coverage": 95.23809523809523,
-      "crap": 6.003887269193392,
-      "crate": "storage"
-    },
-    {
       "file": "common/src/tag.rs",
       "function": "Tag::from_str",
       "line": 20,
@@ -716,7 +932,7 @@
     {
       "file": "common/src/tag.rs",
       "function": "parse_and_validate_tags",
-      "line": 71,
+      "line": 92,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -858,36 +1074,126 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/email_verifications.rs",
-      "function": "PostgresEmailVerificationStorage::create_email_verification",
+      "file": "storage/src/postgres/backup.rs",
+      "function": "insert_sql",
+      "line": 143,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/backup.rs",
+      "function": "columns",
+      "line": 196,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/backup.rs",
+      "function": "schema_version",
+      "line": 252,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/feed_events.rs",
+      "function": "PostgresFeedEventStorage::claim_pending_batch",
+      "line": 40,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/users.rs",
+      "function": "PostgresUserStorage::update_profile",
+      "line": 194,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/users.rs",
+      "function": "PostgresUserStorage::set_email",
+      "line": 204,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/sessions.rs",
+      "function": "PostgresSessionStorage::list_sessions",
+      "line": 86,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/invites.rs",
+      "function": "PostgresInviteStorage::create_invite",
       "line": 21,
-      "cyclomatic": 6.0,
-      "coverage": 100.0,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/invites.rs",
+      "function": "PostgresInviteStorage::list_invites",
+      "line": 73,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
       "crap": 6.0,
       "crate": "storage"
     },
     {
       "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::list_posts_by_tag",
-      "line": 472,
-      "cyclomatic": 6.0,
-      "coverage": 100.0,
+      "function": "PostgresPostStorage::soft_delete_post",
+      "line": 171,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
       "crap": 6.0,
       "crate": "storage"
     },
     {
       "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::list_user_posts_by_tag",
-      "line": 538,
-      "cyclomatic": 6.0,
-      "coverage": 100.0,
+      "function": "PostgresPostStorage::unpublish_post",
+      "line": 181,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "PostgresPostStorage::get_tags_for_post",
+      "line": 444,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/posts.rs",
+      "function": "PostgresPostStorage::list_published_in_window",
+      "line": 660,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
       "crap": 6.0,
       "crate": "storage"
     },
     {
       "file": "server/src/mailer.rs",
       "function": "build_mailer",
-      "line": 383,
+      "line": 184,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -923,7 +1229,7 @@
     {
       "file": "server/src/media_manager.rs",
       "function": "MediaManager::upload_bytes",
-      "line": 275,
+      "line": 280,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -937,15 +1243,6 @@
       "coverage": 100.0,
       "crap": 6.0,
       "crate": "jaunder"
-    },
-    {
-      "file": "storage/src/postgres/feed_events.rs",
-      "function": "parse_status",
-      "line": 18,
-      "cyclomatic": 5.0,
-      "coverage": 71.42857142857143,
-      "crap": 5.5830903790087465,
-      "crate": "storage"
     },
     {
       "file": "web/src/posts/server.rs",
@@ -986,7 +1283,7 @@
     {
       "file": "common/src/feed/feed_path.rs",
       "function": "canonicalize",
-      "line": 38,
+      "line": 40,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -1004,7 +1301,7 @@
     {
       "file": "web/src/feed_events.rs",
       "function": "enqueue_feed_events",
-      "line": 28,
+      "line": 29,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -1191,24 +1488,6 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/backup.rs",
-      "function": "restore_type",
-      "line": 168,
-      "cyclomatic": 5.0,
-      "coverage": 100.0,
-      "crap": 5.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/email_verifications.rs",
-      "function": "PostgresEmailVerificationStorage::use_email_verification",
-      "line": 58,
-      "cyclomatic": 5.0,
-      "coverage": 100.0,
-      "crap": 5.0,
-      "crate": "storage"
-    },
-    {
       "file": "storage/src/postgres/users.rs",
       "function": "PostgresUserStorage::create_user",
       "line": 31,
@@ -1227,36 +1506,9 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/password_resets.rs",
-      "function": "PostgresPasswordResetStorage::use_password_reset",
-      "line": 44,
-      "cyclomatic": 5.0,
-      "coverage": 100.0,
-      "crap": 5.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::list_tags",
-      "line": 609,
-      "cyclomatic": 5.0,
-      "coverage": 100.0,
-      "crap": 5.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "list_published_in_window_postgres",
-      "line": 677,
-      "cyclomatic": 5.0,
-      "coverage": 100.0,
-      "crap": 5.0,
-      "crate": "storage"
-    },
-    {
       "file": "server/src/feed/handlers.rs",
       "function": "parse_format",
-      "line": 14,
+      "line": 15,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -1265,7 +1517,16 @@
     {
       "file": "server/src/feed/regenerate.rs",
       "function": "compute_title",
-      "line": 163,
+      "line": 168,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "jaunder"
+    },
+    {
+      "file": "server/src/media.rs",
+      "function": "resolve_media_path",
+      "line": 211,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -1299,6 +1560,24 @@
       "crate": "jaunder"
     },
     {
+      "file": "storage/src/postgres/mod.rs",
+      "function": "database_has_users",
+      "line": 250,
+      "cyclomatic": 3.0,
+      "coverage": 42.857142857142854,
+      "crap": 4.679300291545189,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/postgres/mod.rs",
+      "function": "open_postgres_database",
+      "line": 240,
+      "cyclomatic": 4.0,
+      "coverage": 75.0,
+      "crap": 4.25,
+      "crate": "storage"
+    },
+    {
       "file": "server/src/commands.rs",
       "function": "describe_bootstrap_error",
       "line": 54,
@@ -1319,20 +1598,11 @@
     {
       "file": "web/src/pages/mod.rs",
       "function": "App",
-      "line": 68,
+      "line": 69,
       "cyclomatic": 4.0,
       "coverage": 90.0,
       "crap": 4.016,
       "crate": "web"
-    },
-    {
-      "file": "storage/src/postgres/bootstrap.rs",
-      "function": "execute_utility",
-      "line": 75,
-      "cyclomatic": 4.0,
-      "coverage": 91.66666666666666,
-      "crap": 4.0092592592592595,
-      "crate": "storage"
     },
     {
       "file": "web/src/backup/server.rs",
@@ -1364,7 +1634,7 @@
     {
       "file": "common/src/feed/feed_path.rs",
       "function": "FeedFormat::ext",
-      "line": 12,
+      "line": 14,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -1373,7 +1643,7 @@
     {
       "file": "common/src/feed/feed_path.rs",
       "function": "FeedFormat::content_type",
-      "line": 20,
+      "line": 22,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -1410,6 +1680,24 @@
       "file": "web/src/pages/media.rs",
       "function": "format_bytes",
       "line": 10,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "web"
+    },
+    {
+      "file": "web/src/error.rs",
+      "function": "ErrorClass::log_level",
+      "line": 110,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "web"
+    },
+    {
+      "file": "web/src/error.rs",
+      "function": "log_boundary_failure",
+      "line": 316,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -1668,60 +1956,6 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::create_post",
-      "line": 27,
-      "cyclomatic": 4.0,
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::list_published_by_user",
-      "line": 189,
-      "cyclomatic": 4.0,
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::list_published",
-      "line": 237,
-      "cyclomatic": 4.0,
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::list_drafts_by_user",
-      "line": 280,
-      "cyclomatic": 4.0,
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::list_collection_by_user",
-      "line": 328,
-      "cyclomatic": 4.0,
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/mod.rs",
-      "function": "open_postgres_database",
-      "line": 240,
-      "cyclomatic": 4.0,
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "storage"
-    },
-    {
       "file": "server/src/lib.rs",
       "function": "run_scheduled_backup",
       "line": 179,
@@ -1751,7 +1985,7 @@
     {
       "file": "server/src/media_manager.rs",
       "function": "MediaManager::finalize_upload",
-      "line": 222,
+      "line": 224,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -1760,7 +1994,7 @@
     {
       "file": "server/src/media_manager.rs",
       "function": "MediaManager::first_file_in_dir",
-      "line": 336,
+      "line": 341,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -1783,15 +2017,6 @@
       "coverage": 100.0,
       "crap": 4.0,
       "crate": "jaunder"
-    },
-    {
-      "file": "common/src/websub/http.rs",
-      "function": "HttpWebSubClient::send_publish",
-      "line": 30,
-      "cyclomatic": 3.0,
-      "coverage": 85.71428571428571,
-      "crap": 3.0262390670553936,
-      "crate": "common"
     },
     {
       "file": "server/src/mailer.rs",
@@ -1832,10 +2057,19 @@
     {
       "file": "common/src/media.rs",
       "function": "detect_content_type",
-      "line": 52,
+      "line": 68,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
+      "crate": "common"
+    },
+    {
+      "file": "common/src/websub/http.rs",
+      "function": "HttpWebSubClient::send_publish",
+      "line": 30,
+      "cyclomatic": 3.0,
+      "coverage": 85.71428571428571,
+      "crap": 3.0262390670553936,
       "crate": "common"
     },
     {
@@ -1894,8 +2128,17 @@
     },
     {
       "file": "web/src/error.rs",
+      "function": "render_operator_message",
+      "line": 285,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web"
+    },
+    {
+      "file": "web/src/error.rs",
       "function": "server_boundary",
-      "line": 188,
+      "line": 298,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2012,7 +2255,7 @@
     {
       "file": "storage/src/sqlite/users.rs",
       "function": "SqliteUserStorage::get_user",
-      "line": 162,
+      "line": 170,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2021,7 +2264,7 @@
     {
       "file": "storage/src/sqlite/users.rs",
       "function": "SqliteUserStorage::get_user_by_username",
-      "line": 174,
+      "line": 182,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2030,7 +2273,7 @@
     {
       "file": "storage/src/sqlite/users.rs",
       "function": "SqliteUserStorage::set_password",
-      "line": 211,
+      "line": 219,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2165,25 +2408,7 @@
     {
       "file": "storage/src/helpers.rs",
       "function": "verify_password",
-      "line": 355,
-      "cyclomatic": 3.0,
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/backup.rs",
-      "function": "existing_export_tables",
-      "line": 89,
-      "cyclomatic": 3.0,
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/backup.rs",
-      "function": "repair_sequences",
-      "line": 177,
+      "line": 389,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2235,63 +2460,9 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/users.rs",
-      "function": "PostgresUserStorage::get_user",
-      "line": 162,
-      "cyclomatic": 3.0,
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/users.rs",
-      "function": "PostgresUserStorage::get_user_by_username",
-      "line": 174,
-      "cyclomatic": 3.0,
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "storage"
-    },
-    {
       "file": "storage/src/postgres/sessions.rs",
       "function": "PostgresSessionStorage::create_session",
       "line": 26,
-      "cyclomatic": 3.0,
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/password_resets.rs",
-      "function": "PostgresPasswordResetStorage::create_password_reset",
-      "line": 22,
-      "cyclomatic": 3.0,
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::get_post_by_id",
-      "line": 57,
-      "cyclomatic": 3.0,
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::get_post_by_permalink",
-      "line": 72,
-      "cyclomatic": 3.0,
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::untag_post",
-      "line": 426,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2307,18 +2478,9 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/mod.rs",
-      "function": "database_has_users",
-      "line": 250,
-      "cyclomatic": 3.0,
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "storage"
-    },
-    {
       "file": "server/src/feed/regenerate.rs",
       "function": "build_feed_items",
-      "line": 134,
+      "line": 139,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2472,6 +2634,15 @@
       "file": "common/src/feed/rss.rs",
       "function": "render_rss",
       "line": 16,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "common"
+    },
+    {
+      "file": "common/src/media.rs",
+      "function": "is_valid_content_hash",
+      "line": 25,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -2687,7 +2858,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "PostPage",
-      "line": 108,
+      "line": 109,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2696,7 +2867,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "DraftPreviewPage",
-      "line": 376,
+      "line": 381,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2705,7 +2876,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "EditPostPage",
-      "line": 478,
+      "line": 483,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2714,7 +2885,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "DraftsPage",
-      "line": 722,
+      "line": 727,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2723,7 +2894,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "render_draft_row",
-      "line": 797,
+      "line": 802,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2732,7 +2903,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "render_delete_form",
-      "line": 842,
+      "line": 847,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2741,7 +2912,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "render_delete_result",
-      "line": 861,
+      "line": 866,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2750,7 +2921,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "SiteTagPage",
-      "line": 880,
+      "line": 885,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2759,18 +2930,9 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "UserTagPage",
-      "line": 1023,
+      "line": 1030,
       "cyclomatic": 1.0,
       "coverage": 0.0,
-      "crap": 2.0,
-      "crate": "web"
-    },
-    {
-      "file": "web/src/error.rs",
-      "function": "error_with_sources",
-      "line": 208,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
       "crap": 2.0,
       "crate": "web"
     },
@@ -2948,7 +3110,7 @@
     {
       "file": "storage/src/sqlite/users.rs",
       "function": "SqliteUserStorage::update_profile",
-      "line": 186,
+      "line": 194,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -2957,7 +3119,7 @@
     {
       "file": "storage/src/sqlite/users.rs",
       "function": "SqliteUserStorage::set_email",
-      "line": 196,
+      "line": 204,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -3117,33 +3279,6 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/backup.rs",
-      "function": "insert_sql",
-      "line": 143,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/backup.rs",
-      "function": "columns",
-      "line": 196,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/backup.rs",
-      "function": "schema_version",
-      "line": 252,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage"
-    },
-    {
       "file": "storage/src/postgres/user_config.rs",
       "function": "PostgresUserConfigStorage::get",
       "line": 20,
@@ -3207,15 +3342,6 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/feed_events.rs",
-      "function": "PostgresFeedEventStorage::claim_pending_batch",
-      "line": 40,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage"
-    },
-    {
       "file": "storage/src/postgres/site_config.rs",
       "function": "PostgresSiteConfigStorage::get",
       "line": 19,
@@ -3234,24 +3360,6 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/users.rs",
-      "function": "PostgresUserStorage::update_profile",
-      "line": 186,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/users.rs",
-      "function": "PostgresUserStorage::set_email",
-      "line": 196,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage"
-    },
-    {
       "file": "storage/src/postgres/sessions.rs",
       "function": "PostgresSessionStorage::revoke_session",
       "line": 78,
@@ -3261,11 +3369,11 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/sessions.rs",
-      "function": "PostgresSessionStorage::list_sessions",
-      "line": 86,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
+      "file": "storage/src/postgres/feed_cache.rs",
+      "function": "row_from_tuple",
+      "line": 20,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
       "crap": 2.0,
       "crate": "storage"
     },
@@ -3297,56 +3405,38 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/invites.rs",
-      "function": "PostgresInviteStorage::create_invite",
-      "line": 21,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/invites.rs",
-      "function": "PostgresInviteStorage::list_invites",
-      "line": 73,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
+      "file": "storage/src/postgres/posts.rs",
+      "function": "window_site_postgres",
+      "line": 699,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
       "crap": 2.0,
       "crate": "storage"
     },
     {
       "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::soft_delete_post",
-      "line": 171,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
+      "function": "window_user_postgres",
+      "line": 731,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
       "crap": 2.0,
       "crate": "storage"
     },
     {
       "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::unpublish_post",
-      "line": 181,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
+      "function": "window_site_tag_postgres",
+      "line": 767,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
       "crap": 2.0,
       "crate": "storage"
     },
     {
       "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::get_tags_for_post",
-      "line": 444,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "PostgresPostStorage::list_published_in_window",
-      "line": 660,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
+      "function": "window_user_tag_postgres",
+      "line": 804,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
       "crap": 2.0,
       "crate": "storage"
     },
@@ -3380,34 +3470,7 @@
     {
       "file": "server/src/feed/handlers.rs",
       "function": "feed_site",
-      "line": 73,
-      "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "crate": "jaunder"
-    },
-    {
-      "file": "server/src/feed/handlers.rs",
-      "function": "feed_site_tag",
-      "line": 84,
-      "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "crate": "jaunder"
-    },
-    {
-      "file": "server/src/feed/handlers.rs",
-      "function": "feed_user_tag",
-      "line": 106,
-      "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "crate": "jaunder"
-    },
-    {
-      "file": "server/src/feed/regenerate.rs",
-      "function": "storage_err",
-      "line": 117,
+      "line": 74,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -3416,7 +3479,7 @@
     {
       "file": "server/src/media.rs",
       "function": "proxy_handler",
-      "line": 202,
+      "line": 188,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -3497,7 +3560,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "CreatePostPage",
-      "line": 24,
+      "line": 25,
       "cyclomatic": 1.0,
       "coverage": 30.76923076923077,
       "crap": 1.3318161128812016,
@@ -3531,12 +3594,21 @@
       "crate": "web"
     },
     {
+      "file": "server/src/feed/handlers.rs",
+      "function": "feed_user_tag",
+      "line": 113,
+      "cyclomatic": 1.0,
+      "coverage": 52.94117647058824,
+      "crap": 1.1042133116222268,
+      "crate": "jaunder"
+    },
+    {
       "file": "web/src/pages/posts.rs",
       "function": "UserTimelinePage",
-      "line": 212,
+      "line": 213,
       "cyclomatic": 1.0,
-      "coverage": 55.78947368421052,
-      "crap": 1.086412596588424,
+      "coverage": 57.57575757575758,
+      "crap": 1.0763558449508863,
       "crate": "web"
     },
     {
@@ -3576,6 +3648,15 @@
       "crate": "web"
     },
     {
+      "file": "server/src/feed/handlers.rs",
+      "function": "feed_site_tag",
+      "line": 85,
+      "cyclomatic": 1.0,
+      "coverage": 81.81818181818183,
+      "crap": 1.0060105184072126,
+      "crate": "jaunder"
+    },
+    {
       "file": "server/src/lib.rs",
       "function": "create_router",
       "line": 42,
@@ -3605,16 +3686,16 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "publish_post",
-      "line": 428,
+      "line": 423,
       "cyclomatic": 1.0,
-      "coverage": 94.44444444444444,
-      "crap": 1.0001714677640603,
+      "coverage": 93.47826086956522,
+      "crap": 1.0002773896605572,
       "crate": "web"
     },
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_posts_by_tag",
-      "line": 652,
+      "line": 639,
       "cyclomatic": 1.0,
       "coverage": 97.2972972972973,
       "crap": 1.0000197421672952,
@@ -3623,7 +3704,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_user_posts_by_tag",
-      "line": 700,
+      "line": 687,
       "cyclomatic": 1.0,
       "coverage": 97.91666666666666,
       "crap": 1.0000090422453705,
@@ -3785,7 +3866,7 @@
     {
       "file": "common/src/media.rs",
       "function": "media_path",
-      "line": 18,
+      "line": 34,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3794,7 +3875,7 @@
     {
       "file": "common/src/media.rs",
       "function": "media_url",
-      "line": 26,
+      "line": 42,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3803,7 +3884,7 @@
     {
       "file": "common/src/media.rs",
       "function": "should_inline",
-      "line": 32,
+      "line": 48,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3839,7 +3920,7 @@
     {
       "file": "common/src/websub/capturing.rs",
       "function": "CapturingWebSubClient::pings",
-      "line": 25,
+      "line": 26,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3848,7 +3929,7 @@
     {
       "file": "common/src/websub/capturing.rs",
       "function": "CapturingWebSubClient::send_publish",
-      "line": 32,
+      "line": 34,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3893,7 +3974,7 @@
     {
       "file": "common/src/mailer.rs",
       "function": "NoopMailSender::send_email",
-      "line": 59,
+      "line": 63,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3902,7 +3983,7 @@
     {
       "file": "common/src/mailer.rs",
       "function": "CapturingMailSender::new",
-      "line": 85,
+      "line": 89,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3911,7 +3992,7 @@
     {
       "file": "common/src/mailer.rs",
       "function": "CapturingMailSender::sent",
-      "line": 94,
+      "line": 99,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3920,7 +4001,7 @@
     {
       "file": "common/src/mailer.rs",
       "function": "CapturingMailSender::send_email",
-      "line": 101,
+      "line": 107,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4037,7 +4118,7 @@
     {
       "file": "web/src/feed_events.rs",
       "function": "tag_slugs",
-      "line": 14,
+      "line": 15,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4252,7 +4333,7 @@
     },
     {
       "file": "web/src/error.rs",
-      "function": "WebError::storage",
+      "function": "WebError::server_message",
       "line": 52,
       "cyclomatic": 1.0,
       "coverage": 100.0,
@@ -4261,7 +4342,7 @@
     },
     {
       "file": "web/src/error.rs",
-      "function": "WebError::server",
+      "function": "WebError::server_function",
       "line": 58,
       "cyclomatic": 1.0,
       "coverage": 100.0,
@@ -4270,26 +4351,8 @@
     },
     {
       "file": "web/src/error.rs",
-      "function": "WebError::server_message",
-      "line": 64,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "web"
-    },
-    {
-      "file": "web/src/error.rs",
-      "function": "WebError::server_function",
-      "line": 70,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "web"
-    },
-    {
-      "file": "web/src/error.rs",
       "function": "WebError::from_server_fn_error",
-      "line": 80,
+      "line": 68,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4298,7 +4361,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::unauthorized",
-      "line": 94,
+      "line": 134,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4307,7 +4370,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::not_found",
-      "line": 98,
+      "line": 138,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4316,7 +4379,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::validation",
-      "line": 107,
+      "line": 142,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4325,7 +4388,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::conflict",
-      "line": 116,
+      "line": 146,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4334,7 +4397,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::storage",
-      "line": 125,
+      "line": 150,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4343,7 +4406,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::server",
-      "line": 135,
+      "line": 162,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4352,7 +4415,16 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::server_message",
-      "line": 145,
+      "line": 174,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web"
+    },
+    {
+      "file": "web/src/error.rs",
+      "function": "InternalError::external",
+      "line": 189,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4361,7 +4433,16 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::masked",
-      "line": 155,
+      "line": 203,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web"
+    },
+    {
+      "file": "web/src/error.rs",
+      "function": "InternalError::with_context",
+      "line": 217,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4370,7 +4451,34 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::public",
-      "line": 160,
+      "line": 223,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web"
+    },
+    {
+      "file": "web/src/error.rs",
+      "function": "InternalError::kind",
+      "line": 228,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web"
+    },
+    {
+      "file": "web/src/error.rs",
+      "function": "InternalError::class",
+      "line": 233,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web"
+    },
+    {
+      "file": "web/src/error.rs",
+      "function": "InternalError::context",
+      "line": 238,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4379,7 +4487,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::operator_message",
-      "line": 165,
+      "line": 246,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4388,7 +4496,7 @@
     {
       "file": "web/src/error.rs",
       "function": "InternalError::into_public",
-      "line": 170,
+      "line": 251,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4396,8 +4504,8 @@
     },
     {
       "file": "web/src/error.rs",
-      "function": "InternalError::new",
-      "line": 174,
+      "function": "InternalError::client",
+      "line": 255,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4631,7 +4739,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "get_post",
-      "line": 222,
+      "line": 219,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4640,7 +4748,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "get_post_preview",
-      "line": 275,
+      "line": 272,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4649,7 +4757,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "update_post",
-      "line": 296,
+      "line": 293,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4658,7 +4766,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_drafts",
-      "line": 390,
+      "line": 385,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4667,7 +4775,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "get_default_post_format",
-      "line": 494,
+      "line": 481,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4676,7 +4784,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "set_default_post_format",
-      "line": 507,
+      "line": 494,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4685,7 +4793,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_user_posts",
-      "line": 523,
+      "line": 510,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4694,7 +4802,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_local_timeline",
-      "line": 572,
+      "line": 559,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4703,7 +4811,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_home_feed",
-      "line": 614,
+      "line": 601,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4712,7 +4820,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "delete_post",
-      "line": 760,
+      "line": 747,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4721,7 +4829,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "unpublish_post",
-      "line": 803,
+      "line": 783,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4982,7 +5090,7 @@
     {
       "file": "storage/src/sqlite/mod.rs",
       "function": "sqlite_pool",
-      "line": 323,
+      "line": 263,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -5082,6 +5190,15 @@
       "file": "storage/src/helpers.rs",
       "function": "post_record_from_row",
       "line": 270,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage"
+    },
+    {
+      "file": "storage/src/helpers.rs",
+      "function": "dummy_password_hash",
+      "line": 374,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -5205,15 +5322,6 @@
       "crate": "storage"
     },
     {
-      "file": "storage/src/postgres/feed_cache.rs",
-      "function": "row_from_tuple",
-      "line": 20,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage"
-    },
-    {
       "file": "storage/src/postgres/password_resets.rs",
       "function": "PostgresPasswordResetStorage::new",
       "line": 15,
@@ -5235,42 +5343,6 @@
       "file": "storage/src/postgres/posts.rs",
       "function": "PostgresPostStorage::new",
       "line": 20,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "window_site_postgres",
-      "line": 699,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "window_user_postgres",
-      "line": 731,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "window_site_tag_postgres",
-      "line": 767,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage"
-    },
-    {
-      "file": "storage/src/postgres/posts.rs",
-      "function": "window_user_tag_postgres",
-      "line": 804,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -5315,7 +5387,16 @@
     {
       "file": "server/src/feed/handlers.rs",
       "function": "feed_user",
-      "line": 95,
+      "line": 99,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "jaunder"
+    },
+    {
+      "file": "server/src/feed/regenerate.rs",
+      "function": "storage_err",
+      "line": 122,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -5324,7 +5405,7 @@
     {
       "file": "server/src/feed/regenerate.rs",
       "function": "percent_encode_path",
-      "line": 121,
+      "line": 126,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,

@@ -16,6 +16,7 @@ use crate::{
     },
 };
 use common::feed::FeedSurface;
+use common::{tag::Tag, username::Username};
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
@@ -314,9 +315,13 @@ pub fn UserTimelinePage() -> impl IntoView {
     view! {
         {move || {
             view! {
-                <FeedDiscovery surface=FeedSurface::User {
-                    username: username.get(),
-                } />
+                {username
+                    .get()
+                    .parse::<Username>()
+                    .ok()
+                    .map(|username| {
+                        view! { <FeedDiscovery surface=FeedSurface::User { username } /> }
+                    })}
                 <RsdDiscovery username=username.get() />
             }
         }}
@@ -970,9 +975,11 @@ pub fn SiteTagPage() -> impl IntoView {
     view! {
         {move || {
             view! {
-                <FeedDiscovery surface=FeedSurface::SiteTag {
-                    tag: tag.get(),
-                } />
+                {tag
+                    .get()
+                    .parse::<Tag>()
+                    .ok()
+                    .map(|tag| view! { <FeedDiscovery surface=FeedSurface::SiteTag { tag } /> })}
             }
         }}
         <Topbar
@@ -1128,10 +1135,19 @@ pub fn UserTagPage() -> impl IntoView {
     view! {
         {move || {
             view! {
-                <FeedDiscovery surface=FeedSurface::UserTag {
-                    username: username.get(),
-                    tag: tag.get(),
-                } />
+                {username
+                    .get()
+                    .parse::<Username>()
+                    .ok()
+                    .zip(tag.get().parse::<Tag>().ok())
+                    .map(|(username, tag)| {
+                        view! {
+                            <FeedDiscovery surface=FeedSurface::UserTag {
+                                username,
+                                tag,
+                            } />
+                        }
+                    })}
             }
         }}
         <Topbar

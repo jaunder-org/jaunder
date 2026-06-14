@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::unused_async
+)]
+
 mod helpers;
 
 use std::sync::Arc;
@@ -44,7 +53,7 @@ async fn post_form(
     (status, String::from_utf8(bytes.to_vec()).unwrap())
 }
 
-/// Creates a user and a session, returning (user_id, raw_token, cookie_header).
+/// Creates a user and a session, returning (`user_id`, `raw_token`, `cookie_header`).
 async fn create_user_and_session(
     state: &Arc<storage::AppState>,
     username: &str,

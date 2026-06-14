@@ -53,8 +53,13 @@ pub enum UserAuthError {
     #[error("invalid credentials")]
     InvalidCredentials,
     /// An unexpected error occurred during the authentication process.
+    ///
+    /// Carries the underlying error as a typed source (a `sqlx::Error` from the
+    /// DB lookup/update, an `io::Error` from password verification, or a record
+    /// conversion error) rather than a flattened string, so the boundary can
+    /// downcast for classification.
     #[error("internal error: {0}")]
-    Internal(String),
+    Internal(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// Fields to update on a user's profile.

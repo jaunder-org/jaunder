@@ -12,7 +12,7 @@ use crate::{
     UpdatePostInput,
 };
 use common::render::{derive_post_metadata, render};
-use common::slug::{slugify_title, Slug};
+use common::slug::{slugify_title, InvalidSlug, Slug};
 
 // ---------------------------------------------------------------------------
 // Orchestration helpers
@@ -95,8 +95,8 @@ pub enum PerformUpdateError {
     NotFound,
     #[error("not authorized")]
     Unauthorized,
-    #[error(transparent)]
-    Storage(sqlx::Error),
+    #[error("storage error: {0}")]
+    Storage(#[source] sqlx::Error),
 }
 
 impl From<UpdatePostError> for PerformUpdateError {
@@ -171,14 +171,14 @@ pub enum PerformCreationError {
     EmptyPost,
     #[error("post must contain at least one ASCII letter or digit for its slug")]
     NoSlugFromPost,
-    #[error("{0}")]
-    InvalidSlug(String),
+    #[error(transparent)]
+    InvalidSlug(#[from] InvalidSlug),
     #[error("unable to allocate a unique slug after {0} attempts")]
     Exhausted(usize),
     #[error("created post not found")]
     CreatedNotFound,
-    #[error(transparent)]
-    Storage(sqlx::Error),
+    #[error("storage error: {0}")]
+    Storage(#[source] sqlx::Error),
 }
 
 /// Generates a unique slug attempt using a suffix for attempts > 0.
@@ -217,7 +217,7 @@ pub async fn perform_post_creation(
         Some(raw) => raw
             .to_ascii_lowercase()
             .parse::<Slug>()
-            .map_err(|e| PerformCreationError::InvalidSlug(e.to_string()))?
+            .map_err(PerformCreationError::InvalidSlug)?
             .to_string(),
         None => slugify_title(&metadata.slug_seed).ok_or(PerformCreationError::NoSlugFromPost)?,
     };
@@ -226,7 +226,7 @@ pub async fn perform_post_creation(
         let slug_string = candidate_slug(&slug_seed, attempt);
         let slug = slug_string
             .parse::<Slug>()
-            .map_err(|e| PerformCreationError::InvalidSlug(e.to_string()))?;
+            .map_err(PerformCreationError::InvalidSlug)?;
 
         match create_rendered_post(
             storage,
@@ -518,7 +518,7 @@ mod tests {
     fn test_perform_creation_error_display_and_debug() {
         let err = PerformCreationError::EmptyPost;
         assert_eq!(err.to_string(), "post body is required");
-        let debug = format!("{:?}", err);
+        let debug = format!("{err:?}");
         assert!(debug.contains("EmptyPost"));
 
         let err = PerformCreationError::NoSlugFromPost;
@@ -527,8 +527,11 @@ mod tests {
             "post must contain at least one ASCII letter or digit for its slug"
         );
 
-        let err = PerformCreationError::InvalidSlug("invalid slug message".to_string());
-        assert_eq!(err.to_string(), "invalid slug message");
+        let err = PerformCreationError::InvalidSlug(InvalidSlug);
+        assert_eq!(
+            err.to_string(),
+            "slug must be non-empty and match [a-z0-9][a-z0-9-]*"
+        );
 
         let err = PerformCreationError::Exhausted(10);
         assert_eq!(
@@ -538,6 +541,16 @@ mod tests {
 
         let err = PerformCreationError::CreatedNotFound;
         assert_eq!(err.to_string(), "created post not found");
+    }
+
+    #[test]
+    fn perform_creation_error_storage_preserves_sqlx_source() {
+        use std::error::Error;
+        // §3.1a: Storage carries the sqlx::Error as a typed source (downcastable
+        // for classification), not a flattened string.
+        let err = PerformCreationError::Storage(sqlx::Error::RowNotFound);
+        let source = err.source().expect("Storage should expose a source");
+        assert!(source.downcast_ref::<sqlx::Error>().is_some());
     }
 
     // -- PerformUpdateError tests --
@@ -589,7 +602,7 @@ mod tests {
     #[test]
     fn perform_update_error_debug() {
         let err = PerformUpdateError::EmptyPost;
-        let debug = format!("{:?}", err);
+        let debug = format!("{err:?}");
         assert!(debug.contains("EmptyPost"));
     }
 

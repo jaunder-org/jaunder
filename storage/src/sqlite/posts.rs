@@ -733,7 +733,7 @@ async fn window_site_sqlite(
 
 async fn window_user_sqlite(
     pool: &sqlx::SqlitePool,
-    username: &str,
+    username: &Username,
     now: DateTime<Utc>,
     cutoff: DateTime<Utc>,
     min_items: i64,
@@ -760,7 +760,7 @@ async fn window_user_sqlite(
     );
     sqlx::query_as::<_, PostRow>(&sql)
         .bind(now)
-        .bind(username)
+        .bind(username.as_str())
         .bind(min_items)
         .bind(cutoff)
         .fetch_all(pool)
@@ -769,7 +769,7 @@ async fn window_user_sqlite(
 
 async fn window_site_tag_sqlite(
     pool: &sqlx::SqlitePool,
-    tag: &str,
+    tag: &Tag,
     now: DateTime<Utc>,
     cutoff: DateTime<Utc>,
     min_items: i64,
@@ -797,7 +797,7 @@ async fn window_site_tag_sqlite(
     );
     sqlx::query_as::<_, PostRow>(&sql)
         .bind(now)
-        .bind(tag)
+        .bind(tag.as_str())
         .bind(min_items)
         .bind(cutoff)
         .fetch_all(pool)
@@ -806,8 +806,8 @@ async fn window_site_tag_sqlite(
 
 async fn window_user_tag_sqlite(
     pool: &sqlx::SqlitePool,
-    username: &str,
-    tag: &str,
+    username: &Username,
+    tag: &Tag,
     now: DateTime<Utc>,
     cutoff: DateTime<Utc>,
     min_items: i64,
@@ -837,8 +837,8 @@ async fn window_user_tag_sqlite(
     );
     sqlx::query_as::<_, PostRow>(&sql)
         .bind(now)
-        .bind(username)
-        .bind(tag)
+        .bind(username.as_str())
+        .bind(tag.as_str())
         .bind(min_items)
         .bind(cutoff)
         .fetch_all(pool)

@@ -60,7 +60,7 @@ git config core.hooksPath .githooks
 **`pre-commit`** runs on every commit — fast formatting, lint, and the SQLite test suite:
 
 - `leptosfmt --check`, `cargo fmt --check`, `prettier --check end2end` — formatting
-- `cargo clippy -- -D warnings` — linting
+- `cargo clippy --all-targets -- -D warnings` — linting (incl. test/bench/example targets)
 - `cargo nextest run` — unit and integration tests (SQLite)
 
 **`pre-push`** runs `scripts/verify` (the commit gate): the static checks plus `scripts/check-coverage --check` (the SQLite + host-PostgreSQL suites under instrumentation, gating both test failures and coverage regressions) and the host e2e suite. The hermetic Nix VM checks are not run here — they run in CI, or locally via `scripts/verify --full`.
@@ -100,10 +100,11 @@ The verify ladder has three tiers:
   - Set `VERIFY_PASSTHROUGH=1` to stream full tool output directly.
   - Set `VERIFY_SHOW_STEP_OUTPUT=1` to print captured output for successful steps.
   - Set `VERIFY_SHOW_FAILURE_LOG=0` to suppress failed-step logs, or `VERIFY_FAILURE_LOG_LINES=<n>` to change the failure tail length (default `200` lines).
+  - These two are the whole ladder: `scripts/verify --fast` while iterating, then `scripts/verify` before pushing. Because `scripts/verify` already runs the tests and `nix flake check`, there is no need to run `cargo nextest` or `nix flake check` separately as their own rung — `scripts/verify` covers them.
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that contain Leptos `view!` macros.
 - `prettier --check end2end` checks Playwright and other frontend test assets.
-- `cargo clippy -- -D warnings` checks the main workspace for lint errors.
+- `cargo clippy --all-targets -- -D warnings` checks the whole workspace, including test, bench, and example targets, for lint errors.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
 - For e2e perf diagnostics, set `JAUNDER_E2E_WARMUP=1` before `playwright test` to warm each test page context before test instrumentation; tune with `JAUNDER_E2E_WARMUP_URL` and `JAUNDER_E2E_WARMUP_TIMEOUT_MS`.
 - In hydration-heavy e2e tests, use `hydrationHeavyTimeoutMs(testInfo, chromiumBudgetMs)` for whole-test budgets and `hydrationHeavyFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)` for first navigation waits (see [ADR-0012](docs/decisions/0012-environment-aware-timeouts.md)).
@@ -230,10 +231,9 @@ nix build .#checks.x86_64-linux.postgres-integration
 - Use Rust, except end-to-end tests, which use Playwright and TypeScript.
 - All Rust code is formatted with `cargo fmt`.
 - Files containing Leptos `view!` macros are additionally formatted with `leptosfmt` (run it first, then `cargo fmt`).
-- Commits reference the milestone item they address, e.g. `M0.1.1: Rename app/ to web/`.
-- Every commit must include appropriate tests unless the user explicitly waives this requirement.
-- Never use `.unwrap()`.
-- Never use `.expect()` in production code.
+- Follow Conventional Commits: `<type>: <imperative summary, ≤72 chars>`, where `<type>` is one of `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `build`, `ci`, `chore` (optional scope, e.g. `fix(storage): …`). Reference the beads issue the commit addresses with a `Refs: <bead-id>` trailer (the bead carries milestone/epic context, so the subject needs no `M`/`§` prefix), and keep the `Co-Authored-By` trailer required of agent commits.
+- Every commit that changes behavior must include appropriate tests, unless the user explicitly waives this requirement. (Docs/build/chore commits with no behavior change are out of scope, not waivers.)
+- Never use `.unwrap()` or `.expect()` in production code; both are permitted in tests. This is enforced by clippy (`unwrap_used`/`expect_used` denied outside tests).
 - Use Rust's type system to make invalid states impossible with infallible types.
 - At boundaries (`#[server]` functions, DB calls), parse data into infallible types, reject invalid data, and handle `Result`/`Option` conversion explicitly.
 - Keep data transformations pure where possible so they are easy to test and reason about.
@@ -248,6 +248,7 @@ nix build .#checks.x86_64-linux.postgres-integration
 - Use specialized storage error enums in `common::storage`, such as `UserAuthError` and `CreateUserError`, with `thiserror`.
 - Use `sqlx` unique violation checks (`is_unique_violation()`) to handle "already exists" errors gracefully.
 - Use the `AppState` struct from `common::storage` to bundle storage handles. In web server functions, retrieve it with `expect_context::<Arc<AppState>>()`.
+- **Dependency injection / composition-root invariant (see [ADR-0016](docs/decisions/0016-dependency-injection-and-appstate.md)):** No type may be both (a) a heterogeneous dependency holder and (b) passed beyond the composition root. Declare a component's dependencies as constructor parameters on the component that uses them — do not add a field to a shared bundle to make a dependency reachable. A storage `Backend` factory may mint storage handles, but only the composition root may hold it; it is never injected into a subsystem (that would be a service locator). Services (mailer, WebSub client, background workers) are constructed at the root and injected per-consumer; there is no "services bundle."
 - The web framework is Leptos with SSR via `cargo-leptos`.
 - Leptos components should only render data; business logic belongs in server functions or pure transformation functions.
 - API methods are automatically prefixed with `/api`.

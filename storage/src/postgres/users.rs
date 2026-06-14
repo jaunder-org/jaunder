@@ -104,7 +104,7 @@ impl UserStorage for PostgresUserStorage {
             "storage.postgres.user.authenticate.lookup_user"
         ))
         .await
-        .map_err(|e| UserAuthError::Internal(e.to_string()))?;
+        .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
 
         let Some((
             user_id,
@@ -119,6 +119,14 @@ impl UserStorage for PostgresUserStorage {
             is_operator,
         )) = row
         else {
+            // Equalize timing with the present-user path to avoid a username
+            // enumeration oracle (§2.1): perform a dummy Argon2 verification
+            // before rejecting. The result is intentionally discarded.
+            let _ = crate::helpers::verify_password(
+                password.clone(),
+                crate::helpers::dummy_password_hash().to_string(),
+            )
+            .await;
             return Err(UserAuthError::InvalidCredentials);
         };
 
@@ -127,7 +135,7 @@ impl UserStorage for PostgresUserStorage {
                 "storage.postgres.user.authenticate.verify_password"
             ))
             .await
-            .map_err(|e| UserAuthError::Internal(e.to_string()))?;
+            .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
 
         if !valid {
             return Err(UserAuthError::InvalidCredentials);
@@ -143,7 +151,7 @@ impl UserStorage for PostgresUserStorage {
                 "storage.postgres.user.authenticate.update_last_authenticated_at"
             ))
             .await
-            .map_err(|e| UserAuthError::Internal(e.to_string()))?;
+            .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
 
         crate::helpers::build_user_record((
             user_id,
@@ -156,7 +164,7 @@ impl UserStorage for PostgresUserStorage {
             email_verified,
             is_operator,
         ))
-        .map_err(|e| UserAuthError::Internal(e.to_string()))
+        .map_err(|e| UserAuthError::Internal(Box::new(e)))
     }
 
     async fn get_user(&self, user_id: i64) -> sqlx::Result<Option<UserRecord>> {

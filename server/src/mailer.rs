@@ -86,7 +86,7 @@ impl MailSender for LettreMailSender {
             .as_ref()
             .map(|a| a.to_string().parse())
             .transpose()
-            .map_err(|e: lettre::address::AddressError| MailError::Send(e.to_string()))?
+            .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))?
             .unwrap_or_else(|| self.sender.clone());
 
         let mut builder = Message::builder().from(from);
@@ -95,19 +95,19 @@ impl MailSender for LettreMailSender {
             let mailbox: Mailbox = to_addr
                 .to_string()
                 .parse()
-                .map_err(|e: lettre::address::AddressError| MailError::Send(e.to_string()))?;
+                .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))?;
             builder = builder.to(mailbox);
         }
 
         let email = builder
             .subject(&message.subject)
             .body(message.body_text.clone())
-            .map_err(|e| MailError::Send(e.to_string()))?;
+            .map_err(|e| MailError::Send(Box::new(e)))?;
 
         self.mailer
             .send(email)
             .await
-            .map_err(|e| MailError::Send(e.to_string()))?;
+            .map_err(|e| MailError::Send(Box::new(e)))?;
 
         Ok(())
     }
@@ -143,8 +143,7 @@ impl MailSender for FileMailSender {
             "subject": message.subject,
             "body_text": message.body_text,
         });
-        let mut line =
-            serde_json::to_string(&record).map_err(|e| MailError::Send(e.to_string()))?;
+        let mut line = serde_json::to_string(&record).map_err(|e| MailError::Send(Box::new(e)))?;
         line.push('\n');
 
         let path = self.path.clone();
@@ -153,13 +152,45 @@ impl MailSender for FileMailSender {
                 .create(true)
                 .append(true)
                 .open(&path)
-                .map_err(|e| MailError::Send(e.to_string()))?;
+                .map_err(|e| MailError::Send(Box::new(e)))?;
             file.write_all(line.as_bytes())
-                .map_err(|e| MailError::Send(e.to_string()))?;
+                .map_err(|e| MailError::Send(Box::new(e)))?;
             Ok::<(), MailError>(())
         })
         .await
-        .map_err(|e| MailError::Send(e.to_string()))?
+        .map_err(|e| MailError::Send(Box::new(e)))?
+    }
+}
+
+// ---------------------------------------------------------------------------
+// build_mailer
+// ---------------------------------------------------------------------------
+
+use std::sync::Arc;
+
+use common::mailer::NoopMailSender;
+use storage::{load_smtp_config, SiteConfigStorage};
+
+/// Picks a mailer implementation based on environment and stored SMTP config.
+///
+/// In e2e tests, `JAUNDER_MAIL_CAPTURE_FILE` short-circuits to the file-capture
+/// transport. Otherwise falls back to the configured SMTP transport, or the
+/// no-op sender if configuration is absent or invalid.
+///
+/// Lives in `server` (not `storage`) because it depends on lettre and
+/// file-capture transports — concerns that the storage crate is deliberately
+/// kept agnostic of.
+#[tracing::instrument(name = "server.mailer.build", skip(site_config))]
+pub async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender> {
+    if let Ok(path) = std::env::var("JAUNDER_MAIL_CAPTURE_FILE") {
+        return Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>;
+    }
+    match load_smtp_config(site_config).await {
+        Ok(Some(cfg)) => match LettreMailSender::from_config(&cfg) {
+            Ok(sender) => Arc::new(sender) as Arc<dyn MailSender>,
+            Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
+        },
+        Ok(None) | Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
     }
 }
 
@@ -181,7 +212,7 @@ mod tests {
     #[async_trait]
     impl storage::SiteConfigStorage for MapConfigStore {
         async fn get(&self, key: &str) -> sqlx::Result<Option<String>> {
-            Ok(self.0.get(key).map(|v| v.to_string()))
+            Ok(self.0.get(key).map(std::string::ToString::to_string))
         }
 
         async fn set(&self, _key: &str, _value: &str) -> sqlx::Result<()> {
@@ -358,37 +389,5 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("failed to send email"));
-    }
-}
-
-// ---------------------------------------------------------------------------
-// build_mailer
-// ---------------------------------------------------------------------------
-
-use std::sync::Arc;
-
-use common::mailer::NoopMailSender;
-use storage::{load_smtp_config, SiteConfigStorage};
-
-/// Picks a mailer implementation based on environment and stored SMTP config.
-///
-/// In e2e tests, `JAUNDER_MAIL_CAPTURE_FILE` short-circuits to the file-capture
-/// transport. Otherwise falls back to the configured SMTP transport, or the
-/// no-op sender if configuration is absent or invalid.
-///
-/// Lives in `server` (not `storage`) because it depends on lettre and
-/// file-capture transports — concerns that the storage crate is deliberately
-/// kept agnostic of.
-#[tracing::instrument(name = "server.mailer.build", skip(site_config))]
-pub async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender> {
-    if let Ok(path) = std::env::var("JAUNDER_MAIL_CAPTURE_FILE") {
-        return Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>;
-    }
-    match load_smtp_config(site_config).await {
-        Ok(Some(cfg)) => match LettreMailSender::from_config(&cfg) {
-            Ok(sender) => Arc::new(sender) as Arc<dyn MailSender>,
-            Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
-        },
-        Ok(None) | Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
     }
 }

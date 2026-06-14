@@ -299,7 +299,9 @@ pub fn login_error(error: storage::UserAuthError) -> InternalError {
         storage::UserAuthError::InvalidCredentials => {
             InternalError::unauthorized("invalid credentials")
         }
-        storage::UserAuthError::Internal(message) => InternalError::server_message(message),
+        storage::UserAuthError::Internal(source) => {
+            InternalError::server_message(source.to_string())
+        }
     }
 }
 
@@ -509,7 +511,7 @@ mod tests {
 
     #[test]
     fn login_error_maps_internal_to_server_error() {
-        let err = login_error(storage::UserAuthError::Internal("db crashed".to_string()));
+        let err = login_error(storage::UserAuthError::Internal("db crashed".into()));
         assert!(matches!(
             err.public(),
             crate::error::WebError::Server { .. }

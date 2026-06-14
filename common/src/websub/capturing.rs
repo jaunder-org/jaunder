@@ -22,6 +22,7 @@ impl CapturingWebSubClient {
     /// # Panics
     ///
     /// Panics if the mutex is poisoned, which should never happen in normal operation.
+    #[allow(clippy::expect_used)] // test double: panicking on a poisoned mutex is fine
     pub fn pings(&self) -> Vec<CapturedPing> {
         self.pings.lock().expect("mutex not poisoned").clone()
     }
@@ -29,6 +30,7 @@ impl CapturingWebSubClient {
 
 #[async_trait]
 impl WebSubClient for CapturingWebSubClient {
+    #[allow(clippy::expect_used)] // test double: panicking on a poisoned mutex is fine
     async fn send_publish(&self, hub_url: &str, feed_url: &str) -> Result<(), WebSubError> {
         self.pings
             .lock()

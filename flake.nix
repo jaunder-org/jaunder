@@ -945,7 +945,7 @@
               commonArgs
               // {
                 inherit cargoArtifacts;
-                cargoClippyExtraArgs = "-- -D warnings";
+                cargoClippyExtraArgs = "--all-targets -- -D warnings";
               }
             );
             rustfmt = craneLib.cargoFmt {

@@ -367,15 +367,15 @@ mod tests {
     #[test]
     fn tagging_error_debug() {
         let err = TaggingError::PostNotFound;
-        let debug_str = format!("{:?}", err);
+        let debug_str = format!("{err:?}");
         assert!(debug_str.contains("PostNotFound"));
 
         let err2 = TaggingError::TagNotFound;
-        let debug_str2 = format!("{:?}", err2);
+        let debug_str2 = format!("{err2:?}");
         assert!(debug_str2.contains("TagNotFound"));
 
         let err3 = TaggingError::AlreadyTagged;
-        let debug_str3 = format!("{:?}", err3);
+        let debug_str3 = format!("{err3:?}");
         assert!(debug_str3.contains("AlreadyTagged"));
     }
 
@@ -388,7 +388,7 @@ mod tests {
     #[test]
     fn list_by_tag_error_debug() {
         let err = ListByTagError::TagNotFound;
-        let debug_str = format!("{:?}", err);
+        let debug_str = format!("{err:?}");
         assert!(debug_str.contains("TagNotFound"));
     }
 
@@ -419,7 +419,7 @@ mod tests {
         );
 
         // Case 2: Body is empty but title is populated.
-        post.body = "".to_string();
+        post.body = String::new();
         assert_eq!(post.fallback_summary_label(), "My Title");
 
         // Case 3: Body and title are empty. It should use the slug.

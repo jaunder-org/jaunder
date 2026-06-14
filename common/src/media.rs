@@ -13,6 +13,22 @@ pub fn sanitize_filename(name: &str) -> String {
     s.replace('\0', "_")
 }
 
+/// Returns true if `hash` is a canonical content hash: exactly 64 lowercase
+/// hex characters (`[0-9a-f]{64}`), the form produced by `format!("{digest:x}")`
+/// for a SHA-256 digest.
+///
+/// Callers that accept a hash from an untrusted source (e.g. a URL path
+/// segment) must check this before slicing or joining it into a path:
+/// [`media_path`] slices `sha256[..2]`/`[2..4]` unguarded, which panics on a
+/// shorter string or one whose byte index 2 is not a UTF-8 char boundary.
+#[must_use]
+pub fn is_valid_content_hash(hash: &str) -> bool {
+    hash.len() == 64
+        && hash
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 /// Returns `"<source>/<p1>/<p2>/<full-sha256>/<filename>"`.
 #[must_use]
 pub fn media_path(source: &str, sha256: &str, filename: &str) -> String {
@@ -172,5 +188,51 @@ mod tests {
     fn detect_content_type_unknown_extension() {
         assert_eq!(detect_content_type("file.xyz"), "application/octet-stream");
         assert_eq!(detect_content_type("noext"), "application/octet-stream");
+    }
+
+    #[test]
+    fn valid_content_hash_accepts_64_lowercase_hex() {
+        let hash = "a".repeat(64);
+        assert!(is_valid_content_hash(&hash));
+        // A realistic lowercase sha256 hex digest.
+        assert!(is_valid_content_hash(
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        ));
+    }
+
+    #[test]
+    fn valid_content_hash_rejects_short_input() {
+        // The historical panic trigger: a single byte cannot be sliced at [2..].
+        assert!(!is_valid_content_hash("a"));
+        assert!(!is_valid_content_hash(""));
+        assert!(!is_valid_content_hash(&"a".repeat(63)));
+    }
+
+    #[test]
+    fn valid_content_hash_rejects_long_input() {
+        assert!(!is_valid_content_hash(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn valid_content_hash_rejects_uppercase_hex() {
+        // Stored digests are lowercase (`format!("{digest:x}")`); uppercase is not canonical.
+        assert!(!is_valid_content_hash(&"A".repeat(64)));
+    }
+
+    #[test]
+    fn valid_content_hash_rejects_non_hex_chars() {
+        // 64 chars but contains a non-hex letter.
+        assert!(!is_valid_content_hash(&format!("g{}", "a".repeat(63))));
+        // 64 chars but contains a path separator.
+        assert!(!is_valid_content_hash(&format!("/{}", "a".repeat(63))));
+    }
+
+    #[test]
+    fn valid_content_hash_rejects_non_ascii_off_boundary() {
+        // A multi-byte char makes byte index 2 land off a UTF-8 boundary — the
+        // other historical panic source. 21 'é' chars = 42 bytes ... build a
+        // 64-byte string whose char boundaries do not align with byte 2.
+        let hash = format!("é{}", "a".repeat(62));
+        assert!(!is_valid_content_hash(&hash));
     }
 }

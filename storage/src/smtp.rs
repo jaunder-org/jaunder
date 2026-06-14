@@ -205,7 +205,7 @@ mod tests {
     #[async_trait]
     impl SiteConfigStorage for MapConfigStore {
         async fn get(&self, key: &str) -> sqlx::Result<Option<String>> {
-            Ok(self.0.get(key).map(|v| v.to_string()))
+            Ok(self.0.get(key).map(std::string::ToString::to_string))
         }
 
         async fn set(&self, _key: &str, _value: &str) -> sqlx::Result<()> {

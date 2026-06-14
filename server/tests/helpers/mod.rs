@@ -1,3 +1,11 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::unused_async
+)]
 #![allow(dead_code)]
 
 use common::mailer::{test_utils::CapturingMailSender, MailSender, NoopMailSender};
@@ -105,8 +113,7 @@ fn postgres_url_authority(url: &str) -> String {
         .unwrap_or(url);
     let after_credentials = without_scheme
         .rsplit_once('@')
-        .map(|(_, authority_and_path)| authority_and_path)
-        .unwrap_or(without_scheme);
+        .map_or(without_scheme, |(_, authority_and_path)| authority_and_path);
     after_credentials
         .split('/')
         .next()
@@ -342,7 +349,7 @@ pub fn noop_mailer() -> Arc<dyn MailSender> {
     Arc::new(NoopMailSender)
 }
 
-/// Like [`test_state`] but also returns the underlying SQLite pool for raw SQL access.
+/// Like [`test_state`] but also returns the underlying `SQLite` pool for raw SQL access.
 /// Only available when Postgres testing is disabled; panics otherwise.
 pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx::SqlitePool) {
     let pool = sqlx::SqlitePool::connect_with(

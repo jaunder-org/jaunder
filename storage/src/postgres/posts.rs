@@ -730,7 +730,7 @@ async fn window_site_postgres(
 
 async fn window_user_postgres(
     pool: &PgPool,
-    username: &str,
+    username: &Username,
     now: DateTime<Utc>,
     cutoff: DateTime<Utc>,
     min_items: i64,
@@ -757,7 +757,7 @@ async fn window_user_postgres(
     );
     sqlx::query_as::<_, PostRow>(&sql)
         .bind(now)
-        .bind(username)
+        .bind(username.as_str())
         .bind(min_items)
         .bind(cutoff)
         .fetch_all(pool)
@@ -766,7 +766,7 @@ async fn window_user_postgres(
 
 async fn window_site_tag_postgres(
     pool: &PgPool,
-    tag: &str,
+    tag: &Tag,
     now: DateTime<Utc>,
     cutoff: DateTime<Utc>,
     min_items: i64,
@@ -794,7 +794,7 @@ async fn window_site_tag_postgres(
     );
     sqlx::query_as::<_, PostRow>(&sql)
         .bind(now)
-        .bind(tag)
+        .bind(tag.as_str())
         .bind(min_items)
         .bind(cutoff)
         .fetch_all(pool)
@@ -803,8 +803,8 @@ async fn window_site_tag_postgres(
 
 async fn window_user_tag_postgres(
     pool: &PgPool,
-    username: &str,
-    tag: &str,
+    username: &Username,
+    tag: &Tag,
     now: DateTime<Utc>,
     cutoff: DateTime<Utc>,
     min_items: i64,
@@ -834,8 +834,8 @@ async fn window_user_tag_postgres(
     );
     sqlx::query_as::<_, PostRow>(&sql)
         .bind(now)
-        .bind(username)
-        .bind(tag)
+        .bind(username.as_str())
+        .bind(tag.as_str())
         .bind(min_items)
         .bind(cutoff)
         .fetch_all(pool)

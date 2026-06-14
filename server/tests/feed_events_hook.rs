@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::unused_async
+)]
+
 mod helpers;
 
 use std::sync::Arc;
@@ -50,7 +59,7 @@ async fn post_json(
 }
 
 fn create_session_cookie(token: &str) -> String {
-    format!("session={}", token)
+    format!("session={token}")
 }
 
 #[tokio::test]
@@ -211,7 +220,7 @@ async fn update_with_tag_change_enqueues_old_and_new_tags() {
         serde_json::from_str(&create_response).expect("parse create response");
     let post_id = create_json
         .get("post_id")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .expect("get post_id");
 
     // Drain initial create events
@@ -303,7 +312,7 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds() {
         serde_json::from_str(&create_response).expect("parse create response");
     let post_id = create_json
         .get("post_id")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .expect("get post_id");
 
     // Drain initial create events
@@ -314,7 +323,7 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds() {
         .expect("claim batch");
 
     // Unpublish the post
-    let unpublish_body = format!("post_id={}", post_id);
+    let unpublish_body = format!("post_id={post_id}");
     let (status, _) = post_json(
         state.clone(),
         "/api/unpublish_post",
@@ -386,7 +395,7 @@ async fn delete_published_post_enqueues_feeds() {
         serde_json::from_str(&create_response).expect("parse create response");
     let post_id = create_json
         .get("post_id")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .expect("get post_id");
 
     // Drain initial create events
@@ -397,7 +406,7 @@ async fn delete_published_post_enqueues_feeds() {
         .expect("claim batch");
 
     // Delete the post
-    let delete_body = format!("post_id={}", post_id);
+    let delete_body = format!("post_id={post_id}");
     let (status, _) = post_json(
         state.clone(),
         "/api/delete_post",
@@ -469,7 +478,7 @@ async fn delete_draft_post_enqueues_nothing() {
         serde_json::from_str(&create_response).expect("parse create response");
     let post_id = create_json
         .get("post_id")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .expect("get post_id");
 
     // Drain any events from create (drafts still enqueue as per spec)
@@ -480,7 +489,7 @@ async fn delete_draft_post_enqueues_nothing() {
         .expect("claim batch");
 
     // Delete the draft post
-    let delete_body = format!("post_id={}", post_id);
+    let delete_body = format!("post_id={post_id}");
     let (status, _) = post_json(
         state.clone(),
         "/api/delete_post",

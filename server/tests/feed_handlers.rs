@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::unused_async
+)]
+
 mod helpers;
 
 use std::sync::Arc;
@@ -260,6 +269,75 @@ async fn handler_rejects_unknown_extension_with_404() {
 }
 
 #[tokio::test]
+async fn handler_rejects_invalid_tag_with_404() {
+    let base = TempDir::new().expect("temp dir");
+    let state = test_state(&base).await;
+    let app = make_app(state, &base).await;
+
+    // A leading hyphen is rejected by the canonical Tag validator, so the
+    // site-tag handler must 404 rather than construct an invalid surface.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/tags/-rust/feed.rss")
+        .body(Body::empty())
+        .expect("build request");
+
+    let resp = app.oneshot(req).await.expect("request");
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "should return 404 for a tag the canonical validator rejects"
+    );
+}
+
+#[tokio::test]
+async fn handler_rejects_invalid_username_with_404() {
+    let base = TempDir::new().expect("temp dir");
+    let state = test_state(&base).await;
+    let app = make_app(state, &base).await;
+
+    // A dot is rejected by the canonical Username validator, so the user
+    // handler must 404 rather than construct an invalid surface.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/~al.ice/feed.rss")
+        .body(Body::empty())
+        .expect("build request");
+
+    let resp = app.oneshot(req).await.expect("request");
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "should return 404 for a username the canonical validator rejects"
+    );
+}
+
+#[tokio::test]
+async fn handler_rejects_invalid_user_tag_with_404() {
+    let base = TempDir::new().expect("temp dir");
+    let state = test_state(&base).await;
+    let app = make_app(state, &base).await;
+
+    // The tag segment is rejected by the canonical Tag validator, so the
+    // user-tag handler must 404 rather than construct an invalid surface.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/~alice/tags/-rust/feed.rss")
+        .body(Body::empty())
+        .expect("build request");
+
+    let resp = app.oneshot(req).await.expect("request");
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "should return 404 for a user-tag whose tag the validator rejects"
+    );
+}
+
+#[tokio::test]
 async fn handler_returns_correct_content_type_per_format() {
     let base = TempDir::new().expect("temp dir");
     let state = test_state(&base).await;
@@ -299,7 +377,7 @@ async fn handler_returns_correct_content_type_per_format() {
         let app = make_app(state.clone(), &base).await;
         let req = Request::builder()
             .method("GET")
-            .uri(&format!("/~eve/feed.{}", ext))
+            .uri(format!("/~eve/feed.{ext}"))
             .body(Body::empty())
             .expect("build request");
 
@@ -311,7 +389,7 @@ async fn handler_returns_correct_content_type_per_format() {
             .headers()
             .get(header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .expect(&format!("content-type header for {ext}"));
+            .unwrap_or_else(|| panic!("content-type header for {ext}"));
         assert_eq!(
             content_type, *expected_content_type,
             "content type for {ext}"

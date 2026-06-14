@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::unused_async
+)]
+
 mod helpers;
 
 use std::sync::Arc;
@@ -129,7 +138,7 @@ async fn verify_email_with_valid_token_sets_email_verified() {
 
     let user = state.users.get_user(user_id).await.unwrap().unwrap();
     assert_eq!(
-        user.email.as_ref().map(|e| e.as_str()),
+        user.email.as_ref().map(email_address::EmailAddress::as_str),
         Some("bob@example.com")
     );
     assert!(user.email_verified, "email should be marked as verified");

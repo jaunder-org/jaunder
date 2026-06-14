@@ -82,7 +82,9 @@ mod tests {
     #[test]
     fn labels_site_tag_surface() {
         assert_eq!(
-            surface_label(&FeedSurface::SiteTag { tag: "rust".into() }),
+            surface_label(&FeedSurface::SiteTag {
+                tag: "rust".parse().unwrap()
+            }),
             "#rust feed"
         );
     }
@@ -91,7 +93,7 @@ mod tests {
     fn labels_user_surface() {
         assert_eq!(
             surface_label(&FeedSurface::User {
-                username: "alice".into()
+                username: "alice".parse().unwrap()
             }),
             "@alice feed"
         );
@@ -101,8 +103,8 @@ mod tests {
     fn labels_user_tag_surface() {
         assert_eq!(
             surface_label(&FeedSurface::UserTag {
-                username: "bob".into(),
-                tag: "leptos".into()
+                username: "bob".parse().unwrap(),
+                tag: "leptos".parse().unwrap()
             }),
             "@bob #leptos feed"
         );

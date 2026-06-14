@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::unused_async
+)]
+
 mod helpers;
 
 use std::sync::Arc;
@@ -159,7 +168,7 @@ async fn member_returns_native_source_with_etag() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/atompub/alice/posts/{}", post.post_id))
+                .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::AUTHORIZATION, basic_header("alice", &token))
                 .body(Body::empty())
                 .unwrap(),
@@ -298,7 +307,7 @@ async fn delete_then_get_is_404() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(&format!("/atompub/alice/posts/{}", post.post_id))
+                .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::AUTHORIZATION, basic_header("alice", &token))
                 .body(Body::empty())
                 .unwrap(),
@@ -312,7 +321,7 @@ async fn delete_then_get_is_404() {
     let get_response = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/atompub/alice/posts/{}", post.post_id))
+                .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::AUTHORIZATION, basic_header("alice", &token))
                 .body(Body::empty())
                 .unwrap(),
@@ -555,11 +564,10 @@ async fn create_post_returns_201_and_is_retrievable() {
         .headers()
         .get(header::LOCATION)
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
     assert!(
         loc.is_some(),
-        "response should have Location header: {:?}",
-        loc
+        "response should have Location header: {loc:?}"
     );
 
     // Now GET that location.
@@ -674,7 +682,7 @@ async fn update_replaces_post_body() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(&format!("/atompub/alice/posts/{}", post.post_id))
+                .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::CONTENT_TYPE, "application/atom+xml")
                 .header(header::AUTHORIZATION, basic_header("alice", &token))
                 .body(Body::from(xml))
@@ -718,7 +726,7 @@ async fn update_with_stale_if_match_returns_412() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(&format!("/atompub/alice/posts/{}", post.post_id))
+                .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::CONTENT_TYPE, "application/atom+xml")
                 .header(header::IF_MATCH, "\"0\"") // Wrong ETag
                 .header(header::AUTHORIZATION, basic_header("alice", &token))
@@ -814,7 +822,7 @@ async fn update_removes_categories_not_in_new_entry() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(&format!("/atompub/alice/posts/{}", post.post_id))
+                .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::CONTENT_TYPE, "application/atom+xml")
                 .header(header::AUTHORIZATION, basic_header("alice", &token))
                 .body(Body::from(xml))
@@ -880,7 +888,7 @@ async fn update_with_put_returns_200_and_etag() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(&format!("/atompub/alice/posts/{}", post.post_id))
+                .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::CONTENT_TYPE, "application/atom+xml")
                 .header(header::AUTHORIZATION, basic_header("alice", &token))
                 .body(Body::from(xml))
@@ -957,7 +965,7 @@ async fn update_with_no_title_or_content_returns_400() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(&format!("/atompub/alice/posts/{}", post.post_id))
+                .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::CONTENT_TYPE, "application/atom+xml")
                 .header(header::AUTHORIZATION, basic_header("alice", &token))
                 .body(Body::from(xml))

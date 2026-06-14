@@ -148,6 +148,17 @@ pub trait MediaStorage: Send + Sync {
     ) -> sqlx::Result<Option<MediaRecord>>;
 }
 
+/// Key for the site configuration setting for maximum file upload size.
+pub const MEDIA_MAX_FILE_SIZE_BYTES_KEY: &str = "media.max_file_size_bytes";
+/// Key for the site configuration setting for per-user upload quota.
+pub const MEDIA_USER_QUOTA_BYTES_KEY: &str = "media.user_quota_bytes";
+/// Key for the site-wide default media cache policy.
+pub const MEDIA_CACHE_POLICY_DEFAULT_KEY: &str = "media.cache_policy_default";
+/// Default maximum file size (50 MiB) if not configured.
+pub const DEFAULT_MAX_FILE_SIZE_BYTES: i64 = 52_428_800;
+/// Default per-user quota (1 GiB) if not configured.
+pub const DEFAULT_USER_QUOTA_BYTES: i64 = 1_073_741_824;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,14 +183,3 @@ mod tests {
         );
     }
 }
-
-/// Key for the site configuration setting for maximum file upload size.
-pub const MEDIA_MAX_FILE_SIZE_BYTES_KEY: &str = "media.max_file_size_bytes";
-/// Key for the site configuration setting for per-user upload quota.
-pub const MEDIA_USER_QUOTA_BYTES_KEY: &str = "media.user_quota_bytes";
-/// Key for the site-wide default media cache policy.
-pub const MEDIA_CACHE_POLICY_DEFAULT_KEY: &str = "media.cache_policy_default";
-/// Default maximum file size (50 MiB) if not configured.
-pub const DEFAULT_MAX_FILE_SIZE_BYTES: i64 = 52_428_800;
-/// Default per-user quota (1 GiB) if not configured.
-pub const DEFAULT_USER_QUOTA_BYTES: i64 = 1_073_741_824;

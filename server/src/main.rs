@@ -17,13 +17,18 @@ async fn main() -> anyhow::Result<()> {
 ///
 /// # Panics
 ///
-/// Panics if the `serve` subcommand is missing when implicitly required.
+/// Panics if the implicitly re-parsed `serve` subcommand is absent, which is
+/// unreachable: `Cli::parse_from(["jaunder", "serve"])` always yields one.
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
     if !matches!(cli.command, Some(Commands::Serve { .. })) {
         jaunder::observability::init_tracing(cli.verbose);
     }
     let command = match cli.command {
         Some(cmd) => cmd,
+        // The re-parsed `serve` invocation below always yields a subcommand, so
+        // the `.expect()` is provably unreachable; a panic is the honest choice
+        // here, hence a scoped exception to the no-`expect` rule.
+        #[allow(clippy::expect_used)]
         None => {
             // cargo-leptos sets LEPTOS_OUTPUT_NAME when running the server
             // binary.  When present, default to `serve` so that
@@ -264,7 +269,7 @@ mod tests {
                 pg: PgBootstrapArgs {
                     bootstrap_db: "sqlite:/tmp/bootstrap.db".to_owned(),
                     app_db: "postgres://jaunder@localhost/jaunder".to_owned(),
-                    app_role_password: std::iter::repeat('z').take(20).collect(),
+                    app_role_password: std::iter::repeat_n('z', 20).collect(),
                 },
             }),
             verbose: false,
