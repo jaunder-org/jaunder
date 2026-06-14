@@ -192,15 +192,6 @@
       "crate": "common"
     },
     {
-      "file": "common/src/feed/feed_path.rs",
-      "function": "parse",
-      "line": 49,
-      "cyclomatic": 20.0,
-      "coverage": 100.0,
-      "crap": 20.0,
-      "crate": "common"
-    },
-    {
       "file": "storage/src/postgres/bootstrap.rs",
       "function": "execute_utility",
       "line": 75,
@@ -273,12 +264,21 @@
       "crate": "storage"
     },
     {
+      "file": "common/src/feed/feed_path.rs",
+      "function": "parse",
+      "line": 51,
+      "cyclomatic": 17.0,
+      "coverage": 100.0,
+      "crap": 17.0,
+      "crate": "common"
+    },
+    {
       "file": "server/src/feed/regenerate.rs",
       "function": "regenerate_feed",
       "line": 28,
       "cyclomatic": 16.0,
-      "coverage": 94.66666666666667,
-      "crap": 16.03883614814815,
+      "coverage": 98.7012987012987,
+      "crap": 16.000560748072974,
       "crate": "jaunder"
     },
     {
@@ -329,7 +329,7 @@
     {
       "file": "server/src/feed/handlers.rs",
       "function": "serve",
-      "line": 23,
+      "line": 24,
       "cyclomatic": 14.0,
       "coverage": 88.37209302325581,
       "crap": 14.308148968015395,
@@ -1274,7 +1274,7 @@
     {
       "file": "common/src/feed/feed_path.rs",
       "function": "canonicalize",
-      "line": 38,
+      "line": 40,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -1292,7 +1292,7 @@
     {
       "file": "web/src/feed_events.rs",
       "function": "enqueue_feed_events",
-      "line": 28,
+      "line": 29,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -1499,7 +1499,7 @@
     {
       "file": "server/src/feed/handlers.rs",
       "function": "parse_format",
-      "line": 14,
+      "line": 15,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -1508,7 +1508,7 @@
     {
       "file": "server/src/feed/regenerate.rs",
       "function": "compute_title",
-      "line": 163,
+      "line": 168,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -1625,7 +1625,7 @@
     {
       "file": "common/src/feed/feed_path.rs",
       "function": "FeedFormat::ext",
-      "line": 12,
+      "line": 14,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -1634,7 +1634,7 @@
     {
       "file": "common/src/feed/feed_path.rs",
       "function": "FeedFormat::content_type",
-      "line": 20,
+      "line": 22,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -2444,7 +2444,7 @@
     {
       "file": "server/src/feed/regenerate.rs",
       "function": "build_feed_items",
-      "line": 134,
+      "line": 139,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2822,7 +2822,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "PostPage",
-      "line": 108,
+      "line": 109,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2831,7 +2831,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "DraftPreviewPage",
-      "line": 376,
+      "line": 381,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2840,7 +2840,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "EditPostPage",
-      "line": 478,
+      "line": 483,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2849,7 +2849,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "DraftsPage",
-      "line": 722,
+      "line": 727,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2858,7 +2858,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "render_draft_row",
-      "line": 797,
+      "line": 802,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2867,7 +2867,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "render_delete_form",
-      "line": 842,
+      "line": 847,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2876,7 +2876,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "render_delete_result",
-      "line": 861,
+      "line": 866,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2885,7 +2885,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "SiteTagPage",
-      "line": 880,
+      "line": 885,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2894,7 +2894,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "UserTagPage",
-      "line": 1023,
+      "line": 1030,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -3443,25 +3443,7 @@
     {
       "file": "server/src/feed/handlers.rs",
       "function": "feed_site",
-      "line": 73,
-      "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "crate": "jaunder"
-    },
-    {
-      "file": "server/src/feed/handlers.rs",
-      "function": "feed_site_tag",
-      "line": 84,
-      "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "crate": "jaunder"
-    },
-    {
-      "file": "server/src/feed/handlers.rs",
-      "function": "feed_user_tag",
-      "line": 106,
+      "line": 74,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -3551,7 +3533,7 @@
     {
       "file": "web/src/pages/posts.rs",
       "function": "CreatePostPage",
-      "line": 24,
+      "line": 25,
       "cyclomatic": 1.0,
       "coverage": 30.76923076923077,
       "crap": 1.3318161128812016,
@@ -3585,12 +3567,21 @@
       "crate": "web"
     },
     {
+      "file": "server/src/feed/handlers.rs",
+      "function": "feed_user_tag",
+      "line": 113,
+      "cyclomatic": 1.0,
+      "coverage": 52.94117647058824,
+      "crap": 1.1042133116222268,
+      "crate": "jaunder"
+    },
+    {
       "file": "web/src/pages/posts.rs",
       "function": "UserTimelinePage",
-      "line": 212,
+      "line": 213,
       "cyclomatic": 1.0,
-      "coverage": 55.78947368421052,
-      "crap": 1.086412596588424,
+      "coverage": 57.57575757575758,
+      "crap": 1.0763558449508863,
       "crate": "web"
     },
     {
@@ -3630,6 +3621,15 @@
       "crate": "web"
     },
     {
+      "file": "server/src/feed/handlers.rs",
+      "function": "feed_site_tag",
+      "line": 85,
+      "cyclomatic": 1.0,
+      "coverage": 81.81818181818183,
+      "crap": 1.0060105184072126,
+      "crate": "jaunder"
+    },
+    {
       "file": "server/src/lib.rs",
       "function": "create_router",
       "line": 42,
@@ -3659,16 +3659,16 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "publish_post",
-      "line": 428,
+      "line": 420,
       "cyclomatic": 1.0,
-      "coverage": 94.44444444444444,
-      "crap": 1.0001714677640603,
+      "coverage": 93.47826086956522,
+      "crap": 1.0002773896605572,
       "crate": "web"
     },
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_posts_by_tag",
-      "line": 652,
+      "line": 636,
       "cyclomatic": 1.0,
       "coverage": 97.2972972972973,
       "crap": 1.0000197421672952,
@@ -3677,7 +3677,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_user_posts_by_tag",
-      "line": 700,
+      "line": 684,
       "cyclomatic": 1.0,
       "coverage": 97.91666666666666,
       "crap": 1.0000090422453705,
@@ -4091,7 +4091,7 @@
     {
       "file": "web/src/feed_events.rs",
       "function": "tag_slugs",
-      "line": 14,
+      "line": 15,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4667,7 +4667,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "get_post",
-      "line": 222,
+      "line": 219,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4676,7 +4676,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "get_post_preview",
-      "line": 275,
+      "line": 272,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4685,7 +4685,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "update_post",
-      "line": 296,
+      "line": 293,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4694,7 +4694,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_drafts",
-      "line": 390,
+      "line": 382,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4703,7 +4703,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "get_default_post_format",
-      "line": 494,
+      "line": 478,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4712,7 +4712,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "set_default_post_format",
-      "line": 507,
+      "line": 491,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4721,7 +4721,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_user_posts",
-      "line": 523,
+      "line": 507,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4730,7 +4730,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_local_timeline",
-      "line": 572,
+      "line": 556,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4739,7 +4739,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "list_home_feed",
-      "line": 614,
+      "line": 598,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4748,7 +4748,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "delete_post",
-      "line": 760,
+      "line": 744,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4757,7 +4757,7 @@
     {
       "file": "web/src/posts/mod.rs",
       "function": "unpublish_post",
-      "line": 803,
+      "line": 780,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -5315,7 +5315,7 @@
     {
       "file": "server/src/feed/handlers.rs",
       "function": "feed_user",
-      "line": 95,
+      "line": 99,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -5324,7 +5324,7 @@
     {
       "file": "server/src/feed/regenerate.rs",
       "function": "storage_err",
-      "line": 117,
+      "line": 122,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -5333,7 +5333,7 @@
     {
       "file": "server/src/feed/regenerate.rs",
       "function": "percent_encode_path",
-      "line": 121,
+      "line": 126,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,

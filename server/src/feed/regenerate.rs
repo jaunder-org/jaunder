@@ -70,10 +70,15 @@ pub async fn regenerate_feed(
     let self_url = format!("{base}{}", percent_encode_path(feed_url));
     let canonical_url = match &surface {
         FeedSurface::Site => format!("{base}/"),
-        FeedSurface::SiteTag { tag } => format!("{base}/tags/{}/", urlencoding::encode(tag)),
+        FeedSurface::SiteTag { tag } => {
+            format!("{base}/tags/{}/", urlencoding::encode(tag.as_str()))
+        }
         FeedSurface::User { username } => format!("{base}/~{username}/"),
         FeedSurface::UserTag { username, tag } => {
-            format!("{base}/~{username}/tags/{}/", urlencoding::encode(tag))
+            format!(
+                "{base}/~{username}/tags/{}/",
+                urlencoding::encode(tag.as_str())
+            )
         }
     };
 
@@ -194,20 +199,25 @@ mod tests {
     #[test]
     fn compute_title_for_each_surface() {
         assert_eq!(compute_title("Jaunder", &FeedSurface::Site), "Jaunder");
-        let site_tag = compute_title("Jaunder", &FeedSurface::SiteTag { tag: "rust".into() });
+        let site_tag = compute_title(
+            "Jaunder",
+            &FeedSurface::SiteTag {
+                tag: "rust".parse().unwrap(),
+            },
+        );
         assert!(site_tag.contains("rust"));
         let user = compute_title(
             "My Blog",
             &FeedSurface::User {
-                username: "alice".into(),
+                username: "alice".parse().unwrap(),
             },
         );
         assert!(user.contains("My Blog") && user.contains("alice"));
         let user_tag = compute_title(
             "Jaunder",
             &FeedSurface::UserTag {
-                username: "alice".into(),
-                tag: "rust".into(),
+                username: "alice".parse().unwrap(),
+                tag: "rust".parse().unwrap(),
             },
         );
         assert!(user_tag.contains("alice") && user_tag.contains("rust"));

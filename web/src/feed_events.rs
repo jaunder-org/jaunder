@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 
 use common::feed::{canonicalize, FeedFormat, FeedSurface};
+use common::{tag::Tag, username::Username};
 use storage::{FeedEventError, FeedEventStorage};
 
 #[cfg(test)]
@@ -27,19 +28,19 @@ fn tag_slugs(tags: &[PostTag]) -> BTreeSet<String> {
 /// Returns an error if the feed event storage operation fails.
 pub async fn enqueue_feed_events(
     events: &dyn FeedEventStorage,
-    username: &str,
-    tag_slugs: &BTreeSet<String>,
+    username: &Username,
+    tag_slugs: &BTreeSet<Tag>,
 ) -> Result<(), FeedEventError> {
     let mut surfaces = vec![
         FeedSurface::Site,
         FeedSurface::User {
-            username: username.to_string(),
+            username: username.clone(),
         },
     ];
     for tag in tag_slugs {
         surfaces.push(FeedSurface::SiteTag { tag: tag.clone() });
         surfaces.push(FeedSurface::UserTag {
-            username: username.to_string(),
+            username: username.clone(),
             tag: tag.clone(),
         });
     }

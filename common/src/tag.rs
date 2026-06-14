@@ -6,7 +6,7 @@ use thiserror::Error;
 ///
 /// Constructed via [`FromStr`]; invalid strings are rejected at the boundary
 /// so interior code works only with already-valid tags.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Tag(String);
 
 /// Error returned when a string cannot be parsed as a [`Tag`].

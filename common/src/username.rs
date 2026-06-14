@@ -6,7 +6,7 @@ use thiserror::Error;
 ///
 /// Constructed via [`FromStr`]; invalid strings are rejected at the boundary
 /// so interior code works only with already-valid usernames.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Username(String);
 
 /// Error returned when a string cannot be parsed as a [`Username`].

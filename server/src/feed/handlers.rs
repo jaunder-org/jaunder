@@ -7,6 +7,7 @@ use axum::{
     Extension,
 };
 use common::feed::{canonicalize, FeedFormat, FeedSurface};
+use common::{tag::Tag, username::Username};
 use storage::AppState;
 
 use super::regenerate::regenerate_feed;
@@ -89,6 +90,9 @@ pub async fn feed_site_tag(
     let Some(format) = parse_format(&ext) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    let Ok(tag) = tag.parse::<Tag>() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
     serve(state, headers, FeedSurface::SiteTag { tag }, format).await
 }
 
@@ -100,6 +104,9 @@ pub async fn feed_user(
     let Some(format) = parse_format(&ext) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    let Ok(username) = username.parse::<Username>() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
     serve(state, headers, FeedSurface::User { username }, format).await
 }
 
@@ -109,6 +116,9 @@ pub async fn feed_user_tag(
     Path((username, tag, ext)): Path<(String, String, String)>,
 ) -> Response {
     let Some(format) = parse_format(&ext) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let (Ok(username), Ok(tag)) = (username.parse::<Username>(), tag.parse::<Tag>()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     serve(

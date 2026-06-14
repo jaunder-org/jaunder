@@ -205,11 +205,8 @@ pub async fn create_post(
             .get_tags_for_post(created.post_id)
             .await
             .map_err(InternalError::storage)?;
-        let tag_slugs: BTreeSet<String> = tag_post_tags
-            .iter()
-            .map(|t| t.tag_slug.as_str().to_string())
-            .collect();
-        enqueue_feed_events(feed_events.as_ref(), auth.username.as_str(), &tag_slugs)
+        let tag_slugs: BTreeSet<Tag> = tag_post_tags.iter().map(|t| t.tag_slug.clone()).collect();
+        enqueue_feed_events(feed_events.as_ref(), &auth.username, &tag_slugs)
             .await
             .map_err(InternalError::storage)?;
 
@@ -311,14 +308,9 @@ pub async fn update_post(
             .get_post_by_id(post_id)
             .await
             .map_err(InternalError::storage)?;
-        let old_tag_slugs: BTreeSet<String> = old
+        let old_tag_slugs: BTreeSet<Tag> = old
             .as_ref()
-            .map(|p| {
-                p.tags
-                    .iter()
-                    .map(|t| t.tag_slug.as_str().to_string())
-                    .collect()
-            })
+            .map(|p| p.tags.iter().map(|t| t.tag_slug.clone()).collect())
             .unwrap_or_default();
 
         // Validate tags up-front so a malformed input rejects before any
@@ -360,13 +352,13 @@ pub async fn update_post(
             .get_tags_for_post(post_id)
             .await
             .map_err(InternalError::storage)?;
-        let mut all_tag_slugs: BTreeSet<String> = old_tag_slugs;
+        let mut all_tag_slugs: BTreeSet<Tag> = old_tag_slugs;
         for tag in current_tags {
-            all_tag_slugs.insert(tag.tag_slug.as_str().to_string());
+            all_tag_slugs.insert(tag.tag_slug);
         }
 
         let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-        enqueue_feed_events(feed_events.as_ref(), auth.username.as_str(), &all_tag_slugs)
+        enqueue_feed_events(feed_events.as_ref(), &auth.username, &all_tag_slugs)
             .await
             .map_err(InternalError::storage)?;
 
@@ -466,19 +458,11 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
             .published_at
             .ok_or_else(|| InternalError::not_found("Post"))?;
 
-        let tag_slugs: BTreeSet<String> = updated
-            .tags
-            .iter()
-            .map(|t| t.tag_slug.as_str().to_string())
-            .collect();
+        let tag_slugs: BTreeSet<Tag> = updated.tags.iter().map(|t| t.tag_slug.clone()).collect();
         let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-        enqueue_feed_events(
-            feed_events.as_ref(),
-            updated.author_username.as_str(),
-            &tag_slugs,
-        )
-        .await
-        .map_err(InternalError::storage)?;
+        enqueue_feed_events(feed_events.as_ref(), &updated.author_username, &tag_slugs)
+            .await
+            .map_err(InternalError::storage)?;
 
         Ok(PublishPostResult {
             post_id: updated.post_id,
@@ -779,19 +763,12 @@ pub async fn delete_post(post_id: i64) -> WebResult<()> {
 
         // Only enqueue feed events for published posts
         if existing.published_at.is_some() {
-            let tag_slugs: BTreeSet<String> = existing
-                .tags
-                .iter()
-                .map(|t| t.tag_slug.as_str().to_string())
-                .collect();
+            let tag_slugs: BTreeSet<Tag> =
+                existing.tags.iter().map(|t| t.tag_slug.clone()).collect();
             let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-            enqueue_feed_events(
-                feed_events.as_ref(),
-                existing.author_username.as_str(),
-                &tag_slugs,
-            )
-            .await
-            .map_err(InternalError::storage)?;
+            enqueue_feed_events(feed_events.as_ref(), &existing.author_username, &tag_slugs)
+                .await
+                .map_err(InternalError::storage)?;
         }
 
         Ok(())
@@ -820,19 +797,11 @@ pub async fn unpublish_post(post_id: i64) -> WebResult<()> {
             .await
             .map_err(InternalError::storage)?;
 
-        let tag_slugs: BTreeSet<String> = existing
-            .tags
-            .iter()
-            .map(|t| t.tag_slug.as_str().to_string())
-            .collect();
+        let tag_slugs: BTreeSet<Tag> = existing.tags.iter().map(|t| t.tag_slug.clone()).collect();
         let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-        enqueue_feed_events(
-            feed_events.as_ref(),
-            existing.author_username.as_str(),
-            &tag_slugs,
-        )
-        .await
-        .map_err(InternalError::storage)?;
+        enqueue_feed_events(feed_events.as_ref(), &existing.author_username, &tag_slugs)
+            .await
+            .map_err(InternalError::storage)?;
 
         Ok(())
     })

@@ -1731,7 +1731,7 @@ async fn assert_list_published_in_window(state: &std::sync::Arc<storage::AppStat
         .posts
         .list_published_in_window(
             &FeedSurface::User {
-                username: "walice".to_string(),
+                username: "walice".parse().unwrap(),
             },
             &alice_window,
             now,
@@ -1746,7 +1746,7 @@ async fn assert_list_published_in_window(state: &std::sync::Arc<storage::AppStat
         .posts
         .list_published_in_window(
             &FeedSurface::User {
-                username: "wbob".to_string(),
+                username: "wbob".parse().unwrap(),
             },
             &HybridWindow {
                 min_items: 10,
@@ -1778,7 +1778,7 @@ async fn assert_list_published_in_window(state: &std::sync::Arc<storage::AppStat
         .posts
         .list_published_in_window(
             &FeedSurface::SiteTag {
-                tag: "rust".to_string(),
+                tag: "rust".parse().unwrap(),
             },
             &HybridWindow {
                 min_items: 20,
@@ -1795,8 +1795,8 @@ async fn assert_list_published_in_window(state: &std::sync::Arc<storage::AppStat
         .posts
         .list_published_in_window(
             &FeedSurface::UserTag {
-                username: "walice".to_string(),
-                tag: "rust".to_string(),
+                username: "walice".parse().unwrap(),
+                tag: "rust".parse().unwrap(),
             },
             &HybridWindow {
                 min_items: 20,
@@ -1813,8 +1813,8 @@ async fn assert_list_published_in_window(state: &std::sync::Arc<storage::AppStat
         .posts
         .list_published_in_window(
             &FeedSurface::UserTag {
-                username: "wbob".to_string(),
-                tag: "rust".to_string(),
+                username: "wbob".parse().unwrap(),
+                tag: "rust".parse().unwrap(),
             },
             &HybridWindow {
                 min_items: 20,

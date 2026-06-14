@@ -128,6 +128,60 @@ async fn regenerate_writes_empty_feed_for_user_with_no_posts() {
 }
 
 #[tokio::test]
+async fn regenerate_writes_cache_rows_for_tag_surfaces() {
+    let base = TempDir::new().expect("temp dir");
+    let state = helpers::test_state(&base).await;
+
+    // Create a user (posts are not required: the tag-window queries and the
+    // SiteTag/UserTag canonical_url arms execute regardless of matches).
+    let username: Username = "alice".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    state
+        .users
+        .create_user(&username, &password, None, false)
+        .await
+        .expect("create user");
+
+    // Site-tag surface exercises the SiteTag canonical_url arm and the
+    // window_site_tag storage query.
+    let site_tag = regenerate_feed(&state, "/tags/rust/feed.rss")
+        .await
+        .expect("regenerate site-tag feed");
+    assert_eq!(
+        site_tag.content_type, "application/rss+xml; charset=utf-8",
+        "site-tag RSS content type"
+    );
+    assert!(
+        state
+            .feed_cache
+            .get("/tags/rust/feed.rss")
+            .await
+            .expect("get site-tag from cache")
+            .is_some(),
+        "site-tag feed should be cached"
+    );
+
+    // User-tag surface exercises the UserTag canonical_url arm and the
+    // window_user_tag storage query.
+    let user_tag = regenerate_feed(&state, "/~alice/tags/rust/feed.rss")
+        .await
+        .expect("regenerate user-tag feed");
+    assert_eq!(
+        user_tag.content_type, "application/rss+xml; charset=utf-8",
+        "user-tag RSS content type"
+    );
+    assert!(
+        state
+            .feed_cache
+            .get("/~alice/tags/rust/feed.rss")
+            .await
+            .expect("get user-tag from cache")
+            .is_some(),
+        "user-tag feed should be cached"
+    );
+}
+
+#[tokio::test]
 async fn regenerate_writes_each_format() {
     let base = TempDir::new().expect("temp dir");
     let state = helpers::test_state(&base).await;
