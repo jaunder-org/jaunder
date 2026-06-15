@@ -256,18 +256,6 @@ pub(crate) async fn database_has_users(options: &PgConnectOptions) -> sqlx::Resu
 }
 
 #[cfg(test)]
-pub(crate) async fn postgres_pool() -> PgPool {
-    let url = std::env::var("JAUNDER_PG_TEST_URL")
-        .unwrap_or_else(|_| "postgres://jaunder@127.0.0.1:55432/jaunder".to_owned());
-    let pool = PgPool::connect(&url).await.unwrap();
-    sqlx::migrate!("./migrations/postgres")
-        .run(&pool)
-        .await
-        .unwrap();
-    pool
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::helpers::{
