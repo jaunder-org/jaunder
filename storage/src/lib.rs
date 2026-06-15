@@ -3,6 +3,7 @@
 mod app_state;
 mod atomic;
 mod auth;
+mod backend;
 mod backup;
 mod db;
 mod email;
@@ -25,6 +26,7 @@ mod users;
 pub use app_state::*;
 pub use atomic::*;
 pub use auth::*;
+pub use backend::*;
 pub use backup::{
     export_backup, restore_backup, BackupError, BackupExportOptions, BackupManifest, BackupMode,
     BackupRestoreOptions,
