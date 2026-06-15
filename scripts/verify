@@ -2,17 +2,19 @@
 # Run the standard project verification sequence.
 #
 # Usage:
-#   scripts/verify --fast   # inner loop: static checks + lint only (no tests, no VM)
-#   scripts/verify          # default gate: static + lint + coverage (SQLite + host
-#                           #   PostgreSQL); no Nix VM. The everyday pre-push gate.
-#   scripts/verify --full   # default gate plus the hermetic Nix VM checks (e2e +
-#                           #   PostgreSQL integration). CI enforces the VM checks too.
+#   scripts/verify --fast   # inner loop: static checks + clippy only (no tests, no VM)
+#   scripts/verify          # commit gate: static + clippy + tests (SQLite + host
+#                           #   PostgreSQL) + host e2e. No coverage, no VM.
+#   scripts/verify --full   # commit gate plus coverage and the hermetic Nix VM
+#                           #   checks (e2e + PostgreSQL integration). Enforced by CI.
 #
 # --fast runs the static checks (fmt, leptosfmt, prettier, cargo-deny) and clippy,
-# then stops. The default gate adds coverage, which runs the test suite against
-# both SQLite and a throwaway host PostgreSQL (via scripts/check-coverage), giving
-# backend parity coverage with no VM. --full additionally builds the Nix VM checks;
-# those are also enforced by CI, so the VM tier is opt-in locally.
+# then stops. The default (commit) gate adds the breakage-catching tests: nextest
+# against SQLite, the same integration suite against a throwaway host PostgreSQL
+# (backend parity), and the end-to-end suite on the host — all without a VM. It is
+# deliberately about catching breakage, not coverage. --full additionally runs
+# coverage and the Nix VM checks; both are also enforced by CI, so that tier is
+# opt-in locally.
 #
 # Optional env:
 #   VERIFY_PASSTHROUGH=1         Stream each step output directly (sequential).
@@ -150,22 +152,32 @@ run_parallel \
 run_step "cargo clippy -- -D warnings" cargo clippy -- -D warnings
 
 if [[ "$FAST" == "1" ]]; then
-    echo "--- verify: fast checks passed (skipped coverage + nix VM; run 'scripts/verify' for the default gate) ---"
+    echo "--- verify: fast checks passed (skipped tests + e2e + nix VM; run 'scripts/verify' for the commit gate) ---"
     exit 0
 fi
 
-# ── Phase 3: Coverage (full suite vs SQLite + host PostgreSQL) ────────
+# ── Phase 3: Tests (commit gate) — catch breakage, no VM ─────────────
+# SQLite unit + integration, then the same integration suite against a throwaway
+# host PostgreSQL (backend parity), then the end-to-end suite on the host.
+
+run_step "cargo nextest run (SQLite)" cargo nextest run
+
+run_step "cargo nextest run -p jaunder (host PostgreSQL)" \
+    scripts/with-ephemeral-postgres cargo nextest run -p jaunder --run-ignored all
+
+run_step "scripts/e2e-local.sh (host e2e)" scripts/e2e-local.sh
+
+if [[ "$FULL" != "1" ]]; then
+    echo "--- verify: commit gate passed (tests + e2e; skipped coverage + nix VM — run 'scripts/verify --full' or rely on CI) ---"
+    exit 0
+fi
+
+# ── Phase 4 (--full): coverage + hermetic Nix VM checks ──────────────
+# Both are also enforced by CI; opt-in locally.
 
 run_step "scripts/check-coverage" scripts/check-coverage
 
-# ── Phase 4: Nix VM checks (e2e + PostgreSQL integration) — opt-in ────
-# The hermetic VM checks are also enforced by CI; locally they are opt-in via
-# --full so the default gate stays fast (no QEMU).
+run_step "nix build .#nix-only-checks" \
+    nix build --accept-flake-config .#nix-only-checks
 
-if [[ "$FULL" == "1" ]]; then
-    run_step "nix build .#nix-only-checks" \
-        nix build --accept-flake-config .#nix-only-checks
-    echo "--- verify: all checks passed (incl. Nix VM) ---"
-else
-    echo "--- verify: local checks passed (skipped Nix VM; run 'scripts/verify --full' or rely on CI for the hermetic gate) ---"
-fi
+echo "--- verify: all checks passed (incl. coverage + Nix VM) ---"
