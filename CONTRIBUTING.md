@@ -95,7 +95,7 @@ The verify ladder has three tiers:
 
 - `scripts/verify --fast` — static checks (fmt, leptosfmt, prettier, cargo-deny) and clippy only. Quick inner-loop feedback; does not certify a change.
 - `scripts/verify` — the commit gate: the `--fast` checks plus the breakage-catching tests — `cargo nextest` against SQLite, the same integration suite against a throwaway host PostgreSQL (backend parity, via `scripts/with-ephemeral-postgres`), and the end-to-end suite on the host (`scripts/e2e-local.sh`). **No coverage, no VM** — it is about catching breakage (including e2e) before commit, not measuring coverage.
-- `scripts/verify --full` — the commit gate plus coverage (`scripts/check-coverage`) and the hermetic Nix VM checks (`nix-only-checks`: e2e + the consolidated PostgreSQL integration VM). Both are also enforced by CI, so running `--full` locally is optional.
+- `scripts/verify --full` — static + clippy, then coverage (`scripts/check-coverage`) and the hermetic Nix VM checks (`nix-only-checks`: e2e + the consolidated PostgreSQL integration VM). Coverage re-runs the SQLite + host-PostgreSQL suites (instrumented) and the VM checks re-run e2e (both browsers, both backends), so the plain commit-gate tests are **skipped** under `--full` rather than run twice. Both also run in CI, so running `--full` locally is optional.
   - By default it prints only `--- verify: ... ---` progress markers and captures step output.
   - Set `VERIFY_PASSTHROUGH=1` to stream full tool output directly.
   - Set `VERIFY_SHOW_STEP_OUTPUT=1` to print captured output for successful steps.

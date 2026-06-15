@@ -156,24 +156,28 @@ if [[ "$FAST" == "1" ]]; then
     exit 0
 fi
 
-# ── Phase 3: Tests (commit gate) — catch breakage, no VM ─────────────
-# SQLite unit + integration, then the same integration suite against a throwaway
-# host PostgreSQL (backend parity), then the end-to-end suite on the host.
-
-run_step "cargo nextest run (SQLite)" cargo nextest run
-
-run_step "cargo nextest run -p jaunder (host PostgreSQL)" \
-    scripts/with-ephemeral-postgres cargo nextest run -p jaunder --run-ignored all
-
-run_step "scripts/e2e-local.sh (host e2e)" scripts/e2e-local.sh
-
 if [[ "$FULL" != "1" ]]; then
+    # ── Phase 3: Tests (commit gate) — catch breakage, no VM ─────────
+    # SQLite unit + integration, then the same integration suite against a
+    # throwaway host PostgreSQL (backend parity), then host e2e. These are
+    # skipped under --full because coverage and the Nix VM checks below re-run
+    # the same suites more thoroughly.
+    run_step "cargo nextest run (SQLite)" cargo nextest run
+
+    run_step "cargo nextest run -p jaunder (host PostgreSQL)" \
+        scripts/with-ephemeral-postgres cargo nextest run -p jaunder --run-ignored all
+
+    run_step "scripts/e2e-local.sh (host e2e)" scripts/e2e-local.sh
+
     echo "--- verify: commit gate passed (tests + e2e; skipped coverage + nix VM — run 'scripts/verify --full' or rely on CI) ---"
     exit 0
 fi
 
-# ── Phase 4 (--full): coverage + hermetic Nix VM checks ──────────────
-# Both are also enforced by CI; opt-in locally.
+# ── Phase 3 (--full): comprehensive certification ────────────────────
+# coverage re-runs the SQLite + host-PostgreSQL suites under instrumentation,
+# and the Nix VM checks run the e2e suite hermetically (both browsers, both
+# backends) plus the PostgreSQL integration binaries — so the plain commit-gate
+# tests would be redundant here and are skipped. Both also run in CI.
 
 run_step "scripts/check-coverage" scripts/check-coverage
 
