@@ -62,3 +62,20 @@ signatures need, since those bounds don't carry through the `Backend` supertrait
   associated `Db` type → breaks object safety).
 
 Subsequent storage traits follow this pattern in later beads.
+
+## Scope and exclusions
+
+This pattern pays off where the backends are near-identical and the divergence is a
+small, enumerable set of operations (a dialect with a handful of methods or
+SQL-fragment consts). It is deliberately NOT applied to **backup storage**
+(`storage/src/sqlite/backup.rs` vs `storage/src/postgres/backup.rs`), which differ in
+361 of 469 lines: dump/restore is fundamentally backend-specific (catalog
+introspection, `COPY` streaming vs SQLite row-dump, sequence/`setval` handling, type
+formatting). A `BackupStore<DB>` + `BackupDialect` would push almost the entire body
+into the dialect — adding an indirection layer while removing essentially no
+duplication. The two implementations are kept separate on purpose; the shared concept
+lives in the public `BackupStorage` trait, not in a generic store.
+
+The rule of thumb: dedup when the dialect would be small relative to the shared body;
+leave separate when the "shared store" would be a thin shell over a near-total dialect.
+(Decided in jaunder-p8ea after the §1.1 rollout deduped the other ten traits.)
