@@ -2,7 +2,10 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sqlx::{Database, Pool};
 use thiserror::Error;
+
+use crate::backend::Backend;
 
 /// Errors returned by [`EmailVerificationStorage::use_email_verification`].
 #[derive(Debug, Error)]
@@ -52,4 +55,116 @@ pub trait EmailVerificationStorage: Send + Sync {
         &self,
         raw_token: &str,
     ) -> Result<(i64, String), UseEmailVerificationError>;
+}
+
+/// Generic [`EmailVerificationStorage`] backed by any [`Backend`] database.
+///
+/// Zero backend divergence (identical SQL across `SQLite` and Postgres),
+/// so it is implemented once here; see ADR-0019.
+pub struct EmailVerificationStore<DB: Database> {
+    pool: Pool<DB>,
+}
+
+impl<DB: Database> EmailVerificationStore<DB> {
+    #[must_use]
+    pub fn new(pool: Pool<DB>) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl<DB> EmailVerificationStorage for EmailVerificationStore<DB>
+where
+    DB: Backend,
+    (i64, String): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (Option<DateTime<Utc>>, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    async fn create_email_verification(
+        &self,
+        user_id: i64,
+        email: &str,
+        expires_at: DateTime<Utc>,
+    ) -> sqlx::Result<String> {
+        let (raw_token, token_hash) = crate::helpers::generate_hashed_token()?;
+        let now = Utc::now();
+
+        let mut tx = self.pool.begin().await?;
+
+        // Supersede any existing pending token for this user by setting its
+        // expires_at to its created_at, making it appear immediately expired.
+        sqlx::query(
+            "UPDATE email_verifications
+             SET expires_at = created_at
+             WHERE user_id = $1 AND used_at IS NULL AND expires_at > $2",
+        )
+        .bind(user_id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO email_verifications
+             (token_hash, user_id, email, created_at, expires_at)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(token_hash.as_str())
+        .bind(user_id)
+        .bind(email)
+        .bind(now)
+        .bind(expires_at)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(raw_token)
+    }
+
+    async fn use_email_verification(
+        &self,
+        raw_token: &str,
+    ) -> Result<(i64, String), UseEmailVerificationError> {
+        let token_hash =
+            crate::auth::hash_token(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
+
+        let now = Utc::now();
+
+        // Atomically claim the token: the UPDATE succeeds only when the token
+        // exists, has not yet been used, and has not expired.  This single
+        // statement is the "claim" — no separate read is needed first, so two
+        // concurrent requests cannot both succeed.  RETURNING gives us the
+        // data we need without a second round-trip.
+        let claimed = sqlx::query_as::<_, (i64, String)>(
+            "UPDATE email_verifications SET used_at = $1
+             WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
+             RETURNING user_id, email",
+        )
+        .bind(now)
+        .bind(token_hash.as_str())
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| UseEmailVerificationError::NotFound)?;
+
+        if let Some((user_id, email)) = claimed {
+            return Ok((user_id, email));
+        }
+
+        // Zero rows affected — inspect the row to return the right error.
+        let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
+            "SELECT used_at, expires_at FROM email_verifications WHERE token_hash = $1",
+        )
+        .bind(token_hash.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| UseEmailVerificationError::NotFound)?;
+
+        Err(crate::helpers::email_verification_claim_error(row))
+    }
 }

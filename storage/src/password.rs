@@ -2,7 +2,10 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sqlx::{Database, Pool};
 use thiserror::Error;
+
+use crate::backend::Backend;
 
 /// Errors returned by [`PasswordResetStorage::use_password_reset`].
 #[derive(Debug, Error)]
@@ -45,4 +48,85 @@ pub trait PasswordResetStorage: Send + Sync {
     /// Returns [`UsePasswordResetError`] if the token is invalid, expired,
     /// or already used.
     async fn use_password_reset(&self, raw_token: &str) -> Result<i64, UsePasswordResetError>;
+}
+
+/// Generic [`PasswordResetStorage`] backed by any [`Backend`] database.
+///
+/// Zero backend divergence (identical SQL across `SQLite` and Postgres),
+/// so it is implemented once here; see ADR-0019.
+pub struct PasswordResetStore<DB: Database> {
+    pool: Pool<DB>,
+}
+
+impl<DB: Database> PasswordResetStore<DB> {
+    #[must_use]
+    pub fn new(pool: Pool<DB>) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl<DB> PasswordResetStorage for PasswordResetStore<DB>
+where
+    DB: Backend,
+    (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (Option<DateTime<Utc>>, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    async fn create_password_reset(
+        &self,
+        user_id: i64,
+        expires_at: DateTime<Utc>,
+    ) -> sqlx::Result<String> {
+        let (raw_token, token_hash) = crate::helpers::generate_hashed_token()?;
+        let now = Utc::now();
+
+        sqlx::query(
+            "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at)
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(token_hash.as_str())
+        .bind(user_id)
+        .bind(now)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(raw_token)
+    }
+
+    async fn use_password_reset(&self, raw_token: &str) -> Result<i64, UsePasswordResetError> {
+        let token_hash =
+            crate::auth::hash_token(raw_token).map_err(|_| UsePasswordResetError::NotFound)?;
+
+        let now = Utc::now();
+
+        let claimed = sqlx::query_as::<_, (i64,)>(
+            "UPDATE password_resets SET used_at = $1
+             WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
+             RETURNING user_id",
+        )
+        .bind(now)
+        .bind(token_hash.as_str())
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some((user_id,)) = claimed {
+            return Ok(user_id);
+        }
+
+        let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
+            "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
+        )
+        .bind(token_hash.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Err(crate::helpers::password_reset_claim_error(row))
+    }
 }
