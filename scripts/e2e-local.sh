@@ -28,4 +28,11 @@ export JAUNDER_MAIL_CAPTURE_FILE="$TMPDIR/mail.jsonl"
 export JAUNDER_WEBSUB_CAPTURE_FILE="$TMPDIR/websub.jsonl"
 mkdir -p "$JAUNDER_STORAGE_PATH"
 
+# A jaunder server left over from an interrupted previous run keeps port 3000
+# bound and serves stale state, which cascades into mysterious e2e failures
+# ("Address already in use", then login/post tests failing against the old DB).
+# Clear any straggler before starting. The bracket in '[t]arget' keeps this
+# pkill from matching its own command line.
+pkill -f '[t]arget.*/jaunder' 2>/dev/null || true
+
 exec cargo leptos end-to-end "$@"
