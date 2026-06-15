@@ -152,34 +152,29 @@ run_parallel \
 run_step "cargo clippy -- -D warnings" cargo clippy -- -D warnings
 
 if [[ "$FAST" == "1" ]]; then
-    echo "--- verify: fast checks passed (skipped tests + e2e + nix VM; run 'scripts/verify' for the commit gate) ---"
+    echo "--- verify: fast checks passed (skipped coverage + e2e + nix VM; run 'scripts/verify' for the commit gate) ---"
     exit 0
 fi
+
+# ── Phase 3: Coverage (commit gate) — tests + coverage regressions ───
+# check-coverage runs the SQLite + host-PostgreSQL suites under instrumentation,
+# so it doubles as the test pass/fail check AND gates coverage regressions
+# locally (rather than waiting for CI). --check is compare-only: it never
+# rewrites the committed baseline, which is regenerated deliberately from the
+# Nix sandbox (the CI-reproducible environment).
+
+run_step "scripts/check-coverage --check" scripts/check-coverage --check
 
 if [[ "$FULL" != "1" ]]; then
-    # ── Phase 3: Tests (commit gate) — catch breakage, no VM ─────────
-    # SQLite unit + integration, then the same integration suite against a
-    # throwaway host PostgreSQL (backend parity), then host e2e. These are
-    # skipped under --full because coverage and the Nix VM checks below re-run
-    # the same suites more thoroughly.
-    run_step "cargo nextest run (SQLite)" cargo nextest run
-
-    run_step "cargo nextest run -p jaunder (host PostgreSQL)" \
-        scripts/with-ephemeral-postgres cargo nextest run -p jaunder --run-ignored all
-
+    # Default (commit) gate: add host e2e and stop — no VM.
     run_step "scripts/e2e-local.sh (host e2e)" scripts/e2e-local.sh
-
-    echo "--- verify: commit gate passed (tests + e2e; skipped coverage + nix VM — run 'scripts/verify --full' or rely on CI) ---"
+    echo "--- verify: commit gate passed (tests + coverage + e2e; skipped nix VM — run 'scripts/verify --full' or rely on CI) ---"
     exit 0
 fi
 
-# ── Phase 3 (--full): comprehensive certification ────────────────────
-# coverage re-runs the SQLite + host-PostgreSQL suites under instrumentation,
-# and the Nix VM checks run the e2e suite hermetically (both browsers, both
-# backends) plus the PostgreSQL integration binaries — so the plain commit-gate
-# tests would be redundant here and are skipped. Both also run in CI.
-
-run_step "scripts/check-coverage" scripts/check-coverage
+# ── Phase 4 (--full): hermetic Nix VM checks ─────────────────────────
+# The VM e2e (both browsers, both backends) subsumes the host e2e suite, so host
+# e2e is skipped here. Also enforced by CI.
 
 run_step "nix build .#nix-only-checks" \
     nix build --accept-flake-config .#nix-only-checks

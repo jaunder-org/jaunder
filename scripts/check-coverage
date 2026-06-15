@@ -28,11 +28,13 @@ CRAP_MANIFEST_FILE="$ROOT/.crap-manifest.json"
 CRAP_REPORT_FILE="$ROOT/.crap-report.json"
 UPDATE=false
 INVESTIGATE=false
+CHECK=false
 
 for arg in "$@"; do
     case "$arg" in
         --update) UPDATE=true ;;
         --investigate) INVESTIGATE=true ;;
+        --check) CHECK=true ;;
         *) echo "error: unknown argument: $arg" >&2; exit 1 ;;
     esac
 done
@@ -261,6 +263,15 @@ if [[ "$(echo "$CRAP_REGRESSIONS" | jq 'length')" -gt 0 ]]; then
         "\(.file): \(.function): \(.old) -> \(.new) (Δ \(.delta), CC \(.cyclomatic), coverage \(.coverage // "n/a")%)"
     ' >&2
     exit 1
+fi
+
+# Compare-only mode (the everyday verify gate): the baseline is regenerated
+# deliberately from the Nix sandbox (the CI-reproducible environment), so a local
+# host run must gate regressions WITHOUT rewriting the committed baseline — host
+# numbers differ slightly from the sandbox for network-sensitive files.
+if [[ "$CHECK" == "true" ]]; then
+    echo "Coverage and CRAP OK (compare-only; baseline not updated)."
+    exit 0
 fi
 
 # If all good, update

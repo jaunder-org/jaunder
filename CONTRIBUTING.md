@@ -63,7 +63,7 @@ git config core.hooksPath .githooks
 - `cargo clippy -- -D warnings` — linting
 - `cargo nextest run` — unit and integration tests (SQLite)
 
-**`pre-push`** runs `scripts/verify` (the commit gate): the static checks plus the breakage-catching tests — SQLite, the integration suite against a throwaway host PostgreSQL, and the host e2e suite. No coverage or VM at this stage (those run in CI, or locally via `scripts/verify --full`).
+**`pre-push`** runs `scripts/verify` (the commit gate): the static checks plus `scripts/check-coverage --check` (the SQLite + host-PostgreSQL suites under instrumentation, gating both test failures and coverage regressions) and the host e2e suite. The hermetic Nix VM checks are not run here — they run in CI, or locally via `scripts/verify --full`.
 
 To skip the pre-push gate on a WIP push:
 
@@ -94,8 +94,8 @@ For tests requiring a database, use `sqlite::memory:` and run migrations with `s
 The verify ladder has three tiers:
 
 - `scripts/verify --fast` — static checks (fmt, leptosfmt, prettier, cargo-deny) and clippy only. Quick inner-loop feedback; does not certify a change.
-- `scripts/verify` — the commit gate: the `--fast` checks plus the breakage-catching tests — `cargo nextest` against SQLite, the same integration suite against a throwaway host PostgreSQL (backend parity, via `scripts/with-ephemeral-postgres`), and the end-to-end suite on the host (`scripts/e2e-local.sh`). **No coverage, no VM** — it is about catching breakage (including e2e) before commit, not measuring coverage.
-- `scripts/verify --full` — static + clippy, then coverage (`scripts/check-coverage`) and the hermetic Nix VM checks (`nix-only-checks`: e2e + the consolidated PostgreSQL integration VM). Coverage re-runs the SQLite + host-PostgreSQL suites (instrumented) and the VM checks re-run e2e (both browsers, both backends), so the plain commit-gate tests are **skipped** under `--full` rather than run twice. Both also run in CI, so running `--full` locally is optional.
+- `scripts/verify` — the commit (pre-push) gate: the `--fast` checks plus `scripts/check-coverage --check` and the host end-to-end suite (`scripts/e2e-local.sh`). `check-coverage` runs the SQLite + host-PostgreSQL suites under instrumentation, so it doubles as the test pass/fail check **and** gates coverage regressions — so test failures, coverage regressions, and e2e breakage are all caught locally, not deferred to CI. `--check` is compare-only (it never rewrites the committed baseline). **No VM.**
+- `scripts/verify --full` — the commit gate plus the hermetic Nix VM checks (`nix-only-checks`: e2e + the consolidated PostgreSQL integration VM). The VM e2e re-runs the end-to-end suite more thoroughly (both browsers, both backends), so the host e2e suite is **skipped** under `--full` rather than run twice. The VM checks also run in CI, so running `--full` locally is optional.
   - By default it prints only `--- verify: ... ---` progress markers and captures step output.
   - Set `VERIFY_PASSTHROUGH=1` to stream full tool output directly.
   - Set `VERIFY_SHOW_STEP_OUTPUT=1` to print captured output for successful steps.
@@ -176,7 +176,8 @@ Per-test databases are not dropped after each run, so a persistent instance accu
 
 ### Coverage and dependency policy
 
-- `scripts/check-coverage` enforces the coverage requirement. It runs in CI and in `scripts/verify --full`, not in the default commit gate (the gate is about catching breakage, not measuring coverage).
+- `scripts/check-coverage` enforces the coverage requirement. The default `scripts/verify` gate runs it as `--check` (compare-only — gates regressions without rewriting the committed baseline), and CI runs it too, so coverage regressions are caught before push rather than at merge. The baseline is regenerated deliberately from the Nix sandbox (the CI-reproducible environment), not by local runs.
+- `scripts/check-coverage --check` compares against the baseline and fails on a regression without updating it (used by the verify gate); plain `scripts/check-coverage` also updates the baseline on success.
 - `scripts/check-coverage --investigate` provides detailed information about missing coverage.
 - `cargo deny check` verifies dependency policy, advisories, and licensing.
 
