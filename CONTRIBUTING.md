@@ -57,22 +57,18 @@ The repository includes git hooks in `.githooks/` that enforce code quality stan
 git config core.hooksPath .githooks
 ```
 
-**`pre-commit`** runs on every commit:
+**`pre-commit`** runs on every commit — fast formatting, lint, and the SQLite test suite:
 
-- `cargo fmt --check` — formatting
+- `leptosfmt --check`, `cargo fmt --check`, `prettier --check end2end` — formatting
 - `cargo clippy -- -D warnings` — linting
-- `cargo nextest run` — unit and integration tests
+- `cargo nextest run` — unit and integration tests (SQLite)
 
-**`pre-push`** runs on every push:
+**`pre-push`** runs `scripts/verify` (the commit gate): the static checks plus the breakage-catching tests — SQLite, the integration suite against a throwaway host PostgreSQL, and the host e2e suite. No coverage or VM at this stage (those run in CI, or locally via `scripts/verify --full`).
 
-- `cargo deny check` — dependency and advisory policy
-- `scripts/check-coverage` — coverage gate
-- `nix flake check` — full check suite (with warmup e2e checks by default)
-
-To skip e2e tests on a WIP push:
+To skip the pre-push gate on a WIP push:
 
 ```
-SKIP_E2E=1 git push
+SKIP_PRE_PUSH=1 git push
 ```
 
 ## Development workflow
@@ -180,7 +176,7 @@ Per-test databases are not dropped after each run, so a persistent instance accu
 
 ### Coverage and dependency policy
 
-- `scripts/check-coverage` enforces the coverage requirement used by `pre-push`.
+- `scripts/check-coverage` enforces the coverage requirement. It runs in CI and in `scripts/verify --full`, not in the default commit gate (the gate is about catching breakage, not measuring coverage).
 - `scripts/check-coverage --investigate` provides detailed information about missing coverage.
 - `cargo deny check` verifies dependency policy, advisories, and licensing.
 
