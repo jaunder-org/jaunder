@@ -983,6 +983,14 @@
                 src = ./.;
                 inherit cargoArtifacts;
                 pname = "jaunder-coverage";
+                # Source-based coverage uses LLVM's embedded coverage map
+                # (-Cinstrument-coverage), not DWARF, so dropping debuginfo
+                # shrinks the instrumented test binaries dramatically with no
+                # loss of line coverage. Without this the instrumented link
+                # exhausts the build filesystem and rust-lld dies with SIGBUS
+                # writing its mmap'd output on the CI runner.
+                CARGO_PROFILE_DEV_DEBUG = "0";
+                CARGO_PROFILE_TEST_DEBUG = "0";
                 nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
                   cargo-crap
                   pkgs.cargo-llvm-cov
