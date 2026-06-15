@@ -67,8 +67,12 @@ else
     # with a live PG server) gets instrumented coverage too. Line coverage is a
     # union of hits, so PG-only lines flip to covered while shared lines stay
     # covered — no double-counting.
-    echo "--- coverage: cleaning stale llvm-cov artifacts ---"
-    cargo llvm-cov clean --workspace
+    # Clear only stale profraw (coverage data) from a previous run, NOT the
+    # instrumented build — `clean --workspace` would force a ~270s recompile
+    # every run; `--profraw-only` keeps the cached instrumented binaries (which
+    # live in a separate target dir), cutting repeat runs from ~530s to ~90s.
+    echo "--- coverage: clearing stale profraw (keeping instrumented build) ---"
+    cargo llvm-cov clean --profraw-only
 
     echo "--- coverage: running cargo llvm-cov (SQLite pass) ---"
     cargo llvm-cov --no-report nextest --show-progress none
