@@ -2,7 +2,10 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sqlx::{Database, Pool};
 use thiserror::Error;
+
+use crate::backend::Backend;
 
 /// Source of a media record.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,6 +149,214 @@ pub trait MediaStorage: Send + Sync {
         sha256: &str,
         source: &MediaSource,
     ) -> sqlx::Result<Option<MediaRecord>>;
+}
+
+/// Backend-specific divergence for [`MediaStore`].
+///
+/// [`get_user_upload_usage`][MediaDialect::get_user_upload_usage] diverges
+/// because Postgres requires an explicit `::bigint` cast on the
+/// `COALESCE(SUM(…), 0)` expression while `SQLite` does not support that syntax.
+///
+/// [`delete_media`][MediaDialect::delete_media] is also here because calling
+/// `.rows_affected()` on the generic `DB::QueryResult` associated type
+/// requires no trait in sqlx 0.8 — the method exists only on the concrete
+/// per-backend result types, so the implementation must be monomorphised.
+/// The SQL itself is identical across backends.
+#[async_trait]
+pub trait MediaDialect: Backend {
+    /// Returns the total upload bytes for `user_id` using backend-appropriate SQL.
+    async fn get_user_upload_usage(pool: &Pool<Self>, user_id: i64) -> sqlx::Result<i64>;
+
+    /// Deletes a media record; returns `NotFound` when no row was matched.
+    async fn delete_media_row(
+        pool: &Pool<Self>,
+        user_id: i64,
+        sha256: &str,
+        filename: &str,
+        source: &str,
+    ) -> Result<(), DeleteMediaError>;
+}
+
+/// Generic [`MediaStorage`] backed by any [`MediaDialect`] database.
+///
+/// All methods except `get_user_upload_usage` are shared here; that one
+/// delegates to [`MediaDialect::get_user_upload_usage`].  See ADR-0019.
+pub struct MediaStore<DB: Database> {
+    pool: Pool<DB>,
+}
+
+impl<DB: Database> MediaStore<DB> {
+    #[must_use]
+    pub fn new(pool: Pool<DB>) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl<DB> MediaStorage for MediaStore<DB>
+where
+    DB: MediaDialect,
+    crate::helpers::MediaRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    #[tracing::instrument(
+        name = "storage.media.create",
+        skip(self, record),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn create_media(&self, record: &MediaRecord) -> Result<(), CreateMediaError> {
+        let result = sqlx::query(
+            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(record.user_id)
+        .bind(record.sha256.as_str())
+        .bind(record.filename.as_str())
+        .bind(record.source.as_str())
+        .bind(record.content_type.as_str())
+        .bind(record.size_bytes)
+        .bind(record.source_url.clone())
+        .bind(record.created_at)
+        .execute(&self.pool)
+        .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(e)
+                if e.as_database_error()
+                    .is_some_and(sqlx::error::DatabaseError::is_unique_violation) =>
+            {
+                Err(CreateMediaError::AlreadyExists)
+            }
+            Err(e) => Err(CreateMediaError::Internal(e)),
+        }
+    }
+
+    #[tracing::instrument(
+        name = "storage.media.get",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn get_media(
+        &self,
+        user_id: i64,
+        sha256: &str,
+        filename: &str,
+        source: &MediaSource,
+    ) -> sqlx::Result<Option<MediaRecord>> {
+        let row = sqlx::query_as::<_, crate::helpers::MediaRow>(
+            "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
+             FROM media
+             WHERE user_id = $1 AND sha256 = $2 AND filename = $3 AND source = $4",
+        )
+        .bind(user_id)
+        .bind(sha256)
+        .bind(filename)
+        .bind(source.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(crate::helpers::media_record_from_row).transpose()
+    }
+
+    #[tracing::instrument(
+        name = "storage.media.list",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn list_media(
+        &self,
+        user_id: i64,
+        source: Option<&MediaSource>,
+        limit: u32,
+        offset: u32,
+    ) -> sqlx::Result<Vec<MediaRecord>> {
+        let rows = if let Some(src) = source {
+            sqlx::query_as::<_, crate::helpers::MediaRow>(
+                "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
+                 FROM media
+                 WHERE user_id = $1 AND source = $2
+                 ORDER BY created_at DESC
+                 LIMIT $3 OFFSET $4",
+            )
+            .bind(user_id)
+            .bind(src.as_str())
+            .bind(i64::from(limit))
+            .bind(i64::from(offset))
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, crate::helpers::MediaRow>(
+                "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
+                 FROM media
+                 WHERE user_id = $1
+                 ORDER BY created_at DESC
+                 LIMIT $2 OFFSET $3",
+            )
+            .bind(user_id)
+            .bind(i64::from(limit))
+            .bind(i64::from(offset))
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        rows.into_iter()
+            .map(crate::helpers::media_record_from_row)
+            .collect()
+    }
+
+    #[tracing::instrument(
+        name = "storage.media.delete",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn delete_media(
+        &self,
+        user_id: i64,
+        sha256: &str,
+        filename: &str,
+        source: &MediaSource,
+    ) -> Result<(), DeleteMediaError> {
+        DB::delete_media_row(&self.pool, user_id, sha256, filename, source.as_str()).await
+    }
+
+    #[tracing::instrument(
+        name = "storage.media.upload_usage",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn get_user_upload_usage(&self, user_id: i64) -> sqlx::Result<i64> {
+        DB::get_user_upload_usage(&self.pool, user_id).await
+    }
+
+    #[tracing::instrument(
+        name = "storage.media.find_by_hash",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn find_by_hash(
+        &self,
+        sha256: &str,
+        source: &MediaSource,
+    ) -> sqlx::Result<Option<MediaRecord>> {
+        let row = sqlx::query_as::<_, crate::helpers::MediaRow>(
+            "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
+             FROM media
+             WHERE sha256 = $1 AND source = $2
+             LIMIT 1",
+        )
+        .bind(sha256)
+        .bind(source.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(crate::helpers::media_record_from_row).transpose()
+    }
 }
 
 /// Key for the site configuration setting for maximum file upload size.

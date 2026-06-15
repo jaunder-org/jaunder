@@ -1,7 +1,9 @@
 //! Per-user preference storage.
 
+use crate::backend::Backend;
 use crate::posts::PostFormat;
 use async_trait::async_trait;
+use sqlx::{Database, Pool};
 
 /// Async operations on the `user_config` key-value table.
 ///
@@ -55,6 +57,84 @@ pub async fn set_default_post_format(
     config
         .set(user_id, DEFAULT_POST_FORMAT_KEY, &format.to_string())
         .await
+}
+
+/// Generic [`UserConfigStorage`] backed by any [`Backend`] database.
+///
+/// `UserConfigStorage` has no per-backend divergence (the upsert uses the shared
+/// `ON CONFLICT ... DO UPDATE` form), so there is no dialect trait — the
+/// implementation is written once here. See ADR-0019.
+pub struct UserConfigStore<DB: Database> {
+    pool: Pool<DB>,
+}
+
+impl<DB: Database> UserConfigStore<DB> {
+    #[must_use]
+    pub fn new(pool: Pool<DB>) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl<DB> UserConfigStorage for UserConfigStore<DB>
+where
+    DB: Backend,
+    // Restated from `Backend` (supertrait where-clauses don't propagate; ADR-0019),
+    // plus the `(String,)` row decode for `get` and the query-arguments bound.
+    (String,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    #[tracing::instrument(
+        name = "storage.user_config.get",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn get(&self, user_id: i64, key: &str) -> sqlx::Result<Option<String>> {
+        let row = sqlx::query_as::<_, (String,)>(
+            "SELECT value FROM user_config WHERE user_id = $1 AND key = $2",
+        )
+        .bind(user_id)
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|(v,)| v))
+    }
+
+    #[tracing::instrument(
+        name = "storage.user_config.set",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn set(&self, user_id: i64, key: &str, value: &str) -> sqlx::Result<()> {
+        sqlx::query(
+            "INSERT INTO user_config (user_id, key, value) VALUES ($1, $2, $3)
+             ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(user_id)
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    #[tracing::instrument(
+        name = "storage.user_config.delete",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn delete(&self, user_id: i64, key: &str) -> sqlx::Result<()> {
+        sqlx::query("DELETE FROM user_config WHERE user_id = $1 AND key = $2")
+            .bind(user_id)
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

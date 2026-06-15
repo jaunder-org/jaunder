@@ -1,8 +1,10 @@
 //! Site-wide configuration storage.
 
+use crate::backend::Backend;
 use async_trait::async_trait;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DEFAULT_BACKUP_RETENTION_COUNT};
 use common::site::{SiteIdentity, DEFAULT_SITE_TITLE};
+use sqlx::{Database, Pool};
 
 /// Async operations on the `site_config` key-value table.
 ///
@@ -191,6 +193,51 @@ fn backup_mode_str(mode: BackupMode) -> &'static str {
     match mode {
         BackupMode::Directory => "directory",
         BackupMode::Archive => "archive",
+    }
+}
+
+/// Generic [`SiteConfigStorage`] backed by any [`Backend`] database.
+///
+/// Zero backend divergence (shared `ON CONFLICT` upsert), so it is implemented
+/// once here; see ADR-0019.
+pub struct SiteConfigStore<DB: Database> {
+    pool: Pool<DB>,
+}
+
+impl<DB: Database> SiteConfigStore<DB> {
+    #[must_use]
+    pub fn new(pool: Pool<DB>) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl<DB> SiteConfigStorage for SiteConfigStore<DB>
+where
+    DB: Backend,
+    (String,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    async fn get(&self, key: &str) -> sqlx::Result<Option<String>> {
+        let row = sqlx::query_as::<_, (String,)>("SELECT value FROM site_config WHERE key = $1")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|(value,)| value))
+    }
+
+    async fn set(&self, key: &str, value: &str) -> sqlx::Result<()> {
+        sqlx::query(
+            "INSERT INTO site_config (key, value) VALUES ($1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }
 

@@ -448,6 +448,35 @@ async fn postgres_session_lifecycle_works() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL test VM"]
+async fn postgres_feed_events_marks_run() {
+    let state = postgres_state().await;
+    let fe = &state.feed_events;
+
+    // Enqueue + claim to obtain real ids, then exercise every Postgres
+    // FeedEventDialect mark_* method. Each is an independent
+    // `UPDATE … WHERE id = ANY($n)`, so they all run regardless of row state.
+    fe.enqueue("/feed-marks.rss").await.unwrap();
+    let claimed = fe
+        .claim_pending_batch(50, chrono::Duration::minutes(5))
+        .await
+        .unwrap();
+    let ids: Vec<i64> = claimed.iter().map(|r| r.id).collect();
+    assert!(!ids.is_empty());
+
+    fe.mark_regenerated(&ids).await.unwrap();
+    fe.mark_pinged(&ids).await.unwrap();
+    fe.mark_failed(
+        &ids,
+        "boom",
+        chrono::Utc::now() + chrono::Duration::minutes(1),
+    )
+    .await
+    .unwrap();
+    fe.mark_exhausted(&ids, "gave up").await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL test VM"]
 async fn postgres_invite_and_atomic_registration_work() {
     let state = postgres_state().await;
     assert_invite_and_atomic_registration(&state).await;

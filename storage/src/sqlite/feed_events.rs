@@ -1,19 +1,13 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
-use sqlx::{Row, SqlitePool};
+use chrono::{DateTime, Utc};
+use sqlx::{Pool, Row, Sqlite};
 
-use crate::feed_events::{FeedEventError, FeedEventRecord, FeedEventStatus, FeedEventStorage};
+use crate::feed_events::{
+    FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStatus, FeedEventStore,
+};
 
-pub struct SqliteFeedEventStorage {
-    pool: SqlitePool,
-}
-
-impl SqliteFeedEventStorage {
-    #[must_use]
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
-    }
-}
+/// SQLite-backed feed-event storage.
+pub type SqliteFeedEventStorage = FeedEventStore<Sqlite>;
 
 fn parse_status(s: &str) -> FeedEventStatus {
     match s {
@@ -29,28 +23,14 @@ fn placeholders(n: usize) -> String {
 }
 
 #[async_trait]
-impl FeedEventStorage for SqliteFeedEventStorage {
-    #[tracing::instrument(name = "storage.sqlite.feed_events.enqueue", skip(self))]
-    async fn enqueue(&self, feed_url: &str) -> Result<i64, FeedEventError> {
-        let id: i64 =
-            sqlx::query_scalar("INSERT INTO feed_events (feed_url) VALUES ($1) RETURNING id")
-                .bind(feed_url)
-                .fetch_one(&self.pool)
-                .await?;
-        Ok(id)
-    }
-
-    #[tracing::instrument(name = "storage.sqlite.feed_events.claim_pending_batch", skip(self))]
+impl FeedEventDialect for Sqlite {
     async fn claim_pending_batch(
-        &self,
-        limit: usize,
-        lease_timeout: Duration,
+        pool: &Pool<Sqlite>,
+        now: DateTime<Utc>,
+        lease_cutoff: DateTime<Utc>,
+        limit_i: i64,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
-        let now = Utc::now();
-        let lease_cutoff = now - lease_timeout;
-        let limit_i = i64::try_from(limit).unwrap_or(i64::MAX);
-
-        let mut tx = self.pool.begin().await?;
+        let mut tx = pool.begin().await?;
 
         let ids: Vec<i64> = sqlx::query_scalar(
             "SELECT id FROM feed_events \
@@ -113,11 +93,7 @@ impl FeedEventStorage for SqliteFeedEventStorage {
         Ok(records)
     }
 
-    #[tracing::instrument(name = "storage.sqlite.feed_events.mark_regenerated", skip(self))]
-    async fn mark_regenerated(&self, ids: &[i64]) -> Result<(), FeedEventError> {
-        if ids.is_empty() {
-            return Ok(());
-        }
+    async fn mark_regenerated(pool: &Pool<Sqlite>, ids: &[i64]) -> Result<(), FeedEventError> {
         let now = Utc::now();
         let ph = placeholders(ids.len());
         let sql = format!("UPDATE feed_events SET regenerated_at = ? WHERE id IN ({ph})");
@@ -125,15 +101,11 @@ impl FeedEventStorage for SqliteFeedEventStorage {
         for id in ids {
             q = q.bind(*id);
         }
-        q.execute(&self.pool).await?;
+        q.execute(pool).await?;
         Ok(())
     }
 
-    #[tracing::instrument(name = "storage.sqlite.feed_events.mark_pinged", skip(self))]
-    async fn mark_pinged(&self, ids: &[i64]) -> Result<(), FeedEventError> {
-        if ids.is_empty() {
-            return Ok(());
-        }
+    async fn mark_pinged(pool: &Pool<Sqlite>, ids: &[i64]) -> Result<(), FeedEventError> {
         let now = Utc::now();
         let ph = placeholders(ids.len());
         let sql =
@@ -142,20 +114,16 @@ impl FeedEventStorage for SqliteFeedEventStorage {
         for id in ids {
             q = q.bind(*id);
         }
-        q.execute(&self.pool).await?;
+        q.execute(pool).await?;
         Ok(())
     }
 
-    #[tracing::instrument(name = "storage.sqlite.feed_events.mark_failed", skip(self))]
     async fn mark_failed(
-        &self,
+        pool: &Pool<Sqlite>,
         ids: &[i64],
         error: &str,
         next_attempt_at: DateTime<Utc>,
     ) -> Result<(), FeedEventError> {
-        if ids.is_empty() {
-            return Ok(());
-        }
         let ph = placeholders(ids.len());
         let sql = format!(
             "UPDATE feed_events \
@@ -166,15 +134,15 @@ impl FeedEventStorage for SqliteFeedEventStorage {
         for id in ids {
             q = q.bind(*id);
         }
-        q.execute(&self.pool).await?;
+        q.execute(pool).await?;
         Ok(())
     }
 
-    #[tracing::instrument(name = "storage.sqlite.feed_events.mark_exhausted", skip(self))]
-    async fn mark_exhausted(&self, ids: &[i64], error: &str) -> Result<(), FeedEventError> {
-        if ids.is_empty() {
-            return Ok(());
-        }
+    async fn mark_exhausted(
+        pool: &Pool<Sqlite>,
+        ids: &[i64],
+        error: &str,
+    ) -> Result<(), FeedEventError> {
         let ph = placeholders(ids.len());
         let sql =
             format!("UPDATE feed_events SET status = 'failed', last_error = ? WHERE id IN ({ph})");
@@ -182,7 +150,7 @@ impl FeedEventStorage for SqliteFeedEventStorage {
         for id in ids {
             q = q.bind(*id);
         }
-        q.execute(&self.pool).await?;
+        q.execute(pool).await?;
         Ok(())
     }
 }
@@ -214,6 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn enqueue_creates_pending_row() {
+        use crate::feed_events::FeedEventStorage;
         let s = SqliteFeedEventStorage::new(pool().await);
         let id = s.enqueue("/feed.rss").await.unwrap();
         assert!(id > 0);
@@ -221,10 +190,11 @@ mod tests {
 
     #[tokio::test]
     async fn claim_returns_eligible_pending_row() {
+        use crate::feed_events::FeedEventStorage;
         let s = SqliteFeedEventStorage::new(pool().await);
         s.enqueue("/feed.rss").await.unwrap();
         let claimed = s
-            .claim_pending_batch(10, Duration::minutes(5))
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
             .await
             .unwrap();
         assert_eq!(claimed.len(), 1);
@@ -234,14 +204,15 @@ mod tests {
 
     #[tokio::test]
     async fn double_claim_returns_no_rows_within_lease() {
+        use crate::feed_events::FeedEventStorage;
         let s = SqliteFeedEventStorage::new(pool().await);
         s.enqueue("/feed.rss").await.unwrap();
         let first = s
-            .claim_pending_batch(10, Duration::minutes(5))
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
             .await
             .unwrap();
         let second = s
-            .claim_pending_batch(10, Duration::minutes(5))
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
             .await
             .unwrap();
         assert_eq!(first.len(), 1);
@@ -250,30 +221,35 @@ mod tests {
 
     #[tokio::test]
     async fn lease_expired_rows_are_reclaimable() {
+        use crate::feed_events::FeedEventStorage;
         let s = SqliteFeedEventStorage::new(pool().await);
         s.enqueue("/feed.rss").await.unwrap();
         let _first = s
-            .claim_pending_batch(10, Duration::minutes(5))
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
             .await
             .unwrap();
         // With a zero lease, the just-claimed row is immediately re-eligible.
-        let second = s.claim_pending_batch(10, Duration::zero()).await.unwrap();
+        let second = s
+            .claim_pending_batch(10, chrono::Duration::zero())
+            .await
+            .unwrap();
         assert_eq!(second.len(), 1);
     }
 
     #[tokio::test]
     async fn mark_pinged_marks_done_and_removes_from_queue() {
+        use crate::feed_events::FeedEventStorage;
         let s = SqliteFeedEventStorage::new(pool().await);
         s.enqueue("/feed.rss").await.unwrap();
         let claimed = s
-            .claim_pending_batch(10, Duration::minutes(5))
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
             .await
             .unwrap();
         let ids: Vec<i64> = claimed.iter().map(|r| r.id).collect();
         s.mark_regenerated(&ids).await.unwrap();
         s.mark_pinged(&ids).await.unwrap();
         let next = s
-            .claim_pending_batch(10, Duration::minutes(5))
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
             .await
             .unwrap();
         assert!(next.is_empty());
@@ -281,17 +257,18 @@ mod tests {
 
     #[tokio::test]
     async fn mark_failed_increments_attempts_and_reschedules() {
+        use crate::feed_events::FeedEventStorage;
         let s = SqliteFeedEventStorage::new(pool().await);
         let id = s.enqueue("/feed.rss").await.unwrap();
         let _ = s
-            .claim_pending_batch(10, Duration::minutes(5))
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
             .await
             .unwrap();
-        let future = Utc::now() + Duration::minutes(1);
+        let future = Utc::now() + chrono::Duration::minutes(1);
         s.mark_failed(&[id], "boom", future).await.unwrap();
         // Not eligible until `future`.
         let now = s
-            .claim_pending_batch(10, Duration::minutes(5))
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
             .await
             .unwrap();
         assert!(now.is_empty());
@@ -299,12 +276,13 @@ mod tests {
 
     #[tokio::test]
     async fn mark_exhausted_marks_failed_terminal() {
+        use crate::feed_events::FeedEventStorage;
         let s = SqliteFeedEventStorage::new(pool().await);
         let id = s.enqueue("/feed.rss").await.unwrap();
         s.mark_exhausted(&[id], "gave up").await.unwrap();
         // Failed rows are never eligible.
         let next = s
-            .claim_pending_batch(10, Duration::minutes(5))
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
             .await
             .unwrap();
         assert!(next.is_empty());
@@ -312,6 +290,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_id_arrays_are_noops() {
+        use crate::feed_events::FeedEventStorage;
         let s = SqliteFeedEventStorage::new(pool().await);
         s.mark_regenerated(&[]).await.unwrap();
         s.mark_pinged(&[]).await.unwrap();
