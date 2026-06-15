@@ -57,22 +57,18 @@ The repository includes git hooks in `.githooks/` that enforce code quality stan
 git config core.hooksPath .githooks
 ```
 
-**`pre-commit`** runs on every commit:
+**`pre-commit`** runs on every commit — fast formatting, lint, and the SQLite test suite:
 
-- `cargo fmt --check` — formatting
+- `leptosfmt --check`, `cargo fmt --check`, `prettier --check end2end` — formatting
 - `cargo clippy -- -D warnings` — linting
-- `cargo nextest run` — unit and integration tests
+- `cargo nextest run` — unit and integration tests (SQLite)
 
-**`pre-push`** runs on every push:
+**`pre-push`** runs `scripts/verify` (the commit gate): the static checks plus `scripts/check-coverage --check` (the SQLite + host-PostgreSQL suites under instrumentation, gating both test failures and coverage regressions) and the host e2e suite. The hermetic Nix VM checks are not run here — they run in CI, or locally via `scripts/verify --full`.
 
-- `cargo deny check` — dependency and advisory policy
-- `scripts/check-coverage` — coverage gate
-- `nix flake check` — full check suite (with warmup e2e checks by default)
-
-To skip e2e tests on a WIP push:
+To skip the pre-push gate on a WIP push:
 
 ```
-SKIP_E2E=1 git push
+SKIP_PRE_PUSH=1 git push
 ```
 
 ## Development workflow
@@ -95,8 +91,11 @@ For tests requiring a database, use `sqlite::memory:` and run migrations with `s
 
 ### Fast local checks
 
-- `scripts/verify --fast` runs static checks for quick feedback while developing.
-- `scripts/verify` runs the full local verification sequence in the preferred order: formatting, build, tests, lint, coverage, then `nix flake check` (with warmup e2e checks by default).
+The verify ladder has three tiers:
+
+- `scripts/verify --fast` — static checks (fmt, leptosfmt, prettier, cargo-deny) and clippy only. Quick inner-loop feedback; does not certify a change.
+- `scripts/verify` — the commit (pre-push) gate: the `--fast` checks plus `scripts/check-coverage --check` and the host end-to-end suite (`scripts/e2e-local.sh`). `check-coverage` runs the SQLite + host-PostgreSQL suites under instrumentation, so it doubles as the test pass/fail check **and** gates coverage regressions — so test failures, coverage regressions, and e2e breakage are all caught locally, not deferred to CI. `--check` is compare-only (it never rewrites the committed baseline). **No VM.**
+- `scripts/verify --full` — the commit gate plus the hermetic Nix VM checks (`nix-only-checks`: e2e + the consolidated PostgreSQL integration VM). The VM e2e re-runs the end-to-end suite more thoroughly (both browsers, both backends), so the host e2e suite is **skipped** under `--full` rather than run twice. The VM checks also run in CI, so running `--full` locally is optional.
   - By default it prints only `--- verify: ... ---` progress markers and captures step output.
   - Set `VERIFY_PASSTHROUGH=1` to stream full tool output directly.
   - Set `VERIFY_SHOW_STEP_OUTPUT=1` to print captured output for successful steps.
@@ -156,32 +155,35 @@ When a change is confined to one area, run the relevant target directly.
 
 ### PostgreSQL-backed Rust tests
 
-Some ignored tests require a live PostgreSQL instance.
+The integration suite is backend-parametric: it runs against SQLite by default, and against PostgreSQL when `JAUNDER_PG_TEST_URL` is set. Each test creates its own database — a clone of a once-migrated template (see `server/tests/helpers/mod.rs`) — so the PostgreSQL tests run **in parallel** just like the SQLite ones. No `--test-threads=1` is needed.
 
-For local development:
+The simplest way to run them against a throwaway PostgreSQL is the wrapper, which starts an ephemeral cluster, exports the connection env, runs the command, and tears everything down:
+
+```bash
+scripts/with-ephemeral-postgres cargo nextest run -p jaunder --run-ignored all
+```
+
+To use a persistent instance instead (e.g. the dev VM), set the env yourself:
 
 ```bash
 nix run .#postgres-testing-vm
 export JAUNDER_PG_TEST_URL=postgres://jaunder@127.0.0.1:55432/jaunder
 export JAUNDER_PG_BOOTSTRAP_TEST_URL=postgres://postgres@127.0.0.1:55432/postgres
+cargo nextest run -p jaunder --run-ignored all
 ```
 
-With those set, you can run the PostgreSQL-only ignored tests:
-
-```bash
-cargo test -p jaunder --test commands -- --ignored --test-threads=1
-cargo test -p jaunder --test storage -- --ignored --test-threads=1
-```
-
-Those tests share one database and reset schema state between cases, so run them individually or with `--test-threads=1`.
+Per-test databases are not dropped after each run, so a persistent instance accumulates `jaunder_test_*` databases over time; the ephemeral wrapper avoids this by discarding the whole cluster.
 
 ### Coverage and dependency policy
 
-- `scripts/check-coverage` enforces the coverage requirement used by `pre-push`.
+- `scripts/check-coverage` enforces the coverage requirement. The default `scripts/verify` gate runs it as `--check` (compare-only — gates regressions without rewriting the committed baseline), and CI runs it too, so coverage regressions are caught before push rather than at merge. The baseline is regenerated deliberately from the Nix sandbox (the CI-reproducible environment), not by local runs.
+- `scripts/check-coverage --check` compares against the baseline and fails on a regression without updating it (used by the verify gate); plain `scripts/check-coverage` also updates the baseline on success.
 - `scripts/check-coverage --investigate` provides detailed information about missing coverage.
 - `cargo deny check` verifies dependency policy, advisories, and licensing.
 
 Coverage is measured by `scripts/check-coverage`, which counts source lines with at least one execution hit across all test binaries. This deduplicates generic-function instantiations across compile units, unlike the inflated `cargo llvm-cov --json` summary percentages for code exercised by multiple test binaries.
+
+Coverage runs in two passes that accumulate into one merged report: the whole workspace against SQLite, then the `jaunder` integration tests against a throwaway host PostgreSQL (via `scripts/with-ephemeral-postgres`), so `storage/src/postgres/*` gets real instrumented coverage. Because the Nix `coverage` build sandbox has no network, a few network-sensitive files (`common/src/websub/http.rs`, `server/src/commands.rs`) report slightly lower there than on a networked host. **The committed baseline must therefore be generated from the Nix `coverage` check (the CI environment), not from a local host run** — a host run would raise the baseline above what CI can reproduce and break the gate. To regenerate it, build the `coverage` check with `--update` semantics and copy out its manifests (see `jaunder-uox1`).
 
 The baseline is stored in `.coverage-manifest.json`. Never lower or update it without user approval; approved changes to the baseline must be committed in the same commit as the file whose coverage changed. Coverage improvements are always allowed.
 
@@ -189,7 +191,7 @@ Some areas have inherent host-side coverage gaps and should not be force-fitted 
 
 - **WASM entry point** (`hydrate/src/lib.rs`, 0%): runs only in the browser WASM context.
 - **Leptos page components** (`web/src/pages/*.rs`, varied): `#[component]` functions render view trees; correctness is validated by e2e tests in the Nix VM.
-- **PostgreSQL-only storage** (`storage/src/postgres/*.rs`, `storage/src/backup/postgres.rs`, 3–15%): tested in the Nix VM PostgreSQL environment. The `cargo nextest` suite uses SQLite in-memory.
+- **A few PostgreSQL storage paths** (`storage/src/postgres/media.rs` ~5%, plus some error branches in `sessions`/`users`/`invites`): the integration suite drives the common paths but not every branch. The bulk of `storage/src/postgres/*` and `storage/src/backup/postgres.rs` is now measured by the host-PostgreSQL coverage pass (formerly a blanket 3–15% gap).
 - **Asset serving** (`server/src/assets.rs`, 0%): compile-time embedded assets are not practical to unit test.
 
 ### Nix VM checks
@@ -204,19 +206,14 @@ Some areas have inherent host-side coverage gaps and should not be force-fitted 
 - `checks.x86_64-linux.deny` — cargo-deny
 - `checks.x86_64-linux.e2e-sqlite` — Playwright end-to-end flow against SQLite with `JAUNDER_E2E_WARMUP=1` (default)
 - `checks.x86_64-linux.e2e-postgres` — Playwright end-to-end flow against PostgreSQL with `JAUNDER_E2E_WARMUP=1` (default)
-- `checks.x86_64-linux.postgres-commands` — `server/tests/commands.rs` against PostgreSQL, including ignored PostgreSQL-only cases
-- `checks.x86_64-linux.postgres-storage` — `server/tests/storage.rs` against PostgreSQL, including ignored PostgreSQL-only cases
-- `checks.x86_64-linux.postgres-web-account` — `server/tests/web_account.rs` against PostgreSQL
-- `checks.x86_64-linux.postgres-web-auth` — `server/tests/web_auth.rs` against PostgreSQL
-- `checks.x86_64-linux.postgres-web-email` — `server/tests/web_email.rs` against PostgreSQL
-- `checks.x86_64-linux.postgres-web-password-reset` — `server/tests/web_password_reset.rs` against PostgreSQL
+- `checks.x86_64-linux.postgres-integration` — every `server/tests/*.rs` integration binary against PostgreSQL (including the ignored PostgreSQL-only cases), all in one VM
 
 Additional Nix-backed checks available as packages (not run by default):
 
 - `packages.x86_64-linux.e2e-sqlite-cold` — Playwright end-to-end flow against SQLite without warmup
 - `packages.x86_64-linux.e2e-postgres-cold` — Playwright end-to-end flow against PostgreSQL without warmup
 
-The PostgreSQL VM checks are split by Rust test binary rather than by individual test case. That keeps the flake readable while still making slow or failing PostgreSQL coverage easy to localize.
+All PostgreSQL integration binaries run in a **single** VM (`postgres-integration`): per-test databases isolate the tests, so they run with libtest's normal in-process parallelism rather than one VM per binary. This is much faster and far lighter on memory than the former per-binary matrix.
 
 If you only need one of the VM-backed checks, you can run it directly:
 
@@ -225,9 +222,7 @@ nix build .#checks.x86_64-linux.e2e-sqlite
 nix build .#checks.x86_64-linux.e2e-postgres
 nix build .#packages.x86_64-linux.e2e-sqlite-cold
 nix build .#packages.x86_64-linux.e2e-postgres-cold
-nix build .#checks.x86_64-linux.postgres-commands
-nix build .#checks.x86_64-linux.postgres-storage
-nix build .#checks.x86_64-linux.postgres-web-auth
+nix build .#checks.x86_64-linux.postgres-integration
 ```
 
 ## Code conventions
@@ -291,4 +286,4 @@ nix build .#checks.x86_64-linux.postgres-web-auth
 - Start it with `nix run .#postgres-testing-vm`.
 - The forwarded connection string is `postgres://jaunder@127.0.0.1:55432/jaunder`.
 - Point the app at it with `export JAUNDER_DB=postgres://jaunder@127.0.0.1:55432/jaunder`.
-- PostgreSQL storage tests in `server/tests/storage.rs` reset a shared schema. Run those tests individually, or with `-- --test-threads=1`, to avoid cross-test interference.
+- The PostgreSQL-backed tests each create their own database (template clones), so they run in parallel without interference; see "PostgreSQL-backed Rust tests" above. For a self-contained run, prefer `scripts/with-ephemeral-postgres`.

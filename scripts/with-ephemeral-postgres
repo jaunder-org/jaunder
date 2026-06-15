@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Run a command with a throwaway PostgreSQL 16 cluster.
+#
+# Spins up an initdb cluster in a temp dir on a private TCP port, creates the
+# `jaunder` application role/database and leaves `postgres` as the superuser,
+# exports JAUNDER_PG_TEST_URL + JAUNDER_PG_BOOTSTRAP_TEST_URL, runs the given
+# command, then stops the cluster and deletes the temp dir on exit.
+#
+# Durability is intentionally disabled (fsync/synchronous_commit off): the
+# cluster is discarded after the run, so we trade crash-safety for speed.
+#
+# Usage:
+#   scripts/with-ephemeral-postgres cargo nextest run -p jaunder
+#
+# Optional env:
+#   JAUNDER_PG_TEST_PORT   TCP port for the ephemeral cluster (default 54329)
+set -euo pipefail
+
+PGDATA="$(mktemp -d -t jaunder-pg.XXXXXX)"
+PGPORT="${JAUNDER_PG_TEST_PORT:-54329}"
+PGHOST=127.0.0.1
+
+cleanup() {
+    pg_ctl -D "$PGDATA" -m immediate stop >/dev/null 2>&1 || true
+    rm -rf "$PGDATA"
+}
+trap cleanup EXIT INT TERM
+
+initdb -D "$PGDATA" -U postgres -A trust --no-sync >/dev/null
+
+pg_ctl -D "$PGDATA" -w start >/dev/null -o "$(
+    printf -- '-c %s ' \
+        "listen_addresses=$PGHOST" \
+        "port=$PGPORT" \
+        "unix_socket_directories=$PGDATA" \
+        "max_connections=200" \
+        "fsync=off" \
+        "full_page_writes=off" \
+        "synchronous_commit=off"
+)"
+
+psql -h "$PGHOST" -p "$PGPORT" -U postgres -d postgres -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
+CREATE ROLE jaunder LOGIN CREATEDB;
+CREATE DATABASE jaunder OWNER jaunder;
+SQL
+
+export JAUNDER_PG_TEST_URL="postgres://jaunder@${PGHOST}:${PGPORT}/jaunder"
+export JAUNDER_PG_BOOTSTRAP_TEST_URL="postgres://postgres@${PGHOST}:${PGPORT}/postgres"
+
+status=0
+"$@" || status=$?
+exit "$status"

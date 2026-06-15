@@ -28,11 +28,13 @@ CRAP_MANIFEST_FILE="$ROOT/.crap-manifest.json"
 CRAP_REPORT_FILE="$ROOT/.crap-report.json"
 UPDATE=false
 INVESTIGATE=false
+CHECK=false
 
 for arg in "$@"; do
     case "$arg" in
         --update) UPDATE=true ;;
         --investigate) INVESTIGATE=true ;;
+        --check) CHECK=true ;;
         *) echo "error: unknown argument: $arg" >&2; exit 1 ;;
     esac
 done
@@ -60,8 +62,31 @@ if [[ "$INVESTIGATE" == "true" ]]; then
     fi
     echo "--- coverage: investigating cached reports ---"
 else
-    echo "--- coverage: running cargo llvm-cov ---"
-    cargo llvm-cov nextest --show-progress none > /dev/null
+    # Coverage is collected in two passes that accumulate profraw data, then a
+    # single merged report. The default pass runs the whole suite against
+    # SQLite; the second pass re-runs the jaunder integration tests against a
+    # throwaway host PostgreSQL so that storage/src/postgres/* (only reachable
+    # with a live PG server) gets instrumented coverage too. Line coverage is a
+    # union of hits, so PG-only lines flip to covered while shared lines stay
+    # covered — no double-counting.
+    # Clear only stale profraw (coverage data) from a previous run, NOT the
+    # instrumented build — `clean --workspace` would force a ~270s recompile
+    # every run; `--profraw-only` keeps the cached instrumented binaries (which
+    # live in a separate target dir), cutting repeat runs from ~530s to ~90s.
+    echo "--- coverage: clearing stale profraw (keeping instrumented build) ---"
+    cargo llvm-cov clean --profraw-only
+
+    echo "--- coverage: running cargo llvm-cov (SQLite pass) ---"
+    cargo llvm-cov --no-report nextest --show-progress none
+
+    echo "--- coverage: running cargo llvm-cov (PostgreSQL pass) ---"
+    # Invoke via `bash` rather than relying on the script's shebang: the Nix
+    # build sandbox (used by the `coverage` flake check) has no /usr/bin/env.
+    bash scripts/with-ephemeral-postgres \
+        cargo llvm-cov --no-report nextest --show-progress none \
+        -p jaunder --run-ignored all
+
+    echo "--- coverage: building merged text report ---"
     cargo llvm-cov report --text > "$REPORT_FILE"
 
     # Reuse the just-recorded llvm-cov profraw data to export LCOV for
@@ -238,6 +263,15 @@ if [[ "$(echo "$CRAP_REGRESSIONS" | jq 'length')" -gt 0 ]]; then
         "\(.file): \(.function): \(.old) -> \(.new) (Δ \(.delta), CC \(.cyclomatic), coverage \(.coverage // "n/a")%)"
     ' >&2
     exit 1
+fi
+
+# Compare-only mode (the everyday verify gate): the baseline is regenerated
+# deliberately from the Nix sandbox (the CI-reproducible environment), so a local
+# host run must gate regressions WITHOUT rewriting the committed baseline — host
+# numbers differ slightly from the sandbox for network-sensitive files.
+if [[ "$CHECK" == "true" ]]; then
+    echo "Coverage and CRAP OK (compare-only; baseline not updated)."
+    exit 0
 fi
 
 # If all good, update

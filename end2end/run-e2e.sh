@@ -33,9 +33,14 @@ done
 
 # Open registration so the auth-flow tests can register fresh users. The
 # shared seed script is backend-agnostic and doesn't touch site_config;
-# we do it here via sqlite3 (the local path is always SQLite).
+# we do it here via sqlite3 (the local path is always SQLite). These must match
+# the VM's seed_db (flake.nix): open registration so the auth-flow tests can
+# register fresh users, and a WebSub hub URL so the feeds.spec.ts hub-ping tests
+# have a hub to ping.
 sqlite3 "$JAUNDER_DB_PATH" \
     "INSERT OR REPLACE INTO site_config (key, value) VALUES ('site.registration_policy', 'open')"
+sqlite3 "$JAUNDER_DB_PATH" \
+    "INSERT OR REPLACE INTO site_config (key, value) VALUES ('feeds.websub_hub_url', 'https://hub.test.local/')"
 
 "$(git rev-parse --show-toplevel)/scripts/seed-e2e-fixtures.sh"
 
