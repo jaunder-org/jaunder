@@ -1,22 +1,19 @@
 //! Backend abstraction for the deduplicated storage layer.
 //!
-//! `Backend` bundles, once, the sqlx scalar-bind and pool-executor bounds that
-//! every generic storage helper needs, and carries the `db.system` value. It is
-//! used only as a bound on concrete generic stores (e.g. `SessionStore<DB>`) —
-//! never as a trait object — so its associated const does not affect the
-//! object-safety of the public storage traits.
+//! `Backend` marks the sqlx databases jaunder supports and carries each one's
+//! `db.system` identity. It is used only as a bound on concrete generic stores
+//! (e.g. `SessionStore<DB>`) — never as a trait object — so its associated const
+//! does not affect the object-safety of the public storage traits.
+//!
+//! `Backend` deliberately carries NO bind/executor `where`-bounds. Rust does not
+//! propagate a trait's `where`-clause to subtraits or `impl` headers (see
+//! ADR-0019), so bundling them here would buy nothing — every generic store
+//! would have to restate them regardless, including bounds it doesn't use.
+//! Instead, each store's `impl` restates exactly the bounds it needs.
 
-use chrono::{DateTime, Utc};
-
-/// A sqlx database jaunder supports, with the common bind/executor bounds and
-/// its OpenTelemetry `db.system` identity.
-pub trait Backend: sqlx::Database
-where
-    for<'q> i64: sqlx::Encode<'q, Self> + sqlx::Type<Self>,
-    for<'q> &'q str: sqlx::Encode<'q, Self> + sqlx::Type<Self>,
-    for<'q> DateTime<Utc>: sqlx::Encode<'q, Self> + sqlx::Type<Self>,
-    for<'c> &'c sqlx::Pool<Self>: sqlx::Executor<'c, Database = Self>,
-{
+/// A sqlx database jaunder supports, carrying its OpenTelemetry `db.system`
+/// identity.
+pub trait Backend: sqlx::Database {
     /// Value of the `db.system` span field (`"sqlite"` | `"postgres"`).
     const DB_SYSTEM: &'static str;
 }
