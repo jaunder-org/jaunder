@@ -7,6 +7,7 @@
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::Writer;
 
+use super::xml::write_empty_element;
 use super::{AtomPubError, APP_NS, ATOM_NS};
 
 /// Serializes a list of category terms to a standalone `app:categories` document.
@@ -29,9 +30,7 @@ pub fn render_categories_document(terms: &[String]) -> Result<String, AtomPubErr
     writer.write_event(Event::Start(root))?;
 
     for term in terms {
-        let mut cat = BytesStart::new("atom:category");
-        cat.push_attribute(("term", term.as_str()));
-        writer.write_event(Event::Empty(cat))?;
+        write_empty_element(&mut writer, "atom:category", &[("term", term.as_str())])?;
     }
 
     writer.write_event(Event::End(BytesEnd::new("app:categories")))?;

@@ -5,9 +5,10 @@
 //! [`CollectionDecl`] types, plus [`render_service_document`] to serialize them
 //! to XML using `quick-xml`.
 
-use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::Writer;
 
+use super::xml::{write_empty_element, write_text_element};
 use super::{AtomPubError, APP_NS, ATOM_NS};
 
 /// Declaration of a single collection (posts or media) in a workspace.
@@ -88,26 +89,13 @@ fn write_collection(
         writer.write_event(Event::Start(cat_elem))?;
 
         for term in &coll.categories {
-            let mut cat = BytesStart::new("atom:category");
-            cat.push_attribute(("term", term.as_str()));
-            writer.write_event(Event::Empty(cat))?;
+            write_empty_element(writer, "atom:category", &[("term", term.as_str())])?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("app:categories")))?;
     }
 
     writer.write_event(Event::End(BytesEnd::new("app:collection")))?;
-    Ok(())
-}
-
-fn write_text_element(
-    writer: &mut Writer<Vec<u8>>,
-    name: &str,
-    text: &str,
-) -> Result<(), AtomPubError> {
-    writer.write_event(Event::Start(BytesStart::new(name)))?;
-    writer.write_event(Event::Text(BytesText::new(text)))?;
-    writer.write_event(Event::End(BytesEnd::new(name)))?;
     Ok(())
 }
 

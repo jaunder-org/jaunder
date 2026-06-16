@@ -19,6 +19,7 @@ use atom_syndication::{Category, Content, Entry, Link, Text};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesRef, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 
+use super::xml::{write_empty_element, write_link, write_text_element};
 use super::{AtomPubError, APP_NS, ATOM_NS};
 
 // ---------------------------------------------------------------------------
@@ -458,9 +459,7 @@ fn write_entry(
         write_link(writer, link.rel(), link.href())?;
     }
     for category in entry.categories() {
-        let mut start = BytesStart::new("category");
-        start.push_attribute(("term", category.term()));
-        writer.write_event(Event::Empty(start))?;
+        write_empty_element(writer, "category", &[("term", category.term())])?;
     }
     if draft {
         writer.write_event(Event::Start(BytesStart::new("app:control")))?;
@@ -469,25 +468,6 @@ fn write_entry(
     }
 
     writer.write_event(Event::End(BytesEnd::new("entry")))?;
-    Ok(())
-}
-
-fn write_text_element(
-    writer: &mut Writer<Vec<u8>>,
-    name: &str,
-    text: &str,
-) -> Result<(), AtomPubError> {
-    writer.write_event(Event::Start(BytesStart::new(name)))?;
-    writer.write_event(Event::Text(BytesText::new(text)))?;
-    writer.write_event(Event::End(BytesEnd::new(name)))?;
-    Ok(())
-}
-
-fn write_link(writer: &mut Writer<Vec<u8>>, rel: &str, href: &str) -> Result<(), AtomPubError> {
-    let mut link = BytesStart::new("link");
-    link.push_attribute(("rel", rel));
-    link.push_attribute(("href", href));
-    writer.write_event(Event::Empty(link))?;
     Ok(())
 }
 
@@ -594,10 +574,11 @@ pub fn render_media_link_entry(entry: &MediaLinkEntry) -> Result<String, AtomPub
     write_text_element(&mut writer, "updated", &entry.updated_rfc3339)?;
     write_text_element(&mut writer, "published", &entry.published_rfc3339)?;
 
-    let mut content = BytesStart::new("content");
-    content.push_attribute(("type", entry.content_type.as_str()));
-    content.push_attribute(("src", entry.content_src.as_str()));
-    writer.write_event(Event::Empty(content))?;
+    let content_attrs = [
+        ("type", entry.content_type.as_str()),
+        ("src", entry.content_src.as_str()),
+    ];
+    write_empty_element(&mut writer, "content", &content_attrs)?;
 
     write_link(&mut writer, "edit", &entry.edit_uri)?;
     write_link(&mut writer, "edit-media", &entry.edit_media_uri)?;
@@ -736,6 +717,8 @@ mod tests {
         assert_eq!(entry.links()[0].href(), "https://h/atompub/alice/posts/1");
         // A link without rel defaults to "alternate".
         assert_eq!(entry.links()[1].rel(), "alternate");
+        // The entry has no <content>, so content_parts yields the empty pair.
+        assert_eq!(content_parts(&entry), (None, None));
     }
 
     #[test]
