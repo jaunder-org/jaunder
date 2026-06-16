@@ -30,7 +30,7 @@ use {
     std::{collections::BTreeSet, sync::Arc},
     storage::{
         perform_post_creation, perform_post_update, FeedEventStorage, PerformUpdateError,
-        PostFormat, PostStorage, UpdatePostError, UpdatePostInput,
+        PostCreation, PostFormat, PostStorage, PostUpdate, UpdatePostError, UpdatePostInput,
     },
 };
 
@@ -127,14 +127,16 @@ pub async fn create_post(
 
         let record = perform_post_creation(
             posts.as_ref(),
-            auth.user_id,
-            body,
-            None,
-            format,
-            slug_override.as_deref(),
-            published_at,
-            100,
-            normalized_summary,
+            PostCreation {
+                user_id: auth.user_id,
+                body,
+                title: None,
+                format,
+                slug_override: slug_override.as_deref(),
+                published_at,
+                max_attempts: 100,
+                summary: normalized_summary,
+            },
         )
         .await
         .map_err(perform_creation_error)?;
@@ -291,14 +293,16 @@ pub async fn update_post(
 
         let record = perform_post_update(
             posts.as_ref(),
-            post_id,
-            auth.user_id,
-            body,
-            None,
-            format,
-            slug_override.as_deref(),
-            publish,
-            normalized_summary,
+            PostUpdate {
+                post_id,
+                editor_user_id: auth.user_id,
+                body,
+                title: None,
+                format,
+                slug_override: slug_override.as_deref(),
+                publish,
+                summary: normalized_summary,
+            },
         )
         .await
         .map_err(|e| match e {

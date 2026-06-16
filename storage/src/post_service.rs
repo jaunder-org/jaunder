@@ -109,6 +109,29 @@ impl From<UpdatePostError> for PerformUpdateError {
     }
 }
 
+/// Raw, front-end-supplied inputs to [`perform_post_update`].
+///
+/// Grouping these into a struct keeps the easy-to-transpose pair
+/// (`title`/`slug_override`, both `Option<&str>`) named at every call site.
+pub struct PostUpdate<'a> {
+    /// Post being edited.
+    pub post_id: i64,
+    /// User performing the edit (ownership is checked in storage).
+    pub editor_user_id: i64,
+    /// Raw post body in `format`.
+    pub body: String,
+    /// Explicit title, or `None` to derive one from the body.
+    pub title: Option<&'a str>,
+    /// Markup format of `body`.
+    pub format: PostFormat,
+    /// Explicit slug, or `None` to derive one from the title/body.
+    pub slug_override: Option<&'a str>,
+    /// Whether to publish the post as part of this update.
+    pub publish: bool,
+    /// Optional summary/excerpt.
+    pub summary: Option<String>,
+}
+
 /// Validates inputs, computes the slug, renders the body, and atomically
 /// updates the post via storage.
 ///
@@ -118,18 +141,20 @@ impl From<UpdatePostError> for PerformUpdateError {
 /// # Errors
 ///
 /// Returns `Err(PerformUpdateError)` if rendering fails or the storage layer returns an error.
-#[allow(clippy::too_many_arguments)]
 pub async fn perform_post_update(
     storage: &dyn PostStorage,
-    post_id: i64,
-    editor_user_id: i64,
-    body: String,
-    title: Option<&str>,
-    format: PostFormat,
-    slug_override: Option<&str>,
-    publish: bool,
-    summary: Option<String>,
+    input: PostUpdate<'_>,
 ) -> Result<PostRecord, PerformUpdateError> {
+    let PostUpdate {
+        post_id,
+        editor_user_id,
+        body,
+        title,
+        format,
+        slug_override,
+        publish,
+        summary,
+    } = input;
     let metadata =
         derive_post_metadata(title, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
 
@@ -191,6 +216,29 @@ pub fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
     }
 }
 
+/// Raw, front-end-supplied inputs to [`perform_post_creation`].
+///
+/// Grouping these into a struct keeps the easy-to-transpose pair
+/// (`title`/`slug_override`, both `Option<&str>`) named at every call site.
+pub struct PostCreation<'a> {
+    /// Author of the new post.
+    pub user_id: i64,
+    /// Raw post body in `format`.
+    pub body: String,
+    /// Explicit title, or `None` to derive one from the body.
+    pub title: Option<&'a str>,
+    /// Markup format of `body`.
+    pub format: PostFormat,
+    /// Explicit slug, or `None` to derive one from the title/body.
+    pub slug_override: Option<&'a str>,
+    /// Publication timestamp, or `None` to create as a draft.
+    pub published_at: Option<DateTime<Utc>>,
+    /// Maximum slug-collision retries before giving up.
+    pub max_attempts: usize,
+    /// Optional summary/excerpt.
+    pub summary: Option<String>,
+}
+
 /// Validates inputs, computes the slug, renders the body, and atomically
 /// creates the post in storage, retrying on slug collision.
 ///
@@ -198,18 +246,20 @@ pub fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
 ///
 /// Returns `Err(PerformCreationError)` if slug validation fails, attempts to
 /// find a unique slug are exhausted, or storage fails.
-#[allow(clippy::too_many_arguments)]
 pub async fn perform_post_creation(
     storage: &dyn PostStorage,
-    user_id: i64,
-    body: String,
-    title: Option<&str>,
-    format: PostFormat,
-    slug_override: Option<&str>,
-    published_at: Option<DateTime<Utc>>,
-    max_attempts: usize,
-    summary: Option<String>,
+    input: PostCreation<'_>,
 ) -> Result<PostRecord, PerformCreationError> {
+    let PostCreation {
+        user_id,
+        body,
+        title,
+        format,
+        slug_override,
+        published_at,
+        max_attempts,
+        summary,
+    } = input;
     let metadata =
         derive_post_metadata(title, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
 
@@ -289,14 +339,16 @@ mod tests {
         let (_pool, storage) = setup_test_db().await;
         let record = perform_post_creation(
             &storage,
-            1,
-            "Hello, world!".to_owned(),
-            None,
-            PostFormat::Markdown,
-            None,
-            None,
-            100,
-            None,
+            PostCreation {
+                user_id: 1,
+                body: "Hello, world!".to_owned(),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+            },
         )
         .await
         .unwrap();
@@ -315,14 +367,16 @@ mod tests {
         // which also seeds the slug.
         let record = perform_post_creation(
             &storage,
-            1,
-            "Body without a heading.".to_owned(),
-            Some("Explicit Title"),
-            PostFormat::Markdown,
-            None,
-            None,
-            100,
-            None,
+            PostCreation {
+                user_id: 1,
+                body: "Body without a heading.".to_owned(),
+                title: Some("Explicit Title"),
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+            },
         )
         .await
         .unwrap();
@@ -336,14 +390,16 @@ mod tests {
         let (_pool, storage) = setup_test_db().await;
         let record = perform_post_creation(
             &storage,
-            1,
-            "Hello, world!".to_owned(),
-            None,
-            PostFormat::Markdown,
-            Some("my-custom-slug"),
-            None,
-            100,
-            None,
+            PostCreation {
+                user_id: 1,
+                body: "Hello, world!".to_owned(),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: Some("my-custom-slug"),
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+            },
         )
         .await
         .unwrap();
@@ -356,14 +412,16 @@ mod tests {
         let (_pool, storage) = setup_test_db().await;
         let err = perform_post_creation(
             &storage,
-            1,
-            "Hello, world!".to_owned(),
-            None,
-            PostFormat::Markdown,
-            Some("Invalid Slug!"),
-            None,
-            100,
-            None,
+            PostCreation {
+                user_id: 1,
+                body: "Hello, world!".to_owned(),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: Some("Invalid Slug!"),
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+            },
         )
         .await
         .unwrap_err();
@@ -376,14 +434,16 @@ mod tests {
         let (_pool, storage) = setup_test_db().await;
         let err = perform_post_creation(
             &storage,
-            1,
-            "   ".to_owned(),
-            None,
-            PostFormat::Markdown,
-            None,
-            None,
-            100,
-            None,
+            PostCreation {
+                user_id: 1,
+                body: "   ".to_owned(),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+            },
         )
         .await
         .unwrap_err();
@@ -396,14 +456,16 @@ mod tests {
         let (_pool, storage) = setup_test_db().await;
         let err = perform_post_creation(
             &storage,
-            1,
-            "!!!".to_owned(),
-            None,
-            PostFormat::Markdown,
-            None,
-            None,
-            100,
-            None,
+            PostCreation {
+                user_id: 1,
+                body: "!!!".to_owned(),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+            },
         )
         .await
         .unwrap_err();
@@ -417,42 +479,48 @@ mod tests {
 
         let r1 = perform_post_creation(
             &storage,
-            1,
-            "Hello, world!".to_owned(),
-            None,
-            PostFormat::Markdown,
-            None,
-            None,
-            100,
-            None,
+            PostCreation {
+                user_id: 1,
+                body: "Hello, world!".to_owned(),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+            },
         )
         .await
         .unwrap();
 
         let r2 = perform_post_creation(
             &storage,
-            1,
-            "Hello, world!".to_owned(),
-            None,
-            PostFormat::Markdown,
-            None,
-            None,
-            100,
-            None,
+            PostCreation {
+                user_id: 1,
+                body: "Hello, world!".to_owned(),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+            },
         )
         .await
         .unwrap();
 
         let r3 = perform_post_creation(
             &storage,
-            1,
-            "Hello, world!".to_owned(),
-            None,
-            PostFormat::Markdown,
-            None,
-            None,
-            100,
-            None,
+            PostCreation {
+                user_id: 1,
+                body: "Hello, world!".to_owned(),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+            },
         )
         .await
         .unwrap();
@@ -468,28 +536,32 @@ mod tests {
 
         let r1 = perform_post_creation(
             &storage,
-            1,
-            "Hello, world!".to_owned(),
-            None,
-            PostFormat::Markdown,
-            None,
-            None,
-            2,
-            None,
+            PostCreation {
+                user_id: 1,
+                body: "Hello, world!".to_owned(),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 2,
+                summary: None,
+            },
         )
         .await
         .unwrap();
 
         let r2 = perform_post_creation(
             &storage,
-            1,
-            "Hello, world!".to_owned(),
-            None,
-            PostFormat::Markdown,
-            None,
-            None,
-            2,
-            None,
+            PostCreation {
+                user_id: 1,
+                body: "Hello, world!".to_owned(),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 2,
+                summary: None,
+            },
         )
         .await
         .unwrap();
@@ -499,14 +571,16 @@ mod tests {
 
         let err = perform_post_creation(
             &storage,
-            1,
-            "Hello, world!".to_owned(),
-            None,
-            PostFormat::Markdown,
-            None,
-            None,
-            2,
-            None,
+            PostCreation {
+                user_id: 1,
+                body: "Hello, world!".to_owned(),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 2,
+                summary: None,
+            },
         )
         .await
         .unwrap_err();

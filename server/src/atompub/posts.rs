@@ -295,14 +295,16 @@ pub async fn collection_post(
 
     let created = storage::perform_post_creation(
         state.posts.as_ref(),
-        auth_user.user_id,
-        fields.body,
-        fields.title.as_deref(),
-        fields.format,
-        None,
-        published_at,
-        100,
-        fields.summary,
+        storage::PostCreation {
+            user_id: auth_user.user_id,
+            body: fields.body,
+            title: fields.title.as_deref(),
+            format: fields.format,
+            slug_override: None,
+            published_at,
+            max_attempts: 100,
+            summary: fields.summary,
+        },
     )
     .await
     .map_err(|e| creation_status(&e))?;
@@ -369,14 +371,16 @@ pub async fn member_put(
 
     storage::perform_post_update(
         state.posts.as_ref(),
-        post_id,
-        auth_user.user_id,
-        fields.body,
-        fields.title.as_deref(),
-        fields.format,
-        None,
-        !fields.is_draft,
-        fields.summary,
+        storage::PostUpdate {
+            post_id,
+            editor_user_id: auth_user.user_id,
+            body: fields.body,
+            title: fields.title.as_deref(),
+            format: fields.format,
+            slug_override: None,
+            publish: !fields.is_draft,
+            summary: fields.summary,
+        },
     )
     .await
     .map_err(|e| update_status(&e))?;
