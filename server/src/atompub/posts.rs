@@ -203,39 +203,23 @@ async fn apply_categories(
     post_id: i64,
     desired: &[String],
 ) -> Result<(), StatusCode> {
-    use common::tag::Tag;
-    use std::collections::HashSet;
-    use std::str::FromStr;
-
     let existing = posts
         .get_tags_for_post(post_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let existing_slugs: HashSet<String> = existing.iter().map(|t| t.tag_slug.to_string()).collect();
-    let desired_slugs: HashSet<String> = desired
-        .iter()
-        .filter_map(|d| Tag::from_str(d).ok())
-        .map(|t| t.to_string())
-        .collect();
+    let diff = storage::post_tag_diff(&existing, desired);
 
-    for display in desired {
-        let Ok(slug) = Tag::from_str(display) else {
-            continue;
-        };
-        if !existing_slugs.contains(&slug.to_string()) {
-            posts
-                .tag_post(post_id, display)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
+    for display in diff.to_add {
+        posts
+            .tag_post(post_id, display)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
-    for tag in &existing {
-        if !desired_slugs.contains(&tag.tag_slug.to_string()) {
-            posts
-                .untag_post(post_id, &tag.tag_slug)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
+    for slug in diff.to_remove {
+        posts
+            .untag_post(post_id, slug)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
     Ok(())
 }
