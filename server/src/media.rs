@@ -131,11 +131,7 @@ pub async fn serve_handler(
             |r| r.content_type,
         );
 
-    let disposition = if should_inline(&content_type) {
-        format!("inline; filename=\"{}\"", params.filename)
-    } else {
-        format!("attachment; filename=\"{}\"", params.filename)
-    };
+    let disposition = content_disposition(&content_type, &params.filename);
 
     let file = fs::File::open(&file_path)
         .await
@@ -200,18 +196,17 @@ pub async fn proxy_handler(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Validates the serve route's path parameters and resolves the on-disk file
-/// path, returning `NOT_FOUND` for any invalid component.
+/// Validates the serve route's attacker-controlled path parameters, returning
+/// the parsed [`MediaSource`] or `NOT_FOUND` for any invalid component.
 ///
-/// `hash` is an attacker-controlled URL segment, so it must be the canonical
-/// 64-char lowercase hex content hash *before* it is sliced or joined into a
-/// path — otherwise `params.hash[2..]` panics on a short or non-ASCII value,
-/// a denial-of-service vector. `p1`/`p2` must be the matching leading hex pairs
-/// of the hash.
-fn resolve_media_path(
-    storage_path: &std::path::Path,
-    params: &ServeParams,
-) -> Result<(MediaSource, PathBuf), StatusCode> {
+/// `hash` must be the canonical 64-char lowercase hex content hash *before* it
+/// is sliced or joined into a path — otherwise `params.hash[2..]` panics on a
+/// short or non-ASCII value, a denial-of-service vector. `p1`/`p2` must be the
+/// matching leading hex pairs of the hash. `filename` must be a single normal
+/// leaf component: `sanitize_filename` strips path components, `.`/`..`, and
+/// null bytes, so a sanitized value differing from the input was not a safe
+/// leaf (e.g. `..`, `a/b`) and is rejected to prevent path traversal.
+fn validate_serve_params(params: &ServeParams) -> Result<MediaSource, StatusCode> {
     let source: MediaSource = params.source.parse().map_err(|_| StatusCode::NOT_FOUND)?;
 
     if !common::media::is_valid_content_hash(&params.hash) {
@@ -222,6 +217,20 @@ fn resolve_media_path(
         return Err(StatusCode::NOT_FOUND);
     }
 
+    if common::media::sanitize_filename(&params.filename) != params.filename {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    Ok(source)
+}
+
+/// Validates the serve route's path parameters and resolves the on-disk file
+/// path, returning `NOT_FOUND` for any invalid component.
+fn resolve_media_path(
+    storage_path: &std::path::Path,
+    params: &ServeParams,
+) -> Result<(MediaSource, PathBuf), StatusCode> {
+    let source = validate_serve_params(params)?;
     let file_path = storage_path
         .join("media")
         .join(source.as_str())
@@ -231,6 +240,38 @@ fn resolve_media_path(
         .join(&params.filename);
 
     Ok((source, file_path))
+}
+
+/// Builds a header-safe `Content-Disposition` value for serving `filename`.
+///
+/// The filename is attacker-influenced (it round-trips through the URL), so it
+/// is emitted in two forms: a quote/backslash-escaped, ASCII-only `filename=`
+/// fallback (control and non-ASCII bytes dropped, so the value can never break
+/// the quoted string or be rejected as a header), and an RFC 5987
+/// `filename*=UTF-8''…` carrying the full percent-encoded name for modern
+/// clients. `inline` vs `attachment` follows [`should_inline`].
+fn content_disposition(content_type: &str, filename: &str) -> String {
+    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+
+    let disposition = if should_inline(content_type) {
+        "inline"
+    } else {
+        "attachment"
+    };
+
+    let mut fallback = String::with_capacity(filename.len());
+    for c in filename.chars() {
+        if !c.is_ascii() || c.is_control() {
+            continue;
+        }
+        if c == '"' || c == '\\' {
+            fallback.push('\\');
+        }
+        fallback.push(c);
+    }
+
+    let encoded = utf8_percent_encode(filename, NON_ALPHANUMERIC);
+    format!("{disposition}; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
 }
 
 #[cfg(test)]
@@ -300,6 +341,19 @@ mod tests {
     }
 
     #[test]
+    fn resolve_media_path_rejects_filename_with_traversal_or_separators() {
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        for bad in ["..", ".", "../../etc/passwd", "a/b", "sub/file.txt"] {
+            let p = params("upload", "e3", "b0", hash, bad);
+            assert_eq!(
+                resolve_media_path(Path::new("/data"), &p),
+                Err(StatusCode::NOT_FOUND),
+                "filename {bad:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn resolve_media_path_rejects_p1_prefix_mismatch() {
         let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
         let p = params("upload", "ff", "b0", hash, "photo.jpg");
@@ -317,5 +371,37 @@ mod tests {
             resolve_media_path(Path::new("/data"), &p),
             Err(StatusCode::NOT_FOUND)
         );
+    }
+
+    #[test]
+    fn content_disposition_picks_inline_or_attachment_by_type() {
+        assert!(content_disposition("image/png", "p.png").starts_with("inline; "));
+        assert!(
+            content_disposition("application/octet-stream", "p.bin").starts_with("attachment; ")
+        );
+    }
+
+    #[test]
+    fn content_disposition_escapes_quotes_and_strips_control_chars() {
+        // A quote in the name must be backslash-escaped, never break the
+        // quoted-string; control chars are dropped from the ASCII fallback.
+        let value = content_disposition("application/octet-stream", "a\"b\n.txt");
+        assert!(
+            value.contains(r#"filename="a\"b.txt""#),
+            "fallback not escaped/stripped: {value}"
+        );
+        assert!(!value.contains('\n'), "control char leaked: {value:?}");
+        // Header construction must succeed (all-ASCII, no controls).
+        assert!(HeaderValue::from_str(&value).is_ok());
+    }
+
+    #[test]
+    fn content_disposition_percent_encodes_non_ascii_in_filename_star() {
+        let value = content_disposition("image/png", "café.png");
+        // Non-ASCII dropped from the ASCII fallback...
+        assert!(value.contains(r#"filename="caf.png""#), "{value}");
+        // ...but carried, percent-encoded, in filename*.
+        assert!(value.contains("filename*=UTF-8''caf%C3%A9"), "{value}");
+        assert!(HeaderValue::from_str(&value).is_ok());
     }
 }
