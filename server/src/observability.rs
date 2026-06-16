@@ -103,12 +103,7 @@ where
         };
 
         let started_at = span.extensions().get::<SpanStartedAt>().copied();
-        let Some(started_at) = started_at else {
-            return;
-        };
-
-        let elapsed = started_at.0.elapsed();
-        if let Some((elapsed_ms, threshold_ms)) = slow_span_values(elapsed, self.threshold) {
+        if let Some((elapsed_ms, threshold_ms)) = slow_span_report(started_at, self.threshold) {
             let metadata = span.metadata();
             let span_name = metadata.name();
             let span_target = metadata.target();
@@ -130,6 +125,18 @@ fn slow_span_values(elapsed: Duration, threshold: Duration) -> Option<(u64, u64)
     } else {
         None
     }
+}
+
+/// Pure slow-span decision used by [`SlowSpanLayer::on_close`]: reports the
+/// `(elapsed_ms, threshold_ms)` to log when a span both recorded its start time
+/// and ran for at least `threshold`.
+///
+/// The `started_at`-absent guard lives here, behind `?`, rather than inline in
+/// the layer: a live registry always inserts `SpanStartedAt` in `on_new_span`,
+/// so that branch is unreachable through the layer and only this free function
+/// can exercise it under test.
+fn slow_span_report(started_at: Option<SpanStartedAt>, threshold: Duration) -> Option<(u64, u64)> {
+    slow_span_values(started_at?.0.elapsed(), threshold)
 }
 
 fn init_tracing_impl(verbose: bool) {
@@ -288,6 +295,23 @@ mod tests {
 
         let above = slow_span_values(Duration::from_millis(750), Duration::from_millis(500));
         assert_eq!(above, Some((750, 500)));
+    }
+
+    #[test]
+    fn slow_span_report_is_none_when_start_time_absent() {
+        // A live registry always records SpanStartedAt in on_new_span, so this
+        // guard is unreachable through the layer; cover it directly here.
+        assert_eq!(slow_span_report(None, Duration::from_millis(1)), None);
+    }
+
+    #[test]
+    fn slow_span_report_reports_when_started_span_exceeds_threshold() {
+        let started_at = SpanStartedAt(
+            Instant::now()
+                .checked_sub(Duration::from_secs(10))
+                .expect("monotonic clock far enough past epoch"),
+        );
+        assert!(slow_span_report(Some(started_at), Duration::from_millis(1)).is_some());
     }
 
     #[test]
