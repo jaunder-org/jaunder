@@ -121,7 +121,7 @@ async fn verify_email_with_valid_token_sets_email_verified() {
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let raw_token = state
         .email_verifications
-        .create_email_verification(user_id, "bob@example.com", expires_at)
+        .create_email_verification(user_id, &"bob@example.com".parse().unwrap(), expires_at)
         .await
         .unwrap();
 
@@ -164,7 +164,7 @@ async fn verify_email_with_expired_token_returns_error() {
     let expires_at = Utc::now() - chrono::Duration::hours(1);
     let raw_token = state
         .email_verifications
-        .create_email_verification(user_id, "carol@example.com", expires_at)
+        .create_email_verification(user_id, &"carol@example.com".parse().unwrap(), expires_at)
         .await
         .unwrap();
 

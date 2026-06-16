@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use email_address::EmailAddress;
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -39,7 +40,7 @@ pub trait EmailVerificationStorage: Send + Sync {
     async fn create_email_verification(
         &self,
         user_id: i64,
-        email: &str,
+        email: &EmailAddress,
         expires_at: DateTime<Utc>,
     ) -> sqlx::Result<String>;
 
@@ -54,7 +55,7 @@ pub trait EmailVerificationStorage: Send + Sync {
     async fn use_email_verification(
         &self,
         raw_token: &str,
-    ) -> Result<(i64, String), UseEmailVerificationError>;
+    ) -> Result<(i64, EmailAddress), UseEmailVerificationError>;
 }
 
 /// Generic [`EmailVerificationStorage`] backed by any [`Backend`] database.
@@ -88,7 +89,7 @@ where
     async fn create_email_verification(
         &self,
         user_id: i64,
-        email: &str,
+        email: &EmailAddress,
         expires_at: DateTime<Utc>,
     ) -> sqlx::Result<String> {
         let (raw_token, token_hash) = crate::helpers::generate_hashed_token()?;
@@ -115,7 +116,7 @@ where
         )
         .bind(token_hash.as_str())
         .bind(user_id)
-        .bind(email)
+        .bind(email.as_str())
         .bind(now)
         .bind(expires_at)
         .execute(&mut *tx)
@@ -129,7 +130,7 @@ where
     async fn use_email_verification(
         &self,
         raw_token: &str,
-    ) -> Result<(i64, String), UseEmailVerificationError> {
+    ) -> Result<(i64, EmailAddress), UseEmailVerificationError> {
         let token_hash =
             crate::auth::hash_token(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
 
@@ -153,6 +154,11 @@ where
         .map_err(|_| UseEmailVerificationError::NotFound)?;
 
         if let Some((user_id, email)) = claimed {
+            // The address was validated when stored; a parse failure here means
+            // the stored value was corrupted, which we surface as a decode error.
+            let email = email
+                .parse::<EmailAddress>()
+                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
             return Ok((user_id, email));
         }
 

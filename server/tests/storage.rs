@@ -213,7 +213,7 @@ async fn assert_email_verification_and_password_reset(state: &std::sync::Arc<sto
         .email_verifications
         .create_email_verification(
             user_id,
-            "dave@example.com",
+            &"dave@example.com".parse().unwrap(),
             Utc::now() + chrono::Duration::hours(1),
         )
         .await
@@ -224,7 +224,7 @@ async fn assert_email_verification_and_password_reset(state: &std::sync::Arc<sto
         .await
         .unwrap();
     assert_eq!(verified_user_id, user_id);
-    assert_eq!(verified_email, "dave@example.com");
+    assert_eq!(verified_email.as_str(), "dave@example.com");
 
     state
         .users
@@ -1077,14 +1077,14 @@ async fn create_email_verification_and_use_returns_user_id_and_email() {
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let raw_token = ev
-        .create_email_verification(user_id, "alice@example.com", expires_at)
+        .create_email_verification(user_id, &"alice@example.com".parse().unwrap(), expires_at)
         .await
         .unwrap();
 
     let (returned_user_id, returned_email) = ev.use_email_verification(&raw_token).await.unwrap();
 
     assert_eq!(returned_user_id, user_id);
-    assert_eq!(returned_email, "alice@example.com");
+    assert_eq!(returned_email.as_str(), "alice@example.com");
 }
 
 #[tokio::test]
@@ -1099,7 +1099,7 @@ async fn use_email_verification_already_used_returns_already_used() {
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let raw_token = ev
-        .create_email_verification(user_id, "alice@example.com", expires_at)
+        .create_email_verification(user_id, &"alice@example.com".parse().unwrap(), expires_at)
         .await
         .unwrap();
 
@@ -1124,7 +1124,7 @@ async fn use_email_verification_expired_returns_expired() {
 
     let expires_at = Utc::now() - chrono::Duration::hours(1);
     let raw_token = ev
-        .create_email_verification(user_id, "alice@example.com", expires_at)
+        .create_email_verification(user_id, &"alice@example.com".parse().unwrap(), expires_at)
         .await
         .unwrap();
 
@@ -1162,20 +1162,20 @@ async fn second_email_verification_supersedes_first() {
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let first_token = ev
-        .create_email_verification(user_id, "alice@example.com", expires_at)
+        .create_email_verification(user_id, &"alice@example.com".parse().unwrap(), expires_at)
         .await
         .unwrap();
 
     // Create a second verification; the first should be superseded.
     let second_token = ev
-        .create_email_verification(user_id, "alice2@example.com", expires_at)
+        .create_email_verification(user_id, &"alice2@example.com".parse().unwrap(), expires_at)
         .await
         .unwrap();
 
     // Second token works normally.
     let (uid, email) = ev.use_email_verification(&second_token).await.unwrap();
     assert_eq!(uid, user_id);
-    assert_eq!(email, "alice2@example.com");
+    assert_eq!(email.as_str(), "alice2@example.com");
 
     // First token is now either NotFound or Expired.
     let err = ev.use_email_verification(&first_token).await.unwrap_err();
@@ -1185,6 +1185,38 @@ async fn second_email_verification_supersedes_first() {
             UseEmailVerificationError::NotFound | UseEmailVerificationError::Expired
         ),
         "expected NotFound or Expired for superseded token, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn use_email_verification_with_corrupt_stored_email_returns_internal() {
+    let base = TempDir::new().unwrap();
+    let pool = open_pool(&base).await;
+    let users = SqliteUserStorage::new(pool.clone());
+    let ev = SqliteEmailVerificationStorage::new(pool.clone());
+
+    let user_id = users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let raw_token = ev
+        .create_email_verification(user_id, &"alice@example.com".parse().unwrap(), expires_at)
+        .await
+        .unwrap();
+
+    // Corrupt the stored address out-of-band so claiming the token yields a
+    // value that no longer parses as an email.
+    sqlx::query("UPDATE email_verifications SET email = 'not-an-email'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let err = ev.use_email_verification(&raw_token).await.unwrap_err();
+    assert!(
+        matches!(err, UseEmailVerificationError::Internal(_)),
+        "expected Internal for unparseable stored email, got {err:?}"
     );
 }
 
