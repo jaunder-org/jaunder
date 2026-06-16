@@ -32,19 +32,9 @@ pub async fn regenerate_feed(
     let (surface, format) =
         parse(feed_url).ok_or_else(|| RegenerateError::BadUrl(feed_url.into()))?;
 
-    let min_items = state
+    let feeds = state
         .site_config
-        .get_feeds_min_items()
-        .await
-        .map_err(storage_err)?;
-    let min_days = state
-        .site_config
-        .get_feeds_min_days()
-        .await
-        .map_err(storage_err)?;
-    let hub_url = state
-        .site_config
-        .get_feeds_websub_hub_url()
+        .get_feeds_config()
         .await
         .map_err(storage_err)?;
     let identity = state
@@ -54,8 +44,8 @@ pub async fn regenerate_feed(
         .map_err(storage_err)?;
 
     let window = HybridWindow {
-        min_items,
-        min_days,
+        min_items: feeds.min_items,
+        min_days: feeds.min_days,
     };
     let now = Utc::now();
     let posts = state
@@ -90,7 +80,7 @@ pub async fn regenerate_feed(
         description: None,
         canonical_url,
         self_url,
-        hub_url,
+        hub_url: feeds.websub_hub_url,
         updated_at,
     };
 

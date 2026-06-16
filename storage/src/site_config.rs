@@ -3,6 +3,7 @@
 use crate::backend::Backend;
 use async_trait::async_trait;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DEFAULT_BACKUP_RETENTION_COUNT};
+use common::feed::FeedsConfig;
 use common::site::{SiteIdentity, DEFAULT_SITE_TITLE};
 use sqlx::{Database, Pool};
 
@@ -91,6 +92,18 @@ pub trait SiteConfigStorage: Send + Sync {
             .and_then(common::text::non_empty_owned))
     }
 
+    /// Returns the feed-generation configuration as a single group, applying
+    /// the same per-field defaults as the granular getters it delegates to.
+    /// The granular getters remain for single-value callers (e.g. the worker's
+    /// hub-URL read).
+    async fn get_feeds_config(&self) -> sqlx::Result<FeedsConfig> {
+        Ok(FeedsConfig {
+            min_items: self.get_feeds_min_items().await?,
+            min_days: self.get_feeds_min_days().await?,
+            websub_hub_url: self.get_feeds_websub_hub_url().await?,
+        })
+    }
+
     /// Returns the site identity (title and base URL).
     async fn get_identity(&self) -> sqlx::Result<SiteIdentity> {
         let title = self
@@ -138,6 +151,21 @@ pub trait SiteConfigStorage: Send + Sync {
         .await?;
         self.set(BACKUP_MODE_KEY, backup_mode_str(config.mode))
             .await?;
+        Ok(())
+    }
+
+    /// Stores the feed-generation configuration. An absent `websub_hub_url` is
+    /// stored as the empty string (treated as unset on read).
+    async fn set_feeds_config(&self, config: &FeedsConfig) -> sqlx::Result<()> {
+        self.set(FEEDS_MIN_ITEMS_KEY, &config.min_items.to_string())
+            .await?;
+        self.set(FEEDS_MIN_DAYS_KEY, &config.min_days.to_string())
+            .await?;
+        self.set(
+            FEEDS_WEBSUB_HUB_URL_KEY,
+            config.websub_hub_url.as_deref().unwrap_or(""),
+        )
+        .await?;
         Ok(())
     }
 }
@@ -237,6 +265,7 @@ mod tests {
     use super::SiteConfigStorage;
     use crate::sqlite::SqliteSiteConfigStorage;
     use common::backup::{BackupConfig, BackupMode, BackupSchedule};
+    use common::feed::FeedsConfig;
     use sqlx::SqlitePool;
 
     async fn test_pool() -> SqlitePool {
@@ -268,6 +297,33 @@ mod tests {
         };
         storage.set_backup_config(&config).await.unwrap();
         assert_eq!(storage.get_backup_config().await.unwrap(), config);
+    }
+
+    #[tokio::test]
+    async fn get_feeds_config_returns_defaults_when_unconfigured() {
+        let pool = test_pool().await;
+        let storage = SqliteSiteConfigStorage::new(pool);
+        let config = storage.get_feeds_config().await.unwrap();
+        assert_eq!(config.min_items, super::DEFAULT_FEEDS_MIN_ITEMS);
+        assert_eq!(config.min_days, super::DEFAULT_FEEDS_MIN_DAYS);
+        assert_eq!(config.websub_hub_url, None);
+    }
+
+    #[tokio::test]
+    async fn set_and_get_feeds_config_round_trips() {
+        let pool = test_pool().await;
+        let storage = SqliteSiteConfigStorage::new(pool);
+        let config = FeedsConfig {
+            min_items: 42,
+            min_days: 7,
+            websub_hub_url: Some("https://hub.example.com".to_owned()),
+        };
+        storage.set_feeds_config(&config).await.unwrap();
+        let loaded = storage.get_feeds_config().await.unwrap();
+        assert_eq!(loaded, config);
+        // Exercise the derived Clone/Debug so the aggregate struct is covered.
+        assert_eq!(loaded.clone(), config);
+        assert!(!format!("{config:?}").is_empty());
     }
 
     #[tokio::test]
