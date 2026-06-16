@@ -134,8 +134,12 @@ fn slow_span_values(elapsed: Duration, threshold: Duration) -> Option<(u64, u64)
 
 fn init_tracing_impl(verbose: bool) {
     // Forward any existing `log` macros to tracing so we can migrate in
-    // phases without duplicate logging calls.
-    let _ = tracing_log::LogTracer::init();
+    // phases without duplicate logging calls. A failure here is non-fatal (it
+    // means a `log` bridge is already installed), but tracing isn't up yet, so
+    // we report it to stderr rather than silently dropping it.
+    if let Err(error) = tracing_log::LogTracer::init() {
+        eprintln!("log-to-tracing bridge init failed (continuing without it): {error}");
+    }
     opentelemetry::global::set_text_map_propagator(
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );
@@ -164,12 +168,19 @@ fn init_tracing_impl(verbose: bool) {
             }
         });
 
-    let _ = tracing_subscriber::registry()
+    // `try_init` fails only if a global subscriber is already installed. That
+    // leaves the process running without our configured layers, which is worth
+    // knowing about; emit to stderr since tracing itself is what failed to come
+    // up.
+    if let Err(error) = tracing_subscriber::registry()
         .with(env_filter)
         .with(slow_span_layer)
         .with(fmt_layer)
         .with(otel_layer)
-        .try_init();
+        .try_init()
+    {
+        eprintln!("tracing subscriber init failed (continuing without it): {error}");
+    }
 }
 
 pub fn init_tracing(verbose: bool) {
@@ -404,6 +415,18 @@ mod tests {
         init_tracing_impl(false);
         std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
         std::env::remove_var("JAUNDER_LOG_FORMAT");
+    }
+
+    #[test]
+    fn init_tracing_impl_reports_failure_when_already_initialized() {
+        let _guard = lock_env();
+        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+        std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
+        // First call installs the global subscriber and log bridge; the second
+        // finds both already set and exercises the non-fatal error branches
+        // (reported to stderr rather than silently dropped).
+        init_tracing_impl(false);
+        init_tracing_impl(false);
     }
 
     #[test]

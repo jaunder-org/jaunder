@@ -113,6 +113,8 @@ The verify ladder has three tiers:
 
 Jaunder uses OpenTelemetry for deep performance analysis (see [ADR-0011](docs/decisions/0011-unified-observability.md)).
 
+- **No PII in telemetry**: span fields and the structured error boundary (`error.source`/`error.context`) must never carry user PII or secrets (emails, tokens, passwords, post bodies); use stable identifiers like `user_id`, `db.system`, and `error.kind` instead. See [ADR-0011](docs/decisions/0011-unified-observability.md).
+
 - **Trace Analysis**: Use `scripts/analyze-otel-traces` to process trace artifacts (JSONL) from VM runs or local tests.
   ```bash
   scripts/analyze-otel-traces \
