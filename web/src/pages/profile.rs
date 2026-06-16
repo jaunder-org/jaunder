@@ -1,7 +1,6 @@
 use crate::error::WebError;
 use crate::pages::Topbar;
-use crate::posts::{get_default_post_format, SetDefaultPostFormat};
-use crate::profile::{get_profile, UpdateProfile};
+use crate::profile::{get_default_post_format, get_profile, SetDefaultPostFormat, UpdateProfile};
 use leptos::prelude::*;
 
 /// Profile page — shows username, display name, bio; allows updating.
