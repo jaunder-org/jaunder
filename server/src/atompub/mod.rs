@@ -1,9 +1,11 @@
 //! Server-side `AtomPub` surface: the boundary mapping Jaunder posts/media to
 //! `AtomPub` wire types, plus the HTTP handlers.
 
+use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::Router;
 use storage::AppState;
+use web::auth::AuthUser;
 
 pub mod mapping;
 pub mod media;
@@ -37,6 +39,19 @@ where
             get(media::member_get).delete(media::member_delete),
         )
         .route("/~{username}/rsd.xml", get(rsd::rsd_document))
+}
+
+/// Authorizes that `auth_user` may act on resources scoped to `username`.
+///
+/// `AtomPub` collection handlers are addressed by `{username}`; a user may only
+/// act on their own resources, so a mismatch yields `403 Forbidden`. The member
+/// handlers fold the same check into `owned_post`.
+pub(crate) fn require_user_match(auth_user: &AuthUser, username: &str) -> Result<(), StatusCode> {
+    if auth_user.username.as_str() == username {
+        Ok(())
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
 }
 
 /// Returns the site's public base URL (scheme + host, no trailing slash), or an

@@ -57,9 +57,7 @@ pub async fn collection_post(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, StatusCode> {
-    if auth_user.username.as_str() != username {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    super::require_user_match(&auth_user, &username)?;
 
     let raw_name = headers
         .get("slug")
@@ -131,9 +129,7 @@ pub async fn member_get(
     auth_user: AuthUser,
     Path((username, sha, filename)): Path<(String, String, String)>,
 ) -> Result<Response, StatusCode> {
-    if auth_user.username.as_str() != username {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    super::require_user_match(&auth_user, &username)?;
     let record = state
         .media
         .get_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
@@ -156,9 +152,7 @@ pub async fn member_delete(
     auth_user: AuthUser,
     Path((username, sha, filename)): Path<(String, String, String)>,
 ) -> Result<Response, StatusCode> {
-    if auth_user.username.as_str() != username {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    super::require_user_match(&auth_user, &username)?;
     state
         .media
         .delete_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)

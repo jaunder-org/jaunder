@@ -50,9 +50,7 @@ pub async fn collection_get(
     Path(username): Path<String>,
     Query(paging): Query<CollectionPaging>,
 ) -> Result<Response, StatusCode> {
-    if auth_user.username.as_str() != username {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    super::require_user_match(&auth_user, &username)?;
 
     let limit = paging
         .limit
@@ -133,9 +131,7 @@ async fn owned_post(
     username: &str,
     post_id: i64,
 ) -> Result<PostRecord, StatusCode> {
-    if auth_user.username.as_str() != username {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    super::require_user_match(auth_user, username)?;
     let post = state
         .posts
         .get_post_by_id(post_id)
@@ -278,9 +274,7 @@ pub async fn collection_post(
     Path(username): Path<String>,
     body: String,
 ) -> Result<Response, StatusCode> {
-    if auth_user.username.as_str() != username {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    super::require_user_match(&auth_user, &username)?;
     let entry = entry_from_xml(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
     let default_format =
         storage::get_default_post_format(state.user_config.as_ref(), auth_user.user_id)
