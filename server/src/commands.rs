@@ -334,9 +334,12 @@ pub async fn cmd_serve(
         .site_addr(bind)
         .build();
 
-    let backup_scheduler =
-        crate::start_backup_worker(db.clone(), storage.db.clone(), storage.storage_path.clone())
-            .await?;
+    let backup_scheduler = crate::backup::start_backup_worker(
+        db.clone(),
+        storage.db.clone(),
+        storage.storage_path.clone(),
+    )
+    .await?;
     let feed_scheduler = crate::feed::worker::start_feed_worker(db.clone()).await?;
     let mailer = crate::mailer::build_mailer(db.site_config.as_ref()).await;
     let router = crate::create_router(
