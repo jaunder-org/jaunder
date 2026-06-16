@@ -134,59 +134,34 @@ fn init_tracing_impl(verbose: bool) {
 
     let env_filter = resolved_filter(verbose);
     let slow_span_layer = SlowSpanLayer::new(slow_op_threshold());
-    let use_json = use_json_format();
 
-    if let Some(endpoint) = otel_exporter_otlp_endpoint() {
-        match build_otel_tracer(&endpoint) {
-            Ok(tracer) => {
-                if use_json {
-                    let _ = tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(slow_span_layer)
-                        .with(fmt::layer().json())
-                        .with(tracing_opentelemetry::layer().with_tracer(tracer))
-                        .try_init();
-                } else {
-                    let _ = tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(slow_span_layer)
-                        .with(fmt::layer())
-                        .with(tracing_opentelemetry::layer().with_tracer(tracer))
-                        .try_init();
-                }
-            }
+    // Box the fmt layer so the json/pretty variants share one type, and carry
+    // OTel as an `Option` layer (absent or failed setup is a no-op). This lets
+    // every {OTel present/failed/none} × {json/pretty} combination flow through
+    // a single registry-build chain.
+    let fmt_layer = if use_json_format() {
+        fmt::layer().json().boxed()
+    } else {
+        fmt::layer().boxed()
+    };
+
+    let otel_layer =
+        otel_exporter_otlp_endpoint().and_then(|endpoint| match build_otel_tracer(&endpoint) {
+            Ok(tracer) => Some(tracing_opentelemetry::layer().with_tracer(tracer)),
             Err(error) => {
                 eprintln!(
                     "OTel disabled because exporter setup failed (endpoint {endpoint}): {error}"
                 );
-                if use_json {
-                    let _ = tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(slow_span_layer)
-                        .with(fmt::layer().json())
-                        .try_init();
-                } else {
-                    let _ = tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(slow_span_layer)
-                        .with(fmt::layer())
-                        .try_init();
-                }
+                None
             }
-        }
-    } else if use_json {
-        let _ = tracing_subscriber::registry()
-            .with(env_filter)
-            .with(slow_span_layer)
-            .with(fmt::layer().json())
-            .try_init();
-    } else {
-        let _ = tracing_subscriber::registry()
-            .with(env_filter)
-            .with(slow_span_layer)
-            .with(fmt::layer())
-            .try_init();
-    }
+        });
+
+    let _ = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(slow_span_layer)
+        .with(fmt_layer)
+        .with(otel_layer)
+        .try_init();
 }
 
 pub fn init_tracing(verbose: bool) {
