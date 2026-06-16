@@ -26,6 +26,12 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
+# Emit one machine-greppable final line stating the exit status on EVERY exit
+# path — success, a step aborting under `set -e`, or a usage error — so a
+# captured run is never ambiguous about whether the gate passed, even if the
+# tail of the log is truncated.
+trap 'verify_status=$?; if [[ ${verify_status} -eq 0 ]]; then echo "--- verify: exit 0 (passed) ---"; else echo "--- verify: exit ${verify_status} (FAILED) ---"; fi' EXIT
+
 FAST=0
 FULL=0
 for arg in "$@"; do
