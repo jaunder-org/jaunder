@@ -117,14 +117,7 @@ pub async fn update_backup_settings(
                 ))
             }
         };
-        let destination_path = {
-            let s = destination_path.trim().to_owned();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        };
+        let destination_path = common::text::non_empty(&destination_path).map(str::to_owned);
 
         let config = BackupConfig {
             destination_path,

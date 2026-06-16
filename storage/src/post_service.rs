@@ -133,7 +133,7 @@ pub async fn perform_post_update(
     let metadata =
         derive_post_metadata(title, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
 
-    let slug = match slug_override.map(str::trim).filter(|s| !s.is_empty()) {
+    let slug = match slug_override.and_then(common::text::non_empty) {
         Some(raw) => raw
             .to_ascii_lowercase()
             .parse::<Slug>()
@@ -213,7 +213,7 @@ pub async fn perform_post_creation(
     let metadata =
         derive_post_metadata(title, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
 
-    let slug_seed = match slug_override.map(str::trim).filter(|s| !s.is_empty()) {
+    let slug_seed = match slug_override.and_then(common::text::non_empty) {
         Some(raw) => raw
             .to_ascii_lowercase()
             .parse::<Slug>()

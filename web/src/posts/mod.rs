@@ -32,19 +32,6 @@ use {
     },
 };
 
-/// Normalizes an optional summary string: empty or whitespace-only strings become `None`.
-#[cfg(feature = "ssr")]
-fn normalize_summary(s: Option<String>) -> Option<String> {
-    s.and_then(|raw| {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
-}
-
 /// Result returned by [`create_post`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreatePostResult {
@@ -161,7 +148,7 @@ pub async fn create_post(
             .parse::<PostFormat>()
             .map_err(|e| InternalError::validation(e.to_string()))?;
         let published_at = publish.then(Utc::now);
-        let normalized_summary = normalize_summary(summary);
+        let normalized_summary = summary.and_then(common::text::non_empty_owned);
 
         let record = perform_post_creation(
             posts.as_ref(),
@@ -325,7 +312,7 @@ pub async fn update_post(
         let format = format
             .parse::<PostFormat>()
             .map_err(|e| InternalError::validation(e.to_string()))?;
-        let normalized_summary = normalize_summary(summary);
+        let normalized_summary = summary.and_then(common::text::non_empty_owned);
 
         let record = perform_post_update(
             posts.as_ref(),
@@ -814,25 +801,9 @@ pub async fn unpublish_post(post_id: i64) -> WebResult<()> {
 mod tests {
     use storage::candidate_slug;
 
-    #[cfg(feature = "ssr")]
-    use super::normalize_summary;
-
     #[test]
     fn candidate_slug_returns_seed_for_first_attempt() {
         assert_eq!(candidate_slug("hello-world", 0), "hello-world");
-    }
-
-    #[cfg(feature = "ssr")]
-    #[test]
-    fn normalize_summary_empty_and_whitespace_become_none() {
-        assert_eq!(normalize_summary(None), None);
-        assert_eq!(normalize_summary(Some(String::new())), None);
-        assert_eq!(normalize_summary(Some("   ".into())), None);
-        assert_eq!(
-            normalize_summary(Some("hello".into())),
-            Some("hello".into())
-        );
-        assert_eq!(normalize_summary(Some("  hi  ".into())), Some("hi".into()));
     }
 
     #[test]

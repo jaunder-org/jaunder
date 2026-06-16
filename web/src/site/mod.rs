@@ -35,16 +35,17 @@ pub async fn update_site_identity(title: String, base_url: String) -> WebResult<
             return Err(InternalError::validation("site title cannot be empty"));
         }
 
-        let base_url = if base_url.trim().is_empty() {
-            None
-        } else {
-            let trimmed = base_url.trim().trim_end_matches('/').to_string();
-            if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
-                return Err(InternalError::validation(
-                    "base URL must be an absolute http or https URL",
-                ));
+        let base_url = match common::text::non_empty(&base_url) {
+            None => None,
+            Some(trimmed) => {
+                let trimmed = trimmed.trim_end_matches('/');
+                if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+                    return Err(InternalError::validation(
+                        "base URL must be an absolute http or https URL",
+                    ));
+                }
+                Some(trimmed.to_string())
             }
-            Some(trimmed)
         };
 
         let identity = SiteIdentity { title, base_url };

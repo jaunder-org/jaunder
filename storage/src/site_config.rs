@@ -30,14 +30,10 @@ pub trait SiteConfigStorage: Send + Sync {
 
     /// Returns the backup configuration from stored values, using defaults for missing/invalid fields.
     async fn get_backup_config(&self) -> sqlx::Result<BackupConfig> {
-        let destination_path = self.get(BACKUP_DESTINATION_PATH_KEY).await?.and_then(|v| {
-            let v = v.trim().to_owned();
-            if v.is_empty() {
-                None
-            } else {
-                Some(v)
-            }
-        });
+        let destination_path = self
+            .get(BACKUP_DESTINATION_PATH_KEY)
+            .await?
+            .and_then(common::text::non_empty_owned);
         let schedule = self
             .get(BACKUP_SCHEDULE_KEY)
             .await?
@@ -89,14 +85,10 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Returns the configured `WebSub` hub URL, if any. An empty stored value
     /// is treated as unset.
     async fn get_feeds_websub_hub_url(&self) -> sqlx::Result<Option<String>> {
-        Ok(self.get(FEEDS_WEBSUB_HUB_URL_KEY).await?.and_then(|v| {
-            let v = v.trim().to_owned();
-            if v.is_empty() {
-                None
-            } else {
-                Some(v)
-            }
-        }))
+        Ok(self
+            .get(FEEDS_WEBSUB_HUB_URL_KEY)
+            .await?
+            .and_then(common::text::non_empty_owned))
     }
 
     /// Returns the site identity (title and base URL).
@@ -104,8 +96,7 @@ pub trait SiteConfigStorage: Send + Sync {
         let title = self
             .get(SITE_TITLE_KEY)
             .await?
-            .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty())
+            .and_then(common::text::non_empty_owned)
             .unwrap_or_else(|| DEFAULT_SITE_TITLE.to_owned());
         let base_url = self.get(SITE_BASE_URL_KEY).await?.and_then(|v| {
             let trimmed = v.trim().trim_end_matches('/').to_owned();

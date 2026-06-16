@@ -44,22 +44,15 @@ pub async fn get_profile() -> WebResult<ProfileData> {
 }
 
 /// Updates the authenticated user's display name and bio.
-/// Empty string clears the field.
+/// Blank input (empty or whitespace-only) clears the field; surrounding
+/// whitespace is trimmed.
 #[server(endpoint = "/update_profile")]
 pub async fn update_profile(display_name: String, bio: String) -> WebResult<()> {
     boundary!("update_profile", {
         let auth = require_auth().await?;
         let users = expect_context::<Arc<dyn UserStorage>>();
-        let dn = if display_name.is_empty() {
-            None
-        } else {
-            Some(display_name.as_str())
-        };
-        let b = if bio.is_empty() {
-            None
-        } else {
-            Some(bio.as_str())
-        };
+        let dn = common::text::non_empty(&display_name);
+        let b = common::text::non_empty(&bio);
         users
             .update_profile(
                 auth.user_id,
