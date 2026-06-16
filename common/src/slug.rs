@@ -1,12 +1,17 @@
 use std::{fmt, str::FromStr};
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// A validated post slug matching `[a-z0-9][a-z0-9-]*`.
 ///
 /// Constructed via [`FromStr`]; invalid strings are rejected at the boundary
-/// so interior code works only with already-valid slugs.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// so interior code works only with already-valid slugs. The `try_from`/`into`
+/// serde bridge routes (de)serialization through that same validation, so a
+/// `Slug` serializes as a plain string and rejects invalid input on the wire —
+/// safe to use as a (de)serialized DTO field.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct Slug(String);
 
 /// Error returned when a string cannot be parsed as a [`Slug`].
@@ -32,6 +37,20 @@ impl FromStr for Slug {
             return Err(InvalidSlug);
         }
         Ok(Slug(s.to_owned()))
+    }
+}
+
+impl TryFrom<String> for Slug {
+    type Error = InvalidSlug;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl From<Slug> for String {
+    fn from(value: Slug) -> Self {
+        value.0
     }
 }
 
@@ -108,6 +127,18 @@ mod tests {
         let s: Slug = "my-post".parse().unwrap();
         assert_eq!(s.to_string(), "my-post");
         assert_eq!(s.as_str(), "my-post");
+    }
+
+    #[test]
+    fn slug_serde_serializes_as_plain_string_and_validates_on_deserialize() {
+        let s: Slug = "my-post".parse().unwrap();
+        assert_eq!(serde_json::to_string(&s).unwrap(), "\"my-post\"");
+        assert_eq!(
+            serde_json::from_str::<Slug>("\"my-post\"").unwrap(),
+            "my-post".parse::<Slug>().unwrap()
+        );
+        // Invalid input is rejected at deserialize time.
+        assert!(serde_json::from_str::<Slug>("\"Bad Slug\"").is_err());
     }
 
     #[test]

@@ -1,12 +1,17 @@
 use std::{fmt, str::FromStr};
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// A validated username matching `[a-z0-9_-]+`.
 ///
 /// Constructed via [`FromStr`]; invalid strings are rejected at the boundary
-/// so interior code works only with already-valid usernames.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// so interior code works only with already-valid usernames. The
+/// `try_from`/`into` serde bridge routes (de)serialization through that same
+/// validation, so a `Username` serializes as a plain string and rejects
+/// invalid input on the wire — safe to use as a (de)serialized DTO field.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct Username(String);
 
 /// Error returned when a string cannot be parsed as a [`Username`].
@@ -27,6 +32,20 @@ impl FromStr for Username {
             return Err(InvalidUsername);
         }
         Ok(Username(s))
+    }
+}
+
+impl TryFrom<String> for Username {
+    type Error = InvalidUsername;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl From<Username> for String {
+    fn from(value: Username) -> Self {
+        value.0
     }
 }
 
@@ -74,5 +93,20 @@ mod tests {
     fn username_display_produces_the_username_string() {
         let u: Username = "alice".parse().unwrap();
         assert_eq!(u.to_string(), "alice");
+    }
+
+    #[test]
+    fn username_serde_serializes_as_plain_string_and_validates_on_deserialize() {
+        let u: Username = "alice".parse().unwrap();
+        assert_eq!(serde_json::to_string(&u).unwrap(), "\"alice\"");
+
+        // Deserialize routes through the validating parse (lowercasing too).
+        assert_eq!(
+            serde_json::from_str::<Username>("\"Alice\"").unwrap(),
+            "alice".parse::<Username>().unwrap()
+        );
+
+        // Invalid input is rejected at deserialize time.
+        assert!(serde_json::from_str::<Username>("\"a b\"").is_err());
     }
 }

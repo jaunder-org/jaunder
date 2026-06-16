@@ -1,12 +1,17 @@
 use std::{fmt, str::FromStr};
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// A validated tag slug matching `[a-z0-9][a-z0-9-]*`.
 ///
 /// Constructed via [`FromStr`]; invalid strings are rejected at the boundary
-/// so interior code works only with already-valid tags.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// so interior code works only with already-valid tags. The `try_from`/`into`
+/// serde bridge routes (de)serialization through that same validation, so a
+/// `Tag` serializes as a plain string and rejects invalid input on the wire —
+/// safe to use as a (de)serialized DTO field.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct Tag(String);
 
 /// Error returned when a string cannot be parsed as a [`Tag`].
@@ -34,6 +39,20 @@ impl FromStr for Tag {
             return Err(InvalidTag);
         }
         Ok(Tag(normalized))
+    }
+}
+
+impl TryFrom<String> for Tag {
+    type Error = InvalidTag;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl From<Tag> for String {
+    fn from(value: Tag) -> Self {
+        value.0
     }
 }
 
@@ -388,5 +407,20 @@ mod tests {
             }
         );
         assert!(err.to_string().contains("too many tags"));
+    }
+
+    #[test]
+    fn tag_serde_serializes_as_plain_string_and_validates_on_deserialize() {
+        let t: Tag = "rust".parse().unwrap();
+        assert_eq!(serde_json::to_string(&t).unwrap(), "\"rust\"");
+
+        // Deserialize routes through the validating parse (lowercasing too).
+        assert_eq!(
+            serde_json::from_str::<Tag>("\"Rust\"").unwrap(),
+            "rust".parse::<Tag>().unwrap()
+        );
+
+        // Invalid input is rejected at deserialize time.
+        assert!(serde_json::from_str::<Tag>("\"-bad\"").is_err());
     }
 }
