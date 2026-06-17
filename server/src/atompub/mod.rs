@@ -65,3 +65,30 @@ pub(crate) async fn base_url(state: &AppState) -> String {
         .and_then(|identity| identity.base_url)
         .unwrap_or_default()
 }
+
+/// Logs a genuine internal failure (typically a storage or I/O error) and maps
+/// it to `500 Internal Server Error`.
+///
+/// The raw `AtomPub` handlers previously discarded these with
+/// `.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)`, producing blank 500s with
+/// nothing in the logs and no way to diagnose the failure. Routing them through
+/// this helper records the underlying error at `error` level first. The error is
+/// a storage/IO failure, not user content, so it carries no PII.
+pub(crate) fn internal_error<E: std::error::Error>(err: E) -> StatusCode {
+    tracing::error!(error = %err, "AtomPub handler internal error");
+    StatusCode::INTERNAL_SERVER_ERROR
+}
+
+#[cfg(test)]
+mod tests {
+    use super::internal_error;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn internal_error_maps_to_500() {
+        assert_eq!(
+            internal_error(sqlx::Error::PoolClosed),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+}

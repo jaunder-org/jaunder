@@ -31,7 +31,7 @@ pub async fn service_document(
         .posts
         .list_tags(None, 100)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(super::internal_error)?
         .into_iter()
         .map(|t| t.tag_slug.to_string())
         .collect();
@@ -52,7 +52,7 @@ pub async fn service_document(
         },
     };
 
-    let xml = render_service_document(&doc).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let xml = render_service_document(&doc);
     Ok((
         [(
             header::CONTENT_TYPE,

@@ -79,7 +79,7 @@ pub async fn collection_post(
         .media
         .get_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(super::internal_error)?
         .is_some();
 
     let manager = crate::media_manager::MediaManager::new(state.clone(), storage_path);
@@ -97,12 +97,12 @@ pub async fn collection_post(
             &MediaSource::Upload,
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(super::internal_error)?
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let base = base_url(&state).await;
     let entry = media_link_entry(&record, &base, &username);
-    let xml = render_media_link_entry(&entry).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let xml = render_media_link_entry(&entry);
     let status = if existed {
         StatusCode::OK
     } else {
@@ -134,12 +134,12 @@ pub async fn member_get(
         .media
         .get_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(super::internal_error)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let base = base_url(&state).await;
     let entry = media_link_entry(&record, &base, &username);
-    let xml = render_media_link_entry(&entry).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let xml = render_media_link_entry(&entry);
     Ok(([(header::CONTENT_TYPE, ENTRY_CONTENT_TYPE)], xml).into_response())
 }
 

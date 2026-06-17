@@ -9,7 +9,7 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::Writer;
 
 use super::xml::{write_empty_element, write_text_element};
-use super::{AtomPubError, APP_NS, ATOM_NS};
+use super::{APP_NS, ATOM_NS};
 
 /// Declaration of a single collection (posts or media) in a workspace.
 #[derive(Debug, Clone)]
@@ -44,59 +44,53 @@ pub struct ServiceDocument {
 /// one `app:accept` element per accept media type, and — when `categories` is non-empty —
 /// an `app:categories fixed="no"` element with one inline `atom:category term="..."` per term.
 ///
-/// # Errors
-///
-/// Returns [`AtomPubError::Malformed`] if the XML writer fails (which should not occur
-/// for valid in-memory inputs).
-pub fn render_service_document(doc: &ServiceDocument) -> Result<String, AtomPubError> {
+/// Writes into an in-memory buffer, so it is infallible.
+#[must_use]
+pub fn render_service_document(doc: &ServiceDocument) -> String {
     let mut writer = Writer::new(Vec::new());
-    writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)))?;
+    let _ = writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)));
 
     let mut root = BytesStart::new("app:service");
     root.push_attribute(("xmlns", ATOM_NS));
     root.push_attribute(("xmlns:app", APP_NS));
-    writer.write_event(Event::Start(root))?;
+    let _ = writer.write_event(Event::Start(root));
 
-    writer.write_event(Event::Start(BytesStart::new("app:workspace")))?;
-    write_text_element(&mut writer, "atom:title", &doc.workspace_title)?;
+    let _ = writer.write_event(Event::Start(BytesStart::new("app:workspace")));
+    write_text_element(&mut writer, "atom:title", &doc.workspace_title);
 
-    write_collection(&mut writer, &doc.posts_collection)?;
-    write_collection(&mut writer, &doc.media_collection)?;
+    write_collection(&mut writer, &doc.posts_collection);
+    write_collection(&mut writer, &doc.media_collection);
 
-    writer.write_event(Event::End(BytesEnd::new("app:workspace")))?;
-    writer.write_event(Event::End(BytesEnd::new("app:service")))?;
+    let _ = writer.write_event(Event::End(BytesEnd::new("app:workspace")));
+    let _ = writer.write_event(Event::End(BytesEnd::new("app:service")));
 
-    String::from_utf8(writer.into_inner()).map_err(|e| AtomPubError::Malformed(e.to_string()))
+    String::from_utf8_lossy(&writer.into_inner()).into_owned()
 }
 
-fn write_collection(
-    writer: &mut Writer<Vec<u8>>,
-    coll: &CollectionDecl,
-) -> Result<(), AtomPubError> {
+fn write_collection(writer: &mut Writer<Vec<u8>>, coll: &CollectionDecl) {
     let mut start = BytesStart::new("app:collection");
     start.push_attribute(("href", coll.href.as_str()));
-    writer.write_event(Event::Start(start))?;
+    let _ = writer.write_event(Event::Start(start));
 
-    write_text_element(writer, "atom:title", &coll.title)?;
+    write_text_element(writer, "atom:title", &coll.title);
 
     for media_type in &coll.accept {
-        write_text_element(writer, "app:accept", media_type)?;
+        write_text_element(writer, "app:accept", media_type);
     }
 
     if !coll.categories.is_empty() {
         let mut cat_elem = BytesStart::new("app:categories");
         cat_elem.push_attribute(("fixed", "no"));
-        writer.write_event(Event::Start(cat_elem))?;
+        let _ = writer.write_event(Event::Start(cat_elem));
 
         for term in &coll.categories {
-            write_empty_element(writer, "atom:category", &[("term", term.as_str())])?;
+            write_empty_element(writer, "atom:category", &[("term", term.as_str())]);
         }
 
-        writer.write_event(Event::End(BytesEnd::new("app:categories")))?;
+        let _ = writer.write_event(Event::End(BytesEnd::new("app:categories")));
     }
 
-    writer.write_event(Event::End(BytesEnd::new("app:collection")))?;
-    Ok(())
+    let _ = writer.write_event(Event::End(BytesEnd::new("app:collection")));
 }
 
 #[cfg(test)]
@@ -124,8 +118,7 @@ mod tests {
                 ],
                 categories: vec![],
             },
-        })
-        .expect("render");
+        });
         assert!(out.contains("app:service"));
         assert!(out.contains("https://h/atompub/alice/posts"));
         assert!(out.contains("type=entry"));

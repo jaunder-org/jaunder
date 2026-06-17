@@ -75,7 +75,7 @@ pub async fn collection_get(
         .posts
         .list_collection_by_user(auth_user.user_id, cursor.as_ref(), limit + 1)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(super::internal_error)?;
 
     let has_more = usize::try_from(limit).unwrap_or(usize::MAX) < posts.len();
     if has_more {
@@ -114,7 +114,7 @@ pub async fn collection_get(
         previous: None,
     };
 
-    let xml = render_feed(&meta, &entries).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let xml = render_feed(&meta, &entries);
     Ok(([(header::CONTENT_TYPE, FEED_CONTENT_TYPE)], xml).into_response())
 }
 
@@ -136,7 +136,7 @@ async fn owned_post(
         .posts
         .get_post_by_id(post_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(super::internal_error)?
         .ok_or(StatusCode::NOT_FOUND)?;
     if post.user_id != auth_user.user_id || post.deleted_at.is_some() {
         return Err(StatusCode::NOT_FOUND);
@@ -159,7 +159,7 @@ pub async fn member_get(
     let post = owned_post(&state, &auth_user, &username, post_id).await?;
     let base = base_url(&state).await;
     let entry = post_to_entry(&post, &base);
-    let xml = entry_to_xml(&entry).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let xml = entry_to_xml(&entry);
     Ok((
         [
             (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
@@ -206,20 +206,20 @@ async fn apply_categories(
     let existing = posts
         .get_tags_for_post(post_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(super::internal_error)?;
     let diff = storage::post_tag_diff(&existing, desired);
 
     for display in diff.to_add {
         posts
             .tag_post(post_id, display)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(super::internal_error)?;
     }
     for slug in diff.to_remove {
         posts
             .untag_post(post_id, slug)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(super::internal_error)?;
     }
     Ok(())
 }
@@ -241,7 +241,7 @@ pub async fn member_delete(
         .posts
         .soft_delete_post(post.post_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(super::internal_error)?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -263,7 +263,7 @@ pub async fn collection_post(
     let default_format =
         storage::get_default_post_format(state.user_config.as_ref(), auth_user.user_id)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(super::internal_error)?;
     let fields = entry_to_post_fields(&entry, default_format);
     let published_at = if fields.is_draft {
         None
@@ -294,13 +294,13 @@ pub async fn collection_post(
         .posts
         .get_post_by_id(created.post_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(super::internal_error)?
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let base = base_url(&state).await;
     let location = format!("{base}/atompub/{username}/posts/{}", post.post_id);
     let entry_out = post_to_entry(&post, &base);
-    let xml = entry_to_xml(&entry_out).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let xml = entry_to_xml(&entry_out);
 
     Ok((
         StatusCode::CREATED,
@@ -344,7 +344,7 @@ pub async fn member_put(
     let default_format =
         storage::get_default_post_format(state.user_config.as_ref(), auth_user.user_id)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(super::internal_error)?;
     let fields = entry_to_post_fields(&entry, default_format);
 
     storage::perform_post_update(
@@ -369,12 +369,12 @@ pub async fn member_put(
         .posts
         .get_post_by_id(post_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(super::internal_error)?
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let base = base_url(&state).await;
     let entry_out = post_to_entry(&post, &base);
-    let xml = entry_to_xml(&entry_out).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let xml = entry_to_xml(&entry_out);
 
     Ok((
         StatusCode::OK,
