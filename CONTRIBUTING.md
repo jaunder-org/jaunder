@@ -188,14 +188,13 @@ Coverage is measured by `scripts/check-coverage`, which counts source lines with
 
 Coverage runs in two passes that accumulate into one merged report: the whole workspace against SQLite, then the `jaunder` integration tests against a throwaway host PostgreSQL (via `scripts/with-ephemeral-postgres`), so `storage/src/postgres/*` gets real instrumented coverage. Because the Nix `coverage` build sandbox has no network, a few network-sensitive files (`server/src/websub/http.rs`, `server/src/commands.rs`) report slightly lower there than on a networked host. **The committed baseline must therefore be regenerated from the Nix sandbox (the CI-reproducible environment), never from a local host `scripts/check-coverage --update`** — a host run bakes in higher numbers for those files than CI can reproduce, which then fails the gate.
 
-To regenerate both manifests, build the `coverage-update` package. It runs `scripts/check-coverage --update` inside the same sandbox as the `coverage` check and exposes the regenerated `.coverage-manifest.json` and `.crap-manifest.json` as build outputs:
+To regenerate both manifests, run `scripts/update-coverage-baseline`. It builds the `coverage-update` flake package — which runs the coverage tooling with `--update` inside the same sandbox as the `coverage` check — and copies the regenerated `.coverage-manifest.json` and `.crap-manifest.json` into the repo:
 
 ```bash
-nix build .#coverage-update
-cp result/.coverage-manifest.json result/.crap-manifest.json .
+scripts/update-coverage-baseline
 ```
 
-Review the resulting diff and commit both manifests in the same change (baseline changes need approval — see the next paragraph). Note that a pure file move (no behavior change) can be re-baselined without a sandbox build by renaming the affected keys in both manifests, preserving their committed values.
+Review the resulting diff and commit both manifests in the same change (baseline changes need approval — see the next paragraph). A pure file move (no behavior change) can instead be re-baselined by renaming the affected keys in both manifests, preserving their committed values.
 
 The baseline is stored in `.coverage-manifest.json`. Never lower or update it without user approval; approved changes to the baseline must be committed in the same commit as the file whose coverage changed. Coverage improvements are always allowed.
 
