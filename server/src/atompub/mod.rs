@@ -184,6 +184,17 @@ impl From<storage::DeleteMediaError> for HandlerError {
     }
 }
 
+impl From<anyhow::Error> for HandlerError {
+    /// The media upload pipeline (`MediaManager::upload_bytes`) reports failures as
+    /// `anyhow::Error`; `MediaManager::map_error` decides the client-facing status
+    /// (e.g. `413` for an oversized payload). Log the underlying error — it is
+    /// infrastructure detail, not user content — then pass the mapped status through.
+    fn from(err: anyhow::Error) -> Self {
+        tracing::error!(error = %err, "AtomPub media upload failed");
+        HandlerError::Status(crate::media_manager::MediaManager::map_error(&err))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::HandlerError;
@@ -194,6 +205,14 @@ mod tests {
     /// The status an error maps to through the single `IntoResponse` boundary.
     fn status(err: HandlerError) -> StatusCode {
         err.into_response().status()
+    }
+
+    #[test]
+    fn anyhow_error_maps_through_media_map_error() {
+        // Media-upload failures arrive as anyhow::Error and flow through
+        // MediaManager::map_error; a generic error yields a non-success status.
+        let code = status(anyhow::anyhow!("upload boom").into());
+        assert!(code.is_client_error() || code.is_server_error());
     }
 
     #[test]

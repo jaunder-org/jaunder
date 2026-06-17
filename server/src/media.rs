@@ -57,6 +57,7 @@ pub struct UploadResponse {
 ///
 /// Returns `4xx`/`5xx` status codes on validation failures or I/O errors.
 #[allow(clippy::too_many_lines)]
+#[tracing::instrument(name = "media.upload", skip_all)]
 pub async fn upload_handler(
     Extension(state): Extension<Arc<AppState>>,
     Extension(storage_path): Extension<Arc<PathBuf>>,
@@ -100,6 +101,7 @@ pub struct ServeParams {
 /// # Errors
 ///
 /// Returns `4xx` status codes for missing files or invalid parameters.
+#[tracing::instrument(name = "media.serve", skip_all)]
 pub async fn serve_handler(
     Extension(state): Extension<Arc<AppState>>,
     Extension(storage_path): Extension<Arc<PathBuf>>,
@@ -125,7 +127,7 @@ pub async fn serve_handler(
         .media
         .find_by_hash(&params.hash, &source)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(serve_internal_error)?
         .map_or_else(
             || detect_content_type(&params.filename).to_owned(),
             |r| r.content_type,
@@ -181,6 +183,7 @@ pub struct ProxyParams {
 /// # Errors
 ///
 /// Returns 401 if the authenticated user does not match `user_id`.
+#[tracing::instrument(name = "media.proxy", skip_all)]
 pub async fn proxy_handler(
     auth_user: AuthUser,
     Query(params): Query<ProxyParams>,
@@ -274,10 +277,27 @@ fn content_disposition(content_type: &str, filename: &str) -> String {
     format!("{disposition}; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
 }
 
+/// Logs a genuine media-serve internal failure (a storage lookup error) and maps
+/// it to `500`. Without this the error was discarded, producing a blank 500 with
+/// nothing logged. The error is infrastructure detail, not user content, so it
+/// carries no PII.
+fn serve_internal_error<E: std::error::Error>(err: E) -> StatusCode {
+    tracing::error!(error = %err, "media serve internal error");
+    StatusCode::INTERNAL_SERVER_ERROR
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn serve_internal_error_maps_to_500() {
+        assert_eq!(
+            serve_internal_error(sqlx::Error::PoolClosed),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
 
     fn params(source: &str, p1: &str, p2: &str, hash: &str, filename: &str) -> ServeParams {
         ServeParams {

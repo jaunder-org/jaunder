@@ -23,6 +23,7 @@ use super::base_url;
 /// # Errors
 ///
 /// Infallible in practice; returns `Result` for handler-signature uniformity.
+#[tracing::instrument(name = "atompub.rsd_document", skip_all)]
 pub async fn rsd_document(
     Extension(state): Extension<Arc<AppState>>,
     Path(username): Path<String>,

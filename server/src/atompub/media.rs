@@ -49,6 +49,7 @@ fn media_link_entry(record: &MediaRecord, base: &str, username: &str) -> MediaLi
 ///
 /// # Errors
 /// `403` wrong user; `4xx`/`5xx` from the upload pipeline; `500` on storage failure.
+#[tracing::instrument(name = "atompub.media.collection_post", skip_all)]
 pub async fn collection_post(
     Extension(state): Extension<Arc<AppState>>,
     Extension(storage_path): Extension<Arc<PathBuf>>,
@@ -84,8 +85,7 @@ pub async fn collection_post(
     let manager = crate::media_manager::MediaManager::new(state.clone(), storage_path);
     let upload = manager
         .upload_bytes(&auth_user, &filename, &content_type, &body)
-        .await
-        .map_err(|e| crate::media_manager::MediaManager::map_error(&e))?;
+        .await?;
 
     let record = state
         .media
@@ -122,6 +122,7 @@ pub async fn collection_post(
 ///
 /// # Errors
 /// `403` wrong user; `404` unknown; `500` on storage failure.
+#[tracing::instrument(name = "atompub.media.member_get", skip_all)]
 pub async fn member_get(
     Extension(state): Extension<Arc<AppState>>,
     auth_user: AuthUser,
@@ -144,6 +145,7 @@ pub async fn member_get(
 ///
 /// # Errors
 /// `403` wrong user; `404` unknown; `500` on storage failure.
+#[tracing::instrument(name = "atompub.media.member_delete", skip_all)]
 pub async fn member_delete(
     Extension(state): Extension<Arc<AppState>>,
     auth_user: AuthUser,

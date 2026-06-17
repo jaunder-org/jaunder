@@ -44,6 +44,7 @@ pub struct CollectionPaging {
 /// Returns `400` if the pagination cursor contains an invalid RFC 3339 timestamp.
 /// Returns `403` if the authenticated user attempts to access another user's collection.
 /// Returns `500` if storage fails.
+#[tracing::instrument(name = "atompub.posts.collection_get", skip_all)]
 pub async fn collection_get(
     Extension(state): Extension<Arc<AppState>>,
     auth_user: AuthUser,
@@ -149,6 +150,7 @@ async fn owned_post(
 /// Returns `403` if the authenticated user attempts to access another user's post.
 /// Returns `404` if the post is not found, is soft-deleted, or belongs to another user.
 /// Returns `500` if storage fails.
+#[tracing::instrument(name = "atompub.posts.member_get", skip_all)]
 pub async fn member_get(
     Extension(state): Extension<Arc<AppState>>,
     auth_user: AuthUser,
@@ -197,6 +199,7 @@ async fn apply_categories(
 /// Returns `403` if the authenticated user attempts to delete another user's post.
 /// Returns `404` if the post is not found, is already soft-deleted, or belongs to another user.
 /// Returns `500` if storage fails.
+#[tracing::instrument(name = "atompub.posts.member_delete", skip_all)]
 pub async fn member_delete(
     Extension(state): Extension<Arc<AppState>>,
     auth_user: AuthUser,
@@ -214,6 +217,7 @@ pub async fn member_delete(
 /// Returns `400` if the entry is malformed or invalid for post creation.
 /// Returns `403` if the authenticated user does not match the target username.
 /// Returns `500` if storage fails.
+#[tracing::instrument(name = "atompub.posts.collection_post", skip_all)]
 pub async fn collection_post(
     Extension(state): Extension<Arc<AppState>>,
     auth_user: AuthUser,
@@ -283,6 +287,7 @@ pub async fn collection_post(
 /// Returns `404` if the post is not found, is deleted, or belongs to another user.
 /// Returns `412` if `If-Match` is present and stale.
 /// Returns `500` if storage fails.
+#[tracing::instrument(name = "atompub.posts.member_put", skip_all)]
 pub async fn member_put(
     Extension(state): Extension<Arc<AppState>>,
     auth_user: AuthUser,

@@ -19,7 +19,8 @@ const MEDIA_ACCEPT: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/w
 ///
 /// # Errors
 ///
-/// Returns `500` if storage or serialization fails.
+/// Returns `500` if storage fails.
+#[tracing::instrument(name = "atompub.service_document", skip_all)]
 pub async fn service_document(
     Extension(state): Extension<Arc<AppState>>,
     auth_user: AuthUser,
