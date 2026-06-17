@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
-use storage::AppState;
+use storage::SiteConfigStorage;
 use web::auth::AuthUser;
 
 pub mod mapping;
@@ -57,9 +57,8 @@ pub(crate) fn require_user_match(auth_user: &AuthUser, username: &str) -> Result
 
 /// Returns the site's public base URL (scheme + host, no trailing slash), or an
 /// empty string when unconfigured (callers then emit root-relative URLs).
-pub(crate) async fn base_url(state: &AppState) -> String {
-    state
-        .site_config
+pub(crate) async fn base_url(site_config: &dyn SiteConfigStorage) -> String {
+    site_config
         .get_identity()
         .await
         .ok()

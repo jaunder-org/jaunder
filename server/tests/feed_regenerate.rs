@@ -64,9 +64,14 @@ async fn regenerate_writes_cache_row_for_user_feed() {
         .expect("create post 2");
 
     // Regenerate feed
-    let row = regenerate_feed(&state, "/~alice/feed.rss")
-        .await
-        .expect("regenerate feed");
+    let row = regenerate_feed(
+        state.site_config.as_ref(),
+        state.posts.as_ref(),
+        state.feed_cache.as_ref(),
+        "/~alice/feed.rss",
+    )
+    .await
+    .expect("regenerate feed");
 
     // Assert content type
     assert_eq!(
@@ -107,9 +112,14 @@ async fn regenerate_writes_empty_feed_for_user_with_no_posts() {
         .expect("create user");
 
     // Regenerate feed
-    let row = regenerate_feed(&state, "/~bob/feed.rss")
-        .await
-        .expect("regenerate feed");
+    let row = regenerate_feed(
+        state.site_config.as_ref(),
+        state.posts.as_ref(),
+        state.feed_cache.as_ref(),
+        "/~bob/feed.rss",
+    )
+    .await
+    .expect("regenerate feed");
 
     // Should have valid content type and non-empty body
     assert_eq!(
@@ -144,9 +154,14 @@ async fn regenerate_writes_cache_rows_for_tag_surfaces() {
 
     // Site-tag surface exercises the SiteTag canonical_url arm and the
     // window_site_tag storage query.
-    let site_tag = regenerate_feed(&state, "/tags/rust/feed.rss")
-        .await
-        .expect("regenerate site-tag feed");
+    let site_tag = regenerate_feed(
+        state.site_config.as_ref(),
+        state.posts.as_ref(),
+        state.feed_cache.as_ref(),
+        "/tags/rust/feed.rss",
+    )
+    .await
+    .expect("regenerate site-tag feed");
     assert_eq!(
         site_tag.content_type, "application/rss+xml; charset=utf-8",
         "site-tag RSS content type"
@@ -163,9 +178,14 @@ async fn regenerate_writes_cache_rows_for_tag_surfaces() {
 
     // User-tag surface exercises the UserTag canonical_url arm and the
     // window_user_tag storage query.
-    let user_tag = regenerate_feed(&state, "/~alice/tags/rust/feed.rss")
-        .await
-        .expect("regenerate user-tag feed");
+    let user_tag = regenerate_feed(
+        state.site_config.as_ref(),
+        state.posts.as_ref(),
+        state.feed_cache.as_ref(),
+        "/~alice/tags/rust/feed.rss",
+    )
+    .await
+    .expect("regenerate user-tag feed");
     assert_eq!(
         user_tag.content_type, "application/rss+xml; charset=utf-8",
         "user-tag RSS content type"
@@ -219,9 +239,14 @@ async fn regenerate_writes_each_format() {
     ];
 
     for (feed_url, expected_content_type) in &formats {
-        let row = regenerate_feed(&state, feed_url)
-            .await
-            .unwrap_or_else(|_| panic!("regenerate {feed_url}"));
+        let row = regenerate_feed(
+            state.site_config.as_ref(),
+            state.posts.as_ref(),
+            state.feed_cache.as_ref(),
+            feed_url,
+        )
+        .await
+        .unwrap_or_else(|_| panic!("regenerate {feed_url}"));
         assert_eq!(
             row.content_type, *expected_content_type,
             "content_type for {feed_url}"

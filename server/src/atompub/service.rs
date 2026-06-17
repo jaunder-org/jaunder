@@ -7,7 +7,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Extension;
 
 use common::atompub::{render_service_document, CollectionDecl, ServiceDocument};
-use storage::AppState;
+use storage::{PostStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
 use super::{base_url, HandlerError};
@@ -22,14 +22,14 @@ const MEDIA_ACCEPT: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/w
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.service_document", skip_all)]
 pub async fn service_document(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
 ) -> Result<Response, HandlerError> {
-    let base = base_url(&state).await;
+    let base = base_url(site_config.as_ref()).await;
     let username = auth_user.username.as_str();
 
-    let categories = state
-        .posts
+    let categories = posts
         .list_tags(None, 100)
         .await?
         .into_iter()

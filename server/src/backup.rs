@@ -9,7 +9,9 @@ use std::sync::Arc;
 use tokio_cron_scheduler::{Job, JobScheduler};
 
 use common::backup::BackupConfig;
-use storage::{export_backup, AppState, BackupExportOptions, BackupMode, DbConnectOptions};
+use storage::{
+    export_backup, BackupExportOptions, BackupMode, DbConnectOptions, SiteConfigStorage,
+};
 
 /// Starts the background backup worker if configured.
 ///
@@ -18,11 +20,11 @@ use storage::{export_backup, AppState, BackupExportOptions, BackupMode, DbConnec
 /// Returns an error if the site configuration cannot be loaded, or if the
 /// job scheduler fails to start.
 pub async fn start_backup_worker(
-    state: Arc<AppState>,
+    site_config: Arc<dyn SiteConfigStorage>,
     database: DbConnectOptions,
     storage_path: PathBuf,
 ) -> anyhow::Result<Option<JobScheduler>> {
-    let config = state.site_config.get_backup_config().await?;
+    let config = site_config.get_backup_config().await?;
     let Some(destination_root) = config.destination_path.as_deref().map(PathBuf::from) else {
         tracing::warn!("backup worker disabled: backup.destination_path is not configured");
         return Ok(None);
@@ -36,11 +38,7 @@ pub async fn start_backup_worker(
         let destination_root = destination_root.clone();
         let config = config.clone();
         Box::pin(async move {
-            if let Err(error) =
-                run_scheduled_backup(&database, &media_path, &destination_root, &config).await
-            {
-                tracing::error!(error = %error, "scheduled backup failed");
-            }
+            run_scheduled_backup_logged(&database, &media_path, &destination_root, &config).await;
         })
     })?;
     scheduler.add(job).await?;
@@ -66,6 +64,22 @@ async fn run_scheduled_backup(
     prune_backups(destination_root, config.retention_count)?;
     tracing::info!(path = %destination_path.display(), "scheduled backup complete");
     Ok(destination_path)
+}
+
+/// Runs one scheduled backup and logs any failure, swallowing the error so a
+/// transient backup failure never tears the scheduler down. Extracted from the
+/// job closure so both the success and failure paths can be exercised directly
+/// from a test, rather than depending on the cron scheduler firing (whose
+/// background-thread execution is awkward to observe under coverage).
+async fn run_scheduled_backup_logged(
+    database: &DbConnectOptions,
+    media_path: &Path,
+    destination_root: &Path,
+    config: &BackupConfig,
+) {
+    if let Err(error) = run_scheduled_backup(database, media_path, destination_root, config).await {
+        tracing::error!(error = %error, "scheduled backup failed");
+    }
 }
 
 fn prune_backups(destination_root: &Path, retention_count: usize) -> std::io::Result<()> {
@@ -112,14 +126,9 @@ fn backup_path_for_mode(destination_root: &Path, mode: BackupMode) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{migrated_sqlite_db, site_config};
     use storage::{BACKUP_DESTINATION_PATH_KEY, BACKUP_SCHEDULE_KEY};
     use tempfile::TempDir;
-
-    async fn test_state() -> Arc<AppState> {
-        storage::open_database(&"sqlite::memory:".parse().unwrap())
-            .await
-            .unwrap()
-    }
 
     #[test]
     fn timestamped_backup_name_has_expected_format() {
@@ -141,44 +150,33 @@ mod tests {
 
     #[tokio::test]
     async fn backup_worker_disabled_without_destination_path() {
-        let state = test_state().await;
         let storage = TempDir::new().expect("temp dir");
-        let scheduler = start_backup_worker(
-            state,
-            "sqlite::memory:".parse().expect("sqlite options"),
-            storage.path().to_path_buf(),
-        )
-        .await
-        .expect("worker start");
+        let (db, pool) = migrated_sqlite_db(storage.path()).await;
+        let scheduler = start_backup_worker(site_config(&pool), db, storage.path().to_path_buf())
+            .await
+            .expect("worker start");
 
         assert!(scheduler.is_none());
     }
 
     #[tokio::test]
     async fn backup_worker_starts_when_destination_is_configured() {
-        let state = test_state().await;
         let storage = TempDir::new().expect("temp dir");
-        state
-            .site_config
-            .set(
-                BACKUP_DESTINATION_PATH_KEY,
-                storage.path().join("backups").to_str().expect("utf-8 path"),
-            )
-            .await
-            .expect("set destination");
-        state
-            .site_config
-            .set(BACKUP_SCHEDULE_KEY, "0 0 0 1 1 *")
+        let (db, pool) = migrated_sqlite_db(storage.path()).await;
+        let cfg = site_config(&pool);
+        cfg.set(
+            BACKUP_DESTINATION_PATH_KEY,
+            storage.path().join("backups").to_str().expect("utf-8 path"),
+        )
+        .await
+        .expect("set destination");
+        cfg.set(BACKUP_SCHEDULE_KEY, "0 0 0 1 1 *")
             .await
             .expect("set schedule");
 
-        let scheduler = start_backup_worker(
-            state,
-            "sqlite::memory:".parse().expect("sqlite options"),
-            storage.path().to_path_buf(),
-        )
-        .await
-        .expect("worker start");
+        let scheduler = start_backup_worker(cfg, db, storage.path().to_path_buf())
+            .await
+            .expect("worker start");
 
         assert!(scheduler.is_some());
     }
@@ -186,31 +184,24 @@ mod tests {
     #[tokio::test]
     async fn backup_worker_executes_scheduled_backup() {
         let temp = TempDir::new().expect("temp dir");
-        let db_options: DbConnectOptions =
-            format!("sqlite:{}", temp.path().join("jaunder.db").display())
-                .parse()
-                .expect("db options");
-        let state = storage::open_database(&db_options).await.expect("open db");
+        let (db, pool) = migrated_sqlite_db(temp.path()).await;
+        let cfg = site_config(&pool);
         let storage_path = temp.path().join("storage");
         let media_path = storage_path.join("media");
         std::fs::create_dir_all(&media_path).expect("media dir");
         std::fs::write(media_path.join("file.txt"), "media").expect("media file");
         let destination_path = temp.path().join("scheduled-backups");
-        state
-            .site_config
-            .set(
-                BACKUP_DESTINATION_PATH_KEY,
-                destination_path.to_str().expect("utf-8 path"),
-            )
-            .await
-            .expect("set destination");
-        state
-            .site_config
-            .set(BACKUP_SCHEDULE_KEY, "*/1 * * * * *")
+        cfg.set(
+            BACKUP_DESTINATION_PATH_KEY,
+            destination_path.to_str().expect("utf-8 path"),
+        )
+        .await
+        .expect("set destination");
+        cfg.set(BACKUP_SCHEDULE_KEY, "*/1 * * * * *")
             .await
             .expect("set schedule");
 
-        let mut scheduler = start_backup_worker(state, db_options, storage_path)
+        let mut scheduler = start_backup_worker(cfg, db, storage_path)
             .await
             .expect("worker start")
             .expect("scheduler enabled");
@@ -236,10 +227,9 @@ mod tests {
     #[tokio::test]
     async fn run_scheduled_backup_writes_backup_and_prunes_old_ones() {
         let temp = TempDir::new().expect("temp dir");
-        let db_url = format!("sqlite:{}", temp.path().join("jaunder.db").display());
-        storage::open_database(&db_url.parse().expect("db options"))
-            .await
-            .expect("open db");
+        // `run_scheduled_backup` opens its own connection via `db`; we just need
+        // the schema in place, so the migrated pool is dropped immediately.
+        let (db, _pool) = migrated_sqlite_db(temp.path()).await;
 
         let media = temp.path().join("media");
         std::fs::create_dir(&media).expect("media dir");
@@ -258,19 +248,48 @@ mod tests {
             retention_count: 1,
             mode: BackupMode::Directory,
         };
-        let written = run_scheduled_backup(
-            &db_url.parse().expect("db options"),
-            &media,
-            &destination_root,
-            &config,
-        )
-        .await
-        .expect("scheduled backup");
+        let written = run_scheduled_backup(&db, &media, &destination_root, &config)
+            .await
+            .expect("scheduled backup");
 
         assert!(written.join("manifest.json").is_file());
         assert!(written.join("media").join("file.txt").is_file());
         assert!(!destination_root.join("backup-0001").exists());
         assert!(!destination_root.join("backup-0002").exists());
+    }
+
+    #[tokio::test]
+    async fn run_scheduled_backup_logged_runs_success_path_and_swallows_errors() {
+        let temp = TempDir::new().expect("temp dir");
+        let (db, _pool) = migrated_sqlite_db(temp.path()).await;
+        let media = temp.path().join("media");
+        std::fs::create_dir(&media).expect("media dir");
+
+        // Success: a writable destination produces a backup directory.
+        let ok_root = temp.path().join("ok-backups");
+        let ok_config = BackupConfig {
+            destination_path: Some(ok_root.to_string_lossy().into_owned()),
+            schedule: common::backup::BackupSchedule::parse("0 0 0 1 1 *").expect("valid schedule"),
+            retention_count: 1,
+            mode: BackupMode::Directory,
+        };
+        run_scheduled_backup_logged(&db, &media, &ok_root, &ok_config).await;
+        assert!(
+            ok_root.exists(),
+            "successful scheduled backup should create the destination"
+        );
+
+        // Failure: the destination's parent is a regular file, so create_dir_all
+        // fails; the error must be logged and swallowed (no panic, nothing written).
+        let blocker = temp.path().join("blocker");
+        std::fs::write(&blocker, "x").expect("write blocker");
+        let bad_root = blocker.join("backups");
+        let bad_config = BackupConfig {
+            destination_path: Some(bad_root.to_string_lossy().into_owned()),
+            ..ok_config
+        };
+        run_scheduled_backup_logged(&db, &media, &bad_root, &bad_config).await;
+        assert!(!bad_root.exists(), "failed scheduled backup writes nothing");
     }
 
     #[test]

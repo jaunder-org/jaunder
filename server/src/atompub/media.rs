@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use common::atompub::{render_media_link_entry, MediaLinkEntry};
 use common::media::{media_url, sanitize_filename};
-use storage::{AppState, MediaRecord, MediaSource};
+use storage::{MediaRecord, MediaSource, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
 use super::{base_url, HandlerError};
@@ -51,7 +51,8 @@ fn media_link_entry(record: &MediaRecord, base: &str, username: &str) -> MediaLi
 /// `403` wrong user; `4xx`/`5xx` from the upload pipeline; `500` on storage failure.
 #[tracing::instrument(name = "atompub.media.collection_post", skip_all)]
 pub async fn collection_post(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(media): Extension<Arc<dyn MediaStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(storage_path): Extension<Arc<PathBuf>>,
     auth_user: AuthUser,
     Path(username): Path<String>,
@@ -76,19 +77,18 @@ pub async fn collection_post(
 
     // Determine whether this exact resource already exists (idempotent re-upload).
     let sha = format!("{:x}", Sha256::digest(&body));
-    let existed = state
-        .media
+    let existed = media
         .get_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
         .await?
         .is_some();
 
-    let manager = crate::media_manager::MediaManager::new(state.clone(), storage_path);
+    let manager =
+        crate::media_manager::MediaManager::new(media.clone(), site_config.clone(), storage_path);
     let upload = manager
         .upload_bytes(&auth_user, &filename, &content_type, &body)
         .await?;
 
-    let record = state
-        .media
+    let record = media
         .get_media(
             auth_user.user_id,
             &upload.sha256,
@@ -98,7 +98,7 @@ pub async fn collection_post(
         .await?
         .ok_or(HandlerError::Internal)?;
 
-    let base = base_url(&state).await;
+    let base = base_url(site_config.as_ref()).await;
     let entry = media_link_entry(&record, &base, &username);
     let xml = render_media_link_entry(&entry);
     let status = if existed {
@@ -124,18 +124,18 @@ pub async fn collection_post(
 /// `403` wrong user; `404` unknown; `500` on storage failure.
 #[tracing::instrument(name = "atompub.media.member_get", skip_all)]
 pub async fn member_get(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(media): Extension<Arc<dyn MediaStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
     Path((username, sha, filename)): Path<(String, String, String)>,
 ) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
-    let record = state
-        .media
+    let record = media
         .get_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
         .await?
         .ok_or(HandlerError::NotFound)?;
 
-    let base = base_url(&state).await;
+    let base = base_url(site_config.as_ref()).await;
     let entry = media_link_entry(&record, &base, &username);
     let xml = render_media_link_entry(&entry);
     Ok(([(header::CONTENT_TYPE, ENTRY_CONTENT_TYPE)], xml).into_response())
@@ -147,13 +147,12 @@ pub async fn member_get(
 /// `403` wrong user; `404` unknown; `500` on storage failure.
 #[tracing::instrument(name = "atompub.media.member_delete", skip_all)]
 pub async fn member_delete(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(media): Extension<Arc<dyn MediaStorage>>,
     auth_user: AuthUser,
     Path((username, sha, filename)): Path<(String, String, String)>,
 ) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
-    state
-        .media
+    media
         .delete_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
         .await?;
     Ok(StatusCode::NO_CONTENT.into_response())

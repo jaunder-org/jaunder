@@ -15,6 +15,9 @@ pub mod media;
 pub mod media_manager;
 pub mod observability;
 
+#[cfg(test)]
+mod test_support;
+
 use std::{path::PathBuf, sync::Arc};
 
 use axum::Router;
@@ -34,7 +37,20 @@ pub fn create_router(
     storage_path: PathBuf,
 ) -> Router {
     let routes = generate_route_list(App);
-    let extension_state = state.clone();
+    // Per-trait extensions for the raw axum HTTP handlers (feed, atompub,
+    // media). The whole `AppState` is never layered as an `Extension`; each
+    // handler receives only the storage traits it declares (ADR-0016). The
+    // Leptos `#[server]` functions are wired separately via per-trait contexts
+    // in `provide_app_state_contexts`.
+    let posts_ext = state.posts.clone();
+    let user_config_ext = state.user_config.clone();
+    let site_config_ext = state.site_config.clone();
+    let media_ext = state.media.clone();
+    let feed_cache_ext = state.feed_cache.clone();
+    // The `AuthUser` extractor (web crate) authenticates the session cookie /
+    // bearer token, so the raw HTTP handlers and the Leptos request `Parts`
+    // need the session store reachable as a request extension.
+    let sessions_ext = state.sessions.clone();
     let server_fn_state = state.clone();
     let server_fn_mailer = mailer.clone();
     let leptos_mailer = mailer;
@@ -94,7 +110,12 @@ pub fn create_router(
         )
         .fallback(leptos_axum::file_and_error_handler(shell))
         .layer(axum::Extension(storage_path_ext))
-        .layer(axum::Extension(extension_state));
+        .layer(axum::Extension(posts_ext))
+        .layer(axum::Extension(user_config_ext))
+        .layer(axum::Extension(site_config_ext))
+        .layer(axum::Extension(media_ext))
+        .layer(axum::Extension(feed_cache_ext))
+        .layer(axum::Extension(sessions_ext));
     crate::observability::with_http_observability(app).with_state(leptos_options)
 }
 

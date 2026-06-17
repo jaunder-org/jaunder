@@ -9,7 +9,7 @@ use axum::Extension;
 use serde::Deserialize;
 
 use common::atompub::{entry_from_xml, entry_to_xml, render_feed, FeedMeta};
-use storage::{AppState, CollectionCursor, PostRecord};
+use storage::{CollectionCursor, PostRecord, PostStorage, SiteConfigStorage, UserConfigStorage};
 use web::auth::AuthUser;
 
 use super::mapping::{entry_to_post_fields, post_to_entry};
@@ -46,7 +46,8 @@ pub struct CollectionPaging {
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.collection_get", skip_all)]
 pub async fn collection_get(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
     Path(username): Path<String>,
     Query(paging): Query<CollectionPaging>,
@@ -72,21 +73,20 @@ pub async fn collection_get(
     };
 
     // Fetch one extra row to detect whether a next page exists.
-    let mut posts = state
-        .posts
+    let mut records = posts
         .list_collection_by_user(auth_user.user_id, cursor.as_ref(), limit + 1)
         .await?;
 
-    let has_more = usize::try_from(limit).unwrap_or(usize::MAX) < posts.len();
+    let has_more = usize::try_from(limit).unwrap_or(usize::MAX) < records.len();
     if has_more {
-        posts.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        records.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
     }
 
-    let base = base_url(&state).await;
+    let base = base_url(site_config.as_ref()).await;
     let collection_url = format!("{base}/atompub/{username}/posts");
 
     let next = if has_more {
-        posts.last().map(|last| {
+        records.last().map(|last| {
             let ts = utf8_encode(&last.updated_at.to_rfc3339());
             format!(
                 "{collection_url}?updated_before={ts}&id_before={}",
@@ -97,9 +97,9 @@ pub async fn collection_get(
         None
     };
 
-    let entries: Vec<_> = posts.iter().map(|p| post_to_entry(p, &base)).collect();
+    let entries: Vec<_> = records.iter().map(|p| post_to_entry(p, &base)).collect();
 
-    let updated_rfc3339 = posts.first().map_or_else(
+    let updated_rfc3339 = records.first().map_or_else(
         || chrono::Utc::now().to_rfc3339(),
         |p| p.updated_at.to_rfc3339(),
     );
@@ -126,14 +126,13 @@ fn utf8_encode(s: &str) -> String {
 /// Loads a post that the authenticated user owns and that is not soft-deleted.
 /// Returns `404` for missing, foreign, or deleted posts.
 async fn owned_post(
-    state: &AppState,
+    posts: &dyn PostStorage,
     auth_user: &AuthUser,
     username: &str,
     post_id: i64,
 ) -> Result<PostRecord, HandlerError> {
     super::require_user_match(auth_user, username)?;
-    let post = state
-        .posts
+    let post = posts
         .get_post_by_id(post_id)
         .await?
         .ok_or(HandlerError::NotFound)?;
@@ -152,12 +151,13 @@ async fn owned_post(
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.member_get", skip_all)]
 pub async fn member_get(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
     Path((username, post_id)): Path<(String, i64)>,
 ) -> Result<Response, HandlerError> {
-    let post = owned_post(&state, &auth_user, &username, post_id).await?;
-    let base = base_url(&state).await;
+    let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
+    let base = base_url(site_config.as_ref()).await;
     let entry = post_to_entry(&post, &base);
     let xml = entry_to_xml(&entry);
     Ok((
@@ -201,12 +201,12 @@ async fn apply_categories(
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.member_delete", skip_all)]
 pub async fn member_delete(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(posts): Extension<Arc<dyn PostStorage>>,
     auth_user: AuthUser,
     Path((username, post_id)): Path<(String, i64)>,
 ) -> Result<Response, HandlerError> {
-    let post = owned_post(&state, &auth_user, &username, post_id).await?;
-    state.posts.soft_delete_post(post.post_id).await?;
+    let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
+    posts.soft_delete_post(post.post_id).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -219,7 +219,9 @@ pub async fn member_delete(
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.collection_post", skip_all)]
 pub async fn collection_post(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(user_config): Extension<Arc<dyn UserConfigStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
     Path(username): Path<String>,
     body: String,
@@ -227,7 +229,7 @@ pub async fn collection_post(
     super::require_user_match(&auth_user, &username)?;
     let entry = entry_from_xml(&body)?;
     let default_format =
-        storage::get_default_post_format(state.user_config.as_ref(), auth_user.user_id).await?;
+        storage::get_default_post_format(user_config.as_ref(), auth_user.user_id).await?;
     let fields = entry_to_post_fields(&entry, default_format);
     let published_at = if fields.is_draft {
         None
@@ -236,7 +238,7 @@ pub async fn collection_post(
     };
 
     let created = storage::perform_post_creation(
-        state.posts.as_ref(),
+        posts.as_ref(),
         storage::PostCreation {
             user_id: auth_user.user_id,
             body: fields.body,
@@ -250,16 +252,15 @@ pub async fn collection_post(
     )
     .await?;
 
-    apply_categories(state.posts.as_ref(), created.post_id, &fields.categories).await?;
+    apply_categories(posts.as_ref(), created.post_id, &fields.categories).await?;
 
     // Re-fetch so the response entry includes the freshly applied tags.
-    let post = state
-        .posts
+    let post = posts
         .get_post_by_id(created.post_id)
         .await?
         .ok_or(HandlerError::Internal)?;
 
-    let base = base_url(&state).await;
+    let base = base_url(site_config.as_ref()).await;
     let location = format!("{base}/atompub/{username}/posts/{}", post.post_id);
     let entry_out = post_to_entry(&post, &base);
     let xml = entry_to_xml(&entry_out);
@@ -289,13 +290,15 @@ pub async fn collection_post(
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.member_put", skip_all)]
 pub async fn member_put(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(user_config): Extension<Arc<dyn UserConfigStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
     Path((username, post_id)): Path<(String, i64)>,
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, HandlerError> {
-    let current = owned_post(&state, &auth_user, &username, post_id).await?;
+    let current = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
 
     if let Some(if_match) = headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()) {
         if if_match != "*" && if_match != etag_for(&current) {
@@ -305,11 +308,11 @@ pub async fn member_put(
 
     let entry = entry_from_xml(&body)?;
     let default_format =
-        storage::get_default_post_format(state.user_config.as_ref(), auth_user.user_id).await?;
+        storage::get_default_post_format(user_config.as_ref(), auth_user.user_id).await?;
     let fields = entry_to_post_fields(&entry, default_format);
 
     storage::perform_post_update(
-        state.posts.as_ref(),
+        posts.as_ref(),
         storage::PostUpdate {
             post_id,
             editor_user_id: auth_user.user_id,
@@ -323,15 +326,14 @@ pub async fn member_put(
     )
     .await?;
 
-    apply_categories(state.posts.as_ref(), post_id, &fields.categories).await?;
+    apply_categories(posts.as_ref(), post_id, &fields.categories).await?;
 
-    let post = state
-        .posts
+    let post = posts
         .get_post_by_id(post_id)
         .await?
         .ok_or(HandlerError::Internal)?;
 
-    let base = base_url(&state).await;
+    let base = base_url(site_config.as_ref()).await;
     let entry_out = post_to_entry(&post, &base);
     let xml = entry_to_xml(&entry_out);
 

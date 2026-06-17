@@ -13,14 +13,29 @@ use chrono::Utc;
 use common::password::Password;
 use common::slug::Slug;
 use common::username::Username;
-use jaunder::feed::worker::tick;
+use jaunder::feed::worker::FeedWorker;
 use storage::{CreatePostInput, PostFormat};
 use tempfile::TempDir;
+
+/// Builds a [`FeedWorker`] from a test `AppState`'s handles plus an injected
+/// `WebSub` client (the worker no longer reaches into a shared bundle).
+fn make_worker(
+    state: &std::sync::Arc<storage::AppState>,
+    websub: std::sync::Arc<dyn common::websub::WebSubClient>,
+) -> FeedWorker {
+    FeedWorker::new(
+        state.site_config.clone(),
+        state.posts.clone(),
+        state.feed_cache.clone(),
+        state.feed_events.clone(),
+        websub,
+    )
+}
 
 #[tokio::test]
 async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub() {
     let base = TempDir::new().expect("temp dir");
-    let (state, _capture) = helpers::test_state_with_websub(&base).await;
+    let (state, capture) = helpers::test_state_with_websub(&base).await;
 
     // Create a user and a published post
     let username: Username = "alice".parse().expect("valid username");
@@ -56,7 +71,7 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub() {
         .expect("enqueue feed event");
 
     // Run the worker
-    tick(state.clone()).await;
+    make_worker(&state, capture.clone()).tick().await;
 
     // Verify the feed was regenerated
     let cache_row = state
@@ -123,7 +138,7 @@ async fn worker_pings_hub_when_configured() {
         .expect("enqueue feed event");
 
     // Run the worker
-    tick(state.clone()).await;
+    make_worker(&state, capture.clone()).tick().await;
 
     // Verify the ping was captured
     let pings = capture.pings();
@@ -185,7 +200,7 @@ async fn worker_groups_duplicate_events_into_single_regen() {
     }
 
     // Run the worker
-    tick(state.clone()).await;
+    make_worker(&state, capture.clone()).tick().await;
 
     // Verify only 1 ping was sent (grouping collapses duplicates)
     let pings = capture.pings();
@@ -213,7 +228,7 @@ async fn worker_applies_backoff_on_regen_failure() {
         .expect("enqueue feed event");
 
     // Run the worker - regeneration will fail.
-    tick(state.clone()).await;
+    make_worker(&state, capture.clone()).tick().await;
 
     // No cache row should have been written.
     let cache = state.feed_cache.get(feed_url).await.expect("get cache");
@@ -286,7 +301,6 @@ async fn worker_applies_backoff_on_ping_failure() {
         user_config: std::sync::Arc::new(storage::SqliteUserConfigStorage::new(pool.clone())),
         feed_cache: std::sync::Arc::new(storage::SqliteFeedCacheStorage::new(pool.clone())),
         feed_events: std::sync::Arc::new(storage::SqliteFeedEventStorage::new(pool)),
-        websub: std::sync::Arc::new(FailingWebSubClient),
     });
 
     // Create a user and a published post
@@ -331,7 +345,9 @@ async fn worker_applies_backoff_on_ping_failure() {
         .expect("enqueue feed event");
 
     // Run the worker - ping will fail
-    tick(state.clone()).await;
+    make_worker(&state, std::sync::Arc::new(FailingWebSubClient))
+        .tick()
+        .await;
 
     // Immediately after failure, the event should NOT be claimable (scheduled for future retry)
     let immediately_claimable = state

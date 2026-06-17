@@ -11,7 +11,7 @@ use tokio::fs;
 use tokio_util::io::ReaderStream;
 
 use common::media::{detect_content_type, should_inline};
-use storage::{AppState, MediaSource};
+use storage::{MediaSource, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
 /// Builds the media routes (upload, content-addressed serve, remote proxy).
@@ -59,7 +59,8 @@ pub struct UploadResponse {
 #[allow(clippy::too_many_lines)]
 #[tracing::instrument(name = "media.upload", skip_all)]
 pub async fn upload_handler(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(media): Extension<Arc<dyn MediaStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(storage_path): Extension<Arc<PathBuf>>,
     auth_user: AuthUser,
     mut multipart: Multipart,
@@ -73,7 +74,7 @@ pub async fn upload_handler(
         return Err(StatusCode::BAD_REQUEST);
     };
 
-    let manager = crate::media_manager::MediaManager::new(state, storage_path);
+    let manager = crate::media_manager::MediaManager::new(media, site_config, storage_path);
     let response = manager.upload(&auth_user, field).await.map_err(|e| {
         tracing::error!(error = %e, "upload failed");
         crate::media_manager::MediaManager::map_error(&e)
@@ -103,7 +104,7 @@ pub struct ServeParams {
 /// Returns `4xx` status codes for missing files or invalid parameters.
 #[tracing::instrument(name = "media.serve", skip_all)]
 pub async fn serve_handler(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(media): Extension<Arc<dyn MediaStorage>>,
     Extension(storage_path): Extension<Arc<PathBuf>>,
     Path(params): Path<ServeParams>,
     req_headers: axum::http::HeaderMap,
@@ -123,8 +124,7 @@ pub async fn serve_handler(
     }
 
     // Look up content_type from DB; fall back to extension detection.
-    let content_type = state
-        .media
+    let content_type = media
         .find_by_hash(&params.hash, &source)
         .await
         .map_err(serve_internal_error)?
