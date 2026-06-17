@@ -12,8 +12,8 @@ use common::atompub::{entry_from_xml, entry_to_xml, render_feed, FeedMeta};
 use storage::{AppState, CollectionCursor, PostRecord};
 use web::auth::AuthUser;
 
-use super::base_url;
 use super::mapping::{entry_to_post_fields, post_to_entry};
+use super::{base_url, HandlerError};
 
 const FEED_CONTENT_TYPE: &str = "application/atom+xml;type=feed;charset=utf-8";
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
@@ -43,13 +43,13 @@ pub struct CollectionPaging {
 ///
 /// Returns `400` if the pagination cursor contains an invalid RFC 3339 timestamp.
 /// Returns `403` if the authenticated user attempts to access another user's collection.
-/// Returns `500` if storage or serialization fails.
+/// Returns `500` if storage fails.
 pub async fn collection_get(
     Extension(state): Extension<Arc<AppState>>,
     auth_user: AuthUser,
     Path(username): Path<String>,
     Query(paging): Query<CollectionPaging>,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
 
     let limit = paging
@@ -60,7 +60,7 @@ pub async fn collection_get(
     let cursor = match (&paging.updated_before, paging.id_before) {
         (Some(ts), Some(post_id)) => {
             let updated_at = chrono::DateTime::parse_from_rfc3339(ts)
-                .map_err(|_| StatusCode::BAD_REQUEST)?
+                .map_err(|_| HandlerError::BadRequest)?
                 .with_timezone(&chrono::Utc);
             Some(CollectionCursor {
                 updated_at,
@@ -74,8 +74,7 @@ pub async fn collection_get(
     let mut posts = state
         .posts
         .list_collection_by_user(auth_user.user_id, cursor.as_ref(), limit + 1)
-        .await
-        .map_err(super::internal_error)?;
+        .await?;
 
     let has_more = usize::try_from(limit).unwrap_or(usize::MAX) < posts.len();
     if has_more {
@@ -130,16 +129,15 @@ async fn owned_post(
     auth_user: &AuthUser,
     username: &str,
     post_id: i64,
-) -> Result<PostRecord, StatusCode> {
+) -> Result<PostRecord, HandlerError> {
     super::require_user_match(auth_user, username)?;
     let post = state
         .posts
         .get_post_by_id(post_id)
-        .await
-        .map_err(super::internal_error)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .await?
+        .ok_or(HandlerError::NotFound)?;
     if post.user_id != auth_user.user_id || post.deleted_at.is_some() {
-        return Err(StatusCode::NOT_FOUND);
+        return Err(HandlerError::NotFound);
     }
     Ok(post)
 }
@@ -150,12 +148,12 @@ async fn owned_post(
 ///
 /// Returns `403` if the authenticated user attempts to access another user's post.
 /// Returns `404` if the post is not found, is soft-deleted, or belongs to another user.
-/// Returns `500` if storage or serialization fails.
+/// Returns `500` if storage fails.
 pub async fn member_get(
     Extension(state): Extension<Arc<AppState>>,
     auth_user: AuthUser,
     Path((username, post_id)): Path<(String, i64)>,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, HandlerError> {
     let post = owned_post(&state, &auth_user, &username, post_id).await?;
     let base = base_url(&state).await;
     let entry = post_to_entry(&post, &base);
@@ -170,29 +168,6 @@ pub async fn member_get(
         .into_response())
 }
 
-/// Maps a `PerformCreationError` to the appropriate HTTP status code.
-fn creation_status(err: &storage::PerformCreationError) -> StatusCode {
-    match err {
-        storage::PerformCreationError::EmptyPost
-        | storage::PerformCreationError::NoSlugFromPost
-        | storage::PerformCreationError::InvalidSlug(_) => StatusCode::BAD_REQUEST,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    }
-}
-
-/// Maps a `PerformUpdateError` to the appropriate HTTP status code.
-fn update_status(err: &storage::PerformUpdateError) -> StatusCode {
-    match err {
-        storage::PerformUpdateError::EmptyPost
-        | storage::PerformUpdateError::NoSlugFromPost
-        | storage::PerformUpdateError::InvalidSlug => StatusCode::BAD_REQUEST,
-        storage::PerformUpdateError::NotFound | storage::PerformUpdateError::Unauthorized => {
-            StatusCode::NOT_FOUND
-        }
-        storage::PerformUpdateError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    }
-}
-
 /// Reconciles the post's tags with a desired set of category terms.
 ///
 /// Tags missing from `desired` are removed; desired categories not yet tagged
@@ -202,24 +177,15 @@ async fn apply_categories(
     posts: &dyn storage::PostStorage,
     post_id: i64,
     desired: &[String],
-) -> Result<(), StatusCode> {
-    let existing = posts
-        .get_tags_for_post(post_id)
-        .await
-        .map_err(super::internal_error)?;
+) -> Result<(), HandlerError> {
+    let existing = posts.get_tags_for_post(post_id).await?;
     let diff = storage::post_tag_diff(&existing, desired);
 
     for display in diff.to_add {
-        posts
-            .tag_post(post_id, display)
-            .await
-            .map_err(super::internal_error)?;
+        posts.tag_post(post_id, display).await?;
     }
     for slug in diff.to_remove {
-        posts
-            .untag_post(post_id, slug)
-            .await
-            .map_err(super::internal_error)?;
+        posts.untag_post(post_id, slug).await?;
     }
     Ok(())
 }
@@ -235,13 +201,9 @@ pub async fn member_delete(
     Extension(state): Extension<Arc<AppState>>,
     auth_user: AuthUser,
     Path((username, post_id)): Path<(String, i64)>,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, HandlerError> {
     let post = owned_post(&state, &auth_user, &username, post_id).await?;
-    state
-        .posts
-        .soft_delete_post(post.post_id)
-        .await
-        .map_err(super::internal_error)?;
+    state.posts.soft_delete_post(post.post_id).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -251,19 +213,17 @@ pub async fn member_delete(
 ///
 /// Returns `400` if the entry is malformed or invalid for post creation.
 /// Returns `403` if the authenticated user does not match the target username.
-/// Returns `500` if storage or serialization fails.
+/// Returns `500` if storage fails.
 pub async fn collection_post(
     Extension(state): Extension<Arc<AppState>>,
     auth_user: AuthUser,
     Path(username): Path<String>,
     body: String,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
-    let entry = entry_from_xml(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let entry = entry_from_xml(&body)?;
     let default_format =
-        storage::get_default_post_format(state.user_config.as_ref(), auth_user.user_id)
-            .await
-            .map_err(super::internal_error)?;
+        storage::get_default_post_format(state.user_config.as_ref(), auth_user.user_id).await?;
     let fields = entry_to_post_fields(&entry, default_format);
     let published_at = if fields.is_draft {
         None
@@ -284,8 +244,7 @@ pub async fn collection_post(
             summary: fields.summary,
         },
     )
-    .await
-    .map_err(|e| creation_status(&e))?;
+    .await?;
 
     apply_categories(state.posts.as_ref(), created.post_id, &fields.categories).await?;
 
@@ -293,9 +252,8 @@ pub async fn collection_post(
     let post = state
         .posts
         .get_post_by_id(created.post_id)
-        .await
-        .map_err(super::internal_error)?
-        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        .await?
+        .ok_or(HandlerError::Internal)?;
 
     let base = base_url(&state).await;
     let location = format!("{base}/atompub/{username}/posts/{}", post.post_id);
@@ -324,27 +282,25 @@ pub async fn collection_post(
 /// Returns `403` if the authenticated user does not match the target username.
 /// Returns `404` if the post is not found, is deleted, or belongs to another user.
 /// Returns `412` if `If-Match` is present and stale.
-/// Returns `500` if storage or serialization fails.
+/// Returns `500` if storage fails.
 pub async fn member_put(
     Extension(state): Extension<Arc<AppState>>,
     auth_user: AuthUser,
     Path((username, post_id)): Path<(String, i64)>,
     headers: HeaderMap,
     body: String,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, HandlerError> {
     let current = owned_post(&state, &auth_user, &username, post_id).await?;
 
     if let Some(if_match) = headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()) {
         if if_match != "*" && if_match != etag_for(&current) {
-            return Err(StatusCode::PRECONDITION_FAILED);
+            return Err(HandlerError::PreconditionFailed);
         }
     }
 
-    let entry = entry_from_xml(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let entry = entry_from_xml(&body)?;
     let default_format =
-        storage::get_default_post_format(state.user_config.as_ref(), auth_user.user_id)
-            .await
-            .map_err(super::internal_error)?;
+        storage::get_default_post_format(state.user_config.as_ref(), auth_user.user_id).await?;
     let fields = entry_to_post_fields(&entry, default_format);
 
     storage::perform_post_update(
@@ -360,17 +316,15 @@ pub async fn member_put(
             summary: fields.summary,
         },
     )
-    .await
-    .map_err(|e| update_status(&e))?;
+    .await?;
 
     apply_categories(state.posts.as_ref(), post_id, &fields.categories).await?;
 
     let post = state
         .posts
         .get_post_by_id(post_id)
-        .await
-        .map_err(super::internal_error)?
-        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        .await?
+        .ok_or(HandlerError::Internal)?;
 
     let base = base_url(&state).await;
     let entry_out = post_to_entry(&post, &base);
@@ -385,61 +339,4 @@ pub async fn member_put(
         xml,
     )
         .into_response())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{creation_status, update_status};
-    use axum::http::StatusCode;
-    use storage::{PerformCreationError, PerformUpdateError};
-
-    #[test]
-    fn creation_status_maps_validation_to_400_else_500() {
-        assert_eq!(
-            creation_status(&PerformCreationError::EmptyPost),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            creation_status(&PerformCreationError::NoSlugFromPost),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            creation_status(&PerformCreationError::InvalidSlug(
-                common::slug::InvalidSlug
-            )),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            creation_status(&PerformCreationError::CreatedNotFound),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-    }
-
-    #[test]
-    fn update_status_maps_each_error_class() {
-        assert_eq!(
-            update_status(&PerformUpdateError::EmptyPost),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            update_status(&PerformUpdateError::NoSlugFromPost),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            update_status(&PerformUpdateError::InvalidSlug),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            update_status(&PerformUpdateError::NotFound),
-            StatusCode::NOT_FOUND
-        );
-        assert_eq!(
-            update_status(&PerformUpdateError::Unauthorized),
-            StatusCode::NOT_FOUND
-        );
-        assert_eq!(
-            update_status(&PerformUpdateError::Storage(sqlx::Error::PoolClosed)),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-    }
 }

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use axum::http::{header, StatusCode};
+use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 
@@ -10,7 +10,7 @@ use common::atompub::{render_service_document, CollectionDecl, ServiceDocument};
 use storage::AppState;
 use web::auth::AuthUser;
 
-use super::base_url;
+use super::{base_url, HandlerError};
 
 /// Media types the media collection accepts.
 const MEDIA_ACCEPT: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -23,15 +23,14 @@ const MEDIA_ACCEPT: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/w
 pub async fn service_document(
     Extension(state): Extension<Arc<AppState>>,
     auth_user: AuthUser,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, HandlerError> {
     let base = base_url(&state).await;
     let username = auth_user.username.as_str();
 
     let categories = state
         .posts
         .list_tags(None, 100)
-        .await
-        .map_err(super::internal_error)?
+        .await?
         .into_iter()
         .map(|t| t.tag_slug.to_string())
         .collect();
