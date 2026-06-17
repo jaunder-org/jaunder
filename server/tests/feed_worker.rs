@@ -21,7 +21,7 @@ use tempfile::TempDir;
 /// `WebSub` client (the worker no longer reaches into a shared bundle).
 fn make_worker(
     state: &std::sync::Arc<storage::AppState>,
-    websub: std::sync::Arc<dyn common::websub::WebSubClient>,
+    websub: std::sync::Arc<dyn jaunder::websub::WebSubClient>,
 ) -> FeedWorker {
     FeedWorker::new(
         state.site_config.clone(),
@@ -274,13 +274,13 @@ async fn worker_applies_backoff_on_ping_failure() {
     // Create a failing WebSub client
     struct FailingWebSubClient;
     #[async_trait::async_trait]
-    impl common::websub::WebSubClient for FailingWebSubClient {
+    impl jaunder::websub::WebSubClient for FailingWebSubClient {
         async fn send_publish(
             &self,
             _hub_url: &str,
             _feed_url: &str,
-        ) -> Result<(), common::websub::WebSubError> {
-            Err(common::websub::WebSubError::HubRefused { status: 503 })
+        ) -> Result<(), jaunder::websub::WebSubError> {
+            Err(jaunder::websub::WebSubError::HubRefused { status: 503 })
         }
     }
 

@@ -27,6 +27,9 @@ use storage::{
 };
 use tempfile::TempDir;
 
+mod websub_capturing;
+pub use websub_capturing::CapturingWebSubClient;
+
 pub fn ensure_server_fns_registered() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
@@ -379,10 +382,8 @@ pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx
     (state, pool)
 }
 
-pub async fn test_state_with_websub(
-    base: &TempDir,
-) -> (Arc<AppState>, Arc<common::websub::CapturingWebSubClient>) {
-    let capturing = Arc::new(common::websub::CapturingWebSubClient::default());
+pub async fn test_state_with_websub(base: &TempDir) -> (Arc<AppState>, Arc<CapturingWebSubClient>) {
+    let capturing = Arc::new(CapturingWebSubClient::default());
     let pool = sqlx::SqlitePool::connect_with(
         format!("sqlite:{}", base.path().join("test.db").display())
             .parse::<sqlx::sqlite::SqliteConnectOptions>()

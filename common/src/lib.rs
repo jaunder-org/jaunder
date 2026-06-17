@@ -10,4 +10,3 @@ pub mod slug;
 pub mod tag;
 pub mod text;
 pub mod username;
-pub mod websub;

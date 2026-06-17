@@ -16,23 +16,13 @@ pub trait WebSubClient: Send + Sync {
     async fn send_publish(&self, hub_url: &str, feed_url: &str) -> Result<(), WebSubError>;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod file_capture;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod http;
 pub mod noop;
 
-#[cfg(any(test, feature = "test-utils"))]
-pub mod capturing;
-
-#[cfg(not(target_arch = "wasm32"))]
 pub use file_capture::FileCapturingWebSubClient;
-#[cfg(not(target_arch = "wasm32"))]
 pub use http::HttpWebSubClient;
 pub use noop::NoopWebSubClient;
-
-#[cfg(any(test, feature = "test-utils"))]
-pub use capturing::CapturingWebSubClient;
 
 /// Build the `WebSubClient` selected by the environment.
 ///
@@ -40,7 +30,6 @@ pub use capturing::CapturingWebSubClient;
 /// [`FileCapturingWebSubClient`] that records pings to that file (used by
 /// end-to-end tests, mirroring the `JAUNDER_MAIL_CAPTURE_FILE` mail-capture
 /// path).  Otherwise returns the live [`HttpWebSubClient`].
-#[cfg(not(target_arch = "wasm32"))]
 #[must_use]
 pub fn default_client_from_env() -> std::sync::Arc<dyn WebSubClient> {
     if let Ok(path) = std::env::var("JAUNDER_WEBSUB_CAPTURE_FILE") {
@@ -50,7 +39,7 @@ pub fn default_client_from_env() -> std::sync::Arc<dyn WebSubClient> {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
