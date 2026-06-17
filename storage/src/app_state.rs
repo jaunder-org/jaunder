@@ -2,8 +2,6 @@
 
 use std::sync::Arc;
 
-use common::websub::WebSubClient;
-
 use super::{
     AtomicOps, EmailVerificationStorage, FeedCacheStorage, FeedEventStorage, InviteStorage,
     MediaStorage, PasswordResetStorage, PostStorage, SessionStorage, SiteConfigStorage,
@@ -13,14 +11,17 @@ use super::{
 /// Bundle of every storage handle the application needs.
 ///
 /// `open_database` constructs this struct so callers get all handles in one
-/// shot; the server then unpacks it into individual Leptos contexts (see
-/// `server::context::provide_app_state_contexts`). Server functions never
-/// touch `AppState` directly — they `expect_context::<Arc<dyn FooStorage>>()`
-/// for the specific traits they need.
+/// shot; the composition root then unpacks it — into individual Leptos contexts
+/// for `#[server]` functions (see `server::context::provide_app_state_contexts`)
+/// and into per-trait axum `Extension`s for the raw HTTP handlers. Consumers
+/// never receive the whole `AppState`: they take exactly the `Arc<dyn FooStorage>`
+/// handles they need. The bundle is purely a construction convenience; per
+/// [ADR-0016](../../docs/decisions/0016-dependency-injection-and-appstate.md) it
+/// holds *only* storage and is never passed beyond the composition root.
 ///
-/// The mailer deliberately lives outside this bundle. It is not a storage
-/// concern, and it is constructed by the server (which knows about SMTP /
-/// file-capture transports) rather than by `open_database`.
+/// Services that are not storage — the mailer and the `WebSub` publisher — are
+/// constructed by the server (which knows about SMTP / file-capture / HTTP
+/// transports) and injected per-consumer, not bundled here.
 pub struct AppState {
     /// Interface for site-wide configuration settings.
     pub site_config: Arc<dyn SiteConfigStorage>,
@@ -49,14 +50,4 @@ pub struct AppState {
     pub feed_cache: Arc<dyn FeedCacheStorage>,
     /// Queue of feed-regeneration events drained by the feed worker.
     pub feed_events: Arc<dyn FeedEventStorage>,
-    /// `WebSub` publisher used to notify subscribers when feeds change.
-    ///
-    /// Production builders select the client via
-    /// [`common::websub::default_client_from_env`]: a
-    /// [`common::websub::FileCapturingWebSubClient`] when
-    /// `JAUNDER_WEBSUB_CAPTURE_FILE` is set (e2e capture), otherwise the live
-    /// [`common::websub::HttpWebSubClient`]. The worker only pings when
-    /// `feeds.websub_hub_url` is configured. Test helpers use
-    /// [`common::websub::NoopWebSubClient`].
-    pub websub: Arc<dyn WebSubClient>,
 }

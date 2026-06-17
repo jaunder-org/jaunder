@@ -199,6 +199,56 @@ pub struct PostTag {
     pub tag_display: String,
 }
 
+/// The slug-level difference between a post's existing tags and a desired set
+/// of display tokens, as computed by [`post_tag_diff`].
+///
+/// Borrows from both inputs; callers perform the actual `tag_post`/`untag_post`
+/// writes with their own error mapping.
+pub struct PostTagDiff<'a> {
+    /// Display tokens to add (their slug is not already present on the post).
+    pub to_add: Vec<&'a str>,
+    /// Existing tags to remove (their slug is not in the desired set).
+    pub to_remove: Vec<&'a Tag>,
+}
+
+/// Diffs a post's `existing` tags against a `desired` set of display tokens.
+///
+/// Tagging is keyed on slug, so a desired token is "to add" only when no
+/// existing tag shares its slug, and an existing tag is "to remove" only when
+/// no desired token maps to its slug. Tokens that fail to parse as [`Tag`] are
+/// ignored. Re-applying an existing tag with different display casing is a
+/// no-op (the existing row's casing is preserved by storage).
+///
+/// This is the pure core shared by the `web` and `server`/`AtomPub` front-ends;
+/// each applies the result with its own error type.
+#[must_use]
+pub fn post_tag_diff<'a>(existing: &'a [PostTag], desired: &'a [String]) -> PostTagDiff<'a> {
+    use std::collections::HashSet;
+    use std::str::FromStr;
+
+    let existing_slugs: HashSet<String> = existing.iter().map(|t| t.tag_slug.to_string()).collect();
+    let desired_slugs: HashSet<String> = desired
+        .iter()
+        .filter_map(|d| Tag::from_str(d).ok())
+        .map(|t| t.to_string())
+        .collect();
+
+    let to_add = desired
+        .iter()
+        .filter(|display| {
+            Tag::from_str(display).is_ok_and(|slug| !existing_slugs.contains(&slug.to_string()))
+        })
+        .map(String::as_str)
+        .collect();
+    let to_remove = existing
+        .iter()
+        .filter(|tag| !desired_slugs.contains(&tag.tag_slug.to_string()))
+        .map(|tag| &tag.tag_slug)
+        .collect();
+
+    PostTagDiff { to_add, to_remove }
+}
+
 /// Errors that can occur when tagging a post.
 #[derive(Debug, Error)]
 pub enum TaggingError {
@@ -1209,6 +1259,34 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn post_tag(slug: &str, display: &str) -> PostTag {
+        PostTag {
+            post_id: 1,
+            tag_id: 0,
+            tag_slug: slug.parse::<Tag>().expect("valid tag slug"),
+            tag_display: display.to_string(),
+        }
+    }
+
+    #[test]
+    fn post_tag_diff_adds_removes_keeps_and_skips_invalid() {
+        let existing = vec![post_tag("rust", "Rust"), post_tag("leptos", "Leptos")];
+        let desired = vec![
+            // Same slug as an existing tag (different casing): kept, not re-added.
+            "Rust".to_string(),
+            // New slug: added.
+            "wasm".to_string(),
+            // Fails to parse as a Tag (underscore): ignored entirely.
+            "has_underscore".to_string(),
+        ];
+
+        let diff = post_tag_diff(&existing, &desired);
+
+        assert_eq!(diff.to_add, vec!["wasm"]);
+        let removed: Vec<&str> = diff.to_remove.iter().map(|t| t.as_str()).collect();
+        assert_eq!(removed, vec!["leptos"]);
+    }
 
     #[test]
     fn tagging_error_display_post_not_found() {

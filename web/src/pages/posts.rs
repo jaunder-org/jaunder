@@ -537,11 +537,8 @@ pub fn EditPostPage() -> impl IntoView {
                         let is_published = fetched.published_at.is_some();
                         let dispatch_update = move |publish: bool| {
                             let slug = slug_override.get();
-                            let slug_override_arg = if slug.trim().is_empty() {
-                                None
-                            } else {
-                                Some(slug)
-                            };
+                            let slug_override_arg = common::text::non_empty(&slug)
+                                .map(str::to_owned);
                             update_post_action
                                 .dispatch(UpdatePost {
                                     post_id,
@@ -552,10 +549,7 @@ pub fn EditPostPage() -> impl IntoView {
                                     tags: Some(
                                         post_tags.get().into_iter().map(|t| t.display).collect(),
                                     ),
-                                    summary: {
-                                        let s = summary.get();
-                                        if s.is_empty() { None } else { Some(s) }
-                                    },
+                                    summary: common::text::non_empty_owned(summary.get()),
                                 });
                         };
                         view! {

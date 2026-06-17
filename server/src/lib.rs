@@ -5,6 +5,7 @@
 
 pub mod assets;
 pub mod atompub;
+pub mod backup;
 pub mod cli;
 pub mod commands;
 pub mod context;
@@ -13,31 +14,21 @@ pub mod mailer;
 pub mod media;
 pub mod media_manager;
 pub mod observability;
+pub mod websub;
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+#[cfg(test)]
+mod test_support;
 
-use axum::http::HeaderName;
+use std::{path::PathBuf, sync::Arc};
+
 use axum::Router;
 use axum_embed::ServeEmbed;
 use leptos::prelude::*;
 use leptos_axum::{generate_route_list, LeptosRoutes};
-use opentelemetry::propagation::Extractor;
-use tokio_cron_scheduler::{Job, JobScheduler};
-use tower::ServiceBuilder;
-use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
-use tower_http::trace::{DefaultOnResponse, TraceLayer};
-use tracing::Level;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
 use web::{shell, App};
 
 use crate::assets::StaticAssets;
 use ::storage::AppState;
-use common::backup::BackupConfig;
-use storage::{export_backup, BackupExportOptions, BackupMode, DbConnectOptions};
 
 pub fn create_router(
     leptos_options: LeptosOptions,
@@ -46,41 +37,27 @@ pub fn create_router(
     secure_cookies: bool,
     storage_path: PathBuf,
 ) -> Router {
-    let request_id_header = HeaderName::from_static("x-request-id");
-    let http_observability = ServiceBuilder::new()
-        .layer(axum::middleware::from_fn(extract_trace_context))
-        .layer(SetRequestIdLayer::new(
-            request_id_header.clone(),
-            MakeRequestUuid,
-        ))
-        .layer(PropagateRequestIdLayer::new(request_id_header))
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(|request: &axum::extract::Request| {
-                    let span = tracing::span!(
-                        Level::INFO,
-                        "request",
-                        method = %request.method(),
-                        uri = %request.uri(),
-                        version = ?request.version(),
-                        headers = ?request.headers(),
-                    );
-                    if let Some(parent) = request.extensions().get::<ExtractedTraceContext>() {
-                        span.set_parent(parent.0.clone());
-                    }
-                    span
-                })
-                .on_response(DefaultOnResponse::new().level(Level::INFO)),
-        );
-
     let routes = generate_route_list(App);
-    let extension_state = state.clone();
+    // Per-trait extensions for the raw axum HTTP handlers (feed, atompub,
+    // media). The whole `AppState` is never layered as an `Extension`; each
+    // handler receives only the storage traits it declares (ADR-0016). The
+    // Leptos `#[server]` functions are wired separately via per-trait contexts
+    // in `provide_app_state_contexts`.
+    let posts_ext = state.posts.clone();
+    let user_config_ext = state.user_config.clone();
+    let site_config_ext = state.site_config.clone();
+    let media_ext = state.media.clone();
+    let feed_cache_ext = state.feed_cache.clone();
+    // The `AuthUser` extractor (web crate) authenticates the session cookie /
+    // bearer token, so the raw HTTP handlers and the Leptos request `Parts`
+    // need the session store reachable as a request extension.
+    let sessions_ext = state.sessions.clone();
     let server_fn_state = state.clone();
     let server_fn_mailer = mailer.clone();
     let leptos_mailer = mailer;
     let serve_assets = ServeEmbed::<StaticAssets>::new();
     let storage_path_ext = Arc::new(storage_path);
-    Router::new()
+    let app = Router::new()
         .nest_service("/style", serve_assets)
         .merge(crate::media::router())
         .merge(crate::atompub::router())
@@ -134,135 +111,13 @@ pub fn create_router(
         )
         .fallback(leptos_axum::file_and_error_handler(shell))
         .layer(axum::Extension(storage_path_ext))
-        .layer(axum::Extension(extension_state))
-        .layer(http_observability)
-        .with_state(leptos_options)
-}
-
-/// Starts the background backup worker if configured.
-///
-/// # Errors
-///
-/// Returns an error if the site configuration cannot be loaded, or if the
-/// job scheduler fails to start.
-pub async fn start_backup_worker(
-    state: Arc<AppState>,
-    database: DbConnectOptions,
-    storage_path: PathBuf,
-) -> anyhow::Result<Option<JobScheduler>> {
-    let config = state.site_config.get_backup_config().await?;
-    let Some(destination_root) = config.destination_path.as_deref().map(PathBuf::from) else {
-        tracing::warn!("backup worker disabled: backup.destination_path is not configured");
-        return Ok(None);
-    };
-
-    let scheduler = JobScheduler::new().await?;
-    let schedule = config.schedule.as_str().to_owned();
-    let job = Job::new_async(schedule.as_str(), move |_uuid, _lock| {
-        let database = database.clone();
-        let media_path = storage_path.join("media");
-        let destination_root = destination_root.clone();
-        let config = config.clone();
-        Box::pin(async move {
-            if let Err(error) =
-                run_scheduled_backup(&database, &media_path, &destination_root, &config).await
-            {
-                tracing::error!(error = %error, "scheduled backup failed");
-            }
-        })
-    })?;
-    scheduler.add(job).await?;
-    scheduler.start().await?;
-    Ok(Some(scheduler))
-}
-
-async fn run_scheduled_backup(
-    database: &DbConnectOptions,
-    media_path: &Path,
-    destination_root: &Path,
-    config: &BackupConfig,
-) -> anyhow::Result<PathBuf> {
-    fs::create_dir_all(destination_root)?;
-    let destination_path = backup_path_for_mode(destination_root, config.mode);
-    export_backup(BackupExportOptions {
-        database,
-        media_path,
-        destination_path: &destination_path,
-        mode: config.mode,
-    })
-    .await?;
-    prune_backups(destination_root, config.retention_count)?;
-    tracing::info!(path = %destination_path.display(), "scheduled backup complete");
-    Ok(destination_path)
-}
-
-fn prune_backups(destination_root: &Path, retention_count: usize) -> std::io::Result<()> {
-    let mut backups = Vec::new();
-    if !destination_root.exists() {
-        return Ok(());
-    }
-    for entry in fs::read_dir(destination_root)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.join("manifest.json").is_file()
-            || path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.ends_with(".tar.gz"))
-        {
-            backups.push(path);
-        }
-    }
-    backups.sort();
-    let prune_count = backups.len().saturating_sub(retention_count);
-    for path in backups.into_iter().take(prune_count) {
-        if path.is_dir() {
-            fs::remove_dir_all(path)?;
-        } else {
-            fs::remove_file(path)?;
-        }
-    }
-    Ok(())
-}
-
-fn timestamped_backup_name() -> String {
-    format!("backup-{}", chrono::Utc::now().format("%Y%m%dT%H%M%SZ"))
-}
-
-fn backup_path_for_mode(destination_root: &Path, mode: BackupMode) -> PathBuf {
-    let name = timestamped_backup_name();
-    match mode {
-        BackupMode::Directory => destination_root.join(name),
-        BackupMode::Archive => destination_root.join(format!("{name}.tar.gz")),
-    }
-}
-
-#[derive(Clone)]
-struct ExtractedTraceContext(opentelemetry::Context);
-
-struct HeaderExtractor<'a>(&'a axum::http::HeaderMap);
-
-impl Extractor for HeaderExtractor<'_> {
-    fn get(&self, key: &str) -> Option<&str> {
-        self.0.get(key).and_then(|value| value.to_str().ok())
-    }
-
-    fn keys(&self) -> Vec<&str> {
-        self.0.keys().map(axum::http::HeaderName::as_str).collect()
-    }
-}
-
-async fn extract_trace_context(
-    mut request: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let context = opentelemetry::global::get_text_map_propagator(|propagator| {
-        propagator.extract(&HeaderExtractor(request.headers()))
-    });
-    request
-        .extensions_mut()
-        .insert(ExtractedTraceContext(context));
-    next.run(request).await
+        .layer(axum::Extension(posts_ext))
+        .layer(axum::Extension(user_config_ext))
+        .layer(axum::Extension(site_config_ext))
+        .layer(axum::Extension(media_ext))
+        .layer(axum::Extension(feed_cache_ext))
+        .layer(axum::Extension(sessions_ext));
+    crate::observability::with_http_observability(app).with_state(leptos_options)
 }
 
 #[cfg(test)]
@@ -270,11 +125,9 @@ mod tests {
     use super::*;
     use axum::{
         body::Body,
-        http::{HeaderMap, Request, StatusCode},
+        http::{Request, StatusCode},
     };
     use leptos::prelude::LeptosOptions;
-    use storage::{BACKUP_DESTINATION_PATH_KEY, BACKUP_SCHEDULE_KEY};
-    use tempfile::TempDir;
     use tower::ServiceExt;
 
     fn ensure_server_fns_registered() {
@@ -303,212 +156,6 @@ mod tests {
 
     fn test_mailer() -> Arc<dyn common::mailer::MailSender> {
         Arc::new(common::mailer::NoopMailSender)
-    }
-
-    #[test]
-    fn timestamped_backup_name_has_expected_format() {
-        let name = timestamped_backup_name();
-        assert!(
-            name.starts_with("backup-"),
-            "name must start with 'backup-', got: {name}"
-        );
-        let suffix = name.strip_prefix("backup-").unwrap();
-        // Format: YYYYMMDDTHHMMSSz (16 chars)
-        assert_eq!(
-            suffix.len(),
-            16,
-            "timestamp suffix must be 16 chars, got: {suffix}"
-        );
-        assert!(suffix.ends_with('Z'), "timestamp must end with 'Z'");
-        assert!(suffix.contains('T'), "timestamp must contain 'T'");
-    }
-
-    #[tokio::test]
-    async fn backup_worker_disabled_without_destination_path() {
-        let state = test_state().await;
-        let storage = TempDir::new().expect("temp dir");
-        let scheduler = start_backup_worker(
-            state,
-            "sqlite::memory:".parse().expect("sqlite options"),
-            storage.path().to_path_buf(),
-        )
-        .await
-        .expect("worker start");
-
-        assert!(scheduler.is_none());
-    }
-
-    #[tokio::test]
-    async fn backup_worker_starts_when_destination_is_configured() {
-        let state = test_state().await;
-        let storage = TempDir::new().expect("temp dir");
-        state
-            .site_config
-            .set(
-                BACKUP_DESTINATION_PATH_KEY,
-                storage.path().join("backups").to_str().expect("utf-8 path"),
-            )
-            .await
-            .expect("set destination");
-        state
-            .site_config
-            .set(BACKUP_SCHEDULE_KEY, "0 0 0 1 1 *")
-            .await
-            .expect("set schedule");
-
-        let scheduler = start_backup_worker(
-            state,
-            "sqlite::memory:".parse().expect("sqlite options"),
-            storage.path().to_path_buf(),
-        )
-        .await
-        .expect("worker start");
-
-        assert!(scheduler.is_some());
-    }
-
-    #[tokio::test]
-    async fn backup_worker_executes_scheduled_backup() {
-        let temp = TempDir::new().expect("temp dir");
-        let db_options: DbConnectOptions =
-            format!("sqlite:{}", temp.path().join("jaunder.db").display())
-                .parse()
-                .expect("db options");
-        let state = storage::open_database(&db_options).await.expect("open db");
-        let storage_path = temp.path().join("storage");
-        let media_path = storage_path.join("media");
-        std::fs::create_dir_all(&media_path).expect("media dir");
-        std::fs::write(media_path.join("file.txt"), "media").expect("media file");
-        let destination_path = temp.path().join("scheduled-backups");
-        state
-            .site_config
-            .set(
-                BACKUP_DESTINATION_PATH_KEY,
-                destination_path.to_str().expect("utf-8 path"),
-            )
-            .await
-            .expect("set destination");
-        state
-            .site_config
-            .set(BACKUP_SCHEDULE_KEY, "*/1 * * * * *")
-            .await
-            .expect("set schedule");
-
-        let mut scheduler = start_backup_worker(state, db_options, storage_path)
-            .await
-            .expect("worker start")
-            .expect("scheduler enabled");
-
-        let mut found_manifest = false;
-        for _ in 0..30 {
-            found_manifest = std::fs::read_dir(&destination_path)
-                .ok()
-                .into_iter()
-                .flatten()
-                .filter_map(Result::ok)
-                .any(|entry| entry.path().join("manifest.json").is_file());
-            if found_manifest {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-        scheduler.shutdown().await.expect("shutdown scheduler");
-
-        assert!(found_manifest, "scheduled backup did not run");
-    }
-
-    #[tokio::test]
-    async fn run_scheduled_backup_writes_backup_and_prunes_old_ones() {
-        let temp = TempDir::new().expect("temp dir");
-        let db_url = format!("sqlite:{}", temp.path().join("jaunder.db").display());
-        storage::open_database(&db_url.parse().expect("db options"))
-            .await
-            .expect("open db");
-
-        let media = temp.path().join("media");
-        std::fs::create_dir(&media).expect("media dir");
-        std::fs::write(media.join("file.txt"), "media").expect("media file");
-
-        let destination_root = temp.path().join("backups");
-        for name in ["backup-0001", "backup-0002"] {
-            let backup = destination_root.join(name);
-            std::fs::create_dir_all(&backup).expect("old backup dir");
-            std::fs::write(backup.join("manifest.json"), "{}").expect("manifest");
-        }
-
-        let config = BackupConfig {
-            destination_path: Some(destination_root.to_string_lossy().into_owned()),
-            schedule: common::backup::BackupSchedule::parse("0 0 0 1 1 *").expect("valid schedule"),
-            retention_count: 1,
-            mode: BackupMode::Directory,
-        };
-        let written = run_scheduled_backup(
-            &db_url.parse().expect("db options"),
-            &media,
-            &destination_root,
-            &config,
-        )
-        .await
-        .expect("scheduled backup");
-
-        assert!(written.join("manifest.json").is_file());
-        assert!(written.join("media").join("file.txt").is_file());
-        assert!(!destination_root.join("backup-0001").exists());
-        assert!(!destination_root.join("backup-0002").exists());
-    }
-
-    #[test]
-    fn prune_backups_keeps_newest_manifest_directories() {
-        let temp = TempDir::new().expect("temp dir");
-        for name in ["backup-1", "backup-2", "backup-3"] {
-            let path = temp.path().join(name);
-            std::fs::create_dir(&path).expect("backup dir");
-            std::fs::write(path.join("manifest.json"), "{}").expect("manifest");
-        }
-        let ignored = temp.path().join("not-a-backup");
-        std::fs::create_dir(&ignored).expect("ignored dir");
-
-        prune_backups(temp.path(), 2).expect("prune");
-
-        assert!(!temp.path().join("backup-1").exists());
-        assert!(temp.path().join("backup-2").exists());
-        assert!(temp.path().join("backup-3").exists());
-        assert!(ignored.exists());
-    }
-
-    #[test]
-    fn prune_backups_keeps_newest_archives() {
-        let temp = TempDir::new().expect("temp dir");
-        for name in ["backup-1.tar.gz", "backup-2.tar.gz", "backup-3.tar.gz"] {
-            std::fs::write(temp.path().join(name), "archive").expect("archive");
-        }
-
-        prune_backups(temp.path(), 2).expect("prune");
-
-        assert!(!temp.path().join("backup-1.tar.gz").exists());
-        assert!(temp.path().join("backup-2.tar.gz").exists());
-        assert!(temp.path().join("backup-3.tar.gz").exists());
-    }
-
-    #[test]
-    fn prune_backups_accepts_missing_destination_root() {
-        let temp = TempDir::new().expect("temp dir");
-        prune_backups(&temp.path().join("missing"), 1).expect("prune missing root");
-    }
-
-    #[test]
-    fn backup_path_for_mode_returns_tar_gz_for_archive_mode() {
-        let root = std::path::Path::new("/backups");
-        let path = backup_path_for_mode(root, BackupMode::Archive);
-        let name = path.file_name().unwrap().to_string_lossy();
-        assert!(
-            name.ends_with(".tar.gz"),
-            "expected .tar.gz extension, got: {name}"
-        );
-        assert!(
-            name.starts_with("backup-"),
-            "expected backup- prefix, got: {name}"
-        );
     }
 
     #[tokio::test]
@@ -807,56 +454,6 @@ mod tests {
                 assert!(html.contains("Jaunder"));
             })
             .await;
-    }
-
-    #[test]
-    fn header_extractor_reads_known_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "traceparent",
-            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-                .parse()
-                .expect("valid traceparent header"),
-        );
-
-        let extractor = HeaderExtractor(&headers);
-        assert_eq!(
-            extractor.get("traceparent"),
-            Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
-        );
-        assert!(extractor.keys().contains(&"traceparent"));
-    }
-
-    #[tokio::test]
-    async fn trace_context_middleware_inserts_extension() {
-        let app = Router::new()
-            .route(
-                "/",
-                axum::routing::get(|req: axum::extract::Request| async move {
-                    if req.extensions().get::<ExtractedTraceContext>().is_some() {
-                        StatusCode::OK
-                    } else {
-                        StatusCode::INTERNAL_SERVER_ERROR
-                    }
-                }),
-            )
-            .layer(axum::middleware::from_fn(extract_trace_context));
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/")
-                    .header(
-                        "traceparent",
-                        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-                    )
-                    .body(Body::empty())
-                    .expect("failed to build request"),
-            )
-            .await
-            .expect("failed to get response");
-
-        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]

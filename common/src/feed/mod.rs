@@ -15,3 +15,14 @@ pub use atom::render_atom;
 
 pub mod json;
 pub use json::render_json;
+
+/// Aggregate of the feed-generation settings stored in `site_config`
+/// (`feeds.min_items`, `feeds.min_days`, `feeds.websub_hub_url`). Mirrors
+/// [`crate::backup::BackupConfig`] so feed settings have a single grouped
+/// getter/setter rather than per-key read chains.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeedsConfig {
+    pub min_items: u32,
+    pub min_days: u32,
+    pub websub_hub_url: Option<String>,
+}

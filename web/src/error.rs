@@ -136,15 +136,15 @@ impl InternalError {
     }
 
     pub fn not_found(resource: impl Into<String>) -> Self {
-        Self::client(WebError::not_found(resource), ErrorKind::NotFound)
+        WebError::not_found(resource).into()
     }
 
     pub fn validation(message: impl Into<String>) -> Self {
-        Self::client(WebError::validation(message), ErrorKind::Validation)
+        WebError::validation(message).into()
     }
 
     pub fn conflict(message: impl Into<String>) -> Self {
-        Self::client(WebError::conflict(message), ErrorKind::Conflict)
+        WebError::conflict(message).into()
     }
 
     pub fn storage(error: impl Error + Send + Sync + 'static) -> Self {
@@ -251,12 +251,23 @@ impl InternalError {
     pub fn into_public(self) -> WebError {
         self.public
     }
+}
 
-    fn client(public: WebError, kind: ErrorKind) -> Self {
+/// Builds a client/expected `InternalError` from its public form: no `source`,
+/// with `(kind, class)` inferred from the variant via [`kind_class_for`], so
+/// the operator message falls back to the public text. This is the shared body
+/// behind the `not_found`/`validation`/`conflict` delegates. Masking failures
+/// (`storage`/`server`/`server_message`/`unauthorized`/`external`) keep their
+/// explicit constructors — do not route a `WebError::Storage`/`Server` through
+/// here, which would carry its message unmasked rather than as a generic 500.
+#[cfg(feature = "ssr")]
+impl From<WebError> for InternalError {
+    fn from(public: WebError) -> Self {
+        let (kind, class) = kind_class_for(&public);
         Self {
             public,
             kind,
-            class: ErrorClass::Client,
+            class,
             context: Vec::new(),
             source: None,
         }

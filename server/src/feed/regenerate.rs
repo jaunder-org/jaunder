@@ -2,7 +2,7 @@ use chrono::Utc;
 use common::feed::{
     feed_etag, parse, FeedFormat, FeedItem, FeedMetadata, FeedSurface, HybridWindow,
 };
-use storage::{AppState, FeedCacheRow, PostRecord};
+use storage::{FeedCacheRow, FeedCacheStorage, PostRecord, PostStorage, SiteConfigStorage};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -26,45 +26,28 @@ pub enum RegenerateError {
 /// Returns `RegenerateError::BadUrl` if `feed_url` cannot be parsed,
 /// or `RegenerateError::Storage` if any database operation fails.
 pub async fn regenerate_feed(
-    state: &AppState,
+    site_config: &dyn SiteConfigStorage,
+    posts: &dyn PostStorage,
+    feed_cache: &dyn FeedCacheStorage,
     feed_url: &str,
 ) -> Result<FeedCacheRow, RegenerateError> {
     let (surface, format) =
         parse(feed_url).ok_or_else(|| RegenerateError::BadUrl(feed_url.into()))?;
 
-    let min_items = state
-        .site_config
-        .get_feeds_min_items()
-        .await
-        .map_err(storage_err)?;
-    let min_days = state
-        .site_config
-        .get_feeds_min_days()
-        .await
-        .map_err(storage_err)?;
-    let hub_url = state
-        .site_config
-        .get_feeds_websub_hub_url()
-        .await
-        .map_err(storage_err)?;
-    let identity = state
-        .site_config
-        .get_identity()
-        .await
-        .map_err(storage_err)?;
+    let feeds = site_config.get_feeds_config().await.map_err(storage_err)?;
+    let identity = site_config.get_identity().await.map_err(storage_err)?;
 
     let window = HybridWindow {
-        min_items,
-        min_days,
+        min_items: feeds.min_items,
+        min_days: feeds.min_days,
     };
     let now = Utc::now();
-    let posts = state
-        .posts
+    let published = posts
         .list_published_in_window(&surface, &window, now)
         .await
         .map_err(storage_err)?;
 
-    let items = build_feed_items(state, &posts).await?;
+    let items = build_feed_items(posts, &published).await?;
 
     let base = identity.base_url.as_deref().unwrap_or("");
     let self_url = format!("{base}{}", percent_encode_path(feed_url));
@@ -90,7 +73,7 @@ pub async fn regenerate_feed(
         description: None,
         canonical_url,
         self_url,
-        hub_url,
+        hub_url: feeds.websub_hub_url,
         updated_at,
     };
 
@@ -110,11 +93,7 @@ pub async fn regenerate_feed(
         generated_at: now,
     };
 
-    state
-        .feed_cache
-        .upsert(row.clone())
-        .await
-        .map_err(storage_err)?;
+    feed_cache.upsert(row.clone()).await.map_err(storage_err)?;
 
     Ok(row)
 }
@@ -137,13 +116,12 @@ fn percent_encode_path(path: &str) -> String {
 }
 
 async fn build_feed_items(
-    state: &AppState,
-    posts: &[PostRecord],
+    posts: &dyn PostStorage,
+    records: &[PostRecord],
 ) -> Result<Vec<FeedItem>, RegenerateError> {
-    let mut items = Vec::with_capacity(posts.len());
-    for p in posts {
-        let tags = state
-            .posts
+    let mut items = Vec::with_capacity(records.len());
+    for p in records {
+        let tags = posts
             .get_tags_for_post(p.post_id)
             .await
             .map_err(storage_err)?;

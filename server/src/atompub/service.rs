@@ -2,15 +2,15 @@
 
 use std::sync::Arc;
 
-use axum::http::{header, StatusCode};
+use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 
 use common::atompub::{render_service_document, CollectionDecl, ServiceDocument};
-use storage::AppState;
+use storage::{PostStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
-use super::base_url;
+use super::{base_url, HandlerError};
 
 /// Media types the media collection accepts.
 const MEDIA_ACCEPT: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -19,19 +19,19 @@ const MEDIA_ACCEPT: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/w
 ///
 /// # Errors
 ///
-/// Returns `500` if storage or serialization fails.
+/// Returns `500` if storage fails.
+#[tracing::instrument(name = "atompub.service_document", skip_all)]
 pub async fn service_document(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
-) -> Result<Response, StatusCode> {
-    let base = base_url(&state).await;
+) -> Result<Response, HandlerError> {
+    let base = base_url(site_config.as_ref()).await;
     let username = auth_user.username.as_str();
 
-    let categories = state
-        .posts
+    let categories = posts
         .list_tags(None, 100)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .await?
         .into_iter()
         .map(|t| t.tag_slug.to_string())
         .collect();
@@ -52,7 +52,7 @@ pub async fn service_document(
         },
     };
 
-    let xml = render_service_document(&doc).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let xml = render_service_document(&doc);
     Ok((
         [(
             header::CONTENT_TYPE,

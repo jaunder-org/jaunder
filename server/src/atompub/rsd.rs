@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Extension;
 
 use common::atompub::render_rsd_document;
-use storage::AppState;
+use storage::SiteConfigStorage;
 
 use super::base_url;
 
@@ -23,11 +23,12 @@ use super::base_url;
 /// # Errors
 ///
 /// Infallible in practice; returns `Result` for handler-signature uniformity.
+#[tracing::instrument(name = "atompub.rsd_document", skip_all)]
 pub async fn rsd_document(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Path(username): Path<String>,
 ) -> Result<Response, StatusCode> {
-    let base = base_url(&state).await;
+    let base = base_url(site_config.as_ref()).await;
     let service_url = format!("{base}/atompub/service");
     let homepage_url = format!("{base}/~{username}");
     let xml = render_rsd_document(&service_url, &homepage_url);

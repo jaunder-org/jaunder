@@ -8,6 +8,8 @@
 //! extracted as a standalone `atompub` crate without dragging Jaunder types
 //! along.
 
+mod xml;
+
 pub mod entry;
 pub use entry::{
     entry_from_xml, entry_to_xml, is_draft, render_feed, render_media_link_entry, set_draft,

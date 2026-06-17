@@ -94,7 +94,7 @@ pub async fn register(
                 .map_err(register_open_error)?,
             RegistrationPolicy::InviteOnly => {
                 let code = invite_code
-                    .filter(|s| !s.is_empty())
+                    .and_then(common::text::non_empty_owned)
                     .ok_or_else(|| InternalError::validation("invite code required"))?;
                 atomic
                     .create_user_with_invite(&username, &password, None, false, &code)
@@ -150,7 +150,7 @@ pub async fn login(username: String, password: String, label: Option<String>) ->
             .map_err(login_error)?;
 
         // Prefer explicit label if provided; otherwise derive from User-Agent header
-        let derived_label = if let Some(l) = label.filter(|s| !s.is_empty()) {
+        let derived_label = if let Some(l) = label.and_then(common::text::non_empty_owned) {
             l
         } else {
             // Extract User-Agent from request headers and truncate to 200 chars

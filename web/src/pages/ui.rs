@@ -617,11 +617,7 @@ pub fn PostCreateForm(
         let slug_override = RwSignal::new(String::new());
         let dispatch_create = move |publish: bool| {
             let slug = slug_override.get();
-            let slug_override = if slug.trim().is_empty() {
-                None
-            } else {
-                Some(slug)
-            };
+            let slug_override = common::text::non_empty(&slug).map(str::to_owned);
             create_action.dispatch(CreatePost {
                 body: body.get(),
                 format: format.get(),

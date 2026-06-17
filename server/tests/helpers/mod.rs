@@ -27,6 +27,9 @@ use storage::{
 };
 use tempfile::TempDir;
 
+mod websub_capturing;
+pub use websub_capturing::CapturingWebSubClient;
+
 pub fn ensure_server_fns_registered() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
@@ -309,7 +312,6 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             user_config: Arc::new(PostgresUserConfigStorage::new(pool.clone())),
             feed_cache: Arc::new(PostgresFeedCacheStorage::new(pool.clone())),
             feed_events: Arc::new(PostgresFeedEventStorage::new(pool)),
-            websub: Arc::new(common::websub::NoopWebSubClient),
         })
     } else {
         let pool = sqlx::SqlitePool::connect_with(
@@ -337,7 +339,6 @@ pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<Captu
             user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
             feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
             feed_events: Arc::new(SqliteFeedEventStorage::new(pool)),
-            websub: Arc::new(common::websub::NoopWebSubClient),
         })
     };
     (state, mailer)
@@ -377,15 +378,12 @@ pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx
         user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
         feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
         feed_events: Arc::new(SqliteFeedEventStorage::new(pool.clone())),
-        websub: Arc::new(common::websub::NoopWebSubClient),
     });
     (state, pool)
 }
 
-pub async fn test_state_with_websub(
-    base: &TempDir,
-) -> (Arc<AppState>, Arc<common::websub::CapturingWebSubClient>) {
-    let capturing = Arc::new(common::websub::CapturingWebSubClient::default());
+pub async fn test_state_with_websub(base: &TempDir) -> (Arc<AppState>, Arc<CapturingWebSubClient>) {
+    let capturing = Arc::new(CapturingWebSubClient::default());
     let pool = sqlx::SqlitePool::connect_with(
         format!("sqlite:{}", base.path().join("test.db").display())
             .parse::<sqlx::sqlite::SqliteConnectOptions>()
@@ -411,7 +409,6 @@ pub async fn test_state_with_websub(
         user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
         feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
         feed_events: Arc::new(SqliteFeedEventStorage::new(pool)),
-        websub: capturing.clone(),
     });
     (state, capturing)
 }

@@ -9,7 +9,11 @@ use {
     crate::auth::require_auth,
     crate::error::InternalError,
     std::sync::Arc,
-    storage::{ProfileUpdate, UserStorage},
+    storage::{
+        get_default_post_format as storage_get_default_post_format,
+        set_default_post_format as storage_set_default_post_format, PostFormat, ProfileUpdate,
+        UserConfigStorage, UserStorage,
+    },
 };
 
 /// Profile data returned by [`get_profile`].
@@ -44,22 +48,15 @@ pub async fn get_profile() -> WebResult<ProfileData> {
 }
 
 /// Updates the authenticated user's display name and bio.
-/// Empty string clears the field.
+/// Blank input (empty or whitespace-only) clears the field; surrounding
+/// whitespace is trimmed.
 #[server(endpoint = "/update_profile")]
 pub async fn update_profile(display_name: String, bio: String) -> WebResult<()> {
     boundary!("update_profile", {
         let auth = require_auth().await?;
         let users = expect_context::<Arc<dyn UserStorage>>();
-        let dn = if display_name.is_empty() {
-            None
-        } else {
-            Some(display_name.as_str())
-        };
-        let b = if bio.is_empty() {
-            None
-        } else {
-            Some(bio.as_str())
-        };
+        let dn = common::text::non_empty(&display_name);
+        let b = common::text::non_empty(&bio);
         users
             .update_profile(
                 auth.user_id,
@@ -70,5 +67,34 @@ pub async fn update_profile(display_name: String, bio: String) -> WebResult<()> 
             )
             .await
             .map_err(InternalError::storage)
+    })
+}
+
+/// Retrieves the authenticated user's default post format preference.
+#[server(endpoint = "/get_default_post_format")]
+pub async fn get_default_post_format() -> WebResult<String> {
+    boundary!("get_default_post_format", {
+        let auth = require_auth().await?;
+        let config = expect_context::<Arc<dyn UserConfigStorage>>();
+        let format = storage_get_default_post_format(config.as_ref(), auth.user_id)
+            .await
+            .map_err(InternalError::storage)?;
+        Ok(format.to_string())
+    })
+}
+
+/// Sets the authenticated user's default post format preference.
+#[server(endpoint = "/set_default_post_format")]
+pub async fn set_default_post_format(format: String) -> WebResult<()> {
+    boundary!("set_default_post_format", {
+        let auth = require_auth().await?;
+        let config = expect_context::<Arc<dyn UserConfigStorage>>();
+        let post_format = format
+            .parse::<PostFormat>()
+            .map_err(|e| InternalError::validation(e.to_string()))?;
+        storage_set_default_post_format(config.as_ref(), auth.user_id, post_format)
+            .await
+            .map_err(InternalError::storage)?;
+        Ok(())
     })
 }

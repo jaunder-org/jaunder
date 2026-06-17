@@ -27,6 +27,7 @@ Chosen option: "Unified Observability with OpenTelemetry", because it provides a
     - `e2e.test`: Automatic, captures one span per test with resource and navigation summaries.
     - `e2e.flow`: Manual, captures domain-specific semantic phases (e.g., "login flow").
 *   **Artifacts**: Traces are exported as JSONL files (`otel-traces.jsonl`) during CI and VM test runs for offline analysis.
+*   **PII discipline**: Span fields and the structured error boundary (`error.source`, `error.context` in `web/src/error.rs`) are operator-only but are still exported to trace backends, so they MUST NOT carry user PII or secrets — email addresses, session/verification tokens, passwords, or post bodies. Record stable, non-sensitive identifiers instead (`user_id`, `db.system`, `error.kind`/`error.class`); usernames are public identifiers and acceptable. The preserved error source chain is built from typed errors (`sqlx::Error`, `io::Error`, parse errors), which carry structural/diagnostic text — not bound parameter values — so the chain is PII-free as long as constructors keep raw user input out of error messages.
 
 ## Consequences
 

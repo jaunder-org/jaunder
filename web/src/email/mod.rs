@@ -27,7 +27,7 @@ pub async fn request_email_verification(email: String) -> WebResult<()> {
 
         let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
         let raw_token = email_verifications
-            .create_email_verification(auth.user_id, &email, expires_at)
+            .create_email_verification(auth.user_id, &email_addr, expires_at)
             .await
             .map_err(InternalError::storage)?;
 
@@ -58,14 +58,10 @@ pub async fn verify_email(token: String) -> WebResult<()> {
         let email_verifications = expect_context::<Arc<dyn EmailVerificationStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
 
-        let (user_id, email_str) = email_verifications
+        let (user_id, email_addr) = email_verifications
             .use_email_verification(&token)
             .await
             .map_err(InternalError::storage)?;
-
-        let email_addr = email_str
-            .parse::<email_address::EmailAddress>()
-            .map_err(|e| InternalError::validation(e.to_string()))?;
 
         users
             .set_email(user_id, Some(&email_addr), true)

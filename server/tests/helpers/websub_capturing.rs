@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::sync::Mutex;
 
-use super::{WebSubClient, WebSubError};
+use jaunder::websub::{WebSubClient, WebSubError};
 
 #[derive(Debug, Clone)]
 pub struct CapturedPing {
@@ -41,28 +41,5 @@ impl WebSubClient for CapturingWebSubClient {
                 sent_at: Utc::now(),
             });
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn capturing_records_each_ping() {
-        let c = CapturingWebSubClient::default();
-        c.send_publish("https://hub", "https://feed")
-            .await
-            .expect("ok");
-        c.send_publish("https://hub", "https://feed")
-            .await
-            .expect("ok");
-        let pings = c.pings();
-        assert_eq!(pings.len(), 2);
-        assert_eq!(pings[0].hub_url, "https://hub");
-        assert_eq!(pings[0].feed_url, "https://feed");
-        let cloned = pings[0].clone();
-        assert_eq!(cloned.hub_url, pings[0].hub_url);
-        assert_eq!(cloned.feed_url, pings[0].feed_url);
     }
 }

@@ -8,8 +8,9 @@ use tokio::io::AsyncWriteExt;
 
 use common::media::{detect_content_type, media_path, media_url, sanitize_filename};
 use storage::{
-    AppState, CreateMediaError, MediaRecord, MediaSource, DEFAULT_MAX_FILE_SIZE_BYTES,
-    DEFAULT_USER_QUOTA_BYTES, MEDIA_MAX_FILE_SIZE_BYTES_KEY, MEDIA_USER_QUOTA_BYTES_KEY,
+    CreateMediaError, MediaRecord, MediaSource, MediaStorage, SiteConfigStorage,
+    DEFAULT_MAX_FILE_SIZE_BYTES, DEFAULT_USER_QUOTA_BYTES, MEDIA_MAX_FILE_SIZE_BYTES_KEY,
+    MEDIA_USER_QUOTA_BYTES_KEY,
 };
 use web::auth::AuthUser;
 
@@ -29,7 +30,8 @@ enum MediaError {
 }
 
 pub struct MediaManager {
-    state: Arc<AppState>,
+    media: Arc<dyn MediaStorage>,
+    site_config: Arc<dyn SiteConfigStorage>,
     storage_path: Arc<PathBuf>,
 }
 
@@ -44,9 +46,14 @@ struct UploadMetadata {
 
 impl MediaManager {
     #[must_use]
-    pub fn new(state: Arc<AppState>, storage_path: Arc<PathBuf>) -> Self {
+    pub fn new(
+        media: Arc<dyn MediaStorage>,
+        site_config: Arc<dyn SiteConfigStorage>,
+        storage_path: Arc<PathBuf>,
+    ) -> Self {
         Self {
-            state,
+            media,
+            site_config,
             storage_path,
         }
     }
@@ -126,13 +133,11 @@ impl MediaManager {
 
     async fn get_limits(&self) -> anyhow::Result<(i64, i64)> {
         let max_file_size = self
-            .state
             .site_config
             .get_int(MEDIA_MAX_FILE_SIZE_BYTES_KEY, DEFAULT_MAX_FILE_SIZE_BYTES)
             .await;
 
         let user_quota = self
-            .state
             .site_config
             .get_int(MEDIA_USER_QUOTA_BYTES_KEY, DEFAULT_USER_QUOTA_BYTES)
             .await;
@@ -153,7 +158,7 @@ impl MediaManager {
         size_bytes: i64,
         user_quota: i64,
     ) -> anyhow::Result<()> {
-        let current_usage = self.state.media.get_user_upload_usage(user_id).await?;
+        let current_usage = self.media.get_user_upload_usage(user_id).await?;
 
         if current_usage + size_bytes > user_quota {
             anyhow::bail!(MediaError::InsufficientStorage);
@@ -202,7 +207,7 @@ impl MediaManager {
             source_url: None,
             created_at: Utc::now(),
         };
-        match self.state.media.create_media(&record).await {
+        match self.media.create_media(&record).await {
             Ok(()) | Err(CreateMediaError::AlreadyExists) => Ok(()),
             Err(CreateMediaError::Internal(e)) => {
                 tracing::error!(error = %e, "create_media failed");
@@ -353,6 +358,7 @@ impl MediaManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{media, migrated_sqlite_db, site_config, users};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -360,11 +366,11 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let dir = temp.path();
 
-        let state = storage::open_database(&"sqlite::memory:".parse().unwrap())
-            .await
-            .unwrap();
+        // Keep the DB out of `dir`, which the test scans for media files.
+        let db = TempDir::new().unwrap();
+        let (_, pool) = migrated_sqlite_db(db.path()).await;
         let storage_path = Arc::new(dir.to_path_buf());
-        let manager = MediaManager::new(state, storage_path);
+        let manager = MediaManager::new(media(&pool), site_config(&pool), storage_path);
 
         // Empty dir
         assert_eq!(manager.first_file_in_dir(dir).await, None);
@@ -389,11 +395,11 @@ mod tests {
         let tmp_dir = media_dir.join("tmp");
         fs::create_dir(&tmp_dir).await.unwrap();
 
-        let state = storage::open_database(&"sqlite::memory:".parse().unwrap())
-            .await
-            .unwrap();
+        // The DB is unused by dedup; keep it out of the scanned storage dir.
+        let db = TempDir::new().unwrap();
+        let (_, pool) = migrated_sqlite_db(db.path()).await;
         let storage_path = Arc::new(dir.to_path_buf());
-        let manager = MediaManager::new(state, storage_path);
+        let manager = MediaManager::new(media(&pool), site_config(&pool), storage_path);
 
         let tmp_path = tmp_dir.join("temp_file");
         fs::write(&tmp_path, "content").await.unwrap();
@@ -487,11 +493,8 @@ mod tests {
     #[tokio::test]
     async fn upload_bytes_is_content_addressed_and_idempotent() {
         let temp = TempDir::new().unwrap();
-        let state = storage::open_database(&"sqlite::memory:".parse().unwrap())
-            .await
-            .unwrap();
-        let user_id = state
-            .users
+        let (_, pool) = migrated_sqlite_db(temp.path()).await;
+        let user_id = users(&pool)
             .create_user(
                 &"uploader".parse().unwrap(),
                 &"password123".parse().unwrap(),
@@ -501,7 +504,7 @@ mod tests {
             .await
             .unwrap();
         let storage_path = Arc::new(temp.path().to_path_buf());
-        let manager = MediaManager::new(state, storage_path);
+        let manager = MediaManager::new(media(&pool), site_config(&pool), storage_path);
 
         let auth = web::auth::AuthUser {
             user_id,
@@ -536,17 +539,11 @@ mod tests {
     #[tokio::test]
     async fn upload_bytes_rejects_oversized_payload() {
         let temp = TempDir::new().unwrap();
-        let state = storage::open_database(&"sqlite::memory:".parse().unwrap())
-            .await
-            .unwrap();
+        let (_, pool) = migrated_sqlite_db(temp.path()).await;
+        let cfg = site_config(&pool);
         // Cap the per-file limit well below the payload size.
-        state
-            .site_config
-            .set(MEDIA_MAX_FILE_SIZE_BYTES_KEY, "5")
-            .await
-            .unwrap();
-        let user_id = state
-            .users
+        cfg.set(MEDIA_MAX_FILE_SIZE_BYTES_KEY, "5").await.unwrap();
+        let user_id = users(&pool)
             .create_user(
                 &"uploader".parse().unwrap(),
                 &"password123".parse().unwrap(),
@@ -555,7 +552,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let manager = MediaManager::new(state, Arc::new(temp.path().to_path_buf()));
+        let manager = MediaManager::new(media(&pool), cfg, Arc::new(temp.path().to_path_buf()));
         let auth = web::auth::AuthUser {
             user_id,
             username: "uploader".parse().unwrap(),

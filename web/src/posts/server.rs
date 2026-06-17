@@ -4,11 +4,9 @@ use chrono::{Datelike, Utc};
 use common::slug::Slug;
 use leptos::context::use_context;
 use leptos_axum::ResponseOptions;
-use std::collections::HashSet;
-use std::str::FromStr;
 use storage::{
-    ListByTagError, PerformCreationError, PerformUpdateError, PostCursor, PostRecord, PostStorage,
-    PostTag,
+    post_tag_diff, ListByTagError, PerformCreationError, PerformUpdateError, PostCursor,
+    PostRecord, PostStorage, PostTag,
 };
 
 pub fn timeline_post_summary(
@@ -73,39 +71,23 @@ pub async fn apply_post_tag_diff(
     post_id: i64,
     desired: &[String],
 ) -> InternalResult<()> {
-    use common::tag::Tag;
-
     let existing = posts
         .get_tags_for_post(post_id)
         .await
         .map_err(InternalError::storage)?;
-    let existing_slugs: HashSet<String> = existing.iter().map(|t| t.tag_slug.to_string()).collect();
-    let desired_slugs: HashSet<String> = desired
-        .iter()
-        .filter_map(|d| Tag::from_str(d).ok())
-        .map(|t| t.to_string())
-        .collect();
+    let diff = post_tag_diff(&existing, desired);
 
-    // Add: every desired tag whose slug isn't already present.
-    for display in desired {
-        let Ok(slug) = Tag::from_str(display) else {
-            continue;
-        };
-        if !existing_slugs.contains(&slug.to_string()) {
-            posts
-                .tag_post(post_id, display)
-                .await
-                .map_err(|e| InternalError::server_message(e.to_string()))?;
-        }
+    for display in diff.to_add {
+        posts
+            .tag_post(post_id, display)
+            .await
+            .map_err(|e| InternalError::server_message(e.to_string()))?;
     }
-    // Remove: every existing tag whose slug isn't in desired.
-    for tag in &existing {
-        if !desired_slugs.contains(&tag.tag_slug.to_string()) {
-            posts
-                .untag_post(post_id, &tag.tag_slug)
-                .await
-                .map_err(|e| InternalError::server_message(e.to_string()))?;
-        }
+    for slug in diff.to_remove {
+        posts
+            .untag_post(post_id, slug)
+            .await
+            .map_err(|e| InternalError::server_message(e.to_string()))?;
     }
     Ok(())
 }

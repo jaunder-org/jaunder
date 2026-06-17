@@ -930,7 +930,7 @@ async fn auth_user_extraction_fails_when_missing() {
 }
 
 #[tokio::test]
-async fn auth_user_extraction_fails_without_app_state_extension() {
+async fn auth_user_extraction_fails_without_session_storage_extension() {
     use axum::extract::FromRequestParts;
     ensure_server_fns_registered();
 
@@ -940,11 +940,11 @@ async fn auth_user_extraction_fails_without_app_state_extension() {
         .unwrap();
     let (mut parts, _) = request.into_parts();
 
-    // Attempt to extract AuthUser without AppState in extensions
+    // Attempt to extract AuthUser without the session store in extensions
     let result = web::auth::AuthUser::from_request_parts(&mut parts, &()).await;
     assert!(matches!(
         result.unwrap_err(),
-        web::auth::AuthRejection::MissingAppState
+        web::auth::AuthRejection::MissingSessionStorage
     ));
 }
 

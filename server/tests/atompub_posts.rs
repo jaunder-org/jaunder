@@ -63,28 +63,32 @@ async fn collection_lists_user_posts() {
     // Create two published posts
     let _post1 = storage::perform_post_creation(
         state.posts.as_ref(),
-        user_id,
-        "Hello body one".to_string(),
-        Some("Hello Title One"),
-        storage::PostFormat::Markdown,
-        None,
-        Some(chrono::Utc::now()),
-        100,
-        None,
+        storage::PostCreation {
+            user_id,
+            body: "Hello body one".to_string(),
+            title: Some("Hello Title One"),
+            format: storage::PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(chrono::Utc::now()),
+            max_attempts: 100,
+            summary: None,
+        },
     )
     .await
     .unwrap();
 
     let _post2 = storage::perform_post_creation(
         state.posts.as_ref(),
-        user_id,
-        "Hello body two".to_string(),
-        Some("Hello Title Two"),
-        storage::PostFormat::Markdown,
-        None,
-        Some(chrono::Utc::now()),
-        100,
-        None,
+        storage::PostCreation {
+            user_id,
+            body: "Hello body two".to_string(),
+            title: Some("Hello Title Two"),
+            format: storage::PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(chrono::Utc::now()),
+            max_attempts: 100,
+            summary: None,
+        },
     )
     .await
     .unwrap();
@@ -151,14 +155,16 @@ async fn member_returns_native_source_with_etag() {
 
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
-        user_id,
-        "# Markdown body".to_string(),
-        Some("My Post"),
-        storage::PostFormat::Markdown,
-        None,
-        Some(chrono::Utc::now()),
-        100,
-        None,
+        storage::PostCreation {
+            user_id,
+            body: "# Markdown body".to_string(),
+            title: Some("My Post"),
+            format: storage::PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(chrono::Utc::now()),
+            max_attempts: 100,
+            summary: None,
+        },
     )
     .await
     .unwrap();
@@ -287,14 +293,16 @@ async fn delete_then_get_is_404() {
 
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
-        user_id,
-        "Delete me".to_string(),
-        Some("Temporary Post"),
-        storage::PostFormat::Markdown,
-        None,
-        Some(chrono::Utc::now()),
-        100,
-        None,
+        storage::PostCreation {
+            user_id,
+            body: "Delete me".to_string(),
+            title: Some("Temporary Post"),
+            format: storage::PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(chrono::Utc::now()),
+            max_attempts: 100,
+            summary: None,
+        },
     )
     .await
     .unwrap();
@@ -355,14 +363,16 @@ async fn collection_paging_emits_next_link() {
     for i in 0..2 {
         storage::perform_post_creation(
             state.posts.as_ref(),
-            user_id,
-            format!("Body {i}"),
-            Some(&format!("Title {i}")),
-            storage::PostFormat::Markdown,
-            None,
-            Some(chrono::Utc::now()),
-            100,
-            None,
+            storage::PostCreation {
+                user_id,
+                body: format!("Body {i}"),
+                title: Some(&format!("Title {i}")),
+                format: storage::PostFormat::Markdown,
+                slug_override: None,
+                published_at: Some(chrono::Utc::now()),
+                max_attempts: 100,
+                summary: None,
+            },
         )
         .await
         .unwrap();
@@ -424,14 +434,16 @@ async fn collection_accepts_valid_cursor() {
     let (user_id, token) = seed_alice(&state).await;
     storage::perform_post_creation(
         state.posts.as_ref(),
-        user_id,
-        "Body".to_string(),
-        Some("Title"),
-        storage::PostFormat::Markdown,
-        None,
-        Some(chrono::Utc::now()),
-        100,
-        None,
+        storage::PostCreation {
+            user_id,
+            body: "Body".to_string(),
+            title: Some("Title"),
+            format: storage::PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(chrono::Utc::now()),
+            max_attempts: 100,
+            summary: None,
+        },
     )
     .await
     .unwrap();
@@ -663,14 +675,16 @@ async fn update_replaces_post_body() {
     // Create an initial post
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
-        user_id,
-        "Old body".to_string(),
-        Some("Old"),
-        storage::PostFormat::Markdown,
-        None,
-        Some(chrono::Utc::now()),
-        100,
-        None,
+        storage::PostCreation {
+            user_id,
+            body: "Old body".to_string(),
+            title: Some("Old"),
+            format: storage::PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(chrono::Utc::now()),
+            max_attempts: 100,
+            summary: None,
+        },
     )
     .await
     .unwrap();
@@ -707,14 +721,16 @@ async fn update_with_stale_if_match_returns_412() {
 
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
-        user_id,
-        "Old body".to_string(),
-        Some("Old"),
-        storage::PostFormat::Markdown,
-        None,
-        Some(chrono::Utc::now()),
-        100,
-        None,
+        storage::PostCreation {
+            user_id,
+            body: "Old body".to_string(),
+            title: Some("Old"),
+            format: storage::PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(chrono::Utc::now()),
+            max_attempts: 100,
+            summary: None,
+        },
     )
     .await
     .unwrap();
@@ -795,14 +811,16 @@ async fn update_removes_categories_not_in_new_entry() {
     // Create a post with a tag
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
-        user_id,
-        "Body".to_string(),
-        Some("Title"),
-        storage::PostFormat::Markdown,
-        None,
-        Some(chrono::Utc::now()),
-        100,
-        None,
+        storage::PostCreation {
+            user_id,
+            body: "Body".to_string(),
+            title: Some("Title"),
+            format: storage::PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(chrono::Utc::now()),
+            max_attempts: 100,
+            summary: None,
+        },
     )
     .await
     .unwrap();
@@ -869,14 +887,16 @@ async fn update_with_put_returns_200_and_etag() {
 
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
-        user_id,
-        "Original".to_string(),
-        Some("Title"),
-        storage::PostFormat::Markdown,
-        None,
-        Some(chrono::Utc::now()),
-        100,
-        None,
+        storage::PostCreation {
+            user_id,
+            body: "Original".to_string(),
+            title: Some("Title"),
+            format: storage::PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(chrono::Utc::now()),
+            max_attempts: 100,
+            summary: None,
+        },
     )
     .await
     .unwrap();
@@ -942,14 +962,16 @@ async fn update_with_no_title_or_content_returns_400() {
     // Create an initial post
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
-        user_id,
-        "Original body".to_string(),
-        Some("Original"),
-        storage::PostFormat::Markdown,
-        None,
-        Some(chrono::Utc::now()),
-        100,
-        None,
+        storage::PostCreation {
+            user_id,
+            body: "Original body".to_string(),
+            title: Some("Original"),
+            format: storage::PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(chrono::Utc::now()),
+            max_attempts: 100,
+            summary: None,
+        },
     )
     .await
     .unwrap();

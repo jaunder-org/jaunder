@@ -1,8 +1,16 @@
 use std::sync::Once;
 use std::time::{Duration, Instant};
 
+use axum::http::HeaderName;
+use axum::Router;
+use opentelemetry::propagation::Extractor;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::WithExportConfig;
+use tower::ServiceBuilder;
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
+use tower_http::trace::{DefaultOnResponse, TraceLayer};
+use tracing::Level;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -95,12 +103,7 @@ where
         };
 
         let started_at = span.extensions().get::<SpanStartedAt>().copied();
-        let Some(started_at) = started_at else {
-            return;
-        };
-
-        let elapsed = started_at.0.elapsed();
-        if let Some((elapsed_ms, threshold_ms)) = slow_span_values(elapsed, self.threshold) {
+        if let Some((elapsed_ms, threshold_ms)) = slow_span_report(started_at, self.threshold) {
             let metadata = span.metadata();
             let span_name = metadata.name();
             let span_target = metadata.target();
@@ -124,68 +127,66 @@ fn slow_span_values(elapsed: Duration, threshold: Duration) -> Option<(u64, u64)
     }
 }
 
+/// Pure slow-span decision used by [`SlowSpanLayer::on_close`]: reports the
+/// `(elapsed_ms, threshold_ms)` to log when a span both recorded its start time
+/// and ran for at least `threshold`.
+///
+/// The `started_at`-absent guard lives here, behind `?`, rather than inline in
+/// the layer: a live registry always inserts `SpanStartedAt` in `on_new_span`,
+/// so that branch is unreachable through the layer and only this free function
+/// can exercise it under test.
+fn slow_span_report(started_at: Option<SpanStartedAt>, threshold: Duration) -> Option<(u64, u64)> {
+    slow_span_values(started_at?.0.elapsed(), threshold)
+}
+
 fn init_tracing_impl(verbose: bool) {
     // Forward any existing `log` macros to tracing so we can migrate in
-    // phases without duplicate logging calls.
-    let _ = tracing_log::LogTracer::init();
+    // phases without duplicate logging calls. A failure here is non-fatal (it
+    // means a `log` bridge is already installed), but tracing isn't up yet, so
+    // we report it to stderr rather than silently dropping it.
+    if let Err(error) = tracing_log::LogTracer::init() {
+        eprintln!("log-to-tracing bridge init failed (continuing without it): {error}");
+    }
     opentelemetry::global::set_text_map_propagator(
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );
 
     let env_filter = resolved_filter(verbose);
     let slow_span_layer = SlowSpanLayer::new(slow_op_threshold());
-    let use_json = use_json_format();
 
-    if let Some(endpoint) = otel_exporter_otlp_endpoint() {
-        match build_otel_tracer(&endpoint) {
-            Ok(tracer) => {
-                if use_json {
-                    let _ = tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(slow_span_layer)
-                        .with(fmt::layer().json())
-                        .with(tracing_opentelemetry::layer().with_tracer(tracer))
-                        .try_init();
-                } else {
-                    let _ = tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(slow_span_layer)
-                        .with(fmt::layer())
-                        .with(tracing_opentelemetry::layer().with_tracer(tracer))
-                        .try_init();
-                }
-            }
+    // Box the fmt layer so the json/pretty variants share one type, and carry
+    // OTel as an `Option` layer (absent or failed setup is a no-op). This lets
+    // every {OTel present/failed/none} × {json/pretty} combination flow through
+    // a single registry-build chain.
+    let fmt_layer = if use_json_format() {
+        fmt::layer().json().boxed()
+    } else {
+        fmt::layer().boxed()
+    };
+
+    let otel_layer =
+        otel_exporter_otlp_endpoint().and_then(|endpoint| match build_otel_tracer(&endpoint) {
+            Ok(tracer) => Some(tracing_opentelemetry::layer().with_tracer(tracer)),
             Err(error) => {
                 eprintln!(
                     "OTel disabled because exporter setup failed (endpoint {endpoint}): {error}"
                 );
-                if use_json {
-                    let _ = tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(slow_span_layer)
-                        .with(fmt::layer().json())
-                        .try_init();
-                } else {
-                    let _ = tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(slow_span_layer)
-                        .with(fmt::layer())
-                        .try_init();
-                }
+                None
             }
-        }
-    } else if use_json {
-        let _ = tracing_subscriber::registry()
-            .with(env_filter)
-            .with(slow_span_layer)
-            .with(fmt::layer().json())
-            .try_init();
-    } else {
-        let _ = tracing_subscriber::registry()
-            .with(env_filter)
-            .with(slow_span_layer)
-            .with(fmt::layer())
-            .try_init();
+        });
+
+    // `try_init` fails only if a global subscriber is already installed. That
+    // leaves the process running without our configured layers, which is worth
+    // knowing about; emit to stderr since tracing itself is what failed to come
+    // up.
+    if let Err(error) = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(slow_span_layer)
+        .with(fmt_layer)
+        .with(otel_layer)
+        .try_init()
+    {
+        eprintln!("tracing subscriber init failed (continuing without it): {error}");
     }
 }
 
@@ -193,10 +194,84 @@ pub fn init_tracing(verbose: bool) {
     INIT_TRACING.call_once(|| init_tracing_impl(verbose));
 }
 
+/// Trace context extracted from inbound request headers (W3C `traceparent`),
+/// stashed in request extensions so the request span can adopt it as parent.
+#[derive(Clone)]
+struct ExtractedTraceContext(opentelemetry::Context);
+
+struct HeaderExtractor<'a>(&'a axum::http::HeaderMap);
+
+impl Extractor for HeaderExtractor<'_> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key).and_then(|value| value.to_str().ok())
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        self.0.keys().map(axum::http::HeaderName::as_str).collect()
+    }
+}
+
+async fn extract_trace_context(
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let context = opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.extract(&HeaderExtractor(request.headers()))
+    });
+    request
+        .extensions_mut()
+        .insert(ExtractedTraceContext(context));
+    next.run(request).await
+}
+
+/// Builds the per-request tracing span, adopting any extracted upstream trace
+/// context as its parent.
+fn make_request_span(request: &axum::extract::Request) -> tracing::Span {
+    let span = tracing::span!(
+        Level::INFO,
+        "request",
+        method = %request.method(),
+        uri = %request.uri(),
+        version = ?request.version(),
+        headers = ?request.headers(),
+    );
+    if let Some(parent) = request.extensions().get::<ExtractedTraceContext>() {
+        span.set_parent(parent.0.clone());
+    }
+    span
+}
+
+/// Applies the HTTP observability middleware stack — trace-context extraction,
+/// request-id set/propagate, and the per-request tracing span — to `router`.
+/// Kept here so all OTel/tower tracing construction lives with the rest of the
+/// tracing setup (§1.7).
+pub fn with_http_observability<S>(router: Router<S>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    let request_id_header = HeaderName::from_static("x-request-id");
+    let layer = ServiceBuilder::new()
+        .layer(axum::middleware::from_fn(extract_trace_context))
+        .layer(SetRequestIdLayer::new(
+            request_id_header.clone(),
+            MakeRequestUuid,
+        ))
+        .layer(PropagateRequestIdLayer::new(request_id_header))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(make_request_span)
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        );
+    router.layer(layer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
+    use axum::http::{HeaderMap, Request, StatusCode};
     use std::sync::{Mutex, MutexGuard};
+    use tower::ServiceExt;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -220,6 +295,23 @@ mod tests {
 
         let above = slow_span_values(Duration::from_millis(750), Duration::from_millis(500));
         assert_eq!(above, Some((750, 500)));
+    }
+
+    #[test]
+    fn slow_span_report_is_none_when_start_time_absent() {
+        // A live registry always records SpanStartedAt in on_new_span, so this
+        // guard is unreachable through the layer; cover it directly here.
+        assert_eq!(slow_span_report(None, Duration::from_millis(1)), None);
+    }
+
+    #[test]
+    fn slow_span_report_reports_when_started_span_exceeds_threshold() {
+        let started_at = SpanStartedAt(
+            Instant::now()
+                .checked_sub(Duration::from_secs(10))
+                .expect("monotonic clock far enough past epoch"),
+        );
+        assert!(slow_span_report(Some(started_at), Duration::from_millis(1)).is_some());
     }
 
     #[test]
@@ -350,6 +442,18 @@ mod tests {
     }
 
     #[test]
+    fn init_tracing_impl_reports_failure_when_already_initialized() {
+        let _guard = lock_env();
+        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+        std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
+        // First call installs the global subscriber and log bridge; the second
+        // finds both already set and exercises the non-fatal error branches
+        // (reported to stderr rather than silently dropped).
+        init_tracing_impl(false);
+        init_tracing_impl(false);
+    }
+
+    #[test]
     fn default_filter_verbose_sets_debug() {
         let filter = default_filter(true);
         let debug_str = format!("{filter:?}");
@@ -403,5 +507,77 @@ mod tests {
         });
         // lock_env() must recover gracefully from the poisoned mutex.
         let _guard = lock_env();
+    }
+
+    #[test]
+    fn header_extractor_reads_known_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "traceparent",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+                .parse()
+                .expect("valid traceparent header"),
+        );
+
+        let extractor = HeaderExtractor(&headers);
+        assert_eq!(
+            extractor.get("traceparent"),
+            Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+        );
+        assert!(extractor.keys().contains(&"traceparent"));
+    }
+
+    #[tokio::test]
+    async fn trace_context_middleware_inserts_extension() {
+        let app = Router::new()
+            .route(
+                "/",
+                axum::routing::get(|req: axum::extract::Request| async move {
+                    if req.extensions().get::<ExtractedTraceContext>().is_some() {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn(extract_trace_context));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(
+                        "traceparent",
+                        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                    )
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
+            .await
+            .expect("failed to get response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn make_request_span_builds_span_with_and_without_parent_context() {
+        // No extracted parent: the span is built without adopting a parent.
+        let request = Request::builder()
+            .method("GET")
+            .uri("/x")
+            .body(Body::empty())
+            .expect("request");
+        let _span = make_request_span(&request);
+
+        // Extracted parent present: exercises the `set_parent` branch.
+        let mut request = Request::builder()
+            .method("GET")
+            .uri("/x")
+            .body(Body::empty())
+            .expect("request");
+        request
+            .extensions_mut()
+            .insert(ExtractedTraceContext(opentelemetry::Context::new()));
+        let _span = make_request_span(&request);
     }
 }

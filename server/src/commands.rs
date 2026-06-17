@@ -334,10 +334,24 @@ pub async fn cmd_serve(
         .site_addr(bind)
         .build();
 
-    let backup_scheduler =
-        crate::start_backup_worker(db.clone(), storage.db.clone(), storage.storage_path.clone())
-            .await?;
-    let feed_scheduler = crate::feed::worker::start_feed_worker(db.clone()).await?;
+    let backup_scheduler = crate::backup::start_backup_worker(
+        db.site_config.clone(),
+        storage.db.clone(),
+        storage.storage_path.clone(),
+    )
+    .await?;
+    // The `WebSub` publisher is a service, not storage: it is constructed at the
+    // composition root and injected into the feed worker (ADR-0016).
+    let websub = crate::websub::default_client_from_env();
+    let feed_scheduler = crate::feed::worker::FeedWorker::new(
+        db.site_config.clone(),
+        db.posts.clone(),
+        db.feed_cache.clone(),
+        db.feed_events.clone(),
+        websub,
+    )
+    .start()
+    .await?;
     let mailer = crate::mailer::build_mailer(db.site_config.as_ref()).await;
     let router = crate::create_router(
         leptos_options,

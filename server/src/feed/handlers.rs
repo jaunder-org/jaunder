@@ -8,7 +8,7 @@ use axum::{
 };
 use common::feed::{canonicalize, FeedFormat, FeedSurface};
 use common::{tag::Tag, username::Username};
-use storage::AppState;
+use storage::{FeedCacheStorage, PostStorage, SiteConfigStorage};
 
 use super::regenerate::regenerate_feed;
 
@@ -22,15 +22,24 @@ fn parse_format(ext: &str) -> Option<FeedFormat> {
 }
 
 async fn serve(
-    state: Arc<AppState>,
+    feed_cache: Arc<dyn FeedCacheStorage>,
+    site_config: Arc<dyn SiteConfigStorage>,
+    posts: Arc<dyn PostStorage>,
     headers: HeaderMap,
     surface: FeedSurface,
     format: FeedFormat,
 ) -> Response {
     let feed_url = canonicalize(&surface, format);
-    let row = match state.feed_cache.get(&feed_url).await {
+    let row = match feed_cache.get(&feed_url).await {
         Ok(Some(row)) => row,
-        Ok(None) => match regenerate_feed(&state, &feed_url).await {
+        Ok(None) => match regenerate_feed(
+            site_config.as_ref(),
+            posts.as_ref(),
+            feed_cache.as_ref(),
+            &feed_url,
+        )
+        .await
+        {
             Ok(row) => row,
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         },
@@ -72,18 +81,30 @@ async fn serve(
 }
 
 pub async fn feed_site(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
+    Extension(posts): Extension<Arc<dyn PostStorage>>,
     headers: HeaderMap,
     Path(ext): Path<String>,
 ) -> Response {
     let Some(format) = parse_format(&ext) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    serve(state, headers, FeedSurface::Site, format).await
+    serve(
+        feed_cache,
+        site_config,
+        posts,
+        headers,
+        FeedSurface::Site,
+        format,
+    )
+    .await
 }
 
 pub async fn feed_site_tag(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
+    Extension(posts): Extension<Arc<dyn PostStorage>>,
     headers: HeaderMap,
     Path((tag, ext)): Path<(String, String)>,
 ) -> Response {
@@ -93,11 +114,21 @@ pub async fn feed_site_tag(
     let Ok(tag) = tag.parse::<Tag>() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    serve(state, headers, FeedSurface::SiteTag { tag }, format).await
+    serve(
+        feed_cache,
+        site_config,
+        posts,
+        headers,
+        FeedSurface::SiteTag { tag },
+        format,
+    )
+    .await
 }
 
 pub async fn feed_user(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
+    Extension(posts): Extension<Arc<dyn PostStorage>>,
     headers: HeaderMap,
     Path((username, ext)): Path<(String, String)>,
 ) -> Response {
@@ -107,11 +138,21 @@ pub async fn feed_user(
     let Ok(username) = username.parse::<Username>() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    serve(state, headers, FeedSurface::User { username }, format).await
+    serve(
+        feed_cache,
+        site_config,
+        posts,
+        headers,
+        FeedSurface::User { username },
+        format,
+    )
+    .await
 }
 
 pub async fn feed_user_tag(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
+    Extension(posts): Extension<Arc<dyn PostStorage>>,
     headers: HeaderMap,
     Path((username, tag, ext)): Path<(String, String, String)>,
 ) -> Response {
@@ -122,7 +163,9 @@ pub async fn feed_user_tag(
         return StatusCode::NOT_FOUND.into_response();
     };
     serve(
-        state,
+        feed_cache,
+        site_config,
+        posts,
         headers,
         FeedSurface::UserTag { username, tag },
         format,

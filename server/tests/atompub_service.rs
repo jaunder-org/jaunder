@@ -59,6 +59,24 @@ async fn service_document_returns_200_with_app_password() {
         .create_session(user_id, "MarsEdit")
         .await
         .unwrap();
+    // Give the user a tagged post so the service document's category list is
+    // non-empty (exercises the tag-collection path in `service_document`).
+    let post = storage::perform_post_creation(
+        state.posts.as_ref(),
+        storage::PostCreation {
+            user_id,
+            body: "a tagged post".to_string(),
+            title: Some("Tagged"),
+            format: storage::PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(chrono::Utc::now()),
+            max_attempts: 100,
+            summary: None,
+        },
+    )
+    .await
+    .unwrap();
+    state.posts.tag_post(post.post_id, "rust").await.unwrap();
     let app = make_app(state, &base).await;
 
     let response = app
@@ -88,6 +106,8 @@ async fn service_document_returns_200_with_app_password() {
     assert!(body.contains("/atompub/alice/posts"));
     assert!(body.contains("/atompub/alice/media"));
     assert!(body.contains("image/webp"));
+    // The tagged post surfaces as an inline category in the posts collection.
+    assert!(body.contains("term=\"rust\""), "categories missing: {body}");
 }
 
 #[tokio::test]

@@ -6,7 +6,7 @@ use axum::{
 };
 use common::username::Username;
 use std::sync::Arc;
-use storage::AppState;
+use storage::SessionStorage;
 
 /// Cookie settings derived from the public deployment scheme.
 #[derive(Clone, Copy)]
@@ -29,7 +29,7 @@ pub struct AuthUser {
 #[derive(Debug)]
 pub enum AuthRejection {
     MissingToken,
-    MissingAppState,
+    MissingSessionStorage,
     Session(storage::SessionAuthError),
     BasicUsernameMismatch,
 }
@@ -37,7 +37,7 @@ pub enum AuthRejection {
 impl IntoResponse for AuthRejection {
     fn into_response(self) -> Response {
         match self {
-            AuthRejection::MissingAppState
+            AuthRejection::MissingSessionStorage
             | AuthRejection::Session(storage::SessionAuthError::Internal(_)) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
@@ -61,12 +61,12 @@ where
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         let credential = resolve_credential(&parts.headers).ok_or(AuthRejection::MissingToken)?;
 
-        let state = parts
+        let sessions = parts
             .extensions
-            .get::<Arc<AppState>>()
-            .ok_or(AuthRejection::MissingAppState)?;
+            .get::<Arc<dyn SessionStorage>>()
+            .ok_or(AuthRejection::MissingSessionStorage)?;
 
-        match state.sessions.authenticate(&credential.token).await {
+        match sessions.authenticate(&credential.token).await {
             Ok(record) => {
                 verify_basic_username(&record.username, credential.expected_username.as_deref())?;
                 Ok(AuthUser {
@@ -110,7 +110,9 @@ pub async fn require_auth() -> InternalResult<AuthUser> {
 fn auth_rejection_error(error: AuthRejection) -> InternalError {
     match error {
         AuthRejection::MissingToken => InternalError::unauthorized("missing session token"),
-        AuthRejection::MissingAppState => InternalError::server_message("missing AppState context"),
+        AuthRejection::MissingSessionStorage => {
+            InternalError::server_message("missing SessionStorage context")
+        }
         AuthRejection::BasicUsernameMismatch => {
             InternalError::unauthorized("basic auth username mismatch")
         }
@@ -409,8 +411,8 @@ mod tests {
     }
 
     #[test]
-    fn auth_rejection_into_response_renders_500_for_missing_app_state() {
-        let response = AuthRejection::MissingAppState.into_response();
+    fn auth_rejection_into_response_renders_500_for_missing_session_storage() {
+        let response = AuthRejection::MissingSessionStorage.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -430,7 +432,7 @@ mod tests {
             crate::error::WebError::Unauthorized
         ));
 
-        let missing_state = auth_rejection_error(AuthRejection::MissingAppState);
+        let missing_state = auth_rejection_error(AuthRejection::MissingSessionStorage);
         assert!(matches!(
             missing_state.public(),
             crate::error::WebError::Server { .. }

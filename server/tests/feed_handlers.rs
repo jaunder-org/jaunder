@@ -130,6 +130,63 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
 }
 
 #[tokio::test]
+async fn handler_serves_site_tag_feed_with_200() {
+    let base = TempDir::new().expect("temp dir");
+    let state = test_state(&base).await;
+    let app = make_app(state.clone(), &base).await;
+
+    // A tagged, published post so the site-tag surface has content.
+    let username: Username = "frank".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    let user_id = state
+        .users
+        .create_user(&username, &password, None, false)
+        .await
+        .expect("create user");
+    let now = Utc::now();
+    let post_id = state
+        .posts
+        .create_post(&CreatePostInput {
+            user_id,
+            title: Some("Tagged Post".to_string()),
+            slug: "tagged-post".parse::<Slug>().expect("valid slug"),
+            body: "Test body".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>Test body</p>".to_string(),
+            published_at: Some(now),
+            summary: None,
+        })
+        .await
+        .expect("create post");
+    state
+        .posts
+        .tag_post(post_id, "rust")
+        .await
+        .expect("tag post");
+
+    // The valid site-tag route exercises feed_site_tag's happy path: parse the
+    // tag, then serve/regenerate the SiteTag surface.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/tags/rust/feed.rss")
+        .body(Body::empty())
+        .expect("build request");
+    let resp = app.oneshot(req).await.expect("request");
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "valid site-tag feed should return 200"
+    );
+    let content_type = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .expect("content-type header");
+    assert_eq!(content_type, "application/rss+xml; charset=utf-8");
+}
+
+#[tokio::test]
 async fn handler_cache_hit_serves_stored_body_without_regeneration() {
     let base = TempDir::new().expect("temp dir");
     let state = test_state(&base).await;

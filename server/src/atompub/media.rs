@@ -12,10 +12,10 @@ use sha2::{Digest, Sha256};
 
 use common::atompub::{render_media_link_entry, MediaLinkEntry};
 use common::media::{media_url, sanitize_filename};
-use storage::{AppState, MediaRecord, MediaSource};
+use storage::{MediaRecord, MediaSource, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
-use super::base_url;
+use super::{base_url, HandlerError};
 
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
 
@@ -48,18 +48,18 @@ fn media_link_entry(record: &MediaRecord, base: &str, username: &str) -> MediaLi
 /// for a new resource or `200` when identical content was already stored.
 ///
 /// # Errors
-/// `403` wrong user; `4xx`/`5xx` from the upload pipeline; `500` on storage/serialization failure.
+/// `403` wrong user; `4xx`/`5xx` from the upload pipeline; `500` on storage failure.
+#[tracing::instrument(name = "atompub.media.collection_post", skip_all)]
 pub async fn collection_post(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(media): Extension<Arc<dyn MediaStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(storage_path): Extension<Arc<PathBuf>>,
     auth_user: AuthUser,
     Path(username): Path<String>,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<Response, StatusCode> {
-    if auth_user.username.as_str() != username {
-        return Err(StatusCode::FORBIDDEN);
-    }
+) -> Result<Response, HandlerError> {
+    super::require_user_match(&auth_user, &username)?;
 
     let raw_name = headers
         .get("slug")
@@ -67,7 +67,7 @@ pub async fn collection_post(
         .unwrap_or("upload");
     let filename = sanitize_filename(raw_name);
     if filename.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(HandlerError::BadRequest);
     }
     let content_type = headers
         .get(header::CONTENT_TYPE)
@@ -77,34 +77,30 @@ pub async fn collection_post(
 
     // Determine whether this exact resource already exists (idempotent re-upload).
     let sha = format!("{:x}", Sha256::digest(&body));
-    let existed = state
-        .media
+    let existed = media
         .get_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .await?
         .is_some();
 
-    let manager = crate::media_manager::MediaManager::new(state.clone(), storage_path);
+    let manager =
+        crate::media_manager::MediaManager::new(media.clone(), site_config.clone(), storage_path);
     let upload = manager
         .upload_bytes(&auth_user, &filename, &content_type, &body)
-        .await
-        .map_err(|e| crate::media_manager::MediaManager::map_error(&e))?;
+        .await?;
 
-    let record = state
-        .media
+    let record = media
         .get_media(
             auth_user.user_id,
             &upload.sha256,
             &upload.filename,
             &MediaSource::Upload,
         )
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        .await?
+        .ok_or(HandlerError::Internal)?;
 
-    let base = base_url(&state).await;
+    let base = base_url(site_config.as_ref()).await;
     let entry = media_link_entry(&record, &base, &username);
-    let xml = render_media_link_entry(&entry).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let xml = render_media_link_entry(&entry);
     let status = if existed {
         StatusCode::OK
     } else {
@@ -125,25 +121,23 @@ pub async fn collection_post(
 /// `GET /atompub/{username}/media/{sha}/{filename}` — fetch a media-link entry.
 ///
 /// # Errors
-/// `403` wrong user; `404` unknown; `500` on storage/serialization failure.
+/// `403` wrong user; `404` unknown; `500` on storage failure.
+#[tracing::instrument(name = "atompub.media.member_get", skip_all)]
 pub async fn member_get(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(media): Extension<Arc<dyn MediaStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
     Path((username, sha, filename)): Path<(String, String, String)>,
-) -> Result<Response, StatusCode> {
-    if auth_user.username.as_str() != username {
-        return Err(StatusCode::FORBIDDEN);
-    }
-    let record = state
-        .media
+) -> Result<Response, HandlerError> {
+    super::require_user_match(&auth_user, &username)?;
+    let record = media
         .get_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .await?
+        .ok_or(HandlerError::NotFound)?;
 
-    let base = base_url(&state).await;
+    let base = base_url(site_config.as_ref()).await;
     let entry = media_link_entry(&record, &base, &username);
-    let xml = render_media_link_entry(&entry).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let xml = render_media_link_entry(&entry);
     Ok(([(header::CONTENT_TYPE, ENTRY_CONTENT_TYPE)], xml).into_response())
 }
 
@@ -151,45 +145,15 @@ pub async fn member_get(
 ///
 /// # Errors
 /// `403` wrong user; `404` unknown; `500` on storage failure.
+#[tracing::instrument(name = "atompub.media.member_delete", skip_all)]
 pub async fn member_delete(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(media): Extension<Arc<dyn MediaStorage>>,
     auth_user: AuthUser,
     Path((username, sha, filename)): Path<(String, String, String)>,
-) -> Result<Response, StatusCode> {
-    if auth_user.username.as_str() != username {
-        return Err(StatusCode::FORBIDDEN);
-    }
-    state
-        .media
+) -> Result<Response, HandlerError> {
+    super::require_user_match(&auth_user, &username)?;
+    media
         .delete_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
-        .await
-        .map_err(|e| delete_status(&e))?;
+        .await?;
     Ok(StatusCode::NO_CONTENT.into_response())
-}
-
-/// Maps a `DeleteMediaError` to the appropriate HTTP status code.
-fn delete_status(err: &storage::DeleteMediaError) -> StatusCode {
-    match err {
-        storage::DeleteMediaError::NotFound => StatusCode::NOT_FOUND,
-        storage::DeleteMediaError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::delete_status;
-    use axum::http::StatusCode;
-    use storage::DeleteMediaError;
-
-    #[test]
-    fn delete_status_maps_not_found_and_internal() {
-        assert_eq!(
-            delete_status(&DeleteMediaError::NotFound),
-            StatusCode::NOT_FOUND
-        );
-        assert_eq!(
-            delete_status(&DeleteMediaError::Internal(sqlx::Error::PoolClosed)),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-    }
 }
