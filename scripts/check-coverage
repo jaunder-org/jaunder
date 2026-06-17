@@ -236,7 +236,11 @@ CRAP_REGRESSIONS=$(jq -n \
     --slurpfile new "$NEW_CRAP_MANIFEST" \
     --slurpfile old "$CRAP_MANIFEST_FILE" \
     '
-    def key: ((.crate // "") + "|" + .file + "|" + .function);
+    # Include the line: a file can hold several same-named functions (e.g. the
+    # many `from`/`new`/`default`/`fmt` trait impls), so crate|file|function
+    # alone collides and the `add` below would keep only the last, making the
+    # comparison flag the others as phantom regressions. The line disambiguates.
+    def key: ((.crate // "") + "|" + .file + "|" + .function + "|" + ((.line // 0) | tostring));
     (($old[0].entries // []) | map({(key): .}) | add // {}) as $old_by_key |
     ($new[0].entries // []) | map(
         . as $entry |
