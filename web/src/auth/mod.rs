@@ -86,26 +86,46 @@ pub async fn register(
             ))
             .await;
 
-        let user_id = match policy {
+        let metric_policy = match &policy {
+            RegistrationPolicy::Open => common::metrics::RegistrationPolicy::Open,
+            RegistrationPolicy::InviteOnly => common::metrics::RegistrationPolicy::InviteOnly,
+            RegistrationPolicy::Closed => common::metrics::RegistrationPolicy::Closed,
+        };
+        let user_id_result: Result<i64, InternalError> = match policy {
             RegistrationPolicy::Open => users
                 .create_user(&username, &password, None, false)
                 .instrument(tracing::info_span!("web.auth.register.create_user_open"))
                 .await
-                .map_err(register_open_error)?,
+                .map_err(register_open_error),
             RegistrationPolicy::InviteOnly => {
-                let code = invite_code
-                    .and_then(common::text::non_empty_owned)
-                    .ok_or_else(|| InternalError::validation("invite code required"))?;
-                atomic
-                    .create_user_with_invite(&username, &password, None, false, &code)
-                    .instrument(tracing::info_span!("web.auth.register.create_user_invite"))
-                    .await
-                    .map_err(register_invite_error)?
+                match invite_code.and_then(common::text::non_empty_owned) {
+                    Some(code) => {
+                        let result = atomic
+                            .create_user_with_invite(&username, &password, None, false, &code)
+                            .instrument(tracing::info_span!("web.auth.register.create_user_invite"))
+                            .await
+                            .map_err(register_invite_error);
+                        // A successful invite registration redeems the code.
+                        if result.is_ok() {
+                            common::metrics::invite(common::metrics::InviteEvent::Redeemed);
+                        }
+                        result
+                    }
+                    None => Err(InternalError::validation("invite code required")),
+                }
             }
-            RegistrationPolicy::Closed => {
-                return Err(InternalError::validation("registration is closed"));
-            }
+            RegistrationPolicy::Closed => Err(InternalError::validation("registration is closed")),
         };
+        common::metrics::registration(
+            common::metrics::RegistrationSource::Web,
+            metric_policy,
+            if user_id_result.is_ok() {
+                common::metrics::RegistrationResult::Ok
+            } else {
+                common::metrics::RegistrationResult::Rejected
+            },
+        );
+        let user_id = user_id_result?;
 
         let raw_token = sessions
             .create_session(user_id, "Sign-up session")
@@ -143,11 +163,27 @@ pub async fn login(username: String, password: String, label: Option<String>) ->
                 .parse::<Password>()
                 .map_err(|e| InternalError::validation(e.to_string()))?
         };
-        let record = users
+        let record = match users
             .authenticate(&username, &password)
             .instrument(tracing::info_span!("web.auth.login.authenticate_user"))
             .await
-            .map_err(login_error)?;
+        {
+            Ok(record) => {
+                common::metrics::login(common::metrics::LoginOutcome::Success);
+                record
+            }
+            Err(error) => {
+                common::metrics::login(match &error {
+                    storage::UserAuthError::InvalidCredentials => {
+                        common::metrics::LoginOutcome::InvalidCredentials
+                    }
+                    storage::UserAuthError::Internal(_) => {
+                        common::metrics::LoginOutcome::InternalError
+                    }
+                });
+                return Err(login_error(error));
+            }
+        };
 
         // Prefer explicit label if provided; otherwise derive from User-Agent header
         let derived_label = if let Some(l) = label.and_then(common::text::non_empty_owned) {

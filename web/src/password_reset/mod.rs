@@ -68,6 +68,7 @@ pub async fn request_password_reset(username: String) -> WebResult<()> {
             .await
             .map_err(InternalError::server)?;
 
+        common::metrics::password_reset(common::metrics::PasswordResetEvent::Requested);
         Ok(())
     })
 }
@@ -86,6 +87,7 @@ pub async fn confirm_password_reset(token: String, new_password: String) -> WebR
             .await
             .map_err(InternalError::storage)?;
 
+        common::metrics::password_reset(common::metrics::PasswordResetEvent::Completed);
         Ok(())
     })
 }

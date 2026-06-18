@@ -68,6 +68,7 @@ where
 
         match sessions.authenticate(&credential.token).await {
             Ok(record) => {
+                common::metrics::session_validation(common::metrics::SessionOutcome::Ok);
                 verify_basic_username(&record.username, credential.expected_username.as_deref())?;
                 Ok(AuthUser {
                     user_id: record.user_id,
@@ -75,7 +76,10 @@ where
                     token_hash: record.token_hash,
                 })
             }
-            Err(error) => Err(AuthRejection::Session(error)),
+            Err(error) => {
+                common::metrics::session_validation(session_outcome(&error));
+                Err(AuthRejection::Session(error))
+            }
         }
     }
 }
@@ -296,6 +300,20 @@ pub fn register_invite_error(error: storage::RegisterWithInviteError) -> Interna
     }
 }
 
+/// Maps a session-validation failure to its bounded `outcome` attribute for the
+/// `jaunder.auth.session_validations` metric. Kept separate (and exhaustively
+/// tested) so every variant's mapping is covered independent of which errors a
+/// given request path happens to produce.
+fn session_outcome(error: &storage::SessionAuthError) -> common::metrics::SessionOutcome {
+    match error {
+        storage::SessionAuthError::InvalidToken => common::metrics::SessionOutcome::InvalidToken,
+        storage::SessionAuthError::SessionNotFound => {
+            common::metrics::SessionOutcome::SessionNotFound
+        }
+        storage::SessionAuthError::Internal(_) => common::metrics::SessionOutcome::Internal,
+    }
+}
+
 pub fn login_error(error: storage::UserAuthError) -> InternalError {
     match error {
         storage::UserAuthError::InvalidCredentials => {
@@ -467,6 +485,25 @@ mod tests {
         assert!(matches!(
             internal.public(),
             crate::error::WebError::Storage { .. }
+        ));
+    }
+
+    #[test]
+    fn session_outcome_maps_each_variant_to_bounded_attribute() {
+        use common::metrics::SessionOutcome;
+        assert!(matches!(
+            session_outcome(&storage::SessionAuthError::InvalidToken),
+            SessionOutcome::InvalidToken
+        ));
+        assert!(matches!(
+            session_outcome(&storage::SessionAuthError::SessionNotFound),
+            SessionOutcome::SessionNotFound
+        ));
+        assert!(matches!(
+            session_outcome(&storage::SessionAuthError::Internal(
+                sqlx::Error::PoolClosed
+            )),
+            SessionOutcome::Internal
         ));
     }
 

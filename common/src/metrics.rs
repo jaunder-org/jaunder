@@ -22,7 +22,7 @@ macro_rules! enum_attr {
 enum_attr!(LoginOutcome { Success => "success", InvalidCredentials => "invalid_credentials", InternalError => "internal_error" });
 enum_attr!(SessionOutcome { Ok => "ok", InvalidToken => "invalid_token", SessionNotFound => "session_not_found", Internal => "internal" });
 enum_attr!(RegistrationSource { Web => "web", Cli => "cli" });
-enum_attr!(RegistrationPolicy { Open => "open", InviteOnly => "invite_only", CliBypass => "cli_bypass" });
+enum_attr!(RegistrationPolicy { Open => "open", InviteOnly => "invite_only", Closed => "closed", CliBypass => "cli_bypass" });
 enum_attr!(RegistrationResult { Ok => "ok", Rejected => "rejected" });
 enum_attr!(InviteEvent { Created => "created", Redeemed => "redeemed" });
 enum_attr!(PasswordResetEvent { Requested => "requested", Completed => "completed" });

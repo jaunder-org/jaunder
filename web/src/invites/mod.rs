@@ -34,10 +34,14 @@ pub async fn create_invite(expires_in_hours: Option<u64>) -> WebResult<String> {
             .and_then(chrono::Duration::try_hours)
             .ok_or_else(|| InternalError::validation("expires_in_hours too large"))?;
         let expires_at = Utc::now() + duration;
-        invites
+        let result = invites
             .create_invite(expires_at)
             .await
-            .map_err(InternalError::storage)
+            .map_err(InternalError::storage);
+        if result.is_ok() {
+            common::metrics::invite(common::metrics::InviteEvent::Created);
+        }
+        result
     })
 }
 
