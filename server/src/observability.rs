@@ -62,6 +62,19 @@ fn build_otel_tracer(endpoint: &str) -> Result<opentelemetry_sdk::trace::Tracer,
     Ok(tracer)
 }
 
+fn build_otel_meter(endpoint: &str) -> Result<(), String> {
+    let exporter = opentelemetry_otlp::MetricExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint)
+        .build()
+        .map_err(|error| format!("failed to build OTLP metric exporter: {error}"))?;
+    let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+        .with_periodic_exporter(exporter)
+        .build();
+    opentelemetry::global::set_meter_provider(provider);
+    Ok(())
+}
+
 pub fn slow_op_threshold() -> Duration {
     std::env::var("JAUNDER_SLOW_OP_MS")
         .ok()
@@ -174,6 +187,15 @@ fn init_tracing_impl(verbose: bool) {
                 None
             }
         });
+
+    // Metrics share the OTLP endpoint with traces; setup failure is non-fatal.
+    if let Some(endpoint) = otel_exporter_otlp_endpoint() {
+        if let Err(error) = build_otel_meter(&endpoint) {
+            eprintln!(
+                "OTel metrics disabled because exporter setup failed (endpoint {endpoint}): {error}"
+            );
+        }
+    }
 
     // `try_init` fails only if a global subscriber is already installed. That
     // leaves the process running without our configured layers, which is worth
@@ -380,6 +402,22 @@ mod tests {
     async fn build_otel_tracer_accepts_valid_endpoint() {
         let tracer = build_otel_tracer("http://127.0.0.1:4317");
         assert!(tracer.is_ok());
+    }
+
+    #[tokio::test]
+    async fn build_otel_meter_accepts_valid_endpoint() {
+        assert!(build_otel_meter("http://127.0.0.1:4317").is_ok());
+    }
+
+    #[tokio::test]
+    async fn build_otel_meter_with_endpoint_is_wired_by_init() {
+        let _guard = lock_env();
+        std::env::set_var(
+            "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+            "http://127.0.0.1:4317",
+        );
+        init_tracing_impl(false);
+        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
     }
 
     #[test]
