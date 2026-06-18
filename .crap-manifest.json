@@ -201,15 +201,6 @@
       "crate": "storage"
     },
     {
-      "file": "server/src/commands.rs",
-      "function": "cmd_serve",
-      "line": 301,
-      "cyclomatic": 11.0,
-      "coverage": 94.54545454545455,
-      "crap": 11.019636363636364,
-      "crate": "jaunder"
-    },
-    {
       "file": "storage/src/sqlite/posts.rs",
       "function": "Sqlite::tag_post",
       "line": 88,
@@ -253,6 +244,15 @@
       "coverage": 90.625,
       "crap": 10.0823974609375,
       "crate": "storage"
+    },
+    {
+      "file": "server/src/commands.rs",
+      "function": "prepare_server",
+      "line": 321,
+      "cyclomatic": 10.0,
+      "coverage": 90.74074074074075,
+      "crap": 10.079383224102017,
+      "crate": "jaunder"
     },
     {
       "file": "web/src/pages/upload.rs",
@@ -1614,6 +1614,15 @@
       "crate": "jaunder"
     },
     {
+      "file": "server/src/commands.rs",
+      "function": "cmd_serve",
+      "line": 396,
+      "cyclomatic": 3.0,
+      "coverage": 94.44444444444444,
+      "crap": 3.001543209876543,
+      "crate": "jaunder"
+    },
+    {
       "file": "common/src/feed/json.rs",
       "function": "render_json",
       "line": 6,
@@ -2093,7 +2102,7 @@
     {
       "file": "server/src/websub/http.rs",
       "function": "HttpWebSubClient::send_publish",
-      "line": 30,
+      "line": 37,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -5035,8 +5044,17 @@
     },
     {
       "file": "server/src/websub/http.rs",
+      "function": "HttpWebSubClient::with_timeout",
+      "line": 21,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "jaunder"
+    },
+    {
+      "file": "server/src/websub/http.rs",
       "function": "HttpWebSubClient::default",
-      "line": 23,
+      "line": 30,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,

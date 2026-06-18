@@ -21,7 +21,7 @@ use common::username::Username;
 use jaunder::cli::StorageArgs;
 use jaunder::commands::{
     cmd_backup, cmd_create_pg_db, cmd_init, cmd_restore, cmd_serve, cmd_smtp_test, cmd_user_create,
-    cmd_user_invite,
+    cmd_user_invite, prepare_server,
 };
 use leptos::prelude::LeptosOptions;
 use sqlx::Connection;
@@ -355,39 +355,46 @@ async fn after_init_server_responds_to_health_check() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-// Covers cmd_serve's success path: open DB, build options, create router, bind,
-// and start serving.
+// Covers cmd_serve's setup path deterministically: open DB, start the backup +
+// feed workers, build the router, and bind the listener. The blocking
+// `axum::serve` loop is the only line cmd_serve adds on top, so we exercise the
+// setup via `prepare_server` directly rather than spawning cmd_serve and
+// aborting it mid-flight (whose async-region coverage was nondeterministic —
+// jaunder-uox1).
 #[tokio::test]
-async fn cmd_serve_starts_and_accepts_connections() {
+async fn prepare_server_binds_and_builds_serving_router() {
     let base = TempDir::new().unwrap();
     let args = storage_args(&base).await;
     cmd_init(&args, false).await.unwrap();
 
-    // Pre-bind port 0 to let the OS assign a free port, then release it so
-    // cmd_serve can bind to the same address.
+    // Pre-bind port 0 for a free port, then release it so prepare_server can
+    // bind the same address.
     let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let bind = probe.local_addr().unwrap();
     drop(probe);
 
-    let storage_path = args.storage_path.clone();
-    let db = args.db.clone();
-    let task = tokio::spawn(async move {
-        let storage = StorageArgs { storage_path, db };
-        let _ = cmd_serve(&storage, bind, true, false).await;
-    });
+    let prepared = prepare_server(&args, bind, true)
+        .await
+        .expect("prepare_server should succeed after init");
+    assert_eq!(
+        prepared.listener.local_addr().unwrap(),
+        bind,
+        "listener should be bound to the requested address"
+    );
 
-    // Poll until the server accepts TCP connections (up to 1 s).
-    let mut connected = false;
-    for _ in 0..100 {
-        if tokio::net::TcpStream::connect(bind).await.is_ok() {
-            connected = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-
-    task.abort();
-    assert!(connected, "server did not start within 1s");
+    // The router serves; drive it directly (no real socket needed). Wrap in a
+    // LocalSet for Leptos SSR's spawn_local, as in after_init_server_responds_to_health_check.
+    let local = tokio::task::LocalSet::new();
+    let response = local
+        .run_until(async move {
+            prepared
+                .router
+                .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+                .await
+                .unwrap()
+        })
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
