@@ -160,6 +160,18 @@ pub fn email_sent(kind: EmailKind, result: SendResult) {
     );
 }
 
+/// Records `jaunder.email.sent` for a completed send attempt, deriving the
+/// `result` attribute from the send outcome. Keeps the success/failure branch
+/// (and its coverage) here rather than at every call site.
+pub fn email_send_result<T, E>(kind: EmailKind, result: &Result<T, E>) {
+    let outcome = if result.is_ok() {
+        SendResult::Success
+    } else {
+        SendResult::Failure
+    };
+    email_sent(kind, outcome);
+}
+
 pub fn email_send_duration_ms(ms: u64) {
     M.email_send_duration.record(ms, &[]);
 }
@@ -235,6 +247,10 @@ mod tests {
         global::set_meter_provider(provider.clone());
 
         login(LoginOutcome::InvalidCredentials);
+        // Exercise both branches of the email send-result mapping; the emit is a
+        // no-op without a provider, so this only needs the helper to run.
+        email_send_result(EmailKind::Verification, &Ok::<(), ()>(()));
+        email_send_result(EmailKind::PasswordReset, &Err::<(), ()>(()));
         provider.force_flush().expect("flush");
 
         let metrics = exporter.get_finished_metrics().expect("metrics");
