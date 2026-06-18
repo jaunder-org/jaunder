@@ -63,11 +63,14 @@ pub async fn request_password_reset(username: String) -> WebResult<()> {
             ),
         };
 
-        mailer
-            .send_email(&message)
-            .await
-            .map_err(InternalError::server)?;
+        let started = std::time::Instant::now();
+        let send_result = mailer.send_email(&message).await;
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        common::metrics::email_send_duration_ms(elapsed_ms);
+        common::metrics::email_send_result(common::metrics::EmailKind::PasswordReset, &send_result);
+        send_result.map_err(InternalError::server)?;
 
+        common::metrics::password_reset(common::metrics::PasswordResetEvent::Requested);
         Ok(())
     })
 }
@@ -86,6 +89,7 @@ pub async fn confirm_password_reset(token: String, new_password: String) -> WebR
             .await
             .map_err(InternalError::storage)?;
 
+        common::metrics::password_reset(common::metrics::PasswordResetEvent::Completed);
         Ok(())
     })
 }

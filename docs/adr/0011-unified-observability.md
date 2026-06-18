@@ -35,3 +35,74 @@ Chosen option: "Unified Observability with OpenTelemetry", because it provides a
 *   Good: Correlated traces make it easy to see exactly what happened in the backend during a specific E2E test step.
 *   Bad: Adds some complexity to the test runner and backend initialization.
 *   Bad: Generates large trace files that require specialized analysis scripts.
+
+## Addendum (2026-06-18): Event metrics pipeline (jaunder-kq8w.21)
+
+Traces answer "what happened in this one request"; they do not answer "how
+often, and is the rate abnormal". This addendum adds an OpenTelemetry **metrics**
+pipeline alongside the existing tracer for operational signals — auth abuse,
+silent email/WebSub failures, backup health, upload pressure, and an overall
+error rate. The full instrument catalog lives in the design spec
+(`docs/superpowers/specs/2026-06-18-otel-metrics-pipeline-design.md`); this
+records the conventions and architecture.
+
+### Pipeline
+
+*   The OTLP `MeterProvider` is installed in `server::observability` next to the
+    tracer (`build_otel_meter`), behind the **same** OTLP-endpoint gate
+    (`JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT`). One
+    endpoint feeds both traces and metrics; setup failure is non-fatal.
+*   When no endpoint is set (or in any non-server process — wasm, the CLI), no
+    provider is installed and every instrument is a no-op, exactly like traces.
+
+### Emit facade: `common::metrics`
+
+*   A single facade in `common`, behind an optional **`metrics` feature** (enabled
+    by `server` and `web/ssr`, never by the wasm/hydrate build). This is a feature
+    gate, not a `target_arch` gate, so `common` stays free of `target_arch` cfgs
+    (jaunder-kq8w.10) and the wasm build never pulls `opentelemetry`. `common` is
+    the only crate reachable by every emitter (`server → web → common`), including
+    the CLI.
+*   **Cardinality is enforced by the type system**: every helper takes bounded
+    Rust enums (e.g. `metrics::login(LoginOutcome::InvalidCredentials)`), each
+    mapping to a `&'static str` attribute. A call site cannot pass an unbounded
+    label (username, id, URL). Instruments are built once from
+    `global::meter("jaunder")` via a `LazyLock`.
+
+### PII discipline
+
+The PII rules above apply unchanged: metric attributes are bounded enums or
+fixed operation names, never user input, so metrics carry no PII or secrets.
+
+### Refinements over the spec catalog
+
+*   `jaunder.auth.registrations` gained a `closed` policy value (the site can have
+    a `Closed` registration policy) and a `cli_bypass` policy for CLI-created
+    users.
+*   `jaunder.media.uploads` gained an `error` outcome for unexpected (non-
+    `MediaError`) upload failures.
+*   `jaunder.posts{event}` counts **web-UI** post lifecycle actions; posts created
+    or mutated over `AtomPub` are reflected in `jaunder.atompub.requests` instead,
+    so the two never double-count.
+*   `jaunder.atompub.requests{op,result}` is emitted from a single router-level
+    middleware: `op` comes from the matched route template + method (a bounded
+    set), `result` from the response status class.
+*   Email metrics are emitted at the `web` send call sites (where the message
+    `kind` is known), not inside the generic mailer.
+
+### Testing
+
+Facade and mapping helpers are unit-tested against an in-memory metric reader
+(`opentelemetry_sdk` `testing` feature): install a `MeterProvider` backed by an
+`InMemoryMetricExporter`, call a helper, `force_flush`, and assert the named
+instrument was exported. Branch-mapping helpers (error kind/class, session
+outcome, upload/serve outcome, AtomPub op/result) are additionally covered by
+exhaustive table tests so every attribute mapping is exercised regardless of
+which request paths a given integration test happens to hit.
+
+### Deferred
+
+*   Saturation **gauges** via async observable callbacks (queue depth, pool
+    utilization, storage bytes, time-since-last-backup) — jaunder-kq8w.24.
+*   Making one-shot **CLI** emits actually export (provider init + `force_flush`)
+    — jaunder-kq8w.25. CLI emit sites exist but are no-ops without a provider.

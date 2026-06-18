@@ -31,18 +31,26 @@ async fn serve(
 ) -> Response {
     let feed_url = canonicalize(&surface, format);
     let row = match feed_cache.get(&feed_url).await {
-        Ok(Some(row)) => row,
-        Ok(None) => match regenerate_feed(
-            site_config.as_ref(),
-            posts.as_ref(),
-            feed_cache.as_ref(),
-            &feed_url,
-        )
-        .await
-        {
-            Ok(row) => row,
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        },
+        Ok(Some(row)) => {
+            common::metrics::feed_cache(common::metrics::CacheResult::Hit);
+            row
+        }
+        Ok(None) => {
+            common::metrics::feed_cache(common::metrics::CacheResult::Miss);
+            match regenerate_feed(
+                site_config.as_ref(),
+                posts.as_ref(),
+                feed_cache.as_ref(),
+                &feed_url,
+            )
+            .await
+            {
+                Ok(row) => row,
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+                }
+            }
+        }
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 

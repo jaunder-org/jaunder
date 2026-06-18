@@ -40,6 +40,61 @@ where
             get(media::member_get).delete(media::member_delete),
         )
         .route("/~{username}/rsd.xml", get(rsd::rsd_document))
+        .layer(axum::middleware::from_fn(record_atompub_request))
+}
+
+/// Records `jaunder.atompub.requests{op, result}` for every routed `AtomPub`
+/// request, deriving the bounded `op` from the matched route + method and the
+/// `result` class from the response status. A single chokepoint so handlers stay
+/// free of metric plumbing.
+async fn record_atompub_request(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let op = atompub_op(
+        request
+            .extensions()
+            .get::<axum::extract::MatchedPath>()
+            .map(axum::extract::MatchedPath::as_str),
+        request.method(),
+    );
+    let response = next.run(request).await;
+    if let Some(op) = op {
+        common::metrics::atompub_request(op, atompub_result(response.status()));
+    }
+    response
+}
+
+/// Maps a matched route template + method to the bounded `op` attribute, or
+/// `None` for anything outside the `AtomPub` surface.
+fn atompub_op(matched_path: Option<&str>, method: &axum::http::Method) -> Option<&'static str> {
+    use axum::http::Method;
+    match (matched_path?, method) {
+        ("/atompub/service", &Method::GET) => Some("service_document"),
+        ("/atompub/{username}/posts", &Method::GET) => Some("collection_get"),
+        ("/atompub/{username}/posts", &Method::POST) => Some("collection_post"),
+        ("/atompub/{username}/posts/{post_id}", &Method::GET) => Some("member_get"),
+        ("/atompub/{username}/posts/{post_id}", &Method::PUT) => Some("member_put"),
+        ("/atompub/{username}/posts/{post_id}", &Method::DELETE) => Some("member_delete"),
+        ("/atompub/{username}/media", &Method::POST) => Some("media_collection_post"),
+        ("/atompub/{username}/media/{sha}/{filename}", &Method::GET) => Some("media_member_get"),
+        ("/atompub/{username}/media/{sha}/{filename}", &Method::DELETE) => {
+            Some("media_member_delete")
+        }
+        ("/~{username}/rsd.xml", &Method::GET) => Some("rsd_document"),
+        _ => None,
+    }
+}
+
+/// Classifies a response status into the bounded `result` attribute.
+fn atompub_result(status: StatusCode) -> common::metrics::AtompubResult {
+    if status.is_server_error() {
+        common::metrics::AtompubResult::ServerError
+    } else if status.is_client_error() {
+        common::metrics::AtompubResult::ClientError
+    } else {
+        common::metrics::AtompubResult::Ok
+    }
 }
 
 /// Authorizes that `auth_user` may act on resources scoped to `username`.
@@ -196,14 +251,86 @@ impl From<anyhow::Error> for HandlerError {
 
 #[cfg(test)]
 mod tests {
-    use super::HandlerError;
-    use axum::http::StatusCode;
+    use super::{atompub_op, atompub_result, HandlerError};
+    use axum::http::{Method, StatusCode};
     use axum::response::IntoResponse;
     use storage::{DeleteMediaError, PerformCreationError, PerformUpdateError, TaggingError};
 
     /// The status an error maps to through the single `IntoResponse` boundary.
     fn status(err: HandlerError) -> StatusCode {
         err.into_response().status()
+    }
+
+    #[test]
+    fn atompub_op_maps_every_route_and_method() {
+        let cases = [
+            ("/atompub/service", Method::GET, Some("service_document")),
+            (
+                "/atompub/{username}/posts",
+                Method::GET,
+                Some("collection_get"),
+            ),
+            (
+                "/atompub/{username}/posts",
+                Method::POST,
+                Some("collection_post"),
+            ),
+            (
+                "/atompub/{username}/posts/{post_id}",
+                Method::GET,
+                Some("member_get"),
+            ),
+            (
+                "/atompub/{username}/posts/{post_id}",
+                Method::PUT,
+                Some("member_put"),
+            ),
+            (
+                "/atompub/{username}/posts/{post_id}",
+                Method::DELETE,
+                Some("member_delete"),
+            ),
+            (
+                "/atompub/{username}/media",
+                Method::POST,
+                Some("media_collection_post"),
+            ),
+            (
+                "/atompub/{username}/media/{sha}/{filename}",
+                Method::GET,
+                Some("media_member_get"),
+            ),
+            (
+                "/atompub/{username}/media/{sha}/{filename}",
+                Method::DELETE,
+                Some("media_member_delete"),
+            ),
+            ("/~{username}/rsd.xml", Method::GET, Some("rsd_document")),
+        ];
+        for (path, method, expected) in cases {
+            assert_eq!(atompub_op(Some(path), &method), expected, "{path} {method}");
+        }
+        // Unmatched route/method and absent matched path both yield None.
+        assert_eq!(atompub_op(Some("/atompub/service"), &Method::POST), None);
+        assert_eq!(atompub_op(None, &Method::GET), None);
+    }
+
+    #[test]
+    fn atompub_result_classifies_status_ranges() {
+        use common::metrics::AtompubResult;
+        assert!(matches!(atompub_result(StatusCode::OK), AtompubResult::Ok));
+        assert!(matches!(
+            atompub_result(StatusCode::CREATED),
+            AtompubResult::Ok
+        ));
+        assert!(matches!(
+            atompub_result(StatusCode::NOT_FOUND),
+            AtompubResult::ClientError
+        ));
+        assert!(matches!(
+            atompub_result(StatusCode::INTERNAL_SERVER_ERROR),
+            AtompubResult::ServerError
+        ));
     }
 
     #[test]

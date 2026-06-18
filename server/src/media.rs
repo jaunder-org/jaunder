@@ -97,13 +97,43 @@ pub struct ServeParams {
     pub filename: String,
 }
 
-/// Serves a stored media file with long-lived cache headers and `ETag` support.
+/// Serves a stored media file, recording the `jaunder.media.served` outcome.
 ///
 /// # Errors
 ///
 /// Returns `4xx` status codes for missing files or invalid parameters.
 #[tracing::instrument(name = "media.serve", skip_all)]
 pub async fn serve_handler(
+    media: Extension<Arc<dyn MediaStorage>>,
+    storage_path: Extension<Arc<PathBuf>>,
+    params: Path<ServeParams>,
+    req_headers: axum::http::HeaderMap,
+) -> Result<Response, StatusCode> {
+    let result = serve_response(media, storage_path, params, req_headers).await;
+    if let Some(outcome) = serve_result(&result) {
+        common::metrics::media_served(outcome);
+    }
+    result
+}
+
+/// Maps a serve outcome to its bounded `result` attribute, or `None` for
+/// internal failures (not one of the served outcomes). Exhaustively tested so
+/// every arm is covered independent of handler call paths.
+fn serve_result(result: &Result<Response, StatusCode>) -> Option<common::metrics::ServeResult> {
+    match result {
+        Ok(response) if response.status() == StatusCode::NOT_MODIFIED => {
+            Some(common::metrics::ServeResult::NotModified)
+        }
+        Ok(_) => Some(common::metrics::ServeResult::Ok),
+        Err(status) if *status == StatusCode::NOT_FOUND => {
+            Some(common::metrics::ServeResult::NotFound)
+        }
+        Err(_) => None,
+    }
+}
+
+/// Serves a stored media file with long-lived cache headers and `ETag` support.
+async fn serve_response(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
     Extension(storage_path): Extension<Arc<PathBuf>>,
     Path(params): Path<ServeParams>,
@@ -290,6 +320,26 @@ fn serve_internal_error<E: std::error::Error>(err: E) -> StatusCode {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn serve_result_maps_each_outcome() {
+        use common::metrics::ServeResult;
+        let ok: Result<Response, StatusCode> = Ok(StatusCode::OK.into_response());
+        assert!(matches!(serve_result(&ok), Some(ServeResult::Ok)));
+        let not_modified: Result<Response, StatusCode> =
+            Ok(StatusCode::NOT_MODIFIED.into_response());
+        assert!(matches!(
+            serve_result(&not_modified),
+            Some(ServeResult::NotModified)
+        ));
+        let not_found: Result<Response, StatusCode> = Err(StatusCode::NOT_FOUND);
+        assert!(matches!(
+            serve_result(&not_found),
+            Some(ServeResult::NotFound)
+        ));
+        let internal: Result<Response, StatusCode> = Err(StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(serve_result(&internal).is_none());
+    }
 
     #[test]
     fn serve_internal_error_maps_to_500() {

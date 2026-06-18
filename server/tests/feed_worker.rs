@@ -369,3 +369,91 @@ async fn worker_applies_backoff_on_ping_failure() {
         .expect("cache row should exist even though ping failed");
     assert!(cache_row.body.contains("Test Post"));
 }
+
+#[tokio::test]
+async fn worker_marks_exhausted_after_backoff_attempts_are_used_up() {
+    let base = TempDir::new().expect("temp dir");
+    let (state, _capture) = helpers::test_state_with_websub(&base).await;
+
+    // A published post so regeneration succeeds: the exhausted branch lives in
+    // the ping sub-path, reached only after a successful regen.
+    let username: Username = "alice".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    let user_id = state
+        .users
+        .create_user(&username, &password, None, false)
+        .await
+        .expect("create user");
+    let now = Utc::now();
+    state
+        .posts
+        .create_post(&CreatePostInput {
+            user_id,
+            title: Some("Test Post".to_string()),
+            slug: "test-post".parse::<Slug>().expect("valid slug"),
+            body: "# Test\n\nContent".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<h1>Test</h1>\n<p>Content</p>".to_string(),
+            published_at: Some(now),
+            summary: None,
+        })
+        .await
+        .expect("create post");
+
+    const HUB_URL_KEY: &str = "feeds.websub_hub_url";
+    state
+        .site_config
+        .set(HUB_URL_KEY, "https://hub.example.com/")
+        .await
+        .expect("set hub url");
+
+    let feed_url = "/~alice/feed.rss";
+    state.feed_events.enqueue(feed_url).await.expect("enqueue");
+
+    // Drive the attempt count up to the backoff-table length by repeatedly
+    // claiming and re-queuing with a past retry time (so it stays claimable).
+    // The next real ping failure then exceeds the table and exhausts the event.
+    let past = Utc::now() - chrono::Duration::hours(1);
+    for _ in 0..6 {
+        let claimed = state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
+            .await
+            .expect("claim pending");
+        let ids: Vec<i64> = claimed.iter().map(|r| r.id).collect();
+        assert!(!ids.is_empty(), "event should be claimable while seeding");
+        state
+            .feed_events
+            .mark_failed(&ids, "seed", past)
+            .await
+            .expect("mark failed");
+    }
+
+    struct FailingWebSubClient;
+    #[async_trait::async_trait]
+    impl jaunder::websub::WebSubClient for FailingWebSubClient {
+        async fn send_publish(
+            &self,
+            _hub_url: &str,
+            _feed_url: &str,
+        ) -> Result<(), jaunder::websub::WebSubError> {
+            Err(jaunder::websub::WebSubError::HubRefused { status: 503 })
+        }
+    }
+
+    make_worker(&state, std::sync::Arc::new(FailingWebSubClient))
+        .tick()
+        .await;
+
+    // Exhausted events move to a terminal status and are no longer claimable,
+    // even with a fully-elapsed retry window.
+    let claimable = state
+        .feed_events
+        .claim_pending_batch(10, chrono::Duration::minutes(5))
+        .await
+        .expect("claim pending");
+    assert!(
+        claimable.is_empty(),
+        "exhausted event should not be claimable"
+    );
+}

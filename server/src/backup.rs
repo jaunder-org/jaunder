@@ -61,9 +61,27 @@ async fn run_scheduled_backup(
         mode: config.mode,
     })
     .await?;
-    prune_backups(destination_root, config.retention_count)?;
+    let pruned = prune_backups(destination_root, config.retention_count)?;
+    common::metrics::backup_bytes(backup_size_bytes(&destination_path));
+    common::metrics::backup_pruned(u64::try_from(pruned).unwrap_or(u64::MAX));
     tracing::info!(path = %destination_path.display(), "scheduled backup complete");
     Ok(destination_path)
+}
+
+/// Total on-disk size of a backup artifact: the file length for an archive, or
+/// the recursive sum of all files for a directory backup. Returns 0 for a path
+/// that cannot be read.
+fn backup_size_bytes(path: &Path) -> u64 {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => metadata.len(),
+        Ok(_) => fs::read_dir(path)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| backup_size_bytes(&entry.path()))
+            .sum(),
+        Err(_) => 0,
+    }
 }
 
 /// Runs one scheduled backup and logs any failure, swallowing the error so a
@@ -77,15 +95,31 @@ async fn run_scheduled_backup_logged(
     destination_root: &Path,
     config: &BackupConfig,
 ) {
-    if let Err(error) = run_scheduled_backup(database, media_path, destination_root, config).await {
+    let started = std::time::Instant::now();
+    let result = run_scheduled_backup(database, media_path, destination_root, config).await;
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    common::metrics::backup_duration_ms(elapsed_ms);
+    common::metrics::backup_run(backup_result_metric(result.is_ok()));
+    if let Err(error) = result {
         tracing::error!(error = %error, "scheduled backup failed");
     }
 }
 
-fn prune_backups(destination_root: &Path, retention_count: usize) -> std::io::Result<()> {
+/// Maps a backup run's success flag to its bounded `result` attribute.
+fn backup_result_metric(succeeded: bool) -> common::metrics::BackupResult {
+    if succeeded {
+        common::metrics::BackupResult::Success
+    } else {
+        common::metrics::BackupResult::Failure
+    }
+}
+
+/// Removes all but the newest `retention_count` backups under
+/// `destination_root`, returning the number pruned.
+fn prune_backups(destination_root: &Path, retention_count: usize) -> std::io::Result<usize> {
     let mut backups = Vec::new();
     if !destination_root.exists() {
-        return Ok(());
+        return Ok(0);
     }
     for entry in fs::read_dir(destination_root)? {
         let entry = entry?;
@@ -108,7 +142,7 @@ fn prune_backups(destination_root: &Path, retention_count: usize) -> std::io::Re
             fs::remove_file(path)?;
         }
     }
-    Ok(())
+    Ok(prune_count)
 }
 
 fn timestamped_backup_name() -> String {
@@ -329,6 +363,26 @@ mod tests {
     fn prune_backups_accepts_missing_destination_root() {
         let temp = TempDir::new().expect("temp dir");
         prune_backups(&temp.path().join("missing"), 1).expect("prune missing root");
+    }
+
+    #[test]
+    fn backup_size_bytes_sums_files_and_handles_missing_path() {
+        let temp = TempDir::new().expect("temp dir");
+
+        // A missing path reports zero.
+        assert_eq!(backup_size_bytes(&temp.path().join("missing")), 0);
+
+        // A plain file reports its byte length.
+        let file = temp.path().join("archive.tar.gz");
+        std::fs::write(&file, b"hello").expect("write file");
+        assert_eq!(backup_size_bytes(&file), 5);
+
+        // A directory sums its contents recursively.
+        let dir = temp.path().join("dir-backup");
+        std::fs::create_dir_all(dir.join("media")).expect("create dirs");
+        std::fs::write(dir.join("manifest.json"), b"abc").expect("write manifest");
+        std::fs::write(dir.join("media").join("a.bin"), b"defg").expect("write media");
+        assert_eq!(backup_size_bytes(&dir), 7);
     }
 
     #[test]
