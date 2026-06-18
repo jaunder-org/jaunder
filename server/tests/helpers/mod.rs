@@ -156,7 +156,13 @@ fn unique_postgres_db_name() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock before unix epoch")
         .as_nanos();
-    format!("jaunder_test_{timestamp}_{suffix}")
+    // nextest runs each test in its own process, so `COUNTER` (and thus
+    // `suffix`) restarts at 0 per process; the nanosecond timestamp alone can
+    // collide when two parallel test processes start within the same tick. The
+    // process id makes the name unique across processes regardless of clock
+    // resolution.
+    let pid = std::process::id();
+    format!("jaunder_test_{timestamp}_{pid}_{suffix}")
 }
 
 pub fn nonexistent_postgres_url() -> DbConnectOptions {
