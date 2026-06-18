@@ -129,6 +129,28 @@ pub struct InternalError {
     source: Option<anyhow::Error>,
 }
 
+/// A transparent [`Error`] wrapper around a `Box<dyn Error + Send + Sync>` so an
+/// already-boxed error can be carried as an `anyhow` source (the box itself does
+/// not implement `Error`). Forwards `Display` and `source`, so it is invisible
+/// in the cause chain.
+#[cfg(feature = "ssr")]
+#[derive(Debug)]
+struct BoxedError(Box<dyn Error + Send + Sync>);
+
+#[cfg(feature = "ssr")]
+impl std::fmt::Display for BoxedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+#[cfg(feature = "ssr")]
+impl Error for BoxedError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.0.source()
+    }
+}
+
 #[cfg(feature = "ssr")]
 impl InternalError {
     pub fn unauthorized(message: impl Into<String>) -> Self {
@@ -169,6 +191,16 @@ impl InternalError {
             context: Vec::new(),
             source: Some(anyhow::Error::new(error)),
         }
+    }
+
+    /// Like [`Self::server`] but for an already-boxed error. `Box<dyn Error + ...>`
+    /// does not itself implement `Error` (so it can't go through `server`), and
+    /// this anyhow build has no `From<Box<dyn Error + ...>>`; a transparent
+    /// wrapper carries it as a structured source, preserving its cause chain for
+    /// operator logs instead of flattening it to a string.
+    #[must_use]
+    pub fn server_boxed(error: Box<dyn Error + Send + Sync>) -> Self {
+        Self::server(BoxedError(error))
     }
 
     pub fn server_message(message: impl Into<String>) -> Self {
