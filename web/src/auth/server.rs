@@ -314,6 +314,18 @@ fn session_outcome(error: &storage::SessionAuthError) -> common::metrics::Sessio
     }
 }
 
+/// Maps an authentication failure to its bounded `outcome` attribute for the
+/// `jaunder.auth.logins` metric. Exhaustively tested so every variant's mapping
+/// is covered independent of which failures the login path is exercised with.
+pub fn login_outcome(error: &storage::UserAuthError) -> common::metrics::LoginOutcome {
+    match error {
+        storage::UserAuthError::InvalidCredentials => {
+            common::metrics::LoginOutcome::InvalidCredentials
+        }
+        storage::UserAuthError::Internal(_) => common::metrics::LoginOutcome::InternalError,
+    }
+}
+
 pub fn login_error(error: storage::UserAuthError) -> InternalError {
     match error {
         storage::UserAuthError::InvalidCredentials => {
@@ -504,6 +516,19 @@ mod tests {
                 sqlx::Error::PoolClosed
             )),
             SessionOutcome::Internal
+        ));
+    }
+
+    #[test]
+    fn login_outcome_maps_each_variant() {
+        use common::metrics::LoginOutcome;
+        assert!(matches!(
+            login_outcome(&storage::UserAuthError::InvalidCredentials),
+            LoginOutcome::InvalidCredentials
+        ));
+        assert!(matches!(
+            login_outcome(&storage::UserAuthError::Internal(Box::new(std::fmt::Error))),
+            LoginOutcome::InternalError
         ));
     }
 

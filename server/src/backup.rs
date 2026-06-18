@@ -72,19 +72,16 @@ async fn run_scheduled_backup(
 /// the recursive sum of all files for a directory backup. Returns 0 for a path
 /// that cannot be read.
 fn backup_size_bytes(path: &Path) -> u64 {
-    let Ok(metadata) = fs::metadata(path) else {
-        return 0;
-    };
-    if metadata.is_file() {
-        return metadata.len();
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => metadata.len(),
+        Ok(_) => fs::read_dir(path)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| backup_size_bytes(&entry.path()))
+            .sum(),
+        Err(_) => 0,
     }
-    let mut total = 0;
-    if let Ok(entries) = fs::read_dir(path) {
-        for entry in entries.flatten() {
-            total += backup_size_bytes(&entry.path());
-        }
-    }
-    total
 }
 
 /// Runs one scheduled backup and logs any failure, swallowing the error so a
@@ -100,16 +97,20 @@ async fn run_scheduled_backup_logged(
 ) {
     let started = std::time::Instant::now();
     let result = run_scheduled_backup(database, media_path, destination_root, config).await;
-    common::metrics::backup_duration_ms(
-        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-    );
-    common::metrics::backup_run(if result.is_ok() {
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    common::metrics::backup_duration_ms(elapsed_ms);
+    common::metrics::backup_run(backup_result_metric(result.is_ok()));
+    if let Err(error) = result {
+        tracing::error!(error = %error, "scheduled backup failed");
+    }
+}
+
+/// Maps a backup run's success flag to its bounded `result` attribute.
+fn backup_result_metric(succeeded: bool) -> common::metrics::BackupResult {
+    if succeeded {
         common::metrics::BackupResult::Success
     } else {
         common::metrics::BackupResult::Failure
-    });
-    if let Err(error) = result {
-        tracing::error!(error = %error, "scheduled backup failed");
     }
 }
 

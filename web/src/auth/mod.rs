@@ -5,7 +5,7 @@ use leptos::prelude::*;
 mod server;
 #[cfg(feature = "ssr")]
 use server::{
-    classify_current_user, clear_session_cookie, login_error, register_invite_error,
+    classify_current_user, clear_session_cookie, login_error, login_outcome, register_invite_error,
     register_open_error, set_session_cookie,
 };
 
@@ -173,14 +173,7 @@ pub async fn login(username: String, password: String, label: Option<String>) ->
                 record
             }
             Err(error) => {
-                common::metrics::login(match &error {
-                    storage::UserAuthError::InvalidCredentials => {
-                        common::metrics::LoginOutcome::InvalidCredentials
-                    }
-                    storage::UserAuthError::Internal(_) => {
-                        common::metrics::LoginOutcome::InternalError
-                    }
-                });
+                common::metrics::login(login_outcome(&error));
                 return Err(login_error(error));
             }
         };
