@@ -179,9 +179,9 @@ mod tests {
     }
 
     #[test]
-    fn tag_rejects_uppercase_first_char() {
-        // Uppercase characters should be rejected after normalization fails
-        assert!("Hello".parse::<Tag>().is_ok()); // Actually should work after lowercasing
+    fn tag_normalizes_uppercase() {
+        // `Tag::from_str` lowercases, so an uppercase input is accepted.
+        assert!("Hello".parse::<Tag>().is_ok());
     }
 
     #[test]
@@ -227,8 +227,8 @@ mod tests {
     }
 
     #[test]
-    fn tag_rejects_double_hyphen() {
-        assert!("hello--world".parse::<Tag>().is_ok()); // Hyphens are allowed in sequence
+    fn tag_allows_consecutive_hyphens() {
+        assert!("hello--world".parse::<Tag>().is_ok());
     }
 
     #[test]

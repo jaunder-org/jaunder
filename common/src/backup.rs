@@ -1,11 +1,21 @@
+//! The backup **configuration** model, shared between the server's scheduled
+//! backup worker (`server::backup`) and the web admin surface that reads and
+//! writes these values through `site_config`. This module holds only the value
+//! types plus their validation and defaults; the actual export, archiving, and
+//! retention-pruning logic lives in the `storage` and `server` crates.
+
 use croner::Cron;
 use serde::{Deserialize, Serialize};
 
+/// How a backup is written to its destination.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BackupMode {
+    /// An expanded directory (`backup-<timestamp>/` holding `manifest.json`, the
+    /// dumped tables, and the media tree). The default.
     #[default]
     Directory,
+    /// A single `backup-<timestamp>.tar.gz` archive of the same contents.
     Archive,
 }
 
@@ -38,14 +48,21 @@ impl Default for BackupSchedule {
     }
 }
 
+/// Default for [`BackupConfig::retention_count`]: keep the seven most recent backups.
 pub const DEFAULT_BACKUP_RETENTION_COUNT: usize = 7;
 
+/// The persisted backup settings (stored in `site_config`, surfaced in the
+/// admin UI, and consumed by the scheduled backup worker).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BackupConfig {
-    /// `None` means no destination is configured and scheduled backups are disabled.
+    /// Filesystem path backups are written under. `None` means no destination is
+    /// configured and scheduled backups are disabled.
     pub destination_path: Option<String>,
+    /// When scheduled backups run, as a validated six-field cron expression.
     pub schedule: BackupSchedule,
+    /// How many of the most recent backups to keep; older ones are pruned.
     pub retention_count: usize,
+    /// Whether each backup is written as a directory or a single archive.
     pub mode: BackupMode,
 }
 

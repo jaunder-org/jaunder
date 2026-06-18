@@ -11,7 +11,14 @@ pub struct HttpWebSubClient {
 impl HttpWebSubClient {
     #[must_use]
     pub fn new() -> Self {
-        let timeout = Duration::from_secs(5);
+        Self::with_timeout(Duration::from_secs(5))
+    }
+
+    /// Builds a client with a custom per-request timeout. Tests use a short
+    /// timeout against a non-responding hub to exercise the timeout branch
+    /// deterministically.
+    #[must_use]
+    pub fn with_timeout(timeout: Duration) -> Self {
         Self {
             client: reqwest::Client::new(),
             timeout,
@@ -134,17 +141,51 @@ mod tests {
         assert!(matches!(err, WebSubError::HubRefused { status: 400 }));
     }
 
+    /// A hub that accepts the connection but never replies within a test's
+    /// lifetime, so a short client timeout deterministically fires.
+    async fn spawn_hanging_hub() -> SocketAddr {
+        let app = Router::new().route(
+            "/",
+            post(|| async {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                StatusCode::ACCEPTED
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        addr
+    }
+
     #[tokio::test]
-    async fn returns_http_error_for_unreachable_host() {
+    async fn returns_http_error_on_connection_refused() {
+        // Bind a port, then drop the listener so nothing is listening: the
+        // connect is refused immediately — a deterministic non-timeout error
+        // (covers the `else` arm of the error mapping).
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = probe.local_addr().unwrap();
+        drop(probe);
+
         let c = HttpWebSubClient::new();
-        // RFC 5737 TEST-NET-1 — not routable
         let err = c
-            .send_publish("http://192.0.2.1:1/", "https://example.com/feed.rss")
+            .send_publish(&format!("http://{addr}/"), "https://example.com/feed.rss")
             .await
             .unwrap_err();
-        assert!(matches!(
-            err,
-            WebSubError::Timeout(_) | WebSubError::Http(_)
-        ));
+        assert!(matches!(err, WebSubError::Http(_)));
+    }
+
+    #[tokio::test]
+    async fn returns_timeout_when_hub_does_not_respond() {
+        // A hub that never replies + a tiny client timeout deterministically
+        // exercises the `is_timeout` branch.
+        let addr = spawn_hanging_hub().await;
+        let c = HttpWebSubClient::with_timeout(Duration::from_millis(100));
+        let err = c
+            .send_publish(&format!("http://{addr}/"), "https://example.com/feed.rss")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, WebSubError::Timeout(_)));
     }
 }

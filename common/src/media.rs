@@ -1,3 +1,31 @@
+//! Pure helpers for jaunder's content-addressed media storage, shared by the
+//! web media upload/serve handlers and the `AtomPub` media collection (both in
+//! the `server` crate). Nothing here touches the filesystem or database — these
+//! are deterministic string/path computations and small classification tables,
+//! so they are cheap to unit-test and safe to call from any layer.
+//!
+//! # Storage layout
+//!
+//! A stored object is addressed by its `SHA-256` content hash and laid out as
+//! `<source>/<p1>/<p2>/<sha256>/<filename>` (see [`media_path`]), served under
+//! `/media/` (see [`media_url`]). `p1`/`p2` are the first two byte-pairs of the
+//! hex digest — a two-level fan-out that keeps any single directory small.
+//! `source` distinguishes provenance (e.g. `upload` vs a remote cache).
+//!
+//! # Untrusted input
+//!
+//! Filenames and hashes round-trip through URLs, so they are attacker-
+//! influenced. [`sanitize_filename`] reduces a name to a single safe path
+//! component, and [`is_valid_content_hash`] must gate any externally supplied
+//! hash before it reaches [`media_path`], whose `sha256[..2]`/`[2..4]` slicing
+//! is unguarded and panics on a short or non-`UTF-8`-boundary value.
+//!
+//! # Content type
+//!
+//! [`detect_content_type`] maps a filename extension to a `MIME` type (falling
+//! back to `application/octet-stream`), and [`should_inline`] decides whether a
+//! type is served inline or as an attachment (the `Content-Disposition`).
+
 use std::path::Path;
 
 /// Strip path components, replace null bytes, reject `.`, `..`, and empty results.
@@ -29,7 +57,14 @@ pub fn is_valid_content_hash(hash: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// Returns `"<source>/<p1>/<p2>/<full-sha256>/<filename>"`.
+/// Returns `"<source>/<p1>/<p2>/<full-sha256>/<filename>"`, the content-
+/// addressed layout described in the module docs.
+///
+/// # Panics
+///
+/// Panics if `sha256` is shorter than four bytes, or if byte index 2 or 4 does
+/// not fall on a `UTF-8` char boundary (the slicing is unguarded). Validate an
+/// untrusted hash with [`is_valid_content_hash`] before calling this.
 #[must_use]
 pub fn media_path(source: &str, sha256: &str, filename: &str) -> String {
     let p1 = &sha256[..2];

@@ -186,7 +186,15 @@ Per-test databases are not dropped after each run, so a persistent instance accu
 
 Coverage is measured by `scripts/check-coverage`, which counts source lines with at least one execution hit across all test binaries. This deduplicates generic-function instantiations across compile units, unlike the inflated `cargo llvm-cov --json` summary percentages for code exercised by multiple test binaries.
 
-Coverage runs in two passes that accumulate into one merged report: the whole workspace against SQLite, then the `jaunder` integration tests against a throwaway host PostgreSQL (via `scripts/with-ephemeral-postgres`), so `storage/src/postgres/*` gets real instrumented coverage. Because the Nix `coverage` build sandbox has no network, a few network-sensitive files (`common/src/websub/http.rs`, `server/src/commands.rs`) report slightly lower there than on a networked host. **The committed baseline must therefore be generated from the Nix `coverage` check (the CI environment), not from a local host run** — a host run would raise the baseline above what CI can reproduce and break the gate. To regenerate it, build the `coverage` check with `--update` semantics and copy out its manifests (see `jaunder-uox1`).
+Coverage runs in two passes that accumulate into one merged report: the whole workspace against SQLite, then the `jaunder` integration tests against a throwaway host PostgreSQL (via `scripts/with-ephemeral-postgres`), so `storage/src/postgres/*` gets real instrumented coverage. Because the Nix `coverage` build sandbox has no network, a few network-sensitive files (`server/src/websub/http.rs`, `server/src/commands.rs`) report slightly lower there than on a networked host. **The committed baseline must therefore be regenerated from the Nix sandbox (the CI-reproducible environment), never from a local host `scripts/check-coverage --update`** — a host run bakes in higher numbers for those files than CI can reproduce, which then fails the gate.
+
+To regenerate both manifests, run `scripts/update-coverage-baseline`. It builds the `coverage-update` flake package — which runs the coverage tooling with `--update` inside the same sandbox as the `coverage` check — and copies the regenerated `.coverage-manifest.json` and `.crap-manifest.json` into the repo:
+
+```bash
+scripts/update-coverage-baseline
+```
+
+Review the resulting diff and commit both manifests in the same change (baseline changes need approval — see the next paragraph). A pure file move (no behavior change) can instead be re-baselined by renaming the affected keys in both manifests, preserving their committed values.
 
 The baseline is stored in `.coverage-manifest.json`. Never lower or update it without user approval; approved changes to the baseline must be committed in the same commit as the file whose coverage changed. Coverage improvements are always allowed.
 
@@ -194,7 +202,7 @@ Some areas have inherent host-side coverage gaps and should not be force-fitted 
 
 - **WASM entry point** (`hydrate/src/lib.rs`, 0%): runs only in the browser WASM context.
 - **Leptos page components** (`web/src/pages/*.rs`, varied): `#[component]` functions render view trees; correctness is validated by e2e tests in the Nix VM.
-- **A few PostgreSQL storage paths** (`storage/src/postgres/media.rs` ~5%, plus some error branches in `sessions`/`users`/`invites`): the integration suite drives the common paths but not every branch. The bulk of `storage/src/postgres/*` and `storage/src/backup/postgres.rs` is now measured by the host-PostgreSQL coverage pass (formerly a blanket 3–15% gap).
+- **A few PostgreSQL storage error branches** (`storage/src/postgres/feed_events.rs` ~91%, `backup.rs`/`bootstrap.rs`/`mod.rs` ~95–99%): the host-PostgreSQL coverage pass now drives the common paths, so most of `storage/src/postgres/*` (`media.rs`, `sessions.rs`, `posts.rs`) is ~100%; only some error branches remain uncovered and should not be force-fitted with artificial tests.
 - **Asset serving** (`server/src/assets.rs`, 0%): compile-time embedded assets are not practical to unit test.
 
 ### Nix VM checks

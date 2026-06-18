@@ -293,19 +293,36 @@ fn directory_has_entries(path: &Path) -> io::Result<bool> {
     Ok(false)
 }
 
-/// Starts the HTTP server and the background backup worker.
+/// A bound listener and router ready to serve, plus the live background-worker
+/// schedulers that must outlive the serve loop. Produced by [`prepare_server`].
+pub struct PreparedServer {
+    /// The bound TCP listener.
+    pub listener: tokio::net::TcpListener,
+    /// The fully wired application router.
+    pub router: axum::Router,
+    // Held only to keep the workers running for the server's lifetime.
+    backup_scheduler: Option<tokio_cron_scheduler::JobScheduler>,
+    feed_scheduler: tokio_cron_scheduler::JobScheduler,
+}
+
+/// Performs all of [`cmd_serve`]'s setup — open the database (auto-initializing
+/// in dev), start the backup and feed workers, build the router, and bind the
+/// listener — returning it ready to serve.
+///
+/// Split out from [`cmd_serve`] so the whole setup path is covered by a
+/// deterministic test: the blocking `axum::serve` loop can only be exercised by
+/// an abort-racing test, whose async-region coverage is nondeterministic
+/// (jaunder-uox1).
 ///
 /// # Errors
 ///
-/// Returns an error if the server or backup worker fails to start.
-pub async fn cmd_serve(
+/// Returns an error if the database cannot be opened/initialized, a worker fails
+/// to start, or the listener cannot bind.
+pub async fn prepare_server(
     storage: &StorageArgs,
     bind: SocketAddr,
     prod: bool,
-    verbose: bool,
-) -> anyhow::Result<()> {
-    crate::observability::init_tracing(verbose);
-
+) -> anyhow::Result<PreparedServer> {
     let db = match open_existing_database(&storage.db).await {
         Ok(db) => db,
         Err(_) if !prod => {
@@ -361,7 +378,38 @@ pub async fn cmd_serve(
         storage.storage_path.clone(),
     );
     let listener = tokio::net::TcpListener::bind(bind).await?;
+
+    Ok(PreparedServer {
+        listener,
+        router,
+        backup_scheduler,
+        feed_scheduler,
+    })
+}
+
+/// Starts the HTTP server and the background workers.
+///
+/// # Errors
+///
+/// Returns an error if setup fails (see [`prepare_server`]) or the server exits
+/// with an error.
+pub async fn cmd_serve(
+    storage: &StorageArgs,
+    bind: SocketAddr,
+    prod: bool,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    crate::observability::init_tracing(verbose);
+
+    let PreparedServer {
+        listener,
+        router,
+        backup_scheduler,
+        feed_scheduler,
+    } = prepare_server(storage, bind, prod).await?;
+
     tracing::info!(bind = %bind, prod, "starting HTTP server");
+    // Keep the worker schedulers alive for the lifetime of the serve loop.
     let _backup_scheduler = backup_scheduler;
     let _feed_scheduler = feed_scheduler;
     axum::serve(listener, router).await?;

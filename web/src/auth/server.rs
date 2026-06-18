@@ -301,9 +301,10 @@ pub fn login_error(error: storage::UserAuthError) -> InternalError {
         storage::UserAuthError::InvalidCredentials => {
             InternalError::unauthorized("invalid credentials")
         }
-        storage::UserAuthError::Internal(source) => {
-            InternalError::server_message(source.to_string())
-        }
+        // Preserve the structured cause chain for operator logs rather than
+        // eagerly flattening it to a string (InternalError carries an anyhow
+        // source since kq8w.16).
+        storage::UserAuthError::Internal(source) => InternalError::server_boxed(source),
     }
 }
 
@@ -513,12 +514,42 @@ mod tests {
 
     #[test]
     fn login_error_maps_internal_to_server_error() {
-        let err = login_error(storage::UserAuthError::Internal("db crashed".into()));
+        use std::fmt;
+
+        // A two-level source chain proves login_error preserves the structured
+        // cause chain rather than flattening it to the top error's string.
+        #[derive(Debug)]
+        struct Inner;
+        impl fmt::Display for Inner {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "inner cause")
+            }
+        }
+        impl std::error::Error for Inner {}
+
+        #[derive(Debug)]
+        struct Outer(Inner);
+        impl fmt::Display for Outer {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "outer failure")
+            }
+        }
+        impl std::error::Error for Outer {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let err = login_error(storage::UserAuthError::Internal(Box::new(Outer(Inner))));
         assert!(matches!(
             err.public(),
             crate::error::WebError::Server { .. }
         ));
-        assert_eq!(err.operator_message(), "db crashed");
+        // anyhow's alternate formatting joins the whole chain; the inner cause
+        // would be lost if the source were flattened via `to_string()`.
+        let op = err.operator_message();
+        assert!(op.contains("outer failure"), "operator message: {op}");
+        assert!(op.contains("inner cause"), "operator message: {op}");
 
         let invalid = login_error(storage::UserAuthError::InvalidCredentials);
         assert!(matches!(
