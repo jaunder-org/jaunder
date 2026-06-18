@@ -55,6 +55,7 @@ default = []
 hydrate = ["leptos/hydrate"]
 ssr = [
     "dep:anyhow",
+    "common/metrics",
     "leptos/ssr",
     "leptos_meta/ssr",
     "leptos_router/ssr",

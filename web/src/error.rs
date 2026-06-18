@@ -86,6 +86,24 @@ pub enum ErrorKind {
     External,
 }
 
+#[cfg(feature = "ssr")]
+impl ErrorKind {
+    /// The bounded `error.kind` attribute value emitted on the `jaunder.errors`
+    /// metric — the same stable names logged as the boundary's `error.kind`
+    /// field, kept low-cardinality by construction.
+    fn as_metric_str(self) -> &'static str {
+        match self {
+            ErrorKind::Auth => "auth",
+            ErrorKind::NotFound => "not_found",
+            ErrorKind::Validation => "validation",
+            ErrorKind::Conflict => "conflict",
+            ErrorKind::Storage => "storage",
+            ErrorKind::Internal => "internal",
+            ErrorKind::External => "external",
+        }
+    }
+}
+
 /// Operational severity, derived at construction so triage (and the
 /// boundary's log level) is mechanical rather than guessed from the message.
 #[cfg(feature = "ssr")]
@@ -112,6 +130,18 @@ impl ErrorClass {
             ErrorClass::Client => tracing::Level::DEBUG,
             ErrorClass::Transient | ErrorClass::External => tracing::Level::WARN,
             ErrorClass::Bug => tracing::Level::ERROR,
+        }
+    }
+
+    /// The bounded `error.class` attribute value emitted on the `jaunder.errors`
+    /// metric — the same stable names logged as the boundary's `error.class`
+    /// field, kept low-cardinality by construction.
+    fn as_metric_str(self) -> &'static str {
+        match self {
+            ErrorClass::Client => "client",
+            ErrorClass::Transient => "transient",
+            ErrorClass::Bug => "bug",
+            ErrorClass::External => "external",
         }
     }
 }
@@ -346,6 +376,7 @@ pub async fn server_boundary<T>(
         Ok(value) => Ok(value),
         Err(error) => {
             log_boundary_failure(server_fn, &error);
+            common::metrics::error(error.kind.as_metric_str(), error.class.as_metric_str());
             Err(error.into_public())
         }
     }
@@ -631,6 +662,25 @@ mod tests {
         assert_eq!(ErrorClass::Transient.log_level(), Level::WARN);
         assert_eq!(ErrorClass::External.log_level(), Level::WARN);
         assert_eq!(ErrorClass::Bug.log_level(), Level::ERROR);
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn error_kind_and_class_metric_strings_are_stable_and_bounded() {
+        use super::{ErrorClass, ErrorKind};
+        // Every variant maps to a fixed, low-cardinality attribute value; these
+        // are the strings emitted on the `jaunder.errors` metric at the boundary.
+        assert_eq!(ErrorKind::Auth.as_metric_str(), "auth");
+        assert_eq!(ErrorKind::NotFound.as_metric_str(), "not_found");
+        assert_eq!(ErrorKind::Validation.as_metric_str(), "validation");
+        assert_eq!(ErrorKind::Conflict.as_metric_str(), "conflict");
+        assert_eq!(ErrorKind::Storage.as_metric_str(), "storage");
+        assert_eq!(ErrorKind::Internal.as_metric_str(), "internal");
+        assert_eq!(ErrorKind::External.as_metric_str(), "external");
+        assert_eq!(ErrorClass::Client.as_metric_str(), "client");
+        assert_eq!(ErrorClass::Transient.as_metric_str(), "transient");
+        assert_eq!(ErrorClass::Bug.as_metric_str(), "bug");
+        assert_eq!(ErrorClass::External.as_metric_str(), "external");
     }
 
     #[cfg(feature = "ssr")]

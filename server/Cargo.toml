@@ -12,7 +12,7 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
-common.workspace = true
+common = { workspace = true, features = ["metrics"] }
 storage.workspace = true
 web = { path = "../web", default-features = false, features = ["ssr"] }
 leptos = { workspace = true, features = [ "ssr" ]}
