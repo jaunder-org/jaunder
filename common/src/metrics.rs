@@ -28,7 +28,7 @@ enum_attr!(InviteEvent { Created => "created", Redeemed => "redeemed" });
 enum_attr!(PasswordResetEvent { Requested => "requested", Completed => "completed" });
 enum_attr!(EmailKind { Verification => "verification", PasswordReset => "password_reset" });
 enum_attr!(SendResult { Success => "success", Failure => "failure" });
-enum_attr!(UploadOutcome { Stored => "stored", Deduplicated => "deduplicated", QuotaExceeded => "quota_exceeded", TooLarge => "too_large", Invalid => "invalid" });
+enum_attr!(UploadOutcome { Stored => "stored", Deduplicated => "deduplicated", QuotaExceeded => "quota_exceeded", TooLarge => "too_large", Invalid => "invalid", Error => "error" });
 enum_attr!(ServeResult { Ok => "ok", NotFound => "not_found", NotModified => "not_modified" });
 enum_attr!(RegenResult { Ok => "ok", Error => "error" });
 enum_attr!(PingOutcome { Success => "success", Failed => "failed", Exhausted => "exhausted", NoHub => "no_hub" });

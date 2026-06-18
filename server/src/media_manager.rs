@@ -119,15 +119,25 @@ impl MediaManager {
 
     #[must_use]
     pub fn map_error(err: &anyhow::Error) -> StatusCode {
-        if let Some(media_err) = err.downcast_ref::<MediaError>() {
-            match media_err {
-                MediaError::BadRequest(_) => StatusCode::BAD_REQUEST,
-                MediaError::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-                MediaError::InsufficientStorage => StatusCode::INSUFFICIENT_STORAGE,
-                MediaError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            }
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
+        let media_err = err.downcast_ref::<MediaError>();
+        common::metrics::media_upload(Self::upload_outcome(media_err));
+        match media_err {
+            Some(MediaError::BadRequest(_)) => StatusCode::BAD_REQUEST,
+            Some(MediaError::PayloadTooLarge) => StatusCode::PAYLOAD_TOO_LARGE,
+            Some(MediaError::InsufficientStorage) => StatusCode::INSUFFICIENT_STORAGE,
+            Some(MediaError::Internal(_)) | None => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    /// Maps a failed upload to its bounded `outcome` attribute for the
+    /// `jaunder.media.uploads` metric. A non-`MediaError` (unexpected I/O, etc.)
+    /// counts as `error`. Exhaustively tested so every arm's mapping is covered.
+    fn upload_outcome(err: Option<&MediaError>) -> common::metrics::UploadOutcome {
+        match err {
+            Some(MediaError::BadRequest(_)) => common::metrics::UploadOutcome::Invalid,
+            Some(MediaError::PayloadTooLarge) => common::metrics::UploadOutcome::TooLarge,
+            Some(MediaError::InsufficientStorage) => common::metrics::UploadOutcome::QuotaExceeded,
+            Some(MediaError::Internal(_)) | None => common::metrics::UploadOutcome::Error,
         }
     }
 
@@ -166,14 +176,19 @@ impl MediaManager {
         Ok(())
     }
 
+    /// Content-addresses the temp file at `target_path`, deduplicating against
+    /// already-stored identical content. Returns `true` when the bytes were
+    /// deduplicated (the target already existed, or an identical file was
+    /// hard-linked) and `false` when this is a freshly stored file.
     async fn handle_deduplication(
         &self,
         tmp_path: &PathBuf,
         target_path: &PathBuf,
         hash_dir: &PathBuf,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         if target_path.exists() {
             let _ = fs::remove_file(tmp_path).await;
+            Ok(true)
         } else {
             let existing_file = self.first_file_in_dir(hash_dir).await;
 
@@ -182,11 +197,12 @@ impl MediaManager {
             if let Some(existing) = existing_file {
                 fs::hard_link(&existing, target_path).await?;
                 let _ = fs::remove_file(tmp_path).await;
+                Ok(true)
             } else {
                 fs::rename(tmp_path, target_path).await?;
+                Ok(false)
             }
         }
-        Ok(())
     }
 
     async fn register_in_db(
@@ -249,7 +265,8 @@ impl MediaManager {
             .parent()
             .expect("target path has a parent")
             .to_path_buf();
-        self.handle_deduplication(&tmp_path.to_path_buf(), &target_path, &hash_dir)
+        let deduplicated = self
+            .handle_deduplication(&tmp_path.to_path_buf(), &target_path, &hash_dir)
             .await?;
         self.register_in_db(
             user_id,
@@ -259,6 +276,12 @@ impl MediaManager {
             metadata.size_bytes,
         )
         .await?;
+        common::metrics::media_upload_bytes(u64::try_from(metadata.size_bytes).unwrap_or(0));
+        common::metrics::media_upload(if deduplicated {
+            common::metrics::UploadOutcome::Deduplicated
+        } else {
+            common::metrics::UploadOutcome::Stored
+        });
         let url = media_url("upload", &metadata.sha256_hex, &metadata.filename);
         Ok(crate::media::UploadResponse {
             sha256: metadata.sha256_hex,
@@ -360,6 +383,31 @@ mod tests {
     use super::*;
     use crate::test_support::{media, migrated_sqlite_db, site_config, users};
     use tempfile::TempDir;
+
+    #[test]
+    fn upload_outcome_maps_each_media_error() {
+        use common::metrics::UploadOutcome;
+        assert!(matches!(
+            MediaManager::upload_outcome(Some(&MediaError::BadRequest("x".to_owned()))),
+            UploadOutcome::Invalid
+        ));
+        assert!(matches!(
+            MediaManager::upload_outcome(Some(&MediaError::PayloadTooLarge)),
+            UploadOutcome::TooLarge
+        ));
+        assert!(matches!(
+            MediaManager::upload_outcome(Some(&MediaError::InsufficientStorage)),
+            UploadOutcome::QuotaExceeded
+        ));
+        assert!(matches!(
+            MediaManager::upload_outcome(Some(&MediaError::Internal("x".to_owned()))),
+            UploadOutcome::Error
+        ));
+        assert!(matches!(
+            MediaManager::upload_outcome(None),
+            UploadOutcome::Error
+        ));
+    }
 
     #[tokio::test]
     async fn test_first_file_in_dir() {
