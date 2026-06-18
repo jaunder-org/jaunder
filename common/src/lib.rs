@@ -3,6 +3,8 @@ pub mod backup;
 pub mod feed;
 pub mod mailer;
 pub mod media;
+#[cfg(feature = "metrics")]
+pub mod metrics;
 pub mod password;
 pub mod render;
 pub mod site;
