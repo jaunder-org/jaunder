@@ -7,6 +7,11 @@
     clippy::unused_async
 )]
 #![allow(dead_code)]
+// A `#[template]` expands to a name-mangled `macro_rules!`, so a per-item
+// `#[allow(unused_macros)]` can't reach it — this crate-level allow suppresses
+// the resulting dead-template lint in test binaries that import an unused
+// template.
+#![allow(unused_macros)]
 
 use common::mailer::{test_utils::CapturingMailSender, MailSender, NoopMailSender};
 use leptos::prelude::LeptosOptions;
@@ -27,8 +32,66 @@ use storage::{
 };
 use tempfile::TempDir;
 
+// `rstest::*` brings the `rstest` attribute the `#[template]` bodies use. It
+// reads as unused here because the templates expand to macros rather than
+// fixture functions, so the import needs an explicit allow.
+#[allow(unused_imports)]
+use rstest::*;
+// `#[template]`/`#[apply]` come from the `rstest_reuse` companion crate (rstest
+// itself only exports `rstest`/`fixture`). The bare `use rstest_reuse;` is
+// required because `rstest_reuse::template` expands to code that names the
+// `rstest_reuse` crate; `use rstest_reuse::*;` alone is not enough.
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
 mod websub_capturing;
 pub use websub_capturing::CapturingWebSubClient;
+
+/// The storage backend a test runs against. Backend-parametrized tests take a
+/// `#[case] backend: Backend` and call [`Backend::setup`].
+#[derive(Copy, Clone)]
+pub enum Backend {
+    Sqlite,
+    Postgres,
+}
+
+/// A ready-to-use [`AppState`] plus the temp dir backing it. `base` doubles as
+/// the media-storage root HTTP tests need on both backends, and on `SQLite` it
+/// also holds the database file alive for the lifetime of the test.
+pub struct TestEnv {
+    pub state: Arc<AppState>,
+    pub base: TempDir,
+}
+
+impl Backend {
+    pub async fn setup(self) -> TestEnv {
+        let base = TempDir::new().unwrap();
+        let state = match self {
+            Backend::Sqlite => open_database(&sqlite_url(&base)).await.unwrap(),
+            Backend::Postgres => open_existing_database(&template_postgres_url().await)
+                .await
+                .unwrap(),
+        };
+        TestEnv { state, base }
+    }
+}
+
+#[template]
+#[rstest]
+#[case::sqlite(Backend::Sqlite)]
+fn sqlite_only(#[case] backend: Backend) {}
+
+#[template]
+#[rstest]
+#[case::postgres(Backend::Postgres)]
+fn postgres_only(#[case] backend: Backend) {}
+
+#[template]
+#[rstest]
+#[case::sqlite(Backend::Sqlite)]
+#[case::postgres(Backend::Postgres)]
+fn backends(#[case] backend: Backend) {}
 
 pub fn ensure_server_fns_registered() {
     static ONCE: OnceLock<()> = OnceLock::new();

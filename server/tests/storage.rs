@@ -6,11 +6,10 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
-// `sqlite_only` is part of the shared template set but currently has no callers
-// (kept available so a future single-backend SQLite test reads like the rest).
-// A `#[template]` expands to a name-mangled `macro_rules!`, so a per-item
-// `#[allow(unused_macros)]` can't reach it — this crate-level allow suppresses
-// the resulting dead-template lint.
+// The `backends`/`postgres_only` templates are imported from `helpers`; a
+// `#[template]` expands to a name-mangled `macro_rules!`, so a per-item
+// `#[allow(unused_macros)]` can't reach an unused one — this crate-level allow
+// suppresses the resulting dead-template lint.
 #![allow(unused_macros)]
 
 mod helpers;
@@ -41,7 +40,9 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use helpers::{sqlite_url, template_postgres_url, unique_postgres_url};
+use helpers::{
+    backends, postgres_only, sqlite_url, template_postgres_url, unique_postgres_url, Backend,
+};
 
 // The PostgreSQL parity tests below run against PostgreSQL when
 // `JAUNDER_PG_TEST_URL` is set; each acquires its own database (a template
@@ -62,64 +63,6 @@ async fn open_pool(base: &TempDir) -> SqlitePool {
         .unwrap();
     pool
 }
-
-async fn postgres_state() -> std::sync::Arc<storage::AppState> {
-    let url = template_postgres_url().await;
-    open_existing_database(&url).await.unwrap()
-}
-
-async fn sqlite_state() -> (TempDir, std::sync::Arc<storage::AppState>) {
-    let base = TempDir::new().unwrap();
-    let state = open_database(&sqlite_url(&base)).await.unwrap();
-    (base, state)
-}
-
-use storage::AppState;
-
-#[derive(Copy, Clone)]
-enum Backend {
-    Sqlite,
-    Postgres,
-}
-
-struct TestEnv {
-    state: std::sync::Arc<AppState>,
-    _guard: Option<TempDir>,
-}
-
-impl Backend {
-    async fn setup(self) -> TestEnv {
-        match self {
-            Backend::Sqlite => {
-                let (base, state) = sqlite_state().await;
-                TestEnv {
-                    state,
-                    _guard: Some(base),
-                }
-            }
-            Backend::Postgres => TestEnv {
-                state: postgres_state().await,
-                _guard: None,
-            },
-        }
-    }
-}
-
-#[template]
-#[rstest]
-#[case::sqlite(Backend::Sqlite)]
-fn sqlite_only(#[case] backend: Backend) {}
-
-#[template]
-#[rstest]
-#[case::postgres(Backend::Postgres)]
-fn postgres_only(#[case] backend: Backend) {}
-
-#[template]
-#[rstest]
-#[case::sqlite(Backend::Sqlite)]
-#[case::postgres(Backend::Postgres)]
-fn backends(#[case] backend: Backend) {}
 
 async fn user_storage(base: &TempDir) -> SqliteUserStorage {
     SqliteUserStorage::new(open_pool(base).await)
