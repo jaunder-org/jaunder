@@ -880,15 +880,6 @@
                   leptosfmt -x .direnv -x .git -x target --check '**/*.rs'
                   touch $out
                 '';
-            nextest = craneLib.cargoNextest (
-              commonArgs
-              // {
-                inherit cargoArtifacts;
-                preCheck = ''
-                  export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
-                '';
-              }
-            );
             deny = craneLib.cargoDeny {
               inherit src;
               pname = "jaunder";
