@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+mod memo;
 mod result;
 mod sh;
 mod steps {
@@ -38,10 +39,19 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             Ok(result)
         }
         Command::Validate { full } => {
+            let key = memo::tree_key()?;
+            if memo::last_green("validate").as_deref() == Some(key.as_str()) {
+                let mut result = CommandResult::new("validate");
+                result.memoized = true;
+                return Ok(result); // ok=true, no steps — "tree unchanged since last green"
+            }
             let sh = xshell::Shell::new()?;
             let mut result = CommandResult::new("validate");
             steps::static_checks::run(&sh, Mode::Fix, &mut result);
             steps::nix::run(full, &mut result);
+            if result.ok {
+                memo::record_green("validate", &key)?;
+            }
             Ok(result)
         }
     }
