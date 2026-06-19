@@ -1943,7 +1943,11 @@ async fn sqlite_post_app_state_parity_suite() {
 // =============================================================================
 
 // Test: Multiple tags on a single post
-async fn assert_multiple_tags_on_single_post(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn multiple_tags_on_single_post(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2002,7 +2006,11 @@ async fn assert_multiple_tags_on_single_post(state: &std::sync::Arc<storage::App
 }
 
 // Test: Post with no tags
-async fn assert_empty_tag_list(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn empty_tag_list(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2040,7 +2048,11 @@ async fn assert_empty_tag_list(state: &std::sync::Arc<storage::AppState>) {
 }
 
 // Test: Tag case preservation with different casing
-async fn assert_tag_case_preservation_variants(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn tag_case_preservation_variants(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2123,7 +2135,11 @@ async fn assert_tag_case_preservation_variants(state: &std::sync::Arc<storage::A
 }
 
 // Test: Invalid tag input
-async fn assert_invalid_tag_input(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn invalid_tag_input(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2165,7 +2181,11 @@ async fn assert_invalid_tag_input(state: &std::sync::Arc<storage::AppState>) {
 }
 
 // Test: Tag pagination with many posts
-async fn assert_tag_list_pagination(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn tag_list_pagination(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2217,9 +2237,11 @@ async fn assert_tag_list_pagination(state: &std::sync::Arc<storage::AppState>) {
 }
 
 // Test: User-specific tag listing
-async fn assert_list_user_posts_by_tag_excludes_other_users(
-    state: &std::sync::Arc<storage::AppState>,
-) {
+#[apply(backends)]
+#[tokio::test]
+async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user1 = state
         .users
         .create_user(
@@ -2307,7 +2329,11 @@ async fn assert_list_user_posts_by_tag_excludes_other_users(
 }
 
 // Test: Untag multiple times and verify correct tag removed
-async fn assert_selective_untag(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn selective_untag(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2381,7 +2407,11 @@ async fn assert_selective_untag(state: &std::sync::Arc<storage::AppState>) {
 }
 
 // Test: Tag with numeric characters
-async fn assert_numeric_tag(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn numeric_tag(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2440,7 +2470,11 @@ async fn assert_numeric_tag(state: &std::sync::Arc<storage::AppState>) {
 }
 
 // Test: Retagging a post with the same tag (duplicate tag error)
-async fn assert_retag_same_post_with_same_tag_fails(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn retag_same_post_with_same_tag_fails(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2484,7 +2518,11 @@ async fn assert_retag_same_post_with_same_tag_fails(state: &std::sync::Arc<stora
 }
 
 // Test: Untag from nonexistent post (should fail)
-async fn assert_untag_nonexistent_post(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn untag_nonexistent_post(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let tag_slug: Tag = "phantom".parse().unwrap();
     let result = state.posts.untag_post(99999, &tag_slug).await;
 
@@ -2493,7 +2531,11 @@ async fn assert_untag_nonexistent_post(state: &std::sync::Arc<storage::AppState>
 }
 
 // Test: Get tags for nonexistent post (should return empty)
-async fn assert_get_tags_nonexistent_post(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn get_tags_nonexistent_post(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let tags = state
         .posts
         .get_tags_for_post(99999)
@@ -2504,7 +2546,11 @@ async fn assert_get_tags_nonexistent_post(state: &std::sync::Arc<storage::AppSta
 }
 
 // Test: List posts by nonexistent tag
-async fn assert_list_posts_by_nonexistent_tag(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn list_posts_by_nonexistent_tag(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let tag_slug: Tag = "nosuch-tag".parse().unwrap();
     let result = state.posts.list_posts_by_tag(&tag_slug, None, 50).await;
 
@@ -2512,7 +2558,11 @@ async fn assert_list_posts_by_nonexistent_tag(state: &std::sync::Arc<storage::Ap
 }
 
 // Test: List user posts by nonexistent tag
-async fn assert_list_user_posts_by_nonexistent_tag(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2534,7 +2584,11 @@ async fn assert_list_user_posts_by_nonexistent_tag(state: &std::sync::Arc<storag
 }
 
 // Test: Many tags on many posts
-async fn assert_many_tags_many_posts(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn many_tags_many_posts(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2599,7 +2653,11 @@ async fn assert_many_tags_many_posts(state: &std::sync::Arc<storage::AppState>) 
 }
 
 // Test: Tag with all-numeric slug
-async fn assert_tag_all_numeric(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn tag_all_numeric(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2651,7 +2709,11 @@ async fn assert_tag_all_numeric(state: &std::sync::Arc<storage::AppState>) {
 }
 
 // Test: Tag with hyphens at boundaries
-async fn assert_tag_hyphen_boundaries(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn tag_hyphen_boundaries(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2714,7 +2776,11 @@ async fn assert_tag_hyphen_boundaries(state: &std::sync::Arc<storage::AppState>)
 }
 
 // Test: Tag with long slug and display name
-async fn assert_tag_with_long_display(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn tag_with_long_display(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2760,7 +2826,11 @@ async fn assert_tag_with_long_display(state: &std::sync::Arc<storage::AppState>)
 }
 
 // Test: Tag list ordering and consistency
-async fn assert_tag_list_ordering(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn tag_list_ordering(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2849,7 +2919,11 @@ async fn assert_tag_list_ordering(state: &std::sync::Arc<storage::AppState>) {
 }
 
 // Test: Boundary test for tag operations without tags
-async fn assert_tags_for_multiple_posts(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn tags_for_multiple_posts(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2918,7 +2992,11 @@ async fn assert_tags_for_multiple_posts(state: &std::sync::Arc<storage::AppState
 }
 
 // Test: Tag normalization with mixed alphanumeric
-async fn assert_tag_mixed_alphanumeric(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -2976,7 +3054,11 @@ async fn assert_tag_mixed_alphanumeric(state: &std::sync::Arc<storage::AppState>
 }
 
 // Test: User with single tag on single post, then untag
-async fn assert_simple_tag_lifecycle(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn simple_tag_lifecycle(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -3666,274 +3748,6 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
 
     assert_eq!(posts.len(), 1);
     assert_eq!(posts[0].post_id, post2);
-}
-
-// ====== Additional tag test cases for improved coverage ======
-
-// SQLite multiple tags tests
-#[tokio::test]
-async fn sqlite_multiple_tags_on_single_post() {
-    let (_base, state) = sqlite_state().await;
-    assert_multiple_tags_on_single_post(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_empty_tag_list() {
-    let (_base, state) = sqlite_state().await;
-    assert_empty_tag_list(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_tag_case_preservation_variants() {
-    let (_base, state) = sqlite_state().await;
-    assert_tag_case_preservation_variants(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_invalid_tag_input() {
-    let (_base, state) = sqlite_state().await;
-    assert_invalid_tag_input(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_tag_list_pagination() {
-    let (_base, state) = sqlite_state().await;
-    assert_tag_list_pagination(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_list_user_posts_by_tag_excludes_other_users() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_user_posts_by_tag_excludes_other_users(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_selective_untag() {
-    let (_base, state) = sqlite_state().await;
-    assert_selective_untag(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_numeric_tag() {
-    let (_base, state) = sqlite_state().await;
-    assert_numeric_tag(&state).await;
-}
-
-// PostgreSQL multiple tags tests
-#[tokio::test]
-async fn postgres_multiple_tags_on_single_post() {
-    let state = postgres_state().await;
-    assert_multiple_tags_on_single_post(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_empty_tag_list() {
-    let state = postgres_state().await;
-    assert_empty_tag_list(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_tag_case_preservation_variants() {
-    let state = postgres_state().await;
-    assert_tag_case_preservation_variants(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_invalid_tag_input() {
-    let state = postgres_state().await;
-    assert_invalid_tag_input(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_tag_list_pagination() {
-    let state = postgres_state().await;
-    assert_tag_list_pagination(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_user_posts_by_tag_excludes_other_users() {
-    let state = postgres_state().await;
-    assert_list_user_posts_by_tag_excludes_other_users(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_selective_untag() {
-    let state = postgres_state().await;
-    assert_selective_untag(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_numeric_tag() {
-    let state = postgres_state().await;
-    assert_numeric_tag(&state).await;
-}
-
-// ====== More comprehensive tag test cases ======
-
-// SQLite: Edge case tests
-#[tokio::test]
-async fn sqlite_retag_same_post_with_same_tag_fails() {
-    let (_base, state) = sqlite_state().await;
-    assert_retag_same_post_with_same_tag_fails(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_untag_nonexistent_post() {
-    let (_base, state) = sqlite_state().await;
-    assert_untag_nonexistent_post(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_get_tags_nonexistent_post() {
-    let (_base, state) = sqlite_state().await;
-    assert_get_tags_nonexistent_post(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_list_posts_by_nonexistent_tag() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_posts_by_nonexistent_tag(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_list_user_posts_by_nonexistent_tag() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_user_posts_by_nonexistent_tag(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_many_tags_many_posts() {
-    let (_base, state) = sqlite_state().await;
-    assert_many_tags_many_posts(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_tag_all_numeric() {
-    let (_base, state) = sqlite_state().await;
-    assert_tag_all_numeric(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_tag_hyphen_boundaries() {
-    let (_base, state) = sqlite_state().await;
-    assert_tag_hyphen_boundaries(&state).await;
-}
-
-// PostgreSQL: Edge case tests
-#[tokio::test]
-async fn postgres_retag_same_post_with_same_tag_fails() {
-    let state = postgres_state().await;
-    assert_retag_same_post_with_same_tag_fails(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_untag_nonexistent_post() {
-    let state = postgres_state().await;
-    assert_untag_nonexistent_post(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_get_tags_nonexistent_post() {
-    let state = postgres_state().await;
-    assert_get_tags_nonexistent_post(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_posts_by_nonexistent_tag() {
-    let state = postgres_state().await;
-    assert_list_posts_by_nonexistent_tag(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_user_posts_by_nonexistent_tag() {
-    let state = postgres_state().await;
-    assert_list_user_posts_by_nonexistent_tag(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_many_tags_many_posts() {
-    let state = postgres_state().await;
-    assert_many_tags_many_posts(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_tag_all_numeric() {
-    let state = postgres_state().await;
-    assert_tag_all_numeric(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_tag_hyphen_boundaries() {
-    let state = postgres_state().await;
-    assert_tag_hyphen_boundaries(&state).await;
-}
-
-// ====== Additional edge case tests ======
-
-// SQLite: Additional edge cases
-#[tokio::test]
-async fn sqlite_tag_with_long_display() {
-    let (_base, state) = sqlite_state().await;
-    assert_tag_with_long_display(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_tag_list_ordering() {
-    let (_base, state) = sqlite_state().await;
-    assert_tag_list_ordering(&state).await;
-}
-
-// PostgreSQL: Additional edge cases
-#[tokio::test]
-async fn postgres_tag_with_long_display() {
-    let state = postgres_state().await;
-    assert_tag_with_long_display(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_tag_list_ordering() {
-    let state = postgres_state().await;
-    assert_tag_list_ordering(&state).await;
-}
-
-// SQLite: Multiple posts with varied tagging
-#[tokio::test]
-async fn sqlite_tags_for_multiple_posts() {
-    let (_base, state) = sqlite_state().await;
-    assert_tags_for_multiple_posts(&state).await;
-}
-
-// PostgreSQL: Multiple posts with varied tagging
-#[tokio::test]
-async fn postgres_tags_for_multiple_posts() {
-    let state = postgres_state().await;
-    assert_tags_for_multiple_posts(&state).await;
-}
-
-// SQLite: Mixed alphanumeric and lifecycle tests
-#[tokio::test]
-async fn sqlite_tag_mixed_alphanumeric() {
-    let (_base, state) = sqlite_state().await;
-    assert_tag_mixed_alphanumeric(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_simple_tag_lifecycle() {
-    let (_base, state) = sqlite_state().await;
-    assert_simple_tag_lifecycle(&state).await;
-}
-
-// PostgreSQL: Mixed alphanumeric and lifecycle tests
-#[tokio::test]
-async fn postgres_tag_mixed_alphanumeric() {
-    let state = postgres_state().await;
-    assert_tag_mixed_alphanumeric(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_simple_tag_lifecycle() {
-    let state = postgres_state().await;
-    assert_simple_tag_lifecycle(&state).await;
 }
 
 // ====== Additional coverage tests for error paths ======
