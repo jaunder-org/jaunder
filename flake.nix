@@ -933,7 +933,7 @@
               '';
               installPhaseCommand = ''
                 mkdir -p $out
-                cp .coverage-manifest.json .crap-manifest.json $out/
+                cp .coverage-manifest.json crap-manifest.json $out/
               '';
             }
           );
@@ -1065,11 +1065,15 @@
                 ];
                 buildPhaseCargoCommand = ''
                   export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:''${LD_LIBRARY_PATH:-}"
-                  bash ./scripts/check-coverage --update
+                  bash ./scripts/check-coverage --emit
                 '';
                 installPhaseCommand = ''
                   mkdir -p $out
-                  cp .coverage-manifest.json .crap-manifest.json $out/
+                  # Non-dotted names: host xtask reads $out/coverage-report.txt
+                  # and $out/crap-report.json (a plain `cp … $out/` would keep
+                  # the leading dot and hide them).
+                  cp .coverage-report.txt $out/coverage-report.txt
+                  cp .crap-report.json $out/crap-report.json
                 '';
               }
             );

@@ -1,15 +1,27 @@
 use std::process::Command;
 
-use crate::result::{CommandResult, StepResult};
+use crate::coverage;
+use crate::result::{CommandResult, Mode, StepResult};
 
 /// The flake checks are Linux-only (`optionalAttrs isLinux` in flake.nix);
 /// the project's CI host is x86_64-linux.
 const SYSTEM: &str = "x86_64-linux";
 
 /// The Nix coverage check: the instrumented test suite (SQLite + ephemeral
-/// PostgreSQL via `--run-ignored all`) plus the coverage gate.
-pub fn coverage(result: &mut CommandResult) {
-    result.push(build_check("nix-coverage", "coverage"));
+/// PostgreSQL via `--run-ignored all`) emits the reports; the regression gate +
+/// auto-heal then runs host-side over the check's `$out`.
+pub fn coverage(result: &mut CommandResult, mode: Mode) {
+    let build = build_check("nix-coverage", "coverage");
+    if !build.ok {
+        // The instrumented suite (or the report emit) failed — there is no
+        // usable `$out` to post-process. Record the failed build only.
+        result.push(build);
+        return;
+    }
+    result.push(build);
+    let (step, report) = coverage::run(".xtask/gcroots/coverage", mode);
+    result.push(step);
+    result.coverage = report;
 }
 
 /// The e2e VM checks (both backends). `postgres-integration` is deliberately
