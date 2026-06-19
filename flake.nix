@@ -1065,11 +1065,11 @@
                 ];
                 buildPhaseCargoCommand = ''
                   export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:''${LD_LIBRARY_PATH:-}"
-                  bash ./scripts/check-coverage --update
+                  bash ./scripts/check-coverage --emit
                 '';
                 installPhaseCommand = ''
                   mkdir -p $out
-                  cp .coverage-manifest.json .crap-manifest.json $out/
+                  cp .coverage-report.txt .crap-report.json $out/
                 '';
               }
             );

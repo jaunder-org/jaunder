@@ -29,12 +29,14 @@ CRAP_REPORT_FILE="$ROOT/.crap-report.json"
 UPDATE=false
 INVESTIGATE=false
 CHECK=false
+EMIT=false
 
 for arg in "$@"; do
     case "$arg" in
         --update) UPDATE=true ;;
         --investigate) INVESTIGATE=true ;;
         --check) CHECK=true ;;
+        --emit) EMIT=true ;;
         *) echo "error: unknown argument: $arg" >&2; exit 1 ;;
     esac
 done
@@ -99,6 +101,15 @@ else
     RAW_CRAP_REPORT=$(mktemp)
     cargo crap --workspace --lcov "$LCOV_FILE" --exclude '**/tests/**' --format json --output "$RAW_CRAP_REPORT" > /dev/null
     normalize_crap_report "$RAW_CRAP_REPORT" "$CRAP_REPORT_FILE"
+fi
+
+# Produce-only mode: the two instrumented passes have run and the rich report,
+# LCOV, and CRAP report are all on disk. Exit before the coverage/CRAP
+# regression gating — that gate now lives in host xtask. Test failures still
+# abort earlier under `set -e` (the `cargo llvm-cov nextest` passes).
+if [[ "$EMIT" == "true" ]]; then
+    echo "--- coverage: emit mode — report + CRAP produced, skipping regression gate ---"
+    exit 0
 fi
 
 # Parse the per-file text output into a JSON object mapping relative-path → percent.
