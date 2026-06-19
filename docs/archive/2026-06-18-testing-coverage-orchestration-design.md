@@ -79,7 +79,7 @@ cargo xtask validate          # + e2e-sqlite + e2e-postgres — the full CI-fait
 # --json available on every command; .xtask/last-result.json always written; xtask-done: sentinel on stderr
 ```
 
-`check ⊂ validate ⊂ validate --full`. The git pre-push hook becomes `cargo xtask validate`.
+`check --no-test ⊂ check ⊂ validate --no-e2e ⊂ validate`. The git pre-push hook (if installed) runs `cargo xtask validate --no-e2e`.
 
 ## Result envelope (sketch)
 
@@ -140,11 +140,11 @@ Phase 0 ran today's `scripts/check-coverage` networked and (attempted) network-d
 
 | Retired | Replacement |
 |---|---|
-| `scripts/verify` | `cargo xtask check` / `validate` / `validate --full` |
+| `scripts/verify` | `cargo xtask check [--no-test]` / `validate [--no-e2e]` |
 | `scripts/check-coverage` | The Nix `coverage` check (unchanged) + host-side xtask post-processing (classification/auto-heal); `--investigate` → JSON `coverage` data |
 | `scripts/update-coverage-baseline` | Folded into `validate`'s host-side auto-heal of the Nix-produced manifest |
 | `scripts/with-ephemeral-postgres` | **Retained** for the Nix coverage/integration derivations; **not** used host-side |
-| `scripts/e2e-local.sh` | Retired; e2e runs only via the Nix e2e checks (`validate --full`) |
+| `scripts/e2e-local.sh` | Retired; e2e runs only via the Nix e2e checks (`validate`) |
 | `scripts/format` | Absorbed into `validate`'s auto-fix |
 | `scripts/seed-e2e-fixtures.sh`, trace/wasm helpers | Left as-is initially |
 
