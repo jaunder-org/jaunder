@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -17,11 +18,15 @@ use axum::{
 };
 use chrono::Utc;
 use storage::{CreatePostInput, PostFormat};
-use tempfile::TempDir;
 use tower::ServiceExt;
 use web::tags::TagSummary;
 
-use helpers::{ensure_server_fns_registered, test_options, test_state};
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
 
 async fn post_json(
     state: Arc<storage::AppState>,
@@ -91,10 +96,10 @@ async fn seed_user_and_tagged_post(
     post_id
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_tags_returns_empty_when_no_tags() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_tags_returns_empty_when_no_tags(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, body) = post_json(state, "/api/list_tags", serde_json::json!({})).await;
 
@@ -103,10 +108,10 @@ async fn list_tags_returns_empty_when_no_tags() {
     assert!(tags.is_empty());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_tags_returns_all_when_prefix_absent() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_tags_returns_all_when_prefix_absent(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     seed_user_and_tagged_post(
         &state,
         "alice",
@@ -133,10 +138,10 @@ async fn list_tags_returns_all_when_prefix_absent() {
     }
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_tags_filters_by_prefix_case_insensitive() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_tags_filters_by_prefix_case_insensitive(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     seed_user_and_tagged_post(
         &state,
         "bob",
@@ -158,10 +163,10 @@ async fn list_tags_filters_by_prefix_case_insensitive() {
     assert_eq!(slugs, vec!["rust", "rust-lang"]);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_tags_clamps_limit_to_max() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_tags_clamps_limit_to_max(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let post = seed_user_and_tagged_post(&state, "carol", "post-3", &[]).await;
     // 60 tags — exceeds the MAX_TAG_LIMIT of 50.
     for n in 0..60 {
@@ -184,10 +189,10 @@ async fn list_tags_clamps_limit_to_max() {
     assert_eq!(tags.len(), 50, "limit must be clamped to MAX_TAG_LIMIT");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_tags_uses_default_limit_when_unspecified() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_tags_uses_default_limit_when_unspecified(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let post = seed_user_and_tagged_post(&state, "dan", "post-4", &[]).await;
     for n in 0..20 {
         state
