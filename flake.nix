@@ -1069,7 +1069,11 @@
                 '';
                 installPhaseCommand = ''
                   mkdir -p $out
-                  cp .coverage-report.txt .crap-report.json $out/
+                  # Non-dotted names: host xtask reads $out/coverage-report.txt
+                  # and $out/crap-report.json (a plain `cp … $out/` would keep
+                  # the leading dot and hide them).
+                  cp .coverage-report.txt $out/coverage-report.txt
+                  cp .crap-report.json $out/crap-report.json
                 '';
               }
             );
