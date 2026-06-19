@@ -6,16 +6,17 @@ use crate::result::{CommandResult, StepResult};
 /// the project's CI host is x86_64-linux.
 const SYSTEM: &str = "x86_64-linux";
 
-pub fn run(full: bool, result: &mut CommandResult) {
+/// The Nix coverage check: the instrumented test suite (SQLite + ephemeral
+/// PostgreSQL via `--run-ignored all`) plus the coverage gate.
+pub fn coverage(result: &mut CommandResult) {
     result.push(build_check("nix-coverage", "coverage"));
-    if full {
-        result.push(build_check("nix-e2e-sqlite", "e2e-sqlite"));
-        result.push(build_check("nix-e2e-postgres", "e2e-postgres"));
-        result.push(build_check(
-            "nix-postgres-integration",
-            "postgres-integration",
-        ));
-    }
+}
+
+/// The e2e VM checks (both backends). `postgres-integration` is deliberately
+/// not dispatched — its tests already run under the coverage check.
+pub fn e2e(result: &mut CommandResult) {
+    result.push(build_check("nix-e2e-sqlite", "e2e-sqlite"));
+    result.push(build_check("nix-e2e-postgres", "e2e-postgres"));
 }
 
 /// `nix build --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.<system>.<check>`.
