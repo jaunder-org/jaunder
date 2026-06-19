@@ -4744,7 +4744,11 @@ async fn untag_preserves_other_tags(#[case] backend: Backend) {
 
 // ====== Site config tests ======
 
-async fn assert_site_config_operations(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn site_config_operations(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     // Test get non-existent key
     let value = state.site_config.get("nonexistent.key").await;
     match value {
@@ -4785,7 +4789,11 @@ async fn assert_site_config_operations(state: &std::sync::Arc<storage::AppState>
     }
 }
 
-async fn assert_session_list_operations(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn session_list_operations(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -4840,7 +4848,11 @@ async fn assert_session_list_operations(state: &std::sync::Arc<storage::AppState
     assert_eq!(record.user_id, user);
 }
 
-async fn assert_invite_list_operations(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn invite_list_operations(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let now = Utc::now();
     let future = now + chrono::Duration::hours(1);
     let past = now - chrono::Duration::hours(1);
@@ -4872,47 +4884,15 @@ async fn assert_invite_list_operations(state: &std::sync::Arc<storage::AppState>
     assert!(unused_count >= 2);
 }
 
-#[tokio::test]
-async fn sqlite_site_config_operations() {
-    let (_base, state) = sqlite_state().await;
-    assert_site_config_operations(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_session_list_operations() {
-    let (_base, state) = sqlite_state().await;
-    assert_session_list_operations(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_invite_list_operations() {
-    let (_base, state) = sqlite_state().await;
-    assert_invite_list_operations(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_site_config_operations() {
-    let state = postgres_state().await;
-    assert_site_config_operations(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_session_list_operations() {
-    let state = postgres_state().await;
-    assert_session_list_operations(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_invite_list_operations() {
-    let state = postgres_state().await;
-    assert_invite_list_operations(&state).await;
-}
-
 // =============================================================================
 // create_rendered_post / update_rendered_post integration tests
 // =============================================================================
 
-async fn assert_create_rendered_post_markdown(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(
@@ -4946,7 +4926,11 @@ async fn assert_create_rendered_post_markdown(state: &std::sync::Arc<storage::Ap
     );
 }
 
-async fn assert_create_rendered_post_org(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(
@@ -4980,7 +4964,11 @@ async fn assert_create_rendered_post_org(state: &std::sync::Arc<storage::AppStat
     );
 }
 
-async fn assert_create_rendered_post_slug_conflict(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     use storage::CreatePostError;
 
     let user_id = state
@@ -5034,7 +5022,11 @@ async fn assert_create_rendered_post_slug_conflict(state: &std::sync::Arc<storag
     );
 }
 
-async fn assert_update_rendered_post_markdown(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(
@@ -5074,7 +5066,11 @@ async fn assert_update_rendered_post_markdown(state: &std::sync::Arc<storage::Ap
     );
 }
 
-async fn assert_update_rendered_post_org(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn update_rendered_post_org_renders_and_updates(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(
@@ -5114,7 +5110,11 @@ async fn assert_update_rendered_post_org(state: &std::sync::Arc<storage::AppStat
     );
 }
 
-async fn assert_update_rendered_post_not_found(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     use storage::UpdatePostError;
 
     let err = update_rendered_post(
@@ -5139,78 +5139,6 @@ async fn assert_update_rendered_post_not_found(state: &std::sync::Arc<storage::A
         err.to_string().contains("not found"),
         "expected 'not found' message, got: {err}"
     );
-}
-
-#[tokio::test]
-async fn sqlite_create_rendered_post_markdown_renders_and_stores() {
-    let (_base, state) = sqlite_state().await;
-    assert_create_rendered_post_markdown(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_create_rendered_post_org_renders_and_stores() {
-    let (_base, state) = sqlite_state().await;
-    assert_create_rendered_post_org(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_create_rendered_post_slug_conflict_returns_storage_error() {
-    let (_base, state) = sqlite_state().await;
-    assert_create_rendered_post_slug_conflict(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_update_rendered_post_markdown_renders_and_updates() {
-    let (_base, state) = sqlite_state().await;
-    assert_update_rendered_post_markdown(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_update_rendered_post_org_renders_and_updates() {
-    let (_base, state) = sqlite_state().await;
-    assert_update_rendered_post_org(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_update_rendered_post_not_found_returns_storage_error() {
-    let (_base, state) = sqlite_state().await;
-    assert_update_rendered_post_not_found(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_create_rendered_post_markdown_renders_and_stores() {
-    let state = postgres_state().await;
-    assert_create_rendered_post_markdown(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_create_rendered_post_org_renders_and_stores() {
-    let state = postgres_state().await;
-    assert_create_rendered_post_org(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_create_rendered_post_slug_conflict_returns_storage_error() {
-    let state = postgres_state().await;
-    assert_create_rendered_post_slug_conflict(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_update_rendered_post_markdown_renders_and_updates() {
-    let state = postgres_state().await;
-    assert_update_rendered_post_markdown(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_update_rendered_post_org_renders_and_updates() {
-    let state = postgres_state().await;
-    assert_update_rendered_post_org(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_update_rendered_post_not_found_returns_storage_error() {
-    let state = postgres_state().await;
-    assert_update_rendered_post_not_found(&state).await;
 }
 
 // ── MediaStorage tests ────────────────────────────────────────────────────────
