@@ -362,14 +362,14 @@ fn unsupported_url_is_rejected_at_parse_time() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn open_database_succeeds_on_postgres_test_vm() {
     let url = unique_postgres_url().await;
     open_database(&url).await.unwrap();
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn open_database_runs_postgres_migrations_on_existing_empty_db() {
     let url = unique_postgres_url().await;
     let state = open_database(&url).await.unwrap();
@@ -377,7 +377,7 @@ async fn open_database_runs_postgres_migrations_on_existing_empty_db() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db() {
     let url = unique_postgres_url().await;
     let state = open_existing_database(&url).await.unwrap();
@@ -385,7 +385,7 @@ async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_app_state_parity_suite() {
     let state = postgres_state().await;
     assert_site_config_roundtrip(&state).await;
@@ -404,14 +404,14 @@ async fn postgres_app_state_parity_suite() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_site_config_set_then_get_roundtrips() {
     let state = postgres_state().await;
     assert_site_config_roundtrip(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_authenticate_with_corrupted_hash_returns_internal_error() {
     use storage::{PostgresUserStorage, UserAuthError, UserStorage};
     let DbConnectOptions::Postgres { options, .. } = template_postgres_url().await else {
@@ -435,21 +435,21 @@ async fn postgres_authenticate_with_corrupted_hash_returns_internal_error() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_create_user_duplicate_and_authenticate_work() {
     let state = postgres_state().await;
     assert_user_duplicate_and_authenticate(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_session_lifecycle_works() {
     let state = postgres_state().await;
     assert_session_lifecycle(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_feed_events_marks_run() {
     let state = postgres_state().await;
     let fe = &state.feed_events;
@@ -478,14 +478,14 @@ async fn postgres_feed_events_marks_run() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_invite_and_atomic_registration_work() {
     let state = postgres_state().await;
     assert_invite_and_atomic_registration(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_email_verification_and_password_reset_work() {
     let state = postgres_state().await;
     assert_email_verification_and_password_reset(&state).await;
@@ -1942,63 +1942,63 @@ async fn sqlite_post_app_state_parity_suite() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_post_create_and_get_by_id_works() {
     let state = postgres_state().await;
     assert_post_create_and_get_by_id(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_post_slug_conflict_returns_slug_conflict() {
     let state = postgres_state().await;
     assert_post_slug_conflict(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_post_update_writes_revision_and_updates_record() {
     let state = postgres_state().await;
     assert_post_update_creates_revision(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_post_update_not_found_returns_error() {
     let state = postgres_state().await;
     assert_post_update_not_found(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_soft_delete_excludes_post_from_lists() {
     let state = postgres_state().await;
     assert_soft_delete_excludes_from_lists(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_published_by_user_returns_only_user_posts() {
     let state = postgres_state().await;
     assert_list_published_by_user(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_published_returns_published_non_deleted_posts() {
     let state = postgres_state().await;
     assert_list_published_returns_all_published(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_published_in_window_applies_hybrid_rule_across_surfaces() {
     let state = postgres_state().await;
     assert_list_published_in_window(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_drafts_by_user_returns_only_drafts() {
     let state = postgres_state().await;
     assert_list_drafts_by_user(&state).await;
@@ -3759,77 +3759,77 @@ async fn sqlite_untag_nonexistent_tag_error() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_tag_creation_and_retrieval() {
     let state = postgres_state().await;
     assert_tag_creation_and_retrieval(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_tag_normalization() {
     let state = postgres_state().await;
     assert_tag_normalization(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_untag_post() {
     let state = postgres_state().await;
     assert_untag_post(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_duplicate_tag_error() {
     let state = postgres_state().await;
     assert_duplicate_tag_error(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_posts_by_tag() {
     let state = postgres_state().await;
     assert_list_posts_by_tag(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_user_posts_by_tag() {
     let state = postgres_state().await;
     assert_list_user_posts_by_tag(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_tag_not_found_error() {
     let state = postgres_state().await;
     assert_tag_not_found_error(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_soft_deleted_posts_excluded_from_tag_list() {
     let state = postgres_state().await;
     assert_soft_deleted_posts_excluded_from_tag_list(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_draft_posts_excluded_from_tag_list() {
     let state = postgres_state().await;
     assert_draft_posts_excluded_from_tag_list(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_tag_post_nonexistent_post_error() {
     let state = postgres_state().await;
     assert_tag_post_nonexistent_post_error(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_untag_nonexistent_tag_error() {
     let state = postgres_state().await;
     assert_untag_nonexistent_tag_error(&state).await;
@@ -3888,56 +3888,56 @@ async fn sqlite_numeric_tag() {
 
 // PostgreSQL multiple tags tests
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_multiple_tags_on_single_post() {
     let state = postgres_state().await;
     assert_multiple_tags_on_single_post(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_empty_tag_list() {
     let state = postgres_state().await;
     assert_empty_tag_list(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_tag_case_preservation_variants() {
     let state = postgres_state().await;
     assert_tag_case_preservation_variants(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_invalid_tag_input() {
     let state = postgres_state().await;
     assert_invalid_tag_input(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_tag_list_pagination() {
     let state = postgres_state().await;
     assert_tag_list_pagination(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_user_posts_by_tag_excludes_other_users() {
     let state = postgres_state().await;
     assert_list_user_posts_by_tag_excludes_other_users(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_selective_untag() {
     let state = postgres_state().await;
     assert_selective_untag(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_numeric_tag() {
     let state = postgres_state().await;
     assert_numeric_tag(&state).await;
@@ -3996,56 +3996,56 @@ async fn sqlite_tag_hyphen_boundaries() {
 
 // PostgreSQL: Edge case tests
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_retag_same_post_with_same_tag_fails() {
     let state = postgres_state().await;
     assert_retag_same_post_with_same_tag_fails(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_untag_nonexistent_post() {
     let state = postgres_state().await;
     assert_untag_nonexistent_post(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_get_tags_nonexistent_post() {
     let state = postgres_state().await;
     assert_get_tags_nonexistent_post(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_posts_by_nonexistent_tag() {
     let state = postgres_state().await;
     assert_list_posts_by_nonexistent_tag(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_user_posts_by_nonexistent_tag() {
     let state = postgres_state().await;
     assert_list_user_posts_by_nonexistent_tag(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_many_tags_many_posts() {
     let state = postgres_state().await;
     assert_many_tags_many_posts(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_tag_all_numeric() {
     let state = postgres_state().await;
     assert_tag_all_numeric(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_tag_hyphen_boundaries() {
     let state = postgres_state().await;
     assert_tag_hyphen_boundaries(&state).await;
@@ -4068,14 +4068,14 @@ async fn sqlite_tag_list_ordering() {
 
 // PostgreSQL: Additional edge cases
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_tag_with_long_display() {
     let state = postgres_state().await;
     assert_tag_with_long_display(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_tag_list_ordering() {
     let state = postgres_state().await;
     assert_tag_list_ordering(&state).await;
@@ -4090,7 +4090,7 @@ async fn sqlite_tags_for_multiple_posts() {
 
 // PostgreSQL: Multiple posts with varied tagging
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_tags_for_multiple_posts() {
     let state = postgres_state().await;
     assert_tags_for_multiple_posts(&state).await;
@@ -4111,14 +4111,14 @@ async fn sqlite_simple_tag_lifecycle() {
 
 // PostgreSQL: Mixed alphanumeric and lifecycle tests
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_tag_mixed_alphanumeric() {
     let state = postgres_state().await;
     assert_tag_mixed_alphanumeric(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_simple_tag_lifecycle() {
     let state = postgres_state().await;
     assert_simple_tag_lifecycle(&state).await;
@@ -4561,42 +4561,42 @@ async fn sqlite_soft_delete_then_operations() {
 
 // PostgreSQL versions of the same tests
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_post_update_invalid_slug() {
     let state = postgres_state().await;
     assert_post_update_invalid_slug(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_published_cursor_boundary() {
     let state = postgres_state().await;
     assert_list_published_cursor_boundary(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_drafts_cursor_boundary() {
     let state = postgres_state().await;
     assert_list_drafts_cursor_boundary(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_user_posts_by_tag_cursor() {
     let state = postgres_state().await;
     assert_list_user_posts_by_tag_cursor(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_posts_by_tag_cursor() {
     let state = postgres_state().await;
     assert_list_posts_by_tag_cursor(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_soft_delete_then_operations() {
     let state = postgres_state().await;
     assert_soft_delete_then_operations(&state).await;
@@ -4917,35 +4917,35 @@ async fn sqlite_tag_edge_case_formats() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_tag_post_multiple_attempts() {
     let state = postgres_state().await;
     assert_tag_post_multiple_attempts(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_published_by_user_no_posts() {
     let state = postgres_state().await;
     assert_list_published_by_user_no_posts(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_get_by_permalink_soft_deleted() {
     let state = postgres_state().await;
     assert_get_by_permalink_soft_deleted(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_update_soft_deleted_post() {
     let state = postgres_state().await;
     assert_update_soft_deleted_post(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_tag_edge_case_formats() {
     let state = postgres_state().await;
     assert_tag_edge_case_formats(&state).await;
@@ -5229,35 +5229,35 @@ async fn sqlite_untag_preserves_other_tags() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_get_post_by_id_nonexistent() {
     let state = postgres_state().await;
     assert_get_post_by_id_nonexistent(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_published_with_cursor_same_timestamp() {
     let state = postgres_state().await;
     assert_list_published_with_cursor_same_timestamp(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_post_revisions_created() {
     let state = postgres_state().await;
     assert_post_revisions_created(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_tag_display_preservation() {
     let state = postgres_state().await;
     assert_tag_display_preservation(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_untag_preserves_other_tags() {
     let state = postgres_state().await;
     assert_untag_preserves_other_tags(&state).await;
@@ -5412,21 +5412,21 @@ async fn sqlite_invite_list_operations() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_site_config_operations() {
     let state = postgres_state().await;
     assert_site_config_operations(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_session_list_operations() {
     let state = postgres_state().await;
     assert_session_list_operations(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_invite_list_operations() {
     let state = postgres_state().await;
     assert_invite_list_operations(&state).await;
@@ -5702,42 +5702,42 @@ async fn sqlite_update_rendered_post_not_found_returns_storage_error() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_create_rendered_post_markdown_renders_and_stores() {
     let state = postgres_state().await;
     assert_create_rendered_post_markdown(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_create_rendered_post_org_renders_and_stores() {
     let state = postgres_state().await;
     assert_create_rendered_post_org(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_create_rendered_post_slug_conflict_returns_storage_error() {
     let state = postgres_state().await;
     assert_create_rendered_post_slug_conflict(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_update_rendered_post_markdown_renders_and_updates() {
     let state = postgres_state().await;
     assert_update_rendered_post_markdown(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_update_rendered_post_org_renders_and_updates() {
     let state = postgres_state().await;
     assert_update_rendered_post_org(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_update_rendered_post_not_found_returns_storage_error() {
     let state = postgres_state().await;
     assert_update_rendered_post_not_found(&state).await;
@@ -6225,98 +6225,98 @@ async fn sqlite_user_config_delete_nonexistent_is_ok() {
 // ── PostgreSQL parity tests ───────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_create_and_get_media() {
     let state = postgres_state().await;
     assert_create_and_get_media(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_duplicate_media_returns_already_exists() {
     let state = postgres_state().await;
     assert_duplicate_media_returns_already_exists(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_delete_media_removes_record() {
     let state = postgres_state().await;
     assert_delete_media_removes_record(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_delete_nonexistent_returns_not_found() {
     let state = postgres_state().await;
     assert_delete_nonexistent_returns_not_found(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_media_returns_records_for_user() {
     let state = postgres_state().await;
     assert_list_media_returns_records_for_user(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_media_filtered_by_source() {
     let state = postgres_state().await;
     assert_list_media_filtered_by_source(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_get_user_upload_usage_returns_zero_initially() {
     let state = postgres_state().await;
     assert_get_user_upload_usage_returns_zero_initially(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_get_user_upload_usage_sums_uploads_only() {
     let state = postgres_state().await;
     assert_get_user_upload_usage_sums_uploads_only(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_find_by_hash_returns_any_match() {
     let state = postgres_state().await;
     assert_find_by_hash_returns_any_match(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_user_config_get_returns_none_when_unset() {
     let state = postgres_state().await;
     assert_user_config_get_returns_none_when_unset(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_user_config_set_and_get() {
     let state = postgres_state().await;
     assert_user_config_set_and_get(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_user_config_overwrite() {
     let state = postgres_state().await;
     assert_user_config_overwrite(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_user_config_delete_removes_key() {
     let state = postgres_state().await;
     assert_user_config_delete_removes_key(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_user_config_delete_nonexistent_is_ok() {
     let state = postgres_state().await;
     assert_user_config_delete_nonexistent_is_ok(&state).await;
@@ -6470,14 +6470,14 @@ async fn sqlite_post_record_carries_tags() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_list_tags_returns_alphabetical_with_prefix() {
     let state = postgres_state().await;
     assert_list_tags_returns_alphabetical_with_prefix(&state).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
+#[ignore = "requires PostgreSQL"]
 async fn postgres_post_record_carries_tags() {
     let state = postgres_state().await;
     assert_post_record_carries_tags(&state).await;
