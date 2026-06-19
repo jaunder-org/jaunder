@@ -162,7 +162,11 @@ fn password(s: &str) -> Password {
     s.parse().unwrap()
 }
 
-async fn assert_site_config_roundtrip(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn site_config_set_then_get_roundtrips(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     state
         .site_config
         .set("site.name", "Parity Site")
@@ -174,7 +178,47 @@ async fn assert_site_config_roundtrip(state: &std::sync::Arc<storage::AppState>)
     );
 }
 
-async fn assert_user_duplicate_and_authenticate(state: &std::sync::Arc<storage::AppState>) {
+#[tokio::test]
+async fn get_missing_key_returns_none() {
+    let base = TempDir::new().unwrap();
+    let state = open_database(&sqlite_url(&base)).await.unwrap();
+
+    assert!(state
+        .site_config
+        .get("nonexistent")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn set_overwrites_existing_value() {
+    let base = TempDir::new().unwrap();
+    let state = open_database(&sqlite_url(&base)).await.unwrap();
+
+    state.site_config.set("site.name", "First").await.unwrap();
+    state.site_config.set("site.name", "Second").await.unwrap();
+
+    assert_eq!(
+        state.site_config.get("site.name").await.unwrap().as_deref(),
+        Some("Second")
+    );
+}
+
+#[tokio::test]
+async fn second_open_on_migrated_database_succeeds() {
+    let base = TempDir::new().unwrap();
+
+    drop(open_database(&sqlite_url(&base)).await.unwrap());
+
+    open_database(&sqlite_url(&base)).await.unwrap();
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_user_duplicate_and_authenticate_work(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let username = username("alice");
     let initial_password = password("password123");
 
@@ -207,7 +251,11 @@ async fn assert_user_duplicate_and_authenticate(state: &std::sync::Arc<storage::
     assert!(authed.last_authenticated_at.is_some());
 }
 
-async fn assert_session_lifecycle(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn session_lifecycle_works(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(&username("bob"), &password("secret_password"), None, false)
@@ -234,7 +282,11 @@ async fn assert_session_lifecycle(state: &std::sync::Arc<storage::AppState>) {
     assert!(matches!(err, SessionAuthError::SessionNotFound));
 }
 
-async fn assert_invite_and_atomic_registration(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn invite_and_atomic_registration_work(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let code = state.invites.create_invite(expires_at).await.unwrap();
 
@@ -266,7 +318,11 @@ async fn assert_invite_and_atomic_registration(state: &std::sync::Arc<storage::A
     assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
 }
 
-async fn assert_email_verification_and_password_reset(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn email_verification_and_password_reset_work(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(&username("dave"), &password("password123"), None, false)
@@ -325,101 +381,6 @@ async fn assert_email_verification_and_password_reset(state: &std::sync::Arc<sto
         .await
         .unwrap();
     assert_eq!(authed.user_id, user_id);
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn site_config_set_then_get_roundtrips(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    assert_site_config_roundtrip(state).await;
-}
-
-#[tokio::test]
-async fn get_missing_key_returns_none() {
-    let base = TempDir::new().unwrap();
-    let state = open_database(&sqlite_url(&base)).await.unwrap();
-
-    assert!(state
-        .site_config
-        .get("nonexistent")
-        .await
-        .unwrap()
-        .is_none());
-}
-
-#[tokio::test]
-async fn set_overwrites_existing_value() {
-    let base = TempDir::new().unwrap();
-    let state = open_database(&sqlite_url(&base)).await.unwrap();
-
-    state.site_config.set("site.name", "First").await.unwrap();
-    state.site_config.set("site.name", "Second").await.unwrap();
-
-    assert_eq!(
-        state.site_config.get("site.name").await.unwrap().as_deref(),
-        Some("Second")
-    );
-}
-
-#[tokio::test]
-async fn second_open_on_migrated_database_succeeds() {
-    let base = TempDir::new().unwrap();
-
-    drop(open_database(&sqlite_url(&base)).await.unwrap());
-
-    open_database(&sqlite_url(&base)).await.unwrap();
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn app_state_parity_suite(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    assert_site_config_roundtrip(&env.state).await;
-
-    let env = backend.setup().await;
-    assert_user_duplicate_and_authenticate(&env.state).await;
-
-    let env = backend.setup().await;
-    assert_session_lifecycle(&env.state).await;
-
-    let env = backend.setup().await;
-    assert_invite_and_atomic_registration(&env.state).await;
-
-    let env = backend.setup().await;
-    assert_email_verification_and_password_reset(&env.state).await;
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn create_user_duplicate_and_authenticate_work(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    assert_user_duplicate_and_authenticate(state).await;
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn session_lifecycle_works(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    assert_session_lifecycle(state).await;
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn invite_and_atomic_registration_work(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    assert_invite_and_atomic_registration(state).await;
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn email_verification_and_password_reset_work(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    assert_email_verification_and_password_reset(state).await;
 }
 
 #[test]
@@ -1375,7 +1336,13 @@ fn make_published_create_post_input(user_id: i64, slug: &str) -> CreatePostInput
     }
 }
 
-async fn assert_post_create_and_get_by_id(state: &std::sync::Arc<storage::AppState>) {
+// Post tests (backend-parametrized)
+
+#[apply(backends)]
+#[tokio::test]
+async fn post_create_and_get_by_id_works(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(&username("alice"), &password("password123"), None, false)
@@ -1395,7 +1362,11 @@ async fn assert_post_create_and_get_by_id(state: &std::sync::Arc<storage::AppSta
     assert!(record.deleted_at.is_none());
 }
 
-async fn assert_post_slug_conflict(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn post_slug_conflict_returns_slug_conflict(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(&username("bob"), &password("password123"), None, false)
@@ -1449,7 +1420,11 @@ async fn assert_post_slug_conflict(state: &std::sync::Arc<storage::AppState>) {
     );
 }
 
-async fn assert_post_update_creates_revision(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(&username("carol"), &password("password123"), None, false)
@@ -1482,7 +1457,11 @@ async fn assert_post_update_creates_revision(state: &std::sync::Arc<storage::App
     assert_eq!(record.body, "updated body");
 }
 
-async fn assert_post_update_not_found(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn post_update_not_found_returns_error(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let update_input = UpdatePostInput {
         title: Some("Title".to_string()),
         slug: "nope".parse().unwrap(),
@@ -1503,7 +1482,11 @@ async fn assert_post_update_not_found(state: &std::sync::Arc<storage::AppState>)
     );
 }
 
-async fn assert_soft_delete_excludes_from_lists(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(&username("dave"), &password("password123"), None, false)
@@ -1531,161 +1514,11 @@ async fn assert_soft_delete_excludes_from_lists(state: &std::sync::Arc<storage::
     assert!(record.deleted_at.is_some());
 }
 
-async fn assert_list_published_by_user(state: &std::sync::Arc<storage::AppState>) {
-    let alice_id = state
-        .users
-        .create_user(&username("ealice"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let bob_id = state
-        .users
-        .create_user(&username("ebob"), &password("password123"), None, false)
-        .await
-        .unwrap();
-
-    state
-        .posts
-        .create_post(&make_published_create_post_input(alice_id, "alice-post1"))
-        .await
-        .unwrap();
-    state
-        .posts
-        .create_post(&make_published_create_post_input(alice_id, "alice-post2"))
-        .await
-        .unwrap();
-    state
-        .posts
-        .create_post(&make_published_create_post_input(bob_id, "bob-post1"))
-        .await
-        .unwrap();
-
-    let alice_posts = state
-        .posts
-        .list_published_by_user(&username("ealice"), None, 10)
-        .await
-        .unwrap();
-    assert_eq!(alice_posts.len(), 2);
-    assert!(alice_posts.iter().all(|p| p.user_id == alice_id));
-
-    let bob_posts = state
-        .posts
-        .list_published_by_user(&username("ebob"), None, 10)
-        .await
-        .unwrap();
-    assert_eq!(bob_posts.len(), 1);
-    assert_eq!(bob_posts[0].user_id, bob_id);
-}
-
-async fn assert_list_published_returns_all_published(state: &std::sync::Arc<storage::AppState>) {
-    let user_id = state
-        .users
-        .create_user(&username("fuser"), &password("password123"), None, false)
-        .await
-        .unwrap();
-
-    // Create a draft (should not appear)
-    state
-        .posts
-        .create_post(&make_create_post_input(user_id, "draft-post"))
-        .await
-        .unwrap();
-
-    // Create two published posts
-    state
-        .posts
-        .create_post(&make_published_create_post_input(user_id, "pub-post1"))
-        .await
-        .unwrap();
-    state
-        .posts
-        .create_post(&make_published_create_post_input(user_id, "pub-post2"))
-        .await
-        .unwrap();
-
-    let published = state.posts.list_published(None, 10).await.unwrap();
-    assert_eq!(published.len(), 2);
-    assert!(published.iter().all(|p| p.published_at.is_some()));
-}
-
-async fn assert_list_drafts_by_user(state: &std::sync::Arc<storage::AppState>) {
-    let user_id = state
-        .users
-        .create_user(&username("guser"), &password("password123"), None, false)
-        .await
-        .unwrap();
-
-    // Create two drafts
-    state
-        .posts
-        .create_post(&make_create_post_input(user_id, "draft-a"))
-        .await
-        .unwrap();
-    state
-        .posts
-        .create_post(&make_create_post_input(user_id, "draft-b"))
-        .await
-        .unwrap();
-
-    // Create a published post (should not appear in drafts)
-    state
-        .posts
-        .create_post(&make_published_create_post_input(user_id, "published-c"))
-        .await
-        .unwrap();
-
-    let drafts = state
-        .posts
-        .list_drafts_by_user(user_id, None, 10)
-        .await
-        .unwrap();
-    assert_eq!(drafts.len(), 2);
-    assert!(drafts.iter().all(|p| p.published_at.is_none()));
-    assert!(drafts.iter().all(|p| p.user_id == user_id));
-}
-
-// Post tests (backend-parametrized)
-
 #[apply(backends)]
 #[tokio::test]
-async fn post_create_and_get_by_id_works(#[case] backend: Backend) {
+async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    assert_post_create_and_get_by_id(state).await;
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn post_slug_conflict_returns_slug_conflict(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    assert_post_slug_conflict(state).await;
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    assert_post_update_creates_revision(state).await;
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn post_update_not_found_returns_error(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    assert_post_update_not_found(state).await;
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    assert_soft_delete_excludes_from_lists(state).await;
-}
-
-async fn assert_list_published_in_window(state: &std::sync::Arc<storage::AppState>) {
     use chrono::Duration;
     use common::feed::{FeedSurface, HybridWindow};
 
@@ -1884,7 +1717,48 @@ async fn assert_list_published_in_window(state: &std::sync::Arc<storage::AppStat
 async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    assert_list_published_by_user(state).await;
+    let alice_id = state
+        .users
+        .create_user(&username("ealice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let bob_id = state
+        .users
+        .create_user(&username("ebob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    state
+        .posts
+        .create_post(&make_published_create_post_input(alice_id, "alice-post1"))
+        .await
+        .unwrap();
+    state
+        .posts
+        .create_post(&make_published_create_post_input(alice_id, "alice-post2"))
+        .await
+        .unwrap();
+    state
+        .posts
+        .create_post(&make_published_create_post_input(bob_id, "bob-post1"))
+        .await
+        .unwrap();
+
+    let alice_posts = state
+        .posts
+        .list_published_by_user(&username("ealice"), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(alice_posts.len(), 2);
+    assert!(alice_posts.iter().all(|p| p.user_id == alice_id));
+
+    let bob_posts = state
+        .posts
+        .list_published_by_user(&username("ebob"), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(bob_posts.len(), 1);
+    assert_eq!(bob_posts[0].user_id, bob_id);
 }
 
 #[apply(backends)]
@@ -1892,15 +1766,34 @@ async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend
 async fn list_published_returns_published_non_deleted_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    assert_list_published_returns_all_published(state).await;
-}
+    let user_id = state
+        .users
+        .create_user(&username("fuser"), &password("password123"), None, false)
+        .await
+        .unwrap();
 
-#[apply(backends)]
-#[tokio::test]
-async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    assert_list_published_in_window(state).await;
+    // Create a draft (should not appear)
+    state
+        .posts
+        .create_post(&make_create_post_input(user_id, "draft-post"))
+        .await
+        .unwrap();
+
+    // Create two published posts
+    state
+        .posts
+        .create_post(&make_published_create_post_input(user_id, "pub-post1"))
+        .await
+        .unwrap();
+    state
+        .posts
+        .create_post(&make_published_create_post_input(user_id, "pub-post2"))
+        .await
+        .unwrap();
+
+    let published = state.posts.list_published(None, 10).await.unwrap();
+    assert_eq!(published.len(), 2);
+    assert!(published.iter().all(|p| p.published_at.is_some()));
 }
 
 #[apply(backends)]
@@ -1908,35 +1801,39 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
 async fn list_drafts_by_user_returns_only_drafts(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    assert_list_drafts_by_user(state).await;
-}
+    let user_id = state
+        .users
+        .create_user(&username("guser"), &password("password123"), None, false)
+        .await
+        .unwrap();
 
-#[apply(sqlite_only)]
-#[tokio::test]
-async fn post_app_state_parity_suite(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    assert_post_create_and_get_by_id(&env.state).await;
+    // Create two drafts
+    state
+        .posts
+        .create_post(&make_create_post_input(user_id, "draft-a"))
+        .await
+        .unwrap();
+    state
+        .posts
+        .create_post(&make_create_post_input(user_id, "draft-b"))
+        .await
+        .unwrap();
 
-    let env = backend.setup().await;
-    assert_post_slug_conflict(&env.state).await;
+    // Create a published post (should not appear in drafts)
+    state
+        .posts
+        .create_post(&make_published_create_post_input(user_id, "published-c"))
+        .await
+        .unwrap();
 
-    let env = backend.setup().await;
-    assert_post_update_creates_revision(&env.state).await;
-
-    let env = backend.setup().await;
-    assert_post_update_not_found(&env.state).await;
-
-    let env = backend.setup().await;
-    assert_soft_delete_excludes_from_lists(&env.state).await;
-
-    let env = backend.setup().await;
-    assert_list_published_by_user(&env.state).await;
-
-    let env = backend.setup().await;
-    assert_list_published_returns_all_published(&env.state).await;
-
-    let env = backend.setup().await;
-    assert_list_drafts_by_user(&env.state).await;
+    let drafts = state
+        .posts
+        .list_drafts_by_user(user_id, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(drafts.len(), 2);
+    assert!(drafts.iter().all(|p| p.published_at.is_none()));
+    assert!(drafts.iter().all(|p| p.user_id == user_id));
 }
 
 // =============================================================================
