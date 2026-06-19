@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Maps old (HEAD) line numbers to new (working-tree) line numbers for one file.
 /// Built by walking unified-diff hunks: context lines map 1:1 (with the running
@@ -11,6 +11,10 @@ pub struct LineMap {
     // begins a new offset regime, the (old_line, cumulative_offset) so that any
     // old line at or after it (and before the next boundary) shifts by `off`.
     offset_after: Vec<(u32, i64)>, // (old_line_from, cumulative_offset)
+    // New-side line numbers introduced by `+` hunks (no old preimage). These
+    // are the "newly added" lines the classifier uses to tell a brand-new
+    // uncovered line (new_uncovered) from a previously-covered one (regression).
+    added: HashSet<u32>,
 }
 
 impl LineMap {
@@ -28,6 +32,24 @@ impl LineMap {
             }
         }
         Some((old_line as i64 + offset) as u32)
+    }
+
+    /// New-side (working-tree) line numbers introduced by `+` hunks — lines that
+    /// have no HEAD preimage. Under an identity/empty map this is empty.
+    pub fn added_lines(&self) -> HashSet<u32> {
+        self.added.clone()
+    }
+
+    /// Test-only: directly install an old→new mapping (or a deletion via `None`).
+    #[cfg(test)]
+    pub fn set_for_test(&mut self, old: u32, new: Option<u32>) {
+        self.map.insert(old, new);
+    }
+
+    /// Test-only: mark a new-side line number as freshly added (no preimage).
+    #[cfg(test)]
+    pub fn set_added_for_test(&mut self, new: u32) {
+        self.added.insert(new);
     }
 }
 
@@ -91,6 +113,7 @@ pub fn parse_unified_diff(diff: &str) -> HashMap<String, LineMap> {
                 lm.offset_after.push((old_ln, cum_offset));
             }
             Some('+') => {
+                lm.added.insert(new_ln);
                 new_ln += 1;
                 cum_offset += 1;
                 // An added line is inserted *after* the current old line, so it
@@ -152,6 +175,25 @@ diff --git a/server/src/x.rs b/server/src/x.rs
     #[test]
     fn empty_map_is_identity() {
         assert_eq!(empty_map().map(42), Some(42));
+    }
+
+    #[test]
+    fn added_lines_collects_plus_hunk_new_numbers() {
+        // The DIFF inserts one line: new file is line1/line3/line_new/line4, so
+        // "line_new" is at new line 3.
+        let maps = parse_unified_diff(DIFF);
+        let m = maps.get("server/src/x.rs").unwrap();
+        let added: Vec<u32> = {
+            let mut v: Vec<u32> = m.added_lines().into_iter().collect();
+            v.sort();
+            v
+        };
+        assert_eq!(added, vec![3]);
+    }
+
+    #[test]
+    fn empty_map_has_no_added_lines() {
+        assert!(empty_map().added_lines().is_empty());
     }
 
     // ---- additional tests ----
