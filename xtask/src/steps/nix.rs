@@ -7,9 +7,10 @@ use crate::result::{CommandResult, Mode, StepResult};
 /// the project's CI host is x86_64-linux.
 const SYSTEM: &str = "x86_64-linux";
 
-/// The Nix coverage check: the instrumented test suite (SQLite + ephemeral
-/// PostgreSQL via `--run-ignored all`) emits the reports; the regression gate +
-/// auto-heal then runs host-side over the check's `$out`.
+/// The Nix coverage check: the instrumented test suite (SQLite- and
+/// PostgreSQL-backed tests together in one pass under an ephemeral PostgreSQL)
+/// emits the reports; the regression gate + auto-heal then runs host-side over
+/// the check's `$out`.
 pub fn coverage(result: &mut CommandResult, mode: Mode) {
     let build = build_check("nix-coverage", "coverage");
     if !build.ok {

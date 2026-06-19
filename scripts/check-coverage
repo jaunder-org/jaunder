@@ -89,13 +89,13 @@ if [[ "$INVESTIGATE" == "true" ]]; then
     fi
     echo "--- coverage: investigating cached reports ---"
 else
-    # Coverage is collected in two passes that accumulate profraw data, then a
-    # single merged report. The default pass runs the whole suite against
-    # SQLite; the second pass re-runs the jaunder integration tests against a
-    # throwaway host PostgreSQL so that storage/src/postgres/* (only reachable
-    # with a live PG server) gets instrumented coverage too. Line coverage is a
-    # union of hits, so PG-only lines flip to covered while shared lines stay
-    # covered — no double-counting.
+    # Coverage is collected in a single instrumented pass with an ephemeral
+    # PostgreSQL available for the whole run. The SQLite-backed tests (which
+    # ignore the PG environment) and the PostgreSQL-backed tests run together
+    # in one nextest batch, so storage/src/sqlite/* and storage/src/postgres/*
+    # (the latter only reachable with a live PG server) both get instrumented
+    # coverage from their respective backend tests. Line coverage is a union of
+    # hits across the batch.
     # Clear only stale profraw (coverage data) from a previous run, NOT the
     # instrumented build — `clean --workspace` would force a ~270s recompile
     # every run; `--profraw-only` keeps the cached instrumented binaries (which
@@ -103,15 +103,14 @@ else
     echo "--- coverage: clearing stale profraw (keeping instrumented build) ---"
     cargo llvm-cov clean --profraw-only
 
-    echo "--- coverage: running cargo llvm-cov (SQLite pass) ---"
-    cargo llvm-cov --no-report nextest --show-progress none
-
-    echo "--- coverage: running cargo llvm-cov (PostgreSQL pass) ---"
+    echo "--- coverage: running cargo llvm-cov (full suite, PostgreSQL available) ---"
     # Invoke via `bash` rather than relying on the script's shebang: the Nix
     # build sandbox (used by the `coverage` flake check) has no /usr/bin/env.
+    # PostgreSQL is up for the whole run, so the SQLite-backed and
+    # PostgreSQL-backed tests run together in one nextest batch (no #[ignore]
+    # gating, no --run-ignored).
     bash scripts/with-ephemeral-postgres \
-        cargo llvm-cov --no-report nextest --show-progress none \
-        -p jaunder --run-ignored all
+        cargo llvm-cov --no-report nextest --show-progress none
 
     echo "--- coverage: building merged text report ---"
     cargo llvm-cov report --text > "$REPORT_FILE"

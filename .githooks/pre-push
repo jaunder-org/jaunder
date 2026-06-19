@@ -6,7 +6,7 @@ if [[ "${SKIP_PRE_PUSH:-0}" == "1" ]]; then
     exit 0
 fi
 
-echo "--- pre-push: running scripts/verify ---"
-scripts/verify
+echo "--- pre-push: running cargo xtask validate --no-e2e ---"
+cargo xtask validate --no-e2e
 
 echo "--- pre-push: all checks passed ---"

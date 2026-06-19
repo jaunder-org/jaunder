@@ -189,7 +189,6 @@ async fn cmd_create_pg_db_rejects_non_postgres_urls() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
 async fn cmd_create_pg_db_provisions_role_and_database() {
     let suffix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -255,7 +254,6 @@ async fn cmd_create_pg_db_provisions_role_and_database() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL test VM"]
 async fn cmd_create_pg_db_fails_if_role_already_exists() {
     let suffix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
