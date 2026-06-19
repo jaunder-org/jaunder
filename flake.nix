@@ -262,6 +262,12 @@
           src = craneLib.path ./.;
           filter =
             path: type:
+            # xtask/ is the host-only dev driver (a separate workspace these
+            # derivations never build). Excluding it keeps driver edits from
+            # busting the app caches AND guarantees a derivation can never run a
+            # stale xtask: it is not in the sandbox, so an accidental
+            # `cargo xtask` fails loudly rather than running stale. xtask runs
+            # only on the host (dev box / CI runner).
             (!pkgs.lib.hasInfix "/xtask/" path)
             && (
               (pkgs.lib.hasSuffix ".sql" path)
