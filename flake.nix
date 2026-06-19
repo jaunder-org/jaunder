@@ -262,10 +262,19 @@
           src = craneLib.path ./.;
           filter =
             path: type:
-            (pkgs.lib.hasSuffix ".sql" path)
-            || (pkgs.lib.hasSuffix ".css" path)
-            || (builtins.match "scripts/.*" path != null)
-            || (craneLib.filterCargoSources path type);
+            # xtask/ is the host-only dev driver (a separate workspace these
+            # derivations never build). Excluding it keeps driver edits from
+            # busting the app caches AND guarantees a derivation can never run a
+            # stale xtask: it is not in the sandbox, so an accidental
+            # `cargo xtask` fails loudly rather than running stale. xtask runs
+            # only on the host (dev box / CI runner).
+            (!pkgs.lib.hasInfix "/xtask/" path)
+            && (
+              (pkgs.lib.hasSuffix ".sql" path)
+              || (pkgs.lib.hasSuffix ".css" path)
+              || (builtins.match "scripts/.*" path != null)
+              || (craneLib.filterCargoSources path type)
+            );
         };
 
         commonArgs = {
@@ -898,7 +907,14 @@
           coverage-update = craneLib.mkCargoDerivation (
             commonArgs
             // {
-              src = ./.;
+              src = pkgs.lib.cleanSourceWith {
+                src = ./.;
+                filter =
+                  path: _type:
+                  !(pkgs.lib.hasInfix "/xtask/" path)
+                  && !(pkgs.lib.hasInfix "/docs/" path)
+                  && !(pkgs.lib.hasInfix "/.github/" path);
+              };
               inherit cargoArtifacts;
               pname = "jaunder-coverage-update";
               CARGO_PROFILE_DEV_DEBUG = "0";
@@ -1017,7 +1033,14 @@
             coverage = craneLib.mkCargoDerivation (
               commonArgs
               // {
-                src = ./.;
+                src = pkgs.lib.cleanSourceWith {
+                  src = ./.;
+                  filter =
+                    path: _type:
+                    !(pkgs.lib.hasInfix "/xtask/" path)
+                    && !(pkgs.lib.hasInfix "/docs/" path)
+                    && !(pkgs.lib.hasInfix "/.github/" path);
+                };
                 inherit cargoArtifacts;
                 pname = "jaunder-coverage";
                 # Source-based coverage uses LLVM's embedded coverage map

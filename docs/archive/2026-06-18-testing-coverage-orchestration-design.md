@@ -55,14 +55,14 @@ xtask never calls xtask. Coverage classification/auto-heal need the git diff and
 |---|---|---|
 | Orchestration vehicle | `cargo xtask` (standalone `./xtask` workspace, isolated `target/`, excluded from the root workspace) + `xshell` | One hermetic binary; host-side only; no new runtime; `xshell` keeps subprocess orchestration terse. |
 | Structure | Library crate + thin `main.rs` | Logic returns typed results; CLI only marshals args + serializes. |
-| Command names | `check`, `validate`, `validate --full` | `check` = host static+clippy (inner loop); `validate` = check + the Nix coverage check (tests+coverage); `--full` adds the Nix e2e + postgres-integration checks. |
+| Command names | `check [--no-test]`, `validate [--no-e2e]` | `check` auto-fixes: static+clippy, plus the Nix coverage check unless `--no-test`. `validate` never mutates: static (verify-only) + coverage, plus the e2e VMs unless `--no-e2e`. No `--full`/`--no-fix` flags. |
 | Test/coverage environment | **Nix, sole** | Host never runs tests; eliminates host↔Nix divergence by construction; Phase 0 showed host congruence is mechanically fragile. |
 | Coverage authority | Nix produces the manifest; **host post-processes** | Classification/auto-heal/JSON run host-side on the Nix-produced manifest; no congruence mechanism needed. |
 | Local memo / persistence | `nix build --out-link <stable>` (a GC root) | The out-link pins the closure so `nix-collect-garbage` can't remove it. **This GC-rooted store _is_ the local memo:** an unchanged `nix build` returns the cached output without re-running, so only the fast host static checks re-run. No separate host-side memo layer — a tree-hash memo would double-count this and is unsound (it can skip when the output was GC'd, or false-skip on unstaged edits). |
 | Cache pull | Always pass `--accept-flake-config` | The flake declares `jaunder-org.cachix.org` as `extra-substituter`; the box trusts it but the user is untrusted, so the flag is required to honor it. |
 | Cache push | CI pushes **build products only**, excludes test-check outputs | Fast CI compile; tests **always actually run** (no cached green checkmarks — protects against impurity poisoning *and* flaky-pass masking). No local push-back. |
 | Output | Human summary default + `.xtask/last-result.json` sidecar always + meaningful exit codes | Exit code = gate signal (run bare under `ctx_execute`); sidecar queried separately with `jq`. |
-| Formatting | `check` and `validate` auto-fix (`Mode::Fix`) by default; `validate --no-fix` verifies (`Mode::Check`) | Local convenience: `validate` fixes and proceeds without forcing a prior `check`. CI runs `validate --no-fix` so the gate fails on unformatted code exactly like CI's format job and never mutates the tree. No standalone `format`. |
+| Formatting | `check` auto-fixes (`Mode::Fix`); `validate` verifies (`Mode::Check`) | The auto-fix-vs-not split is encoded in `check` vs `validate` (no `--no-fix` flag): iterate with `check` (fixes and proceeds), gate with `validate` (fails on unformatted, never mutates) — which is what CI runs. No standalone `format`. |
 | Coverage comparison | Line-identity via the git diff (not file %) | A still-existing previously-covered line going uncovered = `regression`; new uncovered lines = `new_uncovered`; both fail. Requires per-line baseline storage. |
 | New uncovered lines | Strict ratchet — fail | New code must be covered. |
 | Baseline updates | Auto-heal with notification, narrow | Heals only `improvement`/`structural` (and improved/deleted CRAP); never a `regression`/`new_uncovered`. |
@@ -72,14 +72,14 @@ xtask never calls xtask. Coverage classification/auto-heal need the git diff and
 ## Command surface
 
 ```
-cargo xtask check           # host: static checks + clippy (inner loop)
-cargo xtask validate        # check + Nix coverage check (tests+coverage in Nix), host post-processes coverage
-cargo xtask validate --full # + Nix e2e + postgres-integration checks (full CI parity)
-cargo xtask validate --no-fix # verify-only formatting (Mode::Check) — what CI invokes
-# --json available on every command; .xtask/last-result.json always written
+cargo xtask check --no-test   # host: static checks + clippy only (fast inner loop)
+cargo xtask check             # + Nix coverage check (instrumented tests incl. PostgreSQL + coverage); auto-fixes
+cargo xtask validate --no-e2e # static (verify-only) + coverage — the pre-push-style gate
+cargo xtask validate          # + e2e-sqlite + e2e-postgres — the full CI-faithful gate
+# --json available on every command; .xtask/last-result.json always written; xtask-done: sentinel on stderr
 ```
 
-`check ⊂ validate ⊂ validate --full`. The git pre-push hook becomes `cargo xtask validate`.
+`check --no-test ⊂ check ⊂ validate --no-e2e ⊂ validate`. The git pre-push hook (if installed) runs `cargo xtask validate --no-e2e`.
 
 ## Result envelope (sketch)
 
@@ -140,11 +140,11 @@ Phase 0 ran today's `scripts/check-coverage` networked and (attempted) network-d
 
 | Retired | Replacement |
 |---|---|
-| `scripts/verify` | `cargo xtask check` / `validate` / `validate --full` |
+| `scripts/verify` | `cargo xtask check [--no-test]` / `validate [--no-e2e]` |
 | `scripts/check-coverage` | The Nix `coverage` check (unchanged) + host-side xtask post-processing (classification/auto-heal); `--investigate` → JSON `coverage` data |
 | `scripts/update-coverage-baseline` | Folded into `validate`'s host-side auto-heal of the Nix-produced manifest |
 | `scripts/with-ephemeral-postgres` | **Retained** for the Nix coverage/integration derivations; **not** used host-side |
-| `scripts/e2e-local.sh` | Retired; e2e runs only via the Nix e2e checks (`validate --full`) |
+| `scripts/e2e-local.sh` | Retired; e2e runs only via the Nix e2e checks (`validate`) |
 | `scripts/format` | Absorbed into `validate`'s auto-fix |
 | `scripts/seed-e2e-fixtures.sh`, trace/wasm helpers | Left as-is initially |
 
