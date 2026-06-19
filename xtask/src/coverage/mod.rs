@@ -154,7 +154,22 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
     let current = report::parse_text_report(&report, &repo_root);
 
     let diff = git_diff_unified0()?;
-    let maps = diffmap::parse_unified_diff(&diff);
+    let mut maps = diffmap::parse_unified_diff(&diff);
+
+    // `git diff HEAD` omits untracked files, so a brand-new untracked file gets
+    // no map → identity → its uncovered lines would be mislabeled `regression`.
+    // Map every untracked file present in the current report as all-added so its
+    // uncovered lines classify as `new_uncovered`. Never overwrite a map already
+    // built from the diff.
+    for path in git_untracked_files()? {
+        if maps.contains_key(&path) {
+            continue;
+        }
+        if let Some(f) = current.iter().find(|f| f.path == path) {
+            let lines: Vec<u32> = f.lines.iter().map(|l| l.line).collect();
+            maps.insert(path, diffmap::LineMap::all_added(&lines));
+        }
+    }
 
     let baseline = Baseline::load(BASELINE_PATH)?;
     let verdict = classify::classify(&current, &baseline, &maps);
@@ -177,7 +192,7 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
     // (Mode::Fix) and it differs from the committed manifest.
     if matches!(mode, Mode::Fix) && verdict.is_clean() && crap_regs.is_empty() {
         if normalize_json(&crap_report_str)? != normalize_json_or_empty(&old_crap_manifest) {
-            std::fs::write(CRAP_MANIFEST_PATH, &crap_report_str)
+            std::fs::write(CRAP_MANIFEST_PATH, normalize_json(&crap_report_str)?)
                 .with_context(|| format!("writing {CRAP_MANIFEST_PATH}"))?;
             healed = true;
         }
@@ -238,9 +253,33 @@ fn git_repo_root() -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-fn git_diff_unified0() -> Result<String> {
+fn git_untracked_files() -> Result<Vec<String>> {
     let out = Command::new("git")
-        .args(["diff", "--unified=0", "HEAD", "--"])
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .output()
+        .context("running git ls-files --others --exclude-standard")?;
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect())
+}
+
+fn git_diff_unified0() -> Result<String> {
+    // Pin the diff prefixes so a repo/CI with diff.noprefix, diff.mnemonicPrefix,
+    // or color configured can't change the `+++ b/` prefix the parser keys on
+    // (which would silently skip the file and mislabel edits as regressions).
+    let out = Command::new("git")
+        .args([
+            "diff",
+            "--unified=0",
+            "--no-color",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "HEAD",
+            "--",
+        ])
         .output()
         .context("running git diff --unified=0 HEAD")?;
     Ok(String::from_utf8_lossy(&out.stdout).to_string())

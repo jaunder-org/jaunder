@@ -53,6 +53,21 @@ impl LineMap {
     }
 }
 
+impl LineMap {
+    /// Build a map for an untracked/new file whose every line is freshly added
+    /// (no HEAD preimage). `git diff HEAD` omits untracked files, so without this
+    /// such a file falls back to the identity `empty_map`, whose `added_lines()`
+    /// is empty — and its uncovered lines would be mislabeled `regression` rather
+    /// than `new_uncovered`. The identity `map()` is fine: these lines have no old
+    /// preimage, so only `added_lines()` matters for the classifier.
+    pub fn all_added(lines: &[u32]) -> LineMap {
+        LineMap {
+            added: lines.iter().copied().collect(),
+            ..LineMap::default()
+        }
+    }
+}
+
 pub fn empty_map() -> LineMap {
     LineMap::default()
 }
