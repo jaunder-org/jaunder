@@ -277,12 +277,13 @@ git commit -m "feat(xtask): check [--no-test] / validate [--no-e2e] command mode
 
 ---
 
-## Task 3: Agent usage contract in `CLAUDE.md`
+## Task 3: Agent usage contract in `CLAUDE.md` + host-only invariant comment
 
-Document how to invoke and observe xtask so it's used correctly and consistently (the canonical form, not `cargo run --`, not defensive `echo`).
+Document how to invoke and observe xtask so it's used correctly and consistently (the canonical form, not `cargo run --`, not defensive `echo`), and record the host-only invariant in both the docs and the flake.
 
 **Files:**
 - Modify: `CLAUDE.md` (project root) — add a new section.
+- Modify: `flake.nix` — add an explanatory comment at the `xtask/` source-exclusion site.
 
 - [ ] **Step 1: Add the usage-contract section**
 
@@ -308,18 +309,40 @@ Append this section to `CLAUDE.md` (after the existing context-mode notes):
 | `cargo xtask validate` | static + coverage + e2e (sqlite + postgres) — the full CI-faithful gate | verify-only, never mutates |
 
 Use `check`/`check --no-test` while iterating; `validate` is what CI runs and what "green → you may move on" means. The Nix checks are cachix-pulled and GC-rooted, so an unchanged re-run reuses the cached build.
+
+## Invariant: xtask is host-only
+
+xtask runs **only on the host** (your dev box or the CI runner — both have the full checkout), where `cargo xtask` always rebuilds it from the live working tree. **Nix derivations never invoke xtask** — the checks run the raw tooling directly, and the flake deliberately excludes `xtask/` from its source, so an accidental `cargo xtask` inside a derivation fails loudly (missing crate) rather than running a stale copy. The flow is strictly one-directional: host `cargo xtask` → `nix build`; Nix never calls back. So xtask can never run stale.
 ```
 
-- [ ] **Step 2: Verify**
+- [ ] **Step 2: Comment the flake exclusion site**
 
-Run: `rg -n 'xtask-done|cargo xtask validate|--no-test|--no-e2e' CLAUDE.md`
-Expected: the new section's key lines are present.
+In `flake.nix`, the shared source filter (~261) has the `xtask/` guard line `(!pkgs.lib.hasInfix "/xtask/" path)`. Add an explanatory comment immediately above it (match the indentation):
 
-- [ ] **Step 3: Commit**
+```nix
+            # xtask/ is the host-only dev driver (a separate workspace these
+            # derivations never build). Excluding it keeps driver edits from
+            # busting the app caches AND guarantees a derivation can never run a
+            # stale xtask: it is not in the sandbox, so an accidental
+            # `cargo xtask` fails loudly rather than running stale. xtask runs
+            # only on the host (dev box / CI runner).
+            (!pkgs.lib.hasInfix "/xtask/" path)
+```
+
+Then confirm the flake still evaluates: `nix eval --accept-flake-config --raw .#checks.x86_64-linux.coverage.drvPath` resolves and the hash is **unchanged** from before this comment (comments don't affect `craneLib.path` source hashing, but confirm to be safe — if it changed, the comment landed inside the hashed source somehow; revert and place it outside the `cleanSourceWith`).
+
+- [ ] **Step 3: Verify**
+
+Run: `rg -n 'xtask-done|cargo xtask validate|--no-test|--no-e2e|host-only' CLAUDE.md`
+Expected: the new section's key lines and the invariant are present.
+Run: `rg -n 'host-only dev driver' flake.nix`
+Expected: the comment is present at the exclusion site.
+
+- [ ] **Step 4: Commit**
 
 ```bash
-git add CLAUDE.md
-git commit -m "docs(claude): xtask usage contract — canonical invocation + observation"
+git add CLAUDE.md flake.nix
+git commit -m "docs(claude): xtask usage contract + host-only invariant (with flake comment)"
 ```
 
 ---
