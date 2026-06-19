@@ -63,7 +63,7 @@ git config core.hooksPath .githooks
 - `cargo clippy --all-targets -- -D warnings` — linting (incl. test/bench/example targets)
 - `cargo nextest run` — unit and integration tests (SQLite)
 
-**`pre-push`** runs `scripts/verify` (the commit gate): the static checks plus `scripts/check-coverage --check` (the SQLite + host-PostgreSQL suites under instrumentation, gating both test failures and coverage regressions) and the host e2e suite. The hermetic Nix VM checks are not run here — they run in CI, or locally via `scripts/verify --full`.
+**`pre-push`** runs `cargo xtask validate --no-e2e` (the pre-push gate): the static checks (verify-only) plus the Nix `coverage` check (the SQLite + ephemeral-PostgreSQL suites under instrumentation, gating both test failures and coverage regressions). The e2e VM checks are not run here — they run in CI, or locally via `cargo xtask validate`.
 
 To skip the pre-push gate on a WIP push:
 
@@ -89,19 +89,18 @@ Every HTTP endpoint must have both an integration test and an end-to-end test.  
 
 For tests requiring a database, use `sqlite::memory:` and run migrations with `sqlx::migrate!("./migrations").run(&pool).await?` before creating the `AppState`.
 
-### Fast local checks
+### Local checks: `cargo xtask`
 
-The verify ladder has three tiers:
+The driver for all checks is `cargo xtask`. The host runs only the static checks + clippy; **all tests, coverage, and e2e run in the Nix checks that match CI**. When `cargo xtask validate` is green, you may push.
 
-- `scripts/verify --fast` — static checks (fmt, leptosfmt, prettier, cargo-deny) and clippy only. Quick inner-loop feedback; does not certify a change.
-- `scripts/verify` — the commit (pre-push) gate: the `--fast` checks plus `scripts/check-coverage --check` and the host end-to-end suite (`scripts/e2e-local.sh`). `check-coverage` runs the SQLite + host-PostgreSQL suites under instrumentation, so it doubles as the test pass/fail check **and** gates coverage regressions — so test failures, coverage regressions, and e2e breakage are all caught locally, not deferred to CI. `--check` is compare-only (it never rewrites the committed baseline). **No VM.**
-- `scripts/verify --full` — the commit gate plus the hermetic Nix VM checks (`nix-only-checks`: e2e + the consolidated PostgreSQL integration VM). The VM e2e re-runs the end-to-end suite more thoroughly (both browsers, both backends), so the host e2e suite is **skipped** under `--full` rather than run twice. The VM checks also run in CI, so running `--full` locally is optional.
-  - By default it prints only `--- verify: ... ---` progress markers and captures step output.
-  - Set `VERIFY_PASSTHROUGH=1` to stream full tool output directly.
-  - Set `VERIFY_SHOW_STEP_OUTPUT=1` to print captured output for successful steps.
-  - Set `VERIFY_SHOW_FAILURE_LOG=0` to suppress failed-step logs, or `VERIFY_FAILURE_LOG_LINES=<n>` to change the failure tail length (default `200` lines).
-  - These two are the whole ladder: `scripts/verify --fast` while iterating, then `scripts/verify` before pushing. Because `scripts/verify` already runs the tests and `nix flake check`, there is no need to run `cargo nextest` or `nix flake check` separately as their own rung — `scripts/verify` covers them.
-**Incoming: `cargo xtask` commands (preview).** `cargo xtask check` and `cargo xtask validate` are being introduced alongside the verify ladder. `check` runs the static checks + clippy on the host and **auto-fixes** formatting; by default it also runs the Nix `coverage` check (the instrumented test suite — including the ephemeral-PostgreSQL pass — plus the coverage gate), and `check --no-test` runs the static checks alone. `validate` is the strict, never-mutating gate: it runs the static checks (verify-only), the coverage check, and the e2e VM checks; `validate --no-e2e` skips the e2e VMs (the intended pre-push gate). All tests/coverage/e2e run via the Nix checks that match CI. Both commands write a machine-readable result to `.xtask/last-result.json` and a `xtask-done:` completion line to stderr. These will replace the verify ladder once the coverage post-processing and CI wiring land; until then the scripts remain authoritative and are not retired.
+| Command | Runs | Formatting |
+|---|---|---|
+| `cargo xtask check --no-test` | host static checks + clippy | auto-fixes |
+| `cargo xtask check` | + the Nix `coverage` check (instrumented test suite incl. the ephemeral-PostgreSQL pass, plus the coverage gate) | auto-fixes |
+| `cargo xtask validate --no-e2e` | static (verify-only) + coverage — the pre-push gate (the `.githooks/pre-push` hook runs this) | never mutates |
+| `cargo xtask validate` | + e2e (sqlite + postgres) — the full, CI-faithful gate; this is what CI runs | never mutates |
+
+`check` is the inner-loop fixer: it auto-fixes formatting and (in Fix mode) auto-heals the coverage baseline when a change only removes or covers gaps. `validate` is the strict, never-mutating gate. Both commands write a machine-readable result to `.xtask/last-result.json` and a `xtask-done:` completion line to stderr.
 
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that contain Leptos `view!` macros.
@@ -181,24 +180,16 @@ Per-test databases are not dropped after each run, so a persistent instance accu
 
 ### Coverage and dependency policy
 
-- `scripts/check-coverage` enforces the coverage requirement. The default `scripts/verify` gate runs it as `--check` (compare-only — gates regressions without rewriting the committed baseline), and CI runs it too, so coverage regressions are caught before push rather than at merge. The baseline is regenerated deliberately from the Nix sandbox (the CI-reproducible environment), not by local runs.
-- `scripts/check-coverage --check` compares against the baseline and fails on a regression without updating it (used by the verify gate); plain `scripts/check-coverage` also updates the baseline on success.
-- `scripts/check-coverage --investigate` provides detailed information about missing coverage.
-- `cargo deny check` verifies dependency policy, advisories, and licensing.
+- Coverage is gated **host-side by xtask**, which reads the Nix `coverage` check's report. It is part of `cargo xtask check` and `cargo xtask validate` (and therefore the pre-push gate and CI), so coverage regressions are caught before push rather than at merge.
+- `cargo deny check` verifies dependency policy, advisories, and licensing (run as one of the static checks).
 
-Coverage is measured by `scripts/check-coverage`, which counts source lines with at least one execution hit across all test binaries. This deduplicates generic-function instantiations across compile units, unlike the inflated `cargo llvm-cov --json` summary percentages for code exercised by multiple test binaries.
+The gate does **line-identity** classification against the committed `coverage-baseline.json`, which records the accepted-uncovered gaps. A previously-covered line going uncovered, or a new uncovered line that is not in the baseline, **fails** the gate — a strict ratchet. The CRAP baseline is `crap-manifest.json`. Both are committed, ordinary (non-dotted) files.
 
-Coverage runs in two passes that accumulate into one merged report: the whole workspace against SQLite, then the `jaunder` integration tests against a throwaway host PostgreSQL (via `scripts/with-ephemeral-postgres`), so `storage/src/postgres/*` gets real instrumented coverage. Because the Nix `coverage` build sandbox has no network, a few network-sensitive files (`server/src/websub/http.rs`, `server/src/commands.rs`) report slightly lower there than on a networked host. **The committed baseline must therefore be regenerated from the Nix sandbox (the CI-reproducible environment), never from a local host `scripts/check-coverage --update`** — a host run bakes in higher numbers for those files than CI can reproduce, which then fails the gate.
+`cargo xtask check` runs in Fix mode: when a change only removes gaps or covers previously-uncovered lines, it auto-heals the baseline. `cargo xtask validate` is Check-only and never mutates the baseline. A line that is genuinely uncoverable can be excluded from the ratchet with a `// cov:ignore` comment.
 
-To regenerate both manifests, run `scripts/update-coverage-baseline`. It builds the `coverage-update` flake package — which runs the coverage tooling with `--update` inside the same sandbox as the `coverage` check — and copies the regenerated `.coverage-manifest.json` and `.crap-manifest.json` into the repo:
+Coverage counts source lines with at least one execution hit across all test binaries, deduplicating generic-function instantiations across compile units (unlike the inflated `cargo llvm-cov --json` summary percentages for code exercised by multiple test binaries). It runs in two passes that accumulate into one merged report: the whole workspace against SQLite, then the `jaunder` integration tests against an ephemeral PostgreSQL, so `storage/src/postgres/*` gets real instrumented coverage. Both passes — and thus backend parity — run inside the Nix `coverage` check.
 
-```bash
-scripts/update-coverage-baseline
-```
-
-Review the resulting diff and commit both manifests in the same change (baseline changes need approval — see the next paragraph). A pure file move (no behavior change) can instead be re-baselined by renaming the affected keys in both manifests, preserving their committed values.
-
-The baseline is stored in `.coverage-manifest.json`. Never lower or update it without user approval; approved changes to the baseline must be committed in the same commit as the file whose coverage changed. Coverage improvements are always allowed.
+Never lower the baseline without user approval; approved baseline changes must be committed in the same commit as the file whose coverage changed. Coverage improvements are always allowed.
 
 Some areas have inherent host-side coverage gaps and should not be force-fitted with artificial tests:
 
