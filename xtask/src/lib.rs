@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 mod result;
 mod sh;
 mod steps {
+    pub mod nix;
     pub mod static_checks;
 }
 pub use result::{CommandResult, Mode, StepResult};
@@ -36,6 +37,12 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::static_checks::run(&sh, Mode::Fix, &mut result);
             Ok(result)
         }
-        Command::Validate { .. } => Ok(CommandResult::new("validate")),
+        Command::Validate { full } => {
+            let sh = xshell::Shell::new()?;
+            let mut result = CommandResult::new("validate");
+            steps::static_checks::run(&sh, Mode::Fix, &mut result);
+            steps::nix::run(full, &mut result);
+            Ok(result)
+        }
     }
 }
