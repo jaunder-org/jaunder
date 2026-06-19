@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+mod coverage;
 mod result;
 mod sh;
 mod steps {
