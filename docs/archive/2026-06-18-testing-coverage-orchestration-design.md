@@ -1,65 +1,84 @@
 # Testing & Coverage Orchestration Redesign
 
-**Date:** 2026-06-18
+**Date:** 2026-06-18 (revised 2026-06-19 after Phase 0)
 **Status:** Design — approved for planning
-**Topic:** Consolidate the piecemeal test/coverage shell scripts into a single, memoized, JSON-observable `cargo xtask` driver, and make host coverage congruent with Nix so the baseline stops being a source of repeated work.
+**Topic:** Replace the piecemeal `verify`/`check-coverage` shell scripts with one `cargo xtask` driver. The **host runs only the fast inner loop** (static checks + clippy); **all test, coverage, and e2e execution happens in the Nix environment that matches CI exactly**. xtask dispatches to Nix and post-processes the results.
 
 ## Problem
 
-The testing and coverage tooling grew piecemeal: `scripts/verify`, `scripts/check-coverage`, `scripts/update-coverage-baseline`, `scripts/with-ephemeral-postgres`, `scripts/e2e-local.sh`, `scripts/format`, plus seed/trace helpers. A recent change took roughly an hour just to get coverage and testing green. The wasted time decomposed into four sources, all confirmed by the user:
+The testing/coverage tooling grew piecemeal (`verify`, `check-coverage`, `update-coverage-baseline`, `with-ephemeral-postgres`, `e2e-local.sh`, `format`, plus seed/trace helpers). A recent change took ~an hour just to get coverage and testing green. The wasted time, confirmed by the user, had four sources:
 
-- **(A) Redo across environments.** Coverage is computed on the host (fast, networked) *and* in Nix (slow, hermetic), and only the Nix result is authoritative. Work done on the host frequently has to be redone in Nix.
-- **(B) Late discovery.** Coverage is only checked at the commit gate, so a regression surfaces after the developer has mentally moved on from the code that caused it.
-- **(C) Hand reconciliation.** The gate dumps a per-file DROP list with no indication of which drops are real gaps, which are deleted/moved code, and which are baseline staleness. This is sorted out manually every time.
-- **(D) Manual orchestration.** No single command to "make this correct"; the developer remembers which script and flag to run in which order.
+- **(A) Redo across environments** — coverage computed on the host (fast, networked) *and* in Nix (slow, hermetic), only the Nix result authoritative, so host work got redone.
+- **(B) Late discovery** — coverage only checked at the commit gate, after the developer had moved on.
+- **(C) Hand reconciliation** — the gate dumped a per-file DROP list with no indication of which drops were real.
+- **(D) Manual orchestration** — no single command; remember which script and flag, in which order.
 
-The single root cause behind A, the host↔Nix mismatch, and most of the slowness is that **coverage is computed in two environments that disagree on exactly two files**. Per `scripts/check-coverage` and `CONTRIBUTING.md`, the *only* documented divergence is network access: the Nix coverage sandbox has no network, so `common/src/websub/http.rs` and `server/src/commands.rs` report lower coverage there than on a networked host. That one fact is the entire reason the baseline can only be regenerated from Nix.
+**Why this revision exists.** An earlier draft tried to make a *host* coverage run congruent with Nix by denying the host network. **Phase 0** (`docs/superpowers/specs/2026-06-18-phase0-congruence-findings.md`) proved that fragile: the divergence is real and network-driven (Nix covers error-path branches only reached when outbound calls fail), but reproducing Nix's exact network *shape* locally — loopback up, external blocked — needs either root (`ip netns`) or an unprivileged restructure (`unshare -rn` test process + PG outside + unix socket) carrying ongoing fragility. So we pivoted: instead of making a second environment match Nix, **run the one environment that already *is* CI — Nix.** That dissolves sources A and the host↔Nix mismatch by construction.
 
 ## Goals
 
-1. **One command that, if green, means you may move on.** `cargo xtask validate` is the hub of the workflow, designed so its success is a sufficient proof of correctness.
-2. **Eliminate repeated work.** Memoize against tree state; make host coverage congruent with Nix so a host run is never redone; auto-heal the baseline so reconciliation stops being manual.
-3. **Make every command falling-down easy to invoke and observe** — typed results, a stable JSON envelope, a queryable sidecar, and meaningful exit codes.
-4. **Retire the ad-hoc shell scripts** in favor of one library-backed driver shared by host and CI.
-5. **Preserve Nix as the determinism guarantor.** Congruence means the host *conforms to* Nix; it never weakens Nix's hermeticity.
+1. **One command — `cargo xtask validate` — that, if green, means you may move on.**
+2. **Eliminate repeated work:** a single execution environment (Nix) for all tests/coverage so host and CI can never disagree; host-side memoization + a Nix GC root so unchanged re-runs cost ~nothing.
+3. **Every command falling-down easy to invoke and observe:** typed results, a JSON sidecar, meaningful exit codes.
+4. **Retire the ad-hoc shell scripts** into one library-backed driver.
+5. **Nix stays the determinism guarantor and the sole test/coverage environment.**
 
 ## Non-goals / YAGNI
 
-- Not folding `seed-e2e-fixtures.sh` or the trace/wasm helpers in initially — only if it later pays off.
-- Not introducing a new runtime (no Node/gulp). Not adopting `just` (it holds no logic; it would only relocate the scripts).
-- Not changing *what* is tested (backend parity, the suites, the metrics) — only how it is orchestrated, computed congruently, observed, and memoized.
-- Not per-crate incremental coverage gating (unsound — see Memoization).
+- **No host execution of tests/coverage/e2e** — that is the point; it lives in Nix.
+- **No network-denial / host↔Nix congruence machinery** — investigated and rejected (see Phase 0).
+- **No local cache push-back** — a GC root covers local persistence; CI is the sole pusher.
+- **No new runtime** (no Node/gulp); not `just` (it holds no logic).
+- Not folding `seed-e2e-fixtures.sh` / trace / wasm helpers in initially.
+
+## Architecture
+
+Two layers, **one-directional — no recursion**:
+
+- **Host xtask** = the developer-facing orchestrator. `check` does the inner loop directly (static + clippy). `validate` runs `check`, then builds the Nix checks, then post-processes their output.
+- **Nix derivations** = the actual test/coverage/e2e execution, running the raw tooling (`cargo-llvm-cov` / `nextest` / the existing checks). **They do not call xtask.**
+
+```
+cargo xtask validate (host)
+  → static + clippy           (host, Mode::Fix)
+  → nix build --out-link <gcroot> --accept-flake-config .#checks…   (raw tools run here)
+  ← xtask reads the produced coverage manifest, classifies vs the committed
+    baseline, auto-heals, emits JSON
+```
+
+xtask never calls xtask. Coverage classification/auto-heal need the git diff and the committed baseline — both **host** artifacts — so they belong host-side as post-processing, which is also *why* no recursion is needed: the heavy logic that might tempt a shared in-Nix call has host-only inputs.
 
 ## Key decisions
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Orchestration vehicle | `cargo xtask` (own `./xtask` workspace, isolated `target/`, excluded from main `default-members`) + `xshell` | One hermetic binary Nix already builds; same logic host and CI; `xshell`'s `cmd!` keeps subprocess orchestration as terse as shell with real errors. No new runtime. |
-| Structure | Library crate + thin `main.rs` | All logic returns typed results; CLI only marshals args and serializes. Breaking out granular subcommands later is free. |
-| Command names | `check`, `validate`, `validate --full` | Replaces `verify --fast` / `verify` / `verify --full`. `check` = tight loop; `validate` = the hub; `--full` = adds the Nix VM tier. |
-| Output | Concise human summary by default + always-write JSON sidecar `.xtask/last-result.json` (gitignored) + meaningful exit codes | Exit code is the gate signal (run bare under `ctx_execute`, `isError` on failure); the sidecar is queried separately with `jq`, so raw output never enters an agent's context. Both render from one typed struct. |
-| Formatting | Auto-fix, not gate | `validate` applies formatting (`cargo fmt`, `prettier -w .`) and reports "reformatted N files" rather than failing. Library carries `Mode::{Fix, Check}`; host uses `Fix`, CI uses `Check` (CI must never mutate the tree). No standalone `format` command. |
-| Avoid re-running | Memoize `validate` against a whole-tree input hash | Records the input key of the last **green** run; re-invoking on an unchanged tree short-circuits near-instantly, skipping even test execution (which cargo/nextest do not skip). |
-| Host↔Nix coverage | Make host congruent by denying network to the host coverage pass | Neutralizes the single divergence variable, so host ≡ Nix by construction. Kills redo (A) and the "baseline only regenerable in Nix" tax. |
-| Coverage authority | Nix remains the guarantor; host conforms | Nix CI re-runs the coverage check and that is what truly gates. Congruence means it agrees with the host by construction rather than catching the developer out. |
-| CRAP metric | Kept, and gating | Catches under-tested *complex* code that line % misses; recently re-baselined. Reported in the JSON verdict alongside line coverage. |
-| Coverage comparison | Line-identity, mapped through the git diff (not file percentages) | A percentage drop conflates a true regression with dilution. A still-existing previously-covered line going uncovered is a `regression`; new uncovered lines `new_uncovered`; both **fail**. Requires the baseline to store per-line coverage. |
-| New uncovered lines | Strict ratchet — **fail** | New code must be covered; `new_uncovered` fails `validate` and is never healed. |
-| Baseline updates | Auto-heal **with notification**, narrow | Heals **only** `improvement` and pure `structural` deltas (and improved/deleted CRAP); **never** a `regression` or `new_uncovered`. Says loudly when it does. CI's Nix re-check reproduces the numbers by construction. |
+| Orchestration vehicle | `cargo xtask` (standalone `./xtask` workspace, isolated `target/`, excluded from the root workspace) + `xshell` | One hermetic binary; host-side only; no new runtime; `xshell` keeps subprocess orchestration terse. |
+| Structure | Library crate + thin `main.rs` | Logic returns typed results; CLI only marshals args + serializes. |
+| Command names | `check`, `validate`, `validate --full` | `check` = host static+clippy (inner loop); `validate` = check + the Nix coverage check (tests+coverage); `--full` adds the Nix e2e + postgres-integration checks. |
+| Test/coverage environment | **Nix, sole** | Host never runs tests; eliminates host↔Nix divergence by construction; Phase 0 showed host congruence is mechanically fragile. |
+| Coverage authority | Nix produces the manifest; **host post-processes** | Classification/auto-heal/JSON run host-side on the Nix-produced manifest; no congruence mechanism needed. |
+| Local Nix persistence | `nix build --out-link <stable>` (a GC root) + memoization | The out-link pins the whole closure so `nix-collect-garbage` can't remove it; unchanged re-runs ~free. |
+| Cache pull | Always pass `--accept-flake-config` | The flake declares `jaunder-org.cachix.org` as `extra-substituter`; the box trusts it but the user is untrusted, so the flag is required to honor it. |
+| Cache push | CI pushes **build products only**, excludes test-check outputs | Fast CI compile; tests **always actually run** (no cached green checkmarks — protects against impurity poisoning *and* flaky-pass masking). No local push-back. |
+| Output | Human summary default + `.xtask/last-result.json` sidecar always + meaningful exit codes | Exit code = gate signal (run bare under `ctx_execute`); sidecar queried separately with `jq`. |
+| Formatting | Auto-fix (`Mode::Fix`) host; `Mode::Check` in CI | `validate` applies formatting and reports it; CI never mutates the tree. No standalone `format`. |
+| Memoization | Whole-tree input key, skip green re-runs | Records the last green tree key; unchanged tree short-circuits, skipping even the Nix build. |
+| Coverage comparison | Line-identity via the git diff (not file %) | A still-existing previously-covered line going uncovered = `regression`; new uncovered lines = `new_uncovered`; both fail. Requires per-line baseline storage. |
+| New uncovered lines | Strict ratchet — fail | New code must be covered. |
+| Baseline updates | Auto-heal with notification, narrow | Heals only `improvement`/`structural` (and improved/deleted CRAP); never a `regression`/`new_uncovered`. |
+| CRAP metric | Kept, gating | Numeric per-file/function comparison; reported under `.coverage.crap`. |
+| CI test de-dup | Drop the `nextest` check; the `coverage` check is the test gate | The instrumented coverage run already executes (and gates) every test the plain nextest check does, plus the PG pass. |
 
 ## Command surface
 
 ```
-cargo xtask check          # tight loop: static checks + clippy (was `verify --fast`)
-cargo xtask validate       # the hub: check + tests + coverage + e2e, no VM (was `verify`)
-cargo xtask validate --full # adds the hermetic Nix VM checks (was `verify --full`)
-
-cargo xtask e2e [--vm]
-# coverage is a byproduct of `validate`; no standalone coverage/format/baseline commands
-# `--json` available on every command; the sidecar is always written regardless
+cargo xtask check           # host: static checks + clippy (inner loop)
+cargo xtask validate        # check + Nix coverage check (tests+coverage in Nix), host post-processes coverage
+cargo xtask validate --full # + Nix e2e + postgres-integration checks (full CI parity)
+# --json available on every command; .xtask/last-result.json always written
 ```
 
-`check ⊂ validate ⊂ validate --full`. The git pre-push hook becomes the one-liner `cargo xtask validate`.
+`check ⊂ validate ⊂ validate --full`. The git pre-push hook becomes `cargo xtask validate`.
 
 ## Result envelope (sketch)
 
@@ -72,12 +91,9 @@ Every command returns a typed result serialized to a flat, `jq`-friendly envelop
   "duration_ms": 48213,
   "memoized": false,
   "steps": [
-    { "name": "static", "ok": true, "skipped": false },
-    { "name": "clippy", "ok": true, "skipped": false },
-    { "name": "format", "ok": true, "detail": "reformatted 2 files" },
-    { "name": "tests", "ok": true, "detail": "691 passed" },
-    { "name": "coverage", "ok": false },
-    { "name": "e2e", "ok": true }
+    { "name": "fmt", "ok": true, "detail": "reformatted 2 files" },
+    { "name": "clippy", "ok": true },
+    { "name": "nix-coverage", "ok": false }
   ],
   "coverage": {
     "regressions": [ { "file": "server/src/feed/worker.rs", "lines": [142, 147] } ],
@@ -90,64 +106,57 @@ Every command returns a typed result serialized to a flat, `jq`-friendly envelop
 }
 ```
 
-Field shape is illustrative; the implementation plan finalizes it. The contract is: top-level `.ok`, `.steps[]` with `name`/`ok`, and `.coverage.regressions[]` / `.coverage.healed` queryable without parsing prose.
+Field shape is illustrative; the plan finalizes it. The contract: top-level `.ok`, `.steps[]` with `name`/`ok`, `.coverage.regressions[]` / `.coverage.healed` queryable without parsing prose.
 
 ## Coverage model
 
-The redesign treats coverage as a self-describing byproduct of the one test run, not a separate phase.
+1. **One instrumented run, in Nix.** The Nix `coverage` check runs the suite once under instrumentation (whole workspace vs SQLite, then `jaunder` integration vs the ephemeral PostgreSQL it already provisions) and produces the per-line coverage manifest as its output. `validate` copies that manifest out (as the `coverage-update` package already does) and post-processes it. Tests are never run plain-then-instrumented; the coverage check is also the test gate (the redundant CI `nextest` check is dropped).
 
-1. **One instrumented run yields both signals.** `validate` runs the suite once under instrumentation, in the network-denied (Nix-congruent) environment. That run produces the test pass/fail verdict *and* per-file coverage. Tests are never run plain-then-instrumented. (This is the one good property of today's `check-coverage`, which already doubles as the test gate.) The two-pass accumulation — whole workspace vs SQLite, then `jaunder` integration vs throwaway host Postgres over a unix socket — is preserved so `storage/src/postgres/*` is really instrumented.
+2. **The verdict classifies coverage deltas at the line-identity level**, mapped through the git diff — *not* by comparing file percentages, because a percentage drop conflates a real regression with dilution. Four outcomes:
+   - `regression` — a previously-covered line that **still exists** is now uncovered. **Fails**; never auto-healed.
+   - `new_uncovered` — a newly-added line lacking coverage. **Fails** (strict ratchet); never auto-healed.
+   - `structural` — the percentage moved *only* because lines were added/deleted, every surviving previously-covered line is still covered, and no new uncovered line was introduced. Eligible for auto-heal.
+   - `improvement` — coverage rose. Eligible for auto-heal.
 
-2. **The verdict classifies coverage deltas at the line-identity level**, mapped through the git diff — *not* by comparing file percentages, because a percentage drop conflates a true regression with mere dilution. For every line the only question is whether a line that existed before and was covered, and still exists, lost its coverage. Four outcomes:
-   - `regression` — a previously-covered line that **still exists** is now uncovered. **Fails** `validate`; **never** auto-healed. One such line fails the gate regardless of the file percentage.
-   - `new_uncovered` — a newly-added line that lacks coverage. **Fails** `validate` (strict ratchet: new code must be covered). Never auto-healed (silently accepting untested new code is the erosion we are preventing).
-   - `structural` — the percentage moved *only* because lines were added or deleted, **every surviving previously-covered line is still covered**, and no new uncovered line was introduced (e.g. covered code deleted or moved). Safe; eligible for auto-heal.
-   - `improvement` — coverage rose. Eligible for auto-heal (ratchets the baseline up).
+   No `noise` bucket (line coverage is binary). **CRAP** is the exception — a complexity-weighted score, compared numerically: a worse score fails; a better score or a deleted function heals. Reported under `.coverage.crap`.
 
-   There is no `noise` bucket: line coverage is binary, so float wobble does not arise. **CRAP is the exception** — it is a complexity-weighted *score*, not a line-binary, so it keeps a numeric per-file/per-function comparison: a worse CRAP score fails; a better score or a deleted function heals. Reported under `.coverage.crap`.
+3. **Auto-heal with notification — narrow.** `validate` rewrites the committed baseline (`.coverage-manifest.json`, `.crap-manifest.json`) **only** for `improvement`/pure `structural` deltas (and improved/deleted CRAP) and reports it loudly (`coverage.healed: true`). It never heals a `regression`/`new_uncovered`. Because the manifest came from Nix, this update is reproducible by construction — and there is no separate manual regeneration step.
 
-3. **Auto-heal with notification — narrow by design.** `validate` rewrites the committed baseline (`.coverage-manifest.json`, `.crap-manifest.json`) in place **only** for `improvement` and pure `structural` deltas (and improved/deleted CRAP), and reports it loudly (`coverage.healed: true`). It **never** heals a `regression` or `new_uncovered`. No separate manual Nix regeneration; CI's Nix re-check reproduces the numbers by construction.
+   Line-identity comparison requires the baseline to store **per-line coverage**, not just the per-file percentage stored today — a larger, churnier committed manifest, accepted as the cost of a gate that catches stable-line regressions the percentage would hide and stops false-alarming on dilution.
 
-   Line-identity comparison requires the baseline to store **per-line coverage** (which lines are covered), not just the per-file percentage stored today. This makes the committed manifest larger and churnier, but it is what makes the gate both correct (catches a stable-line regression the percentage would hide) and quieter (stops false-alarming on pure dilution/deletion).
+## Phase 0 (rationale, historical)
 
-## Congruence contract & Phase 0
+Phase 0 ran today's `scripts/check-coverage` networked and (attempted) network-denied against the committed `.coverage-manifest.json` (the Nix baseline). Findings: the networked host diverges on **15 server/web handler files, all lower** than the baseline; the cause is **network access** (Nix covers error branches only reached when outbound calls fail). The unprivileged network-denial mechanisms were fragile (`unshare -rn` maps to root and breaks `initdb`; `unshare -cn` can't raise loopback and breaks in-process `127.0.0.1` mock-server tests; `ip netns` needs root). This evidence drove the pivot to **Nix as the sole test/coverage environment.** The congruence/network-denial machinery is **not built.** Full record: `docs/superpowers/specs/2026-06-18-phase0-congruence-findings.md`.
 
-Nix derivations stop calling shell scripts and call `cargo xtask … --mode check` (non-mutating). CI and host run the same library code; the only differences are `Mode::Check` vs `Mode::Fix` and the sandbox wrapper. Nix remains the determinism guarantor.
+## Cache strategy
 
-**CI test de-duplication (Plan B).** `.github/workflows/ci.yml` today runs the suite twice: the `lint-and-test` job's `nextest` check (plain) *and* the `coverage` job's `coverage` check (the same SQLite + host-PG suites under instrumentation). The coverage run already executes and gates every test the plain `nextest` check does (plus the PG pass), so the standalone `nextest` check is redundant. In the new design the `coverage` check is the authoritative test+coverage gate and the separate `nextest` check / `lint-and-test` `Test` step is removed; `clippy`, the static checks, and the e2e/postgres-integration checks stay. This is the CI-side expression of the local "one instrumented run yields both signals" rule, and rides with the rest of the Nix/CI wiring in Plan B.
+**Why caching helps despite ever-changing local code.** The flake is crane-based: `cargoArtifacts = craneLib.buildDepsOnly` (flake.nix:287) is a **deps-only** derivation reused by every consumer via `inherit cargoArtifacts` — `jaunderBin`, `nextest`, `clippy`, `postgresIntegrationTests`, and `coverage` (which inherits the same non-instrumented deps and only recompiles the *workspace* crates with instrumentation). `cargoArtifacts`'s inputs are `Cargo.lock` + dep sources + toolchain, **not** your code, so it is stable across every local edit and is the bulk of the build. Your workspace crates rebuild locally (your code ≠ CI's), but the expensive dependency closure is pulled from cachix. A deps cache *hit* requires `Cargo.lock` **and** `flake.lock` to match what CI built; bumping a dependency rebuilds deps locally until CI publishes that closure. No manual deps-only split is needed — crane already provides it.
 
-The load-bearing mechanism is **how the host run denies network** to reach congruence: Nix gets it free (no network in the sandbox); on the host, xtask wraps the coverage pass in a network-denied namespace (candidate: `unshare -rn` with `lo` brought up; ephemeral Postgres over a unix socket so it needs no network). This is the single biggest implementation risk and is proven first:
-
-> **Phase 0 — prove congruence.** Run today's `scripts/check-coverage` on the host (a) normally and (b) network-denied, and diff both against the committed `.coverage-manifest.json` (which *is* the Nix output). **Expected:** the networked run diverges only on `common/src/websub/http.rs` and `server/src/commands.rs`; the network-denied run matches the baseline exactly. If it holds, the "host ≡ Nix" foundation is real and the rest is built on it. If extra files diverge, the true divergence set is learned before committing to the design.
+- **Local pull:** every Nix invocation xtask makes passes `--accept-flake-config`, so the flake's `jaunder-org.cachix.org` substituter is honored for the (untrusted) local user. *Optional host-level improvement (one-time, out of repo):* promote `jaunder-org.cachix.org` from `trusted-substituters` to active `substituters` in `/etc/nixos/configuration.nix` (a `sudo nixos-rebuild`) to drop the flag dependency. The key is already trusted.
+- **Local persistence:** `validate` builds with `--out-link <stable>` so the closure is GC-rooted and survives `nix-collect-garbage`; with memoization, unchanged `validate` is ~free.
+- **CI push:** push **build products only** to cachix — crucially **keep `cargoArtifacts`** (the shared deps closure — the single most valuable cached artifact) and the workspace build outputs, while **excluding** the `coverage`/`nextest`/`e2e`/`postgres-integration` *check* result derivations, so CI always re-runs the tests. Prefer an explicit allowlist (push `cargoArtifacts` + build packages) over a name-based `pushFilter` exclusion, so a renamed check can't accidentally leak a cached green checkmark. No local push-back.
 
 ## Migration / retirement
-
-Incremental; an old script is deleted only once its `xtask` subcommand reproduces it. At every step the tree stays green via the existing suite.
 
 | Retired | Replacement |
 |---|---|
 | `scripts/verify` | `cargo xtask check` / `validate` / `validate --full` |
-| `scripts/check-coverage`, `scripts/update-coverage-baseline` | Folded into `validate` (coverage byproduct, baseline auto-heals); `--investigate` becomes the JSON `coverage` data |
-| `scripts/with-ephemeral-postgres` | `xtask` library helper, reused by the coverage pass |
-| `scripts/e2e-local.sh` | `validate`'s e2e step (library fn) |
-| `scripts/format` | Absorbed into `validate`'s auto-fix; no standalone command |
-| `scripts/seed-e2e-fixtures.sh`, trace/wasm helpers | Left as-is initially; fold in later only if it pays off |
+| `scripts/check-coverage` | The Nix `coverage` check (unchanged) + host-side xtask post-processing (classification/auto-heal); `--investigate` → JSON `coverage` data |
+| `scripts/update-coverage-baseline` | Folded into `validate`'s host-side auto-heal of the Nix-produced manifest |
+| `scripts/with-ephemeral-postgres` | **Retained** for the Nix coverage/integration derivations; **not** used host-side |
+| `scripts/e2e-local.sh` | Retired; e2e runs only via the Nix e2e checks (`validate --full`) |
+| `scripts/format` | Absorbed into `validate`'s auto-fix |
+| `scripts/seed-e2e-fixtures.sh`, trace/wasm helpers | Left as-is initially |
+
+CI: drop the `nextest` check (`coverage` is the test gate); configure cachix to push build-not-test.
 
 ## Documentation debt (in-scope, rewritten during implementation)
 
-Rewritten alongside the code so docs and behavior land together and stay truthful — **not** in this spec:
-
-- `CONTRIBUTING.md` — Testing and Coverage & dependency policy sections (the verify ladder, `check-coverage` two-pass description, the "baseline only from Nix" paragraph).
-- Project `CLAUDE.md` — the context-mode note referencing `scripts/verify`.
-- The beads pre-push / session-close hook text that names `scripts/verify` and `scripts/check-coverage`.
-- Relevant auto-memory files describing the verify ladder / coverage regen / merge-conflict handling of the manifests.
+Rewritten alongside the code: `CONTRIBUTING.md` (Testing + Coverage sections, the verify ladder, the host-vs-Nix paragraphs — now Nix-only); the project `CLAUDE.md` note referencing `scripts/verify`; the beads pre-push / session-close hook text; relevant auto-memory files (verify ladder, coverage regen, manifest merge-conflict handling).
 
 ## Risks
 
-- **Network denial doesn't fully reproduce Nix** (extra divergent files). Mitigated by Phase 0 before any build.
-- **`unshare -rn` unavailable/insufficient** in some host configs. Phase 0 validates the exact mechanism; fallback approaches (alternative sandboxing, or per-test network suppression) are evaluated only if needed.
-- **Memoization unsoundness** if the input hash misses an outcome-affecting input. Mitigated by hashing the whole tracked tree + lockfile + toolchain id (conservative), never per-crate.
-- **xtask compile tax** on first/changed runs. Mitigated by keeping its dependency set light and isolating its workspace/`target/`.
-- **Auto-heal mutating a committed file** as a side effect. Mitigated by the loud notification and by it firing only for `improvement`/`structural` deltas — never a `regression` or `new_uncovered`.
-- **Per-line baseline is larger and churnier** than today's per-file percentages, producing more diff noise on the committed manifest. Accepted as the cost of correct (regression-catching) and quiet (no dilution false-alarms) gating; the format is chosen to minimize churn where possible.
-```
+- **Nix build latency for local `validate`.** Mitigated by cachix pull (`--accept-flake-config`), the GC root, and host memoization; coverage is not the inner loop.
+- **cachix push filter correctly excluding test products.** A name-based filter is fragile; verify it excludes every check output and an allowlist may be safer.
+- **Per-line baseline churn** — larger committed manifest; accepted for correctness.
+- **The Nix coverage manifest's format/extraction** must give xtask per-line data to classify; if only per-file percentages are available, the per-line baseline work includes extracting line data from the Nix LCOV output.
