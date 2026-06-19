@@ -10,7 +10,8 @@
 
 ## Global Constraints
 
-- **`rstest = "0.26"`** in `[workspace.dependencies]`; `server` references it as `rstest = { workspace = true }` under `[dev-dependencies]`. Test-only; never shipped in the `jaunder` binary.
+- **`rstest = "0.26"` and `rstest_reuse = "0.7"`** in `[workspace.dependencies]`; `server` references both as `{ workspace = true }` under `[dev-dependencies]`. The `#[template]`/`#[apply]` macros live in **`rstest_reuse`**, not rstest core, and require its mandatory top-of-file imports (`use rstest_reuse;` bare + `use rstest_reuse::*;`). Test-only; never shipped in the `jaunder` binary.
+- **Generated case ids are `case_N_<label>`** (e.g. `tag_normalization::case_1_sqlite`, `::case_2_postgres`) — that is how `rstest_reuse` names template cases. The labels (`sqlite`/`postgres`) are still present; nothing keys on the exact id string.
 - **Approach A — `#[template]` + `#[apply]`.** Per-test overhead is exactly one `#[apply(<template>)]` attribute, one `#[case] backend: Backend` param, and one `backend.setup().await` line. Keep this ceremony visible — no bespoke wrapping macro.
 - **Every case is named** (`#[case::sqlite(...)]`, `#[case::postgres(...)]`).
 - **Coverage run stays one pass.** Do not touch `scripts/check-coverage` or `flake.nix`. PG cases need the ephemeral PostgreSQL that is already up for the whole run.
@@ -93,6 +94,7 @@ In `Cargo.toml`, under `[workspace.dependencies]` (alongside `tempfile = "3"` et
 
 ```toml
 rstest = "0.26"
+rstest_reuse = "0.7"
 ```
 
 - [ ] **Step 2: Add the dev-dependency**
@@ -101,11 +103,21 @@ In `server/Cargo.toml`, under `[dev-dependencies]`:
 
 ```toml
 rstest = { workspace = true }
+rstest_reuse = { workspace = true }
 ```
 
 - [ ] **Step 3: Add the fixture and templates to `storage.rs`**
 
-Add `use rstest::*;` to the import block (top of `server/tests/storage.rs`) and, immediately after `sqlite_state`/`postgres_state` (`:60`):
+Add the rstest imports and a crate-level allow to the top of `server/tests/storage.rs`:
+
+```rust
+#![allow(unused_macros)] // single-case templates expand to name-mangled macro_rules! a per-item allow can't reach
+use rstest::*;
+use rstest_reuse; // bare import REQUIRED by rstest_reuse — the glob alone is insufficient
+use rstest_reuse::*;
+```
+
+Then, immediately after `sqlite_state`/`postgres_state` (`:60`):
 
 ```rust
 use storage::AppState;
