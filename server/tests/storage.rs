@@ -3052,7 +3052,11 @@ async fn assert_simple_tag_lifecycle(state: &std::sync::Arc<storage::AppState>) 
     assert_eq!(posts_after.len(), 0);
 }
 
-async fn assert_tag_creation_and_retrieval(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn tag_creation_and_retrieval(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     // Create a user and post
     let user = state
         .users
@@ -3145,7 +3149,11 @@ async fn tag_normalization(#[case] backend: Backend) {
     assert_eq!(tags[0].tag_display, "Rust-Web"); // original preserved
 }
 
-async fn assert_untag_post(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn untag_post(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     // Create a user and post
     let user = state
         .users
@@ -3205,7 +3213,11 @@ async fn assert_untag_post(state: &std::sync::Arc<storage::AppState>) {
     assert_eq!(tags.len(), 0);
 }
 
-async fn assert_duplicate_tag_error(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn duplicate_tag_error(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     // Create a user and post
     let user = state
         .users
@@ -3250,7 +3262,11 @@ async fn assert_duplicate_tag_error(state: &std::sync::Arc<storage::AppState>) {
     }
 }
 
-async fn assert_list_posts_by_tag(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn list_posts_by_tag(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     // Create users
     let user1 = state
         .users
@@ -3325,7 +3341,11 @@ async fn assert_list_posts_by_tag(state: &std::sync::Arc<storage::AppState>) {
     assert!(posts.iter().any(|p| p.post_id == post2));
 }
 
-async fn assert_list_user_posts_by_tag(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn list_user_posts_by_tag(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     // Create users
     let user1 = state
         .users
@@ -3424,7 +3444,11 @@ async fn assert_list_user_posts_by_tag(state: &std::sync::Arc<storage::AppState>
     assert!(posts.iter().all(|p| p.user_id == user1));
 }
 
-async fn assert_tag_not_found_error(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn tag_not_found_error(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     // Try to list posts by non-existent tag
     let tag_slug: Tag = "nonexistent".parse().unwrap();
     let result = state.posts.list_posts_by_tag(&tag_slug, None, 50).await;
@@ -3437,9 +3461,11 @@ async fn assert_tag_not_found_error(state: &std::sync::Arc<storage::AppState>) {
     }
 }
 
-async fn assert_soft_deleted_posts_excluded_from_tag_list(
-    state: &std::sync::Arc<storage::AppState>,
-) {
+#[apply(backends)]
+#[tokio::test]
+async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     // Create a user and posts
     let user = state
         .users
@@ -3513,7 +3539,11 @@ async fn assert_soft_deleted_posts_excluded_from_tag_list(
     assert_eq!(posts[0].post_id, post2);
 }
 
-async fn assert_tag_post_nonexistent_post_error(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn tag_post_nonexistent_post_error(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     // Try to tag a post that doesn't exist
     let result = state.posts.tag_post(99999, "nonexistent-post").await;
     match result {
@@ -3524,7 +3554,11 @@ async fn assert_tag_post_nonexistent_post_error(state: &std::sync::Arc<storage::
     }
 }
 
-async fn assert_untag_nonexistent_tag_error(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn untag_nonexistent_tag_error(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     // Create a user and post
     let user = state
         .users
@@ -3563,7 +3597,11 @@ async fn assert_untag_nonexistent_tag_error(state: &std::sync::Arc<storage::AppS
     }
 }
 
-async fn assert_draft_posts_excluded_from_tag_list(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     // Create a user and posts
     let user = state
         .users
@@ -3628,126 +3666,6 @@ async fn assert_draft_posts_excluded_from_tag_list(state: &std::sync::Arc<storag
 
     assert_eq!(posts.len(), 1);
     assert_eq!(posts[0].post_id, post2);
-}
-
-#[tokio::test]
-async fn sqlite_tag_creation_and_retrieval() {
-    let (_base, state) = sqlite_state().await;
-    assert_tag_creation_and_retrieval(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_untag_post() {
-    let (_base, state) = sqlite_state().await;
-    assert_untag_post(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_duplicate_tag_error() {
-    let (_base, state) = sqlite_state().await;
-    assert_duplicate_tag_error(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_list_posts_by_tag() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_posts_by_tag(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_list_user_posts_by_tag() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_user_posts_by_tag(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_tag_not_found_error() {
-    let (_base, state) = sqlite_state().await;
-    assert_tag_not_found_error(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_soft_deleted_posts_excluded_from_tag_list() {
-    let (_base, state) = sqlite_state().await;
-    assert_soft_deleted_posts_excluded_from_tag_list(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_draft_posts_excluded_from_tag_list() {
-    let (_base, state) = sqlite_state().await;
-    assert_draft_posts_excluded_from_tag_list(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_tag_post_nonexistent_post_error() {
-    let (_base, state) = sqlite_state().await;
-    assert_tag_post_nonexistent_post_error(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_untag_nonexistent_tag_error() {
-    let (_base, state) = sqlite_state().await;
-    assert_untag_nonexistent_tag_error(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_tag_creation_and_retrieval() {
-    let state = postgres_state().await;
-    assert_tag_creation_and_retrieval(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_untag_post() {
-    let state = postgres_state().await;
-    assert_untag_post(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_duplicate_tag_error() {
-    let state = postgres_state().await;
-    assert_duplicate_tag_error(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_posts_by_tag() {
-    let state = postgres_state().await;
-    assert_list_posts_by_tag(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_user_posts_by_tag() {
-    let state = postgres_state().await;
-    assert_list_user_posts_by_tag(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_tag_not_found_error() {
-    let state = postgres_state().await;
-    assert_tag_not_found_error(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_soft_deleted_posts_excluded_from_tag_list() {
-    let state = postgres_state().await;
-    assert_soft_deleted_posts_excluded_from_tag_list(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_draft_posts_excluded_from_tag_list() {
-    let state = postgres_state().await;
-    assert_draft_posts_excluded_from_tag_list(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_tag_post_nonexistent_post_error() {
-    let state = postgres_state().await;
-    assert_tag_post_nonexistent_post_error(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_untag_nonexistent_tag_error() {
-    let state = postgres_state().await;
-    assert_untag_nonexistent_tag_error(&state).await;
 }
 
 // ====== Additional tag test cases for improved coverage ======
