@@ -32,6 +32,15 @@ pub enum Command {
     },
 }
 
+impl Cli {
+    pub fn command_name(&self) -> &'static str {
+        match self.command {
+            Command::Check => "check",
+            Command::Validate { .. } => "validate",
+        }
+    }
+}
+
 pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
     match cli.command {
         Command::Check => {
@@ -40,6 +49,10 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let mut result = CommandResult::new("check");
             steps::static_checks::run(&sh, Mode::Fix, &mut result);
             result.duration_ms = start.elapsed().as_millis();
+            result.finished_at_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
             Ok(result)
         }
         Command::Validate { full, no_fix } => {
@@ -50,6 +63,10 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::static_checks::run(&sh, mode, &mut result);
             steps::nix::run(full, &mut result);
             result.duration_ms = start.elapsed().as_millis();
+            result.finished_at_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
             Ok(result)
         }
     }

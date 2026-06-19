@@ -54,6 +54,7 @@ pub struct CommandResult {
     pub command: String,
     pub ok: bool,
     pub duration_ms: u128,
+    pub finished_at_unix: u64,
     pub steps: Vec<StepResult>,
 }
 
@@ -63,6 +64,7 @@ impl CommandResult {
             command: command.into(),
             ok: true,
             duration_ms: 0,
+            finished_at_unix: 0,
             steps: Vec::new(),
         }
     }
