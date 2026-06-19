@@ -10,14 +10,23 @@ coverage check, which runs the whole suite once under an ephemeral PostgreSQL.
 ## Goal
 
 Eliminate the per-test backend boilerplate in the integration suite by adopting
-[`rstest`](https://docs.rs/rstest) parameterization, in two independently-shippable parts:
+[`rstest`](https://docs.rs/rstest) parameterization, in three independently-shippable parts:
 
-1. **Part 1 — backend parametrization.** Collapse the ~90 `assert_X` / `sqlite_X` /
-   `postgres_X` triples in `storage.rs` (plus 2 in `commands.rs`, 1 in `backup_interop.rs`)
-   into single tests parameterized over the storage backend.
+1. **Part 1 — storage-layer backend parametrization (done).** Collapse the ~90 `assert_X` /
+   `sqlite_X` / `postgres_X` triples in `storage.rs` into single tests parameterized over the
+   storage backend via `#[apply(backends)]`. (`commands.rs` and `backup_interop.rs`, surveyed
+   during planning, hold PostgreSQL-command and cross-backend-interop tests respectively — not
+   backend-parametric triples — so they were out of scope.)
 2. **Part 2 — value parametrization.** Collapse clusters of near-duplicate single-backend
    tests (validation-rejection and authorization tables) in the web/atompub/handler test
    files into `#[case]` tables.
+3. **Part 3 — HTTP-layer backend parametrization.** Make the HTTP/integration tests
+   (`atompub_*`, `web_*`, `feed_*`, `media_handlers`, … — everything that builds a test app
+   through the `test_state` harness) run on **both** backends per run via `#[apply(backends)]`,
+   replacing the current env-selected single backend (`test_state` returns PostgreSQL when
+   `JAUNDER_PG_TEST_URL` is set — i.e. PostgreSQL in CI, SQLite in a bare local run, never both
+   in one run). This closes the parity gap the one-batch coverage simplification left at the
+   HTTP tier and aligns it with the storage tier.
 
 ## Motivation
 
@@ -34,6 +43,17 @@ by endpoint (`*_rejects_unauthenticated`, `*_forbids_other_user`).
 `rstest` addresses both: a parameterized test defined once, expanded into one case per
 backend (Part 1) or per input row (Part 2). Write-once means a new behavior automatically
 covers both backends, and a reader learns a single standard idiom.
+
+**Why Part 3 matters (testing direction).** The intent over time is to lean on the
+integration tests for the obvious surface — happy paths and major decisions — and reserve
+unit tests for the paths that are hard to reach through integration. As integration tests
+become the primary coverage, they must exercise the backend actually shipped, so HTTP-layer
+backend parity stops being optional. Until Part 3 lands the gap is bounded but real: the
+HTTP-layer tests run on **one** env-selected backend per run (PostgreSQL in CI, SQLite in a
+bare local run), so the SQLite full-stack path of the handlers is not gated in CI. It is not
+*uncovered* — handlers are backend-agnostic and delegate to the storage trait (tested on both
+backends in Part 1), and the e2e suite runs the full stack on both backend VMs — but the fast
+integration tier is asymmetric until Part 3 makes each HTTP test run both backends.
 
 ## Global Constraints
 
