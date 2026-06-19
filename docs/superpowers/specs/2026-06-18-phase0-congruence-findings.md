@@ -151,3 +151,87 @@ This file is referenced in the coverage instrumentation metadata but no longer e
 ## Working Tree State
 
 Both `.coverage-manifest.json` and `.crap-manifest.json` were restored to the committed baseline after each run via `git checkout -- .coverage-manifest.json .crap-manifest.json`. No stray changes remain. The working tree is clean (aside from auto-modified `.beads/issues.jsonl` which is excluded from this commit).
+
+---
+
+## Root-Cause Investigation: `unshare -cn` + Socket PG
+
+**Date:** 2026-06-19
+**Task:** jaunder-1bhw.10
+
+### Mechanism confirmed (Step 1)
+
+`unshare -cn` (`--map-current-user --net`) keeps UID 1000 (initdb works) and creates an isolated network namespace. A probe script inside `unshare -cn` confirmed:
+
+- `id` → `uid=1000(mdorman)` — initdb-safe
+- Loopback interface exists but is DOWN (`state DOWN`)
+- `ip link set lo up` → `RTNETLINK answers: Operation not permitted`
+- PG started with `listen_addresses=''` + `unix_socket_directories=$PGDATA` and responded to `psql` over the socket DSN on both bootstrap and application roles
+
+**Conclusion:** socket-only PG inside `unshare -cn` is technically viable.
+
+### Modified `scripts/with-ephemeral-postgres` (temporary edit, reverted)
+
+Changed `listen_addresses` from `$PGHOST` to `''` and exported unix-socket DSNs:
+```
+JAUNDER_PG_TEST_URL="postgres://jaunder@/jaunder?host=${PGDATA}&port=${PGPORT}"
+JAUNDER_PG_BOOTSTRAP_TEST_URL="postgres://postgres@/postgres?host=${PGDATA}&port=${PGPORT}"
+```
+
+### Network-denied coverage run result
+
+**Invocation:** `CARGO_NET_OFFLINE=true unshare -cn scripts/check-coverage`
+
+**Result: FAILED — test failures, not a coverage regression.**
+
+The SQLite pass (run without `with-ephemeral-postgres`) aborted early due to 3 test failures in `server/src/websub/http.rs`:
+
+```
+FAIL websub::http::tests::posts_form_body_to_hub_on_success
+FAIL websub::http::tests::returns_hub_refused_on_4xx
+FAIL websub::http::tests::returns_timeout_when_hub_does_not_respond
+Summary: 370/1079 tests run; 3 failed, 709 not run (nextest aborted on failure)
+```
+
+**Root cause of test failures:** These tests are NOT internet-dependent — they spawn in-process Axum mock servers bound to `127.0.0.1:0` (loopback). Because loopback is DOWN inside `unshare -cn` and cannot be brought up (RTNETLINK: Operation not permitted), TCP connections to `127.0.0.1` fail. The test assertions expect specific error types (e.g. `HubRefused { status: 400 }`) but get a connection error instead, causing assertion panics.
+
+**PG pass never reached:** nextest aborts on failure by default; `with-ephemeral-postgres` was never invoked. The socket DSN path through sqlx/the tests was not exercised end-to-end (but the standalone probe confirms it works at the psql level).
+
+**Coverage manifest:** Not rewritten — the run failed before reaching the report phase. Manifests confirmed identical to committed baseline.
+
+### Critical distinction: Nix sandbox vs `unshare -cn`
+
+| Environment | External network | Loopback | websub tests |
+|---|---|---|---|
+| Nix build sandbox | Blocked | **Working** | Pass |
+| `unshare -cn` | Blocked | DOWN, unraisable | **Fail** |
+| Host (networked) | Open | Working | Pass (but fewer coverage paths) |
+
+The Nix sandbox isolates external network while preserving a functional loopback interface. This is what allows the websub in-process mock tests to pass in the Nix build. `unshare -cn` (unprivileged user namespace + net namespace) creates an isolated network namespace with loopback DOWN and no capability to raise it — a fundamentally different constraint.
+
+### Verdict
+
+**Network is the cause of the 15-file divergence** (confirmed by the interpretation in Phase 0 Step 2 and the flake comment). The Nix baseline is achievable on a host only if the host run has the same network shape as the Nix sandbox: **loopback up, external network blocked**.
+
+**`unshare -cn` + socket PG does NOT reproduce the Nix baseline** — it also blocks loopback, breaking tests that use local mock servers.
+
+**Congruence is achievable**, but requires a different mechanism than `unshare -cn`.
+
+### Plan B recommendation
+
+The required network shape is: loopback functional, external TCP/UDP blocked. Options in priority order:
+
+1. **`ip netns` with a pre-configured namespace (root setup, UID-preserving exec):** Create a named network namespace as root once, with loopback UP and no external routes. Then `ip netns exec <ns> scripts/check-coverage` as the original user (UID 1000) — initdb works, loopback works, external network blocked. Requires root for setup but not for each run; can be a one-time `scripts/setup-coverage-netns` step.
+
+2. **`nft`/`iptables` per-UID rules:** Block external outbound on the test user's UID without touching loopback. More complex to get right; leaves the firewall change persistent.
+
+3. **Kernel `seccomp` / `landlock`:** Block `connect()` to non-loopback addresses at the syscall level. Technically precise but requires careful policy authoring.
+
+The `ip netns` approach (option 1) is the cleanest: it exactly matches the Nix sandbox's network shape (loopback up, no external routes) without requiring root on every run.
+
+### Working tree state after investigation
+
+- `scripts/with-ephemeral-postgres`: reverted to committed HEAD (verified: 0-byte diff)
+- `.coverage-manifest.json`: unchanged (verified: 0-byte diff)
+- `.crap-manifest.json`: unchanged (verified: 0-byte diff)
+- Only `.beads/issues.jsonl` is modified (auto-managed, excluded from commits)
