@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
 
-mod memo;
 mod result;
 mod sh;
 mod steps {
@@ -27,31 +26,30 @@ pub enum Command {
     Validate {
         #[arg(long)]
         full: bool,
+        /// Skip auto-fix (fmt/clippy --fix); report errors instead. Use in CI.
+        #[arg(long)]
+        no_fix: bool,
     },
 }
 
 pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
     match cli.command {
         Command::Check => {
+            let start = std::time::Instant::now();
             let sh = xshell::Shell::new()?;
             let mut result = CommandResult::new("check");
             steps::static_checks::run(&sh, Mode::Fix, &mut result);
+            result.duration_ms = start.elapsed().as_millis();
             Ok(result)
         }
-        Command::Validate { full } => {
-            let key = memo::tree_key()?;
-            if memo::last_green("validate").as_deref() == Some(key.as_str()) {
-                let mut result = CommandResult::new("validate");
-                result.memoized = true;
-                return Ok(result); // ok=true, no steps — "tree unchanged since last green"
-            }
+        Command::Validate { full, no_fix } => {
+            let start = std::time::Instant::now();
             let sh = xshell::Shell::new()?;
             let mut result = CommandResult::new("validate");
-            steps::static_checks::run(&sh, Mode::Fix, &mut result);
+            let mode = if no_fix { Mode::Check } else { Mode::Fix };
+            steps::static_checks::run(&sh, mode, &mut result);
             steps::nix::run(full, &mut result);
-            if result.ok {
-                memo::record_green("validate", &key)?;
-            }
+            result.duration_ms = start.elapsed().as_millis();
             Ok(result)
         }
     }

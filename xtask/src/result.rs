@@ -54,7 +54,6 @@ pub struct CommandResult {
     pub command: String,
     pub ok: bool,
     pub duration_ms: u128,
-    pub memoized: bool,
     pub steps: Vec<StepResult>,
 }
 
@@ -64,7 +63,6 @@ impl CommandResult {
             command: command.into(),
             ok: true,
             duration_ms: 0,
-            memoized: false,
             steps: Vec::new(),
         }
     }
@@ -117,9 +115,8 @@ impl CommandResult {
             println!("[{mark}] {}{detail}", s.name);
         }
         let verdict = if self.ok { "PASSED" } else { "FAILED" };
-        let memo = if self.memoized { " (memoized)" } else { "" };
         println!(
-            "xtask {} {verdict}{memo} in {} ms",
+            "xtask {} {verdict} in {} ms",
             self.command, self.duration_ms
         );
     }
