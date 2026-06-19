@@ -490,49 +490,6 @@
           filter = path: _type: !(pkgs.lib.hasInfix "/node_modules" path);
         };
 
-        # Discover integration test modules from server/tests/ at evaluation time.
-        # Any .rs file added there is automatically included; directories (e.g.
-        # helpers/) are filtered out by type.
-        integrationTestModules =
-          let
-            entries = builtins.readDir ./server/tests;
-            rsFiles = pkgs.lib.filterAttrs (n: t: t == "regular" && pkgs.lib.hasSuffix ".rs" n) entries;
-          in
-          map (pkgs.lib.removeSuffix ".rs") (builtins.attrNames rsFiles);
-
-        # Non-default postgres check configs for specific test modules.
-        # Modules whose ignored PostgreSQL-only tests should also run. The
-        # bootstrap URL is now provided to every binary (per-test databases
-        # need it), so only the include-ignored flag is module-specific.
-        testModuleOverrides = {
-          # `commands` includes PostgreSQL-only ignored bootstrap tests.
-          commands = {
-            includeIgnored = true;
-          };
-          # `storage` carries ignored PostgreSQL-only parity/migration tests.
-          storage = {
-            includeIgnored = true;
-          };
-        };
-
-        postgresIntegrationTests = craneLib.buildPackage (
-          commonArgs
-          // {
-            inherit cargoArtifacts;
-            cargoExtraArgs =
-              "-p jaunder" + pkgs.lib.concatMapStrings (m: " --test ${m}") integrationTestModules;
-            doCheck = false;
-            installPhaseCommand = ''
-              mkdir -p $out/lib $out/tests
-              ln -s ${pkgs.openssl.out}/lib/libssl.so.3 $out/lib/libssl.so.3
-              ln -s ${pkgs.openssl.out}/lib/libcrypto.so.3 $out/lib/libcrypto.so.3
-            ''
-            + pkgs.lib.concatMapStrings (m: ''
-              cp "$(find target/release/deps -maxdepth 1 -type f -executable -name '${m}-*' | head -n 1)" $out/tests/${m}
-            '') integrationTestModules;
-          }
-        );
-
         interactiveTestingVmRunner = pkgs.writeShellApplication {
           name = "interactive-testing-vm";
           text = ''
@@ -547,90 +504,6 @@
             echo "PostgreSQL: postgres://jaunder@127.0.0.1:55432/jaunder"
             exec ${postgresTestingVmConfiguration.config.system.build.vm}/bin/run-jaunder-postgres-testing-vm "$@"
           '';
-        };
-
-        # PostgreSQL-backed Rust integration tests need a live database service,
-        # so they run inside a NixOS VM instead of under the plain `nextest`
-        # check. We keep one VM check per test binary: that is coarse enough to
-        # avoid a derivation-per-test maintenance burden, but still fine-grained
-        # enough that failures and long poles are easy to localize.
-        # PostgreSQL-backed Rust integration tests need a live database, so they
-        # run inside a NixOS VM. With per-test databases (template clones — see
-        # server/tests/helpers/mod.rs) every test is isolated, so all
-        # integration binaries run in ONE VM using libtest's normal in-process
-        # parallelism instead of one VM per binary serialised at
-        # --test-threads=1. (Multithreading was previously avoided for fear of
-        # Leptos reactive-arena races; verified 2026-06-14 the suite is clean
-        # multithreaded now that the SSR/dispose bugs are fixed and each test
-        # has its own database — see jaunder-k4tb.7.)
-        postgresIntegrationCheck = pkgs.testers.nixosTest {
-          name = "jaunder-postgres-integration";
-
-          nodes.machine =
-            { pkgs, lib, ... }:
-            {
-              virtualisation.memorySize = 4096;
-              virtualisation.cores = 4;
-              # Per-test databases are template clones that accumulate over a run
-              # (the VM is discarded afterwards); size the disk for the suite.
-              virtualisation.diskSize = 10240;
-
-              services.postgresql = {
-                enable = true;
-                package = pkgs.postgresql_16;
-                ensureDatabases = [ "jaunder" ];
-                ensureUsers = [
-                  {
-                    name = "jaunder";
-                    ensureDBOwnership = true;
-                  }
-                ];
-                authentication = ''
-                  local all all trust
-                  host all all 0.0.0.0/0 trust
-                '';
-                settings = {
-                  listen_addresses = lib.mkForce "*";
-                  max_connections = 200;
-                  # Throwaway test VM: trade durability for speed. Creating a
-                  # per-test database for each of ~643 tests fsyncs heavily
-                  # otherwise (mirrors scripts/with-ephemeral-postgres).
-                  fsync = false;
-                  synchronous_commit = "off";
-                  full_page_writes = false;
-                };
-              };
-
-              environment.systemPackages = [
-                pkgs.postgresql_16
-              ];
-            };
-
-          testScript = ''
-            machine.start()
-            machine.wait_for_unit("postgresql.service", timeout=60)
-            machine.wait_until_succeeds(
-              "sudo -u postgres psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname = 'jaunder'\" | grep -q 1"
-            )
-            machine.wait_until_succeeds(
-              "sudo -u postgres psql -tAc \"SELECT 1 FROM pg_database WHERE datname = 'jaunder'\" | grep -q 1"
-            )
-          ''
-          + pkgs.lib.concatMapStrings (
-            m:
-            let
-              overrides = testModuleOverrides.${m} or { };
-              includeIgnored =
-                if (overrides.includeIgnored or false) then "--include-ignored " else "";
-            in
-            ''
-              machine.succeed(
-                "JAUNDER_PG_TEST_URL=postgres://jaunder@127.0.0.1/jaunder"
-                + " JAUNDER_PG_BOOTSTRAP_TEST_URL=postgres://postgres@127.0.0.1/postgres"
-                + " ${postgresIntegrationTests}/tests/${m} ${includeIgnored}"
-              )
-            ''
-          ) integrationTestModules;
         };
 
         mkE2eSqliteCheck =
@@ -947,12 +820,6 @@
             );
           };
 
-          # All PostgreSQL integration binaries now run in a single VM check.
-          postgres-integration-checks = pkgs.symlinkJoin {
-            name = "jaunder-postgres-integration-checks";
-            paths = [ self.checks.${system}.postgres-integration ];
-          };
-
           # Meta-package: all checks that require Nix (VM tests).
           # scripts/verify builds this instead of `nix flake check` to avoid
           # re-running format/clippy/nextest/deny that it already ran via Cargo.
@@ -960,7 +827,6 @@
             name = "jaunder-nix-only-checks";
             paths = [
               self.packages.${system}.e2e-checks
-              self.packages.${system}.postgres-integration-checks
             ];
           };
         };
@@ -990,8 +856,6 @@
               checkName = "jaunder-e2e-postgres";
               warmupEnv = " JAUNDER_E2E_WARMUP=1";
             };
-
-            postgres-integration = postgresIntegrationCheck;
           }
           // {
             clippy = craneLib.cargoClippy (
