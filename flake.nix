@@ -912,10 +912,11 @@
                   pkgs.cargo-nextest
                   pkgs.jq
                   pkgs.gawk
-                  # check-coverage runs a host-PostgreSQL pass (via
-                  # scripts/with-ephemeral-postgres) so storage/src/postgres/*
-                  # gets instrumented coverage. The throwaway cluster needs
-                  # initdb/pg_ctl/psql available inside the build sandbox.
+                  # check-coverage runs the whole test suite under an ephemeral
+                  # PostgreSQL (via scripts/with-ephemeral-postgres) so
+                  # storage/src/postgres/* gets instrumented coverage. The
+                  # throwaway cluster needs initdb/pg_ctl/psql available inside
+                  # the build sandbox.
                   pkgs.postgresql_16
                 ];
                 buildPhaseCargoCommand = ''

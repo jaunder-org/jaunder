@@ -96,7 +96,7 @@ The driver for all checks is `cargo xtask`. The host runs only the static checks
 | Command | Runs | Formatting |
 |---|---|---|
 | `cargo xtask check --no-test` | host static checks + clippy | auto-fixes |
-| `cargo xtask check` | + the Nix `coverage` check (instrumented test suite incl. the ephemeral-PostgreSQL pass, plus the coverage gate) | auto-fixes |
+| `cargo xtask check` | + the Nix `coverage` check (full instrumented test suite — SQLite + PostgreSQL together under an ephemeral PostgreSQL — plus the coverage gate) | auto-fixes |
 | `cargo xtask validate --no-e2e` | static (verify-only) + coverage — the pre-push gate (the `.githooks/pre-push` hook runs this) | never mutates |
 | `cargo xtask validate` | + e2e (sqlite + postgres) — the full, CI-faithful gate; this is what CI runs | never mutates |
 
@@ -159,12 +159,12 @@ When a change is confined to one area, run the relevant target directly.
 
 ### PostgreSQL-backed Rust tests
 
-The integration suite is backend-parametric: it runs against SQLite by default, and against PostgreSQL when `JAUNDER_PG_TEST_URL` is set. Each test creates its own database — a clone of a once-migrated template (see `server/tests/helpers/mod.rs`) — so the PostgreSQL tests run **in parallel** just like the SQLite ones. No `--test-threads=1` is needed.
+The integration suite is backend-parametric: the SQLite-backed tests (`sqlite_*`) and PostgreSQL-backed tests (`postgres_*`) share the same assertion bodies, differing only in which backend they open. The PostgreSQL-backed tests are no longer `#[ignore]`d — they run as ordinary tests in the same single nextest pass as the SQLite ones (no `--run-ignored`). The consequence is that a bare `cargo nextest run` now **requires a reachable PostgreSQL**: the `postgres_*` tests connect to `JAUNDER_PG_TEST_URL` (defaulting to `postgres://jaunder@127.0.0.1:55432/jaunder`) and fail if nothing is listening. Each test creates its own database — a clone of a once-migrated template (see `server/tests/helpers/mod.rs`) — so the PostgreSQL tests run **in parallel** just like the SQLite ones; no `--test-threads=1` is needed.
 
 The simplest way to run them against a throwaway PostgreSQL is the wrapper, which starts an ephemeral cluster, exports the connection env, runs the command, and tears everything down:
 
 ```bash
-scripts/with-ephemeral-postgres cargo nextest run -p jaunder --run-ignored all
+scripts/with-ephemeral-postgres cargo nextest run -p jaunder
 ```
 
 To use a persistent instance instead (e.g. the dev VM), set the env yourself:
@@ -173,7 +173,7 @@ To use a persistent instance instead (e.g. the dev VM), set the env yourself:
 nix run .#postgres-testing-vm
 export JAUNDER_PG_TEST_URL=postgres://jaunder@127.0.0.1:55432/jaunder
 export JAUNDER_PG_BOOTSTRAP_TEST_URL=postgres://postgres@127.0.0.1:55432/postgres
-cargo nextest run -p jaunder --run-ignored all
+cargo nextest run -p jaunder
 ```
 
 Per-test databases are not dropped after each run, so a persistent instance accumulates `jaunder_test_*` databases over time; the ephemeral wrapper avoids this by discarding the whole cluster.
@@ -187,7 +187,7 @@ The gate does **line-identity** classification against the committed `coverage-b
 
 `cargo xtask check` runs in Fix mode: when a change only removes gaps or covers previously-uncovered lines, it auto-heals the baseline. `cargo xtask validate` is Check-only and never mutates the baseline. A line that is genuinely uncoverable can be excluded from the ratchet with a `// cov:ignore` comment.
 
-Coverage counts source lines with at least one execution hit across all test binaries, deduplicating generic-function instantiations across compile units (unlike the inflated `cargo llvm-cov --json` summary percentages for code exercised by multiple test binaries). It runs in two passes that accumulate into one merged report: the whole workspace against SQLite, then the `jaunder` integration tests against an ephemeral PostgreSQL, so `storage/src/postgres/*` gets real instrumented coverage. Both passes — and thus backend parity — run inside the Nix `coverage` check.
+Coverage counts source lines with at least one execution hit across all test binaries, deduplicating generic-function instantiations across compile units (unlike the inflated `cargo llvm-cov --json` summary percentages for code exercised by multiple test binaries). It runs the entire test suite in a single nextest pass with an ephemeral PostgreSQL available for the whole run, so the SQLite-backed and PostgreSQL-backed integration tests execute together (no `#[ignore]`, no `--run-ignored`) and `storage/src/postgres/*` gets real instrumented coverage. Reported line coverage is the union of both backends. This — and thus backend parity — runs inside the Nix `coverage` check.
 
 Never lower the baseline without user approval; approved baseline changes must be committed in the same commit as the file whose coverage changed. Coverage improvements are always allowed.
 
