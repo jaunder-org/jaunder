@@ -79,8 +79,8 @@ pub struct CoverageReport {
     pub healed: bool,
 }
 
-const BASELINE_PATH: &str = ".coverage-baseline.json";
-const CRAP_MANIFEST_PATH: &str = ".crap-manifest.json";
+const BASELINE_PATH: &str = "coverage-baseline.json";
+const CRAP_MANIFEST_PATH: &str = "crap-manifest.json";
 
 /// Decide whether to heal the accepted-uncovered baseline, returning the
 /// (possibly) new baseline to persist and the `healed` flag.

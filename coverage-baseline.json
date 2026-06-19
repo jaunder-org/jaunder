@@ -1,0 +1,7832 @@
+{
+  "common/src/atompub/entry.rs": [
+    {
+      "line": 336,
+      "text": "            None => Ok(String::new()),"
+    }
+  ],
+  "hydrate/src/lib.rs": [
+    {
+      "line": 163,
+      "text": "pub fn hydrate() {"
+    },
+    {
+      "line": 165,
+      "text": "    mark_phase_start(\"wasm_init\");"
+    },
+    {
+      "line": 167,
+      "text": "    _ = console_log::init_with_level(log::Level::Debug);"
+    },
+    {
+      "line": 168,
+      "text": "    console_error_panic_hook::set_once();"
+    },
+    {
+      "line": 169,
+      "text": "    mark_phase_end(\"wasm_init\");"
+    },
+    {
+      "line": 171,
+      "text": "    install_fetch_timing();"
+    },
+    {
+      "line": 172,
+      "text": "    mark_hydration_start();"
+    },
+    {
+      "line": 173,
+      "text": "    mark_phase_start(\"leptos_hydrate\");"
+    },
+    {
+      "line": 174,
+      "text": "    leptos::mount::hydrate_body(App);"
+    },
+    {
+      "line": 175,
+      "text": "    mark_phase_end(\"leptos_hydrate\");"
+    },
+    {
+      "line": 179,
+      "text": "    mark_phase_start(\"post_hydrate_effects\");"
+    },
+    {
+      "line": 180,
+      "text": "    mark_hydrated();"
+    },
+    {
+      "line": 181,
+      "text": "    mark_phase_end(\"post_hydrate_effects\");"
+    },
+    {
+      "line": 182,
+      "text": "}"
+    }
+  ],
+  "server/src/assets.rs": [
+    {
+      "line": 3,
+      "text": "#[derive(RustEmbed, Clone)]"
+    }
+  ],
+  "server/src/cli.rs": [
+    {
+      "line": 240,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 253,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 263,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 275,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 287,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 300,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 310,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 322,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 334,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 344,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 354,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 366,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 377,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 386,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 399,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 409,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 419,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 434,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 446,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 470,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 490,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 500,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 519,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 529,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 541,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 560,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 571,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 587,
+      "text": "            panic!(\"wrong variant\");"
+    },
+    {
+      "line": 598,
+      "text": "            panic!(\"wrong variant\");"
+    }
+  ],
+  "server/src/commands.rs": [
+    {
+      "line": 62,
+      "text": "        storage::PgBootstrapError::Sqlx(err) => err.into(),"
+    },
+    {
+      "line": 118,
+      "text": "        let p1 = rpassword::prompt_password(\"Password: \")?;"
+    },
+    {
+      "line": 119,
+      "text": "        let p2 = rpassword::prompt_password(\"Confirm password: \")?;"
+    },
+    {
+      "line": 120,
+      "text": "        if p1 != p2 {"
+    },
+    {
+      "line": 121,
+      "text": "            return Err(anyhow::anyhow!(\"passwords do not match\"));"
+    },
+    {
+      "line": 122,
+      "text": "        }"
+    },
+    {
+      "line": 123,
+      "text": "        p1.parse::<Password>().map_err(|e| anyhow::anyhow!(\"{e}\"))?"
+    },
+    {
+      "line": 332,
+      "text": "                storage_path = %storage.storage_path.display(),"
+    },
+    {
+      "line": 335,
+      "text": "                storage.storage_path.display(),"
+    },
+    {
+      "line": 339,
+      "text": "            open_existing_database(&storage.db)"
+    },
+    {
+      "line": 340,
+      "text": "                .await"
+    },
+    {
+      "line": 341,
+      "text": "                .map_err(|e| anyhow::anyhow!(\"{e}; auto-init failed\"))?"
+    },
+    {
+      "line": 416,
+      "text": "    Ok(())"
+    }
+  ],
+  "server/src/feed/handlers.rs": [
+    {
+      "line": 44,
+      "text": "            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),"
+    },
+    {
+      "line": 46,
+      "text": "        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),"
+    },
+    {
+      "line": 52,
+      "text": "        }"
+    },
+    {
+      "line": 62,
+      "text": "            }"
+    },
+    {
+      "line": 63,
+      "text": "        }"
+    },
+    {
+      "line": 83,
+      "text": "pub async fn feed_site("
+    },
+    {
+      "line": 84,
+      "text": "    Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,"
+    },
+    {
+      "line": 85,
+      "text": "    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,"
+    },
+    {
+      "line": 86,
+      "text": "    Extension(posts): Extension<Arc<dyn PostStorage>>,"
+    },
+    {
+      "line": 87,
+      "text": "    headers: HeaderMap,"
+    },
+    {
+      "line": 88,
+      "text": "    Path(ext): Path<String>,"
+    },
+    {
+      "line": 89,
+      "text": ") -> Response {"
+    },
+    {
+      "line": 90,
+      "text": "    let Some(format) = parse_format(&ext) else {"
+    },
+    {
+      "line": 91,
+      "text": "        return StatusCode::NOT_FOUND.into_response();"
+    },
+    {
+      "line": 93,
+      "text": "    serve("
+    },
+    {
+      "line": 94,
+      "text": "        feed_cache,"
+    },
+    {
+      "line": 95,
+      "text": "        site_config,"
+    },
+    {
+      "line": 96,
+      "text": "        posts,"
+    },
+    {
+      "line": 97,
+      "text": "        headers,"
+    },
+    {
+      "line": 98,
+      "text": "        FeedSurface::Site,"
+    },
+    {
+      "line": 99,
+      "text": "        format,"
+    },
+    {
+      "line": 100,
+      "text": "    )"
+    },
+    {
+      "line": 101,
+      "text": "    .await"
+    },
+    {
+      "line": 102,
+      "text": "}"
+    },
+    {
+      "line": 112,
+      "text": "        return StatusCode::NOT_FOUND.into_response();"
+    },
+    {
+      "line": 160,
+      "text": "        return StatusCode::NOT_FOUND.into_response();"
+    },
+    {
+      "line": 165,
+      "text": "    serve("
+    },
+    {
+      "line": 166,
+      "text": "        feed_cache,"
+    },
+    {
+      "line": 167,
+      "text": "        site_config,"
+    },
+    {
+      "line": 168,
+      "text": "        posts,"
+    },
+    {
+      "line": 169,
+      "text": "        headers,"
+    },
+    {
+      "line": 170,
+      "text": "        FeedSurface::UserTag { username, tag },"
+    },
+    {
+      "line": 171,
+      "text": "        format,"
+    },
+    {
+      "line": 172,
+      "text": "    )"
+    },
+    {
+      "line": 173,
+      "text": "    .await"
+    }
+  ],
+  "server/src/feed/regenerate.rs": [
+    {
+      "line": 55,
+      "text": "        FeedSurface::Site => format!(\"{base}/\"),"
+    }
+  ],
+  "server/src/feed/worker.rs": [
+    {
+      "line": 64,
+      "text": "            Err(e) => {"
+    },
+    {
+      "line": 65,
+      "text": "                tracing::error!(error = %e, \"feed worker claim failed\");"
+    },
+    {
+      "line": 66,
+      "text": "                return;"
+    },
+    {
+      "line": 70,
+      "text": "            return;"
+    },
+    {
+      "line": 104,
+      "text": "                        item_bytes = row.body.len(),"
+    },
+    {
+      "line": 105,
+      "text": "                        duration_ms = started.elapsed().as_millis(),"
+    },
+    {
+      "line": 135,
+      "text": "                                        tracing::warn!(feed_url, hub, \"feed.websub.ping.exhausted\");"
+    },
+    {
+      "line": 136,
+      "text": "                                        let _ = self"
+    },
+    {
+      "line": 137,
+      "text": "                                            .feed_events"
+    },
+    {
+      "line": 138,
+      "text": "                                            .mark_exhausted(&ids, &e.to_string())"
+    },
+    {
+      "line": 139,
+      "text": "                                            .await;"
+    },
+    {
+      "line": 167,
+      "text": "                        let _ = self.feed_events.mark_exhausted(&ids, &e.to_string()).await;"
+    },
+    {
+      "line": 195,
+      "text": "            move |_uuid, _lock| {"
+    },
+    {
+      "line": 196,
+      "text": "                let worker = worker.clone();"
+    },
+    {
+      "line": 197,
+      "text": "                Box::pin(async move {"
+    },
+    {
+      "line": 198,
+      "text": "                    worker.tick().await;"
+    },
+    {
+      "line": 199,
+      "text": "                })"
+    },
+    {
+      "line": 200,
+      "text": "            },"
+    },
+    {
+      "line": 201,
+      "text": "        )?;"
+    }
+  ],
+  "server/src/lib.rs": [
+    {
+      "line": 67,
+      "text": "                let state = server_fn_state.clone();"
+    },
+    {
+      "line": 68,
+      "text": "                let mailer = server_fn_mailer.clone();"
+    },
+    {
+      "line": 69,
+      "text": "                leptos_axum::handle_server_fns_with_context("
+    },
+    {
+      "line": 70,
+      "text": "                    move || {"
+    },
+    {
+      "line": 71,
+      "text": "                        crate::context::provide_app_state_contexts(&state);"
+    },
+    {
+      "line": 72,
+      "text": "                        crate::context::provide_mailer_context(&mailer);"
+    },
+    {
+      "line": 73,
+      "text": "                        provide_context(web::auth::CookieSettings {"
+    },
+    {
+      "line": 74,
+      "text": "                            secure: secure_cookies,"
+    },
+    {
+      "line": 75,
+      "text": "                        });"
+    },
+    {
+      "line": 76,
+      "text": "                    },"
+    },
+    {
+      "line": 77,
+      "text": "                    req,"
+    },
+    {
+      "line": 79,
+      "text": "            }),"
+    }
+  ],
+  "server/src/mailer/file.rs": [
+    {
+      "line": 32,
+      "text": "        let mut line = serde_json::to_string(&record).map_err(|e| MailError::Send(Box::new(e)))?;"
+    },
+    {
+      "line": 47,
+      "text": "        .map_err(|e| MailError::Send(Box::new(e)))?"
+    }
+  ],
+  "server/src/mailer/smtp.rs": [
+    {
+      "line": 43,
+      "text": "                    BuildMailerError::InvalidSender(e.to_string())"
+    },
+    {
+      "line": 44,
+      "text": "                })?;"
+    },
+    {
+      "line": 81,
+      "text": "            .map(|a| a.to_string().parse())"
+    },
+    {
+      "line": 83,
+      "text": "            .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))?"
+    },
+    {
+      "line": 92,
+      "text": "                .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))?;"
+    },
+    {
+      "line": 99,
+      "text": "            .map_err(|e| MailError::Send(Box::new(e)))?;"
+    },
+    {
+      "line": 104,
+      "text": "            .map_err(|e| MailError::Send(Box::new(e)))?;"
+    }
+  ],
+  "server/src/main.rs": [
+    {
+      "line": 7,
+      "text": "async fn main() -> anyhow::Result<()> {"
+    },
+    {
+      "line": 8,
+      "text": "    let cli = Cli::parse();"
+    },
+    {
+      "line": 9,
+      "text": "    run(cli).await"
+    },
+    {
+      "line": 10,
+      "text": "}"
+    },
+    {
+      "line": 37,
+      "text": "            if std::env::var_os(\"LEPTOS_OUTPUT_NAME\").is_some() {"
+    },
+    {
+      "line": 41,
+      "text": "                let implicit = Cli::parse_from([\"jaunder\", \"serve\"]);"
+    },
+    {
+      "line": 42,
+      "text": "                implicit.command.expect(\"serve subcommand present\")"
+    },
+    {
+      "line": 46,
+      "text": "                Cli::parse_from([\"jaunder\", \"--help\"]);"
+    },
+    {
+      "line": 47,
+      "text": "                unreachable!()"
+    },
+    {
+      "line": 107,
+      "text": "            storage,"
+    },
+    {
+      "line": 108,
+      "text": "            mode,"
+    },
+    {
+      "line": 109,
+      "text": "            path,"
+    },
+    {
+      "line": 111,
+      "text": "            jaunder::commands::cmd_backup(&storage, mode.into(), path).await?;"
+    },
+    {
+      "line": 113,
+      "text": "        Commands::Restore { storage, path } => {"
+    },
+    {
+      "line": 114,
+      "text": "            jaunder::commands::cmd_restore(&storage, &path).await?;"
+    },
+    {
+      "line": 258,
+      "text": "        });"
+    },
+    {
+      "line": 377,
+      "text": "        });"
+    }
+  ],
+  "server/src/media.rs": [
+    {
+      "line": 132,
+      "text": "            || detect_content_type(&params.filename).to_owned(),"
+    },
+    {
+      "line": 150,
+      "text": "            .unwrap_or_else(|_| HeaderValue::from_static(\"application/octet-stream\")),"
+    }
+  ],
+  "server/src/media_manager.rs": [
+    {
+      "line": 212,
+      "text": "            Err(CreateMediaError::Internal(e)) => {"
+    },
+    {
+      "line": 213,
+      "text": "                tracing::error!(error = %e, \"create_media failed\");"
+    },
+    {
+      "line": 214,
+      "text": "                Err(anyhow::anyhow!(MediaError::Internal(e.to_string())))"
+    }
+  ],
+  "server/src/observability.rs": [
+    {
+      "line": 102,
+      "text": "            return;"
+    },
+    {
+      "line": 539,
+      "text": "                        StatusCode::INTERNAL_SERVER_ERROR"
+    }
+  ],
+  "server/src/websub/http.rs": [
+    {
+      "line": 99,
+      "text": "        });"
+    },
+    {
+      "line": 151,
+      "text": "                StatusCode::ACCEPTED"
+    },
+    {
+      "line": 158,
+      "text": "        });"
+    }
+  ],
+  "storage/src/backup.rs": [
+    {
+      "line": 186,
+      "text": "    )?;"
+    },
+    {
+      "line": 445,
+      "text": "            }"
+    },
+    {
+      "line": 447,
+      "text": "        }"
+    },
+    {
+      "line": 489,
+      "text": "            )?;"
+    },
+    {
+      "line": 496,
+      "text": "            )?;"
+    },
+    {
+      "line": 497,
+      "text": "        }"
+    },
+    {
+      "line": 510,
+      "text": "    }"
+    },
+    {
+      "line": 545,
+      "text": "        return Ok(None);"
+    },
+    {
+      "line": 683,
+      "text": "        )?;"
+    },
+    {
+      "line": 711,
+      "text": "        )?);"
+    },
+    {
+      "line": 824,
+      "text": "        )?;"
+    },
+    {
+      "line": 920,
+      "text": "        )?;"
+    }
+  ],
+  "storage/src/post_service.rs": [
+    {
+      "line": 302,
+      "text": "            Err(CreatePostError::Internal(e)) => {"
+    },
+    {
+      "line": 303,
+      "text": "                return Err(PerformCreationError::Storage(e));"
+    }
+  ],
+  "storage/src/postgres/backup.rs": [
+    {
+      "line": 51,
+      "text": "        Err(error) => {"
+    },
+    {
+      "line": 52,
+      "text": "            let _ = sqlx::query(\"ROLLBACK\").execute(&mut *connection).await;"
+    },
+    {
+      "line": 53,
+      "text": "            Err(error)"
+    },
+    {
+      "line": 82,
+      "text": "        Err(error) => {"
+    },
+    {
+      "line": 83,
+      "text": "            let _ = sqlx::query(\"ROLLBACK\").execute(&mut *connection).await;"
+    },
+    {
+      "line": 84,
+      "text": "            Err(error)"
+    },
+    {
+      "line": 130,
+      "text": "                BackupError::InvalidBackup(format!("
+    },
+    {
+      "line": 131,
+      "text": "                    \"table {table} row is missing column {}\","
+    },
+    {
+      "line": 132,
+      "text": "                    column.name"
+    },
+    {
+      "line": 133,
+      "text": "                ))"
+    },
+    {
+      "line": 134,
+      "text": "            })?;"
+    }
+  ],
+  "storage/src/postgres/bootstrap.rs": [
+    {
+      "line": 66,
+      "text": "        return Err(PgBootstrapError::DatabaseExists(database_name.to_owned()));"
+    },
+    {
+      "line": 87,
+      "text": "        Err(other) => Err(other),"
+    }
+  ],
+  "storage/src/postgres/feed_events.rs": [
+    {
+      "line": 118,
+      "text": "        \"done\" => FeedEventStatus::Done,"
+    },
+    {
+      "line": 119,
+      "text": "        _ => FeedEventStatus::Failed,"
+    }
+  ],
+  "storage/src/postgres/mod.rs": [
+    {
+      "line": 99,
+      "text": "            .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;"
+    },
+    {
+      "line": 143,
+      "text": "            .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;"
+    }
+  ],
+  "storage/src/sqlite/backup.rs": [
+    {
+      "line": 140,
+      "text": "                BackupError::InvalidBackup(format!(\"table {table} row is missing column {column}\"))"
+    },
+    {
+      "line": 141,
+      "text": "            })?;"
+    },
+    {
+      "line": 177,
+      "text": "                query.bind(value)"
+    },
+    {
+      "line": 404,
+      "text": "        }"
+    }
+  ],
+  "web/src/backup/server.rs": [
+    {
+      "line": 15,
+      "text": "        return Err(InternalError::unauthorized(\"user does not exist\"));"
+    }
+  ],
+  "web/src/pages/auth.rs": [
+    {
+      "line": 38,
+      "text": "                                            on:input=move |ev| {"
+    },
+    {
+      "line": 39,
+      "text": "                                                username.set(event_target_value(&ev).to_lowercase());"
+    },
+    {
+      "line": 40,
+      "text": "                                            }"
+    },
+    {
+      "line": 111,
+      "text": "                                on:input=move |ev| {"
+    },
+    {
+      "line": 112,
+      "text": "                                    username.set(event_target_value(&ev).to_lowercase());"
+    },
+    {
+      "line": 113,
+      "text": "                                }"
+    },
+    {
+      "line": 138,
+      "text": "                                view! { <p class=\"j-loading\">\"Logging in\\u{2026}\"</p> }.into_any()"
+    },
+    {
+      "line": 140,
+      "text": "                            Err(e) => view! { <p class=\"error\">{e.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 141,
+      "text": "                        })"
+    },
+    {
+      "line": 169,
+      "text": "                            match r {"
+    },
+    {
+      "line": 170,
+      "text": "                                Ok(()) => view! { <p>\"You have been logged out.\"</p> }.into_any(),"
+    },
+    {
+      "line": 171,
+      "text": "                                Err(e) => view! { <p class=\"error\">{e.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 173,
+      "text": "                        })"
+    }
+  ],
+  "web/src/pages/backup.rs": [
+    {
+      "line": 9,
+      "text": "pub fn BackupSettingsPage() -> impl IntoView {"
+    },
+    {
+      "line": 10,
+      "text": "    let update_action = ServerAction::<UpdateBackupSettings>::new();"
+    },
+    {
+      "line": 11,
+      "text": "    let settings = Resource::new("
+    },
+    {
+      "line": 12,
+      "text": "        move || update_action.version().get(),"
+    },
+    {
+      "line": 13,
+      "text": "        |_| get_backup_settings(),"
+    },
+    {
+      "line": 16,
+      "text": "    view! {"
+    },
+    {
+      "line": 17,
+      "text": "        <Topbar title=\"Backup Settings\".to_string() sub=\"Operations\".to_string() />"
+    },
+    {
+      "line": 18,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 19,
+      "text": "            <div class=\"j-settings j-backup-settings\">"
+    },
+    {
+      "line": 20,
+      "text": "                <Suspense fallback=|| {"
+    },
+    {
+      "line": 21,
+      "text": "                    view! { <p class=\"j-loading j-settings-loading\">\"Loading\\u{2026}\"</p> }"
+    },
+    {
+      "line": 22,
+      "text": "                }>"
+    },
+    {
+      "line": 23,
+      "text": "                    {move || Suspend::new(async move {"
+    },
+    {
+      "line": 24,
+      "text": "                        match settings.await {"
+    },
+    {
+      "line": 25,
+      "text": "                            Ok(settings) => backup_settings_form(settings, update_action).into_any(),"
+    },
+    {
+      "line": 26,
+      "text": "                            Err(error) => {"
+    },
+    {
+      "line": 27,
+      "text": "                                view! { <p class=\"error j-settings-error\">{error.to_string()}</p> }"
+    },
+    {
+      "line": 28,
+      "text": "                                    .into_any()"
+    },
+    {
+      "line": 31,
+      "text": "                    })}"
+    },
+    {
+      "line": 33,
+      "text": "                {move || {"
+    },
+    {
+      "line": 34,
+      "text": "                    update_action"
+    },
+    {
+      "line": 35,
+      "text": "                        .value()"
+    },
+    {
+      "line": 36,
+      "text": "                        .get()"
+    },
+    {
+      "line": 37,
+      "text": "                        .and_then(|result: Result<(), WebError>| result.err())"
+    },
+    {
+      "line": 38,
+      "text": "                        .map(|error| {"
+    },
+    {
+      "line": 39,
+      "text": "                            view! { <p class=\"error j-settings-error\">{error.to_string()}</p> }"
+    },
+    {
+      "line": 40,
+      "text": "                        })"
+    },
+    {
+      "line": 41,
+      "text": "                }}"
+    },
+    {
+      "line": 44,
+      "text": "    }"
+    },
+    {
+      "line": 45,
+      "text": "}"
+    },
+    {
+      "line": 47,
+      "text": "fn backup_settings_form("
+    },
+    {
+      "line": 48,
+      "text": "    settings: BackupConfig,"
+    },
+    {
+      "line": 49,
+      "text": "    update_action: ServerAction<UpdateBackupSettings>,"
+    },
+    {
+      "line": 50,
+      "text": ") -> impl IntoView {"
+    },
+    {
+      "line": 51,
+      "text": "    let mode_str = match settings.mode {"
+    },
+    {
+      "line": 52,
+      "text": "        BackupMode::Directory => \"directory\","
+    },
+    {
+      "line": 53,
+      "text": "        BackupMode::Archive => \"archive\","
+    },
+    {
+      "line": 55,
+      "text": "    view! {"
+    },
+    {
+      "line": 56,
+      "text": "        <ActionForm action=update_action attr:class=\"j-card j-backup-form\">"
+    },
+    {
+      "line": 114,
+      "text": "    }"
+    },
+    {
+      "line": 115,
+      "text": "}"
+    }
+  ],
+  "web/src/pages/email.rs": [
+    {
+      "line": 11,
+      "text": "pub fn EmailPage() -> impl IntoView {"
+    },
+    {
+      "line": 12,
+      "text": "    let request_action = ServerAction::<RequestEmailVerification>::new();"
+    },
+    {
+      "line": 13,
+      "text": "    let profile = Resource::new(move || request_action.version().get(), |_| get_profile());"
+    },
+    {
+      "line": 15,
+      "text": "    view! {"
+    },
+    {
+      "line": 16,
+      "text": "        <Topbar title=\"Email\".to_string() sub=\"Verify your address\".to_string() />"
+    },
+    {
+      "line": 17,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 18,
+      "text": "            <div class=\"j-page\">"
+    },
+    {
+      "line": 19,
+      "text": "                <Suspense fallback=|| {"
+    },
+    {
+      "line": 20,
+      "text": "                    view! { <p class=\"j-loading\">\"Loading\\u{2026}\"</p> }"
+    },
+    {
+      "line": 21,
+      "text": "                }>"
+    },
+    {
+      "line": 22,
+      "text": "                    {move || Suspend::new(async move {"
+    },
+    {
+      "line": 23,
+      "text": "                        match profile.await {"
+    },
+    {
+      "line": 24,
+      "text": "                            Ok(data) => {"
+    },
+    {
+      "line": 25,
+      "text": "                                let email_status = match (data.email.clone(), data.email_verified) {"
+    },
+    {
+      "line": 26,
+      "text": "                                    (Some(ref e), true) => format!(\"{e} (verified)\"),"
+    },
+    {
+      "line": 27,
+      "text": "                                    (Some(ref e), false) => format!(\"{e} (unverified)\"),"
+    },
+    {
+      "line": 28,
+      "text": "                                    (None, _) => \"No email set\".to_string(),"
+    },
+    {
+      "line": 30,
+      "text": "                                view! { <p>\"Current email: \" {email_status}</p> }.into_any()"
+    },
+    {
+      "line": 32,
+      "text": "                            Err(e) => view! { <p class=\"error\">{e.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 34,
+      "text": "                    })}"
+    },
+    {
+      "line": 36,
+      "text": "                <ActionForm action=request_action>"
+    },
+    {
+      "line": 42,
+      "text": "                {move || {"
+    },
+    {
+      "line": 43,
+      "text": "                    request_action"
+    },
+    {
+      "line": 44,
+      "text": "                        .value()"
+    },
+    {
+      "line": 45,
+      "text": "                        .get()"
+    },
+    {
+      "line": 46,
+      "text": "                        .map(|r: Result<(), WebError>| match r {"
+    },
+    {
+      "line": 48,
+      "text": "                                view! { <p>\"Check your email for a verification link.\"</p> }"
+    },
+    {
+      "line": 49,
+      "text": "                                    .into_any()"
+    },
+    {
+      "line": 51,
+      "text": "                            Err(e) => view! { <p class=\"error\">{e.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 52,
+      "text": "                        })"
+    },
+    {
+      "line": 53,
+      "text": "                }}"
+    },
+    {
+      "line": 56,
+      "text": "    }"
+    },
+    {
+      "line": 57,
+      "text": "}"
+    },
+    {
+      "line": 62,
+      "text": "pub fn VerifyEmailPage() -> impl IntoView {"
+    },
+    {
+      "line": 65,
+      "text": "    let query = use_query_map();"
+    },
+    {
+      "line": 66,
+      "text": "    let token = move || query.with(|q| q.get(\"token\").unwrap_or_default());"
+    },
+    {
+      "line": 67,
+      "text": "    let result = Resource::new(token, verify_email);"
+    },
+    {
+      "line": 69,
+      "text": "    view! {"
+    },
+    {
+      "line": 70,
+      "text": "        <Topbar title=\"Verify Email\".to_string() />"
+    },
+    {
+      "line": 71,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 72,
+      "text": "            <div class=\"j-page\">"
+    },
+    {
+      "line": 73,
+      "text": "                <Suspense fallback=|| {"
+    },
+    {
+      "line": 74,
+      "text": "                    view! { <p class=\"j-loading\">\"Verifying\\u{2026}\"</p> }"
+    },
+    {
+      "line": 75,
+      "text": "                }>"
+    },
+    {
+      "line": 76,
+      "text": "                    {move || Suspend::new(async move {"
+    },
+    {
+      "line": 77,
+      "text": "                        match result.await {"
+    },
+    {
+      "line": 79,
+      "text": "                                view! { <p>\"Your email address has been verified.\"</p> }.into_any()"
+    },
+    {
+      "line": 81,
+      "text": "                            Err(e) => {"
+    },
+    {
+      "line": 82,
+      "text": "                                let msg = e.to_string();"
+    },
+    {
+      "line": 83,
+      "text": "                                view! { <p class=\"error\">{msg}</p> }.into_any()"
+    },
+    {
+      "line": 86,
+      "text": "                    })}"
+    },
+    {
+      "line": 90,
+      "text": "    }"
+    },
+    {
+      "line": 91,
+      "text": "}"
+    }
+  ],
+  "web/src/pages/home.rs": [
+    {
+      "line": 49,
+      "text": "                Err(e) => Err(e),"
+    },
+    {
+      "line": 93,
+      "text": "        {}"
+    },
+    {
+      "line": 138,
+      "text": "    };"
+    },
+    {
+      "line": 148,
+      "text": "        read_has_more().then(|| {"
+    },
+    {
+      "line": 149,
+      "text": "            view! {"
+    },
+    {
+      "line": 150,
+      "text": "                <button on:click=on_load_more disabled=read_loading_more>"
+    },
+    {
+      "line": 151,
+      "text": "                    {move || if read_loading_more() { \"Loading\\u{2026}\" } else { \"Load more\" }}"
+    },
+    {
+      "line": 154,
+      "text": "        })"
+    },
+    {
+      "line": 155,
+      "text": "    };"
+    },
+    {
+      "line": 161,
+      "text": "                return view! { <p class=\"error\">{err}</p> }.into_any();"
+    },
+    {
+      "line": 174,
+      "text": "                Some(TimelineMode::Feed(username)) => {"
+    },
+    {
+      "line": 175,
+      "text": "                    view! {"
+    },
+    {
+      "line": 176,
+      "text": "                        <Topbar title=\"Home\".to_string() sub=\"Your home feed\".to_string() />"
+    },
+    {
+      "line": 177,
+      "text": "                        <InlineComposer username=username on_publish=refresh_version.write_only() />"
+    },
+    {
+      "line": 178,
+      "text": "                        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 179,
+      "text": "                            {move || {"
+    },
+    {
+      "line": 180,
+      "text": "                                let rows = read_timeline_rows();"
+    },
+    {
+      "line": 181,
+      "text": "                                if rows.is_empty() {"
+    },
+    {
+      "line": 182,
+      "text": "                                    view! { <p>\"No posts yet.\"</p> }.into_any()"
+    },
+    {
+      "line": 184,
+      "text": "                                    rows.into_iter()"
+    },
+    {
+      "line": 185,
+      "text": "                                        .map(|p| {"
+    },
+    {
+      "line": 186,
+      "text": "                                            view! {"
+    },
+    {
+      "line": 187,
+      "text": "                                                <PostCard post=p banner=None on_mutate=on_mutate />"
+    },
+    {
+      "line": 189,
+      "text": "                                        })"
+    },
+    {
+      "line": 190,
+      "text": "                                        .collect::<Vec<_>>()"
+    },
+    {
+      "line": 191,
+      "text": "                                        .into_any()"
+    },
+    {
+      "line": 193,
+      "text": "                            }} {load_more_btn}"
+    },
+    {
+      "line": 196,
+      "text": "                        .into_any()"
+    },
+    {
+      "line": 199,
+      "text": "                    view! {"
+    },
+    {
+      "line": 201,
+      "text": "                            title=\"jaunder.local\".to_string()"
+    },
+    {
+      "line": 202,
+      "text": "                            sub=\"Read-only \\u{00b7} posts originating on this instance\".to_string()"
+    },
+    {
+      "line": 211,
+      "text": "                        <div class=\"j-hero\">"
+    },
+    {
+      "line": 220,
+      "text": "                        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 221,
+      "text": "                            {move || {"
+    },
+    {
+      "line": 222,
+      "text": "                                let rows = read_timeline_rows();"
+    },
+    {
+      "line": 223,
+      "text": "                                if rows.is_empty() {"
+    },
+    {
+      "line": 224,
+      "text": "                                    view! { <p>\"No posts yet.\"</p> }.into_any()"
+    },
+    {
+      "line": 226,
+      "text": "                                    rows.into_iter()"
+    },
+    {
+      "line": 227,
+      "text": "                                        .map(|p| {"
+    },
+    {
+      "line": 228,
+      "text": "                                            view! {"
+    },
+    {
+      "line": 229,
+      "text": "                                                <PostCard post=p banner=None on_mutate=on_mutate />"
+    },
+    {
+      "line": 231,
+      "text": "                                        })"
+    },
+    {
+      "line": 232,
+      "text": "                                        .collect::<Vec<_>>()"
+    },
+    {
+      "line": 233,
+      "text": "                                        .into_any()"
+    },
+    {
+      "line": 235,
+      "text": "                            }} {load_more_btn}"
+    },
+    {
+      "line": 237,
+      "text": "                    }"
+    },
+    {
+      "line": 238,
+      "text": "                        .into_any()"
+    }
+  ],
+  "web/src/pages/invites.rs": [
+    {
+      "line": 37,
+      "text": "                        }"
+    },
+    {
+      "line": 38,
+      "text": "                        match invites.await {"
+    },
+    {
+      "line": 39,
+      "text": "                            Ok(list) => {"
+    },
+    {
+      "line": 40,
+      "text": "                                view! {"
+    },
+    {
+      "line": 41,
+      "text": "                                    <ActionForm action=create_action>"
+    },
+    {
+      "line": 50,
+      "text": "                                    <ul>"
+    },
+    {
+      "line": 51,
+      "text": "                                        {list"
+    },
+    {
+      "line": 52,
+      "text": "                                            .into_iter()"
+    },
+    {
+      "line": 53,
+      "text": "                                            .map(|i| {"
+    },
+    {
+      "line": 54,
+      "text": "                                                view! {"
+    },
+    {
+      "line": 55,
+      "text": "                                                    <li>"
+    },
+    {
+      "line": 56,
+      "text": "                                                        \"Code: \" {i.code.clone()} \" — expires: \""
+    },
+    {
+      "line": 57,
+      "text": "                                                        {i.expires_at.clone()}"
+    },
+    {
+      "line": 58,
+      "text": "                                                        {i"
+    },
+    {
+      "line": 59,
+      "text": "                                                            .used_at"
+    },
+    {
+      "line": 60,
+      "text": "                                                            .clone()"
+    },
+    {
+      "line": 61,
+      "text": "                                                            .map(|t| {"
+    },
+    {
+      "line": 62,
+      "text": "                                                                view! {"
+    },
+    {
+      "line": 64,
+      "text": "                                                                    {t}"
+    },
+    {
+      "line": 67,
+      "text": "                                                            })}"
+    },
+    {
+      "line": 70,
+      "text": "                                            })"
+    },
+    {
+      "line": 71,
+      "text": "                                            .collect::<Vec<_>>()}"
+    },
+    {
+      "line": 73,
+      "text": "                                }"
+    },
+    {
+      "line": 74,
+      "text": "                                    .into_any()"
+    },
+    {
+      "line": 76,
+      "text": "                            Err(e) => view! { <p class=\"error\">{e.to_string()}</p> }.into_any(),"
+    }
+  ],
+  "web/src/pages/media.rs": [
+    {
+      "line": 30,
+      "text": "pub fn MediaPage() -> impl IntoView {"
+    },
+    {
+      "line": 31,
+      "text": "    let delete_action = ServerAction::<DeleteMedia>::new();"
+    },
+    {
+      "line": 32,
+      "text": "    let upload_version = RwSignal::new(0u32);"
+    },
+    {
+      "line": 34,
+      "text": "    let usage = Resource::new("
+    },
+    {
+      "line": 35,
+      "text": "        move || (delete_action.version().get(), upload_version.get()),"
+    },
+    {
+      "line": 36,
+      "text": "        |_: (usize, u32)| media_usage(),"
+    },
+    {
+      "line": 39,
+      "text": "    let media_list = Resource::new("
+    },
+    {
+      "line": 40,
+      "text": "        move || (delete_action.version().get(), upload_version.get()),"
+    },
+    {
+      "line": 41,
+      "text": "        |_: (usize, u32)| list_my_media(None, Some(50), Some(0)),"
+    },
+    {
+      "line": 44,
+      "text": "    view! {"
+    },
+    {
+      "line": 45,
+      "text": "        <Topbar title=\"Media\".to_string() sub=\"Your uploads\".to_string() />"
+    },
+    {
+      "line": 46,
+      "text": "        <div class=\"j-page\">"
+    },
+    {
+      "line": 50,
+      "text": "            <div style=\"margin-bottom:24px\">"
+    },
+    {
+      "line": 52,
+      "text": "                    on_uploaded=Callback::new(move |_url: String| {"
+    },
+    {
+      "line": 53,
+      "text": "                        upload_version.update(|v| *v += 1);"
+    },
+    {
+      "line": 54,
+      "text": "                    })"
+    },
+    {
+      "line": 55,
+      "text": "                    on_error=Callback::new(move |msg: String| {"
+    },
+    {
+      "line": 56,
+      "text": "                        leptos::logging::warn!(\"upload error: {msg}\");"
+    },
+    {
+      "line": 57,
+      "text": "                    })"
+    },
+    {
+      "line": 60,
+      "text": "            <Suspense fallback=|| {"
+    },
+    {
+      "line": 61,
+      "text": "                view! { <p class=\"j-loading\">\"Loading usage\\u{2026}\"</p> }"
+    },
+    {
+      "line": 62,
+      "text": "            }>"
+    },
+    {
+      "line": 63,
+      "text": "                {move || Suspend::new(async move {"
+    },
+    {
+      "line": 64,
+      "text": "                    match usage.await {"
+    },
+    {
+      "line": 65,
+      "text": "                        Ok(u) => {"
+    },
+    {
+      "line": 66,
+      "text": "                            let pct = if u.quota_bytes > 0 {"
+    },
+    {
+      "line": 67,
+      "text": "                                (u.used_bytes as f64 / u.quota_bytes as f64 * 100.0).min(100.0)"
+    },
+    {
+      "line": 69,
+      "text": "                                0.0"
+    },
+    {
+      "line": 71,
+      "text": "                            view! {"
+    },
+    {
+      "line": 72,
+      "text": "                                <div class=\"j-sb-head\" style=\"margin-bottom:8px\">"
+    },
+    {
+      "line": 73,
+      "text": "                                    \"Storage\""
+    },
+    {
+      "line": 75,
+      "text": "                                <p>"
+    },
+    {
+      "line": 76,
+      "text": "                                    {format!("
+    },
+    {
+      "line": 78,
+      "text": "                                        format_bytes(u.used_bytes),"
+    },
+    {
+      "line": 79,
+      "text": "                                        format_bytes(u.quota_bytes),"
+    },
+    {
+      "line": 80,
+      "text": "                                        format_bytes(u.max_file_size_bytes),"
+    },
+    {
+      "line": 83,
+      "text": "                                <div style=\"background:#eee;border-radius:4px;height:8px;width:300px;margin:8px 0 16px\">"
+    },
+    {
+      "line": 84,
+      "text": "                                    <div style=format!("
+    },
+    {
+      "line": 89,
+      "text": "                                .into_any()"
+    },
+    {
+      "line": 91,
+      "text": "                        Err(err) => view! { <p class=\"error\">{err.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 93,
+      "text": "                })}"
+    },
+    {
+      "line": 96,
+      "text": "            <Suspense fallback=|| {"
+    },
+    {
+      "line": 97,
+      "text": "                view! { <p class=\"j-loading\">\"Loading media\\u{2026}\"</p> }"
+    },
+    {
+      "line": 98,
+      "text": "            }>"
+    },
+    {
+      "line": 99,
+      "text": "                {move || Suspend::new(async move {"
+    },
+    {
+      "line": 100,
+      "text": "                    match media_list.await {"
+    },
+    {
+      "line": 101,
+      "text": "                        Ok(items) => {"
+    },
+    {
+      "line": 102,
+      "text": "                            if items.is_empty() {"
+    },
+    {
+      "line": 103,
+      "text": "                                return view! { <p>\"No media uploaded yet.\"</p> }.into_any();"
+    },
+    {
+      "line": 104,
+      "text": "                            }"
+    },
+    {
+      "line": 105,
+      "text": "                            view! {"
+    },
+    {
+      "line": 106,
+      "text": "                                <table class=\"j-table\">"
+    },
+    {
+      "line": 117,
+      "text": "                                    <tbody>"
+    },
+    {
+      "line": 118,
+      "text": "                                        {items"
+    },
+    {
+      "line": 119,
+      "text": "                                            .into_iter()"
+    },
+    {
+      "line": 120,
+      "text": "                                            .map(|item| render_media_row(item, delete_action))"
+    },
+    {
+      "line": 121,
+      "text": "                                            .collect::<Vec<_>>()}"
+    },
+    {
+      "line": 125,
+      "text": "                                .into_any()"
+    },
+    {
+      "line": 127,
+      "text": "                        Err(err) => view! { <p class=\"error\">{err.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 129,
+      "text": "                })}"
+    },
+    {
+      "line": 132,
+      "text": "            {move || {"
+    },
+    {
+      "line": 133,
+      "text": "                delete_action"
+    },
+    {
+      "line": 134,
+      "text": "                    .value()"
+    },
+    {
+      "line": 135,
+      "text": "                    .get()"
+    },
+    {
+      "line": 136,
+      "text": "                    .map(|result: Result<DeleteMediaResult, WebError>| match result {"
+    },
+    {
+      "line": 137,
+      "text": "                        Ok(r) if r.deleted => {"
+    },
+    {
+      "line": 138,
+      "text": "                            view! { <p class=\"success\">\"Media deleted.\"</p> }.into_any()"
+    },
+    {
+      "line": 140,
+      "text": "                        Ok(r) => {"
+    },
+    {
+      "line": 141,
+      "text": "                            let ids = r"
+    },
+    {
+      "line": 142,
+      "text": "                                .referenced_in_posts"
+    },
+    {
+      "line": 143,
+      "text": "                                .iter()"
+    },
+    {
+      "line": 144,
+      "text": "                                .map(ToString::to_string)"
+    },
+    {
+      "line": 145,
+      "text": "                                .collect::<Vec<_>>()"
+    },
+    {
+      "line": 146,
+      "text": "                                .join(\", \");"
+    },
+    {
+      "line": 147,
+      "text": "                            view! {"
+    },
+    {
+      "line": 148,
+      "text": "                                <p class=\"error\">"
+    },
+    {
+      "line": 149,
+      "text": "                                    {format!("
+    },
+    {
+      "line": 154,
+      "text": "                                .into_any()"
+    },
+    {
+      "line": 156,
+      "text": "                        Err(err) => view! { <p class=\"error\">{err.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 157,
+      "text": "                    })"
+    },
+    {
+      "line": 158,
+      "text": "            }}"
+    },
+    {
+      "line": 160,
+      "text": "    }"
+    },
+    {
+      "line": 161,
+      "text": "}"
+    },
+    {
+      "line": 164,
+      "text": "fn render_media_row(item: MediaItem, delete_action: ServerAction<DeleteMedia>) -> impl IntoView {"
+    },
+    {
+      "line": 165,
+      "text": "    let url = item.url.clone();"
+    },
+    {
+      "line": 166,
+      "text": "    let filename = item.filename.clone();"
+    },
+    {
+      "line": 167,
+      "text": "    let sha256 = item.sha256.clone();"
+    },
+    {
+      "line": 168,
+      "text": "    let source = item.source.clone();"
+    },
+    {
+      "line": 169,
+      "text": "    let size_label = format_bytes(item.size_bytes);"
+    },
+    {
+      "line": 170,
+      "text": "    let created_at = item.created_at.clone();"
+    },
+    {
+      "line": 172,
+      "text": "    view! {"
+    },
+    {
+      "line": 173,
+      "text": "        <tr>"
+    },
+    {
+      "line": 174,
+      "text": "            <td>"
+    },
+    {
+      "line": 175,
+      "text": "                <a href=url target=\"_blank\">"
+    },
+    {
+      "line": 176,
+      "text": "                    {filename.clone()}"
+    },
+    {
+      "line": 179,
+      "text": "            <td>{item.content_type.clone()}</td>"
+    },
+    {
+      "line": 180,
+      "text": "            <td>{size_label}</td>"
+    },
+    {
+      "line": 181,
+      "text": "            <td>{source.clone()}</td>"
+    },
+    {
+      "line": 182,
+      "text": "            <td>{created_at}</td>"
+    },
+    {
+      "line": 183,
+      "text": "            <td>"
+    },
+    {
+      "line": 184,
+      "text": "                <ActionForm action=delete_action>"
+    },
+    {
+      "line": 198,
+      "text": "    }"
+    },
+    {
+      "line": 199,
+      "text": "}"
+    }
+  ],
+  "web/src/pages/mod.rs": [
+    {
+      "line": 124,
+      "text": "            <Routes fallback=|| \"Page not found.\".into_view()>"
+    }
+  ],
+  "web/src/pages/password_reset.rs": [
+    {
+      "line": 13,
+      "text": "pub fn ForgotPasswordPage() -> impl IntoView {"
+    },
+    {
+      "line": 14,
+      "text": "    let request_action = ServerAction::<RequestPasswordReset>::new();"
+    },
+    {
+      "line": 16,
+      "text": "    view! {"
+    },
+    {
+      "line": 17,
+      "text": "        <Topbar title=\"Forgot Password\".to_string() sub=\"Recover access\".to_string() />"
+    },
+    {
+      "line": 18,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 19,
+      "text": "            <div class=\"j-page\">"
+    },
+    {
+      "line": 20,
+      "text": "                <ActionForm action=request_action>"
+    },
+    {
+      "line": 26,
+      "text": "                {move || {"
+    },
+    {
+      "line": 27,
+      "text": "                    request_action"
+    },
+    {
+      "line": 28,
+      "text": "                        .value()"
+    },
+    {
+      "line": 29,
+      "text": "                        .get()"
+    },
+    {
+      "line": 30,
+      "text": "                        .map(|r: Result<(), WebError>| match r {"
+    },
+    {
+      "line": 32,
+      "text": "                                view! {"
+    },
+    {
+      "line": 33,
+      "text": "                                    <p>"
+    },
+    {
+      "line": 34,
+      "text": "                                        \"If there is a verified email address on file, a reset link has been sent. Check your email.\""
+    },
+    {
+      "line": 37,
+      "text": "                                    .into_any()"
+    },
+    {
+      "line": 39,
+      "text": "                            Err(e) => view! { <p class=\"error\">{e.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 40,
+      "text": "                        })"
+    },
+    {
+      "line": 41,
+      "text": "                }}"
+    },
+    {
+      "line": 44,
+      "text": "    }"
+    },
+    {
+      "line": 45,
+      "text": "}"
+    },
+    {
+      "line": 51,
+      "text": "pub fn ResetPasswordPage() -> impl IntoView {"
+    },
+    {
+      "line": 59,
+      "text": "    let token = use_query_map().with_untracked(|q| q.get(\"token\").unwrap_or_default());"
+    },
+    {
+      "line": 61,
+      "text": "    let confirm_action = ServerAction::<ConfirmPasswordReset>::new();"
+    },
+    {
+      "line": 63,
+      "text": "    view! {"
+    },
+    {
+      "line": 64,
+      "text": "        <Topbar title=\"Reset Password\".to_string() sub=\"Set a new password\".to_string() />"
+    },
+    {
+      "line": 65,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 66,
+      "text": "            <div class=\"j-page\">"
+    },
+    {
+      "line": 67,
+      "text": "                <ActionForm action=confirm_action>"
+    },
+    {
+      "line": 74,
+      "text": "                {move || {"
+    },
+    {
+      "line": 75,
+      "text": "                    confirm_action"
+    },
+    {
+      "line": 76,
+      "text": "                        .value()"
+    },
+    {
+      "line": 77,
+      "text": "                        .get()"
+    },
+    {
+      "line": 78,
+      "text": "                        .map(|r: Result<(), WebError>| match r {"
+    },
+    {
+      "line": 79,
+      "text": "                            Ok(()) => view! { <Redirect path=\"/login\" /> }.into_any(),"
+    },
+    {
+      "line": 80,
+      "text": "                            Err(e) => view! { <p class=\"error\">{e.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 81,
+      "text": "                        })"
+    },
+    {
+      "line": 82,
+      "text": "                }}"
+    },
+    {
+      "line": 85,
+      "text": "    }"
+    },
+    {
+      "line": 86,
+      "text": "}"
+    }
+  ],
+  "web/src/pages/posts.rs": [
+    {
+      "line": 37,
+      "text": "                        view! {"
+    },
+    {
+      "line": 39,
+      "text": "                                compact=false"
+    },
+    {
+      "line": 40,
+      "text": "                                rows=16"
+    },
+    {
+      "line": 41,
+      "text": "                                placeholder=\"Write something\\u{2026}\""
+    },
+    {
+      "line": 42,
+      "text": "                                on_success=Callback::new(move |created| {"
+    },
+    {
+      "line": 43,
+      "text": "                                    last_result.set(Some(created));"
+    },
+    {
+      "line": 44,
+      "text": "                                })"
+    },
+    {
+      "line": 46,
+      "text": "                            {move || {"
+    },
+    {
+      "line": 47,
+      "text": "                                last_result"
+    },
+    {
+      "line": 48,
+      "text": "                                    .get()"
+    },
+    {
+      "line": 49,
+      "text": "                                    .map(|created| {"
+    },
+    {
+      "line": 50,
+      "text": "                                        let message = if created.published_at.is_some() {"
+    },
+    {
+      "line": 51,
+      "text": "                                            \"Post published.\""
+    },
+    {
+      "line": 53,
+      "text": "                                            \"Draft saved.\""
+    },
+    {
+      "line": 55,
+      "text": "                                        let slug_value = created.slug.clone();"
+    },
+    {
+      "line": 56,
+      "text": "                                        let slug_for_attr = slug_value.clone();"
+    },
+    {
+      "line": 57,
+      "text": "                                        view! {"
+    },
+    {
+      "line": 58,
+      "text": "                                            <div class=\"j-save-summary\">"
+    },
+    {
+      "line": 59,
+      "text": "                                                <p class=\"success\">{message}</p>"
+    },
+    {
+      "line": 60,
+      "text": "                                                <p data-test=\"slug-value\" data-slug=slug_for_attr>"
+    },
+    {
+      "line": 62,
+      "text": "                                                    {slug_value}"
+    },
+    {
+      "line": 64,
+      "text": "                                                <a"
+    },
+    {
+      "line": 66,
+      "text": "                                                    href=created.preview_url.clone()"
+    },
+    {
+      "line": 68,
+      "text": "                                                    \"Preview draft\""
+    },
+    {
+      "line": 70,
+      "text": "                                                {created"
+    },
+    {
+      "line": 71,
+      "text": "                                                    .permalink"
+    },
+    {
+      "line": 72,
+      "text": "                                                    .as_ref()"
+    },
+    {
+      "line": 73,
+      "text": "                                                    .map(|href| {"
+    },
+    {
+      "line": 74,
+      "text": "                                                        view! {"
+    },
+    {
+      "line": 75,
+      "text": "                                                            <a data-test=\"permalink-link\" href=href.clone()>"
+    },
+    {
+      "line": 76,
+      "text": "                                                                \"View permalink\""
+    },
+    {
+      "line": 79,
+      "text": "                                                    })}"
+    },
+    {
+      "line": 82,
+      "text": "                                    })"
+    },
+    {
+      "line": 83,
+      "text": "                            }}"
+    },
+    {
+      "line": 85,
+      "text": "                            .into_any()"
+    },
+    {
+      "line": 100,
+      "text": "                    Err(err) => view! { <p class=\"error\">{err.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 109,
+      "text": "pub fn PostPage() -> impl IntoView {"
+    },
+    {
+      "line": 110,
+      "text": "    let params = use_params_map();"
+    },
+    {
+      "line": 112,
+      "text": "    let post_data = move || {"
+    },
+    {
+      "line": 113,
+      "text": "        let params = params.get();"
+    },
+    {
+      "line": 114,
+      "text": "        let raw_username = params.get(\"username\").unwrap_or_default();"
+    },
+    {
+      "line": 115,
+      "text": "        let username = raw_username.strip_prefix('~').map(str::to_string);"
+    },
+    {
+      "line": 116,
+      "text": "        let year = params"
+    },
+    {
+      "line": 117,
+      "text": "            .get(\"year\")"
+    },
+    {
+      "line": 118,
+      "text": "            .and_then(|v| v.parse::<i32>().ok())"
+    },
+    {
+      "line": 119,
+      "text": "            .unwrap_or_default();"
+    },
+    {
+      "line": 120,
+      "text": "        let month = params"
+    },
+    {
+      "line": 121,
+      "text": "            .get(\"month\")"
+    },
+    {
+      "line": 122,
+      "text": "            .and_then(|v| v.parse::<u32>().ok())"
+    },
+    {
+      "line": 123,
+      "text": "            .unwrap_or_default();"
+    },
+    {
+      "line": 124,
+      "text": "        let day = params"
+    },
+    {
+      "line": 125,
+      "text": "            .get(\"day\")"
+    },
+    {
+      "line": 126,
+      "text": "            .and_then(|v| v.parse::<u32>().ok())"
+    },
+    {
+      "line": 127,
+      "text": "            .unwrap_or_default();"
+    },
+    {
+      "line": 128,
+      "text": "        let slug = params.get(\"slug\").unwrap_or_default();"
+    },
+    {
+      "line": 129,
+      "text": "        (username, year, month, day, slug)"
+    },
+    {
+      "line": 130,
+      "text": "    };"
+    },
+    {
+      "line": 132,
+      "text": "    let post = Resource::new("
+    },
+    {
+      "line": 133,
+      "text": "        post_data,"
+    },
+    {
+      "line": 134,
+      "text": "        |(username, year, month, day, slug): (Option<String>, i32, u32, u32, String)| async move {"
+    },
+    {
+      "line": 135,
+      "text": "            let username = match username {"
+    },
+    {
+      "line": 136,
+      "text": "                Some(value) if !value.is_empty() => value,"
+    },
+    {
+      "line": 148,
+      "text": "                    return Err(WebError::validation(\"Invalid permalink\"));"
+    },
+    {
+      "line": 151,
+      "text": "            get_post(username, year, month, day, slug).await"
+    },
+    {
+      "line": 152,
+      "text": "        },"
+    },
+    {
+      "line": 155,
+      "text": "    let on_unpublish = Callback::new(move |()| {"
+    },
+    {
+      "line": 160,
+      "text": "    });"
+    },
+    {
+      "line": 162,
+      "text": "    view! {"
+    },
+    {
+      "line": 163,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 164,
+      "text": "            <div class=\"j-page\">"
+    },
+    {
+      "line": 165,
+      "text": "                <Suspense fallback=|| {"
+    },
+    {
+      "line": 166,
+      "text": "                    view! { <p class=\"j-loading\">\"Loading\\u{2026}\"</p> }"
+    },
+    {
+      "line": 167,
+      "text": "                }>"
+    },
+    {
+      "line": 168,
+      "text": "                    {move || Suspend::new(async move {"
+    },
+    {
+      "line": 169,
+      "text": "                        match post.await {"
+    },
+    {
+      "line": 170,
+      "text": "                            Ok(fetched) => {"
+    },
+    {
+      "line": 171,
+      "text": "                                let banner = fetched"
+    },
+    {
+      "line": 172,
+      "text": "                                    .is_draft"
+    },
+    {
+      "line": 173,
+      "text": "                                    .then_some(\"Draft - visible only to you\".to_string());"
+    },
+    {
+      "line": 174,
+      "text": "                                let summary = TimelinePostSummary {"
+    },
+    {
+      "line": 175,
+      "text": "                                    post_id: fetched.post_id,"
+    },
+    {
+      "line": 176,
+      "text": "                                    username: fetched.username.clone(),"
+    },
+    {
+      "line": 177,
+      "text": "                                    title: fetched.title.clone(),"
+    },
+    {
+      "line": 178,
+      "text": "                                    summary: fetched.summary.clone(),"
+    },
+    {
+      "line": 179,
+      "text": "                                    slug: fetched.slug.clone(),"
+    },
+    {
+      "line": 180,
+      "text": "                                    rendered_html: fetched.rendered_html.clone(),"
+    },
+    {
+      "line": 181,
+      "text": "                                    created_at: fetched.created_at.clone(),"
+    },
+    {
+      "line": 182,
+      "text": "                                    published_at: fetched"
+    },
+    {
+      "line": 183,
+      "text": "                                        .published_at"
+    },
+    {
+      "line": 184,
+      "text": "                                        .clone()"
+    },
+    {
+      "line": 185,
+      "text": "                                        .unwrap_or_else(|| fetched.created_at.clone()),"
+    },
+    {
+      "line": 186,
+      "text": "                                    permalink: fetched.permalink.clone().unwrap_or_default(),"
+    },
+    {
+      "line": 187,
+      "text": "                                    is_author: fetched.is_author,"
+    },
+    {
+      "line": 188,
+      "text": "                                    tags: fetched.tags.clone(),"
+    },
+    {
+      "line": 190,
+      "text": "                                let username_for_tags = fetched.username.clone();"
+    },
+    {
+      "line": 191,
+      "text": "                                view! {"
+    },
+    {
+      "line": 193,
+      "text": "                                        post=summary"
+    },
+    {
+      "line": 194,
+      "text": "                                        banner=banner"
+    },
+    {
+      "line": 195,
+      "text": "                                        tag_context=TagContext::ForUser(username_for_tags)"
+    },
+    {
+      "line": 196,
+      "text": "                                        on_unpublish=on_unpublish"
+    },
+    {
+      "line": 199,
+      "text": "                                    .into_any()"
+    },
+    {
+      "line": 201,
+      "text": "                            Err(err) => view! { <p class=\"error\">{err.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 203,
+      "text": "                    })}"
+    },
+    {
+      "line": 207,
+      "text": "    }"
+    },
+    {
+      "line": 208,
+      "text": "}"
+    },
+    {
+      "line": 233,
+      "text": "                return Err(WebError::validation(\"Invalid username\"));"
+    },
+    {
+      "line": 293,
+      "text": "        let username = username.get_untracked();"
+    },
+    {
+      "line": 294,
+      "text": "        if username.is_empty() || !has_more.get_untracked() {"
+    },
+    {
+      "line": 295,
+      "text": "            return;"
+    },
+    {
+      "line": 296,
+      "text": "        }"
+    },
+    {
+      "line": 297,
+      "text": "        load_more_action.dispatch(ListUserPosts {"
+    },
+    {
+      "line": 298,
+      "text": "            username,"
+    },
+    {
+      "line": 299,
+      "text": "            cursor_created_at: next_cursor_created_at.get_untracked(),"
+    },
+    {
+      "line": 300,
+      "text": "            cursor_post_id: next_cursor_post_id.get_untracked(),"
+    },
+    {
+      "line": 301,
+      "text": "            limit: Some(50),"
+    },
+    {
+      "line": 302,
+      "text": "        });"
+    },
+    {
+      "line": 303,
+      "text": "    };"
+    },
+    {
+      "line": 333,
+      "text": "                        return view! { <p class=\"error\">{err}</p> }.into_any();"
+    },
+    {
+      "line": 337,
+      "text": "                    }"
+    },
+    {
+      "line": 338,
+      "text": "                    let rows = read_timeline();"
+    },
+    {
+      "line": 339,
+      "text": "                    if rows.is_empty() {"
+    },
+    {
+      "line": 340,
+      "text": "                        return view! { <p>\"No posts yet.\"</p> }.into_any();"
+    },
+    {
+      "line": 341,
+      "text": "                    }"
+    },
+    {
+      "line": 342,
+      "text": "                    view! {"
+    },
+    {
+      "line": 343,
+      "text": "                        <div>"
+    },
+    {
+      "line": 344,
+      "text": "                            {rows"
+    },
+    {
+      "line": 345,
+      "text": "                                .into_iter()"
+    },
+    {
+      "line": 346,
+      "text": "                                .map(|post| {"
+    },
+    {
+      "line": 347,
+      "text": "                                    let username_for_tags = post.username.clone();"
+    },
+    {
+      "line": 348,
+      "text": "                                    view! {"
+    },
+    {
+      "line": 350,
+      "text": "                                            post=post"
+    },
+    {
+      "line": 351,
+      "text": "                                            banner=None"
+    },
+    {
+      "line": 352,
+      "text": "                                            tag_context=TagContext::ForUser(username_for_tags)"
+    },
+    {
+      "line": 353,
+      "text": "                                            on_mutate=on_mutate"
+    },
+    {
+      "line": 356,
+      "text": "                                })"
+    },
+    {
+      "line": 357,
+      "text": "                                .collect::<Vec<_>>()}"
+    },
+    {
+      "line": 359,
+      "text": "                        {move || {"
+    },
+    {
+      "line": 360,
+      "text": "                            read_has_more()"
+    },
+    {
+      "line": 361,
+      "text": "                                .then(|| {"
+    },
+    {
+      "line": 362,
+      "text": "                                    view! {"
+    },
+    {
+      "line": 363,
+      "text": "                                        <button on:click=on_load_more disabled=read_pending>"
+    },
+    {
+      "line": 364,
+      "text": "                                            {move || {"
+    },
+    {
+      "line": 365,
+      "text": "                                                if read_pending() { \"Loading\\u{2026}\" } else { \"Load more\" }"
+    },
+    {
+      "line": 366,
+      "text": "                                            }}"
+    },
+    {
+      "line": 369,
+      "text": "                                })"
+    },
+    {
+      "line": 370,
+      "text": "                        }}"
+    },
+    {
+      "line": 372,
+      "text": "                        .into_any()"
+    },
+    {
+      "line": 381,
+      "text": "pub fn DraftPreviewPage() -> impl IntoView {"
+    },
+    {
+      "line": 382,
+      "text": "    let delete_action = ServerAction::<DeletePost>::new();"
+    },
+    {
+      "line": 383,
+      "text": "    let publish_action = ServerAction::<PublishPost>::new();"
+    },
+    {
+      "line": 384,
+      "text": "    let params = use_params_map();"
+    },
+    {
+      "line": 386,
+      "text": "    let preview = Resource::new("
+    },
+    {
+      "line": 387,
+      "text": "        move || params.get(),"
+    },
+    {
+      "line": 388,
+      "text": "        |params| async move {"
+    },
+    {
+      "line": 389,
+      "text": "            let post_id = params"
+    },
+    {
+      "line": 390,
+      "text": "                .get(\"post_id\")"
+    },
+    {
+      "line": 391,
+      "text": "                .and_then(|v| v.parse::<i64>().ok())"
+    },
+    {
+      "line": 392,
+      "text": "                .ok_or_else(|| WebError::validation(\"Invalid preview\"))?;"
+    },
+    {
+      "line": 393,
+      "text": "            get_post_preview(post_id).await"
+    },
+    {
+      "line": 394,
+      "text": "        },"
+    },
+    {
+      "line": 397,
+      "text": "    view! {"
+    },
+    {
+      "line": 398,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 399,
+      "text": "            <div class=\"j-page\">"
+    },
+    {
+      "line": 400,
+      "text": "                <Suspense fallback=|| {"
+    },
+    {
+      "line": 401,
+      "text": "                    view! { <p class=\"j-loading\">\"Loading\\u{2026}\"</p> }"
+    },
+    {
+      "line": 402,
+      "text": "                }>"
+    },
+    {
+      "line": 403,
+      "text": "                    {move || Suspend::new(async move {"
+    },
+    {
+      "line": 404,
+      "text": "                        match preview.await {"
+    },
+    {
+      "line": 405,
+      "text": "                            Ok(fetched) => {"
+    },
+    {
+      "line": 406,
+      "text": "                                let post_id = fetched.post_id;"
+    },
+    {
+      "line": 407,
+      "text": "                                let summary = TimelinePostSummary {"
+    },
+    {
+      "line": 408,
+      "text": "                                    post_id: fetched.post_id,"
+    },
+    {
+      "line": 409,
+      "text": "                                    username: fetched.username.clone(),"
+    },
+    {
+      "line": 410,
+      "text": "                                    title: fetched.title.clone(),"
+    },
+    {
+      "line": 411,
+      "text": "                                    summary: fetched.summary.clone(),"
+    },
+    {
+      "line": 412,
+      "text": "                                    slug: fetched.slug.clone(),"
+    },
+    {
+      "line": 413,
+      "text": "                                    rendered_html: fetched.rendered_html.clone(),"
+    },
+    {
+      "line": 414,
+      "text": "                                    created_at: fetched.created_at.clone(),"
+    },
+    {
+      "line": 415,
+      "text": "                                    published_at: fetched"
+    },
+    {
+      "line": 416,
+      "text": "                                        .published_at"
+    },
+    {
+      "line": 417,
+      "text": "                                        .clone()"
+    },
+    {
+      "line": 418,
+      "text": "                                        .unwrap_or_else(|| fetched.created_at.clone()),"
+    },
+    {
+      "line": 419,
+      "text": "                                    permalink: fetched.permalink.clone().unwrap_or_default(),"
+    },
+    {
+      "line": 421,
+      "text": "                                    tags: fetched.tags.clone(),"
+    },
+    {
+      "line": 423,
+      "text": "                                let username_for_tags = fetched.username.clone();"
+    },
+    {
+      "line": 424,
+      "text": "                                view! {"
+    },
+    {
+      "line": 426,
+      "text": "                                        post=summary"
+    },
+    {
+      "line": 427,
+      "text": "                                        banner=Some("
+    },
+    {
+      "line": 428,
+      "text": "                                            \"Draft preview – visible only to you\".to_string(),"
+    },
+    {
+      "line": 429,
+      "text": "                                        )"
+    },
+    {
+      "line": 430,
+      "text": "                                        tag_context=TagContext::ForUser(username_for_tags)"
+    },
+    {
+      "line": 432,
+      "text": "                                        <div class=\"j-post-acts\">"
+    },
+    {
+      "line": 433,
+      "text": "                                            <ActionForm action=publish_action>"
+    },
+    {
+      "line": 443,
+      "text": "                                            {render_delete_form("
+    },
+    {
+      "line": 444,
+      "text": "                                                delete_action,"
+    },
+    {
+      "line": 445,
+      "text": "                                                post_id,"
+    },
+    {
+      "line": 450,
+      "text": "                                }"
+    },
+    {
+      "line": 451,
+      "text": "                                    .into_any()"
+    },
+    {
+      "line": 453,
+      "text": "                            Err(err) => view! { <p class=\"error\">{err.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 455,
+      "text": "                    })}"
+    },
+    {
+      "line": 457,
+      "text": "                {move || {"
+    },
+    {
+      "line": 458,
+      "text": "                    publish_action"
+    },
+    {
+      "line": 459,
+      "text": "                        .value()"
+    },
+    {
+      "line": 460,
+      "text": "                        .get()"
+    },
+    {
+      "line": 461,
+      "text": "                        .map(|result: Result<PublishPostResult, WebError>| match result {"
+    },
+    {
+      "line": 462,
+      "text": "                            Ok(published) => {"
+    },
+    {
+      "line": 463,
+      "text": "                                view! {"
+    },
+    {
+      "line": 464,
+      "text": "                                    <p class=\"success\">"
+    },
+    {
+      "line": 466,
+      "text": "                                        <a href=published.permalink>\"View post\"</a>"
+    },
+    {
+      "line": 469,
+      "text": "                                    .into_any()"
+    },
+    {
+      "line": 471,
+      "text": "                            Err(err) => view! { <p class=\"error\">{err.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 472,
+      "text": "                        })"
+    },
+    {
+      "line": 473,
+      "text": "                }}"
+    },
+    {
+      "line": 474,
+      "text": "                {render_delete_result(delete_action, \"Draft deleted.\", \"/drafts\", \"Go to drafts\")}"
+    },
+    {
+      "line": 477,
+      "text": "    }"
+    },
+    {
+      "line": 478,
+      "text": "}"
+    },
+    {
+      "line": 483,
+      "text": "pub fn EditPostPage() -> impl IntoView {"
+    },
+    {
+      "line": 484,
+      "text": "    let params = use_params_map();"
+    },
+    {
+      "line": 485,
+      "text": "    let update_post_action = ServerAction::<UpdatePost>::new();"
+    },
+    {
+      "line": 486,
+      "text": "    let body = RwSignal::new(String::new());"
+    },
+    {
+      "line": 487,
+      "text": "    let format = RwSignal::new(\"markdown\".to_string());"
+    },
+    {
+      "line": 488,
+      "text": "    let slug_override = RwSignal::new(String::new());"
+    },
+    {
+      "line": 489,
+      "text": "    let summary = RwSignal::new(String::new());"
+    },
+    {
+      "line": 490,
+      "text": "    let post_tags: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());"
+    },
+    {
+      "line": 508,
+      "text": "    let post = Resource::new("
+    },
+    {
+      "line": 509,
+      "text": "        move || {"
+    },
+    {
+      "line": 510,
+      "text": "            params"
+    },
+    {
+      "line": 511,
+      "text": "                .get()"
+    },
+    {
+      "line": 512,
+      "text": "                .get(\"post_id\")"
+    },
+    {
+      "line": 513,
+      "text": "                .and_then(|v| v.parse::<i64>().ok())"
+    },
+    {
+      "line": 514,
+      "text": "                .unwrap_or(-1)"
+    },
+    {
+      "line": 515,
+      "text": "        },"
+    },
+    {
+      "line": 519,
+      "text": "    view! {"
+    },
+    {
+      "line": 520,
+      "text": "        <Topbar title=\"Edit Post\".to_string() sub=\"Long-form\".to_string() />"
+    },
+    {
+      "line": 521,
+      "text": "        <Suspense fallback=|| {"
+    },
+    {
+      "line": 522,
+      "text": "            view! { <p class=\"j-loading\">\"Loading\\u{2026}\"</p> }"
+    },
+    {
+      "line": 523,
+      "text": "        }>"
+    },
+    {
+      "line": 524,
+      "text": "            {move || Suspend::new(async move {"
+    },
+    {
+      "line": 525,
+      "text": "                match post.await {"
+    },
+    {
+      "line": 526,
+      "text": "                    Ok(fetched) => {"
+    },
+    {
+      "line": 527,
+      "text": "                        body.set(fetched.body.clone());"
+    },
+    {
+      "line": 528,
+      "text": "                        format.set(fetched.format.clone());"
+    },
+    {
+      "line": 529,
+      "text": "                        slug_override.set(fetched.slug.clone());"
+    },
+    {
+      "line": 530,
+      "text": "                        summary.set(fetched.summary.clone().unwrap_or_default());"
+    },
+    {
+      "line": 531,
+      "text": "                        post_tags.set(fetched.tags.clone());"
+    },
+    {
+      "line": 532,
+      "text": "                        let post_id = fetched.post_id;"
+    },
+    {
+      "line": 533,
+      "text": "                        let is_published = fetched.published_at.is_some();"
+    },
+    {
+      "line": 534,
+      "text": "                        let dispatch_update = move |publish: bool| {"
+    },
+    {
+      "line": 535,
+      "text": "                            let slug = slug_override.get();"
+    },
+    {
+      "line": 536,
+      "text": "                            let slug_override_arg = common::text::non_empty(&slug)"
+    },
+    {
+      "line": 537,
+      "text": "                                .map(str::to_owned);"
+    },
+    {
+      "line": 538,
+      "text": "                            update_post_action"
+    },
+    {
+      "line": 539,
+      "text": "                                .dispatch(UpdatePost {"
+    },
+    {
+      "line": 540,
+      "text": "                                    post_id,"
+    },
+    {
+      "line": 541,
+      "text": "                                    body: body.get(),"
+    },
+    {
+      "line": 542,
+      "text": "                                    format: format.get(),"
+    },
+    {
+      "line": 543,
+      "text": "                                    slug_override: slug_override_arg,"
+    },
+    {
+      "line": 544,
+      "text": "                                    publish,"
+    },
+    {
+      "line": 546,
+      "text": "                                        post_tags.get().into_iter().map(|t| t.display).collect(),"
+    },
+    {
+      "line": 548,
+      "text": "                                    summary: common::text::non_empty_owned(summary.get()),"
+    },
+    {
+      "line": 550,
+      "text": "                        };"
+    },
+    {
+      "line": 551,
+      "text": "                        view! {"
+    },
+    {
+      "line": 552,
+      "text": "                            <div class=\"j-edit-form-grid\">"
+    },
+    {
+      "line": 553,
+      "text": "                                <div class=\"j-edit-form-body\">"
+    },
+    {
+      "line": 555,
+      "text": "                                        body=body"
+    },
+    {
+      "line": 556,
+      "text": "                                        format=format"
+    },
+    {
+      "line": 557,
+      "text": "                                        rows=20"
+    },
+    {
+      "line": 558,
+      "text": "                                        show_seg=false"
+    },
+    {
+      "line": 561,
+      "text": "                                <aside class=\"j-edit-form-aside\">"
+    },
+    {
+      "line": 562,
+      "text": "                                    <div>"
+    },
+    {
+      "line": 566,
+      "text": "                                        {(!is_published)"
+    },
+    {
+      "line": 567,
+      "text": "                                            .then(|| {"
+    },
+    {
+      "line": 568,
+      "text": "                                                view! {"
+    },
+    {
+      "line": 569,
+      "text": "                                                    <div"
+    },
+    {
+      "line": 570,
+      "text": "                                                        class=\"j-field-row\""
+    },
+    {
+      "line": 571,
+      "text": "                                                        style=\"grid-template-columns:auto 1fr\""
+    },
+    {
+      "line": 576,
+      "text": "                                                        <input"
+    },
+    {
+      "line": 577,
+      "text": "                                                            id=\"edit-slug\""
+    },
+    {
+      "line": 578,
+      "text": "                                                            type=\"text\""
+    },
+    {
+      "line": 579,
+      "text": "                                                            name=\"slug_override\""
+    },
+    {
+      "line": 580,
+      "text": "                                                            class=\"j-field-val\""
+    },
+    {
+      "line": 581,
+      "text": "                                                            prop:value=slug_override"
+    },
+    {
+      "line": 582,
+      "text": "                                                            on:input=move |ev| {"
+    },
+    {
+      "line": 583,
+      "text": "                                                                slug_override.set(event_target_value(&ev));"
+    },
+    {
+      "line": 584,
+      "text": "                                                            }"
+    },
+    {
+      "line": 588,
+      "text": "                                            })}"
+    },
+    {
+      "line": 589,
+      "text": "                                        <div style=\"margin-top:10px\">"
+    },
+    {
+      "line": 593,
+      "text": "                                            <textarea"
+    },
+    {
+      "line": 594,
+      "text": "                                                id=\"edit-summary\""
+    },
+    {
+      "line": 595,
+      "text": "                                                name=\"summary\""
+    },
+    {
+      "line": 596,
+      "text": "                                                placeholder=\"Optional summary or excerpt\""
+    },
+    {
+      "line": 597,
+      "text": "                                                class=\"j-field-val\""
+    },
+    {
+      "line": 598,
+      "text": "                                                rows=3"
+    },
+    {
+      "line": 599,
+      "text": "                                                prop:value=summary"
+    },
+    {
+      "line": 600,
+      "text": "                                                on:input=move |ev| {"
+    },
+    {
+      "line": 601,
+      "text": "                                                    summary.set(event_target_value(&ev));"
+    },
+    {
+      "line": 602,
+      "text": "                                                }"
+    },
+    {
+      "line": 605,
+      "text": "                                        <div style=\"margin-top:10px\">"
+    },
+    {
+      "line": 606,
+      "text": "                                            <TagInput tags=post_tags />"
+    },
+    {
+      "line": 608,
+      "text": "                                        <div class=\"j-seg\" style=\"margin-top:10px\">"
+    },
+    {
+      "line": 609,
+      "text": "                                            <button"
+    },
+    {
+      "line": 610,
+      "text": "                                                type=\"button\""
+    },
+    {
+      "line": 611,
+      "text": "                                                class=move || {"
+    },
+    {
+      "line": 612,
+      "text": "                                                    if format.get() == \"markdown\" {"
+    },
+    {
+      "line": 613,
+      "text": "                                                        \"j-btn is-selected\""
+    },
+    {
+      "line": 615,
+      "text": "                                                        \"j-btn\""
+    },
+    {
+      "line": 617,
+      "text": "                                                }"
+    },
+    {
+      "line": 618,
+      "text": "                                                on:click=move |_| { format.set(\"markdown\".to_string()) }"
+    },
+    {
+      "line": 620,
+      "text": "                                                \"Markdown\""
+    },
+    {
+      "line": 622,
+      "text": "                                            <button"
+    },
+    {
+      "line": 623,
+      "text": "                                                type=\"button\""
+    },
+    {
+      "line": 624,
+      "text": "                                                class=move || {"
+    },
+    {
+      "line": 625,
+      "text": "                                                    if format.get() == \"org\" {"
+    },
+    {
+      "line": 626,
+      "text": "                                                        \"j-btn is-selected\""
+    },
+    {
+      "line": 628,
+      "text": "                                                        \"j-btn\""
+    },
+    {
+      "line": 630,
+      "text": "                                                }"
+    },
+    {
+      "line": 631,
+      "text": "                                                on:click=move |_| format.set(\"org\".to_string())"
+    },
+    {
+      "line": 633,
+      "text": "                                                \"Org\""
+    },
+    {
+      "line": 637,
+      "text": "                                    <div style=\"margin-top:16px\">"
+    },
+    {
+      "line": 643,
+      "text": "                                    <div class=\"j-edit-form-actions\">"
+    },
+    {
+      "line": 644,
+      "text": "                                        {if is_published {"
+    },
+    {
+      "line": 645,
+      "text": "                                            view! {"
+    },
+    {
+      "line": 646,
+      "text": "                                                <button"
+    },
+    {
+      "line": 647,
+      "text": "                                                    class=\"j-btn is-primary\""
+    },
+    {
+      "line": 648,
+      "text": "                                                    type=\"button\""
+    },
+    {
+      "line": 649,
+      "text": "                                                    name=\"publish\""
+    },
+    {
+      "line": 650,
+      "text": "                                                    value=\"true\""
+    },
+    {
+      "line": 651,
+      "text": "                                                    on:click=move |_| dispatch_update(true)"
+    },
+    {
+      "line": 653,
+      "text": "                                                    \"Save\""
+    },
+    {
+      "line": 656,
+      "text": "                                                .into_any()"
+    },
+    {
+      "line": 658,
+      "text": "                                            view! {"
+    },
+    {
+      "line": 659,
+      "text": "                                                <button"
+    },
+    {
+      "line": 660,
+      "text": "                                                    class=\"j-btn\""
+    },
+    {
+      "line": 661,
+      "text": "                                                    type=\"button\""
+    },
+    {
+      "line": 662,
+      "text": "                                                    name=\"publish\""
+    },
+    {
+      "line": 663,
+      "text": "                                                    value=\"false\""
+    },
+    {
+      "line": 664,
+      "text": "                                                    on:click=move |_| dispatch_update(false)"
+    },
+    {
+      "line": 666,
+      "text": "                                                    \"Save draft\""
+    },
+    {
+      "line": 668,
+      "text": "                                                <button"
+    },
+    {
+      "line": 669,
+      "text": "                                                    class=\"j-btn is-primary\""
+    },
+    {
+      "line": 670,
+      "text": "                                                    type=\"button\""
+    },
+    {
+      "line": 671,
+      "text": "                                                    name=\"publish\""
+    },
+    {
+      "line": 672,
+      "text": "                                                    value=\"true\""
+    },
+    {
+      "line": 673,
+      "text": "                                                    on:click=move |_| dispatch_update(true)"
+    },
+    {
+      "line": 675,
+      "text": "                                                    \"Publish\""
+    },
+    {
+      "line": 678,
+      "text": "                                                .into_any()"
+    },
+    {
+      "line": 684,
+      "text": "                            .into_any()"
+    },
+    {
+      "line": 686,
+      "text": "                    Err(err) => view! { <p class=\"error\">{err.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 688,
+      "text": "            })}"
+    },
+    {
+      "line": 690,
+      "text": "        {move || {"
+    },
+    {
+      "line": 691,
+      "text": "            update_post_action"
+    },
+    {
+      "line": 692,
+      "text": "                .value()"
+    },
+    {
+      "line": 693,
+      "text": "                .get()"
+    },
+    {
+      "line": 694,
+      "text": "                .map(|result: Result<UpdatePostResult, WebError>| match result {"
+    },
+    {
+      "line": 695,
+      "text": "                    Ok(updated) if updated.published_at.is_none() => {"
+    },
+    {
+      "line": 696,
+      "text": "                        let slug_value = updated.slug.clone();"
+    },
+    {
+      "line": 697,
+      "text": "                        let slug_for_attr = slug_value.clone();"
+    },
+    {
+      "line": 698,
+      "text": "                        view! {"
+    },
+    {
+      "line": 699,
+      "text": "                            <div class=\"j-save-summary\">"
+    },
+    {
+      "line": 701,
+      "text": "                                <p data-test=\"slug-value\" data-slug=slug_for_attr>"
+    },
+    {
+      "line": 703,
+      "text": "                                    {slug_value}"
+    },
+    {
+      "line": 705,
+      "text": "                                <a data-test=\"preview-link\" href=updated.preview_url.clone()>"
+    },
+    {
+      "line": 706,
+      "text": "                                    \"Preview draft\""
+    },
+    {
+      "line": 710,
+      "text": "                            .into_any()"
+    },
+    {
+      "line": 712,
+      "text": "                    Ok(_) => view! { <p>\"Redirecting\\u{2026}\"</p> }.into_any(),"
+    },
+    {
+      "line": 713,
+      "text": "                    Err(err) => view! { <p class=\"error\">{err.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 714,
+      "text": "                })"
+    },
+    {
+      "line": 715,
+      "text": "        }}"
+    },
+    {
+      "line": 716,
+      "text": "    }"
+    },
+    {
+      "line": 717,
+      "text": "}"
+    },
+    {
+      "line": 721,
+      "text": "pub fn DraftsPage() -> impl IntoView {"
+    },
+    {
+      "line": 722,
+      "text": "    let publish_action = ServerAction::<PublishPost>::new();"
+    },
+    {
+      "line": 723,
+      "text": "    let delete_action = ServerAction::<DeletePost>::new();"
+    },
+    {
+      "line": 724,
+      "text": "    let drafts = Resource::new("
+    },
+    {
+      "line": 725,
+      "text": "        move || {"
+    },
+    {
+      "line": 726,
+      "text": "            ("
+    },
+    {
+      "line": 727,
+      "text": "                publish_action.version().get(),"
+    },
+    {
+      "line": 728,
+      "text": "                delete_action.version().get(),"
+    },
+    {
+      "line": 729,
+      "text": "            )"
+    },
+    {
+      "line": 730,
+      "text": "        },"
+    },
+    {
+      "line": 731,
+      "text": "        |_| list_drafts(None, None, Some(50)),"
+    },
+    {
+      "line": 734,
+      "text": "    view! {"
+    },
+    {
+      "line": 735,
+      "text": "        <Topbar title=\"Drafts\".to_string() sub=\"Unpublished posts\".to_string() />"
+    },
+    {
+      "line": 736,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 737,
+      "text": "            <div class=\"j-page\">"
+    },
+    {
+      "line": 738,
+      "text": "                <Suspense fallback=|| {"
+    },
+    {
+      "line": 739,
+      "text": "                    view! { <p class=\"j-loading\">\"Loading\\u{2026}\"</p> }"
+    },
+    {
+      "line": 740,
+      "text": "                }>"
+    },
+    {
+      "line": 741,
+      "text": "                    {move || Suspend::new(async move {"
+    },
+    {
+      "line": 742,
+      "text": "                        match drafts.await {"
+    },
+    {
+      "line": 743,
+      "text": "                            Ok(list) => {"
+    },
+    {
+      "line": 744,
+      "text": "                                if list.is_empty() {"
+    },
+    {
+      "line": 745,
+      "text": "                                    return view! { <p>\"You have no drafts.\"</p> }.into_any();"
+    },
+    {
+      "line": 746,
+      "text": "                                }"
+    },
+    {
+      "line": 747,
+      "text": "                                view! {"
+    },
+    {
+      "line": 748,
+      "text": "                                    <ul class=\"j-draft-list\">"
+    },
+    {
+      "line": 749,
+      "text": "                                        {list"
+    },
+    {
+      "line": 750,
+      "text": "                                            .into_iter()"
+    },
+    {
+      "line": 751,
+      "text": "                                            .map(|draft| render_draft_row("
+    },
+    {
+      "line": 752,
+      "text": "                                                draft,"
+    },
+    {
+      "line": 753,
+      "text": "                                                publish_action,"
+    },
+    {
+      "line": 754,
+      "text": "                                                delete_action,"
+    },
+    {
+      "line": 756,
+      "text": "                                            .collect::<Vec<_>>()}"
+    },
+    {
+      "line": 759,
+      "text": "                                    .into_any()"
+    },
+    {
+      "line": 761,
+      "text": "                            Err(err) => view! { <p class=\"error\">{err.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 763,
+      "text": "                    })}"
+    },
+    {
+      "line": 765,
+      "text": "                {move || {"
+    },
+    {
+      "line": 766,
+      "text": "                    publish_action"
+    },
+    {
+      "line": 767,
+      "text": "                        .value()"
+    },
+    {
+      "line": 768,
+      "text": "                        .get()"
+    },
+    {
+      "line": 769,
+      "text": "                        .map(|result: Result<PublishPostResult, WebError>| match result {"
+    },
+    {
+      "line": 770,
+      "text": "                            Ok(published) => {"
+    },
+    {
+      "line": 771,
+      "text": "                                view! {"
+    },
+    {
+      "line": 772,
+      "text": "                                    <p class=\"success\">"
+    },
+    {
+      "line": 774,
+      "text": "                                        <a href=published.permalink>\"View permalink\"</a>"
+    },
+    {
+      "line": 777,
+      "text": "                                    .into_any()"
+    },
+    {
+      "line": 779,
+      "text": "                            Err(err) => view! { <p class=\"error\">{err.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 780,
+      "text": "                        })"
+    },
+    {
+      "line": 781,
+      "text": "                }}"
+    },
+    {
+      "line": 782,
+      "text": "                {move || {"
+    },
+    {
+      "line": 783,
+      "text": "                    delete_action"
+    },
+    {
+      "line": 784,
+      "text": "                        .value()"
+    },
+    {
+      "line": 785,
+      "text": "                        .get()"
+    },
+    {
+      "line": 786,
+      "text": "                        .map(|result| match result {"
+    },
+    {
+      "line": 787,
+      "text": "                            Ok(()) => view! { <p class=\"success\">\"Draft deleted.\"</p> }.into_any(),"
+    },
+    {
+      "line": 788,
+      "text": "                            Err(err) => view! { <p class=\"error\">{err.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 789,
+      "text": "                        })"
+    },
+    {
+      "line": 790,
+      "text": "                }}"
+    },
+    {
+      "line": 793,
+      "text": "    }"
+    },
+    {
+      "line": 794,
+      "text": "}"
+    },
+    {
+      "line": 796,
+      "text": "fn render_draft_row("
+    },
+    {
+      "line": 797,
+      "text": "    draft: DraftSummary,"
+    },
+    {
+      "line": 798,
+      "text": "    publish_action: ServerAction<PublishPost>,"
+    },
+    {
+      "line": 799,
+      "text": "    delete_action: ServerAction<DeletePost>,"
+    },
+    {
+      "line": 800,
+      "text": ") -> impl IntoView {"
+    },
+    {
+      "line": 801,
+      "text": "    let post_id = draft.post_id;"
+    },
+    {
+      "line": 802,
+      "text": "    let label = draft.title.clone().unwrap_or(draft.summary_label.clone());"
+    },
+    {
+      "line": 803,
+      "text": "    view! {"
+    },
+    {
+      "line": 804,
+      "text": "        <li>"
+    },
+    {
+      "line": 805,
+      "text": "            <div class=\"j-draft-row\">"
+    },
+    {
+      "line": 806,
+      "text": "                <div class=\"j-draft-row-content\">"
+    },
+    {
+      "line": 807,
+      "text": "                    <strong>{label}</strong>"
+    },
+    {
+      "line": 809,
+      "text": "                    {draft.slug}"
+    },
+    {
+      "line": 811,
+      "text": "                    <a href=draft.preview_url>\"Preview\"</a>"
+    },
+    {
+      "line": 813,
+      "text": "                    <a href=draft.permalink>\"Permalink\"</a>"
+    },
+    {
+      "line": 815,
+      "text": "                <div class=\"j-draft-actions\">"
+    },
+    {
+      "line": 816,
+      "text": "                    <a class=\"j-btn\" href=draft.edit_url>"
+    },
+    {
+      "line": 817,
+      "text": "                        \"Edit\""
+    },
+    {
+      "line": 819,
+      "text": "                    <ActionForm action=publish_action>"
+    },
+    {
+      "line": 825,
+      "text": "                    <ActionForm action=delete_action>"
+    },
+    {
+      "line": 838,
+      "text": "    }"
+    },
+    {
+      "line": 839,
+      "text": "}"
+    },
+    {
+      "line": 841,
+      "text": "fn render_delete_form("
+    },
+    {
+      "line": 842,
+      "text": "    delete_action: ServerAction<DeletePost>,"
+    },
+    {
+      "line": 843,
+      "text": "    post_id: i64,"
+    },
+    {
+      "line": 844,
+      "text": "    confirm_msg: &'static str,"
+    },
+    {
+      "line": 845,
+      "text": ") -> impl IntoView {"
+    },
+    {
+      "line": 846,
+      "text": "    view! {"
+    },
+    {
+      "line": 847,
+      "text": "        <ActionForm action=delete_action>"
+    },
+    {
+      "line": 857,
+      "text": "    }"
+    },
+    {
+      "line": 858,
+      "text": "}"
+    },
+    {
+      "line": 860,
+      "text": "fn render_delete_result("
+    },
+    {
+      "line": 861,
+      "text": "    delete_action: ServerAction<DeletePost>,"
+    },
+    {
+      "line": 862,
+      "text": "    success_msg: &'static str,"
+    },
+    {
+      "line": 863,
+      "text": "    success_href: &'static str,"
+    },
+    {
+      "line": 864,
+      "text": "    success_link_text: &'static str,"
+    },
+    {
+      "line": 865,
+      "text": ") -> impl IntoView {"
+    },
+    {
+      "line": 866,
+      "text": "    move || {"
+    },
+    {
+      "line": 867,
+      "text": "        delete_action.value().get().map(|result| match result {"
+    },
+    {
+      "line": 868,
+      "text": "            Ok(()) => view! { <p class=\"success\">{success_msg} \" \" <a href=success_href>{success_link_text}</a></p> }"
+    },
+    {
+      "line": 869,
+      "text": "            .into_any(),"
+    },
+    {
+      "line": 870,
+      "text": "            Err(err) => view! { <p class=\"error\">{err.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 871,
+      "text": "        })"
+    },
+    {
+      "line": 872,
+      "text": "    }"
+    },
+    {
+      "line": 873,
+      "text": "}"
+    },
+    {
+      "line": 879,
+      "text": "pub fn SiteTagPage() -> impl IntoView {"
+    },
+    {
+      "line": 880,
+      "text": "    let params = use_params_map();"
+    },
+    {
+      "line": 881,
+      "text": "    let tag = Memo::new(move |_| params.get().get(\"tag\").unwrap_or_default().to_lowercase());"
+    },
+    {
+      "line": 883,
+      "text": "    let mutate_version = RwSignal::new(0u32);"
+    },
+    {
+      "line": 884,
+      "text": "    let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));"
+    },
+    {
+      "line": 887,
+      "text": "    let initial_page = Resource::new("
+    },
+    {
+      "line": 888,
+      "text": "        move || (tag.get(), mutate_version.get()),"
+    },
+    {
+      "line": 889,
+      "text": "        |(tag, _)| async move {"
+    },
+    {
+      "line": 890,
+      "text": "            if tag.is_empty() {"
+    },
+    {
+      "line": 891,
+      "text": "                return Err(WebError::validation(\"Invalid tag\"));"
+    },
+    {
+      "line": 892,
+      "text": "            }"
+    },
+    {
+      "line": 893,
+      "text": "            list_posts_by_tag(tag, None, None, Some(50)).await"
+    },
+    {
+      "line": 894,
+      "text": "        },"
+    },
+    {
+      "line": 897,
+      "text": "    let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());"
+    },
+    {
+      "line": 898,
+      "text": "    let next_cursor_created_at = RwSignal::new(None::<String>);"
+    },
+    {
+      "line": 899,
+      "text": "    let next_cursor_post_id = RwSignal::new(None::<i64>);"
+    },
+    {
+      "line": 900,
+      "text": "    let has_more = RwSignal::new(false);"
+    },
+    {
+      "line": 901,
+      "text": "    let error = RwSignal::new(None::<String>);"
+    },
+    {
+      "line": 902,
+      "text": "    let initial_loaded = RwSignal::new(false);"
+    },
+    {
+      "line": 904,
+      "text": "    let load_more_action = ServerAction::<ListPostsByTag>::new();"
+    },
+    {
+      "line": 944,
+      "text": "    let on_load_more = move |_| {"
+    },
+    {
+      "line": 945,
+      "text": "        let tag_value = tag.get_untracked();"
+    },
+    {
+      "line": 946,
+      "text": "        if tag_value.is_empty() || !has_more.get_untracked() {"
+    },
+    {
+      "line": 947,
+      "text": "            return;"
+    },
+    {
+      "line": 948,
+      "text": "        }"
+    },
+    {
+      "line": 949,
+      "text": "        load_more_action.dispatch(ListPostsByTag {"
+    },
+    {
+      "line": 950,
+      "text": "            tag: tag_value,"
+    },
+    {
+      "line": 951,
+      "text": "            cursor_created_at: next_cursor_created_at.get_untracked(),"
+    },
+    {
+      "line": 952,
+      "text": "            cursor_post_id: next_cursor_post_id.get_untracked(),"
+    },
+    {
+      "line": 953,
+      "text": "            limit: Some(50),"
+    },
+    {
+      "line": 954,
+      "text": "        });"
+    },
+    {
+      "line": 955,
+      "text": "    };"
+    },
+    {
+      "line": 957,
+      "text": "    let read_tag = move || read_signal!(tag);"
+    },
+    {
+      "line": 958,
+      "text": "    let read_error = move || read_signal!(error);"
+    },
+    {
+      "line": 959,
+      "text": "    let read_initial_loaded = move || read_signal!(initial_loaded);"
+    },
+    {
+      "line": 960,
+      "text": "    let read_timeline = move || read_signal!(timeline);"
+    },
+    {
+      "line": 961,
+      "text": "    let read_has_more = move || read_signal!(has_more);"
+    },
+    {
+      "line": 962,
+      "text": "    let read_pending = move || read_signal!(load_more_action.pending());"
+    },
+    {
+      "line": 964,
+      "text": "    view! {"
+    },
+    {
+      "line": 965,
+      "text": "        {move || {"
+    },
+    {
+      "line": 966,
+      "text": "            view! {"
+    },
+    {
+      "line": 967,
+      "text": "                {tag"
+    },
+    {
+      "line": 968,
+      "text": "                    .get()"
+    },
+    {
+      "line": 969,
+      "text": "                    .parse::<Tag>()"
+    },
+    {
+      "line": 970,
+      "text": "                    .ok()"
+    },
+    {
+      "line": 971,
+      "text": "                    .map(|tag| view! { <FeedDiscovery surface=FeedSurface::SiteTag { tag } /> })}"
+    },
+    {
+      "line": 973,
+      "text": "        }}"
+    },
+    {
+      "line": 975,
+      "text": "            title=Signal::derive(move || format!(\"#{}\", read_tag()))"
+    },
+    {
+      "line": 976,
+      "text": "            sub=\"Posts on this instance\".to_string()"
+    },
+    {
+      "line": 978,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 979,
+      "text": "            <div class=\"j-page\">"
+    },
+    {
+      "line": 980,
+      "text": "                {move || {"
+    },
+    {
+      "line": 981,
+      "text": "                    if let Some(err) = read_error() {"
+    },
+    {
+      "line": 982,
+      "text": "                        return view! { <p class=\"error\">{err}</p> }.into_any();"
+    },
+    {
+      "line": 983,
+      "text": "                    }"
+    },
+    {
+      "line": 984,
+      "text": "                    if !read_initial_loaded() {"
+    },
+    {
+      "line": 985,
+      "text": "                        return view! { <p class=\"j-loading\">\"Loading\\u{2026}\"</p> }.into_any();"
+    },
+    {
+      "line": 986,
+      "text": "                    }"
+    },
+    {
+      "line": 987,
+      "text": "                    let rows = read_timeline();"
+    },
+    {
+      "line": 988,
+      "text": "                    if rows.is_empty() {"
+    },
+    {
+      "line": 989,
+      "text": "                        return view! { <p>\"No posts with this tag yet.\"</p> }.into_any();"
+    },
+    {
+      "line": 990,
+      "text": "                    }"
+    },
+    {
+      "line": 991,
+      "text": "                    view! {"
+    },
+    {
+      "line": 992,
+      "text": "                        <div>"
+    },
+    {
+      "line": 993,
+      "text": "                            {rows"
+    },
+    {
+      "line": 994,
+      "text": "                                .into_iter()"
+    },
+    {
+      "line": 995,
+      "text": "                                .map(|post| {"
+    },
+    {
+      "line": 996,
+      "text": "                                    view! { <PostCard post=post banner=None on_mutate=on_mutate /> }"
+    },
+    {
+      "line": 997,
+      "text": "                                })"
+    },
+    {
+      "line": 998,
+      "text": "                                .collect::<Vec<_>>()}"
+    },
+    {
+      "line": 1000,
+      "text": "                        {move || {"
+    },
+    {
+      "line": 1001,
+      "text": "                            read_has_more()"
+    },
+    {
+      "line": 1002,
+      "text": "                                .then(|| {"
+    },
+    {
+      "line": 1003,
+      "text": "                                    view! {"
+    },
+    {
+      "line": 1004,
+      "text": "                                        <button on:click=on_load_more disabled=read_pending>"
+    },
+    {
+      "line": 1005,
+      "text": "                                            {move || {"
+    },
+    {
+      "line": 1006,
+      "text": "                                                if read_pending() { \"Loading\\u{2026}\" } else { \"Load more\" }"
+    },
+    {
+      "line": 1007,
+      "text": "                                            }}"
+    },
+    {
+      "line": 1010,
+      "text": "                                })"
+    },
+    {
+      "line": 1011,
+      "text": "                        }}"
+    },
+    {
+      "line": 1013,
+      "text": "                        .into_any()"
+    },
+    {
+      "line": 1014,
+      "text": "                }}"
+    },
+    {
+      "line": 1018,
+      "text": "}"
+    },
+    {
+      "line": 1024,
+      "text": "pub fn UserTagPage() -> impl IntoView {"
+    },
+    {
+      "line": 1025,
+      "text": "    let params = use_params_map();"
+    },
+    {
+      "line": 1026,
+      "text": "    let username = Memo::new(move |_| {"
+    },
+    {
+      "line": 1027,
+      "text": "        params"
+    },
+    {
+      "line": 1028,
+      "text": "            .get()"
+    },
+    {
+      "line": 1029,
+      "text": "            .get(\"username\")"
+    },
+    {
+      "line": 1030,
+      "text": "            .unwrap_or_default()"
+    },
+    {
+      "line": 1031,
+      "text": "            .strip_prefix('~')"
+    },
+    {
+      "line": 1032,
+      "text": "            .unwrap_or_default()"
+    },
+    {
+      "line": 1033,
+      "text": "            .to_string()"
+    },
+    {
+      "line": 1034,
+      "text": "    });"
+    },
+    {
+      "line": 1035,
+      "text": "    let tag = Memo::new(move |_| params.get().get(\"tag\").unwrap_or_default().to_lowercase());"
+    },
+    {
+      "line": 1037,
+      "text": "    let mutate_version = RwSignal::new(0u32);"
+    },
+    {
+      "line": 1038,
+      "text": "    let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));"
+    },
+    {
+      "line": 1041,
+      "text": "    let initial_page = Resource::new("
+    },
+    {
+      "line": 1042,
+      "text": "        move || (username.get(), tag.get(), mutate_version.get()),"
+    },
+    {
+      "line": 1043,
+      "text": "        |(username, tag, _)| async move {"
+    },
+    {
+      "line": 1044,
+      "text": "            if username.is_empty() {"
+    },
+    {
+      "line": 1045,
+      "text": "                return Err(WebError::validation(\"Invalid username\"));"
+    },
+    {
+      "line": 1046,
+      "text": "            }"
+    },
+    {
+      "line": 1047,
+      "text": "            if tag.is_empty() {"
+    },
+    {
+      "line": 1048,
+      "text": "                return Err(WebError::validation(\"Invalid tag\"));"
+    },
+    {
+      "line": 1049,
+      "text": "            }"
+    },
+    {
+      "line": 1050,
+      "text": "            list_user_posts_by_tag(username, tag, None, None, Some(50)).await"
+    },
+    {
+      "line": 1051,
+      "text": "        },"
+    },
+    {
+      "line": 1054,
+      "text": "    let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());"
+    },
+    {
+      "line": 1055,
+      "text": "    let next_cursor_created_at = RwSignal::new(None::<String>);"
+    },
+    {
+      "line": 1056,
+      "text": "    let next_cursor_post_id = RwSignal::new(None::<i64>);"
+    },
+    {
+      "line": 1057,
+      "text": "    let has_more = RwSignal::new(false);"
+    },
+    {
+      "line": 1058,
+      "text": "    let error = RwSignal::new(None::<String>);"
+    },
+    {
+      "line": 1059,
+      "text": "    let initial_loaded = RwSignal::new(false);"
+    },
+    {
+      "line": 1061,
+      "text": "    let load_more_action = ServerAction::<ListUserPostsByTag>::new();"
+    },
+    {
+      "line": 1101,
+      "text": "    let on_load_more = move |_| {"
+    },
+    {
+      "line": 1102,
+      "text": "        let username_value = username.get_untracked();"
+    },
+    {
+      "line": 1103,
+      "text": "        let tag_value = tag.get_untracked();"
+    },
+    {
+      "line": 1104,
+      "text": "        if username_value.is_empty() || tag_value.is_empty() || !has_more.get_untracked() {"
+    },
+    {
+      "line": 1105,
+      "text": "            return;"
+    },
+    {
+      "line": 1106,
+      "text": "        }"
+    },
+    {
+      "line": 1107,
+      "text": "        load_more_action.dispatch(ListUserPostsByTag {"
+    },
+    {
+      "line": 1108,
+      "text": "            username: username_value,"
+    },
+    {
+      "line": 1109,
+      "text": "            tag: tag_value,"
+    },
+    {
+      "line": 1110,
+      "text": "            cursor_created_at: next_cursor_created_at.get_untracked(),"
+    },
+    {
+      "line": 1111,
+      "text": "            cursor_post_id: next_cursor_post_id.get_untracked(),"
+    },
+    {
+      "line": 1112,
+      "text": "            limit: Some(50),"
+    },
+    {
+      "line": 1113,
+      "text": "        });"
+    },
+    {
+      "line": 1114,
+      "text": "    };"
+    },
+    {
+      "line": 1116,
+      "text": "    let read_username = move || read_signal!(username);"
+    },
+    {
+      "line": 1117,
+      "text": "    let read_tag = move || read_signal!(tag);"
+    },
+    {
+      "line": 1118,
+      "text": "    let read_error = move || read_signal!(error);"
+    },
+    {
+      "line": 1119,
+      "text": "    let read_initial_loaded = move || read_signal!(initial_loaded);"
+    },
+    {
+      "line": 1120,
+      "text": "    let read_timeline = move || read_signal!(timeline);"
+    },
+    {
+      "line": 1121,
+      "text": "    let read_has_more = move || read_signal!(has_more);"
+    },
+    {
+      "line": 1122,
+      "text": "    let read_pending = move || read_signal!(load_more_action.pending());"
+    },
+    {
+      "line": 1124,
+      "text": "    view! {"
+    },
+    {
+      "line": 1125,
+      "text": "        {move || {"
+    },
+    {
+      "line": 1126,
+      "text": "            view! {"
+    },
+    {
+      "line": 1127,
+      "text": "                {username"
+    },
+    {
+      "line": 1128,
+      "text": "                    .get()"
+    },
+    {
+      "line": 1129,
+      "text": "                    .parse::<Username>()"
+    },
+    {
+      "line": 1130,
+      "text": "                    .ok()"
+    },
+    {
+      "line": 1131,
+      "text": "                    .zip(tag.get().parse::<Tag>().ok())"
+    },
+    {
+      "line": 1132,
+      "text": "                    .map(|(username, tag)| {"
+    },
+    {
+      "line": 1133,
+      "text": "                        view! {"
+    },
+    {
+      "line": 1134,
+      "text": "                            <FeedDiscovery surface=FeedSurface::UserTag {"
+    },
+    {
+      "line": 1135,
+      "text": "                                username,"
+    },
+    {
+      "line": 1136,
+      "text": "                                tag,"
+    },
+    {
+      "line": 1137,
+      "text": "                            } />"
+    },
+    {
+      "line": 1139,
+      "text": "                    })}"
+    },
+    {
+      "line": 1141,
+      "text": "        }}"
+    },
+    {
+      "line": 1143,
+      "text": "            title=Signal::derive(move || format!(\"#{}\", read_tag()))"
+    },
+    {
+      "line": 1144,
+      "text": "            sub=Signal::derive(move || format!(\"Posts by ~{}\", read_username()))"
+    },
+    {
+      "line": 1146,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 1147,
+      "text": "            <div class=\"j-page\">"
+    },
+    {
+      "line": 1148,
+      "text": "                {move || {"
+    },
+    {
+      "line": 1149,
+      "text": "                    if let Some(err) = read_error() {"
+    },
+    {
+      "line": 1150,
+      "text": "                        return view! { <p class=\"error\">{err}</p> }.into_any();"
+    },
+    {
+      "line": 1151,
+      "text": "                    }"
+    },
+    {
+      "line": 1152,
+      "text": "                    if !read_initial_loaded() {"
+    },
+    {
+      "line": 1153,
+      "text": "                        return view! { <p class=\"j-loading\">\"Loading\\u{2026}\"</p> }.into_any();"
+    },
+    {
+      "line": 1154,
+      "text": "                    }"
+    },
+    {
+      "line": 1155,
+      "text": "                    let rows = read_timeline();"
+    },
+    {
+      "line": 1156,
+      "text": "                    if rows.is_empty() {"
+    },
+    {
+      "line": 1157,
+      "text": "                        return view! { <p>\"No posts with this tag yet.\"</p> }.into_any();"
+    },
+    {
+      "line": 1158,
+      "text": "                    }"
+    },
+    {
+      "line": 1159,
+      "text": "                    view! {"
+    },
+    {
+      "line": 1160,
+      "text": "                        <div>"
+    },
+    {
+      "line": 1161,
+      "text": "                            {rows"
+    },
+    {
+      "line": 1162,
+      "text": "                                .into_iter()"
+    },
+    {
+      "line": 1163,
+      "text": "                                .map(|post| {"
+    },
+    {
+      "line": 1164,
+      "text": "                                    let username_for_tags = post.username.clone();"
+    },
+    {
+      "line": 1165,
+      "text": "                                    view! {"
+    },
+    {
+      "line": 1167,
+      "text": "                                            post=post"
+    },
+    {
+      "line": 1168,
+      "text": "                                            banner=None"
+    },
+    {
+      "line": 1169,
+      "text": "                                            tag_context=TagContext::ForUser(username_for_tags)"
+    },
+    {
+      "line": 1170,
+      "text": "                                            on_mutate=on_mutate"
+    },
+    {
+      "line": 1173,
+      "text": "                                })"
+    },
+    {
+      "line": 1174,
+      "text": "                                .collect::<Vec<_>>()}"
+    },
+    {
+      "line": 1176,
+      "text": "                        {move || {"
+    },
+    {
+      "line": 1177,
+      "text": "                            read_has_more()"
+    },
+    {
+      "line": 1178,
+      "text": "                                .then(|| {"
+    },
+    {
+      "line": 1179,
+      "text": "                                    view! {"
+    },
+    {
+      "line": 1180,
+      "text": "                                        <button on:click=on_load_more disabled=read_pending>"
+    },
+    {
+      "line": 1181,
+      "text": "                                            {move || {"
+    },
+    {
+      "line": 1182,
+      "text": "                                                if read_pending() { \"Loading\\u{2026}\" } else { \"Load more\" }"
+    },
+    {
+      "line": 1183,
+      "text": "                                            }}"
+    },
+    {
+      "line": 1186,
+      "text": "                                })"
+    },
+    {
+      "line": 1187,
+      "text": "                        }}"
+    },
+    {
+      "line": 1189,
+      "text": "                        .into_any()"
+    },
+    {
+      "line": 1190,
+      "text": "                }}"
+    },
+    {
+      "line": 1194,
+      "text": "}"
+    }
+  ],
+  "web/src/pages/profile.rs": [
+    {
+      "line": 22,
+      "text": "                            Ok(data) => {"
+    },
+    {
+      "line": 23,
+      "text": "                                view! {"
+    },
+    {
+      "line": 24,
+      "text": "                                    <p>\"Username: \" {data.username.clone()}</p>"
+    },
+    {
+      "line": 25,
+      "text": "                                    <ActionForm action=update_action>"
+    },
+    {
+      "line": 46,
+      "text": "                                }"
+    },
+    {
+      "line": 47,
+      "text": "                                    .into_any()"
+    },
+    {
+      "line": 68,
+      "text": "fn DefaultPostFormatControl() -> impl IntoView {"
+    },
+    {
+      "line": 69,
+      "text": "    let action = ServerAction::<SetDefaultPostFormat>::new();"
+    },
+    {
+      "line": 70,
+      "text": "    let initial = Resource::new(|| (), |()| get_default_post_format());"
+    },
+    {
+      "line": 72,
+      "text": "    view! {"
+    },
+    {
+      "line": 73,
+      "text": "        <Suspense fallback=|| ()>"
+    },
+    {
+      "line": 74,
+      "text": "            {move || Suspend::new(async move {"
+    },
+    {
+      "line": 75,
+      "text": "                let current = initial.await.unwrap_or_else(|_| \"html\".to_string());"
+    },
+    {
+      "line": 76,
+      "text": "                view! {"
+    },
+    {
+      "line": 77,
+      "text": "                    <ActionForm action=action>"
+    },
+    {
+      "line": 92,
+      "text": "                }"
+    },
+    {
+      "line": 93,
+      "text": "            })}"
+    },
+    {
+      "line": 95,
+      "text": "    }"
+    }
+  ],
+  "web/src/pages/sessions.rs": [
+    {
+      "line": 41,
+      "text": "                                Ok(pw) => {"
+    },
+    {
+      "line": 42,
+      "text": "                                    view! {"
+    },
+    {
+      "line": 43,
+      "text": "                                        <div class=\"j-app-password-token\">"
+    },
+    {
+      "line": 47,
+      "text": "                                            <code>{pw.token}</code>"
+    },
+    {
+      "line": 50,
+      "text": "                                        .into_any()"
+    },
+    {
+      "line": 52,
+      "text": "                                Err(e) => view! { <p class=\"error\">{e.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 53,
+      "text": "                            })"
+    },
+    {
+      "line": 61,
+      "text": "                            Ok(list) => {"
+    },
+    {
+      "line": 62,
+      "text": "                                view! {"
+    },
+    {
+      "line": 63,
+      "text": "                                    <ul>"
+    },
+    {
+      "line": 64,
+      "text": "                                        {list"
+    },
+    {
+      "line": 65,
+      "text": "                                            .into_iter()"
+    },
+    {
+      "line": 66,
+      "text": "                                            .map(|s| {"
+    },
+    {
+      "line": 67,
+      "text": "                                                let hash = s.token_hash.clone();"
+    },
+    {
+      "line": 68,
+      "text": "                                                view! {"
+    },
+    {
+      "line": 69,
+      "text": "                                                    <li>"
+    },
+    {
+      "line": 70,
+      "text": "                                                        {s.label.clone()} \" — last used: \""
+    },
+    {
+      "line": 71,
+      "text": "                                                        {s.last_used_at.clone()}"
+    },
+    {
+      "line": 72,
+      "text": "                                                        {s.is_current.then_some(view! { \" (current)\" })} \" \""
+    },
+    {
+      "line": 73,
+      "text": "                                                        <ActionForm action=revoke_action>"
+    },
+    {
+      "line": 80,
+      "text": "                                                }"
+    },
+    {
+      "line": 81,
+      "text": "                                            })"
+    },
+    {
+      "line": 82,
+      "text": "                                            .collect::<Vec<_>>()}"
+    },
+    {
+      "line": 85,
+      "text": "                                    .into_any()"
+    }
+  ],
+  "web/src/pages/site.rs": [
+    {
+      "line": 9,
+      "text": "pub fn SiteSettingsPage() -> impl IntoView {"
+    },
+    {
+      "line": 10,
+      "text": "    let update_action = ServerAction::<UpdateSiteIdentity>::new();"
+    },
+    {
+      "line": 11,
+      "text": "    let settings = Resource::new("
+    },
+    {
+      "line": 12,
+      "text": "        move || update_action.version().get(),"
+    },
+    {
+      "line": 13,
+      "text": "        |_| get_site_identity(),"
+    },
+    {
+      "line": 16,
+      "text": "    view! {"
+    },
+    {
+      "line": 17,
+      "text": "        <Topbar title=\"Site Settings\".to_string() sub=\"Operations\".to_string() />"
+    },
+    {
+      "line": 18,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 19,
+      "text": "            <div class=\"j-settings j-site-settings\">"
+    },
+    {
+      "line": 20,
+      "text": "                <Suspense fallback=|| {"
+    },
+    {
+      "line": 21,
+      "text": "                    view! { <p class=\"j-loading j-settings-loading\">\"Loading\\u{2026}\"</p> }"
+    },
+    {
+      "line": 22,
+      "text": "                }>"
+    },
+    {
+      "line": 23,
+      "text": "                    {move || Suspend::new(async move {"
+    },
+    {
+      "line": 24,
+      "text": "                        match settings.await {"
+    },
+    {
+      "line": 25,
+      "text": "                            Ok(identity) => site_settings_form(identity, update_action).into_any(),"
+    },
+    {
+      "line": 26,
+      "text": "                            Err(error) => {"
+    },
+    {
+      "line": 27,
+      "text": "                                view! { <p class=\"error j-settings-error\">{error.to_string()}</p> }"
+    },
+    {
+      "line": 28,
+      "text": "                                    .into_any()"
+    },
+    {
+      "line": 31,
+      "text": "                    })}"
+    },
+    {
+      "line": 33,
+      "text": "                {move || {"
+    },
+    {
+      "line": 34,
+      "text": "                    update_action"
+    },
+    {
+      "line": 35,
+      "text": "                        .value()"
+    },
+    {
+      "line": 36,
+      "text": "                        .get()"
+    },
+    {
+      "line": 37,
+      "text": "                        .map(|result: Result<(), WebError>| match result {"
+    },
+    {
+      "line": 39,
+      "text": "                                view! {"
+    },
+    {
+      "line": 40,
+      "text": "                                    <p class=\"j-settings-saved\" role=\"status\">"
+    },
+    {
+      "line": 41,
+      "text": "                                        \"Site settings saved.\""
+    },
+    {
+      "line": 44,
+      "text": "                                    .into_any()"
+    },
+    {
+      "line": 46,
+      "text": "                            Err(error) => {"
+    },
+    {
+      "line": 47,
+      "text": "                                view! { <p class=\"error j-settings-error\">{error.to_string()}</p> }"
+    },
+    {
+      "line": 48,
+      "text": "                                    .into_any()"
+    },
+    {
+      "line": 50,
+      "text": "                        })"
+    },
+    {
+      "line": 51,
+      "text": "                }}"
+    },
+    {
+      "line": 54,
+      "text": "    }"
+    },
+    {
+      "line": 55,
+      "text": "}"
+    },
+    {
+      "line": 57,
+      "text": "fn site_settings_form("
+    },
+    {
+      "line": 58,
+      "text": "    identity: SiteIdentity,"
+    },
+    {
+      "line": 59,
+      "text": "    update_action: ServerAction<UpdateSiteIdentity>,"
+    },
+    {
+      "line": 60,
+      "text": ") -> impl IntoView {"
+    },
+    {
+      "line": 61,
+      "text": "    view! {"
+    },
+    {
+      "line": 62,
+      "text": "        <ActionForm action=update_action attr:class=\"j-card j-site-form\">"
+    },
+    {
+      "line": 100,
+      "text": "    }"
+    },
+    {
+      "line": 101,
+      "text": "}"
+    }
+  ],
+  "web/src/pages/ui.rs": [
+    {
+      "line": 25,
+      "text": "pub fn TagList(tags: Vec<TagSummary>, context: TagContext) -> impl IntoView {"
+    },
+    {
+      "line": 26,
+      "text": "    if tags.is_empty() {"
+    },
+    {
+      "line": 27,
+      "text": "        return ().into_any();"
+    },
+    {
+      "line": 28,
+      "text": "    }"
+    },
+    {
+      "line": 29,
+      "text": "    let chips: Vec<_> = tags"
+    },
+    {
+      "line": 30,
+      "text": "        .into_iter()"
+    },
+    {
+      "line": 31,
+      "text": "        .map(|tag| {"
+    },
+    {
+      "line": 32,
+      "text": "            let slug = tag.slug.clone();"
+    },
+    {
+      "line": 33,
+      "text": "            let here = match &context {"
+    },
+    {
+      "line": 34,
+      "text": "                TagContext::ForUser(username) => {"
+    },
+    {
+      "line": 35,
+      "text": "                    let here_href = format!(\"/~{username}/tags/{slug}\");"
+    },
+    {
+      "line": 36,
+      "text": "                    Some(view! {"
+    },
+    {
+      "line": 37,
+      "text": "                        <a class=\"j-tag-here\" href=here_href title=\"On this blog\">"
+    },
+    {
+      "line": 38,
+      "text": "                            \"\\u{00b7} here\""
+    },
+    {
+      "line": 39,
+      "text": "                        </a>"
+    },
+    {
+      "line": 40,
+      "text": "                    })"
+    },
+    {
+      "line": 42,
+      "text": "                TagContext::SiteWide => None,"
+    },
+    {
+      "line": 44,
+      "text": "            let chip_href = format!(\"/tags/{slug}\");"
+    },
+    {
+      "line": 45,
+      "text": "            view! {"
+    },
+    {
+      "line": 46,
+      "text": "                <span class=\"j-tag-cell\">"
+    },
+    {
+      "line": 47,
+      "text": "                    <a class=\"j-tag\" href=chip_href>"
+    },
+    {
+      "line": 49,
+      "text": "                        {tag.display}"
+    },
+    {
+      "line": 51,
+      "text": "                    {here}"
+    },
+    {
+      "line": 54,
+      "text": "        })"
+    },
+    {
+      "line": 55,
+      "text": "        .collect();"
+    },
+    {
+      "line": 56,
+      "text": "    view! { <span class=\"j-tag-list\">{chips}</span> }.into_any()"
+    },
+    {
+      "line": 57,
+      "text": "}"
+    },
+    {
+      "line": 152,
+      "text": "pub fn Dot(proto: String) -> impl IntoView {"
+    },
+    {
+      "line": 153,
+      "text": "    let style = format!(\"background: var(--c-{proto})\");"
+    },
+    {
+      "line": 154,
+      "text": "    view! { <span class=\"j-dot\" style=style></span> }"
+    },
+    {
+      "line": 155,
+      "text": "}"
+    },
+    {
+      "line": 161,
+      "text": "pub fn Chip("
+    },
+    {
+      "line": 162,
+      "text": "    label: String,"
+    },
+    {
+      "line": 163,
+      "text": "    #[prop(optional)] proto: Option<String>,"
+    },
+    {
+      "line": 164,
+      "text": "    #[prop(optional)] count: Option<u32>,"
+    },
+    {
+      "line": 165,
+      "text": "    #[prop(default = false)] active: bool,"
+    },
+    {
+      "line": 166,
+      "text": ") -> impl IntoView {"
+    },
+    {
+      "line": 167,
+      "text": "    let class = if active { \"j-chip is-active\" } else { \"j-chip\" };"
+    },
+    {
+      "line": 168,
+      "text": "    view! {"
+    },
+    {
+      "line": 169,
+      "text": "        <span class=class>"
+    },
+    {
+      "line": 170,
+      "text": "            {proto.map(|p| view! { <Dot proto=p /> })} <span>{label}</span>"
+    },
+    {
+      "line": 171,
+      "text": "            {count.map(|n| view! { <span class=\"j-n\">{n}</span> })}"
+    },
+    {
+      "line": 174,
+      "text": "}"
+    },
+    {
+      "line": 188,
+      "text": "                        view! {"
+    },
+    {
+      "line": 189,
+      "text": "                            <div class=\"j-backup-banner\" role=\"alert\">"
+    },
+    {
+      "line": 197,
+      "text": "                            .into_any()"
+    },
+    {
+      "line": 237,
+      "text": "pub fn ComposerFields("
+    },
+    {
+      "line": 238,
+      "text": "    body: RwSignal<String>,"
+    },
+    {
+      "line": 239,
+      "text": "    format: RwSignal<String>,"
+    },
+    {
+      "line": 240,
+      "text": "    #[prop(default = \"Write something\\u{2026}\")] placeholder: &'static str,"
+    },
+    {
+      "line": 241,
+      "text": "    #[prop(default = 16u32)] rows: u32,"
+    },
+    {
+      "line": 242,
+      "text": "    #[prop(default = \"j-edit-form-textarea\")] textarea_class: &'static str,"
+    },
+    {
+      "line": 243,
+      "text": "    /// When false, the `.j-seg` format toggle is not rendered (caller places it elsewhere)."
+    },
+    {
+      "line": 244,
+      "text": "    #[prop(default = true)]"
+    },
+    {
+      "line": 245,
+      "text": "    show_seg: bool,"
+    },
+    {
+      "line": 246,
+      "text": "    /// Optional callback fired on every body input event (e.g. to clear a flash message)."
+    },
+    {
+      "line": 247,
+      "text": "    #[prop(optional)]"
+    },
+    {
+      "line": 248,
+      "text": "    on_input: Option<Callback<()>>,"
+    },
+    {
+      "line": 249,
+      "text": ") -> impl IntoView {"
+    },
+    {
+      "line": 250,
+      "text": "    view! {"
+    },
+    {
+      "line": 251,
+      "text": "        <textarea"
+    },
+    {
+      "line": 252,
+      "text": "            name=\"body\""
+    },
+    {
+      "line": 253,
+      "text": "            class=textarea_class"
+    },
+    {
+      "line": 254,
+      "text": "            rows=rows"
+    },
+    {
+      "line": 255,
+      "text": "            placeholder=placeholder"
+    },
+    {
+      "line": 256,
+      "text": "            prop:value=body"
+    },
+    {
+      "line": 257,
+      "text": "            on:input=move |ev| {"
+    },
+    {
+      "line": 258,
+      "text": "                body.set(event_target_value(&ev));"
+    },
+    {
+      "line": 259,
+      "text": "                if let Some(cb) = on_input {"
+    },
+    {
+      "line": 260,
+      "text": "                    cb.run(());"
+    },
+    {
+      "line": 261,
+      "text": "                }"
+    },
+    {
+      "line": 262,
+      "text": "            }"
+    },
+    {
+      "line": 264,
+      "text": "        {show_seg"
+    },
+    {
+      "line": 265,
+      "text": "            .then(move || {"
+    },
+    {
+      "line": 266,
+      "text": "                view! {"
+    },
+    {
+      "line": 267,
+      "text": "                    <div class=\"j-seg\">"
+    },
+    {
+      "line": 268,
+      "text": "                        <button"
+    },
+    {
+      "line": 269,
+      "text": "                            type=\"button\""
+    },
+    {
+      "line": 270,
+      "text": "                            class=move || {"
+    },
+    {
+      "line": 271,
+      "text": "                                if format.get() == \"markdown\" {"
+    },
+    {
+      "line": 272,
+      "text": "                                    \"j-btn is-selected\""
+    },
+    {
+      "line": 274,
+      "text": "                                    \"j-btn\""
+    },
+    {
+      "line": 276,
+      "text": "                            }"
+    },
+    {
+      "line": 277,
+      "text": "                            on:click=move |_| format.set(\"markdown\".to_string())"
+    },
+    {
+      "line": 279,
+      "text": "                            \"Markdown\""
+    },
+    {
+      "line": 281,
+      "text": "                        <button"
+    },
+    {
+      "line": 282,
+      "text": "                            type=\"button\""
+    },
+    {
+      "line": 283,
+      "text": "                            class=move || {"
+    },
+    {
+      "line": 284,
+      "text": "                                if format.get() == \"org\" { \"j-btn is-selected\" } else { \"j-btn\" }"
+    },
+    {
+      "line": 285,
+      "text": "                            }"
+    },
+    {
+      "line": 286,
+      "text": "                            on:click=move |_| format.set(\"org\".to_string())"
+    },
+    {
+      "line": 288,
+      "text": "                            \"Org\""
+    },
+    {
+      "line": 292,
+      "text": "            })}"
+    },
+    {
+      "line": 293,
+      "text": "        <input type=\"hidden\" name=\"format\" prop:value=move || format.get() />"
+    },
+    {
+      "line": 295,
+      "text": "}"
+    },
+    {
+      "line": 315,
+      "text": "pub fn PostDisplay("
+    },
+    {
+      "line": 316,
+      "text": "    post: TimelinePostSummary,"
+    },
+    {
+      "line": 317,
+      "text": "    banner: Option<String>,"
+    },
+    {
+      "line": 318,
+      "text": "    /// Linking context for the tag chips in the footer; defaults to"
+    },
+    {
+      "line": 319,
+      "text": "    /// site-wide."
+    },
+    {
+      "line": 320,
+      "text": "    #[prop(default = TagContext::SiteWide)]"
+    },
+    {
+      "line": 321,
+      "text": "    tag_context: TagContext,"
+    },
+    {
+      "line": 322,
+      "text": "    #[prop(optional)] children: Option<Children>,"
+    },
+    {
+      "line": 323,
+      "text": ") -> impl IntoView {"
+    },
+    {
+      "line": 324,
+      "text": "    let time_label = format_post_time(&post.published_at);"
+    },
+    {
+      "line": 325,
+      "text": "    let is_author = post.is_author;"
+    },
+    {
+      "line": 326,
+      "text": "    let post_tags = post.tags.clone();"
+    },
+    {
+      "line": 328,
+      "text": "    view! {"
+    },
+    {
+      "line": 329,
+      "text": "        <article class=\"j-post\">"
+    },
+    {
+      "line": 330,
+      "text": "            <Avatar name=post.username.clone() size=38 />"
+    },
+    {
+      "line": 331,
+      "text": "            <div style=\"min-width:0;display:flex;gap:8px;align-items:flex-start\">"
+    },
+    {
+      "line": 332,
+      "text": "                <div style=\"flex:1;min-width:0\">"
+    },
+    {
+      "line": 333,
+      "text": "                    <header class=\"j-post-head\">"
+    },
+    {
+      "line": 334,
+      "text": "                        <span class=\"j-post-name\">{post.username.clone()}</span>"
+    },
+    {
+      "line": 335,
+      "text": "                        <span class=\"j-post-handle\">\"@\"{post.username.clone()}</span>"
+    },
+    {
+      "line": 336,
+      "text": "                        {(!is_author)"
+    },
+    {
+      "line": 337,
+      "text": "                            .then(|| {"
+    },
+    {
+      "line": 338,
+      "text": "                                view! {"
+    },
+    {
+      "line": 340,
+      "text": "                                        <span class=\"j-spacer\"></span>"
+    },
+    {
+      "line": 341,
+      "text": "                                        <span class=\"j-post-time\">{time_label}</span>"
+    },
+    {
+      "line": 344,
+      "text": "                            })}"
+    },
+    {
+      "line": 346,
+      "text": "                    {post"
+    },
+    {
+      "line": 347,
+      "text": "                        .title"
+    },
+    {
+      "line": 348,
+      "text": "                        .clone()"
+    },
+    {
+      "line": 349,
+      "text": "                        .map(|title| {"
+    },
+    {
+      "line": 350,
+      "text": "                            if post.permalink.is_empty() {"
+    },
+    {
+      "line": 351,
+      "text": "                                view! { <div class=\"j-post-title\">{title}</div> }.into_any()"
+    },
+    {
+      "line": 353,
+      "text": "                                view! {"
+    },
+    {
+      "line": 354,
+      "text": "                                    <div class=\"j-post-title\">"
+    },
+    {
+      "line": 355,
+      "text": "                                        <a href=post.permalink.clone()>{title}</a>"
+    },
+    {
+      "line": 358,
+      "text": "                                    .into_any()"
+    },
+    {
+      "line": 360,
+      "text": "                        })}"
+    },
+    {
+      "line": 361,
+      "text": "                    {banner.map(|b| view! { <p class=\"draft-banner\">{b}</p> })}"
+    },
+    {
+      "line": 362,
+      "text": "                    {post.summary.clone().map(|s| view! { <p class=\"j-post-summary\">{s}</p> })}"
+    },
+    {
+      "line": 363,
+      "text": "                    <div class=\"j-post-body\" inner_html=post.rendered_html.clone()></div>"
+    },
+    {
+      "line": 364,
+      "text": "                    <footer class=\"j-post-foot\">"
+    },
+    {
+      "line": 365,
+      "text": "                        <TagList tags=post_tags context=tag_context />"
+    },
+    {
+      "line": 369,
+      "text": "                {children.map(|c| c())}"
+    },
+    {
+      "line": 373,
+      "text": "}"
+    },
+    {
+      "line": 377,
+      "text": "pub fn PostCard("
+    },
+    {
+      "line": 378,
+      "text": "    post: TimelinePostSummary,"
+    },
+    {
+      "line": 379,
+      "text": "    banner: Option<String>,"
+    },
+    {
+      "line": 380,
+      "text": "    /// Linking context for the footer tag chips; defaults to site-wide."
+    },
+    {
+      "line": 381,
+      "text": "    #[prop(default = TagContext::SiteWide)]"
+    },
+    {
+      "line": 382,
+      "text": "    tag_context: TagContext,"
+    },
+    {
+      "line": 383,
+      "text": "    #[prop(optional)] on_mutate: Option<Callback<()>>,"
+    },
+    {
+      "line": 384,
+      "text": "    #[prop(optional)] on_unpublish: Option<Callback<()>>,"
+    },
+    {
+      "line": 385,
+      "text": ") -> impl IntoView {"
+    },
+    {
+      "line": 386,
+      "text": "    let is_author = post.is_author;"
+    },
+    {
+      "line": 387,
+      "text": "    let post_id = post.post_id;"
+    },
+    {
+      "line": 388,
+      "text": "    let time_label = format_post_time(&post.published_at);"
+    },
+    {
+      "line": 389,
+      "text": "    let permalink = post.permalink.clone();"
+    },
+    {
+      "line": 390,
+      "text": "    let edit_url = format!(\"/posts/{post_id}/edit\");"
+    },
+    {
+      "line": 391,
+      "text": "    let delete_action = ServerAction::<DeletePost>::new();"
+    },
+    {
+      "line": 392,
+      "text": "    let unpublish_action = ServerAction::<UnpublishPost>::new();"
+    },
+    {
+      "line": 393,
+      "text": "    let deleted = RwSignal::new(false);"
+    },
+    {
+      "line": 395,
+      "text": "    Effect::new_isomorphic(move |_| {"
+    },
+    {
+      "line": 396,
+      "text": "        if let Some(Ok(())) = delete_action.value().get() {"
+    },
+    {
+      "line": 397,
+      "text": "            deleted.set(true);"
+    },
+    {
+      "line": 398,
+      "text": "            if let Some(cb) = on_mutate {"
+    },
+    {
+      "line": 399,
+      "text": "                cb.run(());"
+    },
+    {
+      "line": 400,
+      "text": "            }"
+    },
+    {
+      "line": 401,
+      "text": "        }"
+    },
+    {
+      "line": 402,
+      "text": "    });"
+    },
+    {
+      "line": 403,
+      "text": "    Effect::new_isomorphic(move |_| {"
+    },
+    {
+      "line": 404,
+      "text": "        if let Some(Ok(())) = unpublish_action.value().get() {"
+    },
+    {
+      "line": 405,
+      "text": "            let cb = on_unpublish.or(on_mutate);"
+    },
+    {
+      "line": 406,
+      "text": "            if let Some(cb) = cb {"
+    },
+    {
+      "line": 407,
+      "text": "                cb.run(());"
+    },
+    {
+      "line": 408,
+      "text": "            }"
+    },
+    {
+      "line": 409,
+      "text": "        }"
+    },
+    {
+      "line": 410,
+      "text": "    });"
+    },
+    {
+      "line": 412,
+      "text": "    let action_col = is_author.then(move || {"
+    },
+    {
+      "line": 413,
+      "text": "        view! {"
+    },
+    {
+      "line": 414,
+      "text": "            <div class=\"j-post-acts\">"
+    },
+    {
+      "line": 415,
+      "text": "                <a class=\"j-post-plink\" href=permalink>"
+    },
+    {
+      "line": 416,
+      "text": "                    {time_label}"
+    },
+    {
+      "line": 418,
+      "text": "                <a class=\"j-btn\" href=edit_url>"
+    },
+    {
+      "line": 419,
+      "text": "                    \"Edit\""
+    },
+    {
+      "line": 421,
+      "text": "                <button"
+    },
+    {
+      "line": 422,
+      "text": "                    type=\"button\""
+    },
+    {
+      "line": 423,
+      "text": "                    class=\"j-btn\""
+    },
+    {
+      "line": 424,
+      "text": "                    on:click=move |_| {"
+    },
+    {
+      "line": 425,
+      "text": "                        unpublish_action.dispatch(UnpublishPost { post_id });"
+    },
+    {
+      "line": 426,
+      "text": "                    }"
+    },
+    {
+      "line": 428,
+      "text": "                    \"Unpublish\""
+    },
+    {
+      "line": 430,
+      "text": "                <button"
+    },
+    {
+      "line": 431,
+      "text": "                    type=\"button\""
+    },
+    {
+      "line": 432,
+      "text": "                    class=\"j-btn is-danger\""
+    },
+    {
+      "line": 433,
+      "text": "                    on:click=move |_| {"
+    },
+    {
+      "line": 434,
+      "text": "                        let confirmed = {"
+    },
+    {
+      "line": 443,
+      "text": "                            #[cfg(not(target_arch = \"wasm32\"))] { false }"
+    },
+    {
+      "line": 445,
+      "text": "                        if confirmed {"
+    },
+    {
+      "line": 446,
+      "text": "                            delete_action.dispatch(DeletePost { post_id });"
+    },
+    {
+      "line": 447,
+      "text": "                        }"
+    },
+    {
+      "line": 448,
+      "text": "                    }"
+    },
+    {
+      "line": 450,
+      "text": "                    \"Delete\""
+    },
+    {
+      "line": 454,
+      "text": "    });"
+    },
+    {
+      "line": 456,
+      "text": "    view! {"
+    },
+    {
+      "line": 457,
+      "text": "        {move || {"
+    },
+    {
+      "line": 458,
+      "text": "            deleted.get().then(|| view! { <p class=\"success\">\"Post deleted.\"</p> }.into_any())"
+    },
+    {
+      "line": 459,
+      "text": "        }}"
+    },
+    {
+      "line": 460,
+      "text": "        <PostDisplay post=post banner=banner tag_context=tag_context>"
+    },
+    {
+      "line": 463,
+      "text": "    }"
+    },
+    {
+      "line": 464,
+      "text": "}"
+    },
+    {
+      "line": 471,
+      "text": "pub fn PostCreateForm("
+    },
+    {
+      "line": 472,
+      "text": "    compact: bool,"
+    },
+    {
+      "line": 473,
+      "text": "    #[prop(optional)] username: Option<String>,"
+    },
+    {
+      "line": 474,
+      "text": "    #[prop(into)] on_success: Callback<CreatePostResult>,"
+    },
+    {
+      "line": 475,
+      "text": "    #[prop(default = 6)] rows: usize,"
+    },
+    {
+      "line": 476,
+      "text": "    #[prop(default = \"What\\u{2019}s on your mind?\")] placeholder: &'static str,"
+    },
+    {
+      "line": 477,
+      "text": "    /// Called on every textarea input event (compact mode only)."
+    },
+    {
+      "line": 478,
+      "text": "    #[prop(optional)]"
+    },
+    {
+      "line": 479,
+      "text": "    on_input: Option<Callback<()>>,"
+    },
+    {
+      "line": 480,
+      "text": ") -> impl IntoView {"
+    },
+    {
+      "line": 481,
+      "text": "    let create_action = ServerAction::<CreatePost>::new();"
+    },
+    {
+      "line": 482,
+      "text": "    let body = RwSignal::new(String::new());"
+    },
+    {
+      "line": 483,
+      "text": "    let format = RwSignal::new(\"markdown\".to_string());"
+    },
+    {
+      "line": 484,
+      "text": "    let summary = RwSignal::new(String::new());"
+    },
+    {
+      "line": 485,
+      "text": "    let tags: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());"
+    },
+    {
+      "line": 500,
+      "text": "    let _ = on_success;"
+    },
+    {
+      "line": 503,
+      "text": "    let rows_u32 = rows as u32;"
+    },
+    {
+      "line": 505,
+      "text": "    if compact {"
+    },
+    {
+      "line": 506,
+      "text": "        let dispatch_save = move |_| {"
+    },
+    {
+      "line": 507,
+      "text": "            create_action.dispatch(CreatePost {"
+    },
+    {
+      "line": 508,
+      "text": "                body: body.get(),"
+    },
+    {
+      "line": 509,
+      "text": "                format: format.get(),"
+    },
+    {
+      "line": 510,
+      "text": "                slug_override: None,"
+    },
+    {
+      "line": 512,
+      "text": "                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),"
+    },
+    {
+      "line": 513,
+      "text": "                summary: Some(summary.get()),"
+    },
+    {
+      "line": 515,
+      "text": "        };"
+    },
+    {
+      "line": 516,
+      "text": "        let dispatch_publish = move |_| {"
+    },
+    {
+      "line": 517,
+      "text": "            create_action.dispatch(CreatePost {"
+    },
+    {
+      "line": 518,
+      "text": "                body: body.get(),"
+    },
+    {
+      "line": 519,
+      "text": "                format: format.get(),"
+    },
+    {
+      "line": 520,
+      "text": "                slug_override: None,"
+    },
+    {
+      "line": 522,
+      "text": "                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),"
+    },
+    {
+      "line": 523,
+      "text": "                summary: Some(summary.get()),"
+    },
+    {
+      "line": 525,
+      "text": "        };"
+    },
+    {
+      "line": 526,
+      "text": "        view! {"
+    },
+    {
+      "line": 527,
+      "text": "            <div class=\"j-composer-row\">"
+    },
+    {
+      "line": 528,
+      "text": "                <Avatar name=username.unwrap_or_default() size=36 />"
+    },
+    {
+      "line": 529,
+      "text": "                <div class=\"j-composer-body\">"
+    },
+    {
+      "line": 531,
+      "text": "                        body=body"
+    },
+    {
+      "line": 532,
+      "text": "                        format=format"
+    },
+    {
+      "line": 533,
+      "text": "                        rows=rows_u32"
+    },
+    {
+      "line": 534,
+      "text": "                        placeholder=placeholder"
+    },
+    {
+      "line": 535,
+      "text": "                        textarea_class=\"\""
+    },
+    {
+      "line": 536,
+      "text": "                        show_seg=false"
+    },
+    {
+      "line": 537,
+      "text": "                        on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))"
+    },
+    {
+      "line": 540,
+      "text": "                    <div style=\"margin-top:10px\">"
+    },
+    {
+      "line": 542,
+      "text": "                        <textarea"
+    },
+    {
+      "line": 543,
+      "text": "                            id=\"compose-summary\""
+    },
+    {
+      "line": 544,
+      "text": "                            class=\"j-field-val\""
+    },
+    {
+      "line": 545,
+      "text": "                            rows=3"
+    },
+    {
+      "line": 546,
+      "text": "                            placeholder=\"Optional summary or excerpt\""
+    },
+    {
+      "line": 547,
+      "text": "                            prop:value=summary"
+    },
+    {
+      "line": 548,
+      "text": "                            on:input=move |ev| {"
+    },
+    {
+      "line": 549,
+      "text": "                                summary.set(event_target_value(&ev));"
+    },
+    {
+      "line": 550,
+      "text": "                            }"
+    },
+    {
+      "line": 553,
+      "text": "                    <TagInput tags=tags />"
+    },
+    {
+      "line": 554,
+      "text": "                    <div class=\"j-composer-toolbar\">"
+    },
+    {
+      "line": 555,
+      "text": "                        <div class=\"j-seg\">"
+    },
+    {
+      "line": 556,
+      "text": "                            <button"
+    },
+    {
+      "line": 557,
+      "text": "                                type=\"button\""
+    },
+    {
+      "line": 558,
+      "text": "                                class=move || {"
+    },
+    {
+      "line": 559,
+      "text": "                                    if format.get() == \"markdown\" {"
+    },
+    {
+      "line": 560,
+      "text": "                                        \"j-btn is-selected\""
+    },
+    {
+      "line": 562,
+      "text": "                                        \"j-btn\""
+    },
+    {
+      "line": 564,
+      "text": "                                }"
+    },
+    {
+      "line": 565,
+      "text": "                                on:click=move |_| format.set(\"markdown\".to_string())"
+    },
+    {
+      "line": 567,
+      "text": "                                \"Markdown\""
+    },
+    {
+      "line": 569,
+      "text": "                            <button"
+    },
+    {
+      "line": 570,
+      "text": "                                type=\"button\""
+    },
+    {
+      "line": 571,
+      "text": "                                class=move || {"
+    },
+    {
+      "line": 572,
+      "text": "                                    if format.get() == \"org\" {"
+    },
+    {
+      "line": 573,
+      "text": "                                        \"j-btn is-selected\""
+    },
+    {
+      "line": 575,
+      "text": "                                        \"j-btn\""
+    },
+    {
+      "line": 577,
+      "text": "                                }"
+    },
+    {
+      "line": 578,
+      "text": "                                on:click=move |_| format.set(\"org\".to_string())"
+    },
+    {
+      "line": 580,
+      "text": "                                \"Org\""
+    },
+    {
+      "line": 584,
+      "text": "                        <button"
+    },
+    {
+      "line": 585,
+      "text": "                            class=\"j-btn\""
+    },
+    {
+      "line": 586,
+      "text": "                            type=\"button\""
+    },
+    {
+      "line": 587,
+      "text": "                            name=\"publish\""
+    },
+    {
+      "line": 588,
+      "text": "                            value=\"false\""
+    },
+    {
+      "line": 589,
+      "text": "                            disabled=move || body.get().trim().is_empty()"
+    },
+    {
+      "line": 590,
+      "text": "                            on:click=dispatch_save"
+    },
+    {
+      "line": 592,
+      "text": "                            \"Save draft\""
+    },
+    {
+      "line": 594,
+      "text": "                        <button"
+    },
+    {
+      "line": 595,
+      "text": "                            class=\"j-btn is-primary\""
+    },
+    {
+      "line": 596,
+      "text": "                            type=\"button\""
+    },
+    {
+      "line": 597,
+      "text": "                            name=\"publish\""
+    },
+    {
+      "line": 598,
+      "text": "                            value=\"true\""
+    },
+    {
+      "line": 599,
+      "text": "                            disabled=move || body.get().trim().is_empty()"
+    },
+    {
+      "line": 600,
+      "text": "                            on:click=dispatch_publish"
+    },
+    {
+      "line": 602,
+      "text": "                            \"Publish\""
+    },
+    {
+      "line": 607,
+      "text": "            {move || {"
+    },
+    {
+      "line": 608,
+      "text": "                create_action"
+    },
+    {
+      "line": 609,
+      "text": "                    .value()"
+    },
+    {
+      "line": 610,
+      "text": "                    .get()"
+    },
+    {
+      "line": 611,
+      "text": "                    .and_then(Result::err)"
+    },
+    {
+      "line": 612,
+      "text": "                    .map(|e| view! { <p class=\"error\">{e.to_string()}</p> })"
+    },
+    {
+      "line": 613,
+      "text": "            }}"
+    },
+    {
+      "line": 615,
+      "text": "        .into_any()"
+    },
+    {
+      "line": 617,
+      "text": "        let slug_override = RwSignal::new(String::new());"
+    },
+    {
+      "line": 618,
+      "text": "        let dispatch_create = move |publish: bool| {"
+    },
+    {
+      "line": 619,
+      "text": "            let slug = slug_override.get();"
+    },
+    {
+      "line": 620,
+      "text": "            let slug_override = common::text::non_empty(&slug).map(str::to_owned);"
+    },
+    {
+      "line": 621,
+      "text": "            create_action.dispatch(CreatePost {"
+    },
+    {
+      "line": 622,
+      "text": "                body: body.get(),"
+    },
+    {
+      "line": 623,
+      "text": "                format: format.get(),"
+    },
+    {
+      "line": 624,
+      "text": "                slug_override,"
+    },
+    {
+      "line": 625,
+      "text": "                publish,"
+    },
+    {
+      "line": 626,
+      "text": "                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),"
+    },
+    {
+      "line": 627,
+      "text": "                summary: Some(summary.get()),"
+    },
+    {
+      "line": 629,
+      "text": "        };"
+    },
+    {
+      "line": 630,
+      "text": "        view! {"
+    },
+    {
+      "line": 631,
+      "text": "            <div class=\"j-compose-grid\">"
+    },
+    {
+      "line": 632,
+      "text": "                <div class=\"j-compose-body\">"
+    },
+    {
+      "line": 634,
+      "text": "                        body=body"
+    },
+    {
+      "line": 635,
+      "text": "                        format=format"
+    },
+    {
+      "line": 636,
+      "text": "                        rows=rows_u32"
+    },
+    {
+      "line": 637,
+      "text": "                        placeholder=placeholder"
+    },
+    {
+      "line": 638,
+      "text": "                        show_seg=false"
+    },
+    {
+      "line": 641,
+      "text": "                <aside class=\"j-compose-aside\">"
+    },
+    {
+      "line": 642,
+      "text": "                    <div>"
+    },
+    {
+      "line": 646,
+      "text": "                        <div class=\"j-field-row\" style=\"grid-template-columns:auto 1fr\">"
+    },
+    {
+      "line": 650,
+      "text": "                            <input"
+    },
+    {
+      "line": 651,
+      "text": "                                id=\"compose-slug\""
+    },
+    {
+      "line": 652,
+      "text": "                                type=\"text\""
+    },
+    {
+      "line": 653,
+      "text": "                                name=\"slug_override\""
+    },
+    {
+      "line": 654,
+      "text": "                                placeholder=\"auto\""
+    },
+    {
+      "line": 655,
+      "text": "                                class=\"j-field-val\""
+    },
+    {
+      "line": 656,
+      "text": "                                prop:value=slug_override"
+    },
+    {
+      "line": 657,
+      "text": "                                on:input=move |ev| slug_override.set(event_target_value(&ev))"
+    },
+    {
+      "line": 660,
+      "text": "                        <div style=\"margin-top:10px\">"
+    },
+    {
+      "line": 664,
+      "text": "                            <textarea"
+    },
+    {
+      "line": 665,
+      "text": "                                id=\"compose-summary\""
+    },
+    {
+      "line": 666,
+      "text": "                                name=\"summary\""
+    },
+    {
+      "line": 667,
+      "text": "                                placeholder=\"Optional summary or excerpt\""
+    },
+    {
+      "line": 668,
+      "text": "                                class=\"j-field-val\""
+    },
+    {
+      "line": 669,
+      "text": "                                rows=3"
+    },
+    {
+      "line": 670,
+      "text": "                                prop:value=summary"
+    },
+    {
+      "line": 671,
+      "text": "                                on:input=move |ev| {"
+    },
+    {
+      "line": 672,
+      "text": "                                    summary.set(event_target_value(&ev));"
+    },
+    {
+      "line": 673,
+      "text": "                                }"
+    },
+    {
+      "line": 676,
+      "text": "                        <div style=\"margin-top:10px\">"
+    },
+    {
+      "line": 677,
+      "text": "                            <TagInput tags=tags />"
+    },
+    {
+      "line": 679,
+      "text": "                        <div class=\"j-seg\" style=\"margin-top:10px\">"
+    },
+    {
+      "line": 680,
+      "text": "                            <button"
+    },
+    {
+      "line": 681,
+      "text": "                                type=\"button\""
+    },
+    {
+      "line": 682,
+      "text": "                                class=move || {"
+    },
+    {
+      "line": 683,
+      "text": "                                    if format.get() == \"markdown\" {"
+    },
+    {
+      "line": 684,
+      "text": "                                        \"j-btn is-selected\""
+    },
+    {
+      "line": 686,
+      "text": "                                        \"j-btn\""
+    },
+    {
+      "line": 688,
+      "text": "                                }"
+    },
+    {
+      "line": 689,
+      "text": "                                on:click=move |_| format.set(\"markdown\".to_string())"
+    },
+    {
+      "line": 691,
+      "text": "                                \"Markdown\""
+    },
+    {
+      "line": 693,
+      "text": "                            <button"
+    },
+    {
+      "line": 694,
+      "text": "                                type=\"button\""
+    },
+    {
+      "line": 695,
+      "text": "                                class=move || {"
+    },
+    {
+      "line": 696,
+      "text": "                                    if format.get() == \"org\" {"
+    },
+    {
+      "line": 697,
+      "text": "                                        \"j-btn is-selected\""
+    },
+    {
+      "line": 699,
+      "text": "                                        \"j-btn\""
+    },
+    {
+      "line": 701,
+      "text": "                                }"
+    },
+    {
+      "line": 702,
+      "text": "                                on:click=move |_| format.set(\"org\".to_string())"
+    },
+    {
+      "line": 704,
+      "text": "                                \"Org\""
+    },
+    {
+      "line": 708,
+      "text": "                    <div style=\"margin-top:16px\">"
+    },
+    {
+      "line": 714,
+      "text": "                    <div style=\"margin-top:auto;display:flex;align-items:center;gap:8px\">"
+    },
+    {
+      "line": 715,
+      "text": "                        <button"
+    },
+    {
+      "line": 716,
+      "text": "                            class=\"j-btn\""
+    },
+    {
+      "line": 717,
+      "text": "                            type=\"button\""
+    },
+    {
+      "line": 718,
+      "text": "                            name=\"publish\""
+    },
+    {
+      "line": 719,
+      "text": "                            value=\"false\""
+    },
+    {
+      "line": 720,
+      "text": "                            on:click=move |_| dispatch_create(false)"
+    },
+    {
+      "line": 722,
+      "text": "                            \"Save draft\""
+    },
+    {
+      "line": 724,
+      "text": "                        <button"
+    },
+    {
+      "line": 725,
+      "text": "                            class=\"j-btn is-primary\""
+    },
+    {
+      "line": 726,
+      "text": "                            type=\"button\""
+    },
+    {
+      "line": 727,
+      "text": "                            name=\"publish\""
+    },
+    {
+      "line": 728,
+      "text": "                            value=\"true\""
+    },
+    {
+      "line": 729,
+      "text": "                            on:click=move |_| dispatch_create(true)"
+    },
+    {
+      "line": 731,
+      "text": "                            \"Publish\""
+    },
+    {
+      "line": 736,
+      "text": "            {move || {"
+    },
+    {
+      "line": 737,
+      "text": "                create_action"
+    },
+    {
+      "line": 738,
+      "text": "                    .value()"
+    },
+    {
+      "line": 739,
+      "text": "                    .get()"
+    },
+    {
+      "line": 740,
+      "text": "                    .and_then(Result::err)"
+    },
+    {
+      "line": 741,
+      "text": "                    .map(|e| view! { <p class=\"error\">{e.to_string()}</p> })"
+    },
+    {
+      "line": 742,
+      "text": "            }}"
+    },
+    {
+      "line": 744,
+      "text": "        .into_any()"
+    },
+    {
+      "line": 746,
+      "text": "}"
+    },
+    {
+      "line": 752,
+      "text": "pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {"
+    },
+    {
+      "line": 753,
+      "text": "    let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);"
+    },
+    {
+      "line": 756,
+      "text": "    let _ = on_publish;"
+    },
+    {
+      "line": 758,
+      "text": "    let on_success = Callback::new(move |created: CreatePostResult| {"
+    },
+    {
+      "line": 759,
+      "text": "        let url = created"
+    },
+    {
+      "line": 760,
+      "text": "            .permalink"
+    },
+    {
+      "line": 761,
+      "text": "            .clone()"
+    },
+    {
+      "line": 762,
+      "text": "            .unwrap_or_else(|| created.preview_url.clone());"
+    },
+    {
+      "line": 763,
+      "text": "        let msg = if created.published_at.is_some() {"
+    },
+    {
+      "line": 764,
+      "text": "            \"Post published!\".to_string()"
+    },
+    {
+      "line": 766,
+      "text": "            \"Draft saved!\".to_string()"
+    },
+    {
+      "line": 768,
+      "text": "        flash.set(Some((url, msg)));"
+    },
+    {
+      "line": 778,
+      "text": "    });"
+    },
+    {
+      "line": 780,
+      "text": "    view! {"
+    },
+    {
+      "line": 781,
+      "text": "        <div class=\"j-composer\">"
+    },
+    {
+      "line": 783,
+      "text": "                compact=true"
+    },
+    {
+      "line": 784,
+      "text": "                username=username"
+    },
+    {
+      "line": 785,
+      "text": "                on_success=on_success"
+    },
+    {
+      "line": 786,
+      "text": "                rows=6"
+    },
+    {
+      "line": 787,
+      "text": "                placeholder=\"What\\u{2019}s on your mind?\""
+    },
+    {
+      "line": 788,
+      "text": "                on_input=Callback::new(move |()| flash.set(None))"
+    },
+    {
+      "line": 790,
+      "text": "            {move || {"
+    },
+    {
+      "line": 791,
+      "text": "                flash"
+    },
+    {
+      "line": 792,
+      "text": "                    .get()"
+    },
+    {
+      "line": 793,
+      "text": "                    .map(|(url, msg)| {"
+    },
+    {
+      "line": 794,
+      "text": "                        view! {"
+    },
+    {
+      "line": 795,
+      "text": "                            <p class=\"success\">"
+    },
+    {
+      "line": 796,
+      "text": "                                <a href=url>{msg}</a>"
+    },
+    {
+      "line": 799,
+      "text": "                    })"
+    },
+    {
+      "line": 800,
+      "text": "            }}"
+    },
+    {
+      "line": 803,
+      "text": "}"
+    },
+    {
+      "line": 816,
+      "text": "        \"j-nav-item is-active\""
+    },
+    {
+      "line": 831,
+      "text": "        None => view! { <div class=class>{inner}</div> }.into_any(),"
+    },
+    {
+      "line": 945,
+      "text": "                                    view! {"
+    },
+    {
+      "line": 947,
+      "text": "                                            label=\"Configure Backups\""
+    },
+    {
+      "line": 948,
+      "text": "                                            icon_path=Icons::SHIELD"
+    },
+    {
+      "line": 949,
+      "text": "                                            active=active_key == \"admin-backups\""
+    },
+    {
+      "line": 950,
+      "text": "                                            href=Some(\"/admin/backups\")"
+    },
+    {
+      "line": 953,
+      "text": "                                            label=\"Site Settings\""
+    },
+    {
+      "line": 954,
+      "text": "                                            icon_path=Icons::SHIELD"
+    },
+    {
+      "line": 955,
+      "text": "                                            active=active_key == \"admin-site\""
+    },
+    {
+      "line": 956,
+      "text": "                                            href=Some(\"/admin/site\")"
+    },
+    {
+      "line": 959,
+      "text": "                                        .into_any()"
+    },
+    {
+      "line": 1042,
+      "text": "pub fn TagInput("
+    },
+    {
+      "line": 1043,
+      "text": "    tags: RwSignal<Vec<TagSummary>>,"
+    },
+    {
+      "line": 1044,
+      "text": "    #[prop(default = \"tags\")] name: &'static str,"
+    },
+    {
+      "line": 1045,
+      "text": ") -> impl IntoView {"
+    },
+    {
+      "line": 1046,
+      "text": "    let input_text = RwSignal::new(String::new());"
+    },
+    {
+      "line": 1047,
+      "text": "    let error: RwSignal<Option<String>> = RwSignal::new(None);"
+    },
+    {
+      "line": 1048,
+      "text": "    let suggestions: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());"
+    },
+    {
+      "line": 1049,
+      "text": "    let suggestions_open = RwSignal::new(false);"
+    },
+    {
+      "line": 1050,
+      "text": "    let selected_idx: RwSignal<Option<usize>> = RwSignal::new(None);"
+    },
+    {
+      "line": 1056,
+      "text": "    let on_input = move |ev: leptos::ev::Event| {"
+    },
+    {
+      "line": 1057,
+      "text": "        let val = event_target_value(&ev);"
+    },
+    {
+      "line": 1058,
+      "text": "        input_text.set(val.clone());"
+    },
+    {
+      "line": 1059,
+      "text": "        error.set(None);"
+    },
+    {
+      "line": 1060,
+      "text": "        selected_idx.set(None);"
+    },
+    {
+      "line": 1097,
+      "text": "        let _ = val;"
+    },
+    {
+      "line": 1098,
+      "text": "    };"
+    },
+    {
+      "line": 1100,
+      "text": "    let on_keydown = move |ev: leptos::ev::KeyboardEvent| {"
+    },
+    {
+      "line": 1101,
+      "text": "        let key = ev.key();"
+    },
+    {
+      "line": 1102,
+      "text": "        match key.as_str() {"
+    },
+    {
+      "line": 1103,
+      "text": "            \"Enter\" | \"Tab\" => {"
+    },
+    {
+      "line": 1105,
+      "text": "                if let Some(i) = selected_idx.get() {"
+    },
+    {
+      "line": 1106,
+      "text": "                    if let Some(tag) = suggestions.get().get(i).cloned() {"
+    },
+    {
+      "line": 1107,
+      "text": "                        ev.prevent_default();"
+    },
+    {
+      "line": 1108,
+      "text": "                        tags.update(|t| {"
+    },
+    {
+      "line": 1109,
+      "text": "                            if !t.iter().any(|x| x.slug == tag.slug) {"
+    },
+    {
+      "line": 1110,
+      "text": "                                t.push(tag.clone());"
+    },
+    {
+      "line": 1111,
+      "text": "                            }"
+    },
+    {
+      "line": 1112,
+      "text": "                        });"
+    },
+    {
+      "line": 1113,
+      "text": "                        input_text.set(String::new());"
+    },
+    {
+      "line": 1114,
+      "text": "                        error.set(None);"
+    },
+    {
+      "line": 1115,
+      "text": "                        suggestions.set(Vec::new());"
+    },
+    {
+      "line": 1116,
+      "text": "                        suggestions_open.set(false);"
+    },
+    {
+      "line": 1117,
+      "text": "                        selected_idx.set(None);"
+    },
+    {
+      "line": 1118,
+      "text": "                        return;"
+    },
+    {
+      "line": 1119,
+      "text": "                    }"
+    },
+    {
+      "line": 1120,
+      "text": "                }"
+    },
+    {
+      "line": 1122,
+      "text": "                let text = normalize_tag_token(&input_text.get());"
+    },
+    {
+      "line": 1123,
+      "text": "                if text.is_empty() {"
+    },
+    {
+      "line": 1124,
+      "text": "                    return;"
+    },
+    {
+      "line": 1125,
+      "text": "                }"
+    },
+    {
+      "line": 1126,
+      "text": "                ev.prevent_default();"
+    },
+    {
+      "line": 1127,
+      "text": "                if is_valid_tag_slug(&text) {"
+    },
+    {
+      "line": 1128,
+      "text": "                    let slug = text.clone();"
+    },
+    {
+      "line": 1129,
+      "text": "                    tags.update(|t| {"
+    },
+    {
+      "line": 1130,
+      "text": "                        if !t.iter().any(|x| x.slug == slug) {"
+    },
+    {
+      "line": 1131,
+      "text": "                            t.push(TagSummary {"
+    },
+    {
+      "line": 1132,
+      "text": "                                slug: slug.clone(),"
+    },
+    {
+      "line": 1133,
+      "text": "                                display: slug,"
+    },
+    {
+      "line": 1134,
+      "text": "                            });"
+    },
+    {
+      "line": 1135,
+      "text": "                        }"
+    },
+    {
+      "line": 1136,
+      "text": "                    });"
+    },
+    {
+      "line": 1137,
+      "text": "                    input_text.set(String::new());"
+    },
+    {
+      "line": 1138,
+      "text": "                    error.set(None);"
+    },
+    {
+      "line": 1139,
+      "text": "                    suggestions.set(Vec::new());"
+    },
+    {
+      "line": 1140,
+      "text": "                    suggestions_open.set(false);"
+    },
+    {
+      "line": 1141,
+      "text": "                    selected_idx.set(None);"
+    },
+    {
+      "line": 1142,
+      "text": "                } else {"
+    },
+    {
+      "line": 1143,
+      "text": "                    error.set(Some(format!(\"Invalid tag \\\"{text}\\\"\")));"
+    },
+    {
+      "line": 1144,
+      "text": "                }"
+    },
+    {
+      "line": 1146,
+      "text": "            \"Backspace\" if input_text.get().is_empty() => {"
+    },
+    {
+      "line": 1147,
+      "text": "                tags.update(|t| {"
+    },
+    {
+      "line": 1148,
+      "text": "                    t.pop();"
+    },
+    {
+      "line": 1149,
+      "text": "                });"
+    },
+    {
+      "line": 1151,
+      "text": "            \"ArrowDown\" => {"
+    },
+    {
+      "line": 1152,
+      "text": "                ev.prevent_default();"
+    },
+    {
+      "line": 1153,
+      "text": "                let len = suggestions.get().len();"
+    },
+    {
+      "line": 1154,
+      "text": "                if len > 0 {"
+    },
+    {
+      "line": 1155,
+      "text": "                    selected_idx.update(|i| {"
+    },
+    {
+      "line": 1156,
+      "text": "                        *i = Some(i.map_or(0, |n| (n + 1).min(len - 1)));"
+    },
+    {
+      "line": 1157,
+      "text": "                    });"
+    },
+    {
+      "line": 1158,
+      "text": "                }"
+    },
+    {
+      "line": 1160,
+      "text": "            \"ArrowUp\" => {"
+    },
+    {
+      "line": 1161,
+      "text": "                ev.prevent_default();"
+    },
+    {
+      "line": 1162,
+      "text": "                selected_idx.update(|i| {"
+    },
+    {
+      "line": 1163,
+      "text": "                    *i = i.and_then(|n| n.checked_sub(1));"
+    },
+    {
+      "line": 1164,
+      "text": "                });"
+    },
+    {
+      "line": 1166,
+      "text": "            \"Escape\" => {"
+    },
+    {
+      "line": 1167,
+      "text": "                suggestions.set(Vec::new());"
+    },
+    {
+      "line": 1168,
+      "text": "                suggestions_open.set(false);"
+    },
+    {
+      "line": 1169,
+      "text": "                selected_idx.set(None);"
+    },
+    {
+      "line": 1170,
+      "text": "            }"
+    },
+    {
+      "line": 1171,
+      "text": "            _ => {}"
+    },
+    {
+      "line": 1173,
+      "text": "    };"
+    },
+    {
+      "line": 1175,
+      "text": "    view! {"
+    },
+    {
+      "line": 1176,
+      "text": "        <div class=\"j-tag-input\">"
+    },
+    {
+      "line": 1177,
+      "text": "            {move || {"
+    },
+    {
+      "line": 1178,
+      "text": "                tags.get()"
+    },
+    {
+      "line": 1179,
+      "text": "                    .into_iter()"
+    },
+    {
+      "line": 1180,
+      "text": "                    .map(|tag| {"
+    },
+    {
+      "line": 1181,
+      "text": "                        let slug = tag.slug.clone();"
+    },
+    {
+      "line": 1182,
+      "text": "                        let display = tag.display.clone();"
+    },
+    {
+      "line": 1183,
+      "text": "                        view! {"
+    },
+    {
+      "line": 1184,
+      "text": "                            <span class=\"j-tag-chip\">"
+    },
+    {
+      "line": 1185,
+      "text": "                                <input type=\"hidden\" name=name value=display.clone() />"
+    },
+    {
+      "line": 1186,
+      "text": "                                <span class=\"j-tag-chip-label\">\"#\" {display}</span>"
+    },
+    {
+      "line": 1187,
+      "text": "                                <button"
+    },
+    {
+      "line": 1188,
+      "text": "                                    type=\"button\""
+    },
+    {
+      "line": 1189,
+      "text": "                                    class=\"j-tag-chip-remove\""
+    },
+    {
+      "line": 1190,
+      "text": "                                    aria-label=\"Remove tag\""
+    },
+    {
+      "line": 1191,
+      "text": "                                    on:click=move |_| {"
+    },
+    {
+      "line": 1192,
+      "text": "                                        tags.update(|t| t.retain(|x| x.slug != slug));"
+    },
+    {
+      "line": 1193,
+      "text": "                                    }"
+    },
+    {
+      "line": 1195,
+      "text": "                                    \"\\u{00d7}\""
+    },
+    {
+      "line": 1199,
+      "text": "                    })"
+    },
+    {
+      "line": 1200,
+      "text": "                    .collect::<Vec<_>>()"
+    },
+    {
+      "line": 1201,
+      "text": "            }}"
+    },
+    {
+      "line": 1202,
+      "text": "            <input"
+    },
+    {
+      "line": 1203,
+      "text": "                type=\"text\""
+    },
+    {
+      "line": 1204,
+      "text": "                class=\"j-tag-text\""
+    },
+    {
+      "line": 1205,
+      "text": "                placeholder=\"Add tag\\u{2026}\""
+    },
+    {
+      "line": 1206,
+      "text": "                prop:value=input_text"
+    },
+    {
+      "line": 1207,
+      "text": "                on:input=on_input"
+    },
+    {
+      "line": 1208,
+      "text": "                on:keydown=on_keydown"
+    },
+    {
+      "line": 1209,
+      "text": "                autocomplete=\"off\""
+    },
+    {
+      "line": 1211,
+      "text": "            {move || {"
+    },
+    {
+      "line": 1212,
+      "text": "                if !suggestions_open.get() {"
+    },
+    {
+      "line": 1213,
+      "text": "                    return ().into_any();"
+    },
+    {
+      "line": 1214,
+      "text": "                }"
+    },
+    {
+      "line": 1215,
+      "text": "                let items = suggestions"
+    },
+    {
+      "line": 1216,
+      "text": "                    .get()"
+    },
+    {
+      "line": 1217,
+      "text": "                    .into_iter()"
+    },
+    {
+      "line": 1218,
+      "text": "                    .enumerate()"
+    },
+    {
+      "line": 1219,
+      "text": "                    .map(|(idx, tag)| {"
+    },
+    {
+      "line": 1220,
+      "text": "                        let is_active = selected_idx.get() == Some(idx);"
+    },
+    {
+      "line": 1221,
+      "text": "                        let slug = tag.slug.clone();"
+    },
+    {
+      "line": 1222,
+      "text": "                        let display = tag.display.clone();"
+    },
+    {
+      "line": 1223,
+      "text": "                        view! {"
+    },
+    {
+      "line": 1224,
+      "text": "                            <li"
+    },
+    {
+      "line": 1225,
+      "text": "                                class=if is_active {"
+    },
+    {
+      "line": 1226,
+      "text": "                                    \"j-tag-suggest-item is-active\""
+    },
+    {
+      "line": 1228,
+      "text": "                                    \"j-tag-suggest-item\""
+    },
+    {
+      "line": 1230,
+      "text": "                                on:click=move |_| {"
+    },
+    {
+      "line": 1231,
+      "text": "                                    let slug = slug.clone();"
+    },
+    {
+      "line": 1232,
+      "text": "                                    let display = display.clone();"
+    },
+    {
+      "line": 1233,
+      "text": "                                    tags.update(|t| {"
+    },
+    {
+      "line": 1234,
+      "text": "                                        if !t.iter().any(|x| x.slug == slug) {"
+    },
+    {
+      "line": 1235,
+      "text": "                                            t.push(TagSummary {"
+    },
+    {
+      "line": 1236,
+      "text": "                                                slug: slug.clone(),"
+    },
+    {
+      "line": 1237,
+      "text": "                                                display: display.clone(),"
+    },
+    {
+      "line": 1238,
+      "text": "                                            });"
+    },
+    {
+      "line": 1239,
+      "text": "                                        }"
+    },
+    {
+      "line": 1240,
+      "text": "                                    });"
+    },
+    {
+      "line": 1241,
+      "text": "                                    input_text.set(String::new());"
+    },
+    {
+      "line": 1242,
+      "text": "                                    error.set(None);"
+    },
+    {
+      "line": 1243,
+      "text": "                                    suggestions.set(Vec::new());"
+    },
+    {
+      "line": 1244,
+      "text": "                                    suggestions_open.set(false);"
+    },
+    {
+      "line": 1245,
+      "text": "                                    selected_idx.set(None);"
+    },
+    {
+      "line": 1246,
+      "text": "                                }"
+    },
+    {
+      "line": 1249,
+      "text": "                                {tag.display}"
+    },
+    {
+      "line": 1252,
+      "text": "                    })"
+    },
+    {
+      "line": 1253,
+      "text": "                    .collect::<Vec<_>>();"
+    },
+    {
+      "line": 1254,
+      "text": "                view! { <ul class=\"j-tag-suggest\">{items}</ul> }.into_any()"
+    },
+    {
+      "line": 1255,
+      "text": "            }}"
+    },
+    {
+      "line": 1257,
+      "text": "        {move || error.get().map(|e| view! { <p class=\"j-tag-error\">{e}</p> })}"
+    },
+    {
+      "line": 1259,
+      "text": "}"
+    }
+  ],
+  "web/src/pages/upload.rs": [
+    {
+      "line": 11,
+      "text": "pub fn MediaUploadButton("
+    },
+    {
+      "line": 12,
+      "text": "    /// Called with the `/media/upload/...` URL when the upload succeeds."
+    },
+    {
+      "line": 13,
+      "text": "    #[prop(into)]"
+    },
+    {
+      "line": 14,
+      "text": "    on_uploaded: Callback<String>,"
+    },
+    {
+      "line": 15,
+      "text": "    /// Called with an error message when the upload fails."
+    },
+    {
+      "line": 16,
+      "text": "    #[prop(into, optional)]"
+    },
+    {
+      "line": 17,
+      "text": "    on_error: Option<Callback<String>>,"
+    },
+    {
+      "line": 18,
+      "text": ") -> impl IntoView {"
+    },
+    {
+      "line": 19,
+      "text": "    let uploading = RwSignal::new(false);"
+    },
+    {
+      "line": 20,
+      "text": "    let file_input = NodeRef::<leptos::html::Input>::new();"
+    },
+    {
+      "line": 22,
+      "text": "    let open_picker = move |_| {"
+    },
+    {
+      "line": 23,
+      "text": "        if let Some(input) = file_input.get() {"
+    },
+    {
+      "line": 24,
+      "text": "            input.click();"
+    },
+    {
+      "line": 25,
+      "text": "        }"
+    },
+    {
+      "line": 26,
+      "text": "    };"
+    },
+    {
+      "line": 28,
+      "text": "    let on_file_change = move |ev: leptos::ev::Event| {"
+    },
+    {
+      "line": 30,
+      "text": "        let _ = ev;"
+    },
+    {
+      "line": 71,
+      "text": "    };"
+    },
+    {
+      "line": 73,
+      "text": "    view! {"
+    },
+    {
+      "line": 74,
+      "text": "        <input type=\"file\" node_ref=file_input style=\"display:none\" on:change=on_file_change />"
+    },
+    {
+      "line": 75,
+      "text": "        <button type=\"button\" class=\"j-btn\" disabled=move || uploading.get() on:click=open_picker>"
+    },
+    {
+      "line": 76,
+      "text": "            {move || if uploading.get() { \"Uploading\\u{2026}\" } else { \"Attach media\" }}"
+    },
+    {
+      "line": 79,
+      "text": "}"
+    },
+    {
+      "line": 85,
+      "text": "pub fn MediaPanel() -> impl IntoView {"
+    },
+    {
+      "line": 86,
+      "text": "    let last_media_url = RwSignal::new(Option::<String>::None);"
+    },
+    {
+      "line": 87,
+      "text": "    let upload_error = RwSignal::new(Option::<String>::None);"
+    },
+    {
+      "line": 89,
+      "text": "    view! {"
+    },
+    {
+      "line": 91,
+      "text": "            on_uploaded=Callback::new(move |url: String| {"
+    },
+    {
+      "line": 92,
+      "text": "                last_media_url.set(Some(url));"
+    },
+    {
+      "line": 93,
+      "text": "                upload_error.set(None);"
+    },
+    {
+      "line": 94,
+      "text": "            })"
+    },
+    {
+      "line": 95,
+      "text": "            on_error=Callback::new(move |msg: String| {"
+    },
+    {
+      "line": 96,
+      "text": "                upload_error.set(Some(msg));"
+    },
+    {
+      "line": 97,
+      "text": "            })"
+    },
+    {
+      "line": 99,
+      "text": "        {move || {"
+    },
+    {
+      "line": 100,
+      "text": "            last_media_url"
+    },
+    {
+      "line": 101,
+      "text": "                .get()"
+    },
+    {
+      "line": 102,
+      "text": "                .map(|url| {"
+    },
+    {
+      "line": 103,
+      "text": "                    view! {"
+    },
+    {
+      "line": 104,
+      "text": "                        <div style=\"margin-top:8px\">"
+    },
+    {
+      "line": 108,
+      "text": "                            <input"
+    },
+    {
+      "line": 109,
+      "text": "                                type=\"text\""
+    },
+    {
+      "line": 110,
+      "text": "                                readonly"
+    },
+    {
+      "line": 111,
+      "text": "                                value=url.clone()"
+    },
+    {
+      "line": 112,
+      "text": "                                class=\"j-field-val\""
+    },
+    {
+      "line": 113,
+      "text": "                                style=\"font-size:12px;cursor:text\""
+    },
+    {
+      "line": 114,
+      "text": "                                on:click=move |ev| {"
+    },
+    {
+      "line": 116,
+      "text": "                                    let _ = ev"
+    },
+    {
+      "line": 117,
+      "text": "                                        .target()"
+    },
+    {
+      "line": 118,
+      "text": "                                        .and_then(|t| {"
+    },
+    {
+      "line": 119,
+      "text": "                                            t.dyn_into::<web_sys::HtmlInputElement>().ok()"
+    },
+    {
+      "line": 120,
+      "text": "                                        })"
+    },
+    {
+      "line": 121,
+      "text": "                                        .map(|i| i.select());"
+    },
+    {
+      "line": 122,
+      "text": "                                }"
+    },
+    {
+      "line": 126,
+      "text": "                })"
+    },
+    {
+      "line": 127,
+      "text": "        }}"
+    },
+    {
+      "line": 128,
+      "text": "        {move || {"
+    },
+    {
+      "line": 129,
+      "text": "            upload_error"
+    },
+    {
+      "line": 130,
+      "text": "                .get()"
+    },
+    {
+      "line": 131,
+      "text": "                .map(|msg| {"
+    },
+    {
+      "line": 132,
+      "text": "                    view! {"
+    },
+    {
+      "line": 133,
+      "text": "                        <p class=\"error\" style=\"margin-top:6px;font-size:12px\">"
+    },
+    {
+      "line": 134,
+      "text": "                            {msg}"
+    },
+    {
+      "line": 137,
+      "text": "                })"
+    },
+    {
+      "line": 138,
+      "text": "        }}"
+    },
+    {
+      "line": 140,
+      "text": "}"
+    }
+  ],
+  "web/src/posts/listing.rs": [
+    {
+      "line": 207,
+      "text": "        )?;"
+    },
+    {
+      "line": 267,
+      "text": "        )?;"
+    }
+  ],
+  "web/src/posts/mod.rs": [
+    {
+      "line": 421,
+      "text": "                    InternalError::not_found(\"Post\")"
+    },
+    {
+      "line": 423,
+      "text": "                UpdatePostError::Internal(error) => InternalError::storage(error),"
+    },
+    {
+      "line": 424,
+      "text": "            })?;"
+    }
+  ],
+  "web/src/posts/server.rs": [
+    {
+      "line": 192,
+      "text": "            return Ok(None);"
+    },
+    {
+      "line": 197,
+      "text": "    Ok(None)"
+    }
+  ]
+}

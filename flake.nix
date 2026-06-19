@@ -933,7 +933,7 @@
               '';
               installPhaseCommand = ''
                 mkdir -p $out
-                cp .coverage-manifest.json .crap-manifest.json $out/
+                cp .coverage-manifest.json crap-manifest.json $out/
               '';
             }
           );
