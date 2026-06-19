@@ -909,7 +909,11 @@
             // {
               src = pkgs.lib.cleanSourceWith {
                 src = ./.;
-                filter = path: _type: !(pkgs.lib.hasInfix "/xtask/" path);
+                filter =
+                  path: _type:
+                  !(pkgs.lib.hasInfix "/xtask/" path)
+                  && !(pkgs.lib.hasInfix "/docs/" path)
+                  && !(pkgs.lib.hasInfix "/.github/" path);
               };
               inherit cargoArtifacts;
               pname = "jaunder-coverage-update";
@@ -1031,7 +1035,11 @@
               // {
                 src = pkgs.lib.cleanSourceWith {
                   src = ./.;
-                  filter = path: _type: !(pkgs.lib.hasInfix "/xtask/" path);
+                  filter =
+                    path: _type:
+                    !(pkgs.lib.hasInfix "/xtask/" path)
+                    && !(pkgs.lib.hasInfix "/docs/" path)
+                    && !(pkgs.lib.hasInfix "/.github/" path);
                 };
                 inherit cargoArtifacts;
                 pname = "jaunder-coverage";
