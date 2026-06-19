@@ -1911,31 +1911,32 @@ async fn list_drafts_by_user_returns_only_drafts(#[case] backend: Backend) {
     assert_list_drafts_by_user(state).await;
 }
 
+#[apply(sqlite_only)]
 #[tokio::test]
-async fn sqlite_post_app_state_parity_suite() {
-    let (_base, state) = sqlite_state().await;
-    assert_post_create_and_get_by_id(&state).await;
+async fn post_app_state_parity_suite(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    assert_post_create_and_get_by_id(&env.state).await;
 
-    let (_base, state) = sqlite_state().await;
-    assert_post_slug_conflict(&state).await;
+    let env = backend.setup().await;
+    assert_post_slug_conflict(&env.state).await;
 
-    let (_base, state) = sqlite_state().await;
-    assert_post_update_creates_revision(&state).await;
+    let env = backend.setup().await;
+    assert_post_update_creates_revision(&env.state).await;
 
-    let (_base, state) = sqlite_state().await;
-    assert_post_update_not_found(&state).await;
+    let env = backend.setup().await;
+    assert_post_update_not_found(&env.state).await;
 
-    let (_base, state) = sqlite_state().await;
-    assert_soft_delete_excludes_from_lists(&state).await;
+    let env = backend.setup().await;
+    assert_soft_delete_excludes_from_lists(&env.state).await;
 
-    let (_base, state) = sqlite_state().await;
-    assert_list_published_by_user(&state).await;
+    let env = backend.setup().await;
+    assert_list_published_by_user(&env.state).await;
 
-    let (_base, state) = sqlite_state().await;
-    assert_list_published_returns_all_published(&state).await;
+    let env = backend.setup().await;
+    assert_list_published_returns_all_published(&env.state).await;
 
-    let (_base, state) = sqlite_state().await;
-    assert_list_drafts_by_user(&state).await;
+    let env = backend.setup().await;
+    assert_list_drafts_by_user(&env.state).await;
 }
 
 // =============================================================================
