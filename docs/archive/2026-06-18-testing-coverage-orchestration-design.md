@@ -18,7 +18,7 @@ The testing/coverage tooling grew piecemeal (`verify`, `check-coverage`, `update
 ## Goals
 
 1. **One command — `cargo xtask validate` — that, if green, means you may move on.**
-2. **Eliminate repeated work:** a single execution environment (Nix) for all tests/coverage so host and CI can never disagree; host-side memoization + a Nix GC root so unchanged re-runs cost ~nothing.
+2. **Eliminate repeated work:** a single execution environment (Nix) for all tests/coverage so host and CI can never disagree; Nix's GC-rooted store memoizes the expensive coverage build, so an unchanged re-run reuses the cached closure and only the fast host static checks re-run.
 3. **Every command falling-down easy to invoke and observe:** typed results, a JSON sidecar, meaningful exit codes.
    - *Secondary benefit — disk footprint.* Today the host `target/` grows to ~1TB over long sessions (instrumented coverage builds + test/e2e profiles compound). Moving all tests/coverage/e2e into Nix leaves only the `check`/clippy build on the host (one profile, slow growth); the heavy builds land in `/nix/store`, which is GC-bounded — Nix keeps only output closures (not every intermediate), the GC root pins just the *current* checks closure, and `nix-collect-garbage` (or removing `.xtask/gcroots/*`) reclaims superseded builds.
 4. **Retire the ad-hoc shell scripts** into one library-backed driver.
@@ -58,12 +58,11 @@ xtask never calls xtask. Coverage classification/auto-heal need the git diff and
 | Command names | `check`, `validate`, `validate --full` | `check` = host static+clippy (inner loop); `validate` = check + the Nix coverage check (tests+coverage); `--full` adds the Nix e2e + postgres-integration checks. |
 | Test/coverage environment | **Nix, sole** | Host never runs tests; eliminates host↔Nix divergence by construction; Phase 0 showed host congruence is mechanically fragile. |
 | Coverage authority | Nix produces the manifest; **host post-processes** | Classification/auto-heal/JSON run host-side on the Nix-produced manifest; no congruence mechanism needed. |
-| Local Nix persistence | `nix build --out-link <stable>` (a GC root) + memoization | The out-link pins the whole closure so `nix-collect-garbage` can't remove it; unchanged re-runs ~free. |
+| Local memo / persistence | `nix build --out-link <stable>` (a GC root) | The out-link pins the closure so `nix-collect-garbage` can't remove it. **This GC-rooted store _is_ the local memo:** an unchanged `nix build` returns the cached output without re-running, so only the fast host static checks re-run. No separate host-side memo layer — a tree-hash memo would double-count this and is unsound (it can skip when the output was GC'd, or false-skip on unstaged edits). |
 | Cache pull | Always pass `--accept-flake-config` | The flake declares `jaunder-org.cachix.org` as `extra-substituter`; the box trusts it but the user is untrusted, so the flag is required to honor it. |
 | Cache push | CI pushes **build products only**, excludes test-check outputs | Fast CI compile; tests **always actually run** (no cached green checkmarks — protects against impurity poisoning *and* flaky-pass masking). No local push-back. |
 | Output | Human summary default + `.xtask/last-result.json` sidecar always + meaningful exit codes | Exit code = gate signal (run bare under `ctx_execute`); sidecar queried separately with `jq`. |
-| Formatting | Auto-fix (`Mode::Fix`) host; `Mode::Check` in CI | `validate` applies formatting and reports it; CI never mutates the tree. No standalone `format`. |
-| Memoization | Whole-tree input key, skip green re-runs | Records the last green tree key; unchanged tree short-circuits, skipping even the Nix build. |
+| Formatting | `check` and `validate` auto-fix (`Mode::Fix`) by default; `validate --no-fix` verifies (`Mode::Check`) | Local convenience: `validate` fixes and proceeds without forcing a prior `check`. CI runs `validate --no-fix` so the gate fails on unformatted code exactly like CI's format job and never mutates the tree. No standalone `format`. |
 | Coverage comparison | Line-identity via the git diff (not file %) | A still-existing previously-covered line going uncovered = `regression`; new uncovered lines = `new_uncovered`; both fail. Requires per-line baseline storage. |
 | New uncovered lines | Strict ratchet — fail | New code must be covered. |
 | Baseline updates | Auto-heal with notification, narrow | Heals only `improvement`/`structural` (and improved/deleted CRAP); never a `regression`/`new_uncovered`. |
@@ -76,6 +75,7 @@ xtask never calls xtask. Coverage classification/auto-heal need the git diff and
 cargo xtask check           # host: static checks + clippy (inner loop)
 cargo xtask validate        # check + Nix coverage check (tests+coverage in Nix), host post-processes coverage
 cargo xtask validate --full # + Nix e2e + postgres-integration checks (full CI parity)
+cargo xtask validate --no-fix # verify-only formatting (Mode::Check) — what CI invokes
 # --json available on every command; .xtask/last-result.json always written
 ```
 
@@ -90,7 +90,6 @@ Every command returns a typed result serialized to a flat, `jq`-friendly envelop
   "command": "validate",
   "ok": false,
   "duration_ms": 48213,
-  "memoized": false,
   "steps": [
     { "name": "fmt", "ok": true, "detail": "reformatted 2 files" },
     { "name": "clippy", "ok": true },
@@ -157,7 +156,7 @@ Rewritten alongside the code: `CONTRIBUTING.md` (Testing + Coverage sections, th
 
 ## Risks
 
-- **Nix build latency for local `validate`.** Mitigated by cachix pull (`--accept-flake-config`), the GC root, and host memoization; coverage is not the inner loop.
+- **Nix build latency for local `validate`.** Mitigated by cachix pull (`--accept-flake-config`) and the GC-rooted Nix store (which memoizes the expensive build so an unchanged re-run only re-runs the fast host static checks); coverage is not the inner loop.
 - **cachix push filter correctly excluding test products.** A name-based filter is fragile; verify it excludes every check output and an allowlist may be safer.
 - **Per-line baseline churn** — larger committed manifest; accepted for correctness.
 - **The Nix coverage manifest's format/extraction** must give xtask per-line data to classify; if only per-file percentages are available, the per-line baseline work includes extracting line data from the Nix LCOV output.
