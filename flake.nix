@@ -262,10 +262,13 @@
           src = craneLib.path ./.;
           filter =
             path: type:
-            (pkgs.lib.hasSuffix ".sql" path)
-            || (pkgs.lib.hasSuffix ".css" path)
-            || (builtins.match "scripts/.*" path != null)
-            || (craneLib.filterCargoSources path type);
+            (!pkgs.lib.hasInfix "/xtask/" path)
+            && (
+              (pkgs.lib.hasSuffix ".sql" path)
+              || (pkgs.lib.hasSuffix ".css" path)
+              || (builtins.match "scripts/.*" path != null)
+              || (craneLib.filterCargoSources path type)
+            );
         };
 
         commonArgs = {
@@ -898,7 +901,10 @@
           coverage-update = craneLib.mkCargoDerivation (
             commonArgs
             // {
-              src = ./.;
+              src = pkgs.lib.cleanSourceWith {
+                src = ./.;
+                filter = path: _type: !(pkgs.lib.hasInfix "/xtask/" path);
+              };
               inherit cargoArtifacts;
               pname = "jaunder-coverage-update";
               CARGO_PROFILE_DEV_DEBUG = "0";
@@ -1017,7 +1023,10 @@
             coverage = craneLib.mkCargoDerivation (
               commonArgs
               // {
-                src = ./.;
+                src = pkgs.lib.cleanSourceWith {
+                  src = ./.;
+                  filter = path: _type: !(pkgs.lib.hasInfix "/xtask/" path);
+                };
                 inherit cargoArtifacts;
                 pname = "jaunder-coverage";
                 # Source-based coverage uses LLVM's embedded coverage map
