@@ -101,6 +101,8 @@ The verify ladder has three tiers:
   - Set `VERIFY_SHOW_STEP_OUTPUT=1` to print captured output for successful steps.
   - Set `VERIFY_SHOW_FAILURE_LOG=0` to suppress failed-step logs, or `VERIFY_FAILURE_LOG_LINES=<n>` to change the failure tail length (default `200` lines).
   - These two are the whole ladder: `scripts/verify --fast` while iterating, then `scripts/verify` before pushing. Because `scripts/verify` already runs the tests and `nix flake check`, there is no need to run `cargo nextest` or `nix flake check` separately as their own rung — `scripts/verify` covers them.
+**Incoming: `cargo xtask` commands (Plan A preview).** `cargo xtask check` and `cargo xtask validate` are being introduced alongside the verify ladder. `check` runs the same static checks and clippy as `scripts/verify --fast`, entirely on the host. `validate` dispatches the full coverage build to the Nix `coverage` check (matching CI), and `validate --full` additionally dispatches the e2e and PostgreSQL-integration VM checks. Both commands write a machine-readable result to `.xtask/last-result.json` and memoize against the whole-tree content hash so a clean re-run exits instantly. They will replace the verify ladder once Plan B (coverage post-processing + CI wiring) lands; until then the scripts remain authoritative and are not retired.
+
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that contain Leptos `view!` macros.
 - `prettier --check end2end` checks Playwright and other frontend test assets.
