@@ -64,6 +64,8 @@ common = { workspace = true, features = ["test-utils"] }
 storage = { workspace = true, features = ["test-utils"] }
 leptos = { workspace = true, features = ["ssr"] }
 maik = "0.2.0"
+rstest = { workspace = true }
+rstest_reuse = { workspace = true }
 server_fn = { version = "0.8", features = ["axum-no-default"] }
 tempfile.workspace = true
 tower = { workspace = true }

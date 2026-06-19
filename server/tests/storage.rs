@@ -6,6 +6,12 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+// The `sqlite_only`/`postgres_only` `#[template]`s are part of the shared
+// fixture set but are not `#[apply]`ed until later conversion tasks. A
+// `#[template]` expands to a name-mangled `macro_rules!`, so a per-item
+// `#[allow(unused_macros)]` can't reach it — this crate-level allow is the only
+// thing that suppresses the dead-template lint for them.
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -25,6 +31,16 @@ use storage::{
     UserAuthError, UserStorage,
 };
 use tempfile::TempDir;
+
+use rstest::*;
+// `#[template]`/`#[apply]` come from the `rstest_reuse` companion crate (rstest
+// itself only exports `rstest`/`fixture`). The bare `use rstest_reuse;` is
+// required at the crate root because `rstest_reuse::template` expands to code
+// that names the `rstest_reuse` crate; `use rstest_reuse::*;` alone is not
+// enough (it imports the public items but not the crate path).
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
 
 use helpers::{sqlite_url, template_postgres_url, unique_postgres_url};
 
@@ -58,6 +74,53 @@ async fn sqlite_state() -> (TempDir, std::sync::Arc<storage::AppState>) {
     let state = open_database(&sqlite_url(&base)).await.unwrap();
     (base, state)
 }
+
+use storage::AppState;
+
+#[derive(Copy, Clone)]
+enum Backend {
+    Sqlite,
+    Postgres,
+}
+
+struct TestEnv {
+    state: std::sync::Arc<AppState>,
+    _guard: Option<TempDir>,
+}
+
+impl Backend {
+    async fn setup(self) -> TestEnv {
+        match self {
+            Backend::Sqlite => {
+                let (base, state) = sqlite_state().await;
+                TestEnv {
+                    state,
+                    _guard: Some(base),
+                }
+            }
+            Backend::Postgres => TestEnv {
+                state: postgres_state().await,
+                _guard: None,
+            },
+        }
+    }
+}
+
+#[template]
+#[rstest]
+#[case::sqlite(Backend::Sqlite)]
+fn sqlite_only(#[case] backend: Backend) {}
+
+#[template]
+#[rstest]
+#[case::postgres(Backend::Postgres)]
+fn postgres_only(#[case] backend: Backend) {}
+
+#[template]
+#[rstest]
+#[case::sqlite(Backend::Sqlite)]
+#[case::postgres(Backend::Postgres)]
+fn backends(#[case] backend: Backend) {}
 
 async fn user_storage(base: &TempDir) -> SqliteUserStorage {
     SqliteUserStorage::new(open_pool(base).await)
@@ -3145,7 +3208,11 @@ async fn assert_tag_creation_and_retrieval(state: &std::sync::Arc<storage::AppSt
     assert_eq!(tags[0].tag_display, "rust");
 }
 
-async fn assert_tag_normalization(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn tag_normalization(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     // Create a user and post
     let user = state
         .users
@@ -3679,12 +3746,6 @@ async fn sqlite_tag_creation_and_retrieval() {
 }
 
 #[tokio::test]
-async fn sqlite_tag_normalization() {
-    let (_base, state) = sqlite_state().await;
-    assert_tag_normalization(&state).await;
-}
-
-#[tokio::test]
 async fn sqlite_untag_post() {
     let (_base, state) = sqlite_state().await;
     assert_untag_post(&state).await;
@@ -3742,12 +3803,6 @@ async fn sqlite_untag_nonexistent_tag_error() {
 async fn postgres_tag_creation_and_retrieval() {
     let state = postgres_state().await;
     assert_tag_creation_and_retrieval(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_tag_normalization() {
-    let state = postgres_state().await;
-    assert_tag_normalization(&state).await;
 }
 
 #[tokio::test]
