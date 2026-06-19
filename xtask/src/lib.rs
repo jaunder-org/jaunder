@@ -1,6 +1,10 @@
 use clap::{Parser, Subcommand};
 
 mod result;
+mod sh;
+mod steps {
+    pub mod static_checks;
+}
 pub use result::{CommandResult, Mode, StepResult};
 
 #[derive(Parser)]
@@ -26,7 +30,12 @@ pub enum Command {
 
 pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
     match cli.command {
-        Command::Check => Ok(CommandResult::new("check")),
+        Command::Check => {
+            let sh = xshell::Shell::new()?;
+            let mut result = CommandResult::new("check");
+            steps::static_checks::run(&sh, Mode::Fix, &mut result);
+            Ok(result)
+        }
         Command::Validate { .. } => Ok(CommandResult::new("validate")),
     }
 }
