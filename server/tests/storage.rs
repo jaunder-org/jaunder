@@ -3753,7 +3753,11 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
 // ====== Additional coverage tests for error paths ======
 
 // SQLite: Post update with invalid slug and edge cases
-async fn assert_post_update_invalid_slug(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn post_update_invalid_slug(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(&username("test_user"), &password("password"), None, false)
@@ -3818,7 +3822,11 @@ async fn assert_post_update_invalid_slug(state: &std::sync::Arc<storage::AppStat
 }
 
 // SQLite: List published with cursor boundary conditions
-async fn assert_list_published_cursor_boundary(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn list_published_cursor_boundary(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -3882,7 +3890,11 @@ async fn assert_list_published_cursor_boundary(state: &std::sync::Arc<storage::A
 }
 
 // SQLite: List drafts with cursor
-async fn assert_list_drafts_cursor_boundary(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -3946,7 +3958,11 @@ async fn assert_list_drafts_cursor_boundary(state: &std::sync::Arc<storage::AppS
 }
 
 // SQLite: List user posts by tag with cursor
-async fn assert_list_user_posts_by_tag_cursor(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -4018,7 +4034,11 @@ async fn assert_list_user_posts_by_tag_cursor(state: &std::sync::Arc<storage::Ap
 }
 
 // SQLite: List posts by tag with cursor
-async fn assert_list_posts_by_tag_cursor(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -4090,7 +4110,11 @@ async fn assert_list_posts_by_tag_cursor(state: &std::sync::Arc<storage::AppStat
 }
 
 // SQLite: Soft delete then try operations
-async fn assert_soft_delete_then_operations(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn soft_delete_then_operations(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -4149,83 +4173,14 @@ async fn assert_soft_delete_then_operations(state: &std::sync::Arc<storage::AppS
     assert!(posts.is_empty());
 }
 
-#[tokio::test]
-async fn sqlite_post_update_invalid_slug() {
-    let (_base, state) = sqlite_state().await;
-    assert_post_update_invalid_slug(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_list_published_cursor_boundary() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_published_cursor_boundary(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_list_drafts_cursor_boundary() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_drafts_cursor_boundary(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_list_user_posts_by_tag_cursor() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_user_posts_by_tag_cursor(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_list_posts_by_tag_cursor() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_posts_by_tag_cursor(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_soft_delete_then_operations() {
-    let (_base, state) = sqlite_state().await;
-    assert_soft_delete_then_operations(&state).await;
-}
-
-// PostgreSQL versions of the same tests
-#[tokio::test]
-async fn postgres_post_update_invalid_slug() {
-    let state = postgres_state().await;
-    assert_post_update_invalid_slug(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_published_cursor_boundary() {
-    let state = postgres_state().await;
-    assert_list_published_cursor_boundary(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_drafts_cursor_boundary() {
-    let state = postgres_state().await;
-    assert_list_drafts_cursor_boundary(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_user_posts_by_tag_cursor() {
-    let state = postgres_state().await;
-    assert_list_user_posts_by_tag_cursor(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_posts_by_tag_cursor() {
-    let state = postgres_state().await;
-    assert_list_posts_by_tag_cursor(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_soft_delete_then_operations() {
-    let state = postgres_state().await;
-    assert_soft_delete_then_operations(&state).await;
-}
-
 // ====== Additional error path and rollback scenario tests ======
 
 // Test tagging with multiple failed attempts
-async fn assert_tag_post_multiple_attempts(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn tag_post_multiple_attempts(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -4285,7 +4240,11 @@ async fn assert_tag_post_multiple_attempts(state: &std::sync::Arc<storage::AppSt
 }
 
 // Test list_published_by_user with cursor when no posts match
-async fn assert_list_published_by_user_no_posts(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn list_published_by_user_no_posts(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let _user = state
         .users
         .create_user(
@@ -4319,7 +4278,11 @@ async fn assert_list_published_by_user_no_posts(state: &std::sync::Arc<storage::
 }
 
 // Test get_post_by_permalink returns None when post is soft-deleted
-async fn assert_get_by_permalink_soft_deleted(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -4385,7 +4348,11 @@ async fn assert_get_by_permalink_soft_deleted(state: &std::sync::Arc<storage::Ap
 }
 
 // Test update_post on soft-deleted post
-async fn assert_update_soft_deleted_post(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn update_soft_deleted_post(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -4448,7 +4415,11 @@ async fn assert_update_soft_deleted_post(state: &std::sync::Arc<storage::AppStat
 }
 
 // Test tag with various edge case formats
-async fn assert_tag_edge_case_formats(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn tag_edge_case_formats(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -4506,70 +4477,14 @@ async fn assert_tag_edge_case_formats(state: &std::sync::Arc<storage::AppState>)
     assert_eq!(tags.len(), 3);
 }
 
-#[tokio::test]
-async fn sqlite_tag_post_multiple_attempts() {
-    let (_base, state) = sqlite_state().await;
-    assert_tag_post_multiple_attempts(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_list_published_by_user_no_posts() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_published_by_user_no_posts(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_get_by_permalink_soft_deleted() {
-    let (_base, state) = sqlite_state().await;
-    assert_get_by_permalink_soft_deleted(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_update_soft_deleted_post() {
-    let (_base, state) = sqlite_state().await;
-    assert_update_soft_deleted_post(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_tag_edge_case_formats() {
-    let (_base, state) = sqlite_state().await;
-    assert_tag_edge_case_formats(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_tag_post_multiple_attempts() {
-    let state = postgres_state().await;
-    assert_tag_post_multiple_attempts(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_published_by_user_no_posts() {
-    let state = postgres_state().await;
-    assert_list_published_by_user_no_posts(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_get_by_permalink_soft_deleted() {
-    let state = postgres_state().await;
-    assert_get_by_permalink_soft_deleted(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_update_soft_deleted_post() {
-    let state = postgres_state().await;
-    assert_update_soft_deleted_post(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_tag_edge_case_formats() {
-    let state = postgres_state().await;
-    assert_tag_edge_case_formats(&state).await;
-}
-
 // ====== Comprehensive error path coverage ======
 
 // Test get_post_by_id with non-existent post
-async fn assert_get_post_by_id_nonexistent(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn get_post_by_id_nonexistent(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let result = state.posts.get_post_by_id(999_999).await;
     match result {
         Ok(None) => {
@@ -4580,9 +4495,11 @@ async fn assert_get_post_by_id_nonexistent(state: &std::sync::Arc<storage::AppSt
 }
 
 // Test list_published with cursor where boundary is crossed
-async fn assert_list_published_with_cursor_same_timestamp(
-    state: &std::sync::Arc<storage::AppState>,
-) {
+#[apply(backends)]
+#[tokio::test]
+async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -4641,7 +4558,11 @@ async fn assert_list_published_with_cursor_same_timestamp(
 }
 
 // Test post revisions are created during update
-async fn assert_post_revisions_created(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn post_revisions_created(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -4694,7 +4615,11 @@ async fn assert_post_revisions_created(state: &std::sync::Arc<storage::AppState>
 }
 
 // Test display preservation of tags
-async fn assert_tag_display_preservation(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn tag_display_preservation(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -4742,7 +4667,11 @@ async fn assert_tag_display_preservation(state: &std::sync::Arc<storage::AppStat
 }
 
 // Test untag operation removes only the specified tag
-async fn assert_untag_preserves_other_tags(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn untag_preserves_other_tags(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -4811,66 +4740,6 @@ async fn assert_untag_preserves_other_tags(state: &std::sync::Arc<storage::AppSt
     assert_eq!(tags.len(), 2);
     let tag_slugs: Vec<_> = tags.iter().map(|t| t.tag_slug.as_str()).collect();
     assert!(!tag_slugs.contains(&"tag2"));
-}
-
-#[tokio::test]
-async fn sqlite_get_post_by_id_nonexistent() {
-    let (_base, state) = sqlite_state().await;
-    assert_get_post_by_id_nonexistent(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_list_published_with_cursor_same_timestamp() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_published_with_cursor_same_timestamp(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_post_revisions_created() {
-    let (_base, state) = sqlite_state().await;
-    assert_post_revisions_created(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_tag_display_preservation() {
-    let (_base, state) = sqlite_state().await;
-    assert_tag_display_preservation(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_untag_preserves_other_tags() {
-    let (_base, state) = sqlite_state().await;
-    assert_untag_preserves_other_tags(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_get_post_by_id_nonexistent() {
-    let state = postgres_state().await;
-    assert_get_post_by_id_nonexistent(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_published_with_cursor_same_timestamp() {
-    let state = postgres_state().await;
-    assert_list_published_with_cursor_same_timestamp(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_post_revisions_created() {
-    let state = postgres_state().await;
-    assert_post_revisions_created(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_tag_display_preservation() {
-    let state = postgres_state().await;
-    assert_tag_display_preservation(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_untag_preserves_other_tags() {
-    let state = postgres_state().await;
-    assert_untag_preserves_other_tags(&state).await;
 }
 
 // ====== Site config tests ======
