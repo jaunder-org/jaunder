@@ -5163,7 +5163,11 @@ fn make_media_record(
     }
 }
 
-async fn assert_create_and_get_media(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn create_and_get_media(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(
@@ -5193,7 +5197,11 @@ async fn assert_create_and_get_media(state: &std::sync::Arc<storage::AppState>) 
     assert_eq!(fetched.size_bytes, 12345);
 }
 
-async fn assert_duplicate_media_returns_already_exists(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn duplicate_media_returns_already_exists(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(
@@ -5215,7 +5223,11 @@ async fn assert_duplicate_media_returns_already_exists(state: &std::sync::Arc<st
     );
 }
 
-async fn assert_delete_media_removes_record(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn delete_media_removes_record(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(
@@ -5244,7 +5256,11 @@ async fn assert_delete_media_removes_record(state: &std::sync::Arc<storage::AppS
     assert!(fetched.is_none(), "record should have been deleted");
 }
 
-async fn assert_delete_nonexistent_returns_not_found(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(
@@ -5268,7 +5284,11 @@ async fn assert_delete_nonexistent_returns_not_found(state: &std::sync::Arc<stor
     );
 }
 
-async fn assert_list_media_returns_records_for_user(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn list_media_returns_records_for_user(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_a = state
         .users
         .create_user(
@@ -5330,7 +5350,11 @@ async fn assert_list_media_returns_records_for_user(state: &std::sync::Arc<stora
     assert!(results.iter().all(|r| r.user_id == user_a));
 }
 
-async fn assert_list_media_filtered_by_source(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn list_media_filtered_by_source(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(
@@ -5383,9 +5407,11 @@ async fn assert_list_media_filtered_by_source(state: &std::sync::Arc<storage::Ap
     assert_eq!(cached[0].source, MediaSource::Cached);
 }
 
-async fn assert_get_user_upload_usage_returns_zero_initially(
-    state: &std::sync::Arc<storage::AppState>,
-) {
+#[apply(backends)]
+#[tokio::test]
+async fn get_user_upload_usage_returns_zero_initially(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(
@@ -5401,7 +5427,11 @@ async fn assert_get_user_upload_usage_returns_zero_initially(
     assert_eq!(usage, 0);
 }
 
-async fn assert_get_user_upload_usage_sums_uploads_only(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn get_user_upload_usage_sums_uploads_only(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(
@@ -5428,7 +5458,11 @@ async fn assert_get_user_upload_usage_sums_uploads_only(state: &std::sync::Arc<s
     assert_eq!(usage, 1000, "only upload bytes should count toward usage");
 }
 
-async fn assert_find_by_hash_returns_any_match(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn find_by_hash_returns_any_match(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(
@@ -5455,7 +5489,11 @@ async fn assert_find_by_hash_returns_any_match(state: &std::sync::Arc<storage::A
 
 // ── UserConfigStorage tests ───────────────────────────────────────────────────
 
-async fn assert_user_config_get_returns_none_when_unset(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn user_config_get_returns_none_when_unset(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(&username("cfguser1"), &password("password123"), None, false)
@@ -5466,7 +5504,11 @@ async fn assert_user_config_get_returns_none_when_unset(state: &std::sync::Arc<s
     assert!(val.is_none());
 }
 
-async fn assert_user_config_set_and_get(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn user_config_set_and_get(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(&username("cfguser2"), &password("password123"), None, false)
@@ -5482,7 +5524,11 @@ async fn assert_user_config_set_and_get(state: &std::sync::Arc<storage::AppState
     assert_eq!(val.as_deref(), Some("dark"));
 }
 
-async fn assert_user_config_overwrite(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn user_config_overwrite(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(&username("cfguser3"), &password("password123"), None, false)
@@ -5503,7 +5549,11 @@ async fn assert_user_config_overwrite(state: &std::sync::Arc<storage::AppState>)
     assert_eq!(val.as_deref(), Some("dark"));
 }
 
-async fn assert_user_config_delete_removes_key(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn user_config_delete_removes_key(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(&username("cfguser4"), &password("password123"), None, false)
@@ -5520,7 +5570,11 @@ async fn assert_user_config_delete_removes_key(state: &std::sync::Arc<storage::A
     assert!(val.is_none());
 }
 
-async fn assert_user_config_delete_nonexistent_is_ok(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn user_config_delete_nonexistent_is_ok(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user_id = state
         .users
         .create_user(&username("cfguser5"), &password("password123"), None, false)
@@ -5534,183 +5588,13 @@ async fn assert_user_config_delete_nonexistent_is_ok(state: &std::sync::Arc<stor
         .unwrap();
 }
 
-// ── SQLite concrete tests ─────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn sqlite_create_and_get_media() {
-    let (_base, state) = sqlite_state().await;
-    assert_create_and_get_media(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_duplicate_media_returns_already_exists() {
-    let (_base, state) = sqlite_state().await;
-    assert_duplicate_media_returns_already_exists(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_delete_media_removes_record() {
-    let (_base, state) = sqlite_state().await;
-    assert_delete_media_removes_record(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_delete_nonexistent_returns_not_found() {
-    let (_base, state) = sqlite_state().await;
-    assert_delete_nonexistent_returns_not_found(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_list_media_returns_records_for_user() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_media_returns_records_for_user(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_list_media_filtered_by_source() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_media_filtered_by_source(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_get_user_upload_usage_returns_zero_initially() {
-    let (_base, state) = sqlite_state().await;
-    assert_get_user_upload_usage_returns_zero_initially(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_get_user_upload_usage_sums_uploads_only() {
-    let (_base, state) = sqlite_state().await;
-    assert_get_user_upload_usage_sums_uploads_only(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_find_by_hash_returns_any_match() {
-    let (_base, state) = sqlite_state().await;
-    assert_find_by_hash_returns_any_match(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_user_config_get_returns_none_when_unset() {
-    let (_base, state) = sqlite_state().await;
-    assert_user_config_get_returns_none_when_unset(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_user_config_set_and_get() {
-    let (_base, state) = sqlite_state().await;
-    assert_user_config_set_and_get(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_user_config_overwrite() {
-    let (_base, state) = sqlite_state().await;
-    assert_user_config_overwrite(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_user_config_delete_removes_key() {
-    let (_base, state) = sqlite_state().await;
-    assert_user_config_delete_removes_key(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_user_config_delete_nonexistent_is_ok() {
-    let (_base, state) = sqlite_state().await;
-    assert_user_config_delete_nonexistent_is_ok(&state).await;
-}
-
-// ── PostgreSQL parity tests ───────────────────────────────────────────────────
-
-#[tokio::test]
-async fn postgres_create_and_get_media() {
-    let state = postgres_state().await;
-    assert_create_and_get_media(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_duplicate_media_returns_already_exists() {
-    let state = postgres_state().await;
-    assert_duplicate_media_returns_already_exists(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_delete_media_removes_record() {
-    let state = postgres_state().await;
-    assert_delete_media_removes_record(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_delete_nonexistent_returns_not_found() {
-    let state = postgres_state().await;
-    assert_delete_nonexistent_returns_not_found(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_media_returns_records_for_user() {
-    let state = postgres_state().await;
-    assert_list_media_returns_records_for_user(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_media_filtered_by_source() {
-    let state = postgres_state().await;
-    assert_list_media_filtered_by_source(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_get_user_upload_usage_returns_zero_initially() {
-    let state = postgres_state().await;
-    assert_get_user_upload_usage_returns_zero_initially(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_get_user_upload_usage_sums_uploads_only() {
-    let state = postgres_state().await;
-    assert_get_user_upload_usage_sums_uploads_only(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_find_by_hash_returns_any_match() {
-    let state = postgres_state().await;
-    assert_find_by_hash_returns_any_match(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_user_config_get_returns_none_when_unset() {
-    let state = postgres_state().await;
-    assert_user_config_get_returns_none_when_unset(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_user_config_set_and_get() {
-    let state = postgres_state().await;
-    assert_user_config_set_and_get(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_user_config_overwrite() {
-    let state = postgres_state().await;
-    assert_user_config_overwrite(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_user_config_delete_removes_key() {
-    let state = postgres_state().await;
-    assert_user_config_delete_removes_key(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_user_config_delete_nonexistent_is_ok() {
-    let state = postgres_state().await;
-    assert_user_config_delete_nonexistent_is_ok(&state).await;
-}
-
 // ====== tags.2: list_tags + get_tags_for_posts ======
 
-async fn assert_list_tags_returns_alphabetical_with_prefix(
-    state: &std::sync::Arc<storage::AppState>,
-) {
+#[apply(backends)]
+#[tokio::test]
+async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -5772,7 +5656,11 @@ async fn assert_list_tags_returns_alphabetical_with_prefix(
     assert!(none.is_empty());
 }
 
-async fn assert_post_record_carries_tags(state: &std::sync::Arc<storage::AppState>) {
+#[apply(backends)]
+#[tokio::test]
+async fn post_record_carries_tags(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let user = state
         .users
         .create_user(
@@ -5839,28 +5727,4 @@ async fn assert_post_record_carries_tags(state: &std::sync::Arc<storage::AppStat
         .expect("get_post_by_id p3")
         .expect("p3 should exist");
     assert!(p3_record.tags.is_empty());
-}
-
-#[tokio::test]
-async fn sqlite_list_tags_returns_alphabetical_with_prefix() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_tags_returns_alphabetical_with_prefix(&state).await;
-}
-
-#[tokio::test]
-async fn sqlite_post_record_carries_tags() {
-    let (_base, state) = sqlite_state().await;
-    assert_post_record_carries_tags(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_tags_returns_alphabetical_with_prefix() {
-    let state = postgres_state().await;
-    assert_list_tags_returns_alphabetical_with_prefix(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_post_record_carries_tags() {
-    let state = postgres_state().await;
-    assert_post_record_carries_tags(&state).await;
 }
