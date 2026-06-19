@@ -2,6 +2,7 @@
 // (diffmap/baseline/classify/crap/run). Suppress dead-code noise until wired.
 #![allow(dead_code)]
 
+pub mod diffmap;
 pub mod report;
 
 #[derive(Clone, Debug, PartialEq)]
