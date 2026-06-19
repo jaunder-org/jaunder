@@ -23,12 +23,11 @@ use sqlx::SqlitePool;
 use storage::{
     create_rendered_post, open_database, open_existing_database, update_rendered_post, AtomicOps,
     CreatePostError, CreatePostInput, CreateUserError, DbConnectOptions, EmailVerificationStorage,
-    InviteStorage, ListByTagError, PasswordResetStorage, PostCursor, PostFormat, PostStorage,
-    ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteAtomicOps,
+    InviteStorage, ListByTagError, PasswordResetStorage, PostCursor, PostFormat, ProfileUpdate,
+    RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteAtomicOps,
     SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
-    SqlitePostStorage, SqliteSessionStorage, SqliteUserStorage, TaggingError, UpdatePostError,
-    UpdatePostInput, UseEmailVerificationError, UseInviteError, UsePasswordResetError,
-    UserAuthError, UserStorage,
+    SqliteSessionStorage, SqliteUserStorage, TaggingError, UpdatePostError, UpdatePostInput,
+    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError, UserStorage,
 };
 use tempfile::TempDir;
 
@@ -1355,14 +1354,6 @@ async fn use_password_reset_unknown_token_returns_not_found() {
 // PostStorage integration tests
 // ---------------------------------------------------------------------------
 
-async fn post_storage(base: &TempDir) -> (SqliteUserStorage, SqlitePostStorage) {
-    let pool = open_pool(base).await;
-    (
-        SqliteUserStorage::new(pool.clone()),
-        SqlitePostStorage::new(pool),
-    )
-}
-
 fn make_create_post_input(user_id: i64, slug: &str) -> CreatePostInput {
     CreatePostInput {
         user_id,
@@ -1652,69 +1643,46 @@ async fn assert_list_drafts_by_user(state: &std::sync::Arc<storage::AppState>) {
     assert!(drafts.iter().all(|p| p.user_id == user_id));
 }
 
-// SQLite post tests
+// Post tests (backend-parametrized)
 
+#[apply(backends)]
 #[tokio::test]
-async fn sqlite_post_create_and_get_by_id_works() {
-    let base = TempDir::new().unwrap();
-    let (_, posts) = post_storage(&base).await;
-    let pool = open_pool(&base).await;
-    let users = SqliteUserStorage::new(pool);
-    let user_id = users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let input = make_create_post_input(user_id, "hello-world");
-    let post_id = posts.create_post(&input).await.unwrap();
-    let record = posts.get_post_by_id(post_id).await.unwrap().unwrap();
-    assert_eq!(record.post_id, post_id);
-    assert_eq!(record.slug.as_str(), "hello-world");
-    assert!(record.deleted_at.is_none());
+async fn post_create_and_get_by_id_works(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    assert_post_create_and_get_by_id(state).await;
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn sqlite_post_slug_conflict_returns_slug_conflict() {
-    let base = TempDir::new().unwrap();
-    let now = Utc::now();
-    let (users, posts) = post_storage(&base).await;
-    let user_id = users
-        .create_user(&username("bob"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let input = CreatePostInput {
-        user_id,
-        title: Some("Post".to_string()),
-        slug: "my-slug".parse().unwrap(),
-        body: "body".to_string(),
-        format: PostFormat::Markdown,
-        rendered_html: "<p>body</p>".to_string(),
-        published_at: Some(now),
-        summary: None,
-    };
-    posts.create_post(&input).await.unwrap();
-    let err = posts.create_post(&input).await.unwrap_err();
-    assert!(
-        matches!(err, CreatePostError::SlugConflict),
-        "expected SlugConflict, got {err:?}"
-    );
+async fn post_slug_conflict_returns_slug_conflict(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    assert_post_slug_conflict(state).await;
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn sqlite_post_update_writes_revision_and_updates_record() {
-    let (_base, state) = sqlite_state().await;
-    assert_post_update_creates_revision(&state).await;
+async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    assert_post_update_creates_revision(state).await;
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn sqlite_post_update_not_found_returns_error() {
-    let (_base, state) = sqlite_state().await;
-    assert_post_update_not_found(&state).await;
+async fn post_update_not_found_returns_error(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    assert_post_update_not_found(state).await;
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn sqlite_soft_delete_excludes_post_from_lists() {
-    let (_base, state) = sqlite_state().await;
-    assert_soft_delete_excludes_from_lists(&state).await;
+async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    assert_soft_delete_excludes_from_lists(state).await;
 }
 
 async fn assert_list_published_in_window(state: &std::sync::Arc<storage::AppState>) {
@@ -1911,28 +1879,36 @@ async fn assert_list_published_in_window(state: &std::sync::Arc<storage::AppStat
     assert!(bob_tag.is_empty());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn sqlite_list_published_by_user_returns_only_user_posts() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_published_by_user(&state).await;
+async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    assert_list_published_by_user(state).await;
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn sqlite_list_published_returns_published_non_deleted_posts() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_published_returns_all_published(&state).await;
+async fn list_published_returns_published_non_deleted_posts(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    assert_list_published_returns_all_published(state).await;
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn sqlite_list_published_in_window_applies_hybrid_rule_across_surfaces() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_published_in_window(&state).await;
+async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    assert_list_published_in_window(state).await;
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn sqlite_list_drafts_by_user_returns_only_drafts() {
-    let (_base, state) = sqlite_state().await;
-    assert_list_drafts_by_user(&state).await;
+async fn list_drafts_by_user_returns_only_drafts(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    assert_list_drafts_by_user(state).await;
 }
 
 #[tokio::test]
@@ -1959,60 +1935,6 @@ async fn sqlite_post_app_state_parity_suite() {
     assert_list_published_returns_all_published(&state).await;
 
     let (_base, state) = sqlite_state().await;
-    assert_list_drafts_by_user(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_post_create_and_get_by_id_works() {
-    let state = postgres_state().await;
-    assert_post_create_and_get_by_id(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_post_slug_conflict_returns_slug_conflict() {
-    let state = postgres_state().await;
-    assert_post_slug_conflict(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_post_update_writes_revision_and_updates_record() {
-    let state = postgres_state().await;
-    assert_post_update_creates_revision(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_post_update_not_found_returns_error() {
-    let state = postgres_state().await;
-    assert_post_update_not_found(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_soft_delete_excludes_post_from_lists() {
-    let state = postgres_state().await;
-    assert_soft_delete_excludes_from_lists(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_published_by_user_returns_only_user_posts() {
-    let state = postgres_state().await;
-    assert_list_published_by_user(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_published_returns_published_non_deleted_posts() {
-    let state = postgres_state().await;
-    assert_list_published_returns_all_published(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_published_in_window_applies_hybrid_rule_across_surfaces() {
-    let state = postgres_state().await;
-    assert_list_published_in_window(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_list_drafts_by_user_returns_only_drafts() {
-    let state = postgres_state().await;
     assert_list_drafts_by_user(&state).await;
 }
 
