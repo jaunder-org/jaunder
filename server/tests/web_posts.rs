@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -23,6 +24,13 @@ use web::posts::{
     CreatePostResult, DraftSummary, PublishPostResult, TimelinePage, UpdatePostResult,
 };
 
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use helpers::{backends, Backend, TestEnv};
+
 async fn unpublish_post_form(
     state: Arc<storage::AppState>,
     post_id: i64,
@@ -37,7 +45,7 @@ async fn unpublish_post_form(
     .await
 }
 
-use helpers::{ensure_server_fns_registered, test_options, test_state};
+use helpers::{ensure_server_fns_registered, test_options};
 
 async fn post_form(
     state: Arc<storage::AppState>,
@@ -169,10 +177,10 @@ async fn get_post_preview_form(
     post_form(state, "/api/get_post_preview", body, cookie).await
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_post_persists_rendered_published_post() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_post_persists_rendered_published_post(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -242,10 +250,10 @@ async fn create_post_persists_rendered_published_post() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_post_retries_slug_conflicts_for_same_user_and_date() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_post_retries_slug_conflicts_for_same_user_and_date(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -294,22 +302,61 @@ second",
     assert_eq!(created.slug, "repeated-title-2");
 }
 
-#[tokio::test]
-async fn create_post_rejects_requests_without_authentication() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+/// Which endpoint a `*_rejects_unauthenticated` case exercises. Each variant
+/// fires the same request the original standalone test fired, with no session
+/// cookie, through that endpoint's existing request builder.
+#[derive(Copy, Clone)]
+enum UnauthEndpoint {
+    CreatePost,
+    UpdatePost,
+    ListDrafts,
+    PublishPost,
+    ListHomeFeed,
+}
 
-    let (status, body) =
-        create_post_json(Arc::clone(&state), "body", "markdown", None, false, None).await;
+async fn unauthenticated_request(
+    state: Arc<storage::AppState>,
+    endpoint: UnauthEndpoint,
+) -> (StatusCode, String) {
+    match endpoint {
+        UnauthEndpoint::CreatePost => {
+            create_post_json(state, "body", "markdown", None, false, None).await
+        }
+        UnauthEndpoint::UpdatePost => {
+            update_post_json(state, 42, "body", "markdown", None, false, None).await
+        }
+        UnauthEndpoint::ListDrafts => list_drafts_form(state, None, None, 10, None).await,
+        UnauthEndpoint::PublishPost => publish_post_form(state, 99, None).await,
+        UnauthEndpoint::ListHomeFeed => list_home_feed_form(state, None, None, 50, None).await,
+    }
+}
+
+// Shape B — `*_rejects_unauthenticated` cluster across endpoints. Identical
+// assertion (INTERNAL_SERVER_ERROR + "unauthorized"); only the endpoint (and
+// thus the request builder) varies.
+#[rstest]
+#[case::create_post(UnauthEndpoint::CreatePost)]
+#[case::update_post(UnauthEndpoint::UpdatePost)]
+#[case::list_drafts(UnauthEndpoint::ListDrafts)]
+#[case::publish_post(UnauthEndpoint::PublishPost)]
+#[case::list_home_feed(UnauthEndpoint::ListHomeFeed)]
+#[tokio::test]
+async fn endpoint_rejects_unauthenticated(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] endpoint: UnauthEndpoint,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+
+    let (status, body) = unauthenticated_request(state, endpoint).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("unauthorized"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_post_accepts_slug_override_and_saves_draft() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -359,10 +406,10 @@ async fn create_post_accepts_slug_override_and_saves_draft() {
     assert!(record.rendered_html.contains("<b>bold</b>"));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_post_accepts_titleless_body() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -403,10 +450,10 @@ async fn create_post_accepts_titleless_body() {
     assert_eq!(record.body, "Titleless note");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_post_extracts_markdown_heading_title() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_post_extracts_markdown_heading_title(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -452,10 +499,35 @@ Body text",
     assert!(record.rendered_html.contains("<h1>Extracted Title</h1>"));
 }
 
+// Shape B — create_post rejection cluster. Identical setup (author + session)
+// and assertion structure (INTERNAL_SERVER_ERROR + body substring); only the
+// request body/format/slug_override and the expected error message vary.
+#[rstest]
+#[case::empty_post("", "markdown", None, "post body is required")]
+#[case::no_slug_source(
+    "+++",
+    "markdown",
+    None,
+    "post must contain at least one ASCII letter or digit for its slug"
+)]
+#[case::invalid_format("body", "invalid_format", None, "post format must be")]
+#[case::invalid_slug_override("body", "markdown", Some("Not Valid"), "slug must be non-empty")]
+// Heading with only em-dashes passes the empty check but cannot produce a slug
+#[case::title_without_ascii_slug(
+    "# ———\n\nbody",
+    "markdown",
+    None,
+    "post must contain at least one ASCII letter or digit for its slug"
+)]
 #[tokio::test]
-async fn create_post_rejects_empty_post() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_post_rejects(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] request_body: &str,
+    #[case] format: &str,
+    #[case] slug_override: Option<&str>,
+    #[case] expected: &str,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -475,171 +547,22 @@ async fn create_post_rejects_empty_post() {
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
-        "",
-        "markdown",
-        None,
+        request_body,
+        format,
+        slug_override,
         false,
         Some(&cookie),
     )
     .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("post body is required"), "body: {body}");
+    assert!(body.contains(expected), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_post_rejects_post_without_slug_source() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let user_id = state
-        .users
-        .create_user(
-            &"author".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = format!("session={token}");
-
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "+++",
-        "markdown",
-        None,
-        false,
-        Some(&cookie),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(
-        body.contains("post must contain at least one ASCII letter or digit for its slug"),
-        "body: {body}"
-    );
-}
-
-#[tokio::test]
-async fn create_post_rejects_invalid_format() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let user_id = state
-        .users
-        .create_user(
-            &"author".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = format!("session={token}");
-
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "body",
-        "invalid_format",
-        None,
-        false,
-        Some(&cookie),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("post format must be"), "body: {body}");
-}
-
-#[tokio::test]
-async fn create_post_rejects_invalid_slug_override() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let user_id = state
-        .users
-        .create_user(
-            &"author".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = format!("session={token}");
-
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "body",
-        "markdown",
-        Some("Not Valid"),
-        false,
-        Some(&cookie),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("slug must be non-empty"), "body: {body}");
-}
-
-#[tokio::test]
-async fn create_post_rejects_title_without_ascii_slug_characters() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let user_id = state
-        .users
-        .create_user(
-            &"author".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = format!("session={token}");
-
-    // Heading with only em-dashes passes the empty check but cannot produce a slug
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "# ———
-
-body",
-        "markdown",
-        None,
-        false,
-        Some(&cookie),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(
-        body.contains("post must contain at least one ASCII letter or digit for its slug"),
-        "body: {body}"
-    );
-}
-
-#[tokio::test]
-async fn get_post_returns_published_post() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn get_post_returns_published_post(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -696,10 +619,10 @@ async fn get_post_returns_published_post() {
     assert!(body.contains("published_at"));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_post_returns_draft_to_author_only() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -807,10 +730,10 @@ draft",
     assert!(body.contains("Draft"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_post_preview_shows_draft_to_author_only() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn get_post_preview_shows_draft_to_author_only(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -877,10 +800,10 @@ draft",
     assert!(body.contains("Post not found"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_post_hides_drafts_from_guests() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -932,10 +855,10 @@ async fn get_post_hides_drafts_from_guests() {
     assert!(body.contains("Post not found"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_post_rejects_invalid_username() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn get_post_rejects_invalid_username(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, body) = get_post_form(state, "Invalid Name", 2024, 1, 1, "missing", None).await;
 
@@ -943,10 +866,10 @@ async fn get_post_rejects_invalid_username() {
     assert!(body.contains("username"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_post_rejects_invalid_slug() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn get_post_rejects_invalid_slug(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, body) = get_post_form(state, "author", 2024, 1, 1, "Invalid Slug", None).await;
 
@@ -954,10 +877,10 @@ async fn get_post_rejects_invalid_slug() {
     assert!(body.contains("slug"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_post_returns_not_found_for_missing_post() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn get_post_returns_not_found_for_missing_post(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, body) = get_post_form(state, "author", 2024, 1, 1, "missing", None).await;
 
@@ -1071,10 +994,10 @@ async fn list_home_feed_form(
     post_form(state, "/api/list_home_feed", parts.join("&"), cookie).await
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_post_updates_draft_content_and_slug() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -1135,10 +1058,10 @@ async fn update_post_updates_draft_content_and_slug() {
     assert!(record.rendered_html.contains("<strong>new body</strong>"));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_post_freezes_slug_when_published() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -1190,10 +1113,10 @@ async fn update_post_freezes_slug_when_published() {
     assert!(updated.published_at.is_some());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_post_publishes_draft() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_post_publishes_draft(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -1242,10 +1165,10 @@ async fn update_post_publishes_draft() {
     assert!(updated.permalink.is_some());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_post_rejects_non_author() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_post_rejects_non_author(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -1310,30 +1233,27 @@ async fn update_post_rejects_non_author() {
     assert!(body.contains("Post not found"), "body: {body}");
 }
 
+// Shape B — update_post rejection cluster. Identical setup (author + session +
+// a freshly created draft) and assertion structure (INTERNAL_SERVER_ERROR +
+// body substring); only the update body/format and expected message vary. The
+// initial draft body is immaterial to the assertion, so it is fixed.
+#[rstest]
+#[case::empty_post("", "markdown", "post body or title is required")]
+#[case::invalid_format("body", "invalid_format", "post format must be")]
+// Heading with only em-dashes passes the empty check but cannot produce a slug
+#[case::title_without_ascii_slug(
+    "# ———\n\nbody",
+    "markdown",
+    "post must contain at least one ASCII letter or digit for its slug"
+)]
 #[tokio::test]
-async fn update_post_rejects_unauthenticated() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-
-    let (status, body) = update_post_json(
-        Arc::clone(&state),
-        42,
-        "body",
-        "markdown",
-        None,
-        false,
-        None,
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("unauthorized"), "body: {body}");
-}
-
-#[tokio::test]
-async fn update_post_rejects_empty_post() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_post_rejects(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] update_body: &str,
+    #[case] update_format: &str,
+    #[case] expected: &str,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -1353,7 +1273,7 @@ async fn update_post_rejects_empty_post() {
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
-        "body",
+        "original",
         "markdown",
         None,
         false,
@@ -1366,8 +1286,8 @@ async fn update_post_rejects_empty_post() {
     let (status, body) = update_post_json(
         Arc::clone(&state),
         created.post_id,
-        "",
-        "markdown",
+        update_body,
+        update_format,
         None,
         false,
         Some(&cookie),
@@ -1375,64 +1295,13 @@ async fn update_post_rejects_empty_post() {
     .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(
-        body.contains("post body or title is required"),
-        "body: {body}"
-    );
+    assert!(body.contains(expected), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_post_rejects_invalid_format() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let user_id = state
-        .users
-        .create_user(
-            &"author".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = format!("session={token}");
-
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "body",
-        "markdown",
-        None,
-        false,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
-
-    let (status, body) = update_post_json(
-        Arc::clone(&state),
-        created.post_id,
-        "body",
-        "invalid_format",
-        None,
-        false,
-        Some(&cookie),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("post format must be"), "body: {body}");
-}
-
-#[tokio::test]
-async fn update_post_returns_not_found_for_missing_post() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_post_returns_not_found_for_missing_post(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -1465,10 +1334,10 @@ async fn update_post_returns_not_found_for_missing_post() {
     assert!(body.contains("Post not found"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_post_returns_not_found_for_deleted_post() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -1515,64 +1384,10 @@ async fn update_post_returns_not_found_for_deleted_post() {
     assert!(body.contains("Post not found"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_post_rejects_title_without_ascii_slug_characters() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let user_id = state
-        .users
-        .create_user(
-            &"author".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = format!("session={token}");
-
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "original",
-        "markdown",
-        None,
-        false,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
-
-    // Heading with only em-dashes passes the empty check but cannot produce a slug
-    let (status, body) = update_post_json(
-        Arc::clone(&state),
-        created.post_id,
-        "# ———
-
-body",
-        "markdown",
-        None,
-        false,
-        Some(&cookie),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(
-        body.contains("post must contain at least one ASCII letter or digit for its slug"),
-        "body: {body}"
-    );
-}
-
-#[tokio::test]
-async fn list_drafts_returns_current_user_drafts_with_cursor_pagination() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -1688,10 +1503,10 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination() {
     assert_eq!(ids, expected_ids);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn publish_post_publishes_draft_and_returns_permalink() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -1740,10 +1555,10 @@ async fn publish_post_publishes_draft_and_returns_permalink() {
     assert!(record.published_at.is_some());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn publish_post_rejects_non_author() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn publish_post_rejects_non_author(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -1798,20 +1613,42 @@ async fn publish_post_rejects_non_author() {
     assert!(body.contains("Post not found"), "body: {body}");
 }
 
+// Shape B — invalid-cursor cluster across the four cursor-paginated endpoints.
+// Each fires two requests with identical assertions: a half-specified cursor
+// ("must be provided together") and an unparseable timestamp ("invalid
+// cursor_created_at"); only the endpoint URI and the (already username-encoded
+// where required) request bodies vary. An author session is always created and
+// passed — the public endpoints ignore it but still run the same cursor
+// validation, so a single setup serves every row without branching.
+#[rstest]
+#[case::list_drafts(
+    "/api/list_drafts",
+    "cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
+    "cursor_created_at=bad-time&cursor_post_id=10&limit=10"
+)]
+#[case::list_user_posts(
+    "/api/list_user_posts",
+    "username=author&cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
+    "username=author&cursor_created_at=bad-time&cursor_post_id=12&limit=10"
+)]
+#[case::list_local_timeline(
+    "/api/list_local_timeline",
+    "cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
+    "cursor_created_at=bad-time&cursor_post_id=12&limit=10"
+)]
+#[case::list_home_feed(
+    "/api/list_home_feed",
+    "cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
+    "cursor_created_at=bad-time&cursor_post_id=12&limit=10"
+)]
 #[tokio::test]
-async fn list_drafts_rejects_unauthenticated_requests() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-
-    let (status, body) = list_drafts_form(state, None, None, 10, None).await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("unauthorized"), "body: {body}");
-}
-
-#[tokio::test]
-async fn list_drafts_rejects_invalid_cursor_inputs() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_rejects_invalid_cursor_inputs(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] uri: &str,
+    #[case] half_cursor_body: &str,
+    #[case] bad_time_body: &str,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -1833,39 +1670,23 @@ async fn list_drafts_rejects_invalid_cursor_inputs() {
 
     let (status, body) = post_form(
         Arc::clone(&state),
-        "/api/list_drafts",
-        "cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
+        uri,
+        half_cursor_body.to_string(),
         Some(&cookie),
     )
     .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("must be provided together"), "body: {body}");
 
-    let (status, body) = post_form(
-        state,
-        "/api/list_drafts",
-        "cursor_created_at=bad-time&cursor_post_id=10&limit=10",
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) = post_form(state, uri, bad_time_body.to_string(), Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("invalid cursor_created_at"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn publish_post_rejects_unauthenticated_requests() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-
-    let (status, body) = publish_post_form(state, 99, None).await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("unauthorized"), "body: {body}");
-}
-
-#[tokio::test]
-async fn publish_post_returns_not_found_for_missing_or_deleted_posts() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -1907,10 +1728,10 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts() {
     assert!(body.contains("Post not found"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_post_finds_author_draft_across_multiple_pages() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn get_post_finds_author_draft_across_multiple_pages(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -1972,10 +1793,10 @@ async fn get_post_finds_author_draft_across_multiple_pages() {
     assert!(body.contains("\"is_draft\":true"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_user_posts_returns_published_posts_with_cursor_pagination() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -2087,46 +1908,22 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination() {
     assert!(!second_page.has_more, "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_user_posts_rejects_invalid_username() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_user_posts_rejects_invalid_username(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, body) = list_user_posts_form(state, "Invalid Name", None, None, 50, None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("username"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_user_posts_rejects_invalid_cursor_inputs() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-
-    let (status, body) = post_form(
-        Arc::clone(&state),
-        "/api/list_user_posts",
-        "username=author&cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("must be provided together"), "body: {body}");
-
-    let (status, body) = post_form(
-        state,
-        "/api/list_user_posts",
-        "username=author&cursor_created_at=bad-time&cursor_post_id=12&limit=10",
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("invalid cursor_created_at"), "body: {body}");
-}
-
-#[tokio::test]
-async fn list_local_timeline_returns_published_posts_with_cursor_pagination() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -2260,36 +2057,10 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination() {
     assert!(!second_page.has_more, "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_local_timeline_rejects_invalid_cursor_inputs() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-
-    let (status, body) = post_form(
-        Arc::clone(&state),
-        "/api/list_local_timeline",
-        "cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("must be provided together"), "body: {body}");
-
-    let (status, body) = post_form(
-        state,
-        "/api/list_local_timeline",
-        "cursor_created_at=bad-time&cursor_post_id=12&limit=10",
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("invalid cursor_created_at"), "body: {body}");
-}
-
-#[tokio::test]
-async fn list_home_feed_returns_authenticated_users_published_posts_only() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -2403,60 +2174,6 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only() {
     assert!(!second_page.has_more, "body: {body}");
 }
 
-#[tokio::test]
-async fn list_home_feed_rejects_unauthenticated_requests() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-
-    let (status, body) = list_home_feed_form(state, None, None, 50, None).await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("unauthorized"), "body: {body}");
-}
-
-#[tokio::test]
-async fn list_home_feed_rejects_invalid_cursor_inputs() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let author_id = state
-        .users
-        .create_user(
-            &"author".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let cookie = format!(
-        "session={}",
-        state
-            .sessions
-            .create_session(author_id, "test session")
-            .await
-            .unwrap()
-    );
-
-    let (status, body) = post_form(
-        Arc::clone(&state),
-        "/api/list_home_feed",
-        "cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("must be provided together"), "body: {body}");
-
-    let (status, body) = post_form(
-        state,
-        "/api/list_home_feed",
-        "cursor_created_at=bad-time&cursor_post_id=12&limit=10",
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("invalid cursor_created_at"), "body: {body}");
-}
-
 async fn delete_post_form(
     state: Arc<storage::AppState>,
     post_id: i64,
@@ -2471,10 +2188,10 @@ async fn delete_post_form(
     .await
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn delete_post_soft_deletes_post() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -2519,10 +2236,10 @@ async fn delete_post_soft_deletes_post() {
     assert!(post.deleted_at.is_some(), "expected deleted_at to be set");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn delete_post_rejects_non_author() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn delete_post_rejects_non_author(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -2578,10 +2295,10 @@ async fn delete_post_rejects_non_author() {
     assert!(body.contains("Post not found"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn delete_post_rejects_unauthenticated() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn delete_post_rejects_unauthenticated(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -2618,10 +2335,10 @@ async fn delete_post_rejects_unauthenticated() {
     assert!(body.contains("unauthorized"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn delete_post_returns_not_found_for_already_deleted_post() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn delete_post_returns_not_found_for_already_deleted_post(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -2661,10 +2378,12 @@ async fn delete_post_returns_not_found_for_already_deleted_post() {
     assert!(body.contains("Post not found"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -2741,10 +2460,10 @@ body",
     assert!(body.contains("Post not found"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn unpublish_post_reverts_published_post_to_draft() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn unpublish_post_reverts_published_post_to_draft(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -2802,10 +2521,10 @@ body",
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn unpublish_post_rejects_non_author() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn unpublish_post_rejects_non_author(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let author_id = state
         .users
         .create_user(
@@ -2862,10 +2581,10 @@ body",
     assert!(body.contains("Post not found"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_user_posts_carries_tags_per_post() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -2915,10 +2634,10 @@ async fn list_user_posts_carries_tags_per_post() {
     assert!(post.tags.iter().any(|t| t.display == "Rust"));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_post_carries_tags() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn get_post_carries_tags(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -2983,9 +2702,8 @@ async fn get_post_carries_tags() {
     assert_eq!(response.tags[0].display, "Performance");
 }
 
-async fn login_and_state() -> (TempDir, Arc<storage::AppState>, String) {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn login_and_state(backend: Backend) -> (TempDir, Arc<storage::AppState>, String) {
+    let TestEnv { state, base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -3007,9 +2725,10 @@ async fn login_and_state() -> (TempDir, Arc<storage::AppState>, String) {
     (base, state, cookie)
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_post_applies_tags_from_param() {
-    let (_base, state, cookie) = login_and_state().await;
+async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
+    let (_base, state, cookie) = login_and_state(backend).await;
 
     let payload = serde_json::json!({
         "body": "# Tagged via API\n\nbody",
@@ -3038,9 +2757,10 @@ async fn create_post_applies_tags_from_param() {
     assert!(stored_tags.iter().any(|t| t.tag_display == "Rust"));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_post_rejects_invalid_tag_token() {
-    let (_base, state, cookie) = login_and_state().await;
+async fn create_post_rejects_invalid_tag_token(#[case] backend: Backend) {
+    let (_base, state, cookie) = login_and_state(backend).await;
 
     let payload = serde_json::json!({
         "body": "# Bad Tag\n\nbody",
@@ -3054,9 +2774,10 @@ async fn create_post_rejects_invalid_tag_token() {
     assert!(body.contains("invalid tag"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_post_rejects_more_than_25_tags() {
-    let (_base, state, cookie) = login_and_state().await;
+async fn create_post_rejects_more_than_25_tags(#[case] backend: Backend) {
+    let (_base, state, cookie) = login_and_state(backend).await;
     let many: Vec<String> = (0..26).map(|n| format!("tag{n}")).collect();
 
     let payload = serde_json::json!({
@@ -3071,9 +2792,10 @@ async fn create_post_rejects_more_than_25_tags() {
     assert!(body.contains("too many tags"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_post_applies_tag_set_diff() {
-    let (_base, state, cookie) = login_and_state().await;
+async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
+    let (_base, state, cookie) = login_and_state(backend).await;
 
     // Create with two tags.
     let create_payload = serde_json::json!({
@@ -3120,10 +2842,10 @@ async fn update_post_applies_tag_set_diff() {
     assert_eq!(slugs, vec!["new-tag", "rust"]);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_posts_by_tag_returns_matching_posts_from_all_users() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Two authors each post twice; only some posts get the target tag.
     let alice_id = state
@@ -3215,10 +2937,10 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users() {
     assert!(usernames.contains("bob"));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_posts_by_tag_returns_empty_for_unknown_tag() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_posts_by_tag_returns_empty_for_unknown_tag(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, body) = list_posts_by_tag_form(state, "rust", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
@@ -3227,9 +2949,10 @@ async fn list_posts_by_tag_returns_empty_for_unknown_tag() {
     assert!(!page.has_more);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_user_posts_by_tag_scopes_to_user() {
-    let (_base, state, alice_cookie) = login_and_state().await;
+async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
+    let (_base, state, alice_cookie) = login_and_state(backend).await;
     let bob_id = state
         .users
         .create_user(
@@ -3275,19 +2998,20 @@ async fn list_user_posts_by_tag_scopes_to_user() {
     assert_eq!(page.posts[0].username, "author");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_user_posts_by_tag_unknown_user_returns_not_found() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_user_posts_by_tag_unknown_user_returns_not_found(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, body) = list_user_posts_by_tag_form(state, "nobody", "rust", None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("user"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_post_with_tags_unset_leaves_existing_tags_alone() {
-    let (_base, state, cookie) = login_and_state().await;
+async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend: Backend) {
+    let (_base, state, cookie) = login_and_state(backend).await;
 
     // Create with one tag.
     let create_payload = serde_json::json!({
@@ -3333,9 +3057,10 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone() {
     assert_eq!(slugs, vec!["keep"]);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_default_post_format_returns_html_by_default() {
-    let (_base, state, cookie) = login_and_state().await;
+async fn get_default_post_format_returns_html_by_default(#[case] backend: Backend) {
+    let (_base, state, cookie) = login_and_state(backend).await;
 
     let (status, body) = post_form(
         Arc::clone(&state),
@@ -3348,9 +3073,10 @@ async fn get_default_post_format_returns_html_by_default() {
     assert_eq!(body, "\"html\"", "expected default format to be html");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn set_default_post_format_persists_and_retrieves_markdown() {
-    let (_base, state, cookie) = login_and_state().await;
+async fn set_default_post_format_persists_and_retrieves_markdown(#[case] backend: Backend) {
+    let (_base, state, cookie) = login_and_state(backend).await;
 
     // Set format to markdown
     let (status, body) = post_form(
