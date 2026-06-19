@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -15,14 +16,20 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
-use tempfile::TempDir;
 use tower::ServiceExt;
 use web::media::{DeleteMediaResult, MediaItem, MediaUsageData};
 
 use chrono::Utc;
 use storage::{CreateMediaError, MediaRecord, MediaSource};
 
-use helpers::{ensure_server_fns_registered, test_options, test_state};
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use helpers::{backends, Backend, TestEnv};
+
+use helpers::{ensure_server_fns_registered, test_options};
 
 async fn post_form(
     state: Arc<storage::AppState>,
@@ -66,10 +73,10 @@ async fn post_form(
 
 // ─── media_usage ──────────────────────────────────────────────
 
+#[apply(backends)]
 #[tokio::test]
-async fn media_usage_returns_defaults_for_authenticated_user() {
-    let base = TempDir::new().expect("failed to create temp dir");
-    let state = test_state(&base).await;
+async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -99,12 +106,22 @@ async fn media_usage_returns_defaults_for_authenticated_user() {
     );
 }
 
+// Shape B — every media server-fn refuses an unauthenticated request the same
+// way (Leptos server fn → INTERNAL_SERVER_ERROR + "unauthorized"); only the
+// endpoint and request body vary.
+#[rstest]
+#[case::media_usage("/api/media_usage", "")]
+#[case::list_my_media("/api/list_my_media", "")]
+#[case::delete_media("/api/delete_media", "sha256=deadbeef&filename=test.png&source=upload")]
 #[tokio::test]
-async fn media_usage_rejects_unauthenticated_request() {
-    let base = TempDir::new().expect("failed to create temp dir");
-    let state = test_state(&base).await;
+async fn media_endpoint_rejects_unauthenticated_request(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] uri: &str,
+    #[case] body: &str,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, body) = post_form(state, "/api/media_usage", "", None).await;
+    let (status, body) = post_form(state, uri, body, None).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("unauthorized"), "body: {body}");
@@ -112,10 +129,10 @@ async fn media_usage_rejects_unauthenticated_request() {
 
 // ─── list_my_media ────────────────────────────────────────────
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_my_media_returns_empty_for_new_user() {
-    let base = TempDir::new().expect("failed to create temp dir");
-    let state = test_state(&base).await;
+async fn list_my_media_returns_empty_for_new_user(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -141,21 +158,10 @@ async fn list_my_media_returns_empty_for_new_user() {
     assert!(items.is_empty(), "expected no media items for new user");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_my_media_rejects_unauthenticated_request() {
-    let base = TempDir::new().expect("failed to create temp dir");
-    let state = test_state(&base).await;
-
-    let (status, body) = post_form(state, "/api/list_my_media", "", None).await;
-
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("unauthorized"), "body: {body}");
-}
-
-#[tokio::test]
-async fn list_my_media_returns_inserted_item() {
-    let base = TempDir::new().expect("failed to create temp dir");
-    let state = test_state(&base).await;
+async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -203,10 +209,10 @@ async fn list_my_media_returns_inserted_item() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_my_media_with_source_filter() {
-    let base = TempDir::new().expect("failed to create temp dir");
-    let state = test_state(&base).await;
+async fn list_my_media_with_source_filter(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -256,10 +262,10 @@ async fn list_my_media_with_source_filter() {
 
 // ─── delete_media ─────────────────────────────────────────────
 
+#[apply(backends)]
 #[tokio::test]
-async fn delete_media_succeeds_for_existing_item() {
-    let base = TempDir::new().expect("failed to create temp dir");
-    let state = test_state(&base).await;
+async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -311,13 +317,13 @@ async fn delete_media_succeeds_for_existing_item() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn delete_media_reports_referencing_posts_when_not_forced() {
+async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend: Backend) {
     use common::slug::Slug;
     use storage::{CreatePostInput, PostFormat};
 
-    let base = TempDir::new().expect("failed to create temp dir");
-    let state = test_state(&base).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -385,22 +391,6 @@ async fn delete_media_reports_referencing_posts_when_not_forced() {
     );
 }
 
-#[tokio::test]
-async fn delete_media_rejects_unauthenticated_request() {
-    let base = TempDir::new().expect("failed to create temp dir");
-    let state = test_state(&base).await;
-
-    let body = "sha256=deadbeef&filename=test.png&source=upload";
-    let (status, body_str) = post_form(state, "/api/delete_media", body, None).await;
-
-    assert_eq!(
-        status,
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "body: {body_str}"
-    );
-    assert!(body_str.contains("unauthorized"), "body: {body_str}");
-}
-
 // ─── serve_handler hash validation (security: §2.2) ────────────
 
 async fn media_serve_get(state: Arc<storage::AppState>, uri: &str) -> StatusCode {
@@ -423,27 +413,23 @@ async fn media_serve_get(state: Arc<storage::AppState>, uri: &str) -> StatusCode
         .status()
 }
 
+// Shape B — the serve handler must reject malformed hashes with 404 (not panic
+// on `params.hash[2..]`, not accept non-hex). Identical setup + assertion; only
+// the malformed URI varies.
+//
+// `short_hash`: a 1-byte hash historically panicked because the prefix check
+// (`hash.starts_with(p1)`) passes and the slice runs off the end of the string.
+// `non_hex`: 64 characters but not lowercase hex — not a canonical content hash.
+#[rstest]
+#[case::short_hash("/media/upload/a/a/a/file.txt".to_owned())]
+#[case::non_hex(format!("/media/upload/zz/zz/{}/file.txt", "z".repeat(64)))]
 #[tokio::test]
-async fn serve_handler_rejects_short_hash_without_panicking() {
-    let base = TempDir::new().expect("failed to create temp dir");
-    let state = test_state(&base).await;
+async fn serve_handler_rejects_malformed_hash(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] uri: String,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
-    // A 1-byte hash historically panicked on `params.hash[2..]` because the
-    // prefix check (`hash.starts_with(p1)`) passes and the slice runs off the
-    // end of the string. It must be rejected with 404, not crash the task.
-    let status = media_serve_get(state, "/media/upload/a/a/a/file.txt").await;
-
-    assert_eq!(status, StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn serve_handler_rejects_non_hex_hash() {
-    let base = TempDir::new().expect("failed to create temp dir");
-    let state = test_state(&base).await;
-
-    // 64 characters but not lowercase hex — not a canonical content hash.
-    let hash = "z".repeat(64);
-    let uri = format!("/media/upload/zz/zz/{hash}/file.txt");
     let status = media_serve_get(state, &uri).await;
 
     assert_eq!(status, StatusCode::NOT_FOUND);

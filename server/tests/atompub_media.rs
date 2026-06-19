@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -19,7 +20,14 @@ use base64::Engine as _;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{ensure_server_fns_registered, noop_mailer, test_options, test_state};
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use helpers::{backends, Backend, TestEnv};
+
+use helpers::{ensure_server_fns_registered, noop_mailer, test_options};
 
 const PNG: &[u8] = &[
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
@@ -51,25 +59,11 @@ async fn body_string(response: axum::response::Response) -> String {
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn upload_returns_201_and_media_link_entry() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "MarsEdit")
-        .await
-        .unwrap();
+async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage).await;
@@ -106,25 +100,11 @@ async fn upload_returns_201_and_media_link_entry() {
     assert!(body.contains("/media/upload/"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn reupload_identical_returns_200() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "MarsEdit")
-        .await
-        .unwrap();
+async fn reupload_identical_returns_200(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage).await;
@@ -163,25 +143,11 @@ async fn reupload_identical_returns_200() {
     assert_eq!(resp2.status(), StatusCode::OK);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_media_member_returns_entry() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "MarsEdit")
-        .await
-        .unwrap();
+async fn get_media_member_returns_entry(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage).await;
@@ -226,25 +192,11 @@ async fn get_media_member_returns_entry() {
     assert!(body.contains("rel=\"edit-media\""), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_unknown_media_returns_404() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "MarsEdit")
-        .await
-        .unwrap();
+async fn get_unknown_media_returns_404(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage).await;
@@ -264,25 +216,11 @@ async fn get_unknown_media_returns_404() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn delete_media_member_returns_204_then_404() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "MarsEdit")
-        .await
-        .unwrap();
+async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage).await;
@@ -342,25 +280,11 @@ async fn delete_media_member_returns_204_then_404() {
     assert_eq!(del_resp2.status(), StatusCode::NOT_FOUND);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn upload_forbids_other_user() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "MarsEdit")
-        .await
-        .unwrap();
+async fn upload_forbids_other_user(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage).await;
@@ -382,9 +306,8 @@ async fn upload_forbids_other_user() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
-/// Seeds a user named `alice` and returns `(state, token)`.
-async fn seed_alice(base: &TempDir) -> (Arc<storage::AppState>, String) {
-    let state = test_state(base).await;
+/// Seeds a user named `alice` and returns the session token.
+async fn seed_alice(state: &Arc<storage::AppState>) -> String {
     let user_id = state
         .users
         .create_user(
@@ -395,18 +318,18 @@ async fn seed_alice(base: &TempDir) -> (Arc<storage::AppState>, String) {
         )
         .await
         .unwrap();
-    let token = state
+    state
         .sessions
         .create_session(user_id, "MarsEdit")
         .await
-        .unwrap();
-    (state, token)
+        .unwrap()
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn upload_rejects_empty_slug() {
-    let base = TempDir::new().unwrap();
-    let (state, token) = seed_alice(&base).await;
+async fn upload_rejects_empty_slug(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let token = seed_alice(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(state, &storage).await;
 
@@ -428,38 +351,26 @@ async fn upload_rejects_empty_slug() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+// Shape B — accessing another user's media member is forbidden regardless of
+// method. Identical setup (alice authenticated, bob's resource) + assertion;
+// only the HTTP method varies.
+#[rstest]
+#[case::get("GET")]
+#[case::delete("DELETE")]
 #[tokio::test]
-async fn member_get_forbids_other_user() {
-    let base = TempDir::new().unwrap();
-    let (state, token) = seed_alice(&base).await;
+async fn member_forbids_other_user(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] method: &str,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let token = seed_alice(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(state, &storage).await;
 
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/atompub/bob/media/deadbeef/pic.png")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn member_delete_forbids_other_user() {
-    let base = TempDir::new().unwrap();
-    let (state, token) = seed_alice(&base).await;
-    let storage = TempDir::new().unwrap();
-    let app = make_app(state, &storage).await;
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("DELETE")
+                .method(method)
                 .uri("/atompub/bob/media/deadbeef/pic.png")
                 .header(header::AUTHORIZATION, basic_header("alice", &token))
                 .body(Body::empty())

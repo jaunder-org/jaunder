@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -18,7 +19,14 @@ use axum::{
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{ensure_server_fns_registered, test_options, test_state};
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use helpers::{backends, Backend, TestEnv};
+
+use helpers::{ensure_server_fns_registered, test_options};
 
 /// Build the router with a real temp storage directory.
 async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
@@ -54,10 +62,10 @@ fn multipart_body(filename: &str, content_type: &str, data: &[u8]) -> (String, V
 // Upload tests
 // ---------------------------------------------------------------------------
 
+#[apply(backends)]
 #[tokio::test]
-async fn upload_returns_201_with_json() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn upload_returns_201_with_json(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let user_id = state
         .users
@@ -114,10 +122,10 @@ async fn upload_returns_201_with_json() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn upload_requires_auth() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn upload_requires_auth(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage).await;
@@ -146,10 +154,10 @@ async fn upload_requires_auth() {
 // Serve tests
 // ---------------------------------------------------------------------------
 
+#[apply(backends)]
 #[tokio::test]
-async fn serve_returns_200_with_cache_headers() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let user_id = state
         .users
@@ -229,10 +237,19 @@ async fn serve_returns_200_with_cache_headers() {
     );
 }
 
+// Shape B — both URIs are served by the same handler and must 404; identical
+// setup + assertion, only the request URI varies.
+#[rstest]
+#[case::missing_file(
+    "/media/upload/ab/cd/abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890/missing.jpg"
+)]
+#[case::invalid_source("/media/invalid/ab/cd/abcdef1234/file.jpg")]
 #[tokio::test]
-async fn serve_returns_404_for_missing_file() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn serve_returns_404(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] uri: &str,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage).await;
@@ -241,7 +258,7 @@ async fn serve_returns_404_for_missing_file() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/media/upload/ab/cd/abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890/missing.jpg")
+                .uri(uri)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -255,10 +272,10 @@ async fn serve_returns_404_for_missing_file() {
 // Proxy tests
 // ---------------------------------------------------------------------------
 
+#[apply(backends)]
 #[tokio::test]
-async fn proxy_requires_auth() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn proxy_requires_auth(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage).await;
@@ -277,10 +294,10 @@ async fn proxy_requires_auth() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn proxy_redirects_authenticated() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn proxy_redirects_authenticated(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let user_id = state
         .users
@@ -330,10 +347,10 @@ async fn proxy_redirects_authenticated() {
 // Additional coverage tests
 // ---------------------------------------------------------------------------
 
+#[apply(backends)]
 #[tokio::test]
-async fn serve_returns_304_on_if_none_match() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let user_id = state
         .users
@@ -398,31 +415,10 @@ async fn serve_returns_304_on_if_none_match() {
     assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn serve_returns_404_for_invalid_source() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-
-    let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/media/invalid/ab/cd/abcdef1234/file.jpg")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn upload_returns_400_for_empty_multipart() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn upload_returns_400_for_empty_multipart(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let user_id = state
         .users
@@ -465,10 +461,10 @@ async fn upload_returns_400_for_empty_multipart() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn upload_deduplicates_same_content() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn upload_deduplicates_same_content(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let user_id = state
         .users
@@ -520,10 +516,10 @@ async fn upload_deduplicates_same_content() {
     drop(cookie);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn upload_quota_exceeded_returns_507() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn upload_quota_exceeded_returns_507(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Set a tiny quota of 1 byte.
     state
@@ -573,10 +569,10 @@ async fn upload_quota_exceeded_returns_507() {
     assert_eq!(response.status(), StatusCode::INSUFFICIENT_STORAGE);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn upload_at_max_file_size_boundary_succeeds() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn upload_at_max_file_size_boundary_succeeds(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     state
         .site_config
@@ -629,10 +625,10 @@ async fn upload_at_max_file_size_boundary_succeeds() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn upload_one_byte_over_max_file_size_is_rejected() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn upload_one_byte_over_max_file_size_is_rejected(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     state
         .site_config
@@ -685,10 +681,10 @@ async fn upload_one_byte_over_max_file_size_is_rejected() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn upload_at_exact_quota_succeeds() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn upload_at_exact_quota_succeeds(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     state
         .site_config
@@ -742,10 +738,10 @@ async fn upload_at_exact_quota_succeeds() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn proxy_rejects_mismatched_user_id() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn proxy_rejects_mismatched_user_id(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let user_id = state
         .users
