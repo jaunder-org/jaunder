@@ -1,0 +1,32 @@
+use clap::{Parser, Subcommand};
+
+mod result;
+pub use result::{CommandResult, Mode, StepResult};
+
+#[derive(Parser)]
+#[command(name = "xtask", about = "Jaunder dev orchestration")]
+pub struct Cli {
+    /// Emit the structured result envelope as JSON to stdout.
+    #[arg(long, global = true)]
+    pub json: bool,
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Subcommand)]
+pub enum Command {
+    /// Tight inner loop: static checks + clippy (host).
+    Check,
+    /// The hub: check + the Nix coverage check (tests+coverage). `--full` adds the Nix e2e + postgres-integration checks.
+    Validate {
+        #[arg(long)]
+        full: bool,
+    },
+}
+
+pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
+    match cli.command {
+        Command::Check => Ok(CommandResult::new("check")),
+        Command::Validate { .. } => Ok(CommandResult::new("validate")),
+    }
+}

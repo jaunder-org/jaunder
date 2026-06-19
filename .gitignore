@@ -28,3 +28,6 @@ mutants.out/
 mutants.out.old/
 
 /coverage-report.txt
+
+# xtask sidecar / GC roots
+/.xtask/
