@@ -20,6 +20,7 @@ The testing/coverage tooling grew piecemeal (`verify`, `check-coverage`, `update
 1. **One command — `cargo xtask validate` — that, if green, means you may move on.**
 2. **Eliminate repeated work:** a single execution environment (Nix) for all tests/coverage so host and CI can never disagree; host-side memoization + a Nix GC root so unchanged re-runs cost ~nothing.
 3. **Every command falling-down easy to invoke and observe:** typed results, a JSON sidecar, meaningful exit codes.
+   - *Secondary benefit — disk footprint.* Today the host `target/` grows to ~1TB over long sessions (instrumented coverage builds + test/e2e profiles compound). Moving all tests/coverage/e2e into Nix leaves only the `check`/clippy build on the host (one profile, slow growth); the heavy builds land in `/nix/store`, which is GC-bounded — Nix keeps only output closures (not every intermediate), the GC root pins just the *current* checks closure, and `nix-collect-garbage` (or removing `.xtask/gcroots/*`) reclaims superseded builds.
 4. **Retire the ad-hoc shell scripts** into one library-backed driver.
 5. **Nix stays the determinism guarantor and the sole test/coverage environment.**
 
