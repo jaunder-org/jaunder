@@ -56,6 +56,8 @@ pub struct CommandResult {
     pub duration_ms: u128,
     pub finished_at_unix: u64,
     pub steps: Vec<StepResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<crate::coverage::CoverageReport>,
 }
 
 impl CommandResult {
@@ -66,6 +68,7 @@ impl CommandResult {
             duration_ms: 0,
             finished_at_unix: 0,
             steps: Vec::new(),
+            coverage: None,
         }
     }
 

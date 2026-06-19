@@ -53,6 +53,31 @@ normalize_crap_report() {
     ' "$input" > "$output"
 }
 
+# Rewrite the `cargo llvm-cov report --text` file-header lines (which end in
+# `.rs:`) from absolute Nix-sandbox paths to repo-relative ones by stripping the
+# `$ABS_ROOT/` prefix — exactly mirroring normalize_crap_report's strip of the
+# CRAP report. Host xtask matches against repo-relative paths, so this lets the
+# emitted report be consumed off-host. Done with a portable `while read` +
+# parameter-expansion rewrite (no awk/sed) over an atomic temp file.
+normalize_report_paths() {
+    local file="$1"
+    local prefix="$ABS_ROOT/"
+    local tmp
+    tmp="$(mktemp)"
+    while IFS= read -r line; do
+        case "$line" in
+            *.rs:)
+                # A file-header line; strip the absolute prefix if present.
+                printf '%s\n' "${line#"$prefix"}"
+                ;;
+            *)
+                printf '%s\n' "$line"
+                ;;
+        esac
+    done < "$file" > "$tmp"
+    mv "$tmp" "$file"
+}
+
 if [[ "$INVESTIGATE" == "true" ]]; then
     if [[ ! -f "$REPORT_FILE" ]]; then
         echo "error: no coverage report found at $REPORT_FILE. Run without --investigate first." >&2
@@ -90,6 +115,10 @@ else
 
     echo "--- coverage: building merged text report ---"
     cargo llvm-cov report --text > "$REPORT_FILE"
+    # Normalize the report's `.rs:` headers to repo-relative immediately, so
+    # both the emit path (consumed by host xtask) and the local gate below see
+    # repo-relative file paths. Harmless when paths are already relative.
+    normalize_report_paths "$REPORT_FILE"
 
     # Reuse the just-recorded llvm-cov profraw data to export LCOV for
     # cargo-crap. Do not run `cargo llvm-cov --lcov` here: that would execute
@@ -120,7 +149,9 @@ fi
 NEW_MANIFEST=$(mktemp)
 awk -v root="$ABS_ROOT/" '
     BEGIN { current = ""; print "{" }
-    /^\/.*\.rs:$/ {
+    # Match `.rs:` headers whether absolute (legacy) or repo-relative (after
+    # normalize_report_paths); the sub(root,...) below no-ops on relative paths.
+    /\.rs:$/ {
         if (current != "" && total > 0) {
             pct = (covered * 100.0) / total
             printf "%s  \"%s\": %s", (first ? "" : ",\n"), current, pct
@@ -216,18 +247,20 @@ if [[ "$(echo "$REGRESSIONS" | jq 'length')" -gt 0 ]]; then
         echo "--- Missing Lines for Regressed Files ---" >&2
 
         # Build a list of absolute paths for regressed files
-        REGRESSED_ABS_PATHS=$(echo "$REGRESSIONS" | jq -r --arg root "$ROOT/" '.[] | ($root + .key)')
+        # The report headers are repo-relative (see normalize_report_paths), as
+        # are the manifest keys, so match on the keys directly.
+        REGRESSED_PATHS=$(echo "$REGRESSIONS" | jq -r '.[] | .key')
 
         # Filter the cached report to only show the regressing files,
         # printing each file's text block (which includes per-line counts).
-        awk -v paths="$REGRESSED_ABS_PATHS" '
+        awk -v paths="$REGRESSED_PATHS" '
             BEGIN {
                 split(paths, path_arr, "\n");
                 for (i in path_arr) {
                     target_paths[path_arr[i]] = 1;
                 }
             }
-            /^\/.*\.rs:$/ {
+            /\.rs:$/ {
                 file = $0;
                 sub(/:$/, "", file);
                 printing = (file in target_paths) ? 1 : 0;

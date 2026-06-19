@@ -29,9 +29,6 @@ impl Baseline {
             self.files.insert(path.to_string(), gaps);
         }
     }
-    pub fn paths(&self) -> impl Iterator<Item = &String> {
-        self.files.keys()
-    }
     pub fn from_files(files: &[FileCoverage]) -> Self {
         let mut b = Baseline::default();
         for f in files {

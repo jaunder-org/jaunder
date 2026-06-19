@@ -55,7 +55,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let mut result = CommandResult::new("check");
             steps::static_checks::run(&sh, Mode::Fix, &mut result);
             if !no_test {
-                steps::nix::coverage(&mut result);
+                steps::nix::coverage(&mut result, Mode::Fix);
             }
             finalize(&mut result, start);
             Ok(result)
@@ -65,7 +65,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("validate");
             steps::static_checks::run(&sh, Mode::Check, &mut result);
-            steps::nix::coverage(&mut result);
+            steps::nix::coverage(&mut result, Mode::Check);
             if !no_e2e {
                 steps::nix::e2e(&mut result);
             }

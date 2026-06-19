@@ -8,13 +8,13 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Sub-epsilon CRAP deltas are float noise, not regressions.
 const EPSILON: f64 = 0.01;
 
 /// A function whose CRAP score got meaningfully worse between old and new.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CrapRegression {
     pub file: String,
     pub function: String,
