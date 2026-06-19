@@ -328,10 +328,12 @@ async fn assert_email_verification_and_password_reset(state: &std::sync::Arc<sto
     assert_eq!(authed.user_id, user_id);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn set_then_get_roundtrips() {
-    let (_base, state) = sqlite_state().await;
-    assert_site_config_roundtrip(&state).await;
+async fn site_config_set_then_get_roundtrips(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    assert_site_config_roundtrip(state).await;
 }
 
 #[tokio::test]
@@ -370,46 +372,55 @@ async fn second_open_on_migrated_database_succeeds() {
     open_database(&sqlite_url(&base)).await.unwrap();
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn sqlite_app_state_parity_suite() {
-    let (_base, state) = sqlite_state().await;
-    assert_site_config_roundtrip(&state).await;
+async fn app_state_parity_suite(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    assert_site_config_roundtrip(&env.state).await;
 
-    let (_base, state) = sqlite_state().await;
-    assert_user_duplicate_and_authenticate(&state).await;
+    let env = backend.setup().await;
+    assert_user_duplicate_and_authenticate(&env.state).await;
 
-    let (_base, state) = sqlite_state().await;
-    assert_session_lifecycle(&state).await;
+    let env = backend.setup().await;
+    assert_session_lifecycle(&env.state).await;
 
-    let (_base, state) = sqlite_state().await;
-    assert_invite_and_atomic_registration(&state).await;
+    let env = backend.setup().await;
+    assert_invite_and_atomic_registration(&env.state).await;
 
-    let (_base, state) = sqlite_state().await;
-    assert_email_verification_and_password_reset(&state).await;
+    let env = backend.setup().await;
+    assert_email_verification_and_password_reset(&env.state).await;
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn sqlite_create_user_duplicate_and_authenticate_work() {
-    let (_base, state) = sqlite_state().await;
-    assert_user_duplicate_and_authenticate(&state).await;
+async fn create_user_duplicate_and_authenticate_work(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    assert_user_duplicate_and_authenticate(state).await;
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn sqlite_session_lifecycle_works() {
-    let (_base, state) = sqlite_state().await;
-    assert_session_lifecycle(&state).await;
+async fn session_lifecycle_works(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    assert_session_lifecycle(state).await;
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn sqlite_invite_and_atomic_registration_work() {
-    let (_base, state) = sqlite_state().await;
-    assert_invite_and_atomic_registration(&state).await;
+async fn invite_and_atomic_registration_work(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    assert_invite_and_atomic_registration(state).await;
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn sqlite_email_verification_and_password_reset_work() {
-    let (_base, state) = sqlite_state().await;
-    assert_email_verification_and_password_reset(&state).await;
+async fn email_verification_and_password_reset_work(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    assert_email_verification_and_password_reset(state).await;
 }
 
 #[test]
@@ -444,32 +455,12 @@ async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db() {
     assert_eq!(state.site_config.get("missing").await.unwrap(), None);
 }
 
+#[apply(postgres_only)]
 #[tokio::test]
-async fn postgres_app_state_parity_suite() {
-    let state = postgres_state().await;
-    assert_site_config_roundtrip(&state).await;
-
-    let state = postgres_state().await;
-    assert_user_duplicate_and_authenticate(&state).await;
-
-    let state = postgres_state().await;
-    assert_session_lifecycle(&state).await;
-
-    let state = postgres_state().await;
-    assert_invite_and_atomic_registration(&state).await;
-
-    let state = postgres_state().await;
-    assert_email_verification_and_password_reset(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_site_config_set_then_get_roundtrips() {
-    let state = postgres_state().await;
-    assert_site_config_roundtrip(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_authenticate_with_corrupted_hash_returns_internal_error() {
+async fn authenticate_with_corrupted_hash_returns_internal_error(#[case] backend: Backend) {
+    // Backend-specific: exercises raw PostgreSQL storage with a deliberately
+    // corrupted hash, so it builds its own pool rather than using `env.state`.
+    let _ = backend;
     use storage::{PostgresUserStorage, UserAuthError, UserStorage};
     let DbConnectOptions::Postgres { options, .. } = template_postgres_url().await else {
         panic!("expected postgres options");
@@ -491,21 +482,11 @@ async fn postgres_authenticate_with_corrupted_hash_returns_internal_error() {
     assert!(matches!(result, Err(UserAuthError::Internal(_))));
 }
 
+#[apply(postgres_only)]
 #[tokio::test]
-async fn postgres_create_user_duplicate_and_authenticate_work() {
-    let state = postgres_state().await;
-    assert_user_duplicate_and_authenticate(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_session_lifecycle_works() {
-    let state = postgres_state().await;
-    assert_session_lifecycle(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_feed_events_marks_run() {
-    let state = postgres_state().await;
+async fn feed_events_marks_run(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
     let fe = &state.feed_events;
 
     // Enqueue + claim to obtain real ids, then exercise every Postgres
@@ -529,18 +510,6 @@ async fn postgres_feed_events_marks_run() {
     .await
     .unwrap();
     fe.mark_exhausted(&ids, "gave up").await.unwrap();
-}
-
-#[tokio::test]
-async fn postgres_invite_and_atomic_registration_work() {
-    let state = postgres_state().await;
-    assert_invite_and_atomic_registration(&state).await;
-}
-
-#[tokio::test]
-async fn postgres_email_verification_and_password_reset_work() {
-    let state = postgres_state().await;
-    assert_email_verification_and_password_reset(&state).await;
 }
 
 // --- UserStorage integration tests ---
