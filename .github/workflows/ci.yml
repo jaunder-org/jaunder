@@ -10,15 +10,21 @@ jobs:
     name: Validate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: cachix/install-nix-action@v27
+      # install-nix-action's install-nix.sh writes `max-jobs = auto` into
+      # /etc/nix/nix.conf, so the runner builds independent derivations in
+      # parallel up to its core count — the e2e step (xtask runs both VM checks
+      # in one `nix build`) relies on that here. (xtask also passes --max-jobs
+      # explicitly so it parallelizes on a plain dev box, where nix's compiled
+      # default is max-jobs = 1.)
+      - uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: cachix/cachix-action@v15
+      - uses: cachix/cachix-action@v17
         with:
           name: jaunder-org
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -27,5 +33,22 @@ jobs:
           # a cached green checkmark (flaky-pass / impurity protection).
           pushFilter: "jaunder-coverage|jaunder-e2e"
 
+      # Cache cargo xtask's host build (its deps + xtask/target). xtask is
+      # host-only (never a Nix derivation), so cachix can't cover it; this
+      # restores the compiled deps between runs, keyed on xtask's lockfile plus
+      # the pinned Nix toolchain (flake.lock). The cargo build runs inside
+      # `nix develop`, so we key manually rather than via Swatinem/rust-cache
+      # (which would need rustc on the host PATH).
+      - name: Cache xtask host build
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            xtask/target
+          key: xtask-${{ runner.os }}-${{ hashFiles('xtask/Cargo.lock', 'flake.lock') }}
+          restore-keys: |
+            xtask-${{ runner.os }}-
+
       - name: Validate (static + clippy + coverage + e2e, via xtask)
-        run: nix develop --accept-flake-config -c cargo xtask validate
+        run: nix develop .#ci --accept-flake-config -c cargo xtask validate

@@ -811,23 +811,16 @@
             }
           );
 
-          # Sub-group meta-packages: CI jobs build these so that adding a
-          # new e2e or postgres check only requires touching flake.nix.
+          # The e2e aggregate: a symlinkJoin of every `e2e-*` check, exposed as
+          # `checks.e2e` and built by `cargo xtask validate`. Adding a new e2e
+          # backend check automatically joins it here. Its `jaunder-e2e*` name
+          # keeps it out of the cachix push, so building it always realizes the
+          # underlying VM checks rather than substituting a cached aggregate.
           e2e-checks = pkgs.symlinkJoin {
             name = "jaunder-e2e-checks";
             paths = builtins.attrValues (
               pkgs.lib.filterAttrs (name: _: pkgs.lib.hasPrefix "e2e-" name) self.checks.${system}
             );
-          };
-
-          # Meta-package: all checks that require Nix (VM tests).
-          # scripts/verify builds this instead of `nix flake check` to avoid
-          # re-running format/clippy/nextest/deny that it already ran via Cargo.
-          nix-only-checks = pkgs.symlinkJoin {
-            name = "jaunder-nix-only-checks";
-            paths = [
-              self.packages.${system}.e2e-checks
-            ];
           };
         };
 
@@ -856,6 +849,16 @@
               checkName = "jaunder-e2e-postgres";
               warmupEnv = " JAUNDER_E2E_WARMUP=1";
             };
+
+            # The single e2e gate `cargo xtask validate` builds. The
+            # `e2e-checks` aggregate depends on both backend VM checks above;
+            # they are independent derivations, so the host realizes them in
+            # parallel up to its `max-jobs` (CI's install-nix-action sets
+            # `max-jobs = auto`; a plain dev box defaults to 1 and runs them
+            # serially). The aggregate's name stays under `jaunder-e2e*`, so the
+            # cachix pushFilter still excludes it — the VM runs are never
+            # substituted from a cached aggregate.
+            e2e = self.packages.${system}.e2e-checks;
           }
           // {
             clippy = craneLib.cargoClippy (
@@ -944,48 +947,65 @@
                 '';
           };
 
-        devShells.default = pkgs.mkShell {
-          buildInputs = [
-            toolchain
-            pkgs.cachix
-            cargo-crap
-            pkgs.cargo-deny
-            pkgs.cargo-generate
-            pkgs.cargo-leptos
-            pkgs.cargo-llvm-cov
-            pkgs.cargo-mutants
-            pkgs.cargo-nextest
-            pkgs.dart-sass
-            pkgs.jq
-            pkgs.leptosfmt
-            pkgs.nodejs
-            pkgs.openssl
-            pkgs.pkg-config
-            pkgs.playwright-test
-            pkgs.postgresql_16
-            pkgs.prettier
-            serena.packages.${pkgs.stdenv.hostPlatform.system}.serena
-            pkgs.sqlx-cli
-            pkgs.sqlite
-            pkgs.typescript-language-server
-            pkgs.vscode-langservers-extracted
-            wasm-bindgen-cli
-          ]
-          ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-            pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
-          ];
-          RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
-          PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
-          shellHook = ''
-            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
+        devShells =
+          let
+            # Everything `cargo xtask validate` needs on the host (toolchain + the
+            # static-check tools) plus what the Nix checks pull anyway — so the CI
+            # shell shares those store paths rather than adding cost.
+            ciInputs = [
+              toolchain
+              pkgs.cachix
+              cargo-crap
+              pkgs.cargo-deny
+              pkgs.cargo-leptos
+              pkgs.cargo-llvm-cov
+              pkgs.cargo-nextest
+              pkgs.dart-sass
+              pkgs.jq
+              pkgs.leptosfmt
+              pkgs.nodejs
+              pkgs.openssl
+              pkgs.pkg-config
+              pkgs.playwright-test
+              pkgs.postgresql_16
+              pkgs.prettier
+              pkgs.sqlite
+              wasm-bindgen-cli
+            ]
+            ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+              pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
+            ];
+            # Interactive-only tools that `cargo xtask validate` never invokes and no
+            # Nix check pulls (serena + the language servers are the bulk). Kept out
+            # of `devShells.ci` so CI does not download/build them.
+            devOnly = [
+              serena.packages.${pkgs.stdenv.hostPlatform.system}.serena
+              pkgs.typescript-language-server
+              pkgs.vscode-langservers-extracted
+              pkgs.cargo-generate
+              pkgs.cargo-mutants
+              pkgs.sqlx-cli
+            ];
+            shellEnv = {
+              RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
+              PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+              PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+              shellHook = ''
+                export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
 
-            # Symlink Nix-provided Playwright into node_modules to avoid instance conflict
-            # and provide IDE support without redundant disk usage.
-            mkdir -p end2end/node_modules/@playwright
-            ln -sfn ${pkgs.playwright-test}/lib/node_modules/@playwright/test end2end/node_modules/@playwright/test
-          '';
-        };
+                # Symlink Nix-provided Playwright into node_modules to avoid instance conflict
+                # and provide IDE support without redundant disk usage.
+                mkdir -p end2end/node_modules/@playwright
+                ln -sfn ${pkgs.playwright-test}/lib/node_modules/@playwright/test end2end/node_modules/@playwright/test
+              '';
+            };
+          in
+          {
+            # Lean shell used by CI (`nix develop .#ci -c cargo xtask validate`).
+            ci = pkgs.mkShell (shellEnv // { buildInputs = ciInputs; });
+            # Full interactive shell for local development.
+            default = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ devOnly; });
+          };
       }
     );
 }

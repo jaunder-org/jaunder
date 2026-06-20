@@ -25,11 +25,15 @@ pub fn coverage(result: &mut CommandResult, mode: Mode) {
     result.coverage = report;
 }
 
-/// The e2e VM checks (both backends). `postgres-integration` is deliberately
+/// The e2e gate: build the `e2e` aggregate check, which depends on both
+/// backend VM checks. They are independent derivations, so the host realizes
+/// them in parallel up to its `max-jobs` — CI's install-nix-action sets
+/// `max-jobs = auto`; a plain dev box defaults to 1 and runs them serially.
+/// The "run both backends in parallel" intent is declared in the flake (the
+/// `e2e-checks` aggregate), not here. `postgres-integration` is deliberately
 /// not dispatched — its tests already run under the coverage check.
 pub fn e2e(result: &mut CommandResult) {
-    result.push(build_check("nix-e2e-sqlite", "e2e-sqlite"));
-    result.push(build_check("nix-e2e-postgres", "e2e-postgres"));
+    result.push(build_check("nix-e2e", "e2e"));
 }
 
 /// `nix build --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.<system>.<check>`.
