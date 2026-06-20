@@ -12,7 +12,7 @@
 
 - **Backend parity (ADR-0019):** every table ships as paired `storage/migrations/sqlite/NNNN_*.sql` + `storage/migrations/postgres/NNNN_*.sql`; every storage trait has SQLite **and** Postgres impls, exercised against both backends by the same test (one body, expanded per backend — see the next bullet). Next free migration number is **0018**.
 - **Enumerated columns are lookup tables, never CHECK** — a lookup grows with a one-line seed `INSERT` in both backends; a CHECK would force SQLite's 12-step table rebuild. Each lookup is guarded by a bijection test.
-- **No application-enforced invariants** for same-owner: composite FKs do it in the DB. Composite FKs require `PRAGMA foreign_keys = ON` on every SQLite connection (Task 1).
+- **No application-enforced invariants** for same-owner: composite FKs do it in the DB. Composite FKs require `PRAGMA foreign_keys = ON` on every SQLite connection — this holds by sqlx's default (`SqliteConnectOptions` enables it) and is regression-guarded by Task 1; **no code needs to enable it**.
 - **Fail closed:** losing targeting data makes a post *more* private; resolution admits only `status = 'active'` subscriptions.
 - **DI / ADR-0016:** consumers receive `Arc<dyn FooStorage>`, never the whole `AppState`; `AppState` holds only storage. New stores are added to `AppState`, both `make_app_state` constructors, and `provide_app_state_contexts`.
 - **No in-file `#[cfg(test)]` tests in per-backend dialect files** (project memory `dialect_files_no_infile_tests`): backend-specific tests live in the backend-parametrized storage integration tests (`server/tests/storage.rs`), not in `sqlite/*.rs` or `postgres/*.rs`. Pure-logic unit tests with no DB (enum round-trips, config parsing) may stay as in-file `#[cfg(test)]` in `common`/the trait module (as `site_config.rs` already does).
@@ -68,26 +68,24 @@
 
 ## Phase 1 — Foundation: SQLite foreign keys
 
-### Task 1: Enable `PRAGMA foreign_keys = ON` on every SQLite connection
+### Task 1: Regression-guard SQLite foreign-key enforcement — DONE (commit `e52a057`)
 
-The composite FKs in Phase 3 are inert unless every pooled SQLite connection has foreign keys on. The app pool currently sets WAL/busy_timeout/cache_size but **not** `foreign_keys` (`storage/src/sqlite/mod.rs:78-104`), and SQLite defaults it off per-connection. A one-shot `execute` (like `cache_size`) only touches one connection — it must be set in `SqliteConnectOptions` so every connection in the pool gets it.
+> **Premise corrected during implementation.** This task originally assumed the SQLite pools did **not** enforce foreign keys and needed `.foreign_keys(true)` added. That is wrong for this codebase: **sqlx's `SqliteConnectOptions` defaults `foreign_keys` to `ON`** (`sqlx-sqlite-0.8.6/src/options/mod.rs:185` inserts the `foreign_keys=ON` pragma by default), so every pooled connection — app (`open_sqlite_database`) and test (`open_pool`) — already enforces FKs. The composite same-owner FKs in Phase 3 are therefore **never inert**; no production change is required. What this task delivers is a **regression guard** that locks the behavior so a future regression (someone disabling the pragma, or a sqlx default change) is caught.
 
 **Files:**
-- Modify: `storage/src/sqlite/mod.rs:89-92` (the `options = options.journal_mode(...)` builder chain in `open_sqlite_database` — the **production** pool)
-- Modify: `server/tests/storage.rs` `open_pool` (the **test** pool — must mirror production, else FK-dependent tests run with FKs off; SQLite `foreign_keys` is per-connection)
-- Test: `server/tests/storage.rs` (`#[apply(sqlite_only)]`, using `open_pool`)
+- Test only: `server/tests/storage.rs` (`#[apply(sqlite_only)]`, using `open_pool`). No production code changed.
 
 **Interfaces:**
-- Produces: every SQLite connection — production *and* test — enforces FKs. No signature change. **This is a prerequisite for Tasks 5/7** (composite FKs are inert with `foreign_keys` off).
+- Produces: a test proving the SQLite pool rejects an FK violation. Phase 3's composite FKs rely on FK enforcement, which holds by sqlx default and is now guarded here.
 
-- [ ] **Step 1: Write the failing test** in `server/tests/storage.rs` — through the FK-enabled test pool, a child-row insert violating an existing FK is rejected.
+- [x] **Step 1: Write the test** in `server/tests/storage.rs` — through `open_pool` (sqlx-default FK enforcement), a child-row insert violating an existing FK is rejected. (TDD note: because the default is already ON, there is no RED state to produce by withholding production code; the test is a behavior-lock, and its value is caught by deliberately breaking the pragma locally to see it fail — the implementer verified this.)
 
 ```rust
 #[apply(sqlite_only)]
 #[tokio::test]
 async fn sqlite_pool_enforces_foreign_keys(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let pool = open_pool(&env.base).await; // same DB file as env.state; FK-enabled by this task
+    let pool = open_pool(&env.base).await; // FK-enforcing pool (sqlx default)
     let result = sqlx::query(
         "INSERT INTO post_revisions (post_id, user_id, title, slug, body, format, rendered_html)
          VALUES (999999, 999999, 't', 's', 'b', 'markdown', '<p>b</p>')",
@@ -98,25 +96,10 @@ async fn sqlite_pool_enforces_foreign_keys(#[case] backend: Backend) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it FAILS** — `ctx_execute(shell, "cargo test -p jaunder --test storage sqlite_pool_enforces_foreign_keys")`. Expected: insert succeeds → assert fails (FKs currently off on both pools).
+- [x] **Step 2: Run** — `cargo test -p jaunder --test storage sqlite_pool_enforces_foreign_keys`. Passes (the default pool enforces FKs).
+- [x] **Step 3: Gate + commit** — `cargo xtask check` green; committed as `test(storage): guard SQLite pool foreign-key enforcement` (`e52a057`).
 
-- [ ] **Step 3: Implement** — add `.foreign_keys(true)` to the production options chain in `open_sqlite_database`:
-
-```rust
-options = options
-    .journal_mode(SqliteJournalMode::Wal)
-    .busy_timeout(Duration::from_secs(5))
-    .foreign_keys(true)
-    .log_slow_statements(LevelFilter::Warn, sql_slow_query_threshold());
-```
-
-Then mirror it in the test pool so tests match production — in `server/tests/storage.rs::open_pool`, add `.foreign_keys(true)` to the `SqliteConnectOptions` before `connect_with` (it currently sets only `create_if_missing`). Audit other app-facing `SqlitePool::connect_with` sites for the same fix; the backup path (`sqlite/backup.rs`) deliberately toggles FKs itself and is exempt.
-
-- [ ] **Step 4: Run to verify it PASSES** — same command. Expected: PASS.
-
-- [ ] **Step 5: Run the broader suites** to confirm no existing data violates FKs now that they're enforced: `ctx_execute(shell, "cargo test -p storage")` then the storage integration tests `cargo test -p jaunder --test storage`. Fix any fixture that relied on FKs being off.
-
-- [ ] **Step 6: Commit** — `git commit -m "fix(storage): enforce PRAGMA foreign_keys on the SQLite app pool"`
+**Downstream consequence:** later tasks that said "FKs from Task 1" or "inert until Task 1" should read "FK enforcement holds by sqlx default, guarded by Task 1." No task needs to *enable* foreign keys.
 
 ---
 
@@ -380,7 +363,7 @@ CREATE INDEX idx_post_audiences_kind_post ON post_audiences (target_kind_id, pos
 - Test: `server/tests/storage.rs` (both backends, via `#[apply(backends)]`).
 
 **Interfaces:**
-- Consumes: the tables from Tasks 4-6, FKs from Task 1 (SQLite), and the `open_pool`/`open_pg_pool` FK-enabled raw helpers (Tasks 1/3). **No dependency on the Subscription/Audience stores** (Tasks 9/10) — seeding is raw SQL so this task stays in Phase 3.
+- Consumes: the tables from Tasks 4-6, SQLite FK enforcement (sqlx default, guarded by Task 1), and the `open_pool`/`open_pg_pool` raw helpers (Task 3). **No dependency on the Subscription/Audience stores** (Tasks 9/10) — seeding is raw SQL so this task stays in Phase 3.
 - Produces: proof the **database** (not app code) rejects pairing an audience with a subscription owned by a different author. This is a deliberately *raw-SQL* test — `audience_members` has no trait insert that bypasses the owner column, so the raw insert is what isolates the FK as the enforcer. (The trait-level complement, `AudienceStorage::add_member` rejecting a cross-author pair, is Task 10.)
 
 - [ ] **Step 1: Write the failing test.** Seed author A's audience and author B's subscription with **raw INSERTs** (ids resolved by natural key inside the membership INSERT, so there is no `RETURNING` vs `last_insert_rowid` divergence to handle). With `author_user_id = A` the `(subscription_id, author_user_id)` FK fails (the subscription is B's); with `B` the `(audience_id, author_user_id)` FK fails (the audience is A's) — either way the DB must reject it.
@@ -418,7 +401,7 @@ async fn composite_fks_reject_cross_author_membership(#[case] backend: Backend) 
 //   safe here (test-only, no untrusted input) and sidesteps placeholder divergence.
 ```
 
-- [ ] **Step 2: Run to verify it PASSES** (the FKs already exist) on both backends — `cargo test -p jaunder --test storage composite_fks_reject_cross_author_membership`. If the insert does *not* error, the FK or the SQLite pragma (Task 1, incl. the `open_pool` mirror) is wrong — fix before proceeding.
+- [ ] **Step 2: Run to verify it PASSES** (the FKs already exist) on both backends — `cargo test -p jaunder --test storage composite_fks_reject_cross_author_membership`. If the insert does *not* error, the composite FK definition is wrong (FK enforcement itself holds by sqlx default) — fix before proceeding.
 
 - [ ] **Step 3: Commit** — `git commit -m "test(storage): composite FKs reject cross-author audience membership"`
 
@@ -892,4 +875,4 @@ Only `jaunder-i3il.1` is `bd ready`; the rest unblock as predecessors close. (Ta
 ## Self-review notes
 
 - **Spec coverage:** data model (T2,4,5,6) · no-app-invariants/composite FK (T1,5,7) · resolution rule incl. ViewerIdentity & anonymous reduction (T8,13) · admission seam fail-closed (T8,9) · SubscriptionStore/AudienceStore/extended PostStore, both backends (T9,10,12,13) · bijection tests (T3) · default_audience (T14) · web surfaces timelines/profile/account/editor (T16,17,18,19) · feeds Public-only (T20) · AtomPub default + owner access (T21) · E2E (T22). All spec sections map to a task.
-- **Open items resolved:** SQLite `foreign_keys` confirmed off and fixed in T1; `post_audiences` nullable-PK divergence between SQLite (NULL-in-PK ok) and Postgres (partial unique indexes) handled in T6.
+- **Open items resolved:** SQLite `foreign_keys` confirmed **ON by sqlx default** (original "off" premise corrected during Task 1; T1 adds a regression guard, no production change); `post_audiences` nullable-PK divergence between SQLite (NULL-in-PK ok) and Postgres (partial unique indexes) handled in T6.
