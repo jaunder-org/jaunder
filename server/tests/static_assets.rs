@@ -13,14 +13,14 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{test_options, test_state};
+use helpers::{test_options, Backend, TestEnv};
 
 async fn get_asset(uri: &str) -> (StatusCode, Option<String>) {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+    // Static-asset serving never touches storage; pin a single backend so these
+    // stay plain (no need to run embedded-asset serving on both).
+    let TestEnv { state, base: _base } = Backend::Sqlite.setup().await;
 
     let request = Request::builder()
         .method("GET")
