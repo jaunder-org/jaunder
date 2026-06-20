@@ -40,8 +40,8 @@ use rstest_reuse;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    backends, postgres_only, sqlite_only, sqlite_url, template_postgres_url, unique_postgres_url,
-    Backend, TestEnv,
+    backends, postgres_only, recorded_postgres_url, sqlite_only, sqlite_url, template_postgres_url,
+    unique_postgres_url, Backend, TestEnv,
 };
 
 // The Postgres-backed cases below (the `::postgres` expansion of each
@@ -5653,4 +5653,94 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
         .expect("get_post_by_id p3")
         .expect("p3 should exist");
     assert!(p3_record.tags.is_empty());
+}
+
+// ── Composite same-owner FK enforcement ───────────────────────────────────────
+
+// Run a statement on the FK-enabled pool for `backend`. These small per-backend
+// helpers mirror `open_pool`/`open_pg_pool`: `raw_exec` unwraps; `raw_try_exec`
+// returns the Result so the test can assert rejection. Inlining integer ids via
+// `format!` is safe here (test-only, no untrusted input) and sidesteps the
+// SQLite/Postgres placeholder divergence.
+async fn raw_exec(backend: Backend, env: &TestEnv, sql: &str) {
+    raw_try_exec(backend, env, sql)
+        .await
+        .unwrap_or_else(|e| panic!("raw exec failed: {e}\nSQL: {sql}"));
+}
+
+async fn raw_try_exec(backend: Backend, env: &TestEnv, sql: &str) -> Result<(), sqlx::Error> {
+    match backend {
+        Backend::Sqlite => sqlx::query(sql)
+            .execute(&open_pool(&env.base).await)
+            .await
+            .map(|_| ()),
+        Backend::Postgres => {
+            // Reuse the *per-test* database the state seeded (see
+            // `recorded_postgres_url`); a bare `open_pg_pool()` would mint a
+            // fresh empty clone and never see the user/audience/subscription.
+            let pool = PgPool::connect(&recorded_postgres_url(&env.base)).await?;
+            sqlx::query(sql).execute(&pool).await.map(|_| ())
+        }
+    }
+}
+
+// The same-owner invariant (an audience and a subscription paired in
+// `audience_members` must belong to the same author) is enforced by the
+// database via two composite FKs that both point at the same `author_user_id`
+// column — never by application code. This raw-SQL test isolates the FK as the
+// enforcer: `audience_members` has no trait insert that bypasses the owner
+// column. With `author_user_id = A` the `(subscription_id, author_user_id)` FK
+// fails (the subscription is B's); with `B` the `(audience_id, author_user_id)`
+// FK fails (the audience is A's) — either way the DB must reject it.
+#[apply(backends)]
+#[tokio::test]
+async fn composite_fks_reject_cross_author_membership(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    // Users via the already-wired UserStore; audience + subscription via raw SQL.
+    let a = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let b = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    raw_exec(
+        backend,
+        &env,
+        &format!("INSERT INTO audiences (author_user_id, name) VALUES ({a}, 'Friends')"),
+    )
+    .await;
+    raw_exec(
+        backend,
+        &env,
+        &format!(
+            "INSERT INTO subscriptions (author_user_id, channel_id, subscriber_ref, status_id) \
+             VALUES ({b}, (SELECT channel_id FROM channels WHERE name='local'), '{b}', \
+                     (SELECT status_id FROM subscription_statuses WHERE name='active'))"
+        ),
+    )
+    .await;
+
+    for owner in [a, b] {
+        let res = raw_try_exec(
+            backend,
+            &env,
+            &format!(
+                "INSERT INTO audience_members (audience_id, subscription_id, author_user_id) VALUES (\
+                   (SELECT audience_id FROM audiences WHERE author_user_id={a} AND name='Friends'), \
+                   (SELECT subscription_id FROM subscriptions WHERE author_user_id={b} AND subscriber_ref='{b}'), \
+                   {owner})"
+            ),
+        )
+        .await;
+        assert!(
+            res.is_err(),
+            "cross-author membership must be rejected by the DB (owner={owner})"
+        );
+    }
 }

@@ -63,14 +63,37 @@ pub struct TestEnv {
     pub base: TempDir,
 }
 
+/// File name (under `TestEnv::base`) holding the Postgres connection string for
+/// the *per-test* database that [`AppState`] was migrated into. Raw-SQL tests
+/// need this because `template_postgres_url` mints a *fresh* clone on every
+/// call, so re-calling it would connect to a different (empty) database than
+/// the one the state seeded. Recorded here (instead of a new `TestEnv` field)
+/// to avoid breaking the many `let TestEnv { state, base } = ...` destructures.
+/// Absent on `SQLite`, where raw access goes through the `base` temp dir directly.
+pub const PG_URL_FILE: &str = "pg_test_url";
+
+/// Returns the Postgres connection string recorded by [`Backend::setup`] for a
+/// test's per-test database. Reuse this for raw-SQL pools so they see rows the
+/// state already inserted. Panics if called on a `SQLite` `TestEnv`.
+pub fn recorded_postgres_url(base: &TempDir) -> String {
+    std::fs::read_to_string(base.path().join(PG_URL_FILE))
+        .expect("Postgres test URL not recorded; recorded_postgres_url is Postgres-only")
+}
+
 impl Backend {
     pub async fn setup(self) -> TestEnv {
         let base = TempDir::new().unwrap();
         let state = match self {
             Backend::Sqlite => open_database(&sqlite_url(&base)).await.unwrap(),
-            Backend::Postgres => open_existing_database(&template_postgres_url().await)
-                .await
-                .unwrap(),
+            Backend::Postgres => {
+                let url = template_postgres_url().await;
+                let state = open_existing_database(&url).await.unwrap();
+                // Record the per-test DB URL so raw-SQL helpers reuse this exact
+                // database rather than minting a fresh (empty) template clone.
+                std::fs::write(base.path().join(PG_URL_FILE), url.to_string())
+                    .expect("write recorded Postgres URL");
+                state
+            }
         };
         TestEnv { state, base }
     }
