@@ -383,10 +383,10 @@ async fn worker_applies_backoff_on_ping_failure() {
     assert!(cache_row.body.contains("Test Post"));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn worker_marks_exhausted_after_backoff_attempts_are_used_up() {
-    let base = TempDir::new().expect("temp dir");
-    let (state, _capture) = helpers::test_state_with_websub(&base).await;
+async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // A published post so regeneration succeeds: the exhausted branch lives in
     // the ping sub-path, reached only after a successful regen.

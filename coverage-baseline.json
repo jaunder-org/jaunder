@@ -217,169 +217,173 @@
       "text": "        p1.parse::<Password>().map_err(|e| anyhow::anyhow!(\"{e}\"))?"
     },
     {
-      "line": 332,
+      "line": 340,
       "text": "                storage_path = %storage.storage_path.display(),"
     },
     {
-      "line": 335,
+      "line": 343,
       "text": "                storage.storage_path.display(),"
     },
     {
-      "line": 339,
+      "line": 347,
       "text": "            open_existing_database(&storage.db)"
     },
     {
-      "line": 340,
+      "line": 348,
       "text": "                .await"
     },
     {
-      "line": 341,
+      "line": 349,
       "text": "                .map_err(|e| anyhow::anyhow!(\"{e}; auto-init failed\"))?"
     },
     {
-      "line": 416,
+      "line": 424,
       "text": "    Ok(())"
     }
   ],
   "server/src/feed/handlers.rs": [
     {
-      "line": 44,
-      "text": "            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),"
+      "line": 49,
+      "text": "                Err(e) => {"
     },
     {
-      "line": 46,
+      "line": 50,
+      "text": "                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()"
+    },
+    {
+      "line": 54,
       "text": "        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),"
     },
     {
-      "line": 52,
+      "line": 60,
       "text": "        }"
     },
     {
-      "line": 62,
+      "line": 70,
       "text": "            }"
     },
     {
-      "line": 63,
+      "line": 71,
       "text": "        }"
     },
     {
-      "line": 83,
+      "line": 91,
       "text": "pub async fn feed_site("
     },
     {
-      "line": 84,
+      "line": 92,
       "text": "    Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,"
     },
     {
-      "line": 85,
+      "line": 93,
       "text": "    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,"
     },
     {
-      "line": 86,
+      "line": 94,
       "text": "    Extension(posts): Extension<Arc<dyn PostStorage>>,"
     },
     {
-      "line": 87,
+      "line": 95,
       "text": "    headers: HeaderMap,"
     },
     {
-      "line": 88,
+      "line": 96,
       "text": "    Path(ext): Path<String>,"
     },
     {
-      "line": 89,
+      "line": 97,
       "text": ") -> Response {"
     },
     {
-      "line": 90,
+      "line": 98,
       "text": "    let Some(format) = parse_format(&ext) else {"
     },
     {
-      "line": 91,
-      "text": "        return StatusCode::NOT_FOUND.into_response();"
-    },
-    {
-      "line": 93,
-      "text": "    serve("
-    },
-    {
-      "line": 94,
-      "text": "        feed_cache,"
-    },
-    {
-      "line": 95,
-      "text": "        site_config,"
-    },
-    {
-      "line": 96,
-      "text": "        posts,"
-    },
-    {
-      "line": 97,
-      "text": "        headers,"
-    },
-    {
-      "line": 98,
-      "text": "        FeedSurface::Site,"
-    },
-    {
       "line": 99,
-      "text": "        format,"
-    },
-    {
-      "line": 100,
-      "text": "    )"
+      "text": "        return StatusCode::NOT_FOUND.into_response();"
     },
     {
       "line": 101,
-      "text": "    .await"
-    },
-    {
-      "line": 102,
-      "text": "}"
-    },
-    {
-      "line": 112,
-      "text": "        return StatusCode::NOT_FOUND.into_response();"
-    },
-    {
-      "line": 160,
-      "text": "        return StatusCode::NOT_FOUND.into_response();"
-    },
-    {
-      "line": 165,
       "text": "    serve("
     },
     {
-      "line": 166,
+      "line": 102,
       "text": "        feed_cache,"
     },
     {
-      "line": 167,
+      "line": 103,
       "text": "        site_config,"
     },
     {
-      "line": 168,
+      "line": 104,
       "text": "        posts,"
     },
     {
-      "line": 169,
+      "line": 105,
       "text": "        headers,"
     },
     {
-      "line": 170,
-      "text": "        FeedSurface::UserTag { username, tag },"
+      "line": 106,
+      "text": "        FeedSurface::Site,"
     },
     {
-      "line": 171,
+      "line": 107,
       "text": "        format,"
     },
     {
-      "line": 172,
+      "line": 108,
       "text": "    )"
     },
     {
+      "line": 109,
+      "text": "    .await"
+    },
+    {
+      "line": 110,
+      "text": "}"
+    },
+    {
+      "line": 120,
+      "text": "        return StatusCode::NOT_FOUND.into_response();"
+    },
+    {
+      "line": 168,
+      "text": "        return StatusCode::NOT_FOUND.into_response();"
+    },
+    {
       "line": 173,
+      "text": "    serve("
+    },
+    {
+      "line": 174,
+      "text": "        feed_cache,"
+    },
+    {
+      "line": 175,
+      "text": "        site_config,"
+    },
+    {
+      "line": 176,
+      "text": "        posts,"
+    },
+    {
+      "line": 177,
+      "text": "        headers,"
+    },
+    {
+      "line": 178,
+      "text": "        FeedSurface::UserTag { username, tag },"
+    },
+    {
+      "line": 179,
+      "text": "        format,"
+    },
+    {
+      "line": 180,
+      "text": "    )"
+    },
+    {
+      "line": 181,
       "text": "    .await"
     }
   ],
@@ -407,63 +411,43 @@
       "text": "            return;"
     },
     {
-      "line": 104,
+      "line": 108,
       "text": "                        item_bytes = row.body.len(),"
     },
     {
-      "line": 105,
+      "line": 109,
       "text": "                        duration_ms = started.elapsed().as_millis(),"
     },
     {
-      "line": 135,
-      "text": "                                        tracing::warn!(feed_url, hub, \"feed.websub.ping.exhausted\");"
-    },
-    {
-      "line": 136,
-      "text": "                                        let _ = self"
-    },
-    {
-      "line": 137,
-      "text": "                                            .feed_events"
-    },
-    {
-      "line": 138,
-      "text": "                                            .mark_exhausted(&ids, &e.to_string())"
-    },
-    {
-      "line": 139,
-      "text": "                                            .await;"
-    },
-    {
-      "line": 167,
+      "line": 175,
       "text": "                        let _ = self.feed_events.mark_exhausted(&ids, &e.to_string()).await;"
     },
     {
-      "line": 195,
+      "line": 203,
       "text": "            move |_uuid, _lock| {"
     },
     {
-      "line": 196,
+      "line": 204,
       "text": "                let worker = worker.clone();"
     },
     {
-      "line": 197,
+      "line": 205,
       "text": "                Box::pin(async move {"
     },
     {
-      "line": 198,
+      "line": 206,
       "text": "                    worker.tick().await;"
     },
     {
-      "line": 199,
+      "line": 207,
       "text": "                })"
     },
     {
-      "line": 200,
+      "line": 208,
       "text": "            },"
     },
     {
-      "line": 201,
+      "line": 209,
       "text": "        )?;"
     }
   ],
@@ -629,35 +613,35 @@
   ],
   "server/src/media.rs": [
     {
-      "line": 132,
-      "text": "            || detect_content_type(&params.filename).to_owned(),"
+      "line": 153,
+      "text": "        }"
     },
     {
-      "line": 150,
-      "text": "            .unwrap_or_else(|_| HeaderValue::from_static(\"application/octet-stream\")),"
+      "line": 162,
+      "text": "            || detect_content_type(&params.filename).to_owned(),"
     }
   ],
   "server/src/media_manager.rs": [
     {
-      "line": 212,
+      "line": 228,
       "text": "            Err(CreateMediaError::Internal(e)) => {"
     },
     {
-      "line": 213,
+      "line": 229,
       "text": "                tracing::error!(error = %e, \"create_media failed\");"
     },
     {
-      "line": 214,
+      "line": 230,
       "text": "                Err(anyhow::anyhow!(MediaError::Internal(e.to_string())))"
     }
   ],
   "server/src/observability.rs": [
     {
-      "line": 102,
+      "line": 115,
       "text": "            return;"
     },
     {
-      "line": 539,
+      "line": 577,
       "text": "                        StatusCode::INTERNAL_SERVER_ERROR"
     }
   ],
@@ -7807,15 +7791,15 @@
   ],
   "web/src/posts/mod.rs": [
     {
-      "line": 421,
+      "line": 423,
       "text": "                    InternalError::not_found(\"Post\")"
     },
     {
-      "line": 423,
+      "line": 425,
       "text": "                UpdatePostError::Internal(error) => InternalError::storage(error),"
     },
     {
-      "line": 424,
+      "line": 426,
       "text": "            })?;"
     }
   ],
