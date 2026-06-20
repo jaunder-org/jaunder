@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # Keep GitHub Actions pinned versions current (and surface runtime
+  # deprecations, e.g. node20 -> node24) via automated PRs.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
