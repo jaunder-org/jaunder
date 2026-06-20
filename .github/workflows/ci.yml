@@ -10,15 +10,15 @@ jobs:
     name: Validate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: cachix/install-nix-action@v27
+      - uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: cachix/cachix-action@v15
+      - uses: cachix/cachix-action@v17
         with:
           name: jaunder-org
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -34,7 +34,7 @@ jobs:
       # `nix develop`, so we key manually rather than via Swatinem/rust-cache
       # (which would need rustc on the host PATH).
       - name: Cache xtask host build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
