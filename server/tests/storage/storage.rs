@@ -39,7 +39,8 @@ use rstest_reuse;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    backends, postgres_only, sqlite_url, template_postgres_url, unique_postgres_url, Backend,
+    backends, postgres_only, sqlite_only, sqlite_url, template_postgres_url, unique_postgres_url,
+    Backend,
 };
 
 // The Postgres-backed cases below (the `::postgres` expansion of each
@@ -61,6 +62,30 @@ async fn open_pool(base: &TempDir) -> SqlitePool {
         .await
         .unwrap();
     pool
+}
+
+// Foreign-key enforcement is per-connection in SQLite. sqlx's
+// `SqliteConnectOptions` defaults `foreign_keys` to ON, so every pooled
+// connection (app and test) enforces FKs. The composite same-owner FKs added in
+// later content-visibility phases depend on that, so this is a regression guard:
+// a child-row insert referencing a non-existent parent must be rejected. It would
+// fail if anyone disabled `foreign_keys` on the pool or a sqlx change dropped the
+// default.
+#[apply(sqlite_only)]
+#[tokio::test]
+async fn sqlite_pool_enforces_foreign_keys(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let pool = open_pool(&env.base).await; // FK-enforcing pool (sqlx default)
+    let result = sqlx::query(
+        "INSERT INTO post_revisions (post_id, user_id, title, slug, body, format, rendered_html)
+         VALUES (999999, 999999, 't', 's', 'b', 'markdown', '<p>b</p>')",
+    )
+    .execute(&pool)
+    .await;
+    assert!(
+        result.is_err(),
+        "FK violation must be rejected when foreign_keys is ON"
+    );
 }
 
 async fn user_storage(base: &TempDir) -> SqliteUserStorage {
