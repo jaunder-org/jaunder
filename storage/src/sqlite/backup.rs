@@ -447,7 +447,7 @@ mod tests {
             .await
             .map_err(|e| BackupError::Io(std::io::Error::other(e.to_string())))?;
         let version = schema_version(&mut connection).await?;
-        assert_eq!(version, 18, "expected one entry per migration file");
+        assert_eq!(version, 21, "expected one entry per migration file");
         Ok(())
     }
 
