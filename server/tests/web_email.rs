@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -16,12 +17,17 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use chrono::Utc;
+use common::mailer::test_utils::CapturingMailSender;
 use common::username::Username;
 use storage::AppState;
-use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{ensure_server_fns_registered, test_options, test_state_with_mailer};
+use helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
+
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
 
 async fn post_form(
     state: Arc<AppState>,
@@ -57,10 +63,11 @@ async fn post_form(
 }
 
 // M3.10.7: request_email_verification creates a row and sends an email via CapturingMailSender.
+#[apply(backends)]
 #[tokio::test]
-async fn request_email_verification_creates_row_and_sends_email() {
-    let base = TempDir::new().unwrap();
-    let (state, mailer) = test_state_with_mailer(&base).await;
+async fn request_email_verification_creates_row_and_sends_email(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
 
     let user_id = state
         .users
@@ -102,10 +109,11 @@ async fn request_email_verification_creates_row_and_sends_email() {
 }
 
 // M3.10.8: verify_email with a valid token sets the email as verified.
+#[apply(backends)]
 #[tokio::test]
-async fn verify_email_with_valid_token_sets_email_verified() {
-    let base = TempDir::new().unwrap();
-    let (state, mailer) = test_state_with_mailer(&base).await;
+async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
 
     let user_id = state
         .users
@@ -145,10 +153,11 @@ async fn verify_email_with_valid_token_sets_email_verified() {
 }
 
 // M3.10.9: verify_email with an expired token returns an error.
+#[apply(backends)]
 #[tokio::test]
-async fn verify_email_with_expired_token_returns_error() {
-    let base = TempDir::new().unwrap();
-    let (state, mailer) = test_state_with_mailer(&base).await;
+async fn verify_email_with_expired_token_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
 
     let user_id = state
         .users
@@ -181,10 +190,11 @@ async fn verify_email_with_expired_token_returns_error() {
 }
 
 // M3.10.10: verify_email with an unknown token returns an error.
+#[apply(backends)]
 #[tokio::test]
-async fn verify_email_with_unknown_token_returns_error() {
-    let base = TempDir::new().unwrap();
-    let (state, mailer) = test_state_with_mailer(&base).await;
+async fn verify_email_with_unknown_token_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, _body) = post_form(
         Arc::clone(&state),
@@ -198,10 +208,11 @@ async fn verify_email_with_unknown_token_returns_error() {
     assert_ne!(status, StatusCode::OK);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn request_email_verification_unauthorized_returns_error() {
-    let base = TempDir::new().unwrap();
-    let (state, mailer) = test_state_with_mailer(&base).await;
+async fn request_email_verification_unauthorized_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
 
     // No cookie provided
     let (status, _) = post_form(
@@ -217,10 +228,11 @@ async fn request_email_verification_unauthorized_returns_error() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn request_email_verification_invalid_email_returns_error() {
-    let base = TempDir::new().unwrap();
-    let (state, mailer) = test_state_with_mailer(&base).await;
+async fn request_email_verification_invalid_email_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
 
     // Create user and session
     let username: Username = "alice".parse().unwrap();

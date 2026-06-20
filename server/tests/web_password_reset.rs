@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -16,12 +17,17 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use chrono::Utc;
+use common::mailer::test_utils::CapturingMailSender;
 use common::username::Username;
 use storage::AppState;
-use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{ensure_server_fns_registered, test_options, test_state_with_mailer};
+use helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
+
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
 
 async fn post_form(
     state: Arc<AppState>,
@@ -87,10 +93,11 @@ async fn create_user_with_verified_email(
 }
 
 // M3.11.7: request_password_reset for a user with a verified email sends a reset email.
+#[apply(backends)]
 #[tokio::test]
-async fn request_password_reset_sends_email_for_verified_user() {
-    let base = TempDir::new().unwrap();
-    let (state, mailer) = test_state_with_mailer(&base).await;
+async fn request_password_reset_sends_email_for_verified_user(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
 
     create_user_with_verified_email(&state, "alice", "alice@example.com").await;
 
@@ -117,10 +124,13 @@ async fn request_password_reset_sends_email_for_verified_user() {
 }
 
 // M3.11.8: request_password_reset for a user without a verified email returns an error.
+#[apply(backends)]
 #[tokio::test]
-async fn request_password_reset_returns_error_for_user_without_verified_email() {
-    let base = TempDir::new().unwrap();
-    let (state, mailer) = test_state_with_mailer(&base).await;
+async fn request_password_reset_returns_error_for_user_without_verified_email(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
 
     state
         .users
@@ -145,10 +155,11 @@ async fn request_password_reset_returns_error_for_user_without_verified_email() 
     assert_ne!(status, StatusCode::OK);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn request_password_reset_invalid_username_returns_error() {
-    let base = TempDir::new().unwrap();
-    let (state, mailer) = test_state_with_mailer(&base).await;
+async fn request_password_reset_invalid_username_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, _) = post_form(
         state,
@@ -162,10 +173,11 @@ async fn request_password_reset_invalid_username_returns_error() {
 }
 
 // M3.11.9: request_password_reset for an unknown username returns an error.
+#[apply(backends)]
 #[tokio::test]
-async fn request_password_reset_returns_error_for_unknown_username() {
-    let base = TempDir::new().unwrap();
-    let (state, mailer) = test_state_with_mailer(&base).await;
+async fn request_password_reset_returns_error_for_unknown_username(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, _body) = post_form(
         Arc::clone(&state),
@@ -180,10 +192,11 @@ async fn request_password_reset_returns_error_for_unknown_username() {
 }
 
 // M3.11.10: confirm_password_reset with a valid token sets the new password and revokes sessions.
+#[apply(backends)]
 #[tokio::test]
-async fn confirm_password_reset_sets_password_and_revokes_sessions() {
-    let base = TempDir::new().unwrap();
-    let (state, mailer) = test_state_with_mailer(&base).await;
+async fn confirm_password_reset_sets_password_and_revokes_sessions(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
 
     let (user_id, _session) =
         create_user_with_verified_email(&state, "carol", "carol@example.com").await;
@@ -239,10 +252,11 @@ async fn confirm_password_reset_sets_password_and_revokes_sessions() {
 }
 
 // M3.11.11: confirm_password_reset with an expired token returns an error.
+#[apply(backends)]
 #[tokio::test]
-async fn confirm_password_reset_with_expired_token_returns_error() {
-    let base = TempDir::new().unwrap();
-    let (state, mailer) = test_state_with_mailer(&base).await;
+async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
 
     let (user_id, _) = create_user_with_verified_email(&state, "dave", "dave@example.com").await;
 
@@ -267,10 +281,11 @@ async fn confirm_password_reset_with_expired_token_returns_error() {
 }
 
 // M3.11.12: confirm_password_reset with an invalid token returns an error.
+#[apply(backends)]
 #[tokio::test]
-async fn confirm_password_reset_with_invalid_token_returns_error() {
-    let base = TempDir::new().unwrap();
-    let (state, mailer) = test_state_with_mailer(&base).await;
+async fn confirm_password_reset_with_invalid_token_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, _body) = post_form(
         Arc::clone(&state),
@@ -285,10 +300,11 @@ async fn confirm_password_reset_with_invalid_token_returns_error() {
 }
 
 // M3.11.13: confirm_password_reset with an already-used token returns an error.
+#[apply(backends)]
 #[tokio::test]
-async fn confirm_password_reset_with_used_token_returns_error() {
-    let base = TempDir::new().unwrap();
-    let (state, mailer) = test_state_with_mailer(&base).await;
+async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
 
     let (user_id, _) = create_user_with_verified_email(&state, "eve", "eve@example.com").await;
 
