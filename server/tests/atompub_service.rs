@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -16,10 +17,16 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use base64::Engine as _;
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{ensure_server_fns_registered, noop_mailer, test_options, test_state};
+use helpers::{
+    backends, ensure_server_fns_registered, noop_mailer, test_options, Backend, TestEnv,
+};
 
 async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     ensure_server_fns_registered();
@@ -40,10 +47,10 @@ async fn body_string(response: axum::response::Response) -> String {
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn service_document_returns_200_with_app_password() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn service_document_returns_200_with_app_password(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -110,10 +117,10 @@ async fn service_document_returns_200_with_app_password() {
     assert!(body.contains("term=\"rust\""), "categories missing: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn service_document_rejects_basic_username_mismatch() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn service_document_rejects_basic_username_mismatch(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -146,10 +153,10 @@ async fn service_document_rejects_basic_username_mismatch() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn service_document_requires_authentication() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn service_document_requires_authentication(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let app = make_app(state, &base).await;
 
     let response = app

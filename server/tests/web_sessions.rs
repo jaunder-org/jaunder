@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -16,10 +17,14 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use common::username::Username;
-use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{ensure_server_fns_registered, test_options, test_state};
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
 
 async fn post_form(
     state: Arc<storage::AppState>,
@@ -77,10 +82,10 @@ async fn create_user_and_session(
     (user_id, raw_token, cookie)
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_sessions_returns_sessions_for_authenticated_user() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let (user_id, raw_token, cookie) = create_user_and_session(&state, "alice").await;
     // Create a second session with a label.
     state
@@ -105,10 +110,10 @@ async fn list_sessions_returns_sessions_for_authenticated_user() {
     let _ = raw_token;
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_sessions_marks_current_session() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_sessions_marks_current_session(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let (_user_id, _raw_token, cookie) = create_user_and_session(&state, "alice").await;
 
     let (status, body) =
@@ -121,20 +126,20 @@ async fn list_sessions_marks_current_session() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_sessions_requires_authentication() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_sessions_requires_authentication(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _) = post_form(Arc::clone(&state), "/api/list_sessions", "", None).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn revoke_session_removes_session_for_authenticated_user() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let (user_id, raw_token1, cookie1) = create_user_and_session(&state, "alice").await;
     // Create a second session to revoke.
     let raw_token2 = state
@@ -174,10 +179,10 @@ async fn revoke_session_removes_session_for_authenticated_user() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn revoke_session_rejects_session_belonging_to_another_user() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let (_alice_id, _alice_token, alice_cookie) = create_user_and_session(&state, "alice").await;
     let (bob_id, bob_raw_token, _bob_cookie) = create_user_and_session(&state, "bob").await;
     let bob_token_hash = state
@@ -207,10 +212,10 @@ async fn revoke_session_rejects_session_belonging_to_another_user() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn revoke_session_requires_authentication() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn revoke_session_requires_authentication(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _) = post_form(
         Arc::clone(&state),
@@ -223,10 +228,10 @@ async fn revoke_session_requires_authentication() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_app_password_mints_labelled_session() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_app_password_mints_labelled_session(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let (user_id, raw_token, cookie) = create_user_and_session(&state, "alice").await;
     let _ = raw_token;
 
@@ -247,10 +252,10 @@ async fn create_app_password_mints_labelled_session() {
     assert!(sessions.iter().any(|s| s.label == "MarsEdit"));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_app_password_rejects_blank_label() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_app_password_rejects_blank_label(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let (_user_id, _raw_token, cookie) = create_user_and_session(&state, "alice").await;
 
     let (status, _body) = post_form(
@@ -265,10 +270,10 @@ async fn create_app_password_rejects_blank_label() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_app_password_requires_authentication() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_app_password_requires_authentication(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _body) = post_form(
         Arc::clone(&state),

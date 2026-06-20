@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -18,10 +19,14 @@ use axum::{
 use common::password::Password;
 use common::username::Username;
 use serde_json::json;
-use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{ensure_server_fns_registered, test_options, test_state};
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
 
 async fn post_json(
     state: Arc<storage::AppState>,
@@ -62,10 +67,19 @@ fn create_session_cookie(token: &str) -> String {
     format!("session={token}")
 }
 
+// Creating a published post enqueues the Site and User feeds (3 formats each =
+// 6 rows), plus 2 rows per tag (SiteTag + UserTag) × 3 formats. With no tags
+// that's 6 rows; with two tags it's 6 + 2×2×3 = 18 rows.
+#[rstest]
+#[case::no_tags(None::<Vec<String>>, 6)]
+#[case::two_tags(Some(vec!["rust".to_string(), "web".to_string()]), 18)]
 #[tokio::test]
-async fn create_published_post_enqueues_site_and_user_feeds() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
+async fn create_published_post_enqueues_expected_feeds(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] tags: Option<Vec<String>>,
+    #[case] expected_rows: usize,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user
     let username: Username = "alice".parse().expect("valid username");
@@ -84,13 +98,13 @@ async fn create_published_post_enqueues_site_and_user_feeds() {
         .expect("create session");
     let cookie = create_session_cookie(token.as_str());
 
-    // Create published post with no tags
+    // Create published post with the given tags
     let body = json!({
         "body": "Test post",
         "format": "markdown",
         "slug_override": None::<String>,
         "publish": true,
-        "tags": None::<Vec<String>>
+        "tags": tags
     });
 
     let (status, _response) = post_json(
@@ -110,74 +124,17 @@ async fn create_published_post_enqueues_site_and_user_feeds() {
         .await
         .expect("claim batch");
 
-    // Expected: Site (3 formats) + User (3 formats) = 6 rows
     assert_eq!(
         batch.len(),
-        6,
-        "Expected 6 feed events for published post with no tags"
+        expected_rows,
+        "Expected {expected_rows} feed events for published post"
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_post_with_two_tags_enqueues_tag_feeds_too() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
-
-    // Create a user
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
-
-    // Create session
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .expect("create session");
-    let cookie = create_session_cookie(token.as_str());
-
-    // Create published post with two tags
-    let body = json!({
-        "body": "Test post",
-        "format": "markdown",
-        "slug_override": None::<String>,
-        "publish": true,
-        "tags": Some(vec!["rust".to_string(), "web".to_string()])
-    });
-
-    let (status, _response) = post_json(
-        state.clone(),
-        "/api/create_post",
-        body.to_string(),
-        Some(&cookie),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-
-    // Claim pending feed events and count them
-    let batch = state
-        .feed_events
-        .claim_pending_batch(100, chrono::Duration::seconds(86400))
-        .await
-        .expect("claim batch");
-
-    // Expected: Site (3) + User (3) + 2 tags × (SiteTag + UserTag) × 3 formats = 6 + 12 = 18 rows
-    assert_eq!(
-        batch.len(),
-        18,
-        "Expected 18 feed events for published post with 2 tags"
-    );
-}
-
-#[tokio::test]
-async fn update_with_tag_change_enqueues_old_and_new_tags() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
+async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user
     let username: Username = "alice".parse().expect("valid username");
@@ -266,10 +223,10 @@ async fn update_with_tag_change_enqueues_old_and_new_tags() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn unpublish_enqueues_site_and_user_and_tag_feeds() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
+async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user
     let username: Username = "alice".parse().expect("valid username");
@@ -349,10 +306,10 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn delete_published_post_enqueues_feeds() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
+async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user
     let username: Username = "alice".parse().expect("valid username");
@@ -432,10 +389,10 @@ async fn delete_published_post_enqueues_feeds() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn delete_draft_post_enqueues_nothing() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
+async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user
     let username: Username = "alice".parse().expect("valid username");

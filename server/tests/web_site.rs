@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -17,10 +18,14 @@ use axum::{
 };
 use common::site::SiteIdentity;
 use common::{password::Password, username::Username};
-use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{ensure_server_fns_registered, test_options, test_state};
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
 
 async fn post_form(
     state: Arc<storage::AppState>,
@@ -57,10 +62,10 @@ async fn post_form(
     (status, body_str)
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_site_identity_requires_operator() {
-    let base = TempDir::new().expect("temp");
-    let state = test_state(&base).await;
+async fn get_site_identity_requires_operator(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let anonymous_cookie = None;
     let member_cookie = create_session_cookie(&state, "member", false).await;
 
@@ -93,10 +98,10 @@ async fn get_site_identity_requires_operator() {
     assert!(member_body.contains("unauthorized"), "body: {member_body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_site_identity_returns_defaults_when_unconfigured() {
-    let base = TempDir::new().expect("temp");
-    let state = test_state(&base).await;
+async fn get_site_identity_returns_defaults_when_unconfigured(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
     let (status, body) = post_form(state, "/api/get_site_identity", "", Some(&cookie)).await;
@@ -107,10 +112,10 @@ async fn get_site_identity_returns_defaults_when_unconfigured() {
     assert_eq!(identity.base_url, None);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_site_identity_round_trips_via_get() {
-    let base = TempDir::new().expect("temp");
-    let state = test_state(&base).await;
+async fn update_site_identity_round_trips_via_get(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
     let update_body = "title=My+Blog&base_url=https%3A%2F%2Fexample.com%2F";
@@ -136,10 +141,10 @@ async fn update_site_identity_round_trips_via_get() {
     assert_eq!(identity.base_url, Some("https://example.com".to_string()));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_site_identity_rejects_empty_title() {
-    let base = TempDir::new().expect("temp");
-    let state = test_state(&base).await;
+async fn update_site_identity_rejects_empty_title(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
     let (status, body) = post_form(
@@ -154,10 +159,10 @@ async fn update_site_identity_rejects_empty_title() {
     assert!(body.contains("site title cannot be empty"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_site_identity_rejects_non_http_base_url() {
-    let base = TempDir::new().expect("temp");
-    let state = test_state(&base).await;
+async fn update_site_identity_rejects_non_http_base_url(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
     let (status, body) = post_form(
@@ -175,10 +180,10 @@ async fn update_site_identity_rejects_non_http_base_url() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_site_identity_accepts_empty_base_url_as_none() {
-    let base = TempDir::new().expect("temp");
-    let state = test_state(&base).await;
+async fn update_site_identity_accepts_empty_base_url_as_none(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
     let (update_status, update_body) = post_form(
@@ -202,10 +207,10 @@ async fn update_site_identity_accepts_empty_base_url_as_none() {
     assert_eq!(identity.base_url, None);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_site_identity_requires_operator() {
-    let base = TempDir::new().expect("temp");
-    let state = test_state(&base).await;
+async fn update_site_identity_requires_operator(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let anonymous_cookie = None;
     let member_cookie = create_session_cookie(&state, "member", false).await;
 

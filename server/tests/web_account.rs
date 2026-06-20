@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -17,10 +18,14 @@ use axum::{
 };
 use common::username::Username;
 use storage::ProfileUpdate;
-use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{ensure_server_fns_registered, test_options, test_state};
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
 
 async fn post_form(
     state: Arc<storage::AppState>,
@@ -64,10 +69,10 @@ async fn post_form(
 // ── Profile tests (M2.10.5, M2.10.6) ─────────────────────────────────────
 
 // M2.10.5: get_profile returns the authenticated user's display name and bio.
+#[apply(backends)]
 #[tokio::test]
-async fn get_profile_returns_display_name_and_bio() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn get_profile_returns_display_name_and_bio(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -104,10 +109,10 @@ async fn get_profile_returns_display_name_and_bio() {
     assert!(body.contains("Hello world"), "bio missing: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_profile_with_email_returns_email() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn get_profile_with_email_returns_email(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create user with email and session
     let username: Username = "emailuser".parse().unwrap();
@@ -136,10 +141,10 @@ async fn get_profile_with_email_returns_email() {
 }
 
 // M2.10.6: update_profile persists changes visible in a subsequent get_profile.
+#[apply(backends)]
 #[tokio::test]
-async fn update_profile_persists_changes() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_profile_persists_changes(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -179,10 +184,10 @@ async fn update_profile_persists_changes() {
 // ── Sessions tests (M2.10.7, M2.10.8) ────────────────────────────────────
 
 // M2.10.7: list_sessions returns sessions for the authenticated user only.
+#[apply(backends)]
 #[tokio::test]
-async fn list_sessions_returns_only_authenticated_users_sessions() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let user1_id = state
         .users
@@ -233,10 +238,10 @@ async fn list_sessions_returns_only_authenticated_users_sessions() {
 }
 
 // M2.10.8: revoke_session removes the target session; re-auth with that token fails.
+#[apply(backends)]
 #[tokio::test]
-async fn revoke_session_removes_session_and_reauth_fails() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -295,10 +300,10 @@ async fn revoke_session_removes_session_and_reauth_fails() {
 // ── Invites tests (M2.10.9) ───────────────────────────────────────────────
 
 // M2.10.9: create_invite returns a code that appears in a subsequent list_invites.
+#[apply(backends)]
 #[tokio::test]
-async fn create_invite_appears_in_list_invites() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_invite_appears_in_list_invites(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "invite_only")
@@ -348,10 +353,10 @@ async fn create_invite_appears_in_list_invites() {
 }
 
 // create_invite requires authentication.
+#[apply(backends)]
 #[tokio::test]
-async fn create_invite_unauthorized_returns_error() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_invite_unauthorized_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _, _) = post_form(Arc::clone(&state), "/api/create_invite", "", None).await;
 
@@ -359,10 +364,10 @@ async fn create_invite_unauthorized_returns_error() {
 }
 
 // create_invite with extremely large hours (causing overflow in i64)?
+#[apply(backends)]
 #[tokio::test]
-async fn create_invite_large_hours_returns_error() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -402,10 +407,10 @@ async fn create_invite_large_hours_returns_error() {
 }
 
 // M2.10.10: revoke_session returns error when target session does not exist.
+#[apply(backends)]
 #[tokio::test]
-async fn revoke_session_unknown_hash_returns_error() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn revoke_session_unknown_hash_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -435,10 +440,10 @@ async fn revoke_session_unknown_hash_returns_error() {
 }
 
 // M2.10.11: revoke_session returns error when target session belongs to another user.
+#[apply(backends)]
 #[tokio::test]
-async fn revoke_session_other_user_hash_returns_error() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user1_id = state
         .users
         .create_user(
@@ -485,10 +490,10 @@ async fn revoke_session_other_user_hash_returns_error() {
 }
 
 // list_invites returns error when policy is not InviteOnly.
+#[apply(backends)]
 #[tokio::test]
-async fn list_invites_returns_error_when_policy_not_invite_only() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn list_invites_returns_error_when_policy_not_invite_only(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     // Policy defaults to Closed.
 
     let user_id = state
@@ -517,19 +522,19 @@ async fn list_invites_returns_error_when_policy_not_invite_only() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_profile_unauthorized_returns_error() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn get_profile_unauthorized_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _, _) = post_form(state, "/api/get_profile", "", None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_profile_unauthorized_returns_error() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_profile_unauthorized_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _, _) = post_form(
         state,
@@ -541,10 +546,10 @@ async fn update_profile_unauthorized_returns_error() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_profile_with_empty_fields_sets_to_none() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create user and session
     let username: Username = "empty".parse().unwrap();

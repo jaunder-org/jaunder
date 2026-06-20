@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -23,7 +24,14 @@ use storage::{
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{ensure_server_fns_registered, test_options, test_state};
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use helpers::{backends, Backend, TestEnv};
+
+use helpers::{ensure_server_fns_registered, test_options};
 
 async fn post_form(
     state: Arc<storage::AppState>,
@@ -60,10 +68,10 @@ async fn post_form(
     (status, body_str)
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn operator_gets_default_backup_settings() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn operator_gets_default_backup_settings(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
     let (status, body) = post_form(state, "/api/get_backup_settings", "", Some(&cookie)).await;
@@ -76,10 +84,10 @@ async fn operator_gets_default_backup_settings() {
     assert_eq!(settings.mode, BackupMode::Directory);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn current_user_is_operator_reports_operator_status() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn current_user_is_operator_reports_operator_status(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let operator_cookie = create_session_cookie(&state, "operator", true).await;
     let member_cookie = create_session_cookie(&state, "member", false).await;
 
@@ -109,10 +117,10 @@ async fn current_user_is_operator_reports_operator_status() {
     assert_eq!(anonymous_body, "false");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn operator_gets_configured_backup_settings() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
     state
         .site_config
@@ -145,10 +153,10 @@ async fn operator_gets_configured_backup_settings() {
     assert_eq!(settings.mode, BackupMode::Archive);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn operator_gets_defaults_for_invalid_backup_settings() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
     state
         .site_config
@@ -181,10 +189,10 @@ async fn operator_gets_defaults_for_invalid_backup_settings() {
     assert_eq!(settings.mode, BackupMode::Directory);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn operator_can_update_backup_settings() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn operator_can_update_backup_settings(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
     let (status, body) = post_form(
@@ -234,10 +242,10 @@ async fn operator_can_update_backup_settings() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn operator_can_update_backup_settings_to_archive_mode() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
     let (status, body) = post_form(
@@ -260,82 +268,42 @@ async fn operator_can_update_backup_settings_to_archive_mode() {
     );
 }
 
+#[rstest]
+#[case::empty_schedule(
+    "destination_path=%2Fsrv%2Fbackups&schedule=+++&retention_count=5&mode=directory",
+    "backup schedule must be a valid six-field cron expression"
+)]
+#[case::invalid_schedule(
+    "destination_path=%2Fsrv%2Fbackups&schedule=not-a-schedule&retention_count=5&mode=directory",
+    "backup schedule must be a valid six-field cron expression"
+)]
+#[case::invalid_retention_count(
+    "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=bogus&mode=directory",
+    "backup retention count"
+)]
+#[case::invalid_mode(
+    "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=5&mode=surprise",
+    "backup mode"
+)]
 #[tokio::test]
-async fn operator_update_backup_settings_rejects_empty_schedule() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn operator_update_backup_settings_rejects_invalid_input(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] form: &str,
+    #[case] expected_error: &str,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
-    let (status, body) = post_form(
-        state,
-        "/api/update_backup_settings",
-        "destination_path=%2Fsrv%2Fbackups&schedule=+++&retention_count=5&mode=directory",
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) = post_form(state, "/api/update_backup_settings", form, Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("backup schedule must be a valid six-field cron expression"));
+    assert!(body.contains(expected_error));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn operator_update_backup_settings_rejects_invalid_schedule() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let cookie = create_session_cookie(&state, "operator", true).await;
-
-    let (status, body) = post_form(
-        state,
-        "/api/update_backup_settings",
-        "destination_path=%2Fsrv%2Fbackups&schedule=not-a-schedule&retention_count=5&mode=directory",
-        Some(&cookie),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("backup schedule must be a valid six-field cron expression"));
-}
-
-#[tokio::test]
-async fn operator_update_backup_settings_rejects_invalid_retention_count() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let cookie = create_session_cookie(&state, "operator", true).await;
-
-    let (status, body) = post_form(
-        state,
-        "/api/update_backup_settings",
-        "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=bogus&mode=directory",
-        Some(&cookie),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("backup retention count"));
-}
-
-#[tokio::test]
-async fn operator_update_backup_settings_rejects_invalid_mode() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let cookie = create_session_cookie(&state, "operator", true).await;
-
-    let (status, body) = post_form(
-        state,
-        "/api/update_backup_settings",
-        "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=5&mode=surprise",
-        Some(&cookie),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("backup mode"));
-}
-
-#[tokio::test]
-async fn non_operator_cannot_update_backup_settings() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn non_operator_cannot_update_backup_settings(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "member", false).await;
 
     let (status, body) = post_form(
@@ -371,10 +339,10 @@ async fn create_session_cookie(
     format!("session={token}")
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn backup_warning_visible_for_operator_without_destination() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn backup_warning_visible_for_operator_without_destination(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
     let (status, body) = post_form(
@@ -389,10 +357,10 @@ async fn backup_warning_visible_for_operator_without_destination() {
     assert_eq!(body, "true");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn backup_warning_hidden_when_destination_configured() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn backup_warning_hidden_when_destination_configured(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
     state
         .site_config
@@ -412,10 +380,10 @@ async fn backup_warning_hidden_when_destination_configured() {
     assert_eq!(body, "false");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn backup_warning_visible_when_configured_schedule_is_invalid() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn backup_warning_visible_when_configured_schedule_is_invalid(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
     state
         .site_config
@@ -441,10 +409,10 @@ async fn backup_warning_visible_when_configured_schedule_is_invalid() {
     assert_eq!(body, "false");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn backup_warning_hidden_for_non_operator() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn backup_warning_hidden_for_non_operator(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "member", false).await;
 
     let (status, body) = post_form(
@@ -459,10 +427,10 @@ async fn backup_warning_hidden_for_non_operator() {
     assert_eq!(body, "false");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn backup_warning_hidden_without_authentication() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn backup_warning_hidden_without_authentication(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, body) = post_form(state, "/api/backup_warning_visible", "", None).await;
 
@@ -470,10 +438,10 @@ async fn backup_warning_hidden_without_authentication() {
     assert_eq!(body, "false");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn operator_can_update_backup_settings_with_empty_destination() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn operator_can_update_backup_settings_with_empty_destination(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
     let (status, body) = post_form(

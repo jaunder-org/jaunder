@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -18,7 +19,26 @@ use axum::{
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{ensure_server_fns_registered, noop_mailer, test_options, test_state};
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use helpers::{ensure_server_fns_registered, noop_mailer, test_options, Backend, TestEnv};
+
+// SPIKE (jaunder Task 1):
+// - Shape A below (`rsd_document_advertises_service_url`) confirms cross-module
+//   `#[apply]` resolves a `#[template]` defined in the `helpers` module simply by
+//   importing it into scope (`use helpers::backends;`) and then `#[apply(backends)]`.
+//   No `#[apply(helpers::backends)]` path and no `pub use` re-export are needed:
+//   a `#[template]` expands to a name-mangled `macro_rules!` brought into scope by
+//   the plain `use`, and `#[apply]` resolves it by bare name.
+// - Shape B below (`user_page_includes_rsd_autodiscovery_link`) confirms the
+//   backend×value matrix: `#[rstest]` + `#[values(Backend::Sqlite, Backend::Postgres)]
+//   backend` as the first param, then named `#[case]` rows. Attribute ordering:
+//   `#[rstest]` first, then the `#[case::name(..)]` rows, then `#[tokio::test]`.
+//   It generates rows × 2 cases (2 rows × 2 backends = 4).
+use helpers::backends;
 
 async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     ensure_server_fns_registered();
@@ -33,10 +53,11 @@ async fn body_string(response: axum::response::Response) -> String {
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 
+// Shape A — non-clustered behavior, backend-parametrized via cross-module apply.
+#[apply(backends)]
 #[tokio::test]
-async fn rsd_document_advertises_service_url() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn rsd_document_advertises_service_url(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     state
         .site_config
         .set_identity(&common::site::SiteIdentity {
@@ -79,10 +100,18 @@ async fn rsd_document_advertises_service_url() {
     assert!(body.contains("https://example.test/~alice"), "{body}");
 }
 
+// Shape B — backend×value matrix. Backend axis is `#[values]` (because
+// `#[apply]`'s injected `#[case]` can't coexist with value `#[case]` rows); the
+// value axis is named `#[case]`s. 2 rows × 2 backends = 4 cases.
+#[rstest]
+#[case::edituri_rel("rel=\"EditURI\"")]
+#[case::rsd_href("/~alice/rsd.xml")]
 #[tokio::test]
-async fn user_page_includes_rsd_autodiscovery_link() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn user_page_includes_rsd_autodiscovery_link(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] expected_fragment: &str,
+) {
+    let TestEnv { state, base } = backend.setup().await;
     state
         .users
         .create_user(
@@ -109,6 +138,5 @@ async fn user_page_includes_rsd_autodiscovery_link() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_string(response).await;
-    assert!(body.contains("rel=\"EditURI\""), "{body}");
-    assert!(body.contains("/~alice/rsd.xml"), "{body}");
+    assert!(body.contains(expected_fragment), "{body}");
 }

@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -22,7 +23,12 @@ use common::username::Username;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{ensure_server_fns_registered, test_options, test_state};
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
 use storage::CreatePostInput;
 use storage::PostFormat;
 
@@ -42,10 +48,12 @@ async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Rou
     )
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_type() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
+async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_type(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base } = backend.setup().await;
     let app = make_app(state.clone(), &base).await;
 
     // Create a user
@@ -129,10 +137,10 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
     assert!(!cached.body.is_empty(), "cached body should not be empty");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn handler_serves_site_tag_feed_with_200() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
+async fn handler_serves_site_tag_feed_with_200(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let app = make_app(state.clone(), &base).await;
 
     // A tagged, published post so the site-tag surface has content.
@@ -186,10 +194,10 @@ async fn handler_serves_site_tag_feed_with_200() {
     assert_eq!(content_type, "application/rss+xml; charset=utf-8");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn handler_cache_hit_serves_stored_body_without_regeneration() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
+async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let app = make_app(state.clone(), &base).await;
 
     // Pre-populate the cache with a known body
@@ -227,10 +235,10 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn handler_if_none_match_returns_304() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
+async fn handler_if_none_match_returns_304(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let app = make_app(state.clone(), &base).await;
 
     // Pre-populate the cache
@@ -263,10 +271,10 @@ async fn handler_if_none_match_returns_304() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn handler_if_modified_since_returns_304_when_unchanged() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
+async fn handler_if_modified_since_returns_304_when_unchanged(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let app = make_app(state.clone(), &base).await;
 
     // Pre-populate the cache with a known update time
@@ -302,40 +310,26 @@ async fn handler_if_modified_since_returns_304_when_unchanged() {
     );
 }
 
+// These surfaces must 404 when the request targets something the canonical
+// validators reject: an unknown extension, a tag with a leading hyphen, a
+// username with a dot, or a user-tag whose tag segment is invalid. The handler
+// must 404 rather than construct an invalid surface.
+#[rstest]
+#[case::unknown_extension("/~alice/feed.xml")]
+#[case::invalid_tag("/tags/-rust/feed.rss")]
+#[case::invalid_username("/~al.ice/feed.rss")]
+#[case::invalid_user_tag("/~alice/tags/-rust/feed.rss")]
 #[tokio::test]
-async fn handler_rejects_unknown_extension_with_404() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
+async fn handler_rejects_invalid_request_with_404(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] uri: &str,
+) {
+    let TestEnv { state, base } = backend.setup().await;
     let app = make_app(state, &base).await;
 
-    // Request with invalid extension
     let req = Request::builder()
         .method("GET")
-        .uri("/~alice/feed.xml")
-        .body(Body::empty())
-        .expect("build request");
-
-    let resp = app.oneshot(req).await.expect("request");
-
-    // Assert 404
-    assert_eq!(
-        resp.status(),
-        StatusCode::NOT_FOUND,
-        "should return 404 for unknown extension"
-    );
-}
-
-#[tokio::test]
-async fn handler_rejects_invalid_tag_with_404() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
-    let app = make_app(state, &base).await;
-
-    // A leading hyphen is rejected by the canonical Tag validator, so the
-    // site-tag handler must 404 rather than construct an invalid surface.
-    let req = Request::builder()
-        .method("GET")
-        .uri("/tags/-rust/feed.rss")
+        .uri(uri)
         .body(Body::empty())
         .expect("build request");
 
@@ -344,60 +338,14 @@ async fn handler_rejects_invalid_tag_with_404() {
     assert_eq!(
         resp.status(),
         StatusCode::NOT_FOUND,
-        "should return 404 for a tag the canonical validator rejects"
+        "should return 404 for a request the canonical validator rejects: {uri}"
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn handler_rejects_invalid_username_with_404() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
-    let app = make_app(state, &base).await;
-
-    // A dot is rejected by the canonical Username validator, so the user
-    // handler must 404 rather than construct an invalid surface.
-    let req = Request::builder()
-        .method("GET")
-        .uri("/~al.ice/feed.rss")
-        .body(Body::empty())
-        .expect("build request");
-
-    let resp = app.oneshot(req).await.expect("request");
-
-    assert_eq!(
-        resp.status(),
-        StatusCode::NOT_FOUND,
-        "should return 404 for a username the canonical validator rejects"
-    );
-}
-
-#[tokio::test]
-async fn handler_rejects_invalid_user_tag_with_404() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
-    let app = make_app(state, &base).await;
-
-    // The tag segment is rejected by the canonical Tag validator, so the
-    // user-tag handler must 404 rather than construct an invalid surface.
-    let req = Request::builder()
-        .method("GET")
-        .uri("/~alice/tags/-rust/feed.rss")
-        .body(Body::empty())
-        .expect("build request");
-
-    let resp = app.oneshot(req).await.expect("request");
-
-    assert_eq!(
-        resp.status(),
-        StatusCode::NOT_FOUND,
-        "should return 404 for a user-tag whose tag the validator rejects"
-    );
-}
-
-#[tokio::test]
-async fn handler_returns_correct_content_type_per_format() {
-    let base = TempDir::new().expect("temp dir");
-    let state = test_state(&base).await;
+async fn handler_returns_correct_content_type_per_format(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
 
     // Create a user with one post
     let username: Username = "eve".parse().expect("valid username");

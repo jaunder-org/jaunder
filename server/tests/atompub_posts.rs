@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -19,7 +20,14 @@ use base64::Engine as _;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{ensure_server_fns_registered, noop_mailer, test_options, test_state};
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use helpers::{
+    backends, ensure_server_fns_registered, noop_mailer, test_options, Backend, TestEnv,
+};
 
 async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     ensure_server_fns_registered();
@@ -40,10 +48,10 @@ async fn body_string(response: axum::response::Response) -> String {
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn collection_lists_user_posts() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn collection_lists_user_posts(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -133,10 +141,10 @@ async fn collection_lists_user_posts() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn member_returns_native_source_with_etag() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -199,10 +207,10 @@ async fn member_returns_native_source_with_etag() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn member_get_unknown_returns_404() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn member_get_unknown_returns_404(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -235,46 +243,10 @@ async fn member_get_unknown_returns_404() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn collection_forbids_other_user() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let alice_id = state
-        .users
-        .create_user(
-            &"alice".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(alice_id, "MarsEdit")
-        .await
-        .unwrap();
-
-    let app = make_app(state, &base).await;
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/atompub/bob/posts")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn delete_then_get_is_404() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn delete_then_get_is_404(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -340,10 +312,10 @@ async fn delete_then_get_is_404() {
     assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn collection_paging_emits_next_link() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn collection_paging_emits_next_link(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -427,32 +399,53 @@ async fn seed_alice(state: &Arc<storage::AppState>) -> (i64, String) {
     (user_id, token)
 }
 
+// Shape B — the cursor accept/reject pair. Both seed `alice`, issue a GET to the
+// collection with a cursor query string, and assert the resulting status. They
+// differ only in whether a post is seeded, the cursor query, and the expected
+// status.
+#[rstest]
+#[case::valid_cursor(
+    true,
+    "updated_before=2099-01-01T00:00:00Z&id_before=999999",
+    StatusCode::OK
+)]
+#[case::invalid_cursor(
+    false,
+    "updated_before=not-a-date&id_before=1",
+    StatusCode::BAD_REQUEST
+)]
 #[tokio::test]
-async fn collection_accepts_valid_cursor() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn collection_cursor_validation(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] seed_post: bool,
+    #[case] query: &str,
+    #[case] expected: StatusCode,
+) {
+    let TestEnv { state, base } = backend.setup().await;
     let (user_id, token) = seed_alice(&state).await;
-    storage::perform_post_creation(
-        state.posts.as_ref(),
-        storage::PostCreation {
-            user_id,
-            body: "Body".to_string(),
-            title: Some("Title"),
-            format: storage::PostFormat::Markdown,
-            slug_override: None,
-            published_at: Some(chrono::Utc::now()),
-            max_attempts: 100,
-            summary: None,
-        },
-    )
-    .await
-    .unwrap();
+    if seed_post {
+        storage::perform_post_creation(
+            state.posts.as_ref(),
+            storage::PostCreation {
+                user_id,
+                body: "Body".to_string(),
+                title: Some("Title"),
+                format: storage::PostFormat::Markdown,
+                slug_override: None,
+                published_at: Some(chrono::Utc::now()),
+                max_attempts: 100,
+                summary: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
     let app = make_app(state, &base).await;
 
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/atompub/alice/posts?updated_before=2099-01-01T00:00:00Z&id_before=999999")
+                .uri(format!("/atompub/alice/posts?{query}"))
                 .header(header::AUTHORIZATION, basic_header("alice", &token))
                 .body(Body::empty())
                 .unwrap(),
@@ -460,34 +453,13 @@ async fn collection_accepts_valid_cursor() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), expected);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn collection_rejects_invalid_cursor() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state, &base).await;
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/atompub/alice/posts?updated_before=not-a-date&id_before=1")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn collection_empty_returns_feed_without_entries() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn collection_empty_returns_feed_without_entries(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base).await;
 
@@ -508,28 +480,6 @@ async fn collection_empty_returns_feed_without_entries() {
     assert_eq!(body.matches("<entry").count(), 0);
 }
 
-#[tokio::test]
-async fn member_forbids_other_user() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state, &base).await;
-
-    // alice is authenticated but requests bob's member URL.
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/atompub/bob/posts/1")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}
-
 fn entry_xml(title: &str, content_type: &str, content: &str) -> String {
     format!(
         r#"<?xml version="1.0"?>
@@ -541,10 +491,77 @@ fn entry_xml(title: &str, content_type: &str, content: &str) -> String {
     )
 }
 
+/// Which cross-user request a `*_forbids_other_user` case issues. Each variant
+/// builds a request that `alice` (authenticated) directs at `bob`'s resource.
+enum ForbiddenRequest {
+    /// GET the collection: `/atompub/bob/posts`.
+    Collection,
+    /// GET a member: `/atompub/bob/posts/1`.
+    Member,
+    /// POST a new entry to the collection: `/atompub/bob/posts`.
+    Create,
+    /// PUT an entry: `/atompub/bob/posts/1`.
+    Update,
+}
+
+impl ForbiddenRequest {
+    fn build(&self, token: &str) -> Request<Body> {
+        let auth = basic_header("alice", token);
+        match self {
+            ForbiddenRequest::Collection => Request::builder()
+                .uri("/atompub/bob/posts")
+                .header(header::AUTHORIZATION, auth)
+                .body(Body::empty())
+                .unwrap(),
+            ForbiddenRequest::Member => Request::builder()
+                .uri("/atompub/bob/posts/1")
+                .header(header::AUTHORIZATION, auth)
+                .body(Body::empty())
+                .unwrap(),
+            ForbiddenRequest::Create => Request::builder()
+                .method("POST")
+                .uri("/atompub/bob/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, auth)
+                .body(Body::from(entry_xml("Hello", "text", "the body")))
+                .unwrap(),
+            ForbiddenRequest::Update => Request::builder()
+                .method("PUT")
+                .uri("/atompub/bob/posts/1")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, auth)
+                .body(Body::from(entry_xml("New", "text", "new body")))
+                .unwrap(),
+        }
+    }
+}
+
+// Shape B — the `*_forbids_other_user` cluster (collection/member/create/update).
+// Each seeds `alice`, then `alice` (authenticated) directs the corresponding
+// request at `bob`'s resource and must get FORBIDDEN.
+#[rstest]
+#[case::collection(ForbiddenRequest::Collection)]
+#[case::member(ForbiddenRequest::Member)]
+#[case::create(ForbiddenRequest::Create)]
+#[case::update(ForbiddenRequest::Update)]
 #[tokio::test]
-async fn create_post_returns_201_and_is_retrievable() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn forbids_other_user(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] request: ForbiddenRequest,
+) {
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base).await;
+
+    let response = app.oneshot(request.build(&token)).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let (user_id, token) = seed_alice(&state).await;
     // Set default format to Markdown so text entries round-trip properly
     storage::set_default_post_format(
@@ -608,10 +625,10 @@ async fn create_post_returns_201_and_is_retrievable() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_post_applies_categories() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_post_applies_categories(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let (_, token) = seed_alice(&state).await;
     let app = make_app(state, &base).await;
 
@@ -637,10 +654,10 @@ async fn create_post_applies_categories() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_html_entry_is_stored_as_html() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_html_entry_is_stored_as_html(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let (_, token) = seed_alice(&state).await;
     let app = make_app(state, &base).await;
 
@@ -666,10 +683,10 @@ async fn create_html_entry_is_stored_as_html() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_replaces_post_body() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_replaces_post_body(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let (user_id, token) = seed_alice(&state).await;
 
     // Create an initial post
@@ -713,10 +730,10 @@ async fn update_replaces_post_body() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_with_stale_if_match_returns_412() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let (user_id, token) = seed_alice(&state).await;
 
     let post = storage::perform_post_creation(
@@ -755,34 +772,10 @@ async fn update_with_stale_if_match_returns_412() {
     assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_forbids_other_user() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state, &base).await;
-
-    let xml = entry_xml("New", "text", "new body");
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("PUT")
-                .uri("/atompub/bob/posts/1")
-                .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
-                .body(Body::from(xml))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn create_rejects_malformed_entry() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_rejects_malformed_entry(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base).await;
 
@@ -802,10 +795,10 @@ async fn create_rejects_malformed_entry() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_removes_categories_not_in_new_entry() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let (user_id, token) = seed_alice(&state).await;
 
     // Create a post with a tag
@@ -855,34 +848,10 @@ async fn update_removes_categories_not_in_new_entry() {
     assert!(!body.contains("original-tag"));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_forbids_other_user() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state, &base).await;
-
-    let xml = entry_xml("Hello", "text", "the body");
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/atompub/bob/posts")
-                .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
-                .body(Body::from(xml))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn update_with_put_returns_200_and_etag() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_with_put_returns_200_and_etag(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let (user_id, token) = seed_alice(&state).await;
 
     let post = storage::perform_post_creation(
@@ -925,84 +894,80 @@ async fn update_with_put_returns_200_and_etag() {
     assert!(etag.is_some(), "PUT response should include ETag header");
 }
 
-#[tokio::test]
-async fn create_with_no_title_or_content_returns_400() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-    let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state, &base).await;
-
-    // Entry with neither title nor content - should fail with EmptyPost
-    let xml = r#"<?xml version="1.0"?>
+/// An empty Atom entry (neither title nor content), shared by the
+/// `*_with_no_title_or_content_returns_400` cases.
+const EMPTY_ENTRY_XML: &str = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
 </entry>"#;
 
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/atompub/alice/posts")
-                .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
-                .body(Body::from(xml))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+/// Whether the empty-entry submission is a create (POST to the collection) or an
+/// update (PUT to a pre-existing post).
+enum EmptyEntryOp {
+    Create,
+    Update,
 }
 
+// Shape B — the `*_with_no_title_or_content_returns_400` pair. Both submit an
+// entry with neither title nor content and must fail with BAD_REQUEST
+// (EmptyPost); create POSTs to the collection, update PUTs to a pre-existing
+// post.
+#[rstest]
+#[case::create(EmptyEntryOp::Create)]
+#[case::update(EmptyEntryOp::Update)]
 #[tokio::test]
-async fn update_with_no_title_or_content_returns_400() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn empty_entry_returns_400(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] op: EmptyEntryOp,
+) {
+    let TestEnv { state, base } = backend.setup().await;
     let (user_id, token) = seed_alice(&state).await;
 
-    // Create an initial post
-    let post = storage::perform_post_creation(
-        state.posts.as_ref(),
-        storage::PostCreation {
-            user_id,
-            body: "Original body".to_string(),
-            title: Some("Original"),
-            format: storage::PostFormat::Markdown,
-            slug_override: None,
-            published_at: Some(chrono::Utc::now()),
-            max_attempts: 100,
-            summary: None,
-        },
-    )
-    .await
-    .unwrap();
-
-    let app = make_app(state, &base).await;
-
-    // Try to update with neither title nor content - should fail with EmptyPost
-    let xml = r#"<?xml version="1.0"?>
-<entry xmlns="http://www.w3.org/2005/Atom">
-</entry>"#;
-
-    let response = app
-        .oneshot(
+    let request = match op {
+        EmptyEntryOp::Create => Request::builder()
+            .method("POST")
+            .uri("/atompub/alice/posts")
+            .header(header::CONTENT_TYPE, "application/atom+xml")
+            .header(header::AUTHORIZATION, basic_header("alice", &token))
+            .body(Body::from(EMPTY_ENTRY_XML))
+            .unwrap(),
+        EmptyEntryOp::Update => {
+            // Create an initial post to update.
+            let post = storage::perform_post_creation(
+                state.posts.as_ref(),
+                storage::PostCreation {
+                    user_id,
+                    body: "Original body".to_string(),
+                    title: Some("Original"),
+                    format: storage::PostFormat::Markdown,
+                    slug_override: None,
+                    published_at: Some(chrono::Utc::now()),
+                    max_attempts: 100,
+                    summary: None,
+                },
+            )
+            .await
+            .unwrap();
             Request::builder()
                 .method("PUT")
                 .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::CONTENT_TYPE, "application/atom+xml")
                 .header(header::AUTHORIZATION, basic_header("alice", &token))
-                .body(Body::from(xml))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+                .body(Body::from(EMPTY_ENTRY_XML))
+                .unwrap()
+        }
+    };
+
+    let app = make_app(state, &base).await;
+
+    let response = app.oneshot(request).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_draft_entry_is_unpublished() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base).await;
 
@@ -1051,10 +1016,10 @@ async fn create_draft_entry_is_unpublished() {
     assert!(body.contains("app:draft"), "draft marker missing: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_skips_invalid_category() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn create_skips_invalid_category(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base).await;
 
@@ -1087,10 +1052,10 @@ async fn create_skips_invalid_category() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_keeps_unchanged_category() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_keeps_unchanged_category(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base).await;
 
@@ -1141,10 +1106,10 @@ async fn update_keeps_unchanged_category() {
     assert!(body.contains("term=\"rust\""), "category dropped: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_with_matching_if_match_succeeds() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base).await;
 

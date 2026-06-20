@@ -6,11 +6,10 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
-// The `sqlite_only`/`postgres_only` `#[template]`s are part of the shared
-// fixture set but are not `#[apply]`ed until later conversion tasks. A
+// The `backends`/`postgres_only` templates are imported from `helpers`; a
 // `#[template]` expands to a name-mangled `macro_rules!`, so a per-item
-// `#[allow(unused_macros)]` can't reach it — this crate-level allow is the only
-// thing that suppresses the dead-template lint for them.
+// `#[allow(unused_macros)]` can't reach an unused one — this crate-level allow
+// suppresses the resulting dead-template lint.
 #![allow(unused_macros)]
 
 mod helpers;
@@ -41,7 +40,9 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use helpers::{sqlite_url, template_postgres_url, unique_postgres_url};
+use helpers::{
+    backends, postgres_only, sqlite_url, template_postgres_url, unique_postgres_url, Backend,
+};
 
 // The PostgreSQL parity tests below run against PostgreSQL when
 // `JAUNDER_PG_TEST_URL` is set; each acquires its own database (a template
@@ -62,64 +63,6 @@ async fn open_pool(base: &TempDir) -> SqlitePool {
         .unwrap();
     pool
 }
-
-async fn postgres_state() -> std::sync::Arc<storage::AppState> {
-    let url = template_postgres_url().await;
-    open_existing_database(&url).await.unwrap()
-}
-
-async fn sqlite_state() -> (TempDir, std::sync::Arc<storage::AppState>) {
-    let base = TempDir::new().unwrap();
-    let state = open_database(&sqlite_url(&base)).await.unwrap();
-    (base, state)
-}
-
-use storage::AppState;
-
-#[derive(Copy, Clone)]
-enum Backend {
-    Sqlite,
-    Postgres,
-}
-
-struct TestEnv {
-    state: std::sync::Arc<AppState>,
-    _guard: Option<TempDir>,
-}
-
-impl Backend {
-    async fn setup(self) -> TestEnv {
-        match self {
-            Backend::Sqlite => {
-                let (base, state) = sqlite_state().await;
-                TestEnv {
-                    state,
-                    _guard: Some(base),
-                }
-            }
-            Backend::Postgres => TestEnv {
-                state: postgres_state().await,
-                _guard: None,
-            },
-        }
-    }
-}
-
-#[template]
-#[rstest]
-#[case::sqlite(Backend::Sqlite)]
-fn sqlite_only(#[case] backend: Backend) {}
-
-#[template]
-#[rstest]
-#[case::postgres(Backend::Postgres)]
-fn postgres_only(#[case] backend: Backend) {}
-
-#[template]
-#[rstest]
-#[case::sqlite(Backend::Sqlite)]
-#[case::postgres(Backend::Postgres)]
-fn backends(#[case] backend: Backend) {}
 
 async fn user_storage(base: &TempDir) -> SqliteUserStorage {
     SqliteUserStorage::new(open_pool(base).await)
@@ -1373,34 +1316,9 @@ async fn post_slug_conflict_returns_slug_conflict(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    // Two drafts created on the same date with the same slug should conflict
+    // Two published posts with the same slug on the same date conflict on the
+    // unique index (user_id, date(COALESCE(published_at, created_at)), slug).
     let now = Utc::now();
-    let input1 = CreatePostInput {
-        user_id,
-        title: Some("First".to_string()),
-        slug: "duplicate-slug".parse().unwrap(),
-        body: "body".to_string(),
-        format: PostFormat::Markdown,
-        rendered_html: "<p>body</p>".to_string(),
-        published_at: None,
-        summary: None,
-    };
-    state.posts.create_post(&input1).await.unwrap();
-
-    let input2 = CreatePostInput {
-        published_at: Some(now),
-        summary: None,
-        ..input1.clone()
-    };
-    // The unique index is on (user_id, date(COALESCE(published_at, created_at)), slug).
-    // For same-day same-slug, this should fail for a published post paired with any other
-    // (since draft uses created_at and published uses published_at).
-    // The simplest reliable conflict: two drafts on the same day.
-    // SQLite's unique index covers (user_id, date(COALESCE(published_at, created_at)), slug)
-    // both use the same date (today), so the second insert should violate it.
-    let _ = input2; // May or may not conflict depending on date; test published conflict below.
-
-    // Test published conflict: publish two posts with same slug on same date
     let pub_input = CreatePostInput {
         user_id,
         title: Some("Published".to_string()),

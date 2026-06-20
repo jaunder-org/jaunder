@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -17,10 +18,14 @@ use axum::{
 };
 use chrono::Utc;
 use common::username::Username;
-use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{ensure_server_fns_registered, test_options, test_state};
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
 
 /// Sends a form-encoded POST request through a fresh router built from `state`.
 /// Returns (status, Set-Cookie header value, response body).
@@ -195,10 +200,10 @@ fn extract_token(body: &str) -> String {
 }
 
 // M2.9.8: `register` with Open policy creates user, sets cookie, returns non-empty token.
+#[apply(backends)]
 #[tokio::test]
-async fn register_open_creates_user_sets_cookie_returns_token() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn register_open_creates_user_sets_cookie_returns_token(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "open")
@@ -229,10 +234,10 @@ async fn register_open_creates_user_sets_cookie_returns_token() {
     assert!(user.is_some(), "user should exist after registration");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn register_duplicate_username_returns_error() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn register_duplicate_username_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "open")
@@ -263,10 +268,10 @@ async fn register_duplicate_username_returns_error() {
 }
 
 // M2.9.9: `register` with InviteOnly + valid code creates user, marks invite used, returns token.
+#[apply(backends)]
 #[tokio::test]
-async fn register_invite_only_valid_code_creates_user_marks_invite_used() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn register_invite_only_valid_code_creates_user_marks_invite_used(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "invite_only")
@@ -304,10 +309,10 @@ async fn register_invite_only_valid_code_creates_user_marks_invite_used() {
 }
 
 // M2.9.10: `register` with InviteOnly policy and missing code returns error.
+#[apply(backends)]
 #[tokio::test]
-async fn register_invite_only_missing_code_returns_error() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn register_invite_only_missing_code_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "invite_only")
@@ -337,10 +342,10 @@ async fn register_invite_only_missing_code_returns_error() {
 }
 
 // M2.9.15: `register` with InviteOnly policy and invalid code returns error.
+#[apply(backends)]
 #[tokio::test]
-async fn register_invite_only_invalid_code_returns_error() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn register_invite_only_invalid_code_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "invite_only")
@@ -360,10 +365,10 @@ async fn register_invite_only_invalid_code_returns_error() {
 }
 
 // M2.9.16: `register` with InviteOnly policy and expired code returns error.
+#[apply(backends)]
 #[tokio::test]
-async fn register_invite_only_expired_code_returns_error() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn register_invite_only_expired_code_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "invite_only")
@@ -387,10 +392,10 @@ async fn register_invite_only_expired_code_returns_error() {
 }
 
 // M2.9.11: `register` with Closed policy returns error.
+#[apply(backends)]
 #[tokio::test]
-async fn register_closed_policy_returns_error() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn register_closed_policy_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     // Default policy is Closed; no need to set it explicitly.
 
     let (status, _set_cookie, _body) = post_form(
@@ -416,10 +421,10 @@ async fn register_closed_policy_returns_error() {
 }
 
 // M2.9.12: `login` with correct password sets cookie and returns token.
+#[apply(backends)]
 #[tokio::test]
-async fn login_correct_password_sets_cookie_and_returns_token() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn login_correct_password_sets_cookie_and_returns_token(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "open")
@@ -451,10 +456,10 @@ async fn login_correct_password_sets_cookie_and_returns_token() {
     assert!(cookie.starts_with("session="), "cookie: {cookie}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn authenticated_home_page_shows_logged_in_indicator() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn authenticated_home_page_shows_logged_in_indicator(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "open")
@@ -479,10 +484,10 @@ async fn authenticated_home_page_shows_logged_in_indicator() {
     assert!(body.contains("alice"), "body: {body}");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn login_unknown_user_returns_error() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn login_unknown_user_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _, _) = post_form(
         Arc::clone(&state),
@@ -496,10 +501,10 @@ async fn login_unknown_user_returns_error() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn login_with_label_creates_session_with_label() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn login_with_label_creates_session_with_label(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "open")
@@ -531,10 +536,10 @@ async fn login_with_label_creates_session_with_label() {
     assert_eq!(record.label, "my-device");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn login_with_empty_label_creates_session_without_label() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn login_with_empty_label_creates_session_without_label(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "open")
@@ -567,10 +572,10 @@ async fn login_with_empty_label_creates_session_without_label() {
 }
 
 // M2.9.12: `login` with long User-Agent truncates to 200 chars.
+#[apply(backends)]
 #[tokio::test]
-async fn login_truncates_long_user_agent() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn login_truncates_long_user_agent(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "open")
@@ -608,10 +613,10 @@ async fn login_truncates_long_user_agent() {
 }
 
 // M2.9.13: `login` with wrong password returns error.
+#[apply(backends)]
 #[tokio::test]
-async fn login_wrong_password_returns_error() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn login_wrong_password_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "open")
@@ -639,10 +644,10 @@ async fn login_wrong_password_returns_error() {
 }
 
 // M2.9.14: `logout` revokes session and clears cookie.
+#[apply(backends)]
 #[tokio::test]
-async fn logout_revokes_session_and_clears_cookie() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn logout_revokes_session_and_clears_cookie(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     // Create a user and a session directly, bypassing the HTTP layer so we
     // have the raw token without needing to parse the register response.
     let user_id = state
@@ -694,10 +699,10 @@ async fn logout_revokes_session_and_clears_cookie() {
 }
 
 // register() with a username containing a space (invalid after lowercase parse) returns error.
+#[apply(backends)]
 #[tokio::test]
-async fn register_invalid_username_returns_error() {
-    let base = TempDir::new().expect("failed to create temp dir");
-    let state = test_state(&base).await;
+async fn register_invalid_username_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "open")
@@ -723,10 +728,10 @@ async fn register_invalid_username_returns_error() {
 }
 
 // register() with a password shorter than 8 characters returns error and creates no user.
+#[apply(backends)]
 #[tokio::test]
-async fn register_short_password_returns_error() {
-    let base = TempDir::new().expect("failed to create temp dir");
-    let state = test_state(&base).await;
+async fn register_short_password_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "open")
@@ -760,10 +765,10 @@ async fn register_short_password_returns_error() {
 }
 
 // login() with a username containing a space (invalid parse) returns error.
+#[apply(backends)]
 #[tokio::test]
-async fn login_invalid_username_returns_error() {
-    let base = TempDir::new().expect("failed to create temp dir");
-    let state = test_state(&base).await;
+async fn login_invalid_username_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _set_cookie, _body) = post_form(
         Arc::clone(&state),
@@ -782,10 +787,10 @@ async fn login_invalid_username_returns_error() {
 }
 
 // logout() via Authorization: Bearer <token> revokes the session and clears the cookie.
+#[apply(backends)]
 #[tokio::test]
-async fn logout_with_bearer_token_revokes_session() {
-    let base = TempDir::new().expect("failed to create temp dir");
-    let state = test_state(&base).await;
+async fn logout_with_bearer_token_revokes_session(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user and session directly so we have the raw token.
     let user_id = state
@@ -843,10 +848,10 @@ async fn logout_with_bearer_token_revokes_session() {
 }
 
 // Unauthenticated logout: no session cookie → skips revoke, still clears cookie.
+#[apply(backends)]
 #[tokio::test]
-async fn logout_without_session_still_clears_cookie() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn logout_without_session_still_clears_cookie(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, set_cookie, _body) =
         post_form(Arc::clone(&state), "/api/logout", "", None, true).await;
@@ -859,10 +864,10 @@ async fn logout_without_session_still_clears_cookie() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn debug_api_routes_exist() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn debug_api_routes_exist(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Send a request with no body to /api/register — if route exists we get
     // something other than 404 (probably a 400/422 for missing fields).
@@ -874,10 +879,10 @@ async fn debug_api_routes_exist() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_registration_policy_returns_correct_value() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn get_registration_policy_returns_correct_value(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "invite_only")
@@ -898,34 +903,22 @@ async fn get_registration_policy_returns_correct_value() {
     assert_eq!(body.trim(), "\"invite_only\"");
 }
 
+// Shape B — `get_profile()` requires `AuthUser`; both an invalid token and a
+// missing token must fail extraction with INTERNAL_SERVER_ERROR. Identical
+// setup + assertion; only the supplied cookie varies.
+#[rstest]
+#[case::invalid_token(Some("session=invalidtoken"))]
+#[case::missing(None)]
 #[tokio::test]
-async fn auth_user_extraction_fails_with_invalid_token() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn auth_user_extraction_fails(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] cookie: Option<&str>,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
-    // get_profile() requires AuthUser. If we provide an invalid token, it should fail.
-    let cookie_header = "session=invalidtoken";
-    let (status, _, _) = post_form(
-        Arc::clone(&state),
-        "/api/get_profile",
-        "",
-        Some(cookie_header),
-        true,
-    )
-    .await;
+    let (status, _, _) = post_form(Arc::clone(&state), "/api/get_profile", "", cookie, true).await;
 
     // Leptos server functions return 500 for ServerFnError.
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-}
-
-#[tokio::test]
-async fn auth_user_extraction_fails_when_missing() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
-
-    // get_profile() requires AuthUser. If we provide no token, it should fail.
-    let (status, _, _) = post_form(Arc::clone(&state), "/api/get_profile", "", None, true).await;
-
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
@@ -948,10 +941,10 @@ async fn auth_user_extraction_fails_without_session_storage_extension() {
     ));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn logout_clears_cookie_without_secure_attribute_when_disabled() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn logout_clears_cookie_without_secure_attribute_when_disabled(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -984,10 +977,10 @@ async fn logout_clears_cookie_without_secure_attribute_when_disabled() {
     assert!(!clear_cookie.contains("Secure"));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn current_user_returns_username_when_authenticated() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn current_user_returns_username_when_authenticated(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
         .create_user(
@@ -1018,10 +1011,10 @@ async fn current_user_returns_username_when_authenticated() {
     assert_eq!(body.trim(), "\"alice\"");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn current_user_returns_null_when_unauthenticated() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn current_user_returns_null_when_unauthenticated(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _, body) =
         post_form(Arc::clone(&state), "/api/current_user", "", None, true).await;
@@ -1030,10 +1023,10 @@ async fn current_user_returns_null_when_unauthenticated() {
     assert_eq!(body.trim(), "null");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn register_sets_cookie_without_secure_attribute_when_disabled() {
-    let base = TempDir::new().unwrap();
-    let state = test_state(&base).await;
+async fn register_sets_cookie_without_secure_attribute_when_disabled(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set("site.registration_policy", "open")

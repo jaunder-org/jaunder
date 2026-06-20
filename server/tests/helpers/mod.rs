@@ -7,8 +7,13 @@
     clippy::unused_async
 )]
 #![allow(dead_code)]
+// A `#[template]` expands to a name-mangled `macro_rules!`, so a per-item
+// `#[allow(unused_macros)]` can't reach it — this crate-level allow suppresses
+// the resulting dead-template lint in test binaries that import an unused
+// template.
+#![allow(unused_macros)]
 
-use common::mailer::{test_utils::CapturingMailSender, MailSender, NoopMailSender};
+use common::mailer::{MailSender, NoopMailSender};
 use leptos::prelude::LeptosOptions;
 use sqlx::Connection;
 use std::sync::{
@@ -16,19 +21,76 @@ use std::sync::{
     Arc, OnceLock,
 };
 use storage::{
-    open_database, open_existing_database, AppState, DbConnectOptions, PostgresAtomicOps,
-    PostgresEmailVerificationStorage, PostgresFeedCacheStorage, PostgresFeedEventStorage,
-    PostgresInviteStorage, PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
-    PostgresSessionStorage, PostgresSiteConfigStorage, PostgresUserConfigStorage,
-    PostgresUserStorage, SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
-    SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage,
-    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserConfigStorage,
-    SqliteUserStorage,
+    open_database, open_existing_database, AppState, DbConnectOptions, SqliteAtomicOps,
+    SqliteEmailVerificationStorage, SqliteFeedCacheStorage, SqliteFeedEventStorage,
+    SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage, SqlitePostStorage,
+    SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserConfigStorage, SqliteUserStorage,
 };
 use tempfile::TempDir;
 
+// `rstest::*` brings the `rstest` attribute the `#[template]` bodies use. It
+// reads as unused here because the templates expand to macros rather than
+// fixture functions, so the import needs an explicit allow.
+#[allow(unused_imports)]
+use rstest::*;
+// `#[template]`/`#[apply]` come from the `rstest_reuse` companion crate (rstest
+// itself only exports `rstest`/`fixture`). The bare `use rstest_reuse;` is
+// required because `rstest_reuse::template` expands to code that names the
+// `rstest_reuse` crate; `use rstest_reuse::*;` alone is not enough.
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
 mod websub_capturing;
+// Re-exported for `feed_worker.rs`; `helpers` is included into every test binary
+// and most don't use it, so the re-export reads as unused in those.
+#[allow(unused_imports)]
 pub use websub_capturing::CapturingWebSubClient;
+
+/// The storage backend a test runs against. Backend-parametrized tests take a
+/// `#[case] backend: Backend` and call [`Backend::setup`].
+#[derive(Copy, Clone)]
+pub enum Backend {
+    Sqlite,
+    Postgres,
+}
+
+/// A ready-to-use [`AppState`] plus the temp dir backing it. `base` doubles as
+/// the media-storage root HTTP tests need on both backends, and on `SQLite` it
+/// also holds the database file alive for the lifetime of the test.
+pub struct TestEnv {
+    pub state: Arc<AppState>,
+    pub base: TempDir,
+}
+
+impl Backend {
+    pub async fn setup(self) -> TestEnv {
+        let base = TempDir::new().unwrap();
+        let state = match self {
+            Backend::Sqlite => open_database(&sqlite_url(&base)).await.unwrap(),
+            Backend::Postgres => open_existing_database(&template_postgres_url().await)
+                .await
+                .unwrap(),
+        };
+        TestEnv { state, base }
+    }
+}
+
+#[template]
+#[rstest]
+#[case::sqlite(Backend::Sqlite)]
+fn sqlite_only(#[case] backend: Backend) {}
+
+#[template]
+#[rstest]
+#[case::postgres(Backend::Postgres)]
+fn postgres_only(#[case] backend: Backend) {}
+
+#[template]
+#[rstest]
+#[case::sqlite(Backend::Sqlite)]
+#[case::postgres(Backend::Postgres)]
+fn backends(#[case] backend: Backend) {}
 
 pub fn ensure_server_fns_registered() {
     static ONCE: OnceLock<()> = OnceLock::new();
@@ -289,67 +351,6 @@ pub async fn template_postgres_url() -> DbConnectOptions {
     postgres_url_with_db_name(&db_name).parse().unwrap()
 }
 
-pub async fn test_state(base: &TempDir) -> Arc<AppState> {
-    if postgres_testing_enabled() {
-        let url = template_postgres_url().await;
-        open_existing_database(&url).await.unwrap()
-    } else {
-        open_database(&sqlite_url(base)).await.unwrap()
-    }
-}
-
-pub async fn test_state_with_mailer(base: &TempDir) -> (Arc<AppState>, Arc<CapturingMailSender>) {
-    let mailer = Arc::new(CapturingMailSender::new());
-    let state = if postgres_testing_enabled() {
-        let DbConnectOptions::Postgres { options, .. } = template_postgres_url().await else {
-            panic!("expected postgres options");
-        };
-        let pool = sqlx::PgPool::connect_with(options).await.unwrap();
-        Arc::new(AppState {
-            site_config: Arc::new(PostgresSiteConfigStorage::new(pool.clone())),
-            users: Arc::new(PostgresUserStorage::new(pool.clone())),
-            sessions: Arc::new(PostgresSessionStorage::new(pool.clone())),
-            invites: Arc::new(PostgresInviteStorage::new(pool.clone())),
-            atomic: Arc::new(PostgresAtomicOps::new(pool.clone())),
-            email_verifications: Arc::new(PostgresEmailVerificationStorage::new(pool.clone())),
-            password_resets: Arc::new(PostgresPasswordResetStorage::new(pool.clone())),
-            posts: Arc::new(PostgresPostStorage::new(pool.clone())),
-            media: Arc::new(PostgresMediaStorage::new(pool.clone())),
-            user_config: Arc::new(PostgresUserConfigStorage::new(pool.clone())),
-            feed_cache: Arc::new(PostgresFeedCacheStorage::new(pool.clone())),
-            feed_events: Arc::new(PostgresFeedEventStorage::new(pool)),
-        })
-    } else {
-        let pool = sqlx::SqlitePool::connect_with(
-            format!("sqlite:{}", base.path().join("test.db").display())
-                .parse::<sqlx::sqlite::SqliteConnectOptions>()
-                .unwrap()
-                .create_if_missing(true),
-        )
-        .await
-        .unwrap();
-        sqlx::migrate!("../storage/migrations/sqlite")
-            .run(&pool)
-            .await
-            .unwrap();
-        Arc::new(AppState {
-            site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
-            users: Arc::new(SqliteUserStorage::new(pool.clone())),
-            sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
-            invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
-            atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
-            email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
-            password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
-            posts: Arc::new(SqlitePostStorage::new(pool.clone())),
-            media: Arc::new(SqliteMediaStorage::new(pool.clone())),
-            user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
-            feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
-            feed_events: Arc::new(SqliteFeedEventStorage::new(pool)),
-        })
-    };
-    (state, mailer)
-}
-
 /// Default mailer for tests that don't care about email sending. Use with
 /// [`create_router`] when you don't have a captured mailer to pass.
 pub fn noop_mailer() -> Arc<dyn MailSender> {
@@ -386,35 +387,4 @@ pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx
         feed_events: Arc::new(SqliteFeedEventStorage::new(pool.clone())),
     });
     (state, pool)
-}
-
-pub async fn test_state_with_websub(base: &TempDir) -> (Arc<AppState>, Arc<CapturingWebSubClient>) {
-    let capturing = Arc::new(CapturingWebSubClient::default());
-    let pool = sqlx::SqlitePool::connect_with(
-        format!("sqlite:{}", base.path().join("test.db").display())
-            .parse::<sqlx::sqlite::SqliteConnectOptions>()
-            .unwrap()
-            .create_if_missing(true),
-    )
-    .await
-    .unwrap();
-    sqlx::migrate!("../storage/migrations/sqlite")
-        .run(&pool)
-        .await
-        .unwrap();
-    let state = Arc::new(AppState {
-        site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
-        users: Arc::new(SqliteUserStorage::new(pool.clone())),
-        sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
-        invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
-        atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
-        email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
-        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
-        posts: Arc::new(SqlitePostStorage::new(pool.clone())),
-        media: Arc::new(SqliteMediaStorage::new(pool.clone())),
-        user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
-        feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
-        feed_events: Arc::new(SqliteFeedEventStorage::new(pool)),
-    });
-    (state, capturing)
 }
