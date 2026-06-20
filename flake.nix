@@ -944,48 +944,65 @@
                 '';
           };
 
-        devShells.default = pkgs.mkShell {
-          buildInputs = [
-            toolchain
-            pkgs.cachix
-            cargo-crap
-            pkgs.cargo-deny
-            pkgs.cargo-generate
-            pkgs.cargo-leptos
-            pkgs.cargo-llvm-cov
-            pkgs.cargo-mutants
-            pkgs.cargo-nextest
-            pkgs.dart-sass
-            pkgs.jq
-            pkgs.leptosfmt
-            pkgs.nodejs
-            pkgs.openssl
-            pkgs.pkg-config
-            pkgs.playwright-test
-            pkgs.postgresql_16
-            pkgs.prettier
-            serena.packages.${pkgs.stdenv.hostPlatform.system}.serena
-            pkgs.sqlx-cli
-            pkgs.sqlite
-            pkgs.typescript-language-server
-            pkgs.vscode-langservers-extracted
-            wasm-bindgen-cli
-          ]
-          ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-            pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
-          ];
-          RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
-          PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
-          shellHook = ''
-            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
+        devShells =
+          let
+            # Everything `cargo xtask validate` needs on the host (toolchain + the
+            # static-check tools) plus what the Nix checks pull anyway — so the CI
+            # shell shares those store paths rather than adding cost.
+            ciInputs = [
+              toolchain
+              pkgs.cachix
+              cargo-crap
+              pkgs.cargo-deny
+              pkgs.cargo-leptos
+              pkgs.cargo-llvm-cov
+              pkgs.cargo-nextest
+              pkgs.dart-sass
+              pkgs.jq
+              pkgs.leptosfmt
+              pkgs.nodejs
+              pkgs.openssl
+              pkgs.pkg-config
+              pkgs.playwright-test
+              pkgs.postgresql_16
+              pkgs.prettier
+              pkgs.sqlite
+              wasm-bindgen-cli
+            ]
+            ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+              pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
+            ];
+            # Interactive-only tools that `cargo xtask validate` never invokes and no
+            # Nix check pulls (serena + the language servers are the bulk). Kept out
+            # of `devShells.ci` so CI does not download/build them.
+            devOnly = [
+              serena.packages.${pkgs.stdenv.hostPlatform.system}.serena
+              pkgs.typescript-language-server
+              pkgs.vscode-langservers-extracted
+              pkgs.cargo-generate
+              pkgs.cargo-mutants
+              pkgs.sqlx-cli
+            ];
+            shellEnv = {
+              RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
+              PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+              PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+              shellHook = ''
+                export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
 
-            # Symlink Nix-provided Playwright into node_modules to avoid instance conflict
-            # and provide IDE support without redundant disk usage.
-            mkdir -p end2end/node_modules/@playwright
-            ln -sfn ${pkgs.playwright-test}/lib/node_modules/@playwright/test end2end/node_modules/@playwright/test
-          '';
-        };
+                # Symlink Nix-provided Playwright into node_modules to avoid instance conflict
+                # and provide IDE support without redundant disk usage.
+                mkdir -p end2end/node_modules/@playwright
+                ln -sfn ${pkgs.playwright-test}/lib/node_modules/@playwright/test end2end/node_modules/@playwright/test
+              '';
+            };
+          in
+          {
+            # Lean shell used by CI (`nix develop .#ci -c cargo xtask validate`).
+            ci = pkgs.mkShell (shellEnv // { buildInputs = ciInputs; });
+            # Full interactive shell for local development.
+            default = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ devOnly; });
+          };
       }
     );
 }

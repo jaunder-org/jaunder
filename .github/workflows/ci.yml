@@ -27,5 +27,22 @@ jobs:
           # a cached green checkmark (flaky-pass / impurity protection).
           pushFilter: "jaunder-coverage|jaunder-e2e"
 
+      # Cache cargo xtask's host build (its deps + xtask/target). xtask is
+      # host-only (never a Nix derivation), so cachix can't cover it; this
+      # restores the compiled deps between runs, keyed on xtask's lockfile plus
+      # the pinned Nix toolchain (flake.lock). The cargo build runs inside
+      # `nix develop`, so we key manually rather than via Swatinem/rust-cache
+      # (which would need rustc on the host PATH).
+      - name: Cache xtask host build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            xtask/target
+          key: xtask-${{ runner.os }}-${{ hashFiles('xtask/Cargo.lock', 'flake.lock') }}
+          restore-keys: |
+            xtask-${{ runner.os }}-
+
       - name: Validate (static + clippy + coverage + e2e, via xtask)
-        run: nix develop --accept-flake-config -c cargo xtask validate
+        run: nix develop .#ci --accept-flake-config -c cargo xtask validate
