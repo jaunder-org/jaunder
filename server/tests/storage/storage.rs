@@ -42,10 +42,11 @@ use crate::helpers::{
     backends, postgres_only, sqlite_url, template_postgres_url, unique_postgres_url, Backend,
 };
 
-// The PostgreSQL parity tests below run against PostgreSQL when
-// `JAUNDER_PG_TEST_URL` is set; each acquires its own database (a template
-// clone via `unique_postgres_url`/`template_postgres_url`, see helpers), so they
-// run safely under the default in-process parallelism. No `--test-threads=1` is
+// The Postgres-backed cases below (the `::postgres` expansion of each
+// `#[apply(backends)]` test) run against PostgreSQL when `JAUNDER_PG_TEST_URL`
+// is set; each acquires its own database (a template clone via
+// `unique_postgres_url`/`template_postgres_url`, see helpers), so they run
+// safely under the default in-process parallelism. No `--test-threads=1` is
 // needed (jaunder-qguq).
 
 async fn open_pool(base: &TempDir) -> SqlitePool {
