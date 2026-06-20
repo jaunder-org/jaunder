@@ -6,16 +6,25 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
+
+use std::sync::Arc;
 
 use chrono::Utc;
 use common::password::Password;
 use common::slug::Slug;
 use common::username::Username;
+use helpers::{backends, Backend, CapturingWebSubClient, TestEnv};
 use jaunder::feed::worker::FeedWorker;
 use storage::{CreatePostInput, PostFormat};
 use tempfile::TempDir;
+
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
 
 /// Builds a [`FeedWorker`] from a test `AppState`'s handles plus an injected
 /// `WebSub` client (the worker no longer reaches into a shared bundle).
@@ -32,10 +41,11 @@ fn make_worker(
     )
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub() {
-    let base = TempDir::new().expect("temp dir");
-    let (state, capture) = helpers::test_state_with_websub(&base).await;
+async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let capture = Arc::new(CapturingWebSubClient::default());
 
     // Create a user and a published post
     let username: Username = "alice".parse().expect("valid username");
@@ -91,10 +101,11 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub() {
     assert!(pending.is_empty(), "event should be done, not pending");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn worker_pings_hub_when_configured() {
-    let base = TempDir::new().expect("temp dir");
-    let (state, capture) = helpers::test_state_with_websub(&base).await;
+async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let capture = Arc::new(CapturingWebSubClient::default());
 
     // Create a user and a published post
     let username: Username = "alice".parse().expect("valid username");
@@ -151,10 +162,11 @@ async fn worker_pings_hub_when_configured() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn worker_groups_duplicate_events_into_single_regen() {
-    let base = TempDir::new().expect("temp dir");
-    let (state, capture) = helpers::test_state_with_websub(&base).await;
+async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let capture = Arc::new(CapturingWebSubClient::default());
 
     // Create a user and a published post
     let username: Username = "alice".parse().expect("valid username");
@@ -213,10 +225,11 @@ async fn worker_groups_duplicate_events_into_single_regen() {
     assert!(pings[0].feed_url.ends_with("/~alice/feed.rss"));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn worker_applies_backoff_on_regen_failure() {
-    let base = TempDir::new().expect("temp dir");
-    let (state, capture) = helpers::test_state_with_websub(&base).await;
+async fn worker_applies_backoff_on_regen_failure(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let capture = Arc::new(CapturingWebSubClient::default());
 
     // Enqueue an event whose feed_url cannot be parsed into a feed surface;
     // regenerate_feed returns BadUrl before any hub logic runs.
