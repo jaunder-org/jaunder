@@ -6,6 +6,7 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
+#![allow(unused_macros)]
 
 mod helpers;
 
@@ -15,12 +16,18 @@ use common::slug::Slug;
 use common::username::Username;
 use jaunder::feed::regenerate::regenerate_feed;
 use storage::{CreatePostInput, PostFormat};
-use tempfile::TempDir;
 
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use helpers::{backends, Backend, TestEnv};
+
+#[apply(backends)]
 #[tokio::test]
-async fn regenerate_writes_cache_row_for_user_feed() {
-    let base = TempDir::new().expect("temp dir");
-    let state = helpers::test_state(&base).await;
+async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user
     let username: Username = "alice".parse().expect("valid username");
@@ -97,10 +104,10 @@ async fn regenerate_writes_cache_row_for_user_feed() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn regenerate_writes_empty_feed_for_user_with_no_posts() {
-    let base = TempDir::new().expect("temp dir");
-    let state = helpers::test_state(&base).await;
+async fn regenerate_writes_empty_feed_for_user_with_no_posts(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user but no posts
     let username: Username = "bob".parse().expect("valid username");
@@ -137,10 +144,10 @@ async fn regenerate_writes_empty_feed_for_user_with_no_posts() {
     assert_eq!(cached.body, row.body, "cached body matches returned body");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn regenerate_writes_cache_rows_for_tag_surfaces() {
-    let base = TempDir::new().expect("temp dir");
-    let state = helpers::test_state(&base).await;
+async fn regenerate_writes_cache_rows_for_tag_surfaces(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user (posts are not required: the tag-window queries and the
     // SiteTag/UserTag canonical_url arms execute regardless of matches).
@@ -201,10 +208,10 @@ async fn regenerate_writes_cache_rows_for_tag_surfaces() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn regenerate_writes_each_format() {
-    let base = TempDir::new().expect("temp dir");
-    let state = helpers::test_state(&base).await;
+async fn regenerate_writes_each_format(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user with one post
     let username: Username = "charlie".parse().expect("valid username");
