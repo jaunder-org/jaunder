@@ -811,23 +811,16 @@
             }
           );
 
-          # Sub-group meta-packages: CI jobs build these so that adding a
-          # new e2e or postgres check only requires touching flake.nix.
+          # The e2e aggregate: a symlinkJoin of every `e2e-*` check, exposed as
+          # `checks.e2e` and built by `cargo xtask validate`. Adding a new e2e
+          # backend check automatically joins it here. Its `jaunder-e2e*` name
+          # keeps it out of the cachix push, so building it always realizes the
+          # underlying VM checks rather than substituting a cached aggregate.
           e2e-checks = pkgs.symlinkJoin {
             name = "jaunder-e2e-checks";
             paths = builtins.attrValues (
               pkgs.lib.filterAttrs (name: _: pkgs.lib.hasPrefix "e2e-" name) self.checks.${system}
             );
-          };
-
-          # Meta-package: all checks that require Nix (VM tests).
-          # scripts/verify builds this instead of `nix flake check` to avoid
-          # re-running format/clippy/nextest/deny that it already ran via Cargo.
-          nix-only-checks = pkgs.symlinkJoin {
-            name = "jaunder-nix-only-checks";
-            paths = [
-              self.packages.${system}.e2e-checks
-            ];
           };
         };
 
@@ -856,6 +849,16 @@
               checkName = "jaunder-e2e-postgres";
               warmupEnv = " JAUNDER_E2E_WARMUP=1";
             };
+
+            # The single e2e gate `cargo xtask validate` builds. The
+            # `e2e-checks` aggregate depends on both backend VM checks above;
+            # they are independent derivations, so the host realizes them in
+            # parallel up to its `max-jobs` (CI's install-nix-action sets
+            # `max-jobs = auto`; a plain dev box defaults to 1 and runs them
+            # serially). The aggregate's name stays under `jaunder-e2e*`, so the
+            # cachix pushFilter still excludes it — the VM runs are never
+            # substituted from a cached aggregate.
+            e2e = self.packages.${system}.e2e-checks;
           }
           // {
             clippy = craneLib.cargoClippy (

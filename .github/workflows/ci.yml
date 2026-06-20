@@ -12,6 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # install-nix-action's install-nix.sh writes `max-jobs = auto` into
+      # /etc/nix/nix.conf, so the runner builds independent derivations in
+      # parallel up to its core count — the e2e step (xtask runs both VM checks
+      # in one `nix build`) relies on that here. (xtask also passes --max-jobs
+      # explicitly so it parallelizes on a plain dev box, where nix's compiled
+      # default is max-jobs = 1.)
       - uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
