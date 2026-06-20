@@ -24,7 +24,8 @@ use storage::{
     open_database, open_existing_database, AppState, DbConnectOptions, SqliteAtomicOps,
     SqliteEmailVerificationStorage, SqliteFeedCacheStorage, SqliteFeedEventStorage,
     SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage, SqlitePostStorage,
-    SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserConfigStorage, SqliteUserStorage,
+    SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
+    SqliteUserConfigStorage, SqliteUserStorage,
 };
 use tempfile::TempDir;
 
@@ -404,6 +405,10 @@ pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx
         email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
         password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
         posts: Arc::new(SqlitePostStorage::new(pool.clone())),
+        subscriptions: Arc::new(SqliteSubscriptionStorage::new(
+            pool.clone(),
+            Arc::new(common::visibility::OpenSubscriptionPolicy),
+        )),
         media: Arc::new(SqliteMediaStorage::new(pool.clone())),
         user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
         feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),

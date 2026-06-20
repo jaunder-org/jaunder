@@ -16,16 +16,20 @@ use chrono::{Datelike, Utc};
 use common::password::Password;
 use common::tag::Tag;
 use common::username::Username;
-use common::visibility::{Channel, SubscriptionStatus, TargetKind};
+use common::visibility::{
+    Channel, SubscriptionPolicy, SubscriptionStatus, TargetKind, ViewerIdentity,
+};
 use sqlx::{PgPool, SqlitePool};
+use std::sync::Arc;
 use storage::{
     create_rendered_post, open_database, open_existing_database, update_rendered_post, AtomicOps,
     CreatePostError, CreatePostInput, CreateUserError, DbConnectOptions, EmailVerificationStorage,
     InviteStorage, ListByTagError, PasswordResetStorage, PostCursor, PostFormat, ProfileUpdate,
     RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteAtomicOps,
     SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
-    SqliteSessionStorage, SqliteUserStorage, TaggingError, UpdatePostError, UpdatePostInput,
-    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError, UserStorage,
+    SqliteSessionStorage, SqliteSubscriptionStorage, SqliteUserStorage, SubscriptionStorage,
+    TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserAuthError, UserStorage,
 };
 use tempfile::TempDir;
 
@@ -172,6 +176,140 @@ async fn sqlite_pool_enforces_foreign_keys(#[case] backend: Backend) {
         result.is_err(),
         "FK violation must be rejected when foreign_keys is ON"
     );
+}
+
+// Sibling of `lookup_names`: a raw SELECT of the seeded `local` channel id.
+// The `local` channel is a lookup row present in every clone, so reading it via
+// the per-test recorded URL (Postgres) or the same DB file (SQLite) both work;
+// we use the established same-DB helpers for consistency. The trait method
+// `local_channel_id()` is introduced in a later task — do not use it here.
+async fn local_channel_id(backend: Backend, env: &TestEnv) -> i64 {
+    let sql = "SELECT channel_id FROM channels WHERE name = 'local'";
+    match backend {
+        Backend::Sqlite => sqlx::query_scalar(sql)
+            .fetch_one(&open_pool(&env.base).await)
+            .await
+            .unwrap(),
+        Backend::Postgres => {
+            let pool = PgPool::connect(&recorded_postgres_url(&env.base))
+                .await
+                .unwrap();
+            sqlx::query_scalar(sql).fetch_one(&pool).await.unwrap()
+        }
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let author = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let bob = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let local = local_channel_id(backend, &env).await;
+    let id1 = state
+        .subscriptions
+        .subscribe(author, local, &bob.to_string())
+        .await
+        .unwrap();
+    let id2 = state
+        .subscriptions
+        .subscribe(author, local, &bob.to_string())
+        .await
+        .unwrap();
+    assert_eq!(id1, id2, "subscribe is idempotent");
+    assert!(state
+        .subscriptions
+        .is_subscriber(author, &ViewerIdentity::local(bob, local))
+        .await
+        .unwrap());
+    assert!(!state
+        .subscriptions
+        .is_subscriber(author, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap());
+    // Active subscriber appears in the listing.
+    let subs = state.subscriptions.list_subscribers(author).await.unwrap();
+    assert_eq!(subs.len(), 1);
+    assert_eq!(subs[0].subscription_id, id1);
+    assert_eq!(subs[0].channel_id, local);
+    assert_eq!(subs[0].subscriber_ref, bob.to_string());
+    assert_eq!(subs[0].status, SubscriptionStatus::Active);
+    // Unsubscribe round-trips: no longer a subscriber, listing empties.
+    state
+        .subscriptions
+        .unsubscribe(author, local, &bob.to_string())
+        .await
+        .unwrap();
+    assert!(!state
+        .subscriptions
+        .is_subscriber(author, &ViewerIdentity::local(bob, local))
+        .await
+        .unwrap());
+    assert!(state
+        .subscriptions
+        .list_subscribers(author)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+// Fail-closed admission: `is_subscriber` admits only `active` rows, so a
+// subscription a stricter policy left `pending` must NOT be admitted. The
+// default `state.subscriptions` uses `OpenSubscriptionPolicy` (always active),
+// so we construct the store directly with a stub policy returning `Pending`.
+// This is pure policy-dispatch + status resolution, so SQLite-only suffices.
+#[apply(sqlite_only)]
+#[tokio::test]
+async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let pool = open_pool(&env.base).await; // same DB file as env.state
+                                           // Only `active` is seeded this milestone (M13 adds `pending`). Seed the
+                                           // `pending` lookup row locally so `subscribe` can persist a pending row and
+                                           // we can prove `is_subscriber` still excludes it (the fail-closed property).
+    sqlx::query("INSERT INTO subscription_statuses (name) VALUES ('pending')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    struct StubPending;
+    impl SubscriptionPolicy for StubPending {
+        fn initial_status(&self, _a: i64, _c: i64, _r: &str) -> SubscriptionStatus {
+            SubscriptionStatus::Pending
+        }
+    }
+    let store = SqliteSubscriptionStorage::new(pool, Arc::new(StubPending));
+    let author = env
+        .state
+        .users
+        .create_user(&username("alice"), &password("pw1234567"), None, false)
+        .await
+        .unwrap();
+    let bob = env
+        .state
+        .users
+        .create_user(&username("bob"), &password("pw1234567"), None, false)
+        .await
+        .unwrap();
+    let local = local_channel_id(backend, &env).await;
+    store
+        .subscribe(author, local, &bob.to_string())
+        .await
+        .unwrap();
+    // Resolution admits only `active` → a pending subscriber is excluded.
+    assert!(!store
+        .is_subscriber(author, &ViewerIdentity::local(bob, local))
+        .await
+        .unwrap());
+    // ...and it is not listed (list_subscribers is active-only).
+    assert!(store.list_subscribers(author).await.unwrap().is_empty());
 }
 
 async fn user_storage(base: &TempDir) -> SqliteUserStorage {

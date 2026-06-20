@@ -20,6 +20,7 @@ mod sessions;
 mod site_config;
 mod smtp;
 mod sqlite;
+mod subscriptions;
 mod user_config;
 mod users;
 
@@ -44,7 +45,8 @@ pub use postgres::{
     PostgresAtomicOps, PostgresEmailVerificationStorage, PostgresFeedCacheStorage,
     PostgresFeedEventStorage, PostgresInviteStorage, PostgresMediaStorage,
     PostgresPasswordResetStorage, PostgresPostStorage, PostgresSessionStorage,
-    PostgresSiteConfigStorage, PostgresUserConfigStorage, PostgresUserStorage,
+    PostgresSiteConfigStorage, PostgresSubscriptionStorage, PostgresUserConfigStorage,
+    PostgresUserStorage,
 };
 pub use posts::*;
 pub use sessions::*;
@@ -53,8 +55,9 @@ pub use smtp::*;
 pub use sqlite::{
     SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
     SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage,
-    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserConfigStorage,
-    SqliteUserStorage,
+    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
+    SqliteUserConfigStorage, SqliteUserStorage,
 };
+pub use subscriptions::*;
 pub use user_config::*;
 pub use users::*;

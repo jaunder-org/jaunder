@@ -15,8 +15,8 @@ use common::mailer::MailSender;
 use leptos::prelude::provide_context;
 use storage::{
     AppState, AtomicOps, EmailVerificationStorage, FeedEventStorage, InviteStorage, MediaStorage,
-    PasswordResetStorage, PostStorage, SessionStorage, SiteConfigStorage, UserConfigStorage,
-    UserStorage,
+    PasswordResetStorage, PostStorage, SessionStorage, SiteConfigStorage, SubscriptionStorage,
+    UserConfigStorage, UserStorage,
 };
 
 /// Place every storage handle in `state` into the current Leptos context as
@@ -30,6 +30,7 @@ pub fn provide_app_state_contexts(state: &Arc<AppState>) {
     provide_context::<Arc<dyn EmailVerificationStorage>>(state.email_verifications.clone());
     provide_context::<Arc<dyn PasswordResetStorage>>(state.password_resets.clone());
     provide_context::<Arc<dyn PostStorage>>(state.posts.clone());
+    provide_context::<Arc<dyn SubscriptionStorage>>(state.subscriptions.clone());
     provide_context::<Arc<dyn MediaStorage>>(state.media.clone());
     provide_context::<Arc<dyn UserConfigStorage>>(state.user_config.clone());
     provide_context::<Arc<dyn SiteConfigStorage>>(state.site_config.clone());
