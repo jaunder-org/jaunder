@@ -2018,6 +2018,88 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
     );
 }
 
+// `get_post_audiences` reads a post's targeting back as a `Vec<AudienceTarget>`
+// (owner-only, no viewer). Round-trips create → read for each shape.
+#[apply(backends)]
+#[tokio::test]
+async fn get_post_audiences_round_trips(#[case] backend: Backend) {
+    use std::collections::HashSet;
+
+    let env = backend.setup().await;
+    let state = &env.state;
+    let author = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let aud = state
+        .audiences
+        .create_audience(author, "Friends")
+        .await
+        .unwrap();
+
+    // Public + Named(aud) → union read back (order-independent compare).
+    let input = CreatePostInput {
+        audiences: vec![AudienceTarget::Public, AudienceTarget::Named(aud)],
+        ..make_create_post_input(author, "round-trip")
+    };
+    let post_id = state.posts.create_post(&input).await.unwrap();
+    let read: HashSet<_> = state
+        .posts
+        .get_post_audiences(post_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+    assert_eq!(
+        read,
+        HashSet::from([AudienceTarget::Public, AudienceTarget::Named(aud)]),
+        "should read back the Public + Named union"
+    );
+
+    // Subscribers-only.
+    let update_subs = UpdatePostInput {
+        title: Some("Post round-trip".to_string()),
+        slug: "round-trip".parse().unwrap(),
+        body: "body text".to_string(),
+        format: PostFormat::Markdown,
+        rendered_html: "<p>body text</p>".to_string(),
+        publish: false,
+        summary: None,
+        audiences: vec![AudienceTarget::Subscribers],
+    };
+    state
+        .posts
+        .update_post(post_id, author, &update_subs)
+        .await
+        .unwrap();
+    assert_eq!(
+        state.posts.get_post_audiences(post_id).await.unwrap(),
+        vec![AudienceTarget::Subscribers],
+        "should read back Subscribers"
+    );
+
+    // Private / empty → no rows → empty vec.
+    let update_private = UpdatePostInput {
+        audiences: vec![AudienceTarget::Private],
+        ..update_subs.clone()
+    };
+    state
+        .posts
+        .update_post(post_id, author, &update_private)
+        .await
+        .unwrap();
+    assert!(
+        state
+            .posts
+            .get_post_audiences(post_id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "Private should read back as an empty vec"
+    );
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {

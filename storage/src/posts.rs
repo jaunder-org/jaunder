@@ -8,7 +8,7 @@ use thiserror::Error;
 use common::slug::Slug;
 use common::tag::Tag;
 use common::username::Username;
-use common::visibility::{AudienceTarget, ViewerIdentity};
+use common::visibility::{AudienceTarget, TargetKind, ViewerIdentity};
 
 use crate::backend::Backend;
 use crate::helpers::{post_record_from_row, PostRow};
@@ -420,6 +420,17 @@ pub trait PostStorage: Send + Sync {
         now: DateTime<Utc>,
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<Vec<PostRecord>>;
+
+    /// Reads a post's audience targeting as a [`Vec<AudienceTarget>`], for
+    /// pre-selecting the editor's audience picker.
+    ///
+    /// Owner-only: this performs no viewer resolution and is intended to be
+    /// called for a post the caller already owns. Maps each `post_audiences`
+    /// row back to its [`AudienceTarget`] (`public` → [`AudienceTarget::Public`],
+    /// `subscribers` → [`AudienceTarget::Subscribers`], `named` →
+    /// [`AudienceTarget::Named`]); a post with no rows yields an empty vec
+    /// (equivalent to [`AudienceTarget::Private`]). See ADR-0020.
+    async fn get_post_audiences(&self, post_id: i64) -> sqlx::Result<Vec<AudienceTarget>>;
 }
 
 /// Backend-specific divergence for [`PostStore`].
@@ -504,6 +515,7 @@ where
     (bool,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (i64, i64, String, String): for<'r> sqlx::FromRow<'r, DB::Row>,
     (i64, String): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (String, Option<i64>): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -585,6 +597,30 @@ where
         let query = sqlx::query_as::<_, PostRow>(&sql).bind(post_id);
         let row = binds.bind_onto(query).fetch_optional(&self.pool).await?;
         Ok(row.map(post_record_from_row).transpose()?)
+    }
+
+    #[tracing::instrument(
+        name = "storage.posts.get_audiences",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn get_post_audiences(&self, post_id: i64) -> sqlx::Result<Vec<AudienceTarget>> {
+        // Owner-only: no viewer resolution. `ORDER BY` makes the result
+        // deterministic so callers can compare vecs directly.
+        let rows: Vec<(String, Option<i64>)> = sqlx::query_as(
+            "SELECT tk.name, pa.audience_id \
+             FROM post_audiences pa \
+             JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id \
+             WHERE pa.post_id = $1 \
+             ORDER BY tk.name, pa.audience_id",
+        )
+        .bind(post_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(kind, audience_id)| audience_target_from_row(&kind, audience_id))
+            .collect())
     }
 
     #[tracing::instrument(
@@ -1325,6 +1361,23 @@ fn audience_target_row(target: &AudienceTarget) -> Option<(&'static str, Option<
     }
 }
 
+/// Maps a `post_audiences` row `(target_kind name, audience_id)` back to its
+/// [`AudienceTarget`] — the inverse of [`audience_target_row`], used by
+/// [`PostStorage::get_post_audiences`].
+///
+/// `public` → [`AudienceTarget::Public`], `subscribers` →
+/// [`AudienceTarget::Subscribers`], `named` (with an id) →
+/// [`AudienceTarget::Named`]. A `named` row missing its id, or any kind name
+/// the lookup table never holds, yields `None` (the row is dropped).
+fn audience_target_from_row(kind: &str, audience_id: Option<i64>) -> Option<AudienceTarget> {
+    match TargetKind::try_from(kind) {
+        Ok(TargetKind::Public) => Some(AudienceTarget::Public),
+        Ok(TargetKind::Subscribers) => Some(AudienceTarget::Subscribers),
+        Ok(TargetKind::Named) => audience_id.map(AudienceTarget::Named),
+        Err(()) => None,
+    }
+}
+
 /// Replaces a post's `post_audiences` rows to exactly match `audiences`.
 ///
 /// Deletes every existing row for `post_id`, then inserts one row per targeting
@@ -1523,6 +1576,26 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audience_target_from_row_maps_every_kind() {
+        // Each lookup-table kind maps to its target; `named` carries the id.
+        assert_eq!(
+            audience_target_from_row("public", None),
+            Some(AudienceTarget::Public)
+        );
+        assert_eq!(
+            audience_target_from_row("subscribers", None),
+            Some(AudienceTarget::Subscribers)
+        );
+        assert_eq!(
+            audience_target_from_row("named", Some(7)),
+            Some(AudienceTarget::Named(7))
+        );
+        // A `named` row missing its id, or an unknown kind name, is dropped.
+        assert_eq!(audience_target_from_row("named", None), None);
+        assert_eq!(audience_target_from_row("bogus", Some(1)), None);
+    }
 
     fn post_tag(slug: &str, display: &str) -> PostTag {
         PostTag {

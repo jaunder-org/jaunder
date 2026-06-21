@@ -53,7 +53,7 @@ impl ViewerIdentity {
 }
 
 /// What a post is addressed to, as chosen in the editor / API.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AudienceTarget {
     Public,
     Private,
