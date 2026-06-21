@@ -1,3 +1,4 @@
+use crate::subscriptions::{is_subscribed_to, SubscribeTo, UnsubscribeFrom};
 use crate::tags::TagSummary;
 use crate::{
     auth::current_user,
@@ -22,7 +23,6 @@ use leptos_router::hooks::use_params_map;
 
 #[allow(clippy::must_use_candidate)]
 #[component]
-#[must_use]
 pub fn CreatePostPage() -> impl IntoView {
     let current_user = Resource::new(|| (), |()| current_user());
     let last_result: RwSignal<Option<CreatePostResult>> = RwSignal::new(None);
@@ -107,7 +107,6 @@ pub fn CreatePostPage() -> impl IntoView {
 
 #[allow(clippy::must_use_candidate)]
 #[component]
-#[must_use]
 pub fn PostPage() -> impl IntoView {
     let params = use_params_map();
 
@@ -210,9 +209,77 @@ pub fn PostPage() -> impl IntoView {
 }
 
 #[allow(clippy::too_many_lines)]
+/// Subscribe / Unsubscribe control shown on a user's profile (timeline) page.
+///
+/// Hidden when the viewer is logged out or is viewing their own profile.
+/// Otherwise renders Subscribe when not subscribed and Unsubscribe when
+/// subscribed, querying state via `is_subscribed_to`.
 #[allow(clippy::must_use_candidate)]
 #[component]
-#[must_use]
+fn SubscribeButton(username: String) -> impl IntoView {
+    let subscribe = ServerAction::<SubscribeTo>::new();
+    let unsubscribe = ServerAction::<UnsubscribeFrom>::new();
+
+    // Re-query after either action mutates the subscription.
+    let username_for_state = username.clone();
+    let state = Resource::new(
+        move || (subscribe.version().get(), unsubscribe.version().get()),
+        move |_| {
+            let username = username_for_state.clone();
+            async move {
+                let viewer = current_user().await.ok().flatten();
+                let subscribed = is_subscribed_to(username.clone()).await.unwrap_or(false);
+                (viewer, subscribed)
+            }
+        },
+    );
+
+    let profile_username = username;
+
+    view! {
+        <Suspense fallback=|| ()>
+            {move || {
+                let username = profile_username.clone();
+                Suspend::new(async move {
+                    let (viewer, subscribed) = state.await;
+                    let show = match &viewer {
+                        Some(name) => *name != username,
+                        None => false,
+                    };
+                    if !show {
+                        return ().into_any();
+                    }
+                    if subscribed {
+                        let username = username.clone();
+                        // Hide when logged out or viewing one's own profile.
+                        view! {
+                            <ActionForm action=unsubscribe>
+                                <input type="hidden" name="author_username" value=username />
+                                <button type="submit" class="j-btn">
+                                    "Unsubscribe"
+                                </button>
+                            </ActionForm>
+                        }
+                            .into_any()
+                    } else {
+                        view! {
+                            <ActionForm action=subscribe>
+                                <input type="hidden" name="author_username" value=username />
+                                <button type="submit" class="j-btn is-primary">
+                                    "Subscribe"
+                                </button>
+                            </ActionForm>
+                        }
+                            .into_any()
+                    }
+                })
+            }}
+        </Suspense>
+    }
+}
+
+#[allow(clippy::must_use_candidate, clippy::too_many_lines)]
+#[component]
 pub fn UserTimelinePage() -> impl IntoView {
     let params = use_params_map();
     let username = Memo::new(move |_| {
@@ -332,6 +399,10 @@ pub fn UserTimelinePage() -> impl IntoView {
         <div class="j-scroll">
             <div class="j-page">
                 {move || {
+                    let username = username.get();
+                    (!username.is_empty()).then(|| view! { <SubscribeButton username=username /> })
+                }}
+                {move || {
                     if let Some(err) = read_error() {
                         return view! { <p class="error">{err}</p> }.into_any();
                     }
@@ -381,7 +452,6 @@ pub fn UserTimelinePage() -> impl IntoView {
 
 #[allow(clippy::must_use_candidate)]
 #[component]
-#[must_use]
 pub fn DraftPreviewPage() -> impl IntoView {
     let delete_action = ServerAction::<DeletePost>::new();
     let publish_action = ServerAction::<PublishPost>::new();
@@ -722,7 +792,6 @@ pub fn EditPostPage() -> impl IntoView {
 
 #[allow(clippy::must_use_candidate)]
 #[component]
-#[must_use]
 pub fn DraftsPage() -> impl IntoView {
     let publish_action = ServerAction::<PublishPost>::new();
     let delete_action = ServerAction::<DeletePost>::new();

@@ -1,3 +1,4 @@
+pub mod audiences;
 pub mod auth;
 pub mod backup;
 pub mod email;
@@ -24,6 +25,7 @@ pub use upload::{MediaPanel, MediaUploadButton};
 /// constant with a value from server configuration.
 pub const DEFAULT_THEME: &str = "studio";
 
+use crate::pages::audiences::AudiencesPage;
 use crate::pages::auth::{LoginPage, LogoutPage, RegisterPage};
 use crate::pages::backup::BackupSettingsPage;
 use crate::pages::email::{EmailPage, VerifyEmailPage};
@@ -130,6 +132,7 @@ pub fn App() -> impl IntoView {
                     <Route path=(StaticSegment("profile"), StaticSegment("email")) view=EmailPage />
                     <Route path=StaticSegment("profile") view=ProfilePage />
                     <Route path=StaticSegment("sessions") view=SessionsPage />
+                    <Route path=StaticSegment("audiences") view=AudiencesPage />
                     <Route path=StaticSegment("invites") view=InvitesPage />
                     <Route
                         path=(StaticSegment("admin"), StaticSegment("backups"))

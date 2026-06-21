@@ -8,6 +8,7 @@ macro_rules! boundary {
     };
 }
 
+pub mod audiences;
 pub mod auth;
 pub mod backup;
 pub mod email;
@@ -22,6 +23,7 @@ pub mod posts;
 pub mod profile;
 pub mod sessions;
 pub mod site;
+pub mod subscriptions;
 pub mod tags;
 pub mod viewer;
 

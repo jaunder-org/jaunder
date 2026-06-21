@@ -152,6 +152,17 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::site::GetSiteIdentity>();
         server_fn::axum::register_explicit::<web::site::UpdateSiteIdentity>();
         server_fn::axum::register_explicit::<web::tags::ListTags>();
+        server_fn::axum::register_explicit::<web::subscriptions::SubscribeTo>();
+        server_fn::axum::register_explicit::<web::subscriptions::UnsubscribeFrom>();
+        server_fn::axum::register_explicit::<web::subscriptions::IsSubscribedTo>();
+        server_fn::axum::register_explicit::<web::audiences::CreateAudience>();
+        server_fn::axum::register_explicit::<web::audiences::RenameAudience>();
+        server_fn::axum::register_explicit::<web::audiences::DeleteAudience>();
+        server_fn::axum::register_explicit::<web::audiences::ListMyAudiences>();
+        server_fn::axum::register_explicit::<web::audiences::ListMySubscribers>();
+        server_fn::axum::register_explicit::<web::audiences::AddSubscriberToAudience>();
+        server_fn::axum::register_explicit::<web::audiences::RemoveSubscriberFromAudience>();
+        server_fn::axum::register_explicit::<web::audiences::ListAudienceMembers>();
     });
 }
 

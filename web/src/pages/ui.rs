@@ -872,6 +872,13 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
         ("bookmarks", "Bookmarks", Icons::BOOKMARK, None, true),
         ("drafts", "Drafts", Icons::EDIT, Some("/drafts"), true),
         ("media", "Media", Icons::MEDIA, Some("/media"), true),
+        (
+            "audiences",
+            "Audiences",
+            Icons::BOOKMARK,
+            Some("/audiences"),
+            true,
+        ),
         ("settings", "Settings", Icons::COG, None, true),
     ];
 
