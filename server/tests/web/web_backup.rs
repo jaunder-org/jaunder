@@ -8,8 +8,6 @@
 )]
 #![allow(unused_macros)]
 
-mod helpers;
-
 use std::sync::Arc;
 
 use axum::{
@@ -29,9 +27,9 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use helpers::{backends, Backend, TestEnv};
+use crate::helpers::{backends, Backend, TestEnv};
 
-use helpers::{ensure_server_fns_registered, test_options};
+use crate::helpers::{ensure_server_fns_registered, test_options};
 
 async fn post_form(
     state: Arc<storage::AppState>,
@@ -53,9 +51,9 @@ async fn post_form(
     let app = jaunder::create_router(
         test_options(),
         state,
-        helpers::noop_mailer(),
+        crate::helpers::noop_mailer(),
         true,
-        helpers::tmp_storage_path(),
+        crate::helpers::tmp_storage_path(),
     );
     let response = app.oneshot(request).await.unwrap();
 
@@ -470,7 +468,7 @@ async fn backup_warning_visible_propagates_storage_error_during_auth() {
     // Covers the Err(non-Unauthorized) branch: close pool after session creation
     // so authenticate() returns an Internal error (not Unauthorized).
     let base = TempDir::new().unwrap();
-    let (state, pool) = helpers::test_sqlite_state_with_pool(&base).await;
+    let (state, pool) = crate::helpers::test_sqlite_state_with_pool(&base).await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
     pool.close().await;
@@ -491,7 +489,7 @@ async fn current_user_is_operator_propagates_storage_error_during_auth() {
     // Covers the Err(non-Unauthorized) branch: close pool after session creation
     // so authenticate() returns an Internal error (not Unauthorized).
     let base = TempDir::new().unwrap();
-    let (state, pool) = helpers::test_sqlite_state_with_pool(&base).await;
+    let (state, pool) = crate::helpers::test_sqlite_state_with_pool(&base).await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
     pool.close().await;
