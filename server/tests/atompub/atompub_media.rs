@@ -8,8 +8,6 @@
 )]
 #![allow(unused_macros)]
 
-mod helpers;
-
 use std::sync::Arc;
 
 use axum::{
@@ -25,9 +23,9 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use helpers::{backends, Backend, TestEnv};
+use crate::helpers::{backends, Backend, TestEnv};
 
-use helpers::{ensure_server_fns_registered, noop_mailer, test_options};
+use crate::helpers::{ensure_server_fns_registered, noop_mailer, test_options};
 
 const PNG: &[u8] = &[
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,

@@ -8,8 +8,6 @@
 )]
 #![allow(unused_macros)]
 
-mod helpers;
-
 use std::sync::Arc;
 
 use axum::{
@@ -24,13 +22,13 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use helpers::{ensure_server_fns_registered, noop_mailer, test_options, Backend, TestEnv};
+use crate::helpers::{ensure_server_fns_registered, noop_mailer, test_options, Backend, TestEnv};
 
 // SPIKE (jaunder Task 1):
 // - Shape A below (`rsd_document_advertises_service_url`) confirms cross-module
 //   `#[apply]` resolves a `#[template]` defined in the `helpers` module simply by
-//   importing it into scope (`use helpers::backends;`) and then `#[apply(backends)]`.
-//   No `#[apply(helpers::backends)]` path and no `pub use` re-export are needed:
+//   importing it into scope (`use crate::helpers::backends;`) and then `#[apply(backends)]`.
+//   No `#[apply(crate::helpers::backends)]` path and no `pub use` re-export are needed:
 //   a `#[template]` expands to a name-mangled `macro_rules!` brought into scope by
 //   the plain `use`, and `#[apply]` resolves it by bare name.
 // - Shape B below (`user_page_includes_rsd_autodiscovery_link`) confirms the
@@ -38,7 +36,7 @@ use helpers::{ensure_server_fns_registered, noop_mailer, test_options, Backend, 
 //   backend` as the first param, then named `#[case]` rows. Attribute ordering:
 //   `#[rstest]` first, then the `#[case::name(..)]` rows, then `#[tokio::test]`.
 //   It generates rows × 2 cases (2 rows × 2 backends = 4).
-use helpers::backends;
+use crate::helpers::backends;
 
 async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     ensure_server_fns_registered();
