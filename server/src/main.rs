@@ -5,6 +5,17 @@ use jaunder::cli::{Cli, Commands};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Fail-closed: a production binary must never link a `common` compiled with
+    // cheap test KDF params. Feature isolation (resolver 2, dev-deps only) keeps
+    // this false in production; if it is ever true, refuse to start rather than
+    // hash passwords weakly. main() is never run by the integration tests, so this
+    // does not affect the test build.
+    if common::CHEAP_KDF_ENABLED {
+        eprintln!(
+            "FATAL: jaunder built with cheap-kdf (test-only password hashing); refusing to start"
+        );
+        std::process::exit(1);
+    }
     let cli = Cli::parse();
     run(cli).await
 }
