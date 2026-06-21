@@ -8,6 +8,7 @@
 )]
 #![allow(unused_macros)]
 
+use common::visibility::AudienceTarget;
 use std::sync::Arc;
 
 use axum::{
@@ -76,6 +77,7 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
             rendered_html: "<p>Test body</p>".to_string(),
             published_at: Some(now),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post");
@@ -161,6 +163,7 @@ async fn handler_serves_site_tag_feed_with_200(#[case] backend: Backend) {
             rendered_html: "<p>Test body</p>".to_string(),
             published_at: Some(now),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post");
@@ -366,6 +369,7 @@ async fn handler_returns_correct_content_type_per_format(#[case] backend: Backen
             rendered_html: "<p>Test body</p>".to_string(),
             published_at: Some(now),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post");

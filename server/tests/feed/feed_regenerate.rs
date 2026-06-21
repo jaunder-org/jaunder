@@ -12,6 +12,7 @@ use chrono::Utc;
 use common::password::Password;
 use common::slug::Slug;
 use common::username::Username;
+use common::visibility::AudienceTarget;
 use jaunder::feed::regenerate::regenerate_feed;
 use storage::{CreatePostInput, PostFormat};
 
@@ -49,6 +50,7 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
             rendered_html: "<p>Post 1 body</p>".to_string(),
             published_at: Some(now),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post 1");
@@ -64,6 +66,7 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
             rendered_html: "<p>Post 2 body</p>".to_string(),
             published_at: Some(now),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post 2");
@@ -232,6 +235,7 @@ async fn regenerate_writes_each_format(#[case] backend: Backend) {
             rendered_html: "<p>Test body</p>".to_string(),
             published_at: Some(now),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post");

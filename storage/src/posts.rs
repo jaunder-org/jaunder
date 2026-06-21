@@ -8,6 +8,7 @@ use thiserror::Error;
 use common::slug::Slug;
 use common::tag::Tag;
 use common::username::Username;
+use common::visibility::AudienceTarget;
 
 use crate::backend::Backend;
 use crate::helpers::{post_record_from_row, PostRow};
@@ -164,6 +165,9 @@ pub struct CreatePostInput {
     pub published_at: Option<DateTime<Utc>>,
     /// Optional summary/excerpt of the post.
     pub summary: Option<String>,
+    /// Audience targeting for the post. Each entry becomes a `post_audiences`
+    /// row; `Private` and an empty vec produce no rows (the post is private).
+    pub audiences: Vec<AudienceTarget>,
 }
 
 /// Input for updating an existing post.
@@ -180,6 +184,10 @@ pub struct UpdatePostInput {
     pub publish: bool,
     /// Optional summary/excerpt of the post.
     pub summary: Option<String>,
+    /// Audience targeting for the post. On update the existing
+    /// `post_audiences` rows are replaced to match this vec; `Private` and an
+    /// empty vec produce no rows (the post is private).
+    pub audiences: Vec<AudienceTarget>,
 }
 
 /// A tag record returned by [`PostStorage`] tag queries.
@@ -422,6 +430,12 @@ pub trait PostDialect: Backend {
     /// `YYYY-MM-DD` string (`$3`), in this backend's date dialect.
     const PERMALINK_DATE_CLAUSE: &'static str;
 
+    /// Deletes every `post_audiences` row for a post. Bind order: `post_id`.
+    const DELETE_POST_AUDIENCES: &'static str;
+    /// Inserts one `post_audiences` row, resolving the target-kind name to its
+    /// `kind_id` via a subquery. Bind order: `post_id, audience_id, kind_name`.
+    const INSERT_POST_AUDIENCE: &'static str;
+
     /// Update a post and record a revision, returning the updated record.
     async fn update_post(
         pool: &Pool<Self>,
@@ -476,9 +490,11 @@ where
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<i64>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<DateTime<Utc>>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     #[tracing::instrument(
@@ -489,6 +505,8 @@ where
     async fn create_post(&self, input: &CreatePostInput) -> Result<i64, CreatePostError> {
         let now = Utc::now();
         let format = input.format.to_string();
+
+        let mut tx = self.pool.begin().await?;
 
         let result = sqlx::query_scalar::<_, i64>(
             "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
@@ -505,16 +523,25 @@ where
         .bind(now)
         .bind(input.published_at)
         .bind(input.summary.clone())
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await;
 
-        match result {
-            Ok(id) => Ok(id),
+        let post_id = match result {
+            Ok(id) => id,
             Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-                Err(CreatePostError::SlugConflict)
+                tx.rollback().await.ok();
+                return Err(CreatePostError::SlugConflict);
             }
-            Err(e) => Err(CreatePostError::Internal(e)),
-        }
+            Err(e) => {
+                tx.rollback().await.ok();
+                return Err(CreatePostError::Internal(e));
+            }
+        };
+
+        replace_post_audiences::<DB>(&mut tx, post_id, &input.audiences).await?;
+        tx.commit().await?;
+        // (`&mut tx` derefs to `&mut DB::Connection` for the helper.)
+        Ok(post_id)
     }
 
     #[tracing::instrument(
@@ -1108,6 +1135,54 @@ where
     }
 }
 
+/// Maps an [`AudienceTarget`] to its `post_audiences` row shape:
+/// `(target_kind name, audience_id)`. `Private` produces no row.
+fn audience_target_row(target: &AudienceTarget) -> Option<(&'static str, Option<i64>)> {
+    use common::visibility::TargetKind;
+    match target {
+        AudienceTarget::Public => Some((TargetKind::Public.as_str(), None)),
+        AudienceTarget::Subscribers => Some((TargetKind::Subscribers.as_str(), None)),
+        AudienceTarget::Named(id) => Some((TargetKind::Named.as_str(), Some(*id))),
+        AudienceTarget::Private => None,
+    }
+}
+
+/// Replaces a post's `post_audiences` rows to exactly match `audiences`.
+///
+/// Deletes every existing row for `post_id`, then inserts one row per targeting
+/// entry (`Public`/`Subscribers` carry a NULL `audience_id`; `Named(id)` carries
+/// the id; `Private` and an empty vec leave the post with no rows). Runs on the
+/// caller's executor so it shares the create/update transaction. See ADR-0020.
+pub(crate) async fn replace_post_audiences<DB>(
+    conn: &mut DB::Connection,
+    post_id: i64,
+    audiences: &[AudienceTarget],
+) -> sqlx::Result<()>
+where
+    DB: PostDialect,
+    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<i64>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    sqlx::query(DB::DELETE_POST_AUDIENCES)
+        .bind(post_id)
+        .execute(&mut *conn)
+        .await?;
+    for target in audiences {
+        if let Some((kind_name, audience_id)) = audience_target_row(target) {
+            sqlx::query(DB::INSERT_POST_AUDIENCE)
+                .bind(post_id)
+                .bind(audience_id)
+                .bind(kind_name)
+                .execute(&mut *conn)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
 /// Runs the hybrid-window query for `surface`, returning raw [`PostRow`]s.
 ///
 /// Shared across backends: the four `FeedSurface` variants differ only in the
@@ -1425,6 +1500,7 @@ mod tests {
             rendered_html: "<p>Test body</p>".into(),
             published_at: None,
             summary: Some("the summary".into()),
+            audiences: vec![AudienceTarget::Public],
         };
 
         let post_id = posts.create_post(&input).await.unwrap();

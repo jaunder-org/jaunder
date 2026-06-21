@@ -13,6 +13,7 @@ use crate::{
 };
 use common::render::{derive_post_metadata, render};
 use common::slug::{slugify_title, InvalidSlug, Slug};
+use common::visibility::AudienceTarget;
 
 // ---------------------------------------------------------------------------
 // Orchestration helpers
@@ -44,6 +45,9 @@ pub async fn create_rendered_post(
         rendered_html,
         published_at,
         summary,
+        // Layer A: every post is Public until the audience picker (later task)
+        // chooses otherwise. An empty vec would mean Private (hidden).
+        audiences: vec![AudienceTarget::Public],
     };
     storage.create_post(&input).await
 }
@@ -74,6 +78,9 @@ pub async fn update_rendered_post(
         rendered_html,
         publish,
         summary,
+        // Layer A: every post is Public until the audience picker (later task)
+        // chooses otherwise. An empty vec would mean Private (hidden).
+        audiences: vec![AudienceTarget::Public],
     };
     storage.update_post(post_id, editor_user_id, &input).await
 }
@@ -178,6 +185,9 @@ pub async fn perform_post_update(
         rendered_html,
         publish,
         summary,
+        // Layer A: every post is Public until the audience picker (later task)
+        // chooses otherwise. An empty vec would mean Private (hidden).
+        audiences: vec![AudienceTarget::Public],
     };
     storage
         .update_post(post_id, editor_user_id, &input)

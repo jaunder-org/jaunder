@@ -7,6 +7,7 @@
     clippy::unused_async
 )]
 
+use common::visibility::AudienceTarget;
 use std::net::SocketAddr;
 
 use axum::{
@@ -74,6 +75,7 @@ async fn populate_backup_fixture(args: &StorageArgs) -> i64 {
             rendered_html: "<p>body text</p>".to_owned(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post");

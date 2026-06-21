@@ -17,7 +17,7 @@ use common::password::Password;
 use common::tag::Tag;
 use common::username::Username;
 use common::visibility::{
-    Channel, SubscriptionPolicy, SubscriptionStatus, TargetKind, ViewerIdentity,
+    AudienceTarget, Channel, SubscriptionPolicy, SubscriptionStatus, TargetKind, ViewerIdentity,
 };
 use sqlx::{PgPool, SqlitePool};
 use std::sync::Arc;
@@ -197,6 +197,19 @@ async fn local_channel_id(backend: Backend, env: &TestEnv) -> i64 {
             sqlx::query_scalar(sql).fetch_one(&pool).await.unwrap()
         }
     }
+}
+
+// The production `SubscriptionStorage::local_channel_id()` accessor must return
+// the same id as the seeded `'local'` channel row (read here via the raw test
+// helper of the same name).
+#[apply(backends)]
+#[tokio::test]
+async fn local_channel_id_returns_seeded_local(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let expected = local_channel_id(backend, &env).await;
+    let actual = state.subscriptions.local_channel_id().await.unwrap();
+    assert_eq!(actual, expected);
 }
 
 #[apply(backends)]
@@ -1746,6 +1759,7 @@ fn make_create_post_input(user_id: i64, slug: &str) -> CreatePostInput {
         rendered_html: "<p>body text</p>".to_string(),
         published_at: None,
         summary: None,
+        audiences: vec![AudienceTarget::Public],
     }
 }
 
@@ -1806,6 +1820,7 @@ async fn post_slug_conflict_returns_slug_conflict(#[case] backend: Backend) {
         rendered_html: "<p>body</p>".to_string(),
         published_at: Some(now),
         summary: None,
+        audiences: vec![AudienceTarget::Public],
     };
     state.posts.create_post(&pub_input.clone()).await.unwrap();
 
@@ -1841,6 +1856,7 @@ async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend
         rendered_html: "<p>updated body</p>".to_string(),
         publish: false,
         summary: None,
+        audiences: vec![AudienceTarget::Public],
     };
     let record = state
         .posts
@@ -1866,6 +1882,7 @@ async fn post_update_not_found_returns_error(#[case] backend: Backend) {
         rendered_html: "<p>body</p>".to_string(),
         publish: false,
         summary: None,
+        audiences: vec![AudienceTarget::Public],
     };
     let err = state
         .posts
@@ -1875,6 +1892,124 @@ async fn post_update_not_found_returns_error(#[case] backend: Backend) {
     assert!(
         matches!(err, UpdatePostError::NotFound),
         "expected NotFound, got {err:?}"
+    );
+}
+
+// Raw read of a post's `post_audiences` rows as `(target_kind name, audience_id)`,
+// ordered by kind name. Used by the audience-targeting persistence test.
+async fn post_audience_rows(
+    backend: Backend,
+    env: &TestEnv,
+    post_id: i64,
+) -> Vec<(String, Option<i64>)> {
+    let sql = "SELECT tk.name, pa.audience_id \
+               FROM post_audiences pa \
+               JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id \
+               WHERE pa.post_id = $1 \
+               ORDER BY tk.name, pa.audience_id";
+    match backend {
+        Backend::Sqlite => sqlx::query_as(&sql.replace("$1", "?"))
+            .bind(post_id)
+            .fetch_all(&open_pool(&env.base).await)
+            .await
+            .unwrap(),
+        Backend::Postgres => {
+            let pool = PgPool::connect(&recorded_postgres_url(&env.base))
+                .await
+                .unwrap();
+            sqlx::query_as(sql)
+                .bind(post_id)
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+        }
+    }
+}
+
+// Create persists `post_audiences` rows matching the input vec; update replaces
+// them (delete-all-then-insert). `Private`/empty → no rows. See ADR-0020.
+#[apply(backends)]
+#[tokio::test]
+async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let author = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let aud = state
+        .audiences
+        .create_audience(author, "Friends")
+        .await
+        .unwrap();
+
+    // Create targeting [Public, Named(aud)] → two rows.
+    let input = CreatePostInput {
+        audiences: vec![AudienceTarget::Public, AudienceTarget::Named(aud)],
+        ..make_create_post_input(author, "audience-post")
+    };
+    let post_id = state.posts.create_post(&input).await.unwrap();
+    let rows = post_audience_rows(backend, &env, post_id).await;
+    assert_eq!(
+        rows,
+        vec![
+            ("named".to_string(), Some(aud)),
+            ("public".to_string(), None),
+        ],
+        "create should persist one public and one named row"
+    );
+
+    // Update to [Private] → zero rows.
+    let update_private = UpdatePostInput {
+        title: Some("Post audience-post".to_string()),
+        slug: "audience-post".parse().unwrap(),
+        body: "body text".to_string(),
+        format: PostFormat::Markdown,
+        rendered_html: "<p>body text</p>".to_string(),
+        publish: false,
+        summary: None,
+        audiences: vec![AudienceTarget::Private],
+    };
+    state
+        .posts
+        .update_post(post_id, author, &update_private)
+        .await
+        .unwrap();
+    assert!(
+        post_audience_rows(backend, &env, post_id).await.is_empty(),
+        "[Private] should leave no rows"
+    );
+
+    // Update to [] (empty) → also zero rows (equivalent to private).
+    let update_empty = UpdatePostInput {
+        audiences: vec![],
+        ..update_private.clone()
+    };
+    state
+        .posts
+        .update_post(post_id, author, &update_empty)
+        .await
+        .unwrap();
+    assert!(
+        post_audience_rows(backend, &env, post_id).await.is_empty(),
+        "an empty audience vec should leave no rows"
+    );
+
+    // Update to [Subscribers] → one subscribers row.
+    let update_subs = UpdatePostInput {
+        audiences: vec![AudienceTarget::Subscribers],
+        ..update_private.clone()
+    };
+    state
+        .posts
+        .update_post(post_id, author, &update_subs)
+        .await
+        .unwrap();
+    assert_eq!(
+        post_audience_rows(backend, &env, post_id).await,
+        vec![("subscribers".to_string(), None)],
+        "update to [Subscribers] should leave exactly one subscribers row"
     );
 }
 
@@ -2264,6 +2399,7 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
             rendered_html: "<p>Content with many tags</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2327,6 +2463,7 @@ async fn empty_tag_list(#[case] backend: Backend) {
             rendered_html: "<p>Untagged post</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2369,6 +2506,7 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2384,6 +2522,7 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2456,6 +2595,7 @@ async fn invalid_tag_input(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2505,6 +2645,7 @@ async fn tag_list_pagination(#[case] backend: Backend) {
                 rendered_html: format!("<p>Content {i}</p>"),
                 published_at: Some(Utc::now()),
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");
@@ -2570,6 +2711,7 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2585,6 +2727,7 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2650,6 +2793,7 @@ async fn selective_untag(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2728,6 +2872,7 @@ async fn numeric_tag(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2791,6 +2936,7 @@ async fn retag_same_post_with_same_tag_fails(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2910,6 +3056,7 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
                 rendered_html: format!("<p>Content {i}</p>"),
                 published_at: Some(Utc::now()),
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");
@@ -2974,6 +3121,7 @@ async fn tag_all_numeric(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3030,6 +3178,7 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3097,6 +3246,7 @@ async fn tag_with_long_display(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3148,6 +3298,7 @@ async fn tag_list_ordering(#[case] backend: Backend) {
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3163,6 +3314,7 @@ async fn tag_list_ordering(#[case] backend: Backend) {
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3241,6 +3393,7 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
             rendered_html: "<p>Content A</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3256,6 +3409,7 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
             rendered_html: "<p>Content B</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3313,6 +3467,7 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3375,6 +3530,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3456,6 +3612,7 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3502,6 +3659,7 @@ async fn tag_normalization(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3553,6 +3711,7 @@ async fn untag_post(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3617,6 +3776,7 @@ async fn duplicate_tag_error(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3673,6 +3833,7 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3688,6 +3849,7 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3757,6 +3919,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3772,6 +3935,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3787,6 +3951,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
             rendered_html: "<p>Content 3</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3865,6 +4030,7 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3880,6 +4046,7 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3958,6 +4125,7 @@ async fn untag_nonexistent_tag_error(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4001,6 +4169,7 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
             rendered_html: "<p>Draft</p>".to_string(),
             published_at: None, // Draft,
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4016,6 +4185,7 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
             rendered_html: "<p>Published</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4069,6 +4239,7 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: None,
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4085,6 +4256,7 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: None,
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4103,6 +4275,7 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
                 rendered_html: "<p>Updated</p>".to_string(),
                 publish: false,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await;
@@ -4147,6 +4320,7 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
                 rendered_html: "<p>Content</p>".to_string(),
                 published_at: Some(now),
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");
@@ -4215,6 +4389,7 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
                 rendered_html: "<p>Content</p>".to_string(),
                 published_at: None,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");
@@ -4283,6 +4458,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
                 rendered_html: "<p>Content</p>".to_string(),
                 published_at: Some(now),
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");
@@ -4359,6 +4535,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
                 rendered_html: "<p>Content</p>".to_string(),
                 published_at: Some(now),
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");
@@ -4431,6 +4608,7 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4497,6 +4675,7 @@ async fn tag_post_multiple_attempts(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4601,6 +4780,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(created_at),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4669,6 +4849,7 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: None,
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4694,6 +4875,7 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
                 rendered_html: "<p>New</p>".to_string(),
                 publish: true,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await;
@@ -4736,6 +4918,7 @@ async fn tag_edge_case_formats(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4821,6 +5004,7 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
                 rendered_html: "<p>Content</p>".to_string(),
                 published_at: Some(now),
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");
@@ -4879,6 +5063,7 @@ async fn post_revisions_created(#[case] backend: Backend) {
             rendered_html: "<p>Original</p>".to_string(),
             published_at: None,
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4897,6 +5082,7 @@ async fn post_revisions_created(#[case] backend: Backend) {
                 rendered_html: "<p>Updated</p>".to_string(),
                 publish: true,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await
@@ -4936,6 +5122,7 @@ async fn tag_display_preservation(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4988,6 +5175,7 @@ async fn untag_preserves_other_tags(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -5910,6 +6098,7 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
             rendered_html: "<p>body</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -5979,6 +6168,7 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
                 rendered_html: format!("<p>body {n}</p>"),
                 published_at: Some(Utc::now()),
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");

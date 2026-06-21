@@ -61,6 +61,13 @@ pub trait SubscriptionStorage: Send + Sync {
 
     /// Lists the author's `active` subscribers.
     async fn list_subscribers(&self, author_user_id: i64) -> sqlx::Result<Vec<SubscriptionRecord>>;
+
+    /// Returns the `channel_id` of the seeded `local` channel.
+    ///
+    /// This is the production lookup the web `viewer_identity()` extractor and
+    /// `subscribe_to` use to build a [`ViewerIdentity::local`]. The web layer
+    /// memoizes the result once per process rather than querying per request.
+    async fn local_channel_id(&self) -> sqlx::Result<i64>;
 }
 
 /// Per-backend SQL for [`SubscriptionStore`]. The statements differ only in the
@@ -82,6 +89,8 @@ pub trait SubscriptionDialect: Database {
     const IS_ACTIVE_SUBSCRIBER: &'static str;
     /// Lists the author's `active` subscriptions. Bind order: `author_user_id`.
     const LIST_ACTIVE_SUBSCRIBERS: &'static str;
+    /// Selects the `channel_id` of the seeded `local` channel. No binds.
+    const SELECT_LOCAL_CHANNEL_ID: &'static str;
 }
 
 /// Generic [`SubscriptionStorage`] backed by any database implementing
@@ -194,5 +203,12 @@ where
                 },
             )
             .collect())
+    }
+
+    async fn local_channel_id(&self) -> sqlx::Result<i64> {
+        sqlx::query_as::<_, (i64,)>(DB::SELECT_LOCAL_CHANNEL_ID)
+            .fetch_one(&self.pool)
+            .await
+            .map(|(id,)| id)
     }
 }

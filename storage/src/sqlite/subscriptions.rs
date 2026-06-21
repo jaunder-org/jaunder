@@ -29,4 +29,7 @@ impl SubscriptionDialect for Sqlite {
          JOIN subscription_statuses st ON st.status_id = s.status_id \
          WHERE s.author_user_id = ? AND st.name = 'active' \
          ORDER BY s.subscription_id";
+
+    const SELECT_LOCAL_CHANNEL_ID: &'static str =
+        "SELECT channel_id FROM channels WHERE name = 'local'";
 }

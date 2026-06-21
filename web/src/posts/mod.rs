@@ -415,6 +415,8 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
                     rendered_html: existing.rendered_html,
                     summary: existing.summary,
                     publish: true,
+                    // Layer A: publishing an existing post keeps it Public.
+                    audiences: vec![common::visibility::AudienceTarget::Public],
                 },
             )
             .await

@@ -32,4 +32,7 @@ impl SubscriptionDialect for Postgres {
          JOIN subscription_statuses st ON st.status_id = s.status_id \
          WHERE s.author_user_id = $1 AND st.name = 'active' \
          ORDER BY s.subscription_id";
+
+    const SELECT_LOCAL_CHANNEL_ID: &'static str =
+        "SELECT channel_id FROM channels WHERE name = 'local'";
 }

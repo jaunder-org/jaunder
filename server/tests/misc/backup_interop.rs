@@ -10,6 +10,7 @@
 use chrono::Utc;
 use common::password::Password;
 use common::username::Username;
+use common::visibility::AudienceTarget;
 use jaunder::cli::StorageArgs;
 use jaunder::commands::{cmd_backup, cmd_init, cmd_restore};
 use storage::{open_existing_database, BackupMode, CreatePostInput, PostFormat};
@@ -58,6 +59,7 @@ async fn populate_backup_fixture(args: &StorageArgs) -> i64 {
             rendered_html: "<p>body text</p>".to_owned(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post");

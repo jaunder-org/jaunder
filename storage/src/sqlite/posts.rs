@@ -15,6 +15,13 @@ impl PostDialect for Sqlite {
 
     const PERMALINK_DATE_CLAUSE: &'static str = "date(p.published_at) = $3";
 
+    const DELETE_POST_AUDIENCES: &'static str = "DELETE FROM post_audiences WHERE post_id = ?";
+
+    // Bind order: post_id, audience_id, kind_name (matches `replace_post_audiences`).
+    const INSERT_POST_AUDIENCE: &'static str = "INSERT INTO post_audiences \
+         (post_id, audience_id, target_kind_id) \
+         VALUES (?, ?, (SELECT kind_id FROM target_kinds WHERE name = ?))";
+
     async fn update_post(
         pool: &Pool<Sqlite>,
         post_id: i64,
@@ -80,6 +87,8 @@ impl PostDialect for Sqlite {
         .bind(post_id)
         .fetch_one(&mut *tx)
         .await?;
+
+        crate::posts::replace_post_audiences::<Sqlite>(&mut tx, post_id, &input.audiences).await?;
 
         tx.commit().await?;
         post_record_from_row(row).map_err(UpdatePostError::Internal)
@@ -185,6 +194,7 @@ mod tests {
             rendered_html: "<p>body</p>".to_string(),
             published_at: None,
             summary: None,
+            audiences: vec![common::visibility::AudienceTarget::Public],
         };
         let result = storage.create_post(&input).await;
         assert!(result.is_err());

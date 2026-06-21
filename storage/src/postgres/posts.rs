@@ -16,6 +16,13 @@ impl PostDialect for Postgres {
     const PERMALINK_DATE_CLAUSE: &'static str =
         "date(p.published_at AT TIME ZONE 'UTC') = $3::date";
 
+    const DELETE_POST_AUDIENCES: &'static str = "DELETE FROM post_audiences WHERE post_id = $1";
+
+    // Bind order: post_id, audience_id, kind_name (matches `replace_post_audiences`).
+    const INSERT_POST_AUDIENCE: &'static str = "INSERT INTO post_audiences \
+         (post_id, audience_id, target_kind_id) \
+         VALUES ($1, $2, (SELECT kind_id FROM target_kinds WHERE name = $3))";
+
     async fn update_post(
         pool: &Pool<Postgres>,
         post_id: i64,
@@ -81,6 +88,9 @@ impl PostDialect for Postgres {
         .bind(post_id)
         .fetch_one(&mut *tx)
         .await?;
+
+        crate::posts::replace_post_audiences::<Postgres>(&mut tx, post_id, &input.audiences)
+            .await?;
 
         tx.commit().await?;
         post_record_from_row(row).map_err(UpdatePostError::Internal)
