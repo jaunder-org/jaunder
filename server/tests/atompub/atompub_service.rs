@@ -77,6 +77,7 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
             published_at: Some(chrono::Utc::now()),
             max_attempts: 100,
             summary: None,
+            audiences: vec![common::visibility::AudienceTarget::Public],
         },
     )
     .await

@@ -43,8 +43,10 @@ pub async fn regenerate_feed(
     };
     let now = Utc::now();
     let published = posts
-        // TODO(Task 15/16/20/21): real viewer. Feeds intentionally stay
-        // Anonymous (public-only); safe today because every post is Public.
+        // Published feeds are public-only (M8 / ADR-0020): regeneration resolves
+        // posts as an anonymous viewer, so the resolution filter reduces to the
+        // `public` EXISTS and only Public posts reach the feed. Anonymous is the
+        // permanent, correct value here — feeds have no authenticated viewer.
         .list_published_in_window(
             &surface,
             &window,

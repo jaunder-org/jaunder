@@ -6,14 +6,17 @@ use crate::{
     feed_discovery::{FeedDiscovery, RsdDiscovery},
     pages::{
         signal_read::read_signal,
-        ui::{ComposerFields, PostCard, PostCreateForm, PostDisplay, TagContext, TagInput, Topbar},
+        ui::{
+            AudiencePicker, ComposerFields, PostCard, PostCreateForm, PostDisplay, TagContext,
+            TagInput, Topbar,
+        },
         MediaPanel,
     },
     posts::{
         get_post, get_post_preview, list_drafts, list_posts_by_tag, list_user_posts,
-        list_user_posts_by_tag, CreatePostResult, DeletePost, DraftSummary, ListPostsByTag,
-        ListUserPosts, ListUserPostsByTag, PublishPost, PublishPostResult, TimelinePostSummary,
-        UpdatePost, UpdatePostResult,
+        list_user_posts_by_tag, post_audience_selection, AudienceSelection, CreatePostResult,
+        DeletePost, DraftSummary, ListPostsByTag, ListUserPosts, ListUserPostsByTag, PublishPost,
+        PublishPostResult, TimelinePostSummary, UpdatePost, UpdatePostResult,
     },
 };
 use common::feed::FeedSurface;
@@ -562,6 +565,12 @@ pub fn EditPostPage() -> impl IntoView {
     let slug_override = RwSignal::new(String::new());
     let summary = RwSignal::new(String::new());
     let post_tags: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());
+    // Pre-selected with the post's current targeting (defaults to Public until
+    // it resolves).
+    let audience = RwSignal::new(AudienceSelection {
+        base: "public".to_string(),
+        named: Vec::new(),
+    });
     // ServerAction dispatches happen only on the client; this redirect-on-publish
     // effect only ever fires there. `Effect::new_isomorphic` would needlessly
     // schedule on the server.
@@ -579,16 +588,26 @@ pub fn EditPostPage() -> impl IntoView {
         }
     });
 
-    let post = Resource::new(
-        move || {
-            params
-                .get()
-                .get("post_id")
-                .and_then(|v| v.parse::<i64>().ok())
-                .unwrap_or(-1)
-        },
-        get_post_preview,
-    );
+    let post_id_param = move || {
+        params
+            .get()
+            .get("post_id")
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(-1)
+    };
+    let post = Resource::new(post_id_param, get_post_preview);
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+    let current_audience = Resource::new(post_id_param, post_audience_selection);
+    // Client-only: copying the resolved Resource into `audience` must not run
+    // during SSR, where the future can resolve after the per-request reactive
+    // owner is disposed (web-style-guide.md §9). The picker is seeded with the
+    // post's current targeting on the client after hydration.
+    #[cfg(target_arch = "wasm32")]
+    Effect::new(move |_| {
+        if let Some(Ok(selection)) = current_audience.get() {
+            audience.set(selection);
+        }
+    });
 
     view! {
         <Topbar title="Edit Post".to_string() sub="Long-form".to_string() />
@@ -620,6 +639,7 @@ pub fn EditPostPage() -> impl IntoView {
                                         post_tags.get().into_iter().map(|t| t.display).collect(),
                                     ),
                                     summary: common::text::non_empty_owned(summary.get()),
+                                    audience: Some(audience.get()),
                                 });
                         };
                         view! {
@@ -678,6 +698,9 @@ pub fn EditPostPage() -> impl IntoView {
                                         </div>
                                         <div style="margin-top:10px">
                                             <TagInput tags=post_tags />
+                                        </div>
+                                        <div style="margin-top:10px">
+                                            <AudiencePicker selection=audience />
                                         </div>
                                         <div class="j-seg" style="margin-top:10px">
                                             <button

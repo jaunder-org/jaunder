@@ -205,12 +205,25 @@ the saved `bd memories`):
    
    **Always wrap client-only `Effect::new` calls (and their containing blocks if necessary) in `#[cfg(target_arch = "wasm32")]`** so they are completely stripped from server-side compilation, ensuring 100% deterministic server-side test coverage and avoiding unnecessary execution.
 
-2. **SSR-eager `Resource` calling `expect_context::<Arc<AppState>>()`.**
-   The same disposal race can hit the context lookup. Use
-   `use_context::<Arc<AppState>>().ok_or_else(…)?` — the `Err` branch
-   in operator-only UI is already harmless. Do *not* switch to
-   `LocalResource` as a structural fix; it never resolves inside an
-   SSR-rendered `Suspense`.
+2. **SSR-eager `Resource` calling `expect_context::<Arc<dyn FooStorage>>()`.**
+   The same disposal race can hit the context lookup. Consumers take a
+   specific `Arc<dyn FooStorage>` handle, never the whole `AppState`
+   (ADR-0016). Replace `expect_context::<Arc<dyn FooStorage>>()` with
+   `use_context::<Arc<dyn FooStorage>>().ok_or_else(…)?` — returning the
+   `Err` branch gracefully instead of panicking and wedging the worker.
+   Do *not* switch to `LocalResource` as a structural fix; it never
+   resolves inside an SSR-rendered `Suspense`.
+
+   **Read context before the first `.await`.** When such a function runs
+   as a `Resource` resolved during SSR, the renderer can resume the
+   future on a worker thread where the Leptos task-local context is no
+   longer installed — so any `use_context` placed *after* an await point
+   (e.g. after `require_auth().await`) returns `None`, and because an
+   SSR-resolved `Resource` serializes its value to the client and is **not**
+   re-fetched on hydration, that `Err` sticks. Fetch every
+   `Arc<dyn FooStorage>` handle first, then `await` (mirror
+   `get_registration_policy`; `require_auth` is await-safe because it reads
+   its `Parts` context synchronously before its own await).
 
 When in doubt, mirror `home.rs`: a plain `Effect::new` (gated with `#[cfg(target_arch = "wasm32")]`) that copies the
 resolved page into signals and only writes when the value actually

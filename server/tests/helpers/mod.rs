@@ -456,6 +456,7 @@ pub async fn seed_posts(
             storage::PostFormat::Markdown,
             published_at,
             None,
+            vec![common::visibility::AudienceTarget::Public],
         )
         .await
         .expect("seed post should be created");

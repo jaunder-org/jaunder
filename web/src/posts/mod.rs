@@ -31,7 +31,8 @@ use {
     std::{collections::BTreeSet, sync::Arc},
     storage::{
         perform_post_creation, perform_post_update, FeedEventStorage, PerformUpdateError,
-        PostCreation, PostFormat, PostStorage, PostUpdate, UpdatePostError, UpdatePostInput,
+        PostCreation, PostFormat, PostStorage, PostUpdate, SiteConfigStorage, UpdatePostError,
+        UpdatePostInput,
     },
 };
 
@@ -56,6 +57,86 @@ pub struct UpdatePostResult {
     pub preview_url: String,
     pub permalink: Option<String>,
     pub summary: Option<String>,
+}
+
+/// The audience-picker selection as it crosses the server-fn boundary.
+///
+/// `base` is the mutually-exclusive built-in (`"public"`, `"private"`, or
+/// `"subscribers"`); `named` is the set of selected named-audience ids. The
+/// two compose by UNION except for `"private"`, which is author-only and
+/// cannot combine with anything — a `"private"` base discards `named`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct AudienceSelection {
+    pub base: String,
+    pub named: Vec<i64>,
+}
+
+/// Translates an [`AudienceSelection`] into the `Vec<AudienceTarget>` the
+/// storage layer persists.
+///
+/// - `"public"` / `"subscribers"` → the built-in target, in union with one
+///   `Named(id)` per selected named audience.
+/// - `"private"` (or any unrecognized base) → an empty vec (author-only); the
+///   named set is ignored, since `Private` cannot combine with other targets.
+#[must_use]
+pub fn audience_selection_to_targets(
+    selection: &AudienceSelection,
+) -> Vec<common::visibility::AudienceTarget> {
+    use common::visibility::AudienceTarget;
+    let base = match selection.base.as_str() {
+        "public" => Some(AudienceTarget::Public),
+        "subscribers" => Some(AudienceTarget::Subscribers),
+        // "private" and anything unrecognized fall through to author-only.
+        _ => None,
+    };
+    let Some(base) = base else {
+        // Private/author-only: no rows, named selection ignored.
+        return Vec::new();
+    };
+    std::iter::once(base)
+        .chain(selection.named.iter().copied().map(AudienceTarget::Named))
+        .collect()
+}
+
+/// Resolves an optional picker selection to the targets to persist. An absent
+/// selection defaults to `[Public]` — the historical behavior and the safe
+/// default for non-editor callers that omit the field on the wire.
+#[must_use]
+pub fn audience_targets_or_public(
+    selection: Option<&AudienceSelection>,
+) -> Vec<common::visibility::AudienceTarget> {
+    selection.map_or_else(
+        || vec![common::visibility::AudienceTarget::Public],
+        audience_selection_to_targets,
+    )
+}
+
+/// Translates a post's persisted `Vec<AudienceTarget>` into the picker's
+/// [`AudienceSelection`] (the inverse of [`audience_selection_to_targets`],
+/// for pre-selecting the editor).
+///
+/// The built-in base is `"public"`/`"subscribers"` when that target is present,
+/// otherwise `"private"` (covering both an explicit `Private` and an empty
+/// targeting). Every `Named(id)` becomes an entry in `named`.
+#[must_use]
+pub fn targets_to_audience_selection(
+    targets: &[common::visibility::AudienceTarget],
+) -> AudienceSelection {
+    use common::visibility::AudienceTarget;
+    let mut base = "private";
+    let mut named = Vec::new();
+    for target in targets {
+        match target {
+            AudienceTarget::Public => base = "public",
+            AudienceTarget::Subscribers => base = "subscribers",
+            AudienceTarget::Named(id) => named.push(*id),
+            AudienceTarget::Private => {}
+        }
+    }
+    AudienceSelection {
+        base: base.to_string(),
+        named,
+    }
 }
 
 /// A draft row returned by [`list_drafts`].
@@ -112,6 +193,7 @@ pub async fn create_post(
     publish: bool,
     tags: Option<Vec<String>>,
     summary: Option<String>,
+    audience: Option<AudienceSelection>,
 ) -> WebResult<CreatePostResult> {
     boundary!("create_post", {
         let auth = require_auth().await?;
@@ -125,6 +207,7 @@ pub async fn create_post(
             .map_err(|e| InternalError::validation(e.to_string()))?;
         let published_at = publish.then(Utc::now);
         let normalized_summary = summary.and_then(common::text::non_empty_owned);
+        let audiences = audience_targets_or_public(audience.as_ref());
 
         let record = perform_post_creation(
             posts.as_ref(),
@@ -137,6 +220,7 @@ pub async fn create_post(
                 published_at,
                 max_attempts: 100,
                 summary: normalized_summary,
+                audiences,
             },
         )
         .await
@@ -256,6 +340,7 @@ pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
 }
 
 /// Updates an existing post for the authenticated author.
+#[allow(clippy::too_many_arguments)]
 #[server(endpoint = "/update_post", input = Json)]
 pub async fn update_post(
     post_id: i64,
@@ -265,6 +350,7 @@ pub async fn update_post(
     publish: bool,
     tags: Option<Vec<String>>,
     summary: Option<String>,
+    audience: Option<AudienceSelection>,
 ) -> WebResult<UpdatePostResult> {
     boundary!("update_post", {
         let auth = require_auth().await?;
@@ -293,6 +379,7 @@ pub async fn update_post(
             .parse::<PostFormat>()
             .map_err(|e| InternalError::validation(e.to_string()))?;
         let normalized_summary = summary.and_then(common::text::non_empty_owned);
+        let audiences = audience_targets_or_public(audience.as_ref());
 
         let record = perform_post_update(
             posts.as_ref(),
@@ -305,6 +392,7 @@ pub async fn update_post(
                 slug_override: slug_override.as_deref(),
                 publish,
                 summary: normalized_summary,
+                audiences,
             },
         )
         .await
@@ -347,6 +435,56 @@ pub async fn update_post(
             permalink,
             summary: record.summary,
         })
+    })
+}
+
+/// Returns the audience-picker selection for a new post: the site-wide
+/// default audience. Used to initialize the editor on the create page.
+#[server(endpoint = "/default_audience_selection")]
+pub async fn default_audience_selection() -> WebResult<AudienceSelection> {
+    boundary!("default_audience_selection", {
+        // Read context BEFORE the first `.await`: a Resource resolved during SSR
+        // is polled by the renderer and can resume on a worker where the Leptos
+        // task-local context is gone, so a `use_context` placed after an await
+        // returns `None` (mirrors `get_registration_policy`, which reads context
+        // first). `require_auth` itself reads its `Parts` context before awaiting.
+        let site_config = use_context::<Arc<dyn SiteConfigStorage>>()
+            .ok_or_else(|| InternalError::server_message("SiteConfigStorage not in context"))?;
+        require_auth().await?;
+        let default = site_config
+            .get_default_audience()
+            .await
+            .map_err(InternalError::storage)?;
+        Ok(targets_to_audience_selection(std::slice::from_ref(
+            &default,
+        )))
+    })
+}
+
+/// Returns the audience-picker selection for an existing post (its current
+/// targeting). Owner-only. Used to pre-select the editor on the edit page.
+#[server(endpoint = "/post_audience_selection")]
+pub async fn post_audience_selection(post_id: i64) -> WebResult<AudienceSelection> {
+    boundary!("post_audience_selection", {
+        // Read context before the first `.await` (see `default_audience_selection`).
+        let posts = use_context::<Arc<dyn PostStorage>>()
+            .ok_or_else(|| InternalError::server_message("PostStorage not in context"))?;
+        let auth = require_auth().await.map_err(private_post_not_found_error)?;
+
+        let post = posts
+            .get_post_by_id(post_id, &viewer_identity().await)
+            .await
+            .map_err(InternalError::storage)?
+            .ok_or_else(not_found_error)?;
+        if post.deleted_at.is_some() || post.user_id != auth.user_id {
+            return Err(not_found_error());
+        }
+
+        let targets = posts
+            .get_post_audiences(post_id)
+            .await
+            .map_err(InternalError::storage)?;
+        Ok(targets_to_audience_selection(&targets))
     })
 }
 
@@ -405,6 +543,13 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
             return Err(InternalError::not_found("Post"));
         }
 
+        // Preserve the post's existing audience targeting across publication
+        // (chosen in the editor); publishing must not silently re-target it.
+        let audiences = posts
+            .get_post_audiences(post_id)
+            .await
+            .map_err(InternalError::storage)?;
+
         let updated = posts
             .update_post(
                 post_id,
@@ -417,8 +562,7 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
                     rendered_html: existing.rendered_html,
                     summary: existing.summary,
                     publish: true,
-                    // Layer A: publishing an existing post keeps it Public.
-                    audiences: vec![common::visibility::AudienceTarget::Public],
+                    audiences,
                 },
             )
             .await
@@ -520,7 +664,97 @@ pub async fn unpublish_post(post_id: i64) -> WebResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        audience_selection_to_targets, audience_targets_or_public, targets_to_audience_selection,
+        AudienceSelection,
+    };
+    use common::visibility::AudienceTarget;
     use storage::candidate_slug;
+
+    fn selection(base: &str, named: &[i64]) -> AudienceSelection {
+        AudienceSelection {
+            base: base.to_string(),
+            named: named.to_vec(),
+        }
+    }
+
+    #[test]
+    fn public_selection_maps_to_public_target() {
+        assert_eq!(
+            audience_selection_to_targets(&selection("public", &[])),
+            vec![AudienceTarget::Public]
+        );
+    }
+
+    #[test]
+    fn subscribers_selection_maps_to_subscribers_target() {
+        assert_eq!(
+            audience_selection_to_targets(&selection("subscribers", &[])),
+            vec![AudienceTarget::Subscribers]
+        );
+    }
+
+    #[test]
+    fn public_plus_named_unions() {
+        assert_eq!(
+            audience_selection_to_targets(&selection("public", &[5, 9])),
+            vec![
+                AudienceTarget::Public,
+                AudienceTarget::Named(5),
+                AudienceTarget::Named(9),
+            ]
+        );
+    }
+
+    #[test]
+    fn private_selection_is_empty_and_ignores_named() {
+        // Private cannot combine with anything; named ids are dropped.
+        assert!(audience_selection_to_targets(&selection("private", &[5])).is_empty());
+        // An unrecognized base also falls through to author-only.
+        assert!(audience_selection_to_targets(&selection("nonsense", &[])).is_empty());
+    }
+
+    #[test]
+    fn absent_selection_defaults_to_public() {
+        assert_eq!(
+            audience_targets_or_public(None),
+            vec![AudienceTarget::Public]
+        );
+        // A present selection is translated normally.
+        assert_eq!(
+            audience_targets_or_public(Some(&selection("subscribers", &[]))),
+            vec![AudienceTarget::Subscribers]
+        );
+    }
+
+    #[test]
+    fn targets_round_trip_through_selection() {
+        // Edit round-trip: persisted targets -> selection -> targets.
+        let targets = vec![AudienceTarget::Subscribers, AudienceTarget::Named(3)];
+        let sel = targets_to_audience_selection(&targets);
+        assert_eq!(sel, selection("subscribers", &[3]));
+        assert_eq!(audience_selection_to_targets(&sel), targets);
+
+        // Public round-trips through the picker.
+        let sel = targets_to_audience_selection(&[AudienceTarget::Public]);
+        assert_eq!(sel, selection("public", &[]));
+        assert_eq!(
+            audience_selection_to_targets(&sel),
+            vec![AudienceTarget::Public]
+        );
+
+        // An explicit Private element yields a private selection.
+        assert_eq!(
+            targets_to_audience_selection(&[AudienceTarget::Private]),
+            selection("private", &[])
+        );
+
+        // No rows (private) round-trips to a private selection and back to empty.
+        let empty: Vec<AudienceTarget> = Vec::new();
+        let sel = targets_to_audience_selection(&empty);
+        assert_eq!(sel, selection("private", &[]));
+        assert!(audience_selection_to_targets(&sel).is_empty());
+    }
 
     #[test]
     fn candidate_slug_returns_seed_for_first_attempt() {

@@ -16,6 +16,17 @@
 //! audience. So before calling them, these functions verify the target
 //! `audience_id` belongs to the authed author (it must appear in
 //! `list_audiences(author)`), rejecting otherwise.
+//!
+//! ## SSR context ordering
+//!
+//! Each function reads its storage handle from Leptos context **before** the
+//! first `.await` (`require_auth`). When one of these is invoked as a `Resource`
+//! resolved during SSR, the renderer can resume the future on a worker thread
+//! where the Leptos task-local context is no longer installed, so a
+//! `use_context` placed after an await point returns `None`. Reading context
+//! first (as `get_registration_policy` does) keeps the lookup on the request
+//! task. `require_auth` is await-safe because it reads its `Parts` context
+//! synchronously before its own await.
 
 use crate::error::WebResult;
 use leptos::prelude::*;
@@ -83,8 +94,11 @@ async fn assert_owns_audience(
 #[server(endpoint = "/create_audience")]
 pub async fn create_audience(name: String) -> WebResult<i64> {
     boundary!("create_audience", {
+        // Context must be read before the first `.await` (see the module note on
+        // SSR context loss across await points).
+        let audiences = use_context::<Arc<dyn AudienceStorage>>()
+            .ok_or_else(|| InternalError::server_message("AudienceStorage not in context"))?;
         let auth = require_auth().await?;
-        let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let name = name.trim();
         if name.is_empty() {
             return Err(InternalError::validation("audience name must not be empty"));
@@ -101,8 +115,9 @@ pub async fn create_audience(name: String) -> WebResult<i64> {
 #[server(endpoint = "/rename_audience")]
 pub async fn rename_audience(audience_id: i64, name: String) -> WebResult<()> {
     boundary!("rename_audience", {
+        let audiences = use_context::<Arc<dyn AudienceStorage>>()
+            .ok_or_else(|| InternalError::server_message("AudienceStorage not in context"))?;
         let auth = require_auth().await?;
-        let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let name = name.trim();
         if name.is_empty() {
             return Err(InternalError::validation("audience name must not be empty"));
@@ -119,8 +134,9 @@ pub async fn rename_audience(audience_id: i64, name: String) -> WebResult<()> {
 #[server(endpoint = "/delete_audience")]
 pub async fn delete_audience(audience_id: i64) -> WebResult<()> {
     boundary!("delete_audience", {
+        let audiences = use_context::<Arc<dyn AudienceStorage>>()
+            .ok_or_else(|| InternalError::server_message("AudienceStorage not in context"))?;
         let auth = require_auth().await?;
-        let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         audiences
             .delete_audience(auth.user_id, audience_id)
             .await
@@ -133,8 +149,9 @@ pub async fn delete_audience(audience_id: i64) -> WebResult<()> {
 #[server(endpoint = "/list_my_audiences")]
 pub async fn list_my_audiences() -> WebResult<Vec<AudienceSummary>> {
     boundary!("list_my_audiences", {
+        let audiences = use_context::<Arc<dyn AudienceStorage>>()
+            .ok_or_else(|| InternalError::server_message("AudienceStorage not in context"))?;
         let auth = require_auth().await?;
-        let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let rows = audiences
             .list_audiences(auth.user_id)
             .await
@@ -155,9 +172,11 @@ pub async fn list_my_audiences() -> WebResult<Vec<AudienceSummary>> {
 pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
     boundary!("list_my_subscribers", {
         use storage::UserStorage;
+        let subscriptions = use_context::<Arc<dyn SubscriptionStorage>>()
+            .ok_or_else(|| InternalError::server_message("SubscriptionStorage not in context"))?;
+        let users = use_context::<Arc<dyn UserStorage>>()
+            .ok_or_else(|| InternalError::server_message("UserStorage not in context"))?;
         let auth = require_auth().await?;
-        let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
-        let users = expect_context::<Arc<dyn UserStorage>>();
         let rows = subscriptions
             .list_subscribers(auth.user_id)
             .await
@@ -193,8 +212,9 @@ pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
 #[server(endpoint = "/add_subscriber_to_audience")]
 pub async fn add_subscriber_to_audience(audience_id: i64, subscription_id: i64) -> WebResult<()> {
     boundary!("add_subscriber_to_audience", {
+        let audiences = use_context::<Arc<dyn AudienceStorage>>()
+            .ok_or_else(|| InternalError::server_message("AudienceStorage not in context"))?;
         let auth = require_auth().await?;
-        let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         audiences
             .add_member(auth.user_id, audience_id, subscription_id)
             .await
@@ -213,8 +233,9 @@ pub async fn remove_subscriber_from_audience(
     subscription_id: i64,
 ) -> WebResult<()> {
     boundary!("remove_subscriber_from_audience", {
+        let audiences = use_context::<Arc<dyn AudienceStorage>>()
+            .ok_or_else(|| InternalError::server_message("AudienceStorage not in context"))?;
         let auth = require_auth().await?;
-        let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         assert_owns_audience(audiences.as_ref(), auth.user_id, audience_id).await?;
         audiences
             .remove_member(audience_id, subscription_id)
@@ -231,8 +252,9 @@ pub async fn remove_subscriber_from_audience(
 #[server(endpoint = "/list_audience_members")]
 pub async fn list_audience_members(audience_id: i64) -> WebResult<Vec<i64>> {
     boundary!("list_audience_members", {
+        let audiences = use_context::<Arc<dyn AudienceStorage>>()
+            .ok_or_else(|| InternalError::server_message("AudienceStorage not in context"))?;
         let auth = require_auth().await?;
-        let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         assert_owns_audience(audiences.as_ref(), auth.user_id, audience_id).await?;
         let members = audiences
             .list_members(audience_id)

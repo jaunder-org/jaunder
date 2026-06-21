@@ -15,6 +15,7 @@ use leptos::prelude::*;
 
 /// Account-area page for managing named audiences and their membership.
 #[allow(clippy::must_use_candidate)]
+#[allow(clippy::too_many_lines)]
 #[component]
 pub fn AudiencesPage() -> impl IntoView {
     let create_action = ServerAction::<CreateAudience>::new();
@@ -34,8 +35,31 @@ pub fn AudiencesPage() -> impl IntoView {
             remove_action.version().get(),
         )
     };
-    let audiences = Resource::new(version, |_| list_my_audiences());
-    let subscribers = Resource::new(version, |_| list_my_subscribers());
+    // SSR-resolved Resources serialize to the client and are not re-fetched on
+    // hydration; if these lost the disposal race and resolved to `Err` during
+    // SSR, the client would reuse that empty/error state. So resolve client-only
+    // (web-style-guide.md §9, mirroring `home.rs`): SSR renders the loading
+    // placeholder; wasm-only Effects seed the lists after hydration, and any
+    // mutation bumps `version` to re-fetch.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+    let audiences_res = Resource::new(version, |_| list_my_audiences());
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+    let subscribers_res = Resource::new(version, |_| list_my_subscribers());
+    // `None` = still loading; `Some(Ok/Err)` once resolved on the client.
+    let audiences = RwSignal::new(None::<Result<Vec<AudienceSummary>, String>>);
+    let subscribers = RwSignal::new(Vec::<SubscriberSummary>::new());
+    #[cfg(target_arch = "wasm32")]
+    Effect::new(move |_| {
+        if let Some(result) = audiences_res.get() {
+            audiences.set(Some(result.map_err(|e| e.to_string())));
+        }
+    });
+    #[cfg(target_arch = "wasm32")]
+    Effect::new(move |_| {
+        if let Some(Ok(list)) = subscribers_res.get() {
+            subscribers.set(list);
+        }
+    });
 
     view! {
         <Topbar title="Audiences".to_string() sub="Named subscriber groups".to_string() />
@@ -74,43 +98,38 @@ pub fn AudiencesPage() -> impl IntoView {
                             </div>
                         </div>
                     </div>
-                    <Suspense fallback=|| {
-                        view! { <p class="j-loading">"Loading\u{2026}"</p> }
-                    }>
-                        {move || Suspend::new(async move {
-                            let audiences = audiences.await;
-                            let subscribers = subscribers.await.unwrap_or_default();
-                            match audiences {
-                                Ok(list) if list.is_empty() => {
-                                    view! { <p>"No audiences yet."</p> }.into_any()
-                                }
-                                Ok(list) => {
-                                    let subscribers = subscribers.clone();
-                                    view! {
-                                        <ul class="j-audience-list">
-                                            {list
-                                                .into_iter()
-                                                .map(|audience| {
-                                                    view! {
-                                                        <AudienceRow
-                                                            audience=audience
-                                                            subscribers=subscribers.clone()
-                                                            rename_action=rename_action
-                                                            delete_action=delete_action
-                                                            add_action=add_action
-                                                            remove_action=remove_action
-                                                        />
-                                                    }
-                                                })
-                                                .collect::<Vec<_>>()}
-                                        </ul>
-                                    }
-                                        .into_any()
-                                }
-                                Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                    {move || {
+                        let subscribers = subscribers.get();
+                        match audiences.get() {
+                            None => view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any(),
+                            Some(Ok(list)) if list.is_empty() => {
+                                view! { <p>"No audiences yet."</p> }.into_any()
                             }
-                        })}
-                    </Suspense>
+                            Some(Ok(list)) => {
+                                view! {
+                                    <ul class="j-audience-list">
+                                        {list
+                                            .into_iter()
+                                            .map(|audience| {
+                                                view! {
+                                                    <AudienceRow
+                                                        audience=audience
+                                                        subscribers=subscribers.clone()
+                                                        rename_action=rename_action
+                                                        delete_action=delete_action
+                                                        add_action=add_action
+                                                        remove_action=remove_action
+                                                    />
+                                                }
+                                            })
+                                            .collect::<Vec<_>>()}
+                                    </ul>
+                                }
+                                    .into_any()
+                            }
+                            Some(Err(e)) => view! { <p class="error">{e}</p> }.into_any(),
+                        }
+                    }}
                 </section>
             </div>
         </div>
@@ -132,14 +151,25 @@ fn AudienceRow(
     let audience_id = audience.audience_id;
     let name = audience.name.clone();
 
-    // Members re-fetch whenever an assign/unassign mutation lands.
-    let members = Resource::new(
+    // Members re-fetch whenever an assign/unassign mutation lands. Resolved
+    // client-only (web-style-guide.md §9): an SSR-serialized `Err` from the
+    // disposal race would otherwise stick. `None` = loading.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+    let members_res = Resource::new(
         move || (add_action.version().get(), remove_action.version().get()),
         move |_| list_audience_members(audience_id),
     );
+    let member_ids = RwSignal::new(None::<Vec<i64>>);
+    #[cfg(target_arch = "wasm32")]
+    Effect::new(move |_| {
+        if let Some(result) = members_res.get() {
+            member_ids.set(Some(result.unwrap_or_default()));
+        }
+    });
 
     view! {
         <li class="j-audience-item">
+            <h3 class="j-audience-name">{name.clone()}</h3>
             <div class="j-audience-head">
                 <ActionForm action=rename_action>
                     <input type="hidden" name="audience_id" value=audience_id />
@@ -155,13 +185,11 @@ fn AudienceRow(
                     </button>
                 </ActionForm>
             </div>
-            <Suspense fallback=|| {
-                view! { <p class="j-loading">"Loading members\u{2026}"</p> }
-            }>
-                {move || {
-                    let subscribers = subscribers.clone();
-                    Suspend::new(async move {
-                        let member_ids = members.await.unwrap_or_default();
+            {move || {
+                let subscribers = subscribers.clone();
+                match member_ids.get() {
+                    None => view! { <p class="j-loading">"Loading members\u{2026}"</p> }.into_any(),
+                    Some(member_ids) => {
                         if subscribers.is_empty() {
                             return view! { <p class="j-sub">"No active subscribers yet."</p> }
                                 .into_any();
@@ -216,9 +244,9 @@ fn AudienceRow(
                             </ul>
                         }
                             .into_any()
-                    })
-                }}
-            </Suspense>
+                    }
+                }
+            }}
         </li>
     }
 }

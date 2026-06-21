@@ -8,6 +8,18 @@
 //! (`OpenSubscriptionPolicy` → `active` in Layer A; an approval gate later).
 //!
 //! Self-subscription is rejected — an author cannot subscribe to themselves.
+//!
+//! ## SSR context ordering
+//!
+//! Each function reads its storage handles from Leptos context **before** the
+//! first `.await` (`require_auth`). `is_subscribed_to` in particular is invoked
+//! by the `SubscribeButton` `state` `Resource`, which resolves during SSR; the
+//! renderer can resume that future on a worker thread where the Leptos
+//! task-local context is no longer installed, so a `use_context` placed after
+//! an await point would return `None` and (because an SSR-resolved `Resource`
+//! serializes its value and is not re-fetched on hydration) wrongly render the
+//! "Subscribe" button to an already-subscribed viewer. `resolve_author` takes
+//! its `users` handle as a parameter for the same reason.
 
 use crate::error::WebResult;
 use leptos::prelude::*;
@@ -23,15 +35,22 @@ use {
 
 /// Resolves an author `user_id` from a (trimmed) username, rejecting the
 /// caller's own username (self-subscribe) and an unknown username.
+///
+/// Takes the `users` handle as a parameter (rather than reading it from
+/// context) so callers can fetch it *before* their first `.await` — see the
+/// module note on SSR context loss across await points.
 #[cfg(feature = "ssr")]
-async fn resolve_author(author_username: &str, viewer_user_id: i64) -> Result<i64, InternalError> {
+async fn resolve_author(
+    users: &dyn UserStorage,
+    author_username: &str,
+    viewer_user_id: i64,
+) -> Result<i64, InternalError> {
     let username = author_username
         .trim()
         .strip_prefix('~')
         .unwrap_or_else(|| author_username.trim())
         .parse::<Username>()
         .map_err(|e| InternalError::validation(e.to_string()))?;
-    let users = expect_context::<Arc<dyn UserStorage>>();
     let author = users
         .get_user_by_username(&username)
         .await
@@ -51,9 +70,13 @@ async fn resolve_author(author_username: &str, viewer_user_id: i64) -> Result<i6
 #[server(endpoint = "/subscribe_to")]
 pub async fn subscribe_to(author_username: String) -> WebResult<()> {
     boundary!("subscribe_to", {
+        // Read context before the first `.await` (see the module note).
+        let subscriptions = use_context::<Arc<dyn SubscriptionStorage>>()
+            .ok_or_else(|| InternalError::server_message("SubscriptionStorage not in context"))?;
+        let users = use_context::<Arc<dyn UserStorage>>()
+            .ok_or_else(|| InternalError::server_message("UserStorage not in context"))?;
         let auth = require_auth().await?;
-        let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
-        let author_id = resolve_author(&author_username, auth.user_id).await?;
+        let author_id = resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
         let channel_id = subscriptions
             .local_channel_id()
             .await
@@ -72,9 +95,12 @@ pub async fn subscribe_to(author_username: String) -> WebResult<()> {
 #[server(endpoint = "/unsubscribe_from")]
 pub async fn unsubscribe_from(author_username: String) -> WebResult<()> {
     boundary!("unsubscribe_from", {
+        let subscriptions = use_context::<Arc<dyn SubscriptionStorage>>()
+            .ok_or_else(|| InternalError::server_message("SubscriptionStorage not in context"))?;
+        let users = use_context::<Arc<dyn UserStorage>>()
+            .ok_or_else(|| InternalError::server_message("UserStorage not in context"))?;
         let auth = require_auth().await?;
-        let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
-        let author_id = resolve_author(&author_username, auth.user_id).await?;
+        let author_id = resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
         let channel_id = subscriptions
             .local_channel_id()
             .await
@@ -95,11 +121,19 @@ pub async fn unsubscribe_from(author_username: String) -> WebResult<()> {
 #[server(endpoint = "/is_subscribed_to")]
 pub async fn is_subscribed_to(author_username: String) -> WebResult<bool> {
     boundary!("is_subscribed_to", {
+        // This fn is consumed by the `SubscribeButton` `state` Resource, which
+        // resolves during SSR. Read context before the first `.await` so the
+        // lookup doesn't return `None` after the future resumes on a worker
+        // thread that lost the Leptos task-local context (see the module note).
+        let subscriptions = use_context::<Arc<dyn SubscriptionStorage>>()
+            .ok_or_else(|| InternalError::server_message("SubscriptionStorage not in context"))?;
+        let users = use_context::<Arc<dyn UserStorage>>()
+            .ok_or_else(|| InternalError::server_message("UserStorage not in context"))?;
         let auth = require_auth().await?;
-        let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
         // `resolve_author` rejects a self-target; treat that as "not subscribed"
         // so the profile can hide the button rather than surfacing an error.
-        let Ok(author_id) = resolve_author(&author_username, auth.user_id).await else {
+        let Ok(author_id) = resolve_author(users.as_ref(), &author_username, auth.user_id).await
+        else {
             return Ok(false);
         };
         let channel_id = subscriptions

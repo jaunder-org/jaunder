@@ -19,7 +19,8 @@ use storage::PostFormat;
 use tempfile::TempDir;
 use tower::ServiceExt;
 use web::posts::{
-    CreatePostResult, DraftSummary, PublishPostResult, TimelinePage, UpdatePostResult,
+    AudienceSelection, CreatePostResult, DraftSummary, PublishPostResult, TimelinePage,
+    UpdatePostResult,
 };
 
 use rstest::*;
@@ -3340,4 +3341,151 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
         StatusCode::OK,
         "subscriber must see subscribers-only post; body: {body}"
     );
+}
+
+// ── Audience-picker server fns ────────────────────────────────
+
+/// Creates `author` and returns a session cookie for the audience-picker tests.
+async fn author_with_cookie(state: &Arc<storage::AppState>) -> String {
+    user_with_cookie(state, "author").await
+}
+
+/// Creates a user with `username` and returns a session cookie.
+async fn user_with_cookie(state: &Arc<storage::AppState>, username: &str) -> String {
+    let user_id = state
+        .users
+        .create_user(
+            &username.parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
+    format!("session={token}")
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn default_audience_selection_returns_public_by_default(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = author_with_cookie(&state).await;
+
+    let (status, body) = post_json(
+        Arc::clone(&state),
+        "/api/default_audience_selection",
+        serde_json::json!({}),
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let selection: AudienceSelection = serde_json::from_str(&body).unwrap();
+    assert_eq!(selection.base, "public");
+    assert!(selection.named.is_empty());
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn default_audience_selection_rejects_unauthenticated(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+
+    let (status, body) = post_json(
+        Arc::clone(&state),
+        "/api/default_audience_selection",
+        serde_json::json!({}),
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("unauthorized"), "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn post_audience_selection_returns_public_for_new_post(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = author_with_cookie(&state).await;
+
+    let (status, body) = create_post_json(
+        Arc::clone(&state),
+        "Hello",
+        "markdown",
+        None,
+        true,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/post_audience_selection",
+        format!("post_id={}", created.post_id),
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let selection: AudienceSelection = serde_json::from_str(&body).unwrap();
+    // A post created with no audience field defaults to Public.
+    assert_eq!(selection.base, "public");
+    assert!(selection.named.is_empty());
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn post_audience_selection_rejects_missing_post(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = author_with_cookie(&state).await;
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/post_audience_selection",
+        "post_id=99999".to_string(),
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn post_audience_selection_rejects_non_owner(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let author_cookie = user_with_cookie(&state, "author").await;
+    let other_cookie = user_with_cookie(&state, "intruder").await;
+
+    let (status, body) = create_post_json(
+        Arc::clone(&state),
+        "Hello",
+        "markdown",
+        None,
+        true,
+        Some(&author_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    // A different user must not learn another author's targeting.
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/post_audience_selection",
+        format!("post_id={}", created.post_id),
+        Some(&other_cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
 }

@@ -5525,6 +5525,7 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
         PostFormat::Markdown,
         None,
         None,
+        vec![AudienceTarget::Public],
     )
     .await
     .unwrap();
@@ -5568,6 +5569,7 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
         PostFormat::Org,
         None,
         None,
+        vec![AudienceTarget::Public],
     )
     .await
     .unwrap();
@@ -5616,6 +5618,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
         PostFormat::Markdown,
         Some(now),
         None,
+        vec![AudienceTarget::Public],
     )
     .await
     .unwrap();
@@ -5630,6 +5633,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
         PostFormat::Markdown,
         Some(now),
         None,
+        vec![AudienceTarget::Public],
     )
     .await
     .unwrap_err();
@@ -5676,6 +5680,7 @@ async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Back
         PostFormat::Markdown,
         false,
         None,
+        vec![AudienceTarget::Public],
     )
     .await
     .unwrap();
@@ -5720,6 +5725,7 @@ async fn update_rendered_post_org_renders_and_updates(#[case] backend: Backend) 
         PostFormat::Org,
         false,
         None,
+        vec![AudienceTarget::Public],
     )
     .await
     .unwrap();
@@ -5749,6 +5755,7 @@ async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: B
         PostFormat::Markdown,
         false,
         None,
+        vec![AudienceTarget::Public],
     )
     .await
     .unwrap_err();

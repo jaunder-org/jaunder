@@ -697,10 +697,14 @@
                 # Postgres can't be stop-wiped the way SQLite can (it's
                 # a separate service), so a wipe-via-TRUNCATE is the
                 # cheapest equivalent.
+                # channels/subscription_statuses/target_kinds carry migration-seeded
+                # reference data (migration 0018); the non-restartable Postgres path
+                # can't re-seed them, so exclude them from the wipe.
                 machine.succeed(
                   "sudo -u postgres psql -d jaunder -c \"DO \\$\\$ DECLARE r record;"
                   + " BEGIN FOR r IN SELECT tablename FROM pg_tables"
-                  + " WHERE schemaname = 'public' AND tablename NOT LIKE '\\\\_sqlx%' LOOP"
+                  + " WHERE schemaname = 'public' AND tablename NOT LIKE '\\\\_sqlx%'"
+                  + " AND tablename NOT IN ('channels', 'subscription_statuses', 'target_kinds') LOOP"
                   + " EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' CASCADE';"
                   + " END LOOP; END \\$\\$;\""
                 )

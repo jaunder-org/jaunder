@@ -3,6 +3,7 @@
 mod helpers;
 
 mod web_account;
+mod web_audiences;
 mod web_auth;
 mod web_backup;
 mod web_email;
@@ -11,4 +12,5 @@ mod web_password_reset;
 mod web_posts;
 mod web_sessions;
 mod web_site;
+mod web_subscriptions;
 mod web_tags;
