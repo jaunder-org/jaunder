@@ -53,14 +53,33 @@ impl Password {
     pub fn hash(&self) -> Result<String, PasswordError> {
         use argon2::{
             password_hash::{rand_core::OsRng, SaltString},
-            Argon2, PasswordHasher,
+            PasswordHasher,
         };
 
         let salt = SaltString::generate(&mut OsRng);
-        Argon2::default()
+        Self::hasher()
             .hash_password(self.0.as_bytes(), &salt)
             .map(|h| h.to_string())
             .map_err(|e| PasswordError::HashingFailed(e.to_string()))
+    }
+
+    /// Argon2 configuration for hashing. Production uses the crate defaults
+    /// (m=19456, t=2). Under `cheap-kdf` (test builds only) it uses the minimum
+    /// memory cost so the suite is not dominated by KDF time. `verify()` derives
+    /// cost from the stored hash, so it needs no branch.
+    fn hasher() -> argon2::Argon2<'static> {
+        #[cfg(feature = "cheap-kdf")]
+        {
+            use argon2::{Algorithm, Argon2, Params, Version};
+            #[allow(clippy::expect_used)] // static params (MIN_M_COST, 1, 1, None) are always valid
+            let params =
+                Params::new(Params::MIN_M_COST, 1, 1, None).expect("valid cheap argon2 params");
+            Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+        }
+        #[cfg(not(feature = "cheap-kdf"))]
+        {
+            argon2::Argon2::default()
+        }
     }
 
     /// Verifies the password against a stored Argon2 hash.
@@ -129,6 +148,27 @@ mod tests {
         let p: Password = val.parse().unwrap();
         let hash = p.hash().expect("hashing should succeed");
         assert!(p.verify(&hash).expect("verification should succeed"));
+    }
+
+    #[test]
+    fn production_params_roundtrip_regardless_of_feature() {
+        // Guards prod-strength Argon2 even when the workspace test build turns on
+        // cheap-kdf: hash with explicit production params and verify.
+        use argon2::{
+            password_hash::{rand_core::OsRng, SaltString},
+            Argon2, PasswordHasher,
+        };
+        let p: Password = "a".repeat(10).parse().unwrap();
+        let salt = SaltString::generate(&mut OsRng);
+        let prod_hash = Argon2::default()
+            .hash_password(p.as_str().as_bytes(), &salt)
+            .unwrap()
+            .to_string();
+        assert!(
+            prod_hash.contains("m=19456"),
+            "prod params must be Argon2 default"
+        );
+        assert!(p.verify(&prod_hash).unwrap());
     }
 
     #[test]
