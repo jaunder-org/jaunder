@@ -25,6 +25,7 @@ use {
     crate::auth::require_auth,
     crate::error::InternalError,
     crate::feed_events::enqueue_feed_events,
+    crate::viewer::viewer_identity,
     chrono::{NaiveDate, Utc},
     common::{slug::Slug, tag::Tag, username::Username},
     std::{collections::BTreeSet, sync::Arc},
@@ -201,17 +202,9 @@ pub async fn get_post(
         NaiveDate::from_ymd_opt(year, month, day)
             .ok_or_else(|| InternalError::validation("Invalid permalink"))?;
 
+        let viewer = viewer_identity().await;
         if let Some(post) = posts
-            // TODO(Task 15/16/20/21): real viewer (logged-in user). Anonymous
-            // is safe today because every post is Public.
-            .get_post_by_permalink(
-                &username_parsed,
-                year,
-                month,
-                day,
-                &slug_parsed,
-                &common::visibility::ViewerIdentity::Anonymous,
-            )
+            .get_post_by_permalink(&username_parsed, year, month, day, &slug_parsed, &viewer)
             .await
             .map_err(InternalError::storage)?
         {
@@ -249,9 +242,7 @@ pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
         let post = posts
-            // TODO(Task 15/16/20/21): real viewer (logged-in user). Anonymous
-            // is safe today because every post is Public.
-            .get_post_by_id(post_id, &common::visibility::ViewerIdentity::Anonymous)
+            .get_post_by_id(post_id, &viewer_identity().await)
             .await
             .map_err(InternalError::storage)?
             .ok_or_else(not_found_error)?;
@@ -281,9 +272,7 @@ pub async fn update_post(
 
         // Load old tags before mutation to union with new tags
         let old = posts
-            // TODO(Task 15/16/20/21): real viewer (logged-in user). Anonymous
-            // is safe today because every post is Public.
-            .get_post_by_id(post_id, &common::visibility::ViewerIdentity::Anonymous)
+            .get_post_by_id(post_id, &viewer_identity().await)
             .await
             .map_err(InternalError::storage)?;
         let old_tag_slugs: BTreeSet<Tag> = old
@@ -407,9 +396,7 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
         let existing = posts
-            // TODO(Task 15/16/20/21): real viewer (logged-in user). Anonymous
-            // is safe today because every post is Public.
-            .get_post_by_id(post_id, &common::visibility::ViewerIdentity::Anonymous)
+            .get_post_by_id(post_id, &viewer_identity().await)
             .await
             .map_err(InternalError::storage)?
             .ok_or_else(|| InternalError::not_found("Post"))?;
@@ -470,9 +457,7 @@ pub async fn delete_post(post_id: i64) -> WebResult<()> {
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
         let existing = posts
-            // TODO(Task 15/16/20/21): real viewer (logged-in user). Anonymous
-            // is safe today because every post is Public.
-            .get_post_by_id(post_id, &common::visibility::ViewerIdentity::Anonymous)
+            .get_post_by_id(post_id, &viewer_identity().await)
             .await
             .map_err(InternalError::storage)?
             .ok_or_else(|| InternalError::not_found("Post"))?;
@@ -509,9 +494,7 @@ pub async fn unpublish_post(post_id: i64) -> WebResult<()> {
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
         let existing = posts
-            // TODO(Task 15/16/20/21): real viewer (logged-in user). Anonymous
-            // is safe today because every post is Public.
-            .get_post_by_id(post_id, &common::visibility::ViewerIdentity::Anonymous)
+            .get_post_by_id(post_id, &viewer_identity().await)
             .await
             .map_err(InternalError::storage)?
             .ok_or_else(|| InternalError::not_found("Post"))?;

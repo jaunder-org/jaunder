@@ -23,6 +23,7 @@ pub mod profile;
 pub mod sessions;
 pub mod site;
 pub mod tags;
+pub mod viewer;
 
 pub use pages::App;
 

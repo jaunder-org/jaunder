@@ -144,13 +144,11 @@ pub async fn delete_media(
         let url = common::media::media_url(source_enum.as_str(), &sha256, &filename);
 
         let published = posts
-            // TODO(Task 15/16/20/21): real viewer. Anonymous is safe today
-            // because every post is Public.
             .list_published_by_user(
                 &auth.username,
                 None,
                 1000,
-                &common::visibility::ViewerIdentity::Anonymous,
+                &crate::viewer::viewer_identity().await,
             )
             .await
             .map_err(InternalError::storage)?;

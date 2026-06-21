@@ -3060,3 +3060,284 @@ async fn set_default_post_format_persists_and_retrieves_markdown(#[case] backend
         "expected format to be markdown after setting"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Content visibility — Layer A (Task 16): timeline reads thread the real
+// viewer (viewer_identity) through the store resolution filter instead of the
+// Anonymous stopgap. These are server-fn-level tests; the exhaustive storage
+// resolution matrix lives in `storage.rs`.
+// ---------------------------------------------------------------------------
+
+/// Creates a published post for `author` with the given audience targeting,
+/// directly through the store (the web create path is Public-only in Layer A).
+async fn create_targeted_post(
+    state: &Arc<storage::AppState>,
+    author: i64,
+    slug: &str,
+    audiences: Vec<common::visibility::AudienceTarget>,
+) -> i64 {
+    state
+        .posts
+        .create_post(&storage::CreatePostInput {
+            user_id: author,
+            title: Some(format!("Post {slug}")),
+            slug: slug.parse().unwrap(),
+            body: "body".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>body</p>".to_string(),
+            published_at: Some(chrono::Utc::now()),
+            summary: None,
+            audiences,
+        })
+        .await
+        .unwrap()
+}
+
+/// The set of post slugs visible in a local-timeline response.
+fn timeline_slugs(page: &TimelinePage) -> std::collections::BTreeSet<String> {
+    page.posts.iter().map(|p| p.slug.clone()).collect()
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend) {
+    use common::visibility::AudienceTarget;
+
+    let TestEnv { state, base: _base } = backend.setup().await;
+
+    let author = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let subscriber = state
+        .users
+        .create_user(
+            &"subby".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let stranger = state
+        .users
+        .create_user(
+            &"stranger".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let local = state.subscriptions.local_channel_id().await.unwrap();
+    // A named audience containing the subscriber's subscription. `subscribe` is
+    // idempotent, so this both establishes the active subscription and yields
+    // the subscription id for audience membership.
+    let friends = state
+        .audiences
+        .create_audience(author, "Friends")
+        .await
+        .unwrap();
+    let sub_id = state
+        .subscriptions
+        .subscribe(author, local, &subscriber.to_string())
+        .await
+        .unwrap();
+    state
+        .audiences
+        .add_member(author, friends, sub_id)
+        .await
+        .unwrap();
+
+    create_targeted_post(&state, author, "public-post", vec![AudienceTarget::Public]).await;
+    create_targeted_post(
+        &state,
+        author,
+        "subscribers-post",
+        vec![AudienceTarget::Subscribers],
+    )
+    .await;
+    create_targeted_post(
+        &state,
+        author,
+        "named-post",
+        vec![AudienceTarget::Named(friends)],
+    )
+    .await;
+    create_targeted_post(&state, author, "private-post", vec![]).await;
+
+    let author_cookie = format!(
+        "session={}",
+        state.sessions.create_session(author, "s").await.unwrap()
+    );
+    let subscriber_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(subscriber, "s")
+            .await
+            .unwrap()
+    );
+    let stranger_cookie = format!(
+        "session={}",
+        state.sessions.create_session(stranger, "s").await.unwrap()
+    );
+
+    // Anonymous viewer: only the Public post.
+    let (status, body) = list_local_timeline_form(Arc::clone(&state), None, None, 50, None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let anon: TimelinePage = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        timeline_slugs(&anon),
+        ["public-post".to_string()].into_iter().collect(),
+        "anonymous viewer sees only Public; body: {body}"
+    );
+
+    // Author: sees all of their own posts, including the private one.
+    let (status, body) =
+        list_local_timeline_form(Arc::clone(&state), None, None, 50, Some(&author_cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let authored: TimelinePage = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        timeline_slugs(&authored),
+        [
+            "public-post".to_string(),
+            "subscribers-post".to_string(),
+            "named-post".to_string(),
+            "private-post".to_string(),
+        ]
+        .into_iter()
+        .collect(),
+        "author sees own posts regardless of audience; body: {body}"
+    );
+
+    // Active subscriber + named member: Public + Subscribers + Named (not Private).
+    let (status, body) =
+        list_local_timeline_form(Arc::clone(&state), None, None, 50, Some(&subscriber_cookie))
+            .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let sub: TimelinePage = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        timeline_slugs(&sub),
+        [
+            "public-post".to_string(),
+            "subscribers-post".to_string(),
+            "named-post".to_string(),
+        ]
+        .into_iter()
+        .collect(),
+        "subscriber sees Public + Subscribers + admitted Named; body: {body}"
+    );
+    assert!(
+        sub.posts.iter().all(|p| !p.is_author),
+        "subscriber is not the author; body: {body}"
+    );
+
+    // Authed non-subscriber: only the Public post (same reach as anonymous,
+    // proving viewer_identity yields a Channel viewer that is correctly *not*
+    // admitted to subscriber/named content).
+    let (status, body) =
+        list_local_timeline_form(Arc::clone(&state), None, None, 50, Some(&stranger_cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let stranger_page: TimelinePage = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        timeline_slugs(&stranger_page),
+        ["public-post".to_string()].into_iter().collect(),
+        "authed non-subscriber sees only Public; body: {body}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] backend: Backend) {
+    use common::visibility::AudienceTarget;
+
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let author = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let subscriber = state
+        .users
+        .create_user(
+            &"subby".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let local = state.subscriptions.local_channel_id().await.unwrap();
+    state
+        .subscriptions
+        .subscribe(author, local, &subscriber.to_string())
+        .await
+        .unwrap();
+
+    let post_id = create_targeted_post(
+        &state,
+        author,
+        "subs-only",
+        vec![AudienceTarget::Subscribers],
+    )
+    .await;
+    let post = state
+        .posts
+        .get_post_by_id(
+            post_id,
+            &common::visibility::ViewerIdentity::local(author, local),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let published = post.published_at.unwrap();
+    let (y, m, d) = (published.year(), published.month(), published.day());
+
+    // Anonymous → 404 (the resolution filter hides the subscribers-only post).
+    let (status, _body) =
+        get_post_form(Arc::clone(&state), "author", y, m, d, "subs-only", None).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "anonymous must not see subscribers-only post"
+    );
+
+    // Active subscriber → 200.
+    let subscriber_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(subscriber, "s")
+            .await
+            .unwrap()
+    );
+    let (status, body) = get_post_form(
+        Arc::clone(&state),
+        "author",
+        y,
+        m,
+        d,
+        "subs-only",
+        Some(&subscriber_cookie),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "subscriber must see subscribers-only post; body: {body}"
+    );
+}
