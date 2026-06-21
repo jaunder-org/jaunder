@@ -1749,26 +1749,8 @@ async fn get_post_finds_author_draft_across_multiple_pages(#[case] backend: Back
             .unwrap()
     );
 
-    let mut first_post_id = None;
-    for i in 0..55 {
-        let request_body = format!("# Draft {i}\n\nbody");
-        let (status, body) = create_post_json(
-            Arc::clone(&state),
-            &request_body,
-            "markdown",
-            None,
-            false,
-            Some(&cookie),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "create body: {body}");
-        let created: CreatePostResult = serde_json::from_str(&body).unwrap();
-        if first_post_id.is_none() {
-            first_post_id = Some(created.post_id);
-        }
-    }
-
-    let first_post_id = first_post_id.expect("at least one draft should be created");
+    let ids = crate::helpers::seed_posts(&state, author_id, 55, false).await;
+    let first_post_id = ids[0];
     let record = state
         .posts
         .get_post_by_id(first_post_id)
@@ -1832,19 +1814,7 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
             .unwrap()
     );
 
-    for i in 0..51 {
-        let request_body = format!("# Post {i}\n\nbody");
-        let (status, body) = create_post_json(
-            Arc::clone(&state),
-            &request_body,
-            "markdown",
-            None,
-            true,
-            Some(&author_cookie),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "create body: {body}");
-    }
+    crate::helpers::seed_posts(&state, author_id, 51, true).await;
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1950,39 +1920,8 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
             .await
             .unwrap()
     );
-    let other_cookie = format!(
-        "session={}",
-        state
-            .sessions
-            .create_session(other_id, "test session")
-            .await
-            .unwrap()
-    );
-
-    for i in 0..26 {
-        let request_body = format!("# Post {i}\n\nbody");
-        let (status, body) = create_post_json(
-            Arc::clone(&state),
-            &request_body,
-            "markdown",
-            None,
-            true,
-            Some(&author_cookie),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "create body: {body}");
-
-        let (status, body) = create_post_json(
-            Arc::clone(&state),
-            "body",
-            "markdown",
-            None,
-            true,
-            Some(&other_cookie),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "create body: {body}");
-    }
+    crate::helpers::seed_posts(&state, author_id, 26, true).await;
+    crate::helpers::seed_posts(&state, other_id, 26, true).await;
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -2096,19 +2035,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
             .unwrap()
     );
 
-    for i in 0..51 {
-        let request_body = format!("# Post {i}\n\nbody");
-        let (status, body) = create_post_json(
-            Arc::clone(&state),
-            &request_body,
-            "markdown",
-            None,
-            true,
-            Some(&author_cookie),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "create body: {body}");
-    }
+    crate::helpers::seed_posts(&state, author_id, 51, true).await;
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
