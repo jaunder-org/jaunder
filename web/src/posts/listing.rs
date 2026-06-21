@@ -74,7 +74,14 @@ pub async fn list_user_posts(
         let fetch_limit = page_size.saturating_add(1);
 
         let mut rows = posts
-            .list_published_by_user(&username, cursor.as_ref(), fetch_limit)
+            // TODO(Task 15/16/20/21): real viewer. Anonymous is safe today
+            // because every post is Public.
+            .list_published_by_user(
+                &username,
+                cursor.as_ref(),
+                fetch_limit,
+                &common::visibility::ViewerIdentity::Anonymous,
+            )
             .await
             .map_err(InternalError::storage)?;
 
@@ -117,7 +124,13 @@ pub async fn list_local_timeline(
         let fetch_limit = page_size.saturating_add(1);
 
         let mut rows = posts
-            .list_published(cursor.as_ref(), fetch_limit)
+            // TODO(Task 15/16/20/21): real viewer. Anonymous is safe today
+            // because every post is Public.
+            .list_published(
+                cursor.as_ref(),
+                fetch_limit,
+                &common::visibility::ViewerIdentity::Anonymous,
+            )
             .await
             .map_err(InternalError::storage)?;
 
@@ -155,7 +168,14 @@ pub async fn list_home_feed(
         let fetch_limit = page_size.saturating_add(1);
 
         let mut rows = posts
-            .list_published_by_user(&auth.username, cursor.as_ref(), fetch_limit)
+            // TODO(Task 15/16/20/21): real viewer. Anonymous is safe today
+            // because every post is Public.
+            .list_published_by_user(
+                &auth.username,
+                cursor.as_ref(),
+                fetch_limit,
+                &common::visibility::ViewerIdentity::Anonymous,
+            )
             .await
             .map_err(InternalError::storage)?;
 
@@ -202,7 +222,14 @@ pub async fn list_posts_by_tag(
 
         let rows = list_by_tag_rows(
             posts
-                .list_posts_by_tag(&tag_slug, cursor.as_ref(), fetch_limit)
+                // TODO(Task 15/16/20/21): real viewer. Anonymous is safe today
+                // because every post is Public.
+                .list_posts_by_tag(
+                    &tag_slug,
+                    cursor.as_ref(),
+                    fetch_limit,
+                    &common::visibility::ViewerIdentity::Anonymous,
+                )
                 .await,
         )?;
 
@@ -262,7 +289,15 @@ pub async fn list_user_posts_by_tag(
 
         let rows = list_by_tag_rows(
             posts
-                .list_user_posts_by_tag(author.user_id, &tag_slug, cursor.as_ref(), fetch_limit)
+                // TODO(Task 15/16/20/21): real viewer. Anonymous is safe today
+                // because every post is Public.
+                .list_user_posts_by_tag(
+                    author.user_id,
+                    &tag_slug,
+                    cursor.as_ref(),
+                    fetch_limit,
+                    &common::visibility::ViewerIdentity::Anonymous,
+                )
                 .await,
         )?;
 

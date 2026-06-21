@@ -302,7 +302,10 @@ pub async fn perform_post_creation(
         {
             Ok(post_id) => {
                 let record = storage
-                    .get_post_by_id(post_id)
+                    // TODO(Task 15/16/20/21): real viewer. Anonymous is safe
+                    // today because every post is Public; this fetch re-reads
+                    // the post the author just created.
+                    .get_post_by_id(post_id, &common::visibility::ViewerIdentity::Anonymous)
                     .await
                     .map_err(PerformCreationError::Storage)?
                     .ok_or(PerformCreationError::CreatedNotFound)?;

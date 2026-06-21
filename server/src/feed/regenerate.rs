@@ -43,7 +43,14 @@ pub async fn regenerate_feed(
     };
     let now = Utc::now();
     let published = posts
-        .list_published_in_window(&surface, &window, now)
+        // TODO(Task 15/16/20/21): real viewer. Feeds intentionally stay
+        // Anonymous (public-only); safe today because every post is Public.
+        .list_published_in_window(
+            &surface,
+            &window,
+            now,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .map_err(storage_err)?;
 

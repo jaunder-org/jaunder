@@ -221,7 +221,10 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
 
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .expect("post should exist");
@@ -394,7 +397,10 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
 
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .expect("post should exist");
@@ -440,7 +446,10 @@ async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
     assert_eq!(created.slug, "titleless-note");
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .expect("post should exist");
@@ -486,7 +495,10 @@ Body text",
     assert_eq!(created.slug, "extracted-title");
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .expect("post should exist");
@@ -594,7 +606,10 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
 
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .expect("post should exist");
@@ -673,7 +688,10 @@ draft",
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -834,7 +852,10 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -1047,7 +1068,7 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
 
     let record = state
         .posts
-        .get_post_by_id(post_id)
+        .get_post_by_id(post_id, &common::visibility::ViewerIdentity::Anonymous)
         .await
         .unwrap()
         .expect("post should exist");
@@ -1546,7 +1567,10 @@ async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Bac
 
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -1753,7 +1777,10 @@ async fn get_post_finds_author_draft_across_multiple_pages(#[case] backend: Back
     let first_post_id = ids[0];
     let record = state
         .posts
-        .get_post_by_id(first_post_id)
+        .get_post_by_id(
+            first_post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .expect("first draft should exist");
@@ -2154,7 +2181,10 @@ async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
     // The post should now be gone from storage (deleted_at is set)
     let post = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -2602,7 +2632,10 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
 
     let published_at = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .unwrap()

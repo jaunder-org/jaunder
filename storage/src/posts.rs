@@ -8,7 +8,7 @@ use thiserror::Error;
 use common::slug::Slug;
 use common::tag::Tag;
 use common::username::Username;
-use common::visibility::AudienceTarget;
+use common::visibility::{AudienceTarget, ViewerIdentity};
 
 use crate::backend::Backend;
 use crate::helpers::{post_record_from_row, PostRow};
@@ -294,10 +294,17 @@ pub trait PostStorage: Send + Sync {
     /// Creates a new post.
     async fn create_post(&self, input: &CreatePostInput) -> Result<i64, CreatePostError>;
 
-    /// Fetches a post by its ID.
-    async fn get_post_by_id(&self, post_id: i64) -> sqlx::Result<Option<PostRecord>>;
+    /// Fetches a post by its ID, applying the viewer-resolution filter: the post
+    /// is returned only if `viewer` is the author or a targeted audience admits
+    /// them. See ADR-0020.
+    async fn get_post_by_id(
+        &self,
+        post_id: i64,
+        viewer: &ViewerIdentity,
+    ) -> sqlx::Result<Option<PostRecord>>;
 
-    /// Fetches a post by its public permalink components.
+    /// Fetches a post by its public permalink components, applying the
+    /// viewer-resolution filter. See ADR-0020.
     async fn get_post_by_permalink(
         &self,
         username: &Username,
@@ -305,6 +312,7 @@ pub trait PostStorage: Send + Sync {
         month: u32,
         day: u32,
         slug: &Slug,
+        viewer: &ViewerIdentity,
     ) -> sqlx::Result<Option<PostRecord>>;
 
     /// Updates a post and creates a new revision.
@@ -326,19 +334,23 @@ pub trait PostStorage: Send + Sync {
     /// Reverts a published post to draft status.
     async fn unpublish_post(&self, post_id: i64) -> sqlx::Result<()>;
 
-    /// Lists published posts for a specific user, ordered by creation date.
+    /// Lists published posts for a specific user, ordered by creation date,
+    /// applying the viewer-resolution filter. See ADR-0020.
     async fn list_published_by_user(
         &self,
         username: &Username,
         cursor: Option<&PostCursor>,
         limit: u32,
+        viewer: &ViewerIdentity,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
-    /// Lists all published posts across the entire site.
+    /// Lists all published posts across the entire site, applying the
+    /// viewer-resolution filter. See ADR-0020.
     async fn list_published(
         &self,
         cursor: Option<&PostCursor>,
         limit: u32,
+        viewer: &ViewerIdentity,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Lists draft posts for a specific user.
@@ -368,21 +380,25 @@ pub trait PostStorage: Send + Sync {
     /// Returns all tags associated with a specific post.
     async fn get_tags_for_post(&self, post_id: i64) -> sqlx::Result<Vec<PostTag>>;
 
-    /// Lists published posts that carry a specific tag.
+    /// Lists published posts that carry a specific tag, applying the
+    /// viewer-resolution filter. See ADR-0020.
     async fn list_posts_by_tag(
         &self,
         tag_slug: &Tag,
         cursor: Option<&PostCursor>,
         limit: u32,
+        viewer: &ViewerIdentity,
     ) -> Result<Vec<PostRecord>, ListByTagError>;
 
-    /// Lists published posts for a specific user that carry a specific tag.
+    /// Lists published posts for a specific user that carry a specific tag,
+    /// applying the viewer-resolution filter. See ADR-0020.
     async fn list_user_posts_by_tag(
         &self,
         user_id: i64,
         tag_slug: &Tag,
         cursor: Option<&PostCursor>,
         limit: u32,
+        viewer: &ViewerIdentity,
     ) -> Result<Vec<PostRecord>, ListByTagError>;
 
     /// Returns tag records whose slug begins with `prefix` (case-insensitive
@@ -402,6 +418,7 @@ pub trait PostStorage: Send + Sync {
         surface: &common::feed::FeedSurface,
         window: &common::feed::HybridWindow,
         now: DateTime<Utc>,
+        viewer: &ViewerIdentity,
     ) -> sqlx::Result<Vec<PostRecord>>;
 }
 
@@ -549,20 +566,24 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn get_post_by_id(&self, post_id: i64) -> sqlx::Result<Option<PostRecord>> {
+    async fn get_post_by_id(
+        &self,
+        post_id: i64,
+        viewer: &ViewerIdentity,
+    ) -> sqlx::Result<Option<PostRecord>> {
+        let (resolution, binds, _) = resolution_where(viewer, 2);
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                     p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
                     {tags} AS tags
              FROM posts p
              JOIN users u ON p.user_id = u.user_id
-             WHERE p.post_id = $1",
+             WHERE p.post_id = $1
+               AND {resolution}",
             tags = DB::TAGS_SUBQUERY,
         );
-        let row = sqlx::query_as::<_, PostRow>(&sql)
-            .bind(post_id)
-            .fetch_optional(&self.pool)
-            .await?;
+        let query = sqlx::query_as::<_, PostRow>(&sql).bind(post_id);
+        let row = binds.bind_onto(query).fetch_optional(&self.pool).await?;
         Ok(row.map(post_record_from_row).transpose()?)
     }
 
@@ -578,8 +599,10 @@ where
         month: u32,
         day: u32,
         slug: &Slug,
+        viewer: &ViewerIdentity,
     ) -> sqlx::Result<Option<PostRecord>> {
         let date_str = format!("{year:04}-{month:02}-{day:02}");
+        let (resolution, binds, _) = resolution_where(viewer, 4);
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                     p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -590,16 +613,16 @@ where
                AND p.slug = $2
                AND p.published_at IS NOT NULL
                AND p.deleted_at IS NULL
-               AND {date_clause}",
+               AND {date_clause}
+               AND {resolution}",
             tags = DB::TAGS_SUBQUERY,
             date_clause = DB::PERMALINK_DATE_CLAUSE,
         );
-        let row = sqlx::query_as::<_, PostRow>(&sql)
+        let query = sqlx::query_as::<_, PostRow>(&sql)
             .bind(username.as_str())
             .bind(slug.as_str())
-            .bind(date_str.as_str())
-            .fetch_optional(&self.pool)
-            .await?;
+            .bind(date_str.as_str());
+        let row = binds.bind_onto(query).fetch_optional(&self.pool).await?;
         Ok(row.map(post_record_from_row).transpose()?)
     }
 
@@ -655,9 +678,13 @@ where
         username: &Username,
         cursor: Option<&PostCursor>,
         limit: u32,
+        viewer: &ViewerIdentity,
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
+            // Binds: $1 username, $2/$3 cursor, $4 post_id, $5..$9 resolution,
+            // $10 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 5);
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -668,18 +695,23 @@ where
                    AND p.published_at IS NOT NULL
                    AND p.deleted_at IS NULL
                    AND (p.created_at < $2 OR (p.created_at = $3 AND p.post_id < $4))
+                   AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT $5"
+                 LIMIT ${limit_idx}"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(username.as_str())
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(cursor.post_id)
+                .bind(cursor.post_id);
+            binds
+                .bind_onto(query)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
         } else {
+            // Binds: $1 username, $2..$6 resolution, $7 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 2);
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -689,11 +721,13 @@ where
                  WHERE u.username = $1
                    AND p.published_at IS NOT NULL
                    AND p.deleted_at IS NULL
+                   AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT $2"
+                 LIMIT ${limit_idx}"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
-                .bind(username.as_str())
+            let query = sqlx::query_as::<_, PostRow>(&sql).bind(username.as_str());
+            binds
+                .bind_onto(query)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
@@ -710,9 +744,12 @@ where
         &self,
         cursor: Option<&PostCursor>,
         limit: u32,
+        viewer: &ViewerIdentity,
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
+            // Binds: $1/$2 cursor, $3 post_id, $4..$8 resolution, $9 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 4);
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -722,17 +759,22 @@ where
                  WHERE p.published_at IS NOT NULL
                    AND p.deleted_at IS NULL
                    AND (p.created_at < $1 OR (p.created_at = $2 AND p.post_id < $3))
+                   AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT $4"
+                 LIMIT ${limit_idx}"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(cursor.post_id)
+                .bind(cursor.post_id);
+            binds
+                .bind_onto(query)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
         } else {
+            // Binds: $1..$5 resolution, $6 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 1);
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -741,10 +783,13 @@ where
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.published_at IS NOT NULL
                    AND p.deleted_at IS NULL
+                   AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT $1"
+                 LIMIT ${limit_idx}"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRow>(&sql);
+            binds
+                .bind_onto(query)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
@@ -921,6 +966,7 @@ where
         tag_slug: &Tag,
         cursor: Option<&PostCursor>,
         limit: u32,
+        viewer: &ViewerIdentity,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         let tag_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
@@ -934,6 +980,8 @@ where
 
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
+            // Binds: $1 tag, $2/$3 cursor, $4 post_id, $5..$9 resolution, $10 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 5);
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -946,18 +994,23 @@ where
                    AND p.published_at IS NOT NULL
                    AND p.deleted_at IS NULL
                    AND (p.created_at < $2 OR (p.created_at = $3 AND p.post_id < $4))
+                   AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT $5"
+                 LIMIT ${limit_idx}"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(tag_slug.as_str())
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(cursor.post_id)
+                .bind(cursor.post_id);
+            binds
+                .bind_onto(query)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
         } else {
+            // Binds: $1 tag, $2..$6 resolution, $7 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 2);
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -969,11 +1022,13 @@ where
                  WHERE t.tag_slug = $1
                    AND p.published_at IS NOT NULL
                    AND p.deleted_at IS NULL
+                   AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT $2"
+                 LIMIT ${limit_idx}"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
-                .bind(tag_slug.as_str())
+            let query = sqlx::query_as::<_, PostRow>(&sql).bind(tag_slug.as_str());
+            binds
+                .bind_onto(query)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
@@ -996,6 +1051,7 @@ where
         tag_slug: &Tag,
         cursor: Option<&PostCursor>,
         limit: u32,
+        viewer: &ViewerIdentity,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         let tag_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
@@ -1009,6 +1065,9 @@ where
 
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
+            // Binds: $1 user_id, $2 tag, $3/$4 cursor, $5 post_id,
+            // $6..$10 resolution, $11 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 6);
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -1022,19 +1081,24 @@ where
                    AND p.published_at IS NOT NULL
                    AND p.deleted_at IS NULL
                    AND (p.created_at < $3 OR (p.created_at = $4 AND p.post_id < $5))
+                   AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT $6"
+                 LIMIT ${limit_idx}"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(user_id)
                 .bind(tag_slug.as_str())
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(cursor.post_id)
+                .bind(cursor.post_id);
+            binds
+                .bind_onto(query)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
         } else {
+            // Binds: $1 user_id, $2 tag, $3..$7 resolution, $8 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 3);
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -1047,12 +1111,15 @@ where
                    AND t.tag_slug = $2
                    AND p.published_at IS NOT NULL
                    AND p.deleted_at IS NULL
+                   AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT $3"
+                 LIMIT ${limit_idx}"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(user_id)
-                .bind(tag_slug.as_str())
+                .bind(tag_slug.as_str());
+            binds
+                .bind_onto(query)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
@@ -1122,6 +1189,7 @@ where
         surface: &common::feed::FeedSurface,
         window: &common::feed::HybridWindow,
         now: DateTime<Utc>,
+        viewer: &ViewerIdentity,
     ) -> sqlx::Result<Vec<PostRecord>> {
         // ROW_NUMBER() identifies the top `min_items` posts; OR-combining with
         // `published_at >= cutoff` produces the hybrid-window union in a single
@@ -1129,9 +1197,119 @@ where
         // is shared via `DB::TAGS_SUBQUERY`.
         let cutoff = window.cutoff_date(now);
         let min_items = i64::from(window.min_items);
-        let rows = list_published_in_window_rows::<DB>(&self.pool, surface, now, cutoff, min_items)
-            .await?;
+        let rows = list_published_in_window_rows::<DB>(
+            &self.pool, surface, now, cutoff, min_items, viewer,
+        )
+        .await?;
         rows.into_iter().map(post_record_from_row).collect()
+    }
+}
+
+/// The viewer-resolution binds folded into a read query's `WHERE`, in the exact
+/// left-to-right order their placeholders appear in [`resolution_where`]'s
+/// fragment. `channel`/`subref` repeat (subscribers branch, then named branch)
+/// because each occurrence gets its own placeholder — see [`resolution_where`].
+struct ResolutionBinds {
+    /// `p.user_id = $author_id` — the viewer's local user id for the author
+    /// branch, or the sentinel `-1` (no post has `user_id` -1) for `Anonymous`.
+    author_id: i64,
+    /// `s.channel_id` for the subscribers/named `EXISTS` branches; sentinel `-1`
+    /// for `Anonymous` (no subscription has `channel_id` -1).
+    channel: i64,
+    /// `s.subscriber_ref` for the subscribers/named branches; sentinel `""` for
+    /// `Anonymous`.
+    subref: String,
+}
+
+/// The viewer-resolution predicate and its binds, for folding into a read
+/// query's `WHERE`. A post is returned to `viewer` only if the viewer is the
+/// author OR some targeted audience admits them. See ADR-0020, Task 13.
+///
+/// The fragment is emitted in full for every viewer; `Anonymous` is handled by
+/// binding sentinels (`author_id = -1`, `channel = -1`, `subref = ""`) that make
+/// every non-`public` branch dead, so it reduces to "public posts only" without
+/// a second query shape.
+///
+/// `start` is the next free `$n` index. The fragment uses FIVE distinct
+/// placeholders (`$start`..`$start+4`) — the `channel`/`subref` pair appears once
+/// in the subscribers branch and again in the named branch, and each occurrence
+/// gets its own number so the binds are positional on both backends (`SQLite`
+/// accepts `$n` and binds by position; see ADR-0019). The returned
+/// [`ResolutionBinds`] therefore carries `channel`/`subref` once each but the
+/// caller binds them **twice**, in fragment order:
+/// `author_id, channel, subref, channel, subref`. Returns `(sql, binds, next)`
+/// where `next` is the first free index after the fragment.
+fn resolution_where(viewer: &ViewerIdentity, start: usize) -> (String, ResolutionBinds, usize) {
+    let (author_id, channel, subref) = match viewer {
+        ViewerIdentity::Anonymous => (-1_i64, -1_i64, String::new()),
+        ViewerIdentity::Channel {
+            channel_id,
+            subscriber_ref,
+        } => {
+            // The author branch fires only for a local viewer whose
+            // `subscriber_ref` parses to a real user id (the post's `user_id`).
+            // A non-numeric ref (no local user) falls through to -1, so it never
+            // matches `p.user_id`.
+            let author_id = subscriber_ref.parse::<i64>().unwrap_or(-1);
+            (author_id, *channel_id, subscriber_ref.clone())
+        }
+    };
+    let author = start;
+    let sub_channel = start + 1;
+    let sub_refnum = start + 2;
+    let named_channel = start + 3;
+    let named_refnum = start + 4;
+    let sql = format!(
+        "( p.user_id = ${author}
+  OR EXISTS (
+    SELECT 1 FROM post_audiences pa
+    JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
+    WHERE pa.post_id = p.post_id AND (
+         tk.name = 'public'
+      OR (tk.name = 'subscribers' AND EXISTS (
+            SELECT 1 FROM subscriptions s JOIN subscription_statuses st ON st.status_id = s.status_id
+            WHERE s.author_user_id = p.user_id AND s.channel_id = ${sub_channel}
+              AND s.subscriber_ref = ${sub_refnum} AND st.name = 'active'))
+      OR (tk.name = 'named' AND EXISTS (
+            SELECT 1 FROM audience_members am
+            JOIN subscriptions s ON s.subscription_id = am.subscription_id
+            JOIN subscription_statuses st ON st.status_id = s.status_id
+            WHERE am.audience_id = pa.audience_id AND s.channel_id = ${named_channel}
+              AND s.subscriber_ref = ${named_refnum} AND st.name = 'active'))
+  ))
+)"
+    );
+    (
+        sql,
+        ResolutionBinds {
+            author_id,
+            channel,
+            subref,
+        },
+        start + 5,
+    )
+}
+
+impl ResolutionBinds {
+    /// Binds the five resolution placeholders onto `query` in the exact
+    /// fragment order: `author_id, channel, subref, channel, subref`. The caller
+    /// must have already bound everything to the left of the fragment, and must
+    /// bind the query's trailing binds (e.g. `LIMIT`) afterward.
+    fn bind_onto<'q, DB>(
+        &'q self,
+        query: sqlx::query::QueryAs<'q, DB, PostRow, DB::Arguments<'q>>,
+    ) -> sqlx::query::QueryAs<'q, DB, PostRow, DB::Arguments<'q>>
+    where
+        DB: Database,
+        i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    {
+        query
+            .bind(self.author_id)
+            .bind(self.channel)
+            .bind(self.subref.as_str())
+            .bind(self.channel)
+            .bind(self.subref.as_str())
     }
 }
 
@@ -1197,6 +1375,7 @@ async fn list_published_in_window_rows<DB>(
     now: DateTime<Utc>,
     cutoff: DateTime<Utc>,
     min_items: i64,
+    viewer: &ViewerIdentity,
 ) -> sqlx::Result<Vec<PostRow>>
 where
     DB: PostDialect,
@@ -1211,6 +1390,8 @@ where
     let tags = DB::TAGS_SUBQUERY;
     match surface {
         FeedSurface::Site => {
+            // Binds: $1 now, $2 min_items, $3 cutoff, $4..$8 resolution.
+            let (resolution, binds, _) = resolution_where(viewer, 4);
             let sql = format!(
                 "WITH ranked AS (
      SELECT p.post_id, p.published_at,
@@ -1226,17 +1407,20 @@ where
  FROM ranked r
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
- WHERE r.rn <= $2 OR r.published_at >= $3
+ WHERE (r.rn <= $2 OR r.published_at >= $3)
+   AND {resolution}
  ORDER BY p.published_at DESC, p.post_id DESC"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(now)
                 .bind(min_items)
-                .bind(cutoff)
-                .fetch_all(pool)
-                .await
+                .bind(cutoff);
+            binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::User { username } => {
+            // Binds: $1 now, $2 username, $3 min_items, $4 cutoff,
+            // $5..$9 resolution.
+            let (resolution, binds, _) = resolution_where(viewer, 5);
             let sql = format!(
                 "WITH ranked AS (
      SELECT p.post_id, p.published_at,
@@ -1254,18 +1438,20 @@ where
  FROM ranked r
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
- WHERE r.rn <= $3 OR r.published_at >= $4
+ WHERE (r.rn <= $3 OR r.published_at >= $4)
+   AND {resolution}
  ORDER BY p.published_at DESC, p.post_id DESC"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(now)
                 .bind(username.as_str())
                 .bind(min_items)
-                .bind(cutoff)
-                .fetch_all(pool)
-                .await
+                .bind(cutoff);
+            binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::SiteTag { tag } => {
+            // Binds: $1 now, $2 tag, $3 min_items, $4 cutoff, $5..$9 resolution.
+            let (resolution, binds, _) = resolution_where(viewer, 5);
             let sql = format!(
                 "WITH ranked AS (
      SELECT p.post_id, p.published_at,
@@ -1284,18 +1470,21 @@ where
  FROM ranked r
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
- WHERE r.rn <= $3 OR r.published_at >= $4
+ WHERE (r.rn <= $3 OR r.published_at >= $4)
+   AND {resolution}
  ORDER BY p.published_at DESC, p.post_id DESC"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(now)
                 .bind(tag.as_str())
                 .bind(min_items)
-                .bind(cutoff)
-                .fetch_all(pool)
-                .await
+                .bind(cutoff);
+            binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::UserTag { username, tag } => {
+            // Binds: $1 now, $2 username, $3 tag, $4 min_items, $5 cutoff,
+            // $6..$10 resolution.
+            let (resolution, binds, _) = resolution_where(viewer, 6);
             let sql = format!(
                 "WITH ranked AS (
      SELECT p.post_id, p.published_at,
@@ -1316,17 +1505,17 @@ where
  FROM ranked r
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
- WHERE r.rn <= $4 OR r.published_at >= $5
+ WHERE (r.rn <= $4 OR r.published_at >= $5)
+   AND {resolution}
  ORDER BY p.published_at DESC, p.post_id DESC"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(now)
                 .bind(username.as_str())
                 .bind(tag.as_str())
                 .bind(min_items)
-                .bind(cutoff)
-                .fetch_all(pool)
-                .await
+                .bind(cutoff);
+            binds.bind_onto(query).fetch_all(pool).await
         }
     }
 }
@@ -1504,7 +1693,11 @@ mod tests {
         };
 
         let post_id = posts.create_post(&input).await.unwrap();
-        let post = posts.get_post_by_id(post_id).await.unwrap().unwrap();
+        let post = posts
+            .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+            .await
+            .unwrap()
+            .unwrap();
 
         assert_eq!(post.summary, Some("the summary".into()));
     }

@@ -1787,7 +1787,12 @@ async fn post_create_and_get_by_id_works(#[case] backend: Backend) {
     let input = make_create_post_input(user_id, "hello-world");
     let post_id = state.posts.create_post(&input).await.unwrap();
 
-    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    let record = state
+        .posts
+        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(record.post_id, post_id);
     assert_eq!(record.user_id, user_id);
     assert_eq!(record.title.as_deref(), Some("Post hello-world"));
@@ -2031,17 +2036,30 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
         .unwrap();
 
     // It should appear before deletion
-    let published = state.posts.list_published(None, 10).await.unwrap();
+    let published = state
+        .posts
+        .list_published(None, 10, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap();
     assert!(published.iter().any(|p| p.post_id == post_id));
 
     state.posts.soft_delete_post(post_id).await.unwrap();
 
     // Should not appear after deletion
-    let published = state.posts.list_published(None, 10).await.unwrap();
+    let published = state
+        .posts
+        .list_published(None, 10, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap();
     assert!(!published.iter().any(|p| p.post_id == post_id));
 
     // deleted_at should be set
-    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    let record = state
+        .posts
+        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(record.deleted_at.is_some());
 }
 
@@ -2115,7 +2133,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     };
     let site = state
         .posts
-        .list_published_in_window(&FeedSurface::Site, &window, now)
+        .list_published_in_window(&FeedSurface::Site, &window, now, &ViewerIdentity::Anonymous)
         .await
         .unwrap();
     assert_eq!(site.len(), 3, "site feed in {{3 items, 30 days}}");
@@ -2131,7 +2149,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     };
     let site_big = state
         .posts
-        .list_published_in_window(&FeedSurface::Site, &big, now)
+        .list_published_in_window(&FeedSurface::Site, &big, now, &ViewerIdentity::Anonymous)
         .await
         .unwrap();
     assert_eq!(site_big.len(), 5, "min_items=5 pulls in older posts");
@@ -2151,6 +2169,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
             },
             &alice_window,
             now,
+            &ViewerIdentity::Anonymous,
         )
         .await
         .unwrap();
@@ -2169,6 +2188,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 min_days: 1,
             },
             now,
+            &ViewerIdentity::Anonymous,
         )
         .await
         .unwrap();
@@ -2178,7 +2198,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     // Add a tag to alice-recent-1 and verify site-tag / user-tag feeds.
     let alice_recent_1 = state
         .posts
-        .list_published_by_user(&username("walice"), None, 10)
+        .list_published_by_user(&username("walice"), None, 10, &ViewerIdentity::Anonymous)
         .await
         .unwrap()
         .into_iter()
@@ -2201,6 +2221,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 min_days: 30,
             },
             now,
+            &ViewerIdentity::Anonymous,
         )
         .await
         .unwrap();
@@ -2219,6 +2240,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 min_days: 30,
             },
             now,
+            &ViewerIdentity::Anonymous,
         )
         .await
         .unwrap();
@@ -2237,6 +2259,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 min_days: 30,
             },
             now,
+            &ViewerIdentity::Anonymous,
         )
         .await
         .unwrap();
@@ -2277,7 +2300,7 @@ async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend
 
     let alice_posts = state
         .posts
-        .list_published_by_user(&username("ealice"), None, 10)
+        .list_published_by_user(&username("ealice"), None, 10, &ViewerIdentity::Anonymous)
         .await
         .unwrap();
     assert_eq!(alice_posts.len(), 2);
@@ -2285,7 +2308,7 @@ async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend
 
     let bob_posts = state
         .posts
-        .list_published_by_user(&username("ebob"), None, 10)
+        .list_published_by_user(&username("ebob"), None, 10, &ViewerIdentity::Anonymous)
         .await
         .unwrap();
     assert_eq!(bob_posts.len(), 1);
@@ -2322,7 +2345,11 @@ async fn list_published_returns_published_non_deleted_posts(#[case] backend: Bac
         .await
         .unwrap();
 
-    let published = state.posts.list_published(None, 10).await.unwrap();
+    let published = state
+        .posts
+        .list_published(None, 10, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap();
     assert_eq!(published.len(), 2);
     assert!(published.iter().all(|p| p.published_at.is_some()));
 }
@@ -2560,7 +2587,7 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
     let tag_slug: Tag = "web-development".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
 
@@ -2662,7 +2689,7 @@ async fn tag_list_pagination(#[case] backend: Backend) {
     let tag_slug: Tag = "pagination-test".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 2)
+        .list_posts_by_tag(&tag_slug, None, 2, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
 
@@ -2747,7 +2774,7 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
     let tag_slug: Tag = "shared-tag".parse().unwrap();
     let user1_posts = state
         .posts
-        .list_user_posts_by_tag(user1, &tag_slug, None, 50)
+        .list_user_posts_by_tag(user1, &tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_user_posts_by_tag failed");
 
@@ -2757,7 +2784,7 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
     // List user2's posts by tag - should only see post2
     let user2_posts = state
         .posts
-        .list_user_posts_by_tag(user2, &tag_slug, None, 50)
+        .list_user_posts_by_tag(user2, &tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_user_posts_by_tag failed");
 
@@ -2992,7 +3019,10 @@ async fn list_posts_by_nonexistent_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let tag_slug: Tag = "nosuch-tag".parse().unwrap();
-    let result = state.posts.list_posts_by_tag(&tag_slug, None, 50).await;
+    let result = state
+        .posts
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .await;
 
     assert!(matches!(result, Err(ListByTagError::TagNotFound)));
 }
@@ -3017,7 +3047,7 @@ async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
     let tag_slug: Tag = "nonexistent-tag-99".parse().unwrap();
     let result = state
         .posts
-        .list_user_posts_by_tag(user, &tag_slug, None, 50)
+        .list_user_posts_by_tag(user, &tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await;
 
     assert!(matches!(result, Err(ListByTagError::TagNotFound)));
@@ -3086,7 +3116,7 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
         let tag_slug: Tag = tag.parse().unwrap();
         let posts = state
             .posts
-            .list_posts_by_tag(&tag_slug, None, 50)
+            .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
             .await
             .expect("list_posts_by_tag failed");
         assert_eq!(posts.len(), 3);
@@ -3555,7 +3585,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     let tag_slug: Tag = "test".parse().unwrap();
     let posts_before = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(posts_before.len(), 1);
@@ -3578,7 +3608,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     // List by tag again - should return empty list (tag exists but no posts have it)
     let posts_after = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(posts_after.len(), 0);
@@ -3870,7 +3900,7 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
     let tag_slug: Tag = "javascript".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
 
@@ -3977,7 +4007,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
     let tag_slug: Tag = "clojure".parse().unwrap();
     let posts = state
         .posts
-        .list_user_posts_by_tag(user1, &tag_slug, None, 50)
+        .list_user_posts_by_tag(user1, &tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_user_posts_by_tag failed");
 
@@ -3992,7 +4022,10 @@ async fn tag_not_found_error(#[case] backend: Backend) {
     let state = &env.state;
     // Try to list posts by non-existent tag
     let tag_slug: Tag = "nonexistent".parse().unwrap();
-    let result = state.posts.list_posts_by_tag(&tag_slug, None, 50).await;
+    let result = state
+        .posts
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .await;
 
     match result {
         Err(ListByTagError::TagNotFound) => {
@@ -4074,7 +4107,7 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let tag_slug: Tag = "haskell".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
 
@@ -4206,7 +4239,7 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let tag_slug: Tag = "kotlin".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
 
@@ -4329,7 +4362,7 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
     // Get all posts
     let all = state
         .posts
-        .list_published(None, 10)
+        .list_published(None, 10, &ViewerIdentity::Anonymous)
         .await
         .expect("list_published failed");
     assert_eq!(all.len(), 5);
@@ -4337,7 +4370,7 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
     // Get first 2
     let first = state
         .posts
-        .list_published(None, 2)
+        .list_published(None, 2, &ViewerIdentity::Anonymous)
         .await
         .expect("list_published failed");
     assert_eq!(first.len(), 2);
@@ -4350,7 +4383,7 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_published(Some(&cursor), 2)
+            .list_published(Some(&cursor), 2, &ViewerIdentity::Anonymous)
             .await
             .expect("list_published with cursor failed");
         assert_eq!(next.len(), 2);
@@ -4475,7 +4508,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
     // Get all tagged posts
     let all = state
         .posts
-        .list_user_posts_by_tag(user, &tag, None, 10)
+        .list_user_posts_by_tag(user, &tag, None, 10, &ViewerIdentity::Anonymous)
         .await
         .expect("list_user_posts_by_tag failed");
     assert_eq!(all.len(), 3);
@@ -4483,7 +4516,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
     // Get first 1
     let first = state
         .posts
-        .list_user_posts_by_tag(user, &tag, None, 1)
+        .list_user_posts_by_tag(user, &tag, None, 1, &ViewerIdentity::Anonymous)
         .await
         .expect("list_user_posts_by_tag failed");
     assert_eq!(first.len(), 1);
@@ -4496,7 +4529,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_user_posts_by_tag(user, &tag, Some(&cursor), 2)
+            .list_user_posts_by_tag(user, &tag, Some(&cursor), 2, &ViewerIdentity::Anonymous)
             .await
             .expect("list_user_posts_by_tag with cursor failed");
         assert!(next.len() <= 2);
@@ -4552,7 +4585,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
     // Get all tagged posts
     let all = state
         .posts
-        .list_posts_by_tag(&tag, None, 10)
+        .list_posts_by_tag(&tag, None, 10, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(all.len(), 3);
@@ -4560,7 +4593,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
     // Get first 1
     let first = state
         .posts
-        .list_posts_by_tag(&tag, None, 1)
+        .list_posts_by_tag(&tag, None, 1, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(first.len(), 1);
@@ -4573,7 +4606,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_posts_by_tag(&tag, Some(&cursor), 2)
+            .list_posts_by_tag(&tag, Some(&cursor), 2, &ViewerIdentity::Anonymous)
             .await
             .expect("list_posts_by_tag with cursor failed");
         assert!(next.len() <= 2);
@@ -4630,7 +4663,7 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
     // Try to get by ID (should still exist internally)
     let post = state
         .posts
-        .get_post_by_id(post_id)
+        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id failed");
     assert!(post.is_none() || post.unwrap().deleted_at.is_some());
@@ -4639,7 +4672,7 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
     let tag: Tag = "delete-tag".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag, None, 10)
+        .list_posts_by_tag(&tag, None, 10, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
     assert!(posts.is_empty());
@@ -4732,7 +4765,12 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
     // User has no posts
     let posts = state
         .posts
-        .list_published_by_user(&username("no_posts_user"), None, 10)
+        .list_published_by_user(
+            &username("no_posts_user"),
+            None,
+            10,
+            &ViewerIdentity::Anonymous,
+        )
         .await
         .expect("list_published_by_user failed");
     assert!(posts.is_empty());
@@ -4744,7 +4782,12 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
     };
     let posts = state
         .posts
-        .list_published_by_user(&username("no_posts_user"), Some(&cursor), 10)
+        .list_published_by_user(
+            &username("no_posts_user"),
+            Some(&cursor),
+            10,
+            &ViewerIdentity::Anonymous,
+        )
         .await
         .expect("list_published_by_user with cursor failed");
     assert!(posts.is_empty());
@@ -4794,6 +4837,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
             created_at.month(),
             created_at.day(),
             &"permalink-test".parse().unwrap(),
+            &ViewerIdentity::Anonymous,
         )
         .await
         .expect("get_post_by_permalink failed");
@@ -4815,6 +4859,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
             created_at.month(),
             created_at.day(),
             &"permalink-test".parse().unwrap(),
+            &ViewerIdentity::Anonymous,
         )
         .await
         .expect("get_post_by_permalink after delete failed");
@@ -4884,7 +4929,7 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
     // The important part is that the post is soft deleted
     let post = state
         .posts
-        .get_post_by_id(post_id)
+        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id failed");
     assert!(post.is_none() || post.unwrap().deleted_at.is_some());
@@ -4962,7 +5007,10 @@ async fn tag_edge_case_formats(#[case] backend: Backend) {
 async fn get_post_by_id_nonexistent(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let result = state.posts.get_post_by_id(999_999).await;
+    let result = state
+        .posts
+        .get_post_by_id(999_999, &ViewerIdentity::Anonymous)
+        .await;
     match result {
         Ok(None) => {
             // Expected
@@ -5014,7 +5062,7 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
     // Get first 2
     let first = state
         .posts
-        .list_published(None, 2)
+        .list_published(None, 2, &ViewerIdentity::Anonymous)
         .await
         .expect("list_published failed");
     assert_eq!(first.len(), 2);
@@ -5027,7 +5075,7 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_published(Some(&cursor), 2)
+            .list_published(Some(&cursor), 2, &ViewerIdentity::Anonymous)
             .await
             .expect("list_published with cursor failed");
         // Should get remaining 2
@@ -5399,7 +5447,12 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
     .await
     .unwrap();
 
-    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    let record = state
+        .posts
+        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(record.title.as_deref(), Some("Rendered Markdown"));
     assert!(
         record.rendered_html.contains("<strong>bold</strong>"),
@@ -5437,7 +5490,12 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    let record = state
+        .posts
+        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(record.title.as_deref(), Some("Rendered Org"));
     assert!(
         record.rendered_html.contains("<b>bold</b>"),
@@ -6185,7 +6243,7 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
     // the rest of the row — no separate batch call.
     let p1_record = state
         .posts
-        .get_post_by_id(p1)
+        .get_post_by_id(p1, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id p1")
         .expect("p1 should exist");
@@ -6196,7 +6254,7 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
 
     let p2_record = state
         .posts
-        .get_post_by_id(p2)
+        .get_post_by_id(p2, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id p2")
         .expect("p2 should exist");
@@ -6206,7 +6264,7 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
 
     let p3_record = state
         .posts
-        .get_post_by_id(p3)
+        .get_post_by_id(p3, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id p3")
         .expect("p3 should exist");
@@ -6300,5 +6358,186 @@ async fn composite_fks_reject_cross_author_membership(#[case] backend: Backend) 
             res.is_err(),
             "cross-author membership must be rejected by the DB (owner={owner})"
         );
+    }
+}
+
+// ── Viewer-aware resolution filter (Task 13) ───────────────────────────────────
+
+// The full resolution matrix: viewers {anonymous, author A, active subscriber S,
+// named-member M (in audience G, also subscribed), non-member N (not subscribed)}
+// × posts {Public, Private, Subscribers, Named(G), Named(G2), Public+Named(G)},
+// asserting both `get_post_by_id` visibility AND presence in `list_published`
+// per the truth table in the plan (Task 13). A post is returned to a viewer only
+// if the viewer is the author OR a targeted audience admits them; admission is
+// `active`-subscription-only (fail-closed).
+#[apply(backends)]
+#[tokio::test]
+async fn resolution_matrix(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let local = local_channel_id(backend, &env).await;
+
+    // Author A and three other accounts (S, M, N). N never subscribes.
+    let a = state
+        .users
+        .create_user(&username("author_a"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let s = state
+        .users
+        .create_user(
+            &username("subscriber_s"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let m = state
+        .users
+        .create_user(&username("member_m"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let n = state
+        .users
+        .create_user(
+            &username("nonmember_n"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    // S and M are active subscribers to A; N is not. M is additionally a member
+    // of audience G (but not G2).
+    state
+        .subscriptions
+        .subscribe(a, local, &s.to_string())
+        .await
+        .unwrap();
+    let m_sub = state
+        .subscriptions
+        .subscribe(a, local, &m.to_string())
+        .await
+        .unwrap();
+    let g = state.audiences.create_audience(a, "G").await.unwrap();
+    let g2 = state.audiences.create_audience(a, "G2").await.unwrap();
+    state.audiences.add_member(a, g, m_sub).await.unwrap();
+
+    // One published post per audience targeting. `Private` carries no audience
+    // rows; `Public+Named(G)` carries both.
+    let make = |slug: &str, audiences: Vec<AudienceTarget>| CreatePostInput {
+        user_id: a,
+        title: Some(format!("Post {slug}")),
+        slug: slug.parse().unwrap(),
+        body: "body".to_string(),
+        format: PostFormat::Markdown,
+        rendered_html: "<p>body</p>".to_string(),
+        published_at: Some(Utc::now()),
+        summary: None,
+        audiences,
+    };
+    let p_public = state
+        .posts
+        .create_post(&make("public", vec![AudienceTarget::Public]))
+        .await
+        .unwrap();
+    let p_private = state
+        .posts
+        .create_post(&make("private", vec![]))
+        .await
+        .unwrap();
+    let p_subscribers = state
+        .posts
+        .create_post(&make("subscribers", vec![AudienceTarget::Subscribers]))
+        .await
+        .unwrap();
+    let p_named_g = state
+        .posts
+        .create_post(&make("named-g", vec![AudienceTarget::Named(g)]))
+        .await
+        .unwrap();
+    let p_named_g2 = state
+        .posts
+        .create_post(&make("named-g2", vec![AudienceTarget::Named(g2)]))
+        .await
+        .unwrap();
+    let p_public_named_g = state
+        .posts
+        .create_post(&make(
+            "public-named-g",
+            vec![AudienceTarget::Public, AudienceTarget::Named(g)],
+        ))
+        .await
+        .unwrap();
+
+    let anon = ViewerIdentity::Anonymous;
+    let viewer_a = ViewerIdentity::local(a, local);
+    let viewer_s = ViewerIdentity::local(s, local);
+    let viewer_m = ViewerIdentity::local(m, local);
+    let viewer_n = ViewerIdentity::local(n, local);
+
+    // (label, post_id, [anon, A, S, M, N] expected visibility)
+    let matrix: &[(&str, i64, [bool; 5])] = &[
+        ("Public", p_public, [true, true, true, true, true]),
+        ("Private", p_private, [false, true, false, false, false]),
+        (
+            "Subscribers",
+            p_subscribers,
+            [false, true, true, true, false],
+        ),
+        ("Named(G)", p_named_g, [false, true, false, true, false]),
+        ("Named(G2)", p_named_g2, [false, true, false, false, false]),
+        (
+            "Public+Named(G)",
+            p_public_named_g,
+            [true, true, true, true, true],
+        ),
+    ];
+    let viewers: [(&str, &ViewerIdentity); 5] = [
+        ("anon", &anon),
+        ("A", &viewer_a),
+        ("S", &viewer_s),
+        ("M", &viewer_m),
+        ("N", &viewer_n),
+    ];
+
+    // `get_post_by_id`: each cell of the matrix.
+    for (label, post_id, expected) in matrix {
+        for (i, (vlabel, viewer)) in viewers.iter().enumerate() {
+            let visible = state
+                .posts
+                .get_post_by_id(*post_id, viewer)
+                .await
+                .unwrap()
+                .is_some();
+            assert_eq!(
+                visible, expected[i],
+                "get_post_by_id: post {label} for viewer {vlabel}: expected {}, got {visible}",
+                expected[i]
+            );
+        }
+    }
+
+    // `list_published`: the same truth table via presence in the site listing.
+    for (vi, (vlabel, viewer)) in viewers.iter().enumerate() {
+        let listed: std::collections::HashSet<i64> = state
+            .posts
+            .list_published(None, 100, viewer)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|p| p.post_id)
+            .collect();
+        for (label, post_id, expected) in matrix {
+            assert_eq!(
+                listed.contains(post_id),
+                expected[vi],
+                "list_published: post {label} for viewer {vlabel}: expected {}, present={}",
+                expected[vi],
+                listed.contains(post_id)
+            );
+        }
     }
 }

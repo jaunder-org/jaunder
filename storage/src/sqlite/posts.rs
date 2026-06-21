@@ -205,7 +205,9 @@ mod tests {
         let pool = sqlite_pool().await;
         let storage = SqlitePostStorage::new(pool.clone());
         pool.close().await;
-        let result = storage.get_post_by_id(1).await;
+        let result = storage
+            .get_post_by_id(1, &common::visibility::ViewerIdentity::Anonymous)
+            .await;
         assert!(result.is_err());
     }
 
@@ -214,7 +216,9 @@ mod tests {
         let pool = sqlite_pool().await;
         let storage = SqlitePostStorage::new(pool.clone());
         pool.close().await;
-        let result = storage.list_published(None, 10).await;
+        let result = storage
+            .list_published(None, 10, &common::visibility::ViewerIdentity::Anonymous)
+            .await;
         assert!(result.is_err());
     }
 

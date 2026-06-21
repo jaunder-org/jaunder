@@ -87,9 +87,21 @@ async fn assert_backup_fixture_restored(args: &StorageArgs, post_id: i64) {
     assert!(user.is_operator);
     assert_eq!(user.display_name.as_deref(), Some("Backup User"));
 
+    // View as the restored post's author. Backup/restore does not yet carry the
+    // `post_audiences` rows (see TABLES_IN_EXPORT_ORDER), so an Anonymous viewer
+    // would be filtered out by the resolution predicate; the owner is always
+    // admitted via the author branch, which is the correct viewer here.
+    let local = state
+        .subscriptions
+        .local_channel_id()
+        .await
+        .expect("local channel id");
     let post = state
         .posts
-        .get_post_by_id(post_id)
+        .get_post_by_id(
+            post_id,
+            &common::visibility::ViewerIdentity::local(user.user_id, local),
+        )
         .await
         .expect("get post")
         .expect("restored post");

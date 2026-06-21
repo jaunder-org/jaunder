@@ -133,7 +133,9 @@ async fn owned_post(
 ) -> Result<PostRecord, HandlerError> {
     super::require_user_match(auth_user, username)?;
     let post = posts
-        .get_post_by_id(post_id)
+        // TODO(Task 21): AtomPub owner-access — pass the authenticated owner as
+        // viewer. Anonymous is safe today because every post is Public.
+        .get_post_by_id(post_id, &common::visibility::ViewerIdentity::Anonymous)
         .await?
         .ok_or(HandlerError::NotFound)?;
     if post.user_id != auth_user.user_id || post.deleted_at.is_some() {
@@ -256,7 +258,12 @@ pub async fn collection_post(
 
     // Re-fetch so the response entry includes the freshly applied tags.
     let post = posts
-        .get_post_by_id(created.post_id)
+        // TODO(Task 21): AtomPub owner-access — pass the authenticated owner as
+        // viewer. Anonymous is safe today because every post is Public.
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await?
         .ok_or(HandlerError::Internal)?;
 
@@ -329,7 +336,9 @@ pub async fn member_put(
     apply_categories(posts.as_ref(), post_id, &fields.categories).await?;
 
     let post = posts
-        .get_post_by_id(post_id)
+        // TODO(Task 21): AtomPub owner-access — pass the authenticated owner as
+        // viewer. Anonymous is safe today because every post is Public.
+        .get_post_by_id(post_id, &common::visibility::ViewerIdentity::Anonymous)
         .await?
         .ok_or(HandlerError::Internal)?;
 
