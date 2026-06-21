@@ -18,6 +18,7 @@
 - **Security (workstream 3):** A release/production `jaunder` binary must never use cheap Argon2 params. This is enforced by feature isolation **and** a runtime guard; both must be present.
 - **Test discovery invariant:** After any consolidation task, `cargo nextest list -p jaunder` must report the **same total test count** as before (no tests silently lost).
 - **Run via the alias:** Invoke the gate as `cargo xtask …` (bare; no trailing `; echo`, `| tee`, `2>&1` that would mask the exit code).
+- **No compound/loop Bash:** This sandbox denies `for … do … done` loops, `{ … }` blocks, `sed`, and piped `grep`/`head`/`tail`. Run each `git mv` as its own single-line command; use the Grep tool (not bash grep) to search and Edit/Write (not sed) to edit. The `for`-loops shown in some tasks below are illustrative — expand them into individual commands.
 
 ---
 
@@ -181,10 +182,12 @@ git commit -m "refactor(test): consolidate web_* integration tests into one bina
 
 ```bash
 mkdir -p server/tests/atompub
-for f in atompub_posts atompub_media atompub_rsd atompub_service; do
-  git mv "server/tests/$f.rs" "server/tests/atompub/$f.rs"
-done
+git mv server/tests/atompub_posts.rs   server/tests/atompub/atompub_posts.rs
+git mv server/tests/atompub_media.rs   server/tests/atompub/atompub_media.rs
+git mv server/tests/atompub_rsd.rs     server/tests/atompub/atompub_rsd.rs
+git mv server/tests/atompub_service.rs server/tests/atompub/atompub_service.rs
 ```
+(Run each `git mv` as a separate command — no `for`-loop.)
 `server/tests/atompub/main.rs`:
 ```rust
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
@@ -216,10 +219,12 @@ git commit -m "refactor(test): consolidate atompub integration tests into one bi
 
 ```bash
 mkdir -p server/tests/feed
-for f in feed_worker feed_events_hook feed_handlers feed_regenerate; do
-  git mv "server/tests/$f.rs" "server/tests/feed/$f.rs"
-done
+git mv server/tests/feed_worker.rs      server/tests/feed/feed_worker.rs
+git mv server/tests/feed_events_hook.rs server/tests/feed/feed_events_hook.rs
+git mv server/tests/feed_handlers.rs    server/tests/feed/feed_handlers.rs
+git mv server/tests/feed_regenerate.rs  server/tests/feed/feed_regenerate.rs
 ```
+(Run each `git mv` as a separate command — no `for`-loop.)
 `server/tests/feed/main.rs`:
 ```rust
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
@@ -251,10 +256,12 @@ git commit -m "refactor(test): consolidate feed integration tests into one binar
 
 ```bash
 mkdir -p server/tests/misc
-for f in commands backup_interop media_handlers static_assets; do
-  git mv "server/tests/$f.rs" "server/tests/misc/$f.rs"
-done
+git mv server/tests/commands.rs       server/tests/misc/commands.rs
+git mv server/tests/backup_interop.rs server/tests/misc/backup_interop.rs
+git mv server/tests/media_handlers.rs server/tests/misc/media_handlers.rs
+git mv server/tests/static_assets.rs  server/tests/misc/static_assets.rs
 ```
+(Run each `git mv` as a separate command — no `for`-loop.)
 `server/tests/misc/main.rs`:
 ```rust
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
