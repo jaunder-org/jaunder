@@ -45,6 +45,9 @@ pub use posts::SqlitePostStorage;
 mod subscriptions;
 pub use subscriptions::SqliteSubscriptionStorage;
 
+mod audiences;
+pub use audiences::SqliteAudienceStorage;
+
 pub(crate) mod backup;
 
 use crate::db::sql_slow_query_threshold;
@@ -70,6 +73,7 @@ fn make_app_state(pool: SqlitePool) -> Arc<AppState> {
             pool.clone(),
             Arc::new(common::visibility::OpenSubscriptionPolicy),
         )),
+        audiences: Arc::new(SqliteAudienceStorage::new(pool.clone())),
         media: Arc::new(SqliteMediaStorage::new(pool.clone())),
         user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
         feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),

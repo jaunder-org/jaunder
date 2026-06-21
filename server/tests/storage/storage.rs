@@ -23,13 +23,13 @@ use sqlx::{PgPool, SqlitePool};
 use std::sync::Arc;
 use storage::{
     create_rendered_post, open_database, open_existing_database, update_rendered_post, AtomicOps,
-    CreatePostError, CreatePostInput, CreateUserError, DbConnectOptions, EmailVerificationStorage,
-    InviteStorage, ListByTagError, PasswordResetStorage, PostCursor, PostFormat, ProfileUpdate,
-    RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteAtomicOps,
-    SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
-    SqliteSessionStorage, SqliteSubscriptionStorage, SqliteUserStorage, SubscriptionStorage,
-    TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
-    UsePasswordResetError, UserAuthError, UserStorage,
+    AudienceError, CreatePostError, CreatePostInput, CreateUserError, DbConnectOptions,
+    EmailVerificationStorage, InviteStorage, ListByTagError, PasswordResetStorage, PostCursor,
+    PostFormat, ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionStorage,
+    SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
+    SqlitePasswordResetStorage, SqliteSessionStorage, SqliteSubscriptionStorage, SqliteUserStorage,
+    SubscriptionStorage, TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError,
+    UseInviteError, UsePasswordResetError, UserAuthError, UserStorage,
 };
 use tempfile::TempDir;
 
@@ -310,6 +310,236 @@ async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
         .unwrap());
     // ...and it is not listed (list_subscribers is active-only).
     assert!(store.list_subscribers(author).await.unwrap().is_empty());
+}
+
+// ── Audiences ─────────────────────────────────────────────────────────────────
+
+// create → list → rename → delete round-trip. Every write is author-scoped and
+// the listing is ordered by `audience_id`; rename and delete mutate exactly the
+// targeted row.
+#[apply(backends)]
+#[tokio::test]
+async fn audience_create_list_rename_delete(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let author = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    let friends = state
+        .audiences
+        .create_audience(author, "Friends")
+        .await
+        .unwrap();
+    let family = state
+        .audiences
+        .create_audience(author, "Family")
+        .await
+        .unwrap();
+
+    // Listing is author-scoped and ordered by audience_id (insertion order).
+    let listed = state.audiences.list_audiences(author).await.unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].audience_id, friends);
+    assert_eq!(listed[0].name, "Friends");
+    assert_eq!(listed[1].audience_id, family);
+    assert_eq!(listed[1].name, "Family");
+
+    // Rename mutates exactly the targeted audience.
+    state
+        .audiences
+        .rename_audience(author, friends, "Close Friends")
+        .await
+        .unwrap();
+    let listed = state.audiences.list_audiences(author).await.unwrap();
+    assert_eq!(listed[0].name, "Close Friends");
+
+    // Renaming an audience the author does not own is NotFound.
+    let stranger = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    assert!(matches!(
+        state
+            .audiences
+            .rename_audience(stranger, friends, "Hijacked")
+            .await,
+        Err(AudienceError::NotFound)
+    ));
+
+    // Delete removes exactly the targeted audience.
+    state
+        .audiences
+        .delete_audience(author, friends)
+        .await
+        .unwrap();
+    let listed = state.audiences.list_audiences(author).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].audience_id, family);
+}
+
+// A duplicate `(author_user_id, name)` is mapped to DuplicateName on both create
+// and rename; a different author may reuse the same name.
+#[apply(backends)]
+#[tokio::test]
+async fn audience_duplicate_name_rejected(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let alice = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let bob = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    state
+        .audiences
+        .create_audience(alice, "Friends")
+        .await
+        .unwrap();
+    // Same author, same name → DuplicateName.
+    assert!(matches!(
+        state.audiences.create_audience(alice, "Friends").await,
+        Err(AudienceError::DuplicateName)
+    ));
+    // Different author may reuse the name.
+    state
+        .audiences
+        .create_audience(bob, "Friends")
+        .await
+        .unwrap();
+
+    // Rename onto an existing name (same author) → DuplicateName.
+    let work = state
+        .audiences
+        .create_audience(alice, "Work")
+        .await
+        .unwrap();
+    assert!(matches!(
+        state
+            .audiences
+            .rename_audience(alice, work, "Friends")
+            .await,
+        Err(AudienceError::DuplicateName)
+    ));
+}
+
+// add_member / list_members / remove_member happy path against a same-owner
+// subscription seeded via the wired SubscriptionStore.
+#[apply(backends)]
+#[tokio::test]
+async fn audience_membership_round_trip(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let author = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let bob = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let local = local_channel_id(backend, &env).await;
+    let sub = state
+        .subscriptions
+        .subscribe(author, local, &bob.to_string())
+        .await
+        .unwrap();
+    let audience = state
+        .audiences
+        .create_audience(author, "Friends")
+        .await
+        .unwrap();
+
+    assert!(state
+        .audiences
+        .list_members(audience)
+        .await
+        .unwrap()
+        .is_empty());
+
+    state
+        .audiences
+        .add_member(author, audience, sub)
+        .await
+        .unwrap();
+    // add_member is idempotent.
+    state
+        .audiences
+        .add_member(author, audience, sub)
+        .await
+        .unwrap();
+    assert_eq!(
+        state.audiences.list_members(audience).await.unwrap(),
+        vec![sub]
+    );
+
+    state.audiences.remove_member(audience, sub).await.unwrap();
+    assert!(state
+        .audiences
+        .list_members(audience)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+// The same-owner invariant is enforced by the composite FKs: pairing an audience
+// with a subscription owned by a *different* author must be rejected by the DB
+// and surface as `AudienceError::Storage` (no app-level check). Complements the
+// raw-SQL `composite_fks_reject_cross_author_membership` test at the trait layer.
+#[apply(backends)]
+#[tokio::test]
+async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let alice = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let bob = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let local = local_channel_id(backend, &env).await;
+    // Subscription owned by BOB.
+    let bob_sub = state
+        .subscriptions
+        .subscribe(bob, local, &alice.to_string())
+        .await
+        .unwrap();
+    // Audience owned by ALICE.
+    let alice_audience = state
+        .audiences
+        .create_audience(alice, "Friends")
+        .await
+        .unwrap();
+
+    // Alice pairs her audience with Bob's subscription: the
+    // (subscription_id, author_user_id) FK fails → Storage error.
+    assert!(matches!(
+        state
+            .audiences
+            .add_member(alice, alice_audience, bob_sub)
+            .await,
+        Err(AudienceError::Storage(_))
+    ));
+    assert!(state
+        .audiences
+        .list_members(alice_audience)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 async fn user_storage(base: &TempDir) -> SqliteUserStorage {

@@ -22,9 +22,9 @@ use std::sync::{
 };
 use storage::{
     open_database, open_existing_database, AppState, DbConnectOptions, SqliteAtomicOps,
-    SqliteEmailVerificationStorage, SqliteFeedCacheStorage, SqliteFeedEventStorage,
-    SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage, SqlitePostStorage,
-    SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
+    SqliteAudienceStorage, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
+    SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage,
+    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
     SqliteUserConfigStorage, SqliteUserStorage,
 };
 use tempfile::TempDir;
@@ -409,6 +409,7 @@ pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx
             pool.clone(),
             Arc::new(common::visibility::OpenSubscriptionPolicy),
         )),
+        audiences: Arc::new(SqliteAudienceStorage::new(pool.clone())),
         media: Arc::new(SqliteMediaStorage::new(pool.clone())),
         user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
         feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),

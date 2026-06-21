@@ -312,6 +312,7 @@ async fn worker_applies_backoff_on_ping_failure() {
             pool.clone(),
             std::sync::Arc::new(common::visibility::OpenSubscriptionPolicy),
         )),
+        audiences: std::sync::Arc::new(storage::SqliteAudienceStorage::new(pool.clone())),
         media: std::sync::Arc::new(storage::SqliteMediaStorage::new(pool.clone())),
         user_config: std::sync::Arc::new(storage::SqliteUserConfigStorage::new(pool.clone())),
         feed_cache: std::sync::Arc::new(storage::SqliteFeedCacheStorage::new(pool.clone())),

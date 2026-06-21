@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use super::{
-    AtomicOps, EmailVerificationStorage, FeedCacheStorage, FeedEventStorage, InviteStorage,
-    MediaStorage, PasswordResetStorage, PostStorage, SessionStorage, SiteConfigStorage,
-    SubscriptionStorage, UserConfigStorage, UserStorage,
+    AtomicOps, AudienceStorage, EmailVerificationStorage, FeedCacheStorage, FeedEventStorage,
+    InviteStorage, MediaStorage, PasswordResetStorage, PostStorage, SessionStorage,
+    SiteConfigStorage, SubscriptionStorage, UserConfigStorage, UserStorage,
 };
 
 /// Bundle of every storage handle the application needs.
@@ -44,6 +44,8 @@ pub struct AppState {
     pub posts: Arc<dyn PostStorage>,
     /// Interface for subscription management and the subscription-admission seam.
     pub subscriptions: Arc<dyn SubscriptionStorage>,
+    /// Interface for named audiences and their membership.
+    pub audiences: Arc<dyn AudienceStorage>,
     /// Interface for media file metadata management.
     pub media: Arc<dyn MediaStorage>,
     /// Interface for per-user preference storage.

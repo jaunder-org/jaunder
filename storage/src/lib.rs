@@ -2,6 +2,7 @@
 
 mod app_state;
 mod atomic;
+mod audiences;
 mod auth;
 mod backend;
 mod backup;
@@ -26,6 +27,7 @@ mod users;
 
 pub use app_state::*;
 pub use atomic::*;
+pub use audiences::*;
 pub use auth::*;
 pub use backend::*;
 pub use backup::{
@@ -42,18 +44,18 @@ pub use password::*;
 pub use post_service::*;
 pub use postgres::{
     create_postgres_database_and_role, resolved_postgres_options, PgBootstrapError,
-    PostgresAtomicOps, PostgresEmailVerificationStorage, PostgresFeedCacheStorage,
-    PostgresFeedEventStorage, PostgresInviteStorage, PostgresMediaStorage,
-    PostgresPasswordResetStorage, PostgresPostStorage, PostgresSessionStorage,
-    PostgresSiteConfigStorage, PostgresSubscriptionStorage, PostgresUserConfigStorage,
-    PostgresUserStorage,
+    PostgresAtomicOps, PostgresAudienceStorage, PostgresEmailVerificationStorage,
+    PostgresFeedCacheStorage, PostgresFeedEventStorage, PostgresInviteStorage,
+    PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
+    PostgresSessionStorage, PostgresSiteConfigStorage, PostgresSubscriptionStorage,
+    PostgresUserConfigStorage, PostgresUserStorage,
 };
 pub use posts::*;
 pub use sessions::*;
 pub use site_config::*;
 pub use smtp::*;
 pub use sqlite::{
-    SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
+    SqliteAtomicOps, SqliteAudienceStorage, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
     SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage,
     SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
     SqliteUserConfigStorage, SqliteUserStorage,
