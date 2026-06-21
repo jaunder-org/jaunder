@@ -176,6 +176,118 @@ async fn duplicate_audience_name_is_user_error(#[case] backend: Backend) {
     );
 }
 
+// An empty / whitespace-only name is rejected by create_audience with a
+// user-facing validation error (not a 500-masked failure).
+#[apply(backends)]
+#[tokio::test]
+async fn create_audience_empty_name_is_validation_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let author = make_user(&state, "author").await;
+    let cookie = cookie_for(&state, author).await;
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_audience",
+        "name=%20%20",
+        Some(&cookie),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "empty name must be rejected");
+    assert!(
+        body.contains("audience name must not be empty"),
+        "empty-name error should be user-facing: {body}"
+    );
+    assert!(
+        state
+            .audiences
+            .list_audiences(author)
+            .await
+            .unwrap()
+            .is_empty(),
+        "no audience should have been created"
+    );
+}
+
+// An empty / whitespace-only name is rejected by rename_audience with a
+// user-facing validation error.
+#[apply(backends)]
+#[tokio::test]
+async fn rename_audience_empty_name_is_validation_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let author = make_user(&state, "author").await;
+    let cookie = cookie_for(&state, author).await;
+
+    let (_status, body) = post_form(
+        Arc::clone(&state),
+        "/api/create_audience",
+        "name=Friends",
+        Some(&cookie),
+    )
+    .await;
+    let aud_id = parse_id(&body);
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/rename_audience",
+        &format!("audience_id={aud_id}&name=%20%20"),
+        Some(&cookie),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "empty rename must be rejected");
+    assert!(
+        body.contains("audience name must not be empty"),
+        "empty-name error should be user-facing: {body}"
+    );
+    // Original name is unchanged.
+    let audiences = state.audiences.list_audiences(author).await.unwrap();
+    assert_eq!(audiences.len(), 1);
+    assert_eq!(audiences[0].name, "Friends", "name should be unchanged");
+}
+
+// list_audience_members returns the audience's subscription members.
+#[apply(backends)]
+#[tokio::test]
+async fn list_audience_members_returns_members(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let author = make_user(&state, "author").await;
+    let subscriber = make_user(&state, "subscriber").await;
+    let cookie = cookie_for(&state, author).await;
+    let channel = state.subscriptions.local_channel_id().await.unwrap();
+    let sub_id = state
+        .subscriptions
+        .subscribe(author, channel, &subscriber.to_string())
+        .await
+        .unwrap();
+
+    let aud_id = state
+        .audiences
+        .create_audience(author, "Friends")
+        .await
+        .unwrap();
+    state
+        .audiences
+        .add_member(author, aud_id, sub_id)
+        .await
+        .unwrap();
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/list_audience_members",
+        &format!("audience_id={aud_id}"),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "list_audience_members failed: {body}"
+    );
+    assert!(
+        body.contains(&sub_id.to_string()),
+        "member subscription_id should appear in list: {body}"
+    );
+}
+
 // add member → list members → remove member happy path.
 #[apply(backends)]
 #[tokio::test]
