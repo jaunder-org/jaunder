@@ -8,15 +8,13 @@
 )]
 #![allow(unused_macros)]
 
-mod helpers;
-
 use std::sync::Arc;
 
+use crate::helpers::{backends, Backend, CapturingWebSubClient, TestEnv};
 use chrono::Utc;
 use common::password::Password;
 use common::slug::Slug;
 use common::username::Username;
-use helpers::{backends, Backend, CapturingWebSubClient, TestEnv};
 use jaunder::feed::worker::FeedWorker;
 use storage::{CreatePostInput, PostFormat};
 use tempfile::TempDir;

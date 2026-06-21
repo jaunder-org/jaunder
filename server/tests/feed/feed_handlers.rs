@@ -8,8 +8,6 @@
 )]
 #![allow(unused_macros)]
 
-mod helpers;
-
 use std::sync::Arc;
 
 use axum::{
@@ -28,7 +26,7 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
+use crate::helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
 use storage::CreatePostInput;
 use storage::PostFormat;
 
@@ -42,7 +40,7 @@ async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Rou
     jaunder::create_router(
         test_options(),
         state,
-        helpers::noop_mailer(),
+        crate::helpers::noop_mailer(),
         false,
         storage_path,
     )
