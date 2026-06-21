@@ -25,7 +25,8 @@ opentelemetry = { workspace = true, optional = true }
 getrandom = { version = "0.2", features = ["js"] }
 
 [features]
-test-utils = []
+test-utils = ["cheap-kdf"]
+cheap-kdf = []
 metrics = ["dep:opentelemetry"]
 
 [dev-dependencies]
