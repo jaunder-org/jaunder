@@ -8,8 +8,6 @@
 )]
 #![allow(unused_macros)]
 
-mod helpers;
-
 use std::sync::Arc;
 
 use axum::{
@@ -24,9 +22,9 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use helpers::{backends, Backend, TestEnv};
+use crate::helpers::{backends, Backend, TestEnv};
 
-use helpers::{ensure_server_fns_registered, test_options};
+use crate::helpers::{ensure_server_fns_registered, test_options};
 
 /// Build the router with a real temp storage directory.
 async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
@@ -38,7 +36,7 @@ async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Rou
     jaunder::create_router(
         test_options(),
         state,
-        helpers::noop_mailer(),
+        crate::helpers::noop_mailer(),
         false,
         storage_path,
     )

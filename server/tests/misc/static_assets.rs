@@ -7,15 +7,13 @@
     clippy::unused_async
 )]
 
-mod helpers;
-
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
 use tower::ServiceExt;
 
-use helpers::{test_options, Backend, TestEnv};
+use crate::helpers::{test_options, Backend, TestEnv};
 
 async fn get_asset(uri: &str) -> (StatusCode, Option<String>) {
     // Static-asset serving never touches storage; pin a single backend so these
@@ -31,9 +29,9 @@ async fn get_asset(uri: &str) -> (StatusCode, Option<String>) {
     let app = jaunder::create_router(
         test_options(),
         state,
-        helpers::noop_mailer(),
+        crate::helpers::noop_mailer(),
         false,
-        helpers::tmp_storage_path(),
+        crate::helpers::tmp_storage_path(),
     );
     let response = app.oneshot(request).await.unwrap();
 
