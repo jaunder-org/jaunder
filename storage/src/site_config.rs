@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DEFAULT_BACKUP_RETENTION_COUNT};
 use common::feed::FeedsConfig;
 use common::site::{SiteIdentity, DEFAULT_SITE_TITLE};
+use common::visibility::AudienceTarget;
 use sqlx::{Database, Pool};
 
 /// Async operations on the `site_config` key-value table.
@@ -154,6 +155,26 @@ pub trait SiteConfigStorage: Send + Sync {
         Ok(())
     }
 
+    /// Returns the configured site-wide default post audience, falling back to
+    /// [`AudienceTarget::Public`] when unset or unparseable. Only the built-in
+    /// audiences (`public`/`subscribers`/`private`) are valid site-wide
+    /// defaults; a `Named` audience is per-author and never returned here.
+    async fn get_default_audience(&self) -> sqlx::Result<AudienceTarget> {
+        Ok(self
+            .get(POSTS_DEFAULT_AUDIENCE_KEY)
+            .await?
+            .as_deref()
+            .and_then(parse_default_audience)
+            .unwrap_or(AudienceTarget::Public))
+    }
+
+    /// Stores the site-wide default post audience as its string form. A `Named`
+    /// audience has no site-wide string form and is stored as `public`.
+    async fn set_default_audience(&self, audience: &AudienceTarget) -> sqlx::Result<()> {
+        self.set(POSTS_DEFAULT_AUDIENCE_KEY, default_audience_str(audience))
+            .await
+    }
+
     /// Stores the feed-generation configuration. An absent `websub_hub_url` is
     /// stored as the empty string (treated as unset on read).
     async fn set_feeds_config(&self, config: &FeedsConfig) -> sqlx::Result<()> {
@@ -193,6 +214,11 @@ pub const DEFAULT_FEEDS_MIN_ITEMS: u32 = 20;
 /// Default for [`FEEDS_MIN_DAYS_KEY`]: include items from the last 30 days.
 pub const DEFAULT_FEEDS_MIN_DAYS: u32 = 30;
 
+/// Key for the site-wide default post audience. Valid stored values are the
+/// built-in audiences `public`/`subscribers`/`private`; anything else (or
+/// unset) is read back as [`AudienceTarget::Public`].
+pub const POSTS_DEFAULT_AUDIENCE_KEY: &str = "posts.default_audience";
+
 /// Key for the human-facing site title used in feed metadata and similar.
 pub const SITE_TITLE_KEY: &str = "site.title";
 /// Key for the public-facing base URL of the site (scheme + host, no
@@ -212,6 +238,28 @@ fn backup_mode_str(mode: BackupMode) -> &'static str {
     match mode {
         BackupMode::Directory => "directory",
         BackupMode::Archive => "archive",
+    }
+}
+
+/// Parses a stored site-wide default audience. Only the built-ins are valid:
+/// `Named` is per-author and has no instance-wide form, so it is rejected here
+/// (the caller falls back to `Public`).
+fn parse_default_audience(value: &str) -> Option<AudienceTarget> {
+    match value.trim() {
+        "public" => Some(AudienceTarget::Public),
+        "subscribers" => Some(AudienceTarget::Subscribers),
+        "private" => Some(AudienceTarget::Private),
+        _ => None,
+    }
+}
+
+/// String form for a site-wide default audience. `Named` has no instance-wide
+/// form, so it collapses to `public`.
+fn default_audience_str(audience: &AudienceTarget) -> &'static str {
+    match audience {
+        AudienceTarget::Public | AudienceTarget::Named(_) => "public",
+        AudienceTarget::Subscribers => "subscribers",
+        AudienceTarget::Private => "private",
     }
 }
 
@@ -478,5 +526,83 @@ mod tests {
         storage.set("backup.destination_path", "").await.unwrap();
         let config = storage.get_backup_config().await.unwrap();
         assert_eq!(config.destination_path, None);
+    }
+
+    #[tokio::test]
+    async fn default_audience_returns_public_when_unset() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        assert_eq!(
+            storage.get_default_audience().await.unwrap(),
+            common::visibility::AudienceTarget::Public
+        );
+    }
+
+    #[tokio::test]
+    async fn default_audience_returns_private_when_set() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        storage
+            .set_default_audience(&common::visibility::AudienceTarget::Private)
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.get_default_audience().await.unwrap(),
+            common::visibility::AudienceTarget::Private
+        );
+    }
+
+    #[tokio::test]
+    async fn default_audience_returns_subscribers_when_set() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        storage
+            .set_default_audience(&common::visibility::AudienceTarget::Subscribers)
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.get_default_audience().await.unwrap(),
+            common::visibility::AudienceTarget::Subscribers
+        );
+    }
+
+    #[tokio::test]
+    async fn set_default_audience_collapses_named_to_public() {
+        // A `Named` audience has no instance-wide form; the setter stores it as
+        // `public` and the getter reads it back as `Public`.
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        storage
+            .set_default_audience(&common::visibility::AudienceTarget::Named(7))
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .get(super::POSTS_DEFAULT_AUDIENCE_KEY)
+                .await
+                .unwrap(),
+            Some("public".to_owned())
+        );
+        assert_eq!(
+            storage.get_default_audience().await.unwrap(),
+            common::visibility::AudienceTarget::Public
+        );
+    }
+
+    #[tokio::test]
+    async fn default_audience_falls_back_to_public_when_garbage() {
+        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        storage
+            .set(super::POSTS_DEFAULT_AUDIENCE_KEY, "named")
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.get_default_audience().await.unwrap(),
+            common::visibility::AudienceTarget::Public
+        );
+        storage
+            .set(super::POSTS_DEFAULT_AUDIENCE_KEY, "not a real value")
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.get_default_audience().await.unwrap(),
+            common::visibility::AudienceTarget::Public
+        );
     }
 }
