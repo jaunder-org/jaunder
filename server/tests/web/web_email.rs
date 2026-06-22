@@ -8,8 +8,6 @@
 )]
 #![allow(unused_macros)]
 
-mod helpers;
-
 use std::sync::Arc;
 
 use axum::{
@@ -22,7 +20,7 @@ use common::username::Username;
 use storage::AppState;
 use tower::ServiceExt;
 
-use helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
+use crate::helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
 
 use rstest::*;
 #[allow(clippy::single_component_path_imports)]
@@ -52,7 +50,7 @@ async fn post_form(
         state,
         mailer,
         true,
-        helpers::tmp_storage_path(),
+        crate::helpers::tmp_storage_path(),
     );
     let response = app.oneshot(request).await.unwrap();
     let status = response.status();

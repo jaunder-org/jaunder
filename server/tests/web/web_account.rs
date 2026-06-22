@@ -8,8 +8,6 @@
 )]
 #![allow(unused_macros)]
 
-mod helpers;
-
 use std::sync::Arc;
 
 use axum::{
@@ -25,7 +23,7 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
+use crate::helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
 
 async fn post_form(
     state: Arc<storage::AppState>,
@@ -47,9 +45,9 @@ async fn post_form(
     let app = jaunder::create_router(
         test_options(),
         state,
-        helpers::noop_mailer(),
+        crate::helpers::noop_mailer(),
         true,
-        helpers::tmp_storage_path(),
+        crate::helpers::tmp_storage_path(),
     );
     let response = app.oneshot(request).await.unwrap();
 

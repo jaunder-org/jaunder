@@ -12,8 +12,6 @@
 // suppresses the resulting dead-template lint.
 #![allow(unused_macros)]
 
-mod helpers;
-
 use chrono::{Datelike, Utc};
 use common::password::Password;
 use common::tag::Tag;
@@ -40,7 +38,7 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use helpers::{
+use crate::helpers::{
     backends, postgres_only, sqlite_url, template_postgres_url, unique_postgres_url, Backend,
 };
 

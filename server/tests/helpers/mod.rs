@@ -388,3 +388,38 @@ pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx
     });
     (state, pool)
 }
+
+/// Seeds `count` posts for `user_id` directly through the storage service,
+/// bypassing the HTTP/server-fn path (markdown render of trivial bodies is
+/// negligible; the cost we avoid is axum routing + `server_fn` per call).
+/// `published == true` sets `published_at = now` so list/timeline endpoints
+/// return them; `false` leaves them as drafts. Returns ids in creation order.
+pub async fn seed_posts(
+    state: &Arc<AppState>,
+    user_id: i64,
+    count: usize,
+    published: bool,
+) -> Vec<i64> {
+    let mut ids = Vec::with_capacity(count);
+    for i in 0..count {
+        let published_at = if published {
+            Some(chrono::Utc::now())
+        } else {
+            None
+        };
+        let id = storage::create_rendered_post(
+            &*state.posts,
+            user_id,
+            None,
+            format!("seed-{i}").parse().expect("valid slug"),
+            format!("# Post {i}\n\nbody"),
+            storage::PostFormat::Markdown,
+            published_at,
+            None,
+        )
+        .await
+        .expect("seed post should be created");
+        ids.push(id);
+    }
+    ids
+}

@@ -8,8 +8,6 @@
 )]
 #![allow(unused_macros)]
 
-mod helpers;
-
 use std::sync::Arc;
 
 use axum::{
@@ -25,7 +23,7 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use helpers::{
+use crate::helpers::{
     backends, ensure_server_fns_registered, noop_mailer, test_options, Backend, TestEnv,
 };
 

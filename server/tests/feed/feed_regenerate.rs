@@ -8,8 +8,6 @@
 )]
 #![allow(unused_macros)]
 
-mod helpers;
-
 use chrono::Utc;
 use common::password::Password;
 use common::slug::Slug;
@@ -22,7 +20,7 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use helpers::{backends, Backend, TestEnv};
+use crate::helpers::{backends, Backend, TestEnv};
 
 #[apply(backends)]
 #[tokio::test]

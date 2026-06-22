@@ -8,8 +8,6 @@
 )]
 #![allow(unused_macros)]
 
-mod helpers;
-
 use std::sync::Arc;
 
 use axum::{
@@ -25,7 +23,7 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
+use crate::helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
 
 /// Sends a form-encoded POST request through a fresh router built from `state`.
 /// Returns (status, Set-Cookie header value, response body).
@@ -50,9 +48,9 @@ async fn post_form(
     let app = jaunder::create_router(
         test_options(),
         state,
-        helpers::noop_mailer(),
+        crate::helpers::noop_mailer(),
         secure_cookies,
-        helpers::tmp_storage_path(),
+        crate::helpers::tmp_storage_path(),
     );
     let response = app.oneshot(request).await.unwrap();
 
@@ -92,9 +90,9 @@ async fn post_form_with_ua(
     let app = jaunder::create_router(
         test_options(),
         state,
-        helpers::noop_mailer(),
+        crate::helpers::noop_mailer(),
         secure_cookies,
-        helpers::tmp_storage_path(),
+        crate::helpers::tmp_storage_path(),
     );
     let response = app.oneshot(request).await.unwrap();
 
@@ -128,9 +126,9 @@ async fn get_html(
             let app = jaunder::create_router(
                 test_options(),
                 state,
-                helpers::noop_mailer(),
+                crate::helpers::noop_mailer(),
                 true,
-                helpers::tmp_storage_path(),
+                crate::helpers::tmp_storage_path(),
             );
             let response = app.oneshot(request).await.unwrap();
 
@@ -168,9 +166,9 @@ async fn post_form_with_bearer(
     let app = jaunder::create_router(
         test_options(),
         state,
-        helpers::noop_mailer(),
+        crate::helpers::noop_mailer(),
         true,
-        helpers::tmp_storage_path(),
+        crate::helpers::tmp_storage_path(),
     );
     let response = app.oneshot(request).await.expect("router oneshot failed");
 

@@ -547,67 +547,83 @@
       "text": "async fn main() -> anyhow::Result<()> {"
     },
     {
-      "line": 8,
+      "line": 13,
+      "text": "    if common::CHEAP_KDF_ENABLED {"
+    },
+    {
+      "line": 14,
+      "text": "        eprintln!("
+    },
+    {
+      "line": 17,
+      "text": "        std::process::exit(1);"
+    },
+    {
+      "line": 18,
+      "text": "    }"
+    },
+    {
+      "line": 19,
       "text": "    let cli = Cli::parse();"
     },
     {
-      "line": 9,
+      "line": 20,
       "text": "    run(cli).await"
     },
     {
-      "line": 10,
+      "line": 21,
       "text": "}"
     },
     {
-      "line": 37,
+      "line": 48,
       "text": "            if std::env::var_os(\"LEPTOS_OUTPUT_NAME\").is_some() {"
     },
     {
-      "line": 41,
+      "line": 52,
       "text": "                let implicit = Cli::parse_from([\"jaunder\", \"serve\"]);"
     },
     {
-      "line": 42,
+      "line": 53,
       "text": "                implicit.command.expect(\"serve subcommand present\")"
     },
     {
-      "line": 46,
+      "line": 57,
       "text": "                Cli::parse_from([\"jaunder\", \"--help\"]);"
     },
     {
-      "line": 47,
+      "line": 58,
       "text": "                unreachable!()"
     },
     {
-      "line": 107,
+      "line": 118,
       "text": "            storage,"
     },
     {
-      "line": 108,
+      "line": 119,
       "text": "            mode,"
     },
     {
-      "line": 109,
+      "line": 120,
       "text": "            path,"
     },
     {
-      "line": 111,
+      "line": 122,
       "text": "            jaunder::commands::cmd_backup(&storage, mode.into(), path).await?;"
     },
     {
-      "line": 113,
+      "line": 124,
       "text": "        Commands::Restore { storage, path } => {"
     },
     {
-      "line": 114,
+      "line": 125,
       "text": "            jaunder::commands::cmd_restore(&storage, &path).await?;"
     },
     {
-      "line": 258,
+      "line": 269,
       "text": "        });"
     },
     {
-      "line": 377,
+      "line": 388,
       "text": "        });"
     }
   ],

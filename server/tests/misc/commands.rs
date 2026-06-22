@@ -7,8 +7,6 @@
     clippy::unused_async
 )]
 
-mod helpers;
-
 use std::net::SocketAddr;
 
 use axum::{
@@ -29,7 +27,7 @@ use storage::{open_database, open_existing_database, BackupMode, CreatePostInput
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use helpers::{
+use crate::helpers::{
     nonexistent_postgres_url, postgres_bootstrap_url, postgres_test_authority,
     postgres_testing_enabled, sqlite_url, unique_postgres_url,
 };
@@ -331,7 +329,7 @@ async fn after_init_server_responds_to_health_check() {
     let router = jaunder::create_router(
         leptos_options,
         db,
-        helpers::noop_mailer(),
+        crate::helpers::noop_mailer(),
         true,
         args.storage_path.clone(),
     );

@@ -5,7 +5,7 @@
     {
       "file": "server/src/main.rs",
       "function": "run",
-      "line": 22,
+      "line": 33,
       "cyclomatic": 23.0,
       "coverage": 81.66666666666667,
       "crap": 26.259717592592587,
@@ -813,6 +813,15 @@
       "crate": "jaunder"
     },
     {
+      "file": "server/src/main.rs",
+      "function": "main",
+      "line": 7,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "jaunder"
+    },
+    {
       "file": "server/src/media.rs",
       "function": "validate_serve_params",
       "line": 242,
@@ -923,7 +932,7 @@
     {
       "file": "common/src/password.rs",
       "function": "Password::verify",
-      "line": 74,
+      "line": 93,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -3108,15 +3117,6 @@
       "crate": "jaunder"
     },
     {
-      "file": "server/src/main.rs",
-      "function": "main",
-      "line": 7,
-      "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "crate": "jaunder"
-    },
-    {
       "file": "server/src/feed/handlers.rs",
       "function": "feed_site",
       "line": 91,
@@ -3730,8 +3730,17 @@
     },
     {
       "file": "common/src/password.rs",
+      "function": "Password::hasher",
+      "line": 70,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "common"
+    },
+    {
+      "file": "common/src/password.rs",
       "function": "Password::fmt",
-      "line": 88,
+      "line": 107,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,

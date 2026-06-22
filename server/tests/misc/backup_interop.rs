@@ -7,8 +7,6 @@
     clippy::unused_async
 )]
 
-mod helpers;
-
 use chrono::Utc;
 use common::password::Password;
 use common::username::Username;
@@ -17,7 +15,7 @@ use jaunder::commands::{cmd_backup, cmd_init, cmd_restore};
 use storage::{open_existing_database, BackupMode, CreatePostInput, PostFormat};
 use tempfile::TempDir;
 
-use helpers::{postgres_testing_enabled, unique_postgres_url};
+use crate::helpers::{postgres_testing_enabled, unique_postgres_url};
 
 fn sqlite_storage_args(base: &TempDir, name: &str) -> StorageArgs {
     StorageArgs {
