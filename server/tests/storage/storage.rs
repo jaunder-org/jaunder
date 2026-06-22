@@ -16,15 +16,20 @@ use chrono::{Datelike, Utc};
 use common::password::Password;
 use common::tag::Tag;
 use common::username::Username;
-use sqlx::SqlitePool;
+use common::visibility::{
+    AudienceTarget, Channel, SubscriptionPolicy, SubscriptionStatus, TargetKind, ViewerIdentity,
+};
+use sqlx::{PgPool, SqlitePool};
+use std::sync::Arc;
 use storage::{
     create_rendered_post, open_database, open_existing_database, update_rendered_post, AtomicOps,
-    CreatePostError, CreatePostInput, CreateUserError, DbConnectOptions, EmailVerificationStorage,
-    InviteStorage, ListByTagError, PasswordResetStorage, PostCursor, PostFormat, ProfileUpdate,
-    RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteAtomicOps,
-    SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
-    SqliteSessionStorage, SqliteUserStorage, TaggingError, UpdatePostError, UpdatePostInput,
-    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError, UserStorage,
+    AudienceError, CreatePostError, CreatePostInput, CreateUserError, DbConnectOptions,
+    EmailVerificationStorage, InviteStorage, ListByTagError, PasswordResetStorage, PostCursor,
+    PostFormat, ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionStorage,
+    SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
+    SqlitePasswordResetStorage, SqliteSessionStorage, SqliteSubscriptionStorage, SqliteUserStorage,
+    SubscriptionStorage, TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError,
+    UseInviteError, UsePasswordResetError, UserAuthError, UserStorage,
 };
 use tempfile::TempDir;
 
@@ -39,13 +44,15 @@ use rstest_reuse;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    backends, postgres_only, sqlite_url, template_postgres_url, unique_postgres_url, Backend,
+    backends, postgres_only, recorded_postgres_url, sqlite_only, sqlite_url, template_postgres_url,
+    unique_postgres_url, Backend, TestEnv,
 };
 
-// The PostgreSQL parity tests below run against PostgreSQL when
-// `JAUNDER_PG_TEST_URL` is set; each acquires its own database (a template
-// clone via `unique_postgres_url`/`template_postgres_url`, see helpers), so they
-// run safely under the default in-process parallelism. No `--test-threads=1` is
+// The Postgres-backed cases below (the `::postgres` expansion of each
+// `#[apply(backends)]` test) run against PostgreSQL when `JAUNDER_PG_TEST_URL`
+// is set; each acquires its own database (a template clone via
+// `unique_postgres_url`/`template_postgres_url`, see helpers), so they run
+// safely under the default in-process parallelism. No `--test-threads=1` is
 // needed (jaunder-qguq).
 
 async fn open_pool(base: &TempDir) -> SqlitePool {
@@ -60,6 +67,492 @@ async fn open_pool(base: &TempDir) -> SqlitePool {
         .await
         .unwrap();
     pool
+}
+
+async fn open_pg_pool() -> PgPool {
+    PgPool::connect(&template_postgres_url().await.to_string())
+        .await
+        .unwrap()
+}
+
+async fn lookup_names(backend: Backend, env: &TestEnv, table: &str) -> Vec<String> {
+    let sql = format!("SELECT name FROM {table} ORDER BY name");
+    match backend {
+        Backend::Sqlite => sqlx::query_scalar(&sql)
+            .fetch_all(&open_pool(&env.base).await)
+            .await
+            .unwrap(),
+        Backend::Postgres => sqlx::query_scalar(&sql)
+            .fetch_all(&open_pg_pool().await)
+            .await
+            .unwrap(),
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn channels_bijection(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let names = lookup_names(backend, &env, "channels").await;
+    for n in &names {
+        assert!(
+            Channel::try_from(n.as_str()).is_ok(),
+            "unseeded enum for channel {n}"
+        );
+    }
+    let c = Channel::Local;
+    assert!(
+        names.iter().any(|n| n == c.as_str()),
+        "missing seed for {c}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn target_kinds_bijection(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let names = lookup_names(backend, &env, "target_kinds").await;
+    for n in &names {
+        assert!(
+            TargetKind::try_from(n.as_str()).is_ok(),
+            "unseeded enum for target kind {n}"
+        );
+    }
+    for k in [
+        TargetKind::Public,
+        TargetKind::Subscribers,
+        TargetKind::Named,
+    ] {
+        assert!(
+            names.iter().any(|n| n == k.as_str()),
+            "missing seed for {k}"
+        );
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn statuses_seed_maps_to_enum(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let names = lookup_names(backend, &env, "subscription_statuses").await;
+    // Seeded names must each map to a variant (no orphan seed)...
+    for n in &names {
+        assert!(
+            SubscriptionStatus::try_from(n.as_str()).is_ok(),
+            "unseeded enum for subscription status {n}"
+        );
+    }
+    // ...and the one status seeded this milestone must be present. `Pending`
+    // and `Blocked` variants exist (reserved for M13/M15) but have no rows yet,
+    // so this is the subset direction only — not exact bijection.
+    assert!(
+        names
+            .iter()
+            .any(|n| n == SubscriptionStatus::Active.as_str()),
+        "missing seed for {}",
+        SubscriptionStatus::Active
+    );
+}
+
+// Foreign-key enforcement is per-connection in SQLite. sqlx's
+// `SqliteConnectOptions` defaults `foreign_keys` to ON, so every pooled
+// connection (app and test) enforces FKs. The composite same-owner FKs added in
+// later content-visibility phases depend on that, so this is a regression guard:
+// a child-row insert referencing a non-existent parent must be rejected. It would
+// fail if anyone disabled `foreign_keys` on the pool or a sqlx change dropped the
+// default.
+#[apply(sqlite_only)]
+#[tokio::test]
+async fn sqlite_pool_enforces_foreign_keys(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let pool = open_pool(&env.base).await; // FK-enforcing pool (sqlx default)
+    let result = sqlx::query(
+        "INSERT INTO post_revisions (post_id, user_id, title, slug, body, format, rendered_html)
+         VALUES (999999, 999999, 't', 's', 'b', 'markdown', '<p>b</p>')",
+    )
+    .execute(&pool)
+    .await;
+    assert!(
+        result.is_err(),
+        "FK violation must be rejected when foreign_keys is ON"
+    );
+}
+
+// Sibling of `lookup_names`: a raw SELECT of the seeded `local` channel id.
+// The `local` channel is a lookup row present in every clone, so reading it via
+// the per-test recorded URL (Postgres) or the same DB file (SQLite) both work;
+// we use the established same-DB helpers for consistency. The trait method
+// `local_channel_id()` is introduced in a later task — do not use it here.
+async fn local_channel_id(backend: Backend, env: &TestEnv) -> i64 {
+    let sql = "SELECT channel_id FROM channels WHERE name = 'local'";
+    match backend {
+        Backend::Sqlite => sqlx::query_scalar(sql)
+            .fetch_one(&open_pool(&env.base).await)
+            .await
+            .unwrap(),
+        Backend::Postgres => {
+            let pool = PgPool::connect(&recorded_postgres_url(&env.base))
+                .await
+                .unwrap();
+            sqlx::query_scalar(sql).fetch_one(&pool).await.unwrap()
+        }
+    }
+}
+
+// The production `SubscriptionStorage::local_channel_id()` accessor must return
+// the same id as the seeded `'local'` channel row (read here via the raw test
+// helper of the same name).
+#[apply(backends)]
+#[tokio::test]
+async fn local_channel_id_returns_seeded_local(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let expected = local_channel_id(backend, &env).await;
+    let actual = state.subscriptions.local_channel_id().await.unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let author = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let bob = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let local = local_channel_id(backend, &env).await;
+    let id1 = state
+        .subscriptions
+        .subscribe(author, local, &bob.to_string())
+        .await
+        .unwrap();
+    let id2 = state
+        .subscriptions
+        .subscribe(author, local, &bob.to_string())
+        .await
+        .unwrap();
+    assert_eq!(id1, id2, "subscribe is idempotent");
+    assert!(state
+        .subscriptions
+        .is_subscriber(author, &ViewerIdentity::local(bob, local))
+        .await
+        .unwrap());
+    assert!(!state
+        .subscriptions
+        .is_subscriber(author, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap());
+    // Active subscriber appears in the listing.
+    let subs = state.subscriptions.list_subscribers(author).await.unwrap();
+    assert_eq!(subs.len(), 1);
+    assert_eq!(subs[0].subscription_id, id1);
+    assert_eq!(subs[0].channel_id, local);
+    assert_eq!(subs[0].subscriber_ref, bob.to_string());
+    assert_eq!(subs[0].status, SubscriptionStatus::Active);
+    // Unsubscribe round-trips: no longer a subscriber, listing empties.
+    state
+        .subscriptions
+        .unsubscribe(author, local, &bob.to_string())
+        .await
+        .unwrap();
+    assert!(!state
+        .subscriptions
+        .is_subscriber(author, &ViewerIdentity::local(bob, local))
+        .await
+        .unwrap());
+    assert!(state
+        .subscriptions
+        .list_subscribers(author)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+// Fail-closed admission: `is_subscriber` admits only `active` rows, so a
+// subscription a stricter policy left `pending` must NOT be admitted. The
+// default `state.subscriptions` uses `OpenSubscriptionPolicy` (always active),
+// so we construct the store directly with a stub policy returning `Pending`.
+// This is pure policy-dispatch + status resolution, so SQLite-only suffices.
+#[apply(sqlite_only)]
+#[tokio::test]
+async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let pool = open_pool(&env.base).await; // same DB file as env.state
+                                           // Only `active` is seeded this milestone (M13 adds `pending`). Seed the
+                                           // `pending` lookup row locally so `subscribe` can persist a pending row and
+                                           // we can prove `is_subscriber` still excludes it (the fail-closed property).
+    sqlx::query("INSERT INTO subscription_statuses (name) VALUES ('pending')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    struct StubPending;
+    impl SubscriptionPolicy for StubPending {
+        fn initial_status(&self, _a: i64, _c: i64, _r: &str) -> SubscriptionStatus {
+            SubscriptionStatus::Pending
+        }
+    }
+    let store = SqliteSubscriptionStorage::new(pool, Arc::new(StubPending));
+    let author = env
+        .state
+        .users
+        .create_user(&username("alice"), &password("pw1234567"), None, false)
+        .await
+        .unwrap();
+    let bob = env
+        .state
+        .users
+        .create_user(&username("bob"), &password("pw1234567"), None, false)
+        .await
+        .unwrap();
+    let local = local_channel_id(backend, &env).await;
+    store
+        .subscribe(author, local, &bob.to_string())
+        .await
+        .unwrap();
+    // Resolution admits only `active` → a pending subscriber is excluded.
+    assert!(!store
+        .is_subscriber(author, &ViewerIdentity::local(bob, local))
+        .await
+        .unwrap());
+    // ...and it is not listed (list_subscribers is active-only).
+    assert!(store.list_subscribers(author).await.unwrap().is_empty());
+}
+
+// ── Audiences ─────────────────────────────────────────────────────────────────
+
+// create → list → rename → delete round-trip. Every write is author-scoped and
+// the listing is ordered by `audience_id`; rename and delete mutate exactly the
+// targeted row.
+#[apply(backends)]
+#[tokio::test]
+async fn audience_create_list_rename_delete(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let author = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    let friends = state
+        .audiences
+        .create_audience(author, "Friends")
+        .await
+        .unwrap();
+    let family = state
+        .audiences
+        .create_audience(author, "Family")
+        .await
+        .unwrap();
+
+    // Listing is author-scoped and ordered by audience_id (insertion order).
+    let listed = state.audiences.list_audiences(author).await.unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].audience_id, friends);
+    assert_eq!(listed[0].name, "Friends");
+    assert_eq!(listed[1].audience_id, family);
+    assert_eq!(listed[1].name, "Family");
+
+    // Rename mutates exactly the targeted audience.
+    state
+        .audiences
+        .rename_audience(author, friends, "Close Friends")
+        .await
+        .unwrap();
+    let listed = state.audiences.list_audiences(author).await.unwrap();
+    assert_eq!(listed[0].name, "Close Friends");
+
+    // Renaming an audience the author does not own is NotFound.
+    let stranger = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    assert!(matches!(
+        state
+            .audiences
+            .rename_audience(stranger, friends, "Hijacked")
+            .await,
+        Err(AudienceError::NotFound)
+    ));
+
+    // Delete removes exactly the targeted audience.
+    state
+        .audiences
+        .delete_audience(author, friends)
+        .await
+        .unwrap();
+    let listed = state.audiences.list_audiences(author).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].audience_id, family);
+}
+
+// A duplicate `(author_user_id, name)` is mapped to DuplicateName on both create
+// and rename; a different author may reuse the same name.
+#[apply(backends)]
+#[tokio::test]
+async fn audience_duplicate_name_rejected(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let alice = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let bob = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    state
+        .audiences
+        .create_audience(alice, "Friends")
+        .await
+        .unwrap();
+    // Same author, same name → DuplicateName.
+    assert!(matches!(
+        state.audiences.create_audience(alice, "Friends").await,
+        Err(AudienceError::DuplicateName)
+    ));
+    // Different author may reuse the name.
+    state
+        .audiences
+        .create_audience(bob, "Friends")
+        .await
+        .unwrap();
+
+    // Rename onto an existing name (same author) → DuplicateName.
+    let work = state
+        .audiences
+        .create_audience(alice, "Work")
+        .await
+        .unwrap();
+    assert!(matches!(
+        state
+            .audiences
+            .rename_audience(alice, work, "Friends")
+            .await,
+        Err(AudienceError::DuplicateName)
+    ));
+}
+
+// add_member / list_members / remove_member happy path against a same-owner
+// subscription seeded via the wired SubscriptionStore.
+#[apply(backends)]
+#[tokio::test]
+async fn audience_membership_round_trip(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let author = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let bob = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let local = local_channel_id(backend, &env).await;
+    let sub = state
+        .subscriptions
+        .subscribe(author, local, &bob.to_string())
+        .await
+        .unwrap();
+    let audience = state
+        .audiences
+        .create_audience(author, "Friends")
+        .await
+        .unwrap();
+
+    assert!(state
+        .audiences
+        .list_members(audience)
+        .await
+        .unwrap()
+        .is_empty());
+
+    state
+        .audiences
+        .add_member(author, audience, sub)
+        .await
+        .unwrap();
+    // add_member is idempotent.
+    state
+        .audiences
+        .add_member(author, audience, sub)
+        .await
+        .unwrap();
+    assert_eq!(
+        state.audiences.list_members(audience).await.unwrap(),
+        vec![sub]
+    );
+
+    state.audiences.remove_member(audience, sub).await.unwrap();
+    assert!(state
+        .audiences
+        .list_members(audience)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+// The same-owner invariant is enforced by the composite FKs: pairing an audience
+// with a subscription owned by a *different* author must be rejected by the DB
+// and surface as `AudienceError::Storage` (no app-level check). Complements the
+// raw-SQL `composite_fks_reject_cross_author_membership` test at the trait layer.
+#[apply(backends)]
+#[tokio::test]
+async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let alice = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let bob = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let local = local_channel_id(backend, &env).await;
+    // Subscription owned by BOB.
+    let bob_sub = state
+        .subscriptions
+        .subscribe(bob, local, &alice.to_string())
+        .await
+        .unwrap();
+    // Audience owned by ALICE.
+    let alice_audience = state
+        .audiences
+        .create_audience(alice, "Friends")
+        .await
+        .unwrap();
+
+    // Alice pairs her audience with Bob's subscription: the
+    // (subscription_id, author_user_id) FK fails → Storage error.
+    assert!(matches!(
+        state
+            .audiences
+            .add_member(alice, alice_audience, bob_sub)
+            .await,
+        Err(AudienceError::Storage(_))
+    ));
+    assert!(state
+        .audiences
+        .list_members(alice_audience)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 async fn user_storage(base: &TempDir) -> SqliteUserStorage {
@@ -1266,6 +1759,7 @@ fn make_create_post_input(user_id: i64, slug: &str) -> CreatePostInput {
         rendered_html: "<p>body text</p>".to_string(),
         published_at: None,
         summary: None,
+        audiences: vec![AudienceTarget::Public],
     }
 }
 
@@ -1293,7 +1787,12 @@ async fn post_create_and_get_by_id_works(#[case] backend: Backend) {
     let input = make_create_post_input(user_id, "hello-world");
     let post_id = state.posts.create_post(&input).await.unwrap();
 
-    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    let record = state
+        .posts
+        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(record.post_id, post_id);
     assert_eq!(record.user_id, user_id);
     assert_eq!(record.title.as_deref(), Some("Post hello-world"));
@@ -1326,6 +1825,7 @@ async fn post_slug_conflict_returns_slug_conflict(#[case] backend: Backend) {
         rendered_html: "<p>body</p>".to_string(),
         published_at: Some(now),
         summary: None,
+        audiences: vec![AudienceTarget::Public],
     };
     state.posts.create_post(&pub_input.clone()).await.unwrap();
 
@@ -1361,6 +1861,7 @@ async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend
         rendered_html: "<p>updated body</p>".to_string(),
         publish: false,
         summary: None,
+        audiences: vec![AudienceTarget::Public],
     };
     let record = state
         .posts
@@ -1386,6 +1887,7 @@ async fn post_update_not_found_returns_error(#[case] backend: Backend) {
         rendered_html: "<p>body</p>".to_string(),
         publish: false,
         summary: None,
+        audiences: vec![AudienceTarget::Public],
     };
     let err = state
         .posts
@@ -1395,6 +1897,206 @@ async fn post_update_not_found_returns_error(#[case] backend: Backend) {
     assert!(
         matches!(err, UpdatePostError::NotFound),
         "expected NotFound, got {err:?}"
+    );
+}
+
+// Raw read of a post's `post_audiences` rows as `(target_kind name, audience_id)`,
+// ordered by kind name. Used by the audience-targeting persistence test.
+async fn post_audience_rows(
+    backend: Backend,
+    env: &TestEnv,
+    post_id: i64,
+) -> Vec<(String, Option<i64>)> {
+    let sql = "SELECT tk.name, pa.audience_id \
+               FROM post_audiences pa \
+               JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id \
+               WHERE pa.post_id = $1 \
+               ORDER BY tk.name, pa.audience_id";
+    match backend {
+        Backend::Sqlite => sqlx::query_as(&sql.replace("$1", "?"))
+            .bind(post_id)
+            .fetch_all(&open_pool(&env.base).await)
+            .await
+            .unwrap(),
+        Backend::Postgres => {
+            let pool = PgPool::connect(&recorded_postgres_url(&env.base))
+                .await
+                .unwrap();
+            sqlx::query_as(sql)
+                .bind(post_id)
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+        }
+    }
+}
+
+// Create persists `post_audiences` rows matching the input vec; update replaces
+// them (delete-all-then-insert). `Private`/empty → no rows. See ADR-0020.
+#[apply(backends)]
+#[tokio::test]
+async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let author = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let aud = state
+        .audiences
+        .create_audience(author, "Friends")
+        .await
+        .unwrap();
+
+    // Create targeting [Public, Named(aud)] → two rows.
+    let input = CreatePostInput {
+        audiences: vec![AudienceTarget::Public, AudienceTarget::Named(aud)],
+        ..make_create_post_input(author, "audience-post")
+    };
+    let post_id = state.posts.create_post(&input).await.unwrap();
+    let rows = post_audience_rows(backend, &env, post_id).await;
+    assert_eq!(
+        rows,
+        vec![
+            ("named".to_string(), Some(aud)),
+            ("public".to_string(), None),
+        ],
+        "create should persist one public and one named row"
+    );
+
+    // Update to [Private] → zero rows.
+    let update_private = UpdatePostInput {
+        title: Some("Post audience-post".to_string()),
+        slug: "audience-post".parse().unwrap(),
+        body: "body text".to_string(),
+        format: PostFormat::Markdown,
+        rendered_html: "<p>body text</p>".to_string(),
+        publish: false,
+        summary: None,
+        audiences: vec![AudienceTarget::Private],
+    };
+    state
+        .posts
+        .update_post(post_id, author, &update_private)
+        .await
+        .unwrap();
+    assert!(
+        post_audience_rows(backend, &env, post_id).await.is_empty(),
+        "[Private] should leave no rows"
+    );
+
+    // Update to [] (empty) → also zero rows (equivalent to private).
+    let update_empty = UpdatePostInput {
+        audiences: vec![],
+        ..update_private.clone()
+    };
+    state
+        .posts
+        .update_post(post_id, author, &update_empty)
+        .await
+        .unwrap();
+    assert!(
+        post_audience_rows(backend, &env, post_id).await.is_empty(),
+        "an empty audience vec should leave no rows"
+    );
+
+    // Update to [Subscribers] → one subscribers row.
+    let update_subs = UpdatePostInput {
+        audiences: vec![AudienceTarget::Subscribers],
+        ..update_private.clone()
+    };
+    state
+        .posts
+        .update_post(post_id, author, &update_subs)
+        .await
+        .unwrap();
+    assert_eq!(
+        post_audience_rows(backend, &env, post_id).await,
+        vec![("subscribers".to_string(), None)],
+        "update to [Subscribers] should leave exactly one subscribers row"
+    );
+}
+
+// `get_post_audiences` reads a post's targeting back as a `Vec<AudienceTarget>`
+// (owner-only, no viewer). Round-trips create → read for each shape.
+#[apply(backends)]
+#[tokio::test]
+async fn get_post_audiences_round_trips(#[case] backend: Backend) {
+    use std::collections::HashSet;
+
+    let env = backend.setup().await;
+    let state = &env.state;
+    let author = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let aud = state
+        .audiences
+        .create_audience(author, "Friends")
+        .await
+        .unwrap();
+
+    // Public + Named(aud) → union read back (order-independent compare).
+    let input = CreatePostInput {
+        audiences: vec![AudienceTarget::Public, AudienceTarget::Named(aud)],
+        ..make_create_post_input(author, "round-trip")
+    };
+    let post_id = state.posts.create_post(&input).await.unwrap();
+    let read: HashSet<_> = state
+        .posts
+        .get_post_audiences(post_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+    assert_eq!(
+        read,
+        HashSet::from([AudienceTarget::Public, AudienceTarget::Named(aud)]),
+        "should read back the Public + Named union"
+    );
+
+    // Subscribers-only.
+    let update_subs = UpdatePostInput {
+        title: Some("Post round-trip".to_string()),
+        slug: "round-trip".parse().unwrap(),
+        body: "body text".to_string(),
+        format: PostFormat::Markdown,
+        rendered_html: "<p>body text</p>".to_string(),
+        publish: false,
+        summary: None,
+        audiences: vec![AudienceTarget::Subscribers],
+    };
+    state
+        .posts
+        .update_post(post_id, author, &update_subs)
+        .await
+        .unwrap();
+    assert_eq!(
+        state.posts.get_post_audiences(post_id).await.unwrap(),
+        vec![AudienceTarget::Subscribers],
+        "should read back Subscribers"
+    );
+
+    // Private / empty → no rows → empty vec.
+    let update_private = UpdatePostInput {
+        audiences: vec![AudienceTarget::Private],
+        ..update_subs.clone()
+    };
+    state
+        .posts
+        .update_post(post_id, author, &update_private)
+        .await
+        .unwrap();
+    assert!(
+        state
+            .posts
+            .get_post_audiences(post_id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "Private should read back as an empty vec"
     );
 }
 
@@ -1416,17 +2118,30 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
         .unwrap();
 
     // It should appear before deletion
-    let published = state.posts.list_published(None, 10).await.unwrap();
+    let published = state
+        .posts
+        .list_published(None, 10, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap();
     assert!(published.iter().any(|p| p.post_id == post_id));
 
     state.posts.soft_delete_post(post_id).await.unwrap();
 
     // Should not appear after deletion
-    let published = state.posts.list_published(None, 10).await.unwrap();
+    let published = state
+        .posts
+        .list_published(None, 10, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap();
     assert!(!published.iter().any(|p| p.post_id == post_id));
 
     // deleted_at should be set
-    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    let record = state
+        .posts
+        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(record.deleted_at.is_some());
 }
 
@@ -1500,7 +2215,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     };
     let site = state
         .posts
-        .list_published_in_window(&FeedSurface::Site, &window, now)
+        .list_published_in_window(&FeedSurface::Site, &window, now, &ViewerIdentity::Anonymous)
         .await
         .unwrap();
     assert_eq!(site.len(), 3, "site feed in {{3 items, 30 days}}");
@@ -1516,7 +2231,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     };
     let site_big = state
         .posts
-        .list_published_in_window(&FeedSurface::Site, &big, now)
+        .list_published_in_window(&FeedSurface::Site, &big, now, &ViewerIdentity::Anonymous)
         .await
         .unwrap();
     assert_eq!(site_big.len(), 5, "min_items=5 pulls in older posts");
@@ -1536,6 +2251,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
             },
             &alice_window,
             now,
+            &ViewerIdentity::Anonymous,
         )
         .await
         .unwrap();
@@ -1554,6 +2270,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 min_days: 1,
             },
             now,
+            &ViewerIdentity::Anonymous,
         )
         .await
         .unwrap();
@@ -1563,7 +2280,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     // Add a tag to alice-recent-1 and verify site-tag / user-tag feeds.
     let alice_recent_1 = state
         .posts
-        .list_published_by_user(&username("walice"), None, 10)
+        .list_published_by_user(&username("walice"), None, 10, &ViewerIdentity::Anonymous)
         .await
         .unwrap()
         .into_iter()
@@ -1586,6 +2303,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 min_days: 30,
             },
             now,
+            &ViewerIdentity::Anonymous,
         )
         .await
         .unwrap();
@@ -1604,6 +2322,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 min_days: 30,
             },
             now,
+            &ViewerIdentity::Anonymous,
         )
         .await
         .unwrap();
@@ -1622,6 +2341,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 min_days: 30,
             },
             now,
+            &ViewerIdentity::Anonymous,
         )
         .await
         .unwrap();
@@ -1662,7 +2382,7 @@ async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend
 
     let alice_posts = state
         .posts
-        .list_published_by_user(&username("ealice"), None, 10)
+        .list_published_by_user(&username("ealice"), None, 10, &ViewerIdentity::Anonymous)
         .await
         .unwrap();
     assert_eq!(alice_posts.len(), 2);
@@ -1670,7 +2390,7 @@ async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend
 
     let bob_posts = state
         .posts
-        .list_published_by_user(&username("ebob"), None, 10)
+        .list_published_by_user(&username("ebob"), None, 10, &ViewerIdentity::Anonymous)
         .await
         .unwrap();
     assert_eq!(bob_posts.len(), 1);
@@ -1707,7 +2427,11 @@ async fn list_published_returns_published_non_deleted_posts(#[case] backend: Bac
         .await
         .unwrap();
 
-    let published = state.posts.list_published(None, 10).await.unwrap();
+    let published = state
+        .posts
+        .list_published(None, 10, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap();
     assert_eq!(published.len(), 2);
     assert!(published.iter().all(|p| p.published_at.is_some()));
 }
@@ -1784,6 +2508,7 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
             rendered_html: "<p>Content with many tags</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -1847,6 +2572,7 @@ async fn empty_tag_list(#[case] backend: Backend) {
             rendered_html: "<p>Untagged post</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -1889,6 +2615,7 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -1904,6 +2631,7 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -1941,7 +2669,7 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
     let tag_slug: Tag = "web-development".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
 
@@ -1976,6 +2704,7 @@ async fn invalid_tag_input(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2025,6 +2754,7 @@ async fn tag_list_pagination(#[case] backend: Backend) {
                 rendered_html: format!("<p>Content {i}</p>"),
                 published_at: Some(Utc::now()),
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");
@@ -2041,7 +2771,7 @@ async fn tag_list_pagination(#[case] backend: Backend) {
     let tag_slug: Tag = "pagination-test".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 2)
+        .list_posts_by_tag(&tag_slug, None, 2, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
 
@@ -2090,6 +2820,7 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2105,6 +2836,7 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2124,7 +2856,7 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
     let tag_slug: Tag = "shared-tag".parse().unwrap();
     let user1_posts = state
         .posts
-        .list_user_posts_by_tag(user1, &tag_slug, None, 50)
+        .list_user_posts_by_tag(user1, &tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_user_posts_by_tag failed");
 
@@ -2134,7 +2866,7 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
     // List user2's posts by tag - should only see post2
     let user2_posts = state
         .posts
-        .list_user_posts_by_tag(user2, &tag_slug, None, 50)
+        .list_user_posts_by_tag(user2, &tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_user_posts_by_tag failed");
 
@@ -2170,6 +2902,7 @@ async fn selective_untag(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2248,6 +2981,7 @@ async fn numeric_tag(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2311,6 +3045,7 @@ async fn retag_same_post_with_same_tag_fails(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2366,7 +3101,10 @@ async fn list_posts_by_nonexistent_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let tag_slug: Tag = "nosuch-tag".parse().unwrap();
-    let result = state.posts.list_posts_by_tag(&tag_slug, None, 50).await;
+    let result = state
+        .posts
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .await;
 
     assert!(matches!(result, Err(ListByTagError::TagNotFound)));
 }
@@ -2391,7 +3129,7 @@ async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
     let tag_slug: Tag = "nonexistent-tag-99".parse().unwrap();
     let result = state
         .posts
-        .list_user_posts_by_tag(user, &tag_slug, None, 50)
+        .list_user_posts_by_tag(user, &tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await;
 
     assert!(matches!(result, Err(ListByTagError::TagNotFound)));
@@ -2430,6 +3168,7 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
                 rendered_html: format!("<p>Content {i}</p>"),
                 published_at: Some(Utc::now()),
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");
@@ -2459,7 +3198,7 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
         let tag_slug: Tag = tag.parse().unwrap();
         let posts = state
             .posts
-            .list_posts_by_tag(&tag_slug, None, 50)
+            .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
             .await
             .expect("list_posts_by_tag failed");
         assert_eq!(posts.len(), 3);
@@ -2494,6 +3233,7 @@ async fn tag_all_numeric(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2550,6 +3290,7 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2617,6 +3358,7 @@ async fn tag_with_long_display(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2668,6 +3410,7 @@ async fn tag_list_ordering(#[case] backend: Backend) {
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2683,6 +3426,7 @@ async fn tag_list_ordering(#[case] backend: Backend) {
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2761,6 +3505,7 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
             rendered_html: "<p>Content A</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2776,6 +3521,7 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
             rendered_html: "<p>Content B</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2833,6 +3579,7 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2895,6 +3642,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -2919,7 +3667,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     let tag_slug: Tag = "test".parse().unwrap();
     let posts_before = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(posts_before.len(), 1);
@@ -2942,7 +3690,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     // List by tag again - should return empty list (tag exists but no posts have it)
     let posts_after = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(posts_after.len(), 0);
@@ -2976,6 +3724,7 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3022,6 +3771,7 @@ async fn tag_normalization(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3073,6 +3823,7 @@ async fn untag_post(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3137,6 +3888,7 @@ async fn duplicate_tag_error(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3193,6 +3945,7 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3208,6 +3961,7 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3228,7 +3982,7 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
     let tag_slug: Tag = "javascript".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
 
@@ -3277,6 +4031,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3292,6 +4047,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3307,6 +4063,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
             rendered_html: "<p>Content 3</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3332,7 +4089,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
     let tag_slug: Tag = "clojure".parse().unwrap();
     let posts = state
         .posts
-        .list_user_posts_by_tag(user1, &tag_slug, None, 50)
+        .list_user_posts_by_tag(user1, &tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_user_posts_by_tag failed");
 
@@ -3347,7 +4104,10 @@ async fn tag_not_found_error(#[case] backend: Backend) {
     let state = &env.state;
     // Try to list posts by non-existent tag
     let tag_slug: Tag = "nonexistent".parse().unwrap();
-    let result = state.posts.list_posts_by_tag(&tag_slug, None, 50).await;
+    let result = state
+        .posts
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .await;
 
     match result {
         Err(ListByTagError::TagNotFound) => {
@@ -3385,6 +4145,7 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
             rendered_html: "<p>Content 1</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3400,6 +4161,7 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
             rendered_html: "<p>Content 2</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3427,7 +4189,7 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let tag_slug: Tag = "haskell".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
 
@@ -3478,6 +4240,7 @@ async fn untag_nonexistent_tag_error(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3521,6 +4284,7 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
             rendered_html: "<p>Draft</p>".to_string(),
             published_at: None, // Draft,
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3536,6 +4300,7 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
             rendered_html: "<p>Published</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3556,7 +4321,7 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let tag_slug: Tag = "kotlin".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
 
@@ -3589,6 +4354,7 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: None,
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3605,6 +4371,7 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: None,
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3623,6 +4390,7 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
                 rendered_html: "<p>Updated</p>".to_string(),
                 publish: false,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await;
@@ -3667,6 +4435,7 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
                 rendered_html: "<p>Content</p>".to_string(),
                 published_at: Some(now),
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");
@@ -3675,7 +4444,7 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
     // Get all posts
     let all = state
         .posts
-        .list_published(None, 10)
+        .list_published(None, 10, &ViewerIdentity::Anonymous)
         .await
         .expect("list_published failed");
     assert_eq!(all.len(), 5);
@@ -3683,7 +4452,7 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
     // Get first 2
     let first = state
         .posts
-        .list_published(None, 2)
+        .list_published(None, 2, &ViewerIdentity::Anonymous)
         .await
         .expect("list_published failed");
     assert_eq!(first.len(), 2);
@@ -3696,7 +4465,7 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_published(Some(&cursor), 2)
+            .list_published(Some(&cursor), 2, &ViewerIdentity::Anonymous)
             .await
             .expect("list_published with cursor failed");
         assert_eq!(next.len(), 2);
@@ -3735,6 +4504,7 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
                 rendered_html: "<p>Content</p>".to_string(),
                 published_at: None,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");
@@ -3803,6 +4573,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
                 rendered_html: "<p>Content</p>".to_string(),
                 published_at: Some(now),
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");
@@ -3819,7 +4590,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
     // Get all tagged posts
     let all = state
         .posts
-        .list_user_posts_by_tag(user, &tag, None, 10)
+        .list_user_posts_by_tag(user, &tag, None, 10, &ViewerIdentity::Anonymous)
         .await
         .expect("list_user_posts_by_tag failed");
     assert_eq!(all.len(), 3);
@@ -3827,7 +4598,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
     // Get first 1
     let first = state
         .posts
-        .list_user_posts_by_tag(user, &tag, None, 1)
+        .list_user_posts_by_tag(user, &tag, None, 1, &ViewerIdentity::Anonymous)
         .await
         .expect("list_user_posts_by_tag failed");
     assert_eq!(first.len(), 1);
@@ -3840,7 +4611,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_user_posts_by_tag(user, &tag, Some(&cursor), 2)
+            .list_user_posts_by_tag(user, &tag, Some(&cursor), 2, &ViewerIdentity::Anonymous)
             .await
             .expect("list_user_posts_by_tag with cursor failed");
         assert!(next.len() <= 2);
@@ -3879,6 +4650,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
                 rendered_html: "<p>Content</p>".to_string(),
                 published_at: Some(now),
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");
@@ -3895,7 +4667,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
     // Get all tagged posts
     let all = state
         .posts
-        .list_posts_by_tag(&tag, None, 10)
+        .list_posts_by_tag(&tag, None, 10, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(all.len(), 3);
@@ -3903,7 +4675,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
     // Get first 1
     let first = state
         .posts
-        .list_posts_by_tag(&tag, None, 1)
+        .list_posts_by_tag(&tag, None, 1, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(first.len(), 1);
@@ -3916,7 +4688,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_posts_by_tag(&tag, Some(&cursor), 2)
+            .list_posts_by_tag(&tag, Some(&cursor), 2, &ViewerIdentity::Anonymous)
             .await
             .expect("list_posts_by_tag with cursor failed");
         assert!(next.len() <= 2);
@@ -3951,6 +4723,7 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -3972,7 +4745,7 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
     // Try to get by ID (should still exist internally)
     let post = state
         .posts
-        .get_post_by_id(post_id)
+        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id failed");
     assert!(post.is_none() || post.unwrap().deleted_at.is_some());
@@ -3981,7 +4754,7 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
     let tag: Tag = "delete-tag".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag, None, 10)
+        .list_posts_by_tag(&tag, None, 10, &ViewerIdentity::Anonymous)
         .await
         .expect("list_posts_by_tag failed");
     assert!(posts.is_empty());
@@ -4017,6 +4790,7 @@ async fn tag_post_multiple_attempts(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4073,7 +4847,12 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
     // User has no posts
     let posts = state
         .posts
-        .list_published_by_user(&username("no_posts_user"), None, 10)
+        .list_published_by_user(
+            &username("no_posts_user"),
+            None,
+            10,
+            &ViewerIdentity::Anonymous,
+        )
         .await
         .expect("list_published_by_user failed");
     assert!(posts.is_empty());
@@ -4085,7 +4864,12 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
     };
     let posts = state
         .posts
-        .list_published_by_user(&username("no_posts_user"), Some(&cursor), 10)
+        .list_published_by_user(
+            &username("no_posts_user"),
+            Some(&cursor),
+            10,
+            &ViewerIdentity::Anonymous,
+        )
         .await
         .expect("list_published_by_user with cursor failed");
     assert!(posts.is_empty());
@@ -4121,6 +4905,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(created_at),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4134,6 +4919,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
             created_at.month(),
             created_at.day(),
             &"permalink-test".parse().unwrap(),
+            &ViewerIdentity::Anonymous,
         )
         .await
         .expect("get_post_by_permalink failed");
@@ -4155,6 +4941,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
             created_at.month(),
             created_at.day(),
             &"permalink-test".parse().unwrap(),
+            &ViewerIdentity::Anonymous,
         )
         .await
         .expect("get_post_by_permalink after delete failed");
@@ -4189,6 +4976,7 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: None,
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4214,6 +5002,7 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
                 rendered_html: "<p>New</p>".to_string(),
                 publish: true,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await;
@@ -4222,7 +5011,7 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
     // The important part is that the post is soft deleted
     let post = state
         .posts
-        .get_post_by_id(post_id)
+        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id failed");
     assert!(post.is_none() || post.unwrap().deleted_at.is_some());
@@ -4256,6 +5045,7 @@ async fn tag_edge_case_formats(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4299,7 +5089,10 @@ async fn tag_edge_case_formats(#[case] backend: Backend) {
 async fn get_post_by_id_nonexistent(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let result = state.posts.get_post_by_id(999_999).await;
+    let result = state
+        .posts
+        .get_post_by_id(999_999, &ViewerIdentity::Anonymous)
+        .await;
     match result {
         Ok(None) => {
             // Expected
@@ -4341,6 +5134,7 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
                 rendered_html: "<p>Content</p>".to_string(),
                 published_at: Some(now),
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");
@@ -4350,7 +5144,7 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
     // Get first 2
     let first = state
         .posts
-        .list_published(None, 2)
+        .list_published(None, 2, &ViewerIdentity::Anonymous)
         .await
         .expect("list_published failed");
     assert_eq!(first.len(), 2);
@@ -4363,7 +5157,7 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_published(Some(&cursor), 2)
+            .list_published(Some(&cursor), 2, &ViewerIdentity::Anonymous)
             .await
             .expect("list_published with cursor failed");
         // Should get remaining 2
@@ -4399,6 +5193,7 @@ async fn post_revisions_created(#[case] backend: Backend) {
             rendered_html: "<p>Original</p>".to_string(),
             published_at: None,
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4417,6 +5212,7 @@ async fn post_revisions_created(#[case] backend: Backend) {
                 rendered_html: "<p>Updated</p>".to_string(),
                 publish: true,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await
@@ -4456,6 +5252,7 @@ async fn tag_display_preservation(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4508,6 +5305,7 @@ async fn untag_preserves_other_tags(#[case] backend: Backend) {
             rendered_html: "<p>Content</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -4727,11 +5525,17 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
         PostFormat::Markdown,
         None,
         None,
+        vec![AudienceTarget::Public],
     )
     .await
     .unwrap();
 
-    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    let record = state
+        .posts
+        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(record.title.as_deref(), Some("Rendered Markdown"));
     assert!(
         record.rendered_html.contains("<strong>bold</strong>"),
@@ -4765,11 +5569,17 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
         PostFormat::Org,
         None,
         None,
+        vec![AudienceTarget::Public],
     )
     .await
     .unwrap();
 
-    let record = state.posts.get_post_by_id(post_id).await.unwrap().unwrap();
+    let record = state
+        .posts
+        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(record.title.as_deref(), Some("Rendered Org"));
     assert!(
         record.rendered_html.contains("<b>bold</b>"),
@@ -4808,6 +5618,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
         PostFormat::Markdown,
         Some(now),
         None,
+        vec![AudienceTarget::Public],
     )
     .await
     .unwrap();
@@ -4822,6 +5633,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
         PostFormat::Markdown,
         Some(now),
         None,
+        vec![AudienceTarget::Public],
     )
     .await
     .unwrap_err();
@@ -4868,6 +5680,7 @@ async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Back
         PostFormat::Markdown,
         false,
         None,
+        vec![AudienceTarget::Public],
     )
     .await
     .unwrap();
@@ -4912,6 +5725,7 @@ async fn update_rendered_post_org_renders_and_updates(#[case] backend: Backend) 
         PostFormat::Org,
         false,
         None,
+        vec![AudienceTarget::Public],
     )
     .await
     .unwrap();
@@ -4941,6 +5755,7 @@ async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: B
         PostFormat::Markdown,
         false,
         None,
+        vec![AudienceTarget::Public],
     )
     .await
     .unwrap_err();
@@ -5430,6 +6245,7 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
             rendered_html: "<p>body</p>".to_string(),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("post creation failed");
@@ -5499,6 +6315,7 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
                 rendered_html: format!("<p>body {n}</p>"),
                 published_at: Some(Utc::now()),
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             })
             .await
             .expect("post creation failed");
@@ -5515,7 +6332,7 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
     // the rest of the row — no separate batch call.
     let p1_record = state
         .posts
-        .get_post_by_id(p1)
+        .get_post_by_id(p1, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id p1")
         .expect("p1 should exist");
@@ -5526,7 +6343,7 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
 
     let p2_record = state
         .posts
-        .get_post_by_id(p2)
+        .get_post_by_id(p2, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id p2")
         .expect("p2 should exist");
@@ -5536,9 +6353,280 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
 
     let p3_record = state
         .posts
-        .get_post_by_id(p3)
+        .get_post_by_id(p3, &ViewerIdentity::Anonymous)
         .await
         .expect("get_post_by_id p3")
         .expect("p3 should exist");
     assert!(p3_record.tags.is_empty());
+}
+
+// ── Composite same-owner FK enforcement ───────────────────────────────────────
+
+// Run a statement on the FK-enabled pool for `backend`. These small per-backend
+// helpers mirror `open_pool`/`open_pg_pool`: `raw_exec` unwraps; `raw_try_exec`
+// returns the Result so the test can assert rejection. Inlining integer ids via
+// `format!` is safe here (test-only, no untrusted input) and sidesteps the
+// SQLite/Postgres placeholder divergence.
+async fn raw_exec(backend: Backend, env: &TestEnv, sql: &str) {
+    raw_try_exec(backend, env, sql)
+        .await
+        .unwrap_or_else(|e| panic!("raw exec failed: {e}\nSQL: {sql}"));
+}
+
+async fn raw_try_exec(backend: Backend, env: &TestEnv, sql: &str) -> Result<(), sqlx::Error> {
+    match backend {
+        Backend::Sqlite => sqlx::query(sql)
+            .execute(&open_pool(&env.base).await)
+            .await
+            .map(|_| ()),
+        Backend::Postgres => {
+            // Reuse the *per-test* database the state seeded (see
+            // `recorded_postgres_url`); a bare `open_pg_pool()` would mint a
+            // fresh empty clone and never see the user/audience/subscription.
+            let pool = PgPool::connect(&recorded_postgres_url(&env.base)).await?;
+            sqlx::query(sql).execute(&pool).await.map(|_| ())
+        }
+    }
+}
+
+// The same-owner invariant (an audience and a subscription paired in
+// `audience_members` must belong to the same author) is enforced by the
+// database via two composite FKs that both point at the same `author_user_id`
+// column — never by application code. This raw-SQL test isolates the FK as the
+// enforcer: `audience_members` has no trait insert that bypasses the owner
+// column. With `author_user_id = A` the `(subscription_id, author_user_id)` FK
+// fails (the subscription is B's); with `B` the `(audience_id, author_user_id)`
+// FK fails (the audience is A's) — either way the DB must reject it.
+#[apply(backends)]
+#[tokio::test]
+async fn composite_fks_reject_cross_author_membership(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    // Users via the already-wired UserStore; audience + subscription via raw SQL.
+    let a = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let b = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    raw_exec(
+        backend,
+        &env,
+        &format!("INSERT INTO audiences (author_user_id, name) VALUES ({a}, 'Friends')"),
+    )
+    .await;
+    raw_exec(
+        backend,
+        &env,
+        &format!(
+            "INSERT INTO subscriptions (author_user_id, channel_id, subscriber_ref, status_id) \
+             VALUES ({b}, (SELECT channel_id FROM channels WHERE name='local'), '{b}', \
+                     (SELECT status_id FROM subscription_statuses WHERE name='active'))"
+        ),
+    )
+    .await;
+
+    for owner in [a, b] {
+        let res = raw_try_exec(
+            backend,
+            &env,
+            &format!(
+                "INSERT INTO audience_members (audience_id, subscription_id, author_user_id) VALUES (\
+                   (SELECT audience_id FROM audiences WHERE author_user_id={a} AND name='Friends'), \
+                   (SELECT subscription_id FROM subscriptions WHERE author_user_id={b} AND subscriber_ref='{b}'), \
+                   {owner})"
+            ),
+        )
+        .await;
+        assert!(
+            res.is_err(),
+            "cross-author membership must be rejected by the DB (owner={owner})"
+        );
+    }
+}
+
+// ── Viewer-aware resolution filter (Task 13) ───────────────────────────────────
+
+// The full resolution matrix: viewers {anonymous, author A, active subscriber S,
+// named-member M (in audience G, also subscribed), non-member N (not subscribed)}
+// × posts {Public, Private, Subscribers, Named(G), Named(G2), Public+Named(G)},
+// asserting both `get_post_by_id` visibility AND presence in `list_published`
+// per the truth table in the plan (Task 13). A post is returned to a viewer only
+// if the viewer is the author OR a targeted audience admits them; admission is
+// `active`-subscription-only (fail-closed).
+#[apply(backends)]
+#[tokio::test]
+async fn resolution_matrix(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let local = local_channel_id(backend, &env).await;
+
+    // Author A and three other accounts (S, M, N). N never subscribes.
+    let a = state
+        .users
+        .create_user(&username("author_a"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let s = state
+        .users
+        .create_user(
+            &username("subscriber_s"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let m = state
+        .users
+        .create_user(&username("member_m"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let n = state
+        .users
+        .create_user(
+            &username("nonmember_n"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    // S and M are active subscribers to A; N is not. M is additionally a member
+    // of audience G (but not G2).
+    state
+        .subscriptions
+        .subscribe(a, local, &s.to_string())
+        .await
+        .unwrap();
+    let m_sub = state
+        .subscriptions
+        .subscribe(a, local, &m.to_string())
+        .await
+        .unwrap();
+    let g = state.audiences.create_audience(a, "G").await.unwrap();
+    let g2 = state.audiences.create_audience(a, "G2").await.unwrap();
+    state.audiences.add_member(a, g, m_sub).await.unwrap();
+
+    // One published post per audience targeting. `Private` carries no audience
+    // rows; `Public+Named(G)` carries both.
+    let make = |slug: &str, audiences: Vec<AudienceTarget>| CreatePostInput {
+        user_id: a,
+        title: Some(format!("Post {slug}")),
+        slug: slug.parse().unwrap(),
+        body: "body".to_string(),
+        format: PostFormat::Markdown,
+        rendered_html: "<p>body</p>".to_string(),
+        published_at: Some(Utc::now()),
+        summary: None,
+        audiences,
+    };
+    let p_public = state
+        .posts
+        .create_post(&make("public", vec![AudienceTarget::Public]))
+        .await
+        .unwrap();
+    let p_private = state
+        .posts
+        .create_post(&make("private", vec![]))
+        .await
+        .unwrap();
+    let p_subscribers = state
+        .posts
+        .create_post(&make("subscribers", vec![AudienceTarget::Subscribers]))
+        .await
+        .unwrap();
+    let p_named_g = state
+        .posts
+        .create_post(&make("named-g", vec![AudienceTarget::Named(g)]))
+        .await
+        .unwrap();
+    let p_named_g2 = state
+        .posts
+        .create_post(&make("named-g2", vec![AudienceTarget::Named(g2)]))
+        .await
+        .unwrap();
+    let p_public_named_g = state
+        .posts
+        .create_post(&make(
+            "public-named-g",
+            vec![AudienceTarget::Public, AudienceTarget::Named(g)],
+        ))
+        .await
+        .unwrap();
+
+    let anon = ViewerIdentity::Anonymous;
+    let viewer_a = ViewerIdentity::local(a, local);
+    let viewer_s = ViewerIdentity::local(s, local);
+    let viewer_m = ViewerIdentity::local(m, local);
+    let viewer_n = ViewerIdentity::local(n, local);
+
+    // (label, post_id, [anon, A, S, M, N] expected visibility)
+    let matrix: &[(&str, i64, [bool; 5])] = &[
+        ("Public", p_public, [true, true, true, true, true]),
+        ("Private", p_private, [false, true, false, false, false]),
+        (
+            "Subscribers",
+            p_subscribers,
+            [false, true, true, true, false],
+        ),
+        ("Named(G)", p_named_g, [false, true, false, true, false]),
+        ("Named(G2)", p_named_g2, [false, true, false, false, false]),
+        (
+            "Public+Named(G)",
+            p_public_named_g,
+            [true, true, true, true, true],
+        ),
+    ];
+    let viewers: [(&str, &ViewerIdentity); 5] = [
+        ("anon", &anon),
+        ("A", &viewer_a),
+        ("S", &viewer_s),
+        ("M", &viewer_m),
+        ("N", &viewer_n),
+    ];
+
+    // `get_post_by_id`: each cell of the matrix.
+    for (label, post_id, expected) in matrix {
+        for (i, (vlabel, viewer)) in viewers.iter().enumerate() {
+            let visible = state
+                .posts
+                .get_post_by_id(*post_id, viewer)
+                .await
+                .unwrap()
+                .is_some();
+            assert_eq!(
+                visible, expected[i],
+                "get_post_by_id: post {label} for viewer {vlabel}: expected {}, got {visible}",
+                expected[i]
+            );
+        }
+    }
+
+    // `list_published`: the same truth table via presence in the site listing.
+    for (vi, (vlabel, viewer)) in viewers.iter().enumerate() {
+        let listed: std::collections::HashSet<i64> = state
+            .posts
+            .list_published(None, 100, viewer)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|p| p.post_id)
+            .collect();
+        for (label, post_id, expected) in matrix {
+            assert_eq!(
+                listed.contains(post_id),
+                expected[vi],
+                "list_published: post {label} for viewer {vlabel}: expected {}, present={}",
+                expected[vi],
+                listed.contains(post_id)
+            );
+        }
+    }
 }

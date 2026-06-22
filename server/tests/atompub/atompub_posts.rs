@@ -78,6 +78,7 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
             published_at: Some(chrono::Utc::now()),
             max_attempts: 100,
             summary: None,
+            audiences: vec![common::visibility::AudienceTarget::Public],
         },
     )
     .await
@@ -94,6 +95,7 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
             published_at: Some(chrono::Utc::now()),
             max_attempts: 100,
             summary: None,
+            audiences: vec![common::visibility::AudienceTarget::Public],
         },
     )
     .await
@@ -170,6 +172,7 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
             published_at: Some(chrono::Utc::now()),
             max_attempts: 100,
             summary: None,
+            audiences: vec![common::visibility::AudienceTarget::Public],
         },
     )
     .await
@@ -272,6 +275,7 @@ async fn delete_then_get_is_404(#[case] backend: Backend) {
             published_at: Some(chrono::Utc::now()),
             max_attempts: 100,
             summary: None,
+            audiences: vec![common::visibility::AudienceTarget::Public],
         },
     )
     .await
@@ -342,6 +346,7 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
                 published_at: Some(chrono::Utc::now()),
                 max_attempts: 100,
                 summary: None,
+                audiences: vec![common::visibility::AudienceTarget::Public],
             },
         )
         .await
@@ -433,6 +438,7 @@ async fn collection_cursor_validation(
                 published_at: Some(chrono::Utc::now()),
                 max_attempts: 100,
                 summary: None,
+                audiences: vec![common::visibility::AudienceTarget::Public],
             },
         )
         .await
@@ -699,6 +705,7 @@ async fn update_replaces_post_body(#[case] backend: Backend) {
             published_at: Some(chrono::Utc::now()),
             max_attempts: 100,
             summary: None,
+            audiences: vec![common::visibility::AudienceTarget::Public],
         },
     )
     .await
@@ -745,6 +752,7 @@ async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
             published_at: Some(chrono::Utc::now()),
             max_attempts: 100,
             summary: None,
+            audiences: vec![common::visibility::AudienceTarget::Public],
         },
     )
     .await
@@ -811,6 +819,7 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
             published_at: Some(chrono::Utc::now()),
             max_attempts: 100,
             summary: None,
+            audiences: vec![common::visibility::AudienceTarget::Public],
         },
     )
     .await
@@ -863,6 +872,7 @@ async fn update_with_put_returns_200_and_etag(#[case] backend: Backend) {
             published_at: Some(chrono::Utc::now()),
             max_attempts: 100,
             summary: None,
+            audiences: vec![common::visibility::AudienceTarget::Public],
         },
     )
     .await
@@ -941,6 +951,7 @@ async fn empty_entry_returns_400(
                     published_at: Some(chrono::Utc::now()),
                     max_attempts: 100,
                     summary: None,
+                    audiences: vec![common::visibility::AudienceTarget::Public],
                 },
             )
             .await
@@ -1160,4 +1171,156 @@ async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
         .await
         .unwrap();
     assert_eq!(updated.status(), StatusCode::OK);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let (user_id, token) = seed_alice(&state).await;
+
+    // A Subscribers-targeted post is hidden from an anonymous viewer. Editing it
+    // via AtomPub must still succeed (the handler loads it as the authenticated
+    // owner) AND must preserve the targeting across the edit (AtomPub has no
+    // audience picker). Before owner-viewer threading, owned_post loaded the
+    // post as Anonymous and the PUT 404'd before reaching this preservation.
+    let post = storage::perform_post_creation(
+        state.posts.as_ref(),
+        storage::PostCreation {
+            user_id,
+            body: "Old body".to_string(),
+            title: Some("Old"),
+            format: storage::PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(chrono::Utc::now()),
+            max_attempts: 100,
+            summary: None,
+            audiences: vec![common::visibility::AudienceTarget::Subscribers],
+        },
+    )
+    .await
+    .unwrap();
+
+    let app = make_app(state.clone(), &base).await;
+
+    let xml = entry_xml("New", "text", "new body");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/atompub/alice/posts/{}", post.post_id))
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "owner must be able to edit a non-Public post via AtomPub"
+    );
+
+    let audiences = state.posts.get_post_audiences(post.post_id).await.unwrap();
+    assert_eq!(
+        audiences,
+        vec![common::visibility::AudienceTarget::Subscribers],
+        "the edit must preserve the post's Subscribers targeting"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let (user_id, token) = seed_alice(&state).await;
+
+    // A Subscribers-targeted post is hidden from Anonymous; the owner must still
+    // be able to GET it via AtomPub (handler loads as the authenticated owner).
+    let post = storage::perform_post_creation(
+        state.posts.as_ref(),
+        storage::PostCreation {
+            user_id,
+            body: "Secret body".to_string(),
+            title: Some("Secret"),
+            format: storage::PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(chrono::Utc::now()),
+            max_attempts: 100,
+            summary: None,
+            audiences: vec![common::visibility::AudienceTarget::Subscribers],
+        },
+    )
+    .await
+    .unwrap();
+
+    let app = make_app(state, &base).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/atompub/alice/posts/{}", post.post_id))
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "owner must be able to read their own non-Public post via AtomPub"
+    );
+    let body = body_string(response).await;
+    assert!(body.contains("Secret body"), "body should contain content");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_adopts_default_audience(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+
+    // The instance default audience is Subscribers; an AtomPub POST (which has no
+    // audience field) must adopt it.
+    state
+        .site_config
+        .set_default_audience(&common::visibility::AudienceTarget::Subscribers)
+        .await
+        .unwrap();
+
+    let app = make_app(state.clone(), &base).await;
+
+    let xml = entry_xml("Hello", "text", "the body");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let loc = response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|p| p.rsplit('/').next())
+        .and_then(|id| id.parse::<i64>().ok())
+        .unwrap();
+
+    let audiences = state.posts.get_post_audiences(loc).await.unwrap();
+    assert_eq!(
+        audiences,
+        vec![common::visibility::AudienceTarget::Subscribers],
+        "AtomPub create must adopt the configured default audience"
+    );
 }

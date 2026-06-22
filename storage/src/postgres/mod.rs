@@ -41,6 +41,12 @@ pub use media::PostgresMediaStorage;
 mod posts;
 pub use posts::PostgresPostStorage;
 
+mod subscriptions;
+pub use subscriptions::PostgresSubscriptionStorage;
+
+mod audiences;
+pub use audiences::PostgresAudienceStorage;
+
 mod bootstrap;
 pub use bootstrap::{create_postgres_database_and_role, PgBootstrapError};
 
@@ -204,6 +210,11 @@ fn make_postgres_app_state(pool: PgPool) -> Arc<crate::AppState> {
         email_verifications: Arc::new(PostgresEmailVerificationStorage::new(pool.clone())),
         password_resets: Arc::new(PostgresPasswordResetStorage::new(pool.clone())),
         posts: Arc::new(PostgresPostStorage::new(pool.clone())),
+        subscriptions: Arc::new(PostgresSubscriptionStorage::new(
+            pool.clone(),
+            Arc::new(common::visibility::OpenSubscriptionPolicy),
+        )),
+        audiences: Arc::new(PostgresAudienceStorage::new(pool.clone())),
         media: Arc::new(PostgresMediaStorage::new(pool.clone())),
         user_config: Arc::new(PostgresUserConfigStorage::new(pool.clone())),
         feed_cache: Arc::new(PostgresFeedCacheStorage::new(pool.clone())),

@@ -13,6 +13,7 @@ use crate::{
 };
 use common::render::{derive_post_metadata, render};
 use common::slug::{slugify_title, InvalidSlug, Slug};
+use common::visibility::AudienceTarget;
 
 // ---------------------------------------------------------------------------
 // Orchestration helpers
@@ -33,6 +34,7 @@ pub async fn create_rendered_post(
     format: PostFormat,
     published_at: Option<DateTime<Utc>>,
     summary: Option<String>,
+    audiences: Vec<AudienceTarget>,
 ) -> Result<i64, CreatePostError> {
     let rendered_html = render(&body, &format);
     let input = CreatePostInput {
@@ -44,6 +46,7 @@ pub async fn create_rendered_post(
         rendered_html,
         published_at,
         summary,
+        audiences,
     };
     storage.create_post(&input).await
 }
@@ -64,6 +67,7 @@ pub async fn update_rendered_post(
     format: PostFormat,
     publish: bool,
     summary: Option<String>,
+    audiences: Vec<AudienceTarget>,
 ) -> Result<PostRecord, UpdatePostError> {
     let rendered_html = render(&body, &format);
     let input = UpdatePostInput {
@@ -74,6 +78,7 @@ pub async fn update_rendered_post(
         rendered_html,
         publish,
         summary,
+        audiences,
     };
     storage.update_post(post_id, editor_user_id, &input).await
 }
@@ -130,6 +135,9 @@ pub struct PostUpdate<'a> {
     pub publish: bool,
     /// Optional summary/excerpt.
     pub summary: Option<String>,
+    /// Audience targeting for the post (replaces its existing rows). An empty
+    /// vec (or `[Private]`) makes the post author-only.
+    pub audiences: Vec<AudienceTarget>,
 }
 
 /// Validates inputs, computes the slug, renders the body, and atomically
@@ -154,6 +162,7 @@ pub async fn perform_post_update(
         slug_override,
         publish,
         summary,
+        audiences,
     } = input;
     let metadata =
         derive_post_metadata(title, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
@@ -178,6 +187,7 @@ pub async fn perform_post_update(
         rendered_html,
         publish,
         summary,
+        audiences,
     };
     storage
         .update_post(post_id, editor_user_id, &input)
@@ -237,6 +247,9 @@ pub struct PostCreation<'a> {
     pub max_attempts: usize,
     /// Optional summary/excerpt.
     pub summary: Option<String>,
+    /// Audience targeting for the new post. An empty vec (or `[Private]`) makes
+    /// the post author-only.
+    pub audiences: Vec<AudienceTarget>,
 }
 
 /// Validates inputs, computes the slug, renders the body, and atomically
@@ -259,6 +272,7 @@ pub async fn perform_post_creation(
         published_at,
         max_attempts,
         summary,
+        audiences,
     } = input;
     let metadata =
         derive_post_metadata(title, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
@@ -287,12 +301,19 @@ pub async fn perform_post_creation(
             format.clone(),
             published_at,
             summary.clone(),
+            audiences.clone(),
         )
         .await
         {
             Ok(post_id) => {
+                // Re-read as the author so the fetch succeeds regardless of the
+                // post's targeting (a private/subscribers/named post is invisible
+                // to an Anonymous viewer). The author branch of the resolution
+                // filter keys on `user_id` alone, so the channel id is irrelevant
+                // here; `0` is a harmless placeholder.
+                let viewer = common::visibility::ViewerIdentity::local(user_id, 0);
                 let record = storage
-                    .get_post_by_id(post_id)
+                    .get_post_by_id(post_id, &viewer)
                     .await
                     .map_err(PerformCreationError::Storage)?
                     .ok_or(PerformCreationError::CreatedNotFound)?;
@@ -348,6 +369,7 @@ mod tests {
                 published_at: None,
                 max_attempts: 100,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await
@@ -376,6 +398,7 @@ mod tests {
                 published_at: None,
                 max_attempts: 100,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await
@@ -399,6 +422,7 @@ mod tests {
                 published_at: None,
                 max_attempts: 100,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await
@@ -421,6 +445,7 @@ mod tests {
                 published_at: None,
                 max_attempts: 100,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await
@@ -443,6 +468,7 @@ mod tests {
                 published_at: None,
                 max_attempts: 100,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await
@@ -465,6 +491,7 @@ mod tests {
                 published_at: None,
                 max_attempts: 100,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await
@@ -488,6 +515,7 @@ mod tests {
                 published_at: None,
                 max_attempts: 100,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await
@@ -504,6 +532,7 @@ mod tests {
                 published_at: None,
                 max_attempts: 100,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await
@@ -520,6 +549,7 @@ mod tests {
                 published_at: None,
                 max_attempts: 100,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await
@@ -545,6 +575,7 @@ mod tests {
                 published_at: None,
                 max_attempts: 2,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await
@@ -561,6 +592,7 @@ mod tests {
                 published_at: None,
                 max_attempts: 2,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await
@@ -580,6 +612,7 @@ mod tests {
                 published_at: None,
                 max_attempts: 2,
                 summary: None,
+                audiences: vec![AudienceTarget::Public],
             },
         )
         .await

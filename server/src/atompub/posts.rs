@@ -9,7 +9,11 @@ use axum::Extension;
 use serde::Deserialize;
 
 use common::atompub::{entry_from_xml, entry_to_xml, render_feed, FeedMeta};
-use storage::{CollectionCursor, PostRecord, PostStorage, SiteConfigStorage, UserConfigStorage};
+use common::visibility::ViewerIdentity;
+use storage::{
+    CollectionCursor, PostRecord, PostStorage, SiteConfigStorage, SubscriptionStorage,
+    UserConfigStorage,
+};
 use web::auth::AuthUser;
 
 use super::mapping::{entry_to_post_fields, post_to_entry};
@@ -123,17 +127,36 @@ fn utf8_encode(s: &str) -> String {
     utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
 }
 
+/// Builds the `ViewerIdentity` for the authenticated `AtomPub` user.
+///
+/// `AtomPub` requests are authenticated (the author), so the owner-post-load paths
+/// resolve the post as the local viewer for that user — otherwise the resolution
+/// filter would hide the user's own non-Public posts (a `404` before the owner
+/// check ever runs).
+async fn owner_viewer(
+    subscriptions: &dyn SubscriptionStorage,
+    auth_user: &AuthUser,
+) -> Result<ViewerIdentity, HandlerError> {
+    let local_channel_id = subscriptions.local_channel_id().await?;
+    Ok(ViewerIdentity::local(auth_user.user_id, local_channel_id))
+}
+
 /// Loads a post that the authenticated user owns and that is not soft-deleted.
 /// Returns `404` for missing, foreign, or deleted posts.
+///
+/// The post is loaded as the authenticated owner (not `Anonymous`) so the
+/// resolution filter does not hide the owner's own non-Public posts.
 async fn owned_post(
     posts: &dyn PostStorage,
+    subscriptions: &dyn SubscriptionStorage,
     auth_user: &AuthUser,
     username: &str,
     post_id: i64,
 ) -> Result<PostRecord, HandlerError> {
     super::require_user_match(auth_user, username)?;
+    let viewer = owner_viewer(subscriptions, auth_user).await?;
     let post = posts
-        .get_post_by_id(post_id)
+        .get_post_by_id(post_id, &viewer)
         .await?
         .ok_or(HandlerError::NotFound)?;
     if post.user_id != auth_user.user_id || post.deleted_at.is_some() {
@@ -152,11 +175,19 @@ async fn owned_post(
 #[tracing::instrument(name = "atompub.posts.member_get", skip_all)]
 pub async fn member_get(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
     Path((username, post_id)): Path<(String, i64)>,
 ) -> Result<Response, HandlerError> {
-    let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
+    let post = owned_post(
+        posts.as_ref(),
+        subscriptions.as_ref(),
+        &auth_user,
+        &username,
+        post_id,
+    )
+    .await?;
     let base = base_url(site_config.as_ref()).await;
     let entry = post_to_entry(&post, &base);
     let xml = entry_to_xml(&entry);
@@ -202,10 +233,18 @@ async fn apply_categories(
 #[tracing::instrument(name = "atompub.posts.member_delete", skip_all)]
 pub async fn member_delete(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,
     auth_user: AuthUser,
     Path((username, post_id)): Path<(String, i64)>,
 ) -> Result<Response, HandlerError> {
-    let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
+    let post = owned_post(
+        posts.as_ref(),
+        subscriptions.as_ref(),
+        &auth_user,
+        &username,
+        post_id,
+    )
+    .await?;
     posts.soft_delete_post(post.post_id).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
@@ -220,6 +259,7 @@ pub async fn member_delete(
 #[tracing::instrument(name = "atompub.posts.collection_post", skip_all)]
 pub async fn collection_post(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,
     Extension(user_config): Extension<Arc<dyn UserConfigStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
@@ -237,6 +277,9 @@ pub async fn collection_post(
         Some(chrono::Utc::now())
     };
 
+    // AtomPub has no audience picker; new posts adopt the instance default.
+    let default_audience = site_config.get_default_audience().await?;
+
     let created = storage::perform_post_creation(
         posts.as_ref(),
         storage::PostCreation {
@@ -248,15 +291,18 @@ pub async fn collection_post(
             published_at,
             max_attempts: 100,
             summary: fields.summary,
+            audiences: vec![default_audience],
         },
     )
     .await?;
 
     apply_categories(posts.as_ref(), created.post_id, &fields.categories).await?;
 
-    // Re-fetch so the response entry includes the freshly applied tags.
+    // Re-fetch so the response entry includes the freshly applied tags. Load as
+    // the authenticated owner so a non-Public default audience is not hidden.
+    let viewer = owner_viewer(subscriptions.as_ref(), &auth_user).await?;
     let post = posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(created.post_id, &viewer)
         .await?
         .ok_or(HandlerError::Internal)?;
 
@@ -289,8 +335,10 @@ pub async fn collection_post(
 /// Returns `412` if `If-Match` is present and stale.
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.member_put", skip_all)]
+#[allow(clippy::too_many_arguments)] // axum extractor handler; args are request inputs
 pub async fn member_put(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,
     Extension(user_config): Extension<Arc<dyn UserConfigStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
@@ -298,7 +346,14 @@ pub async fn member_put(
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, HandlerError> {
-    let current = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
+    let current = owned_post(
+        posts.as_ref(),
+        subscriptions.as_ref(),
+        &auth_user,
+        &username,
+        post_id,
+    )
+    .await?;
 
     if let Some(if_match) = headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()) {
         if if_match != "*" && if_match != etag_for(&current) {
@@ -311,6 +366,9 @@ pub async fn member_put(
         storage::get_default_post_format(user_config.as_ref(), auth_user.user_id).await?;
     let fields = entry_to_post_fields(&entry, default_format);
 
+    // AtomPub has no audience picker; preserve the post's existing targeting
+    // across the edit rather than resetting it.
+    let audiences = posts.get_post_audiences(post_id).await?;
     storage::perform_post_update(
         posts.as_ref(),
         storage::PostUpdate {
@@ -322,14 +380,17 @@ pub async fn member_put(
             slug_override: None,
             publish: !fields.is_draft,
             summary: fields.summary,
+            audiences,
         },
     )
     .await?;
 
     apply_categories(posts.as_ref(), post_id, &fields.categories).await?;
 
+    // Load as the authenticated owner so a non-Public post is not hidden.
+    let viewer = owner_viewer(subscriptions.as_ref(), &auth_user).await?;
     let post = posts
-        .get_post_by_id(post_id)
+        .get_post_by_id(post_id, &viewer)
         .await?
         .ok_or(HandlerError::Internal)?;
 

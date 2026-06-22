@@ -144,7 +144,12 @@ pub async fn delete_media(
         let url = common::media::media_url(source_enum.as_str(), &sha256, &filename);
 
         let published = posts
-            .list_published_by_user(&auth.username, None, 1000)
+            .list_published_by_user(
+                &auth.username,
+                None,
+                1000,
+                &crate::viewer::viewer_identity().await,
+            )
             .await
             .map_err(InternalError::storage)?;
 

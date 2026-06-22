@@ -147,8 +147,9 @@ test("sidebar footer shows Sign out link when logged in", async ({
 
   // Wait for the authenticated nav to resolve (Suspense resolves after auth resource loads).
   await waitForSelector(page, ".j-nav a[href='/drafts']");
-  // Home, Drafts, and Media have hrefs.
-  await expect(page.locator(".j-nav a")).toHaveCount(3);
+  // Home, Drafts, Media, and Audiences have hrefs.
+  await waitForSelector(page, ".j-nav a[href='/audiences']");
+  await expect(page.locator(".j-nav a")).toHaveCount(4);
 
   // Footer has Sign out.
   await expect(page.locator("a[href='/logout']")).toBeVisible();

@@ -1,3 +1,4 @@
+use crate::subscriptions::{is_subscribed_to, SubscribeTo, UnsubscribeFrom};
 use crate::tags::TagSummary;
 use crate::{
     auth::current_user,
@@ -5,14 +6,17 @@ use crate::{
     feed_discovery::{FeedDiscovery, RsdDiscovery},
     pages::{
         signal_read::read_signal,
-        ui::{ComposerFields, PostCard, PostCreateForm, PostDisplay, TagContext, TagInput, Topbar},
+        ui::{
+            AudiencePicker, ComposerFields, PostCard, PostCreateForm, PostDisplay, TagContext,
+            TagInput, Topbar,
+        },
         MediaPanel,
     },
     posts::{
         get_post, get_post_preview, list_drafts, list_posts_by_tag, list_user_posts,
-        list_user_posts_by_tag, CreatePostResult, DeletePost, DraftSummary, ListPostsByTag,
-        ListUserPosts, ListUserPostsByTag, PublishPost, PublishPostResult, TimelinePostSummary,
-        UpdatePost, UpdatePostResult,
+        list_user_posts_by_tag, post_audience_selection, AudienceSelection, CreatePostResult,
+        DeletePost, DraftSummary, ListPostsByTag, ListUserPosts, ListUserPostsByTag, PublishPost,
+        PublishPostResult, TimelinePostSummary, UpdatePost, UpdatePostResult,
     },
 };
 use common::feed::FeedSurface;
@@ -22,7 +26,6 @@ use leptos_router::hooks::use_params_map;
 
 #[allow(clippy::must_use_candidate)]
 #[component]
-#[must_use]
 pub fn CreatePostPage() -> impl IntoView {
     let current_user = Resource::new(|| (), |()| current_user());
     let last_result: RwSignal<Option<CreatePostResult>> = RwSignal::new(None);
@@ -107,7 +110,6 @@ pub fn CreatePostPage() -> impl IntoView {
 
 #[allow(clippy::must_use_candidate)]
 #[component]
-#[must_use]
 pub fn PostPage() -> impl IntoView {
     let params = use_params_map();
 
@@ -210,9 +212,77 @@ pub fn PostPage() -> impl IntoView {
 }
 
 #[allow(clippy::too_many_lines)]
+/// Subscribe / Unsubscribe control shown on a user's profile (timeline) page.
+///
+/// Hidden when the viewer is logged out or is viewing their own profile.
+/// Otherwise renders Subscribe when not subscribed and Unsubscribe when
+/// subscribed, querying state via `is_subscribed_to`.
 #[allow(clippy::must_use_candidate)]
 #[component]
-#[must_use]
+fn SubscribeButton(username: String) -> impl IntoView {
+    let subscribe = ServerAction::<SubscribeTo>::new();
+    let unsubscribe = ServerAction::<UnsubscribeFrom>::new();
+
+    // Re-query after either action mutates the subscription.
+    let username_for_state = username.clone();
+    let state = Resource::new(
+        move || (subscribe.version().get(), unsubscribe.version().get()),
+        move |_| {
+            let username = username_for_state.clone();
+            async move {
+                let viewer = current_user().await.ok().flatten();
+                let subscribed = is_subscribed_to(username.clone()).await.unwrap_or(false);
+                (viewer, subscribed)
+            }
+        },
+    );
+
+    let profile_username = username;
+
+    view! {
+        <Suspense fallback=|| ()>
+            {move || {
+                let username = profile_username.clone();
+                Suspend::new(async move {
+                    let (viewer, subscribed) = state.await;
+                    let show = match &viewer {
+                        Some(name) => *name != username,
+                        None => false,
+                    };
+                    if !show {
+                        return ().into_any();
+                    }
+                    if subscribed {
+                        let username = username.clone();
+                        // Hide when logged out or viewing one's own profile.
+                        view! {
+                            <ActionForm action=unsubscribe>
+                                <input type="hidden" name="author_username" value=username />
+                                <button type="submit" class="j-btn">
+                                    "Unsubscribe"
+                                </button>
+                            </ActionForm>
+                        }
+                            .into_any()
+                    } else {
+                        view! {
+                            <ActionForm action=subscribe>
+                                <input type="hidden" name="author_username" value=username />
+                                <button type="submit" class="j-btn is-primary">
+                                    "Subscribe"
+                                </button>
+                            </ActionForm>
+                        }
+                            .into_any()
+                    }
+                })
+            }}
+        </Suspense>
+    }
+}
+
+#[allow(clippy::must_use_candidate, clippy::too_many_lines)]
+#[component]
 pub fn UserTimelinePage() -> impl IntoView {
     let params = use_params_map();
     let username = Memo::new(move |_| {
@@ -332,6 +402,10 @@ pub fn UserTimelinePage() -> impl IntoView {
         <div class="j-scroll">
             <div class="j-page">
                 {move || {
+                    let username = username.get();
+                    (!username.is_empty()).then(|| view! { <SubscribeButton username=username /> })
+                }}
+                {move || {
                     if let Some(err) = read_error() {
                         return view! { <p class="error">{err}</p> }.into_any();
                     }
@@ -381,7 +455,6 @@ pub fn UserTimelinePage() -> impl IntoView {
 
 #[allow(clippy::must_use_candidate)]
 #[component]
-#[must_use]
 pub fn DraftPreviewPage() -> impl IntoView {
     let delete_action = ServerAction::<DeletePost>::new();
     let publish_action = ServerAction::<PublishPost>::new();
@@ -492,6 +565,12 @@ pub fn EditPostPage() -> impl IntoView {
     let slug_override = RwSignal::new(String::new());
     let summary = RwSignal::new(String::new());
     let post_tags: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());
+    // Pre-selected with the post's current targeting (defaults to Public until
+    // it resolves).
+    let audience = RwSignal::new(AudienceSelection {
+        base: "public".to_string(),
+        named: Vec::new(),
+    });
     // ServerAction dispatches happen only on the client; this redirect-on-publish
     // effect only ever fires there. `Effect::new_isomorphic` would needlessly
     // schedule on the server.
@@ -509,16 +588,26 @@ pub fn EditPostPage() -> impl IntoView {
         }
     });
 
-    let post = Resource::new(
-        move || {
-            params
-                .get()
-                .get("post_id")
-                .and_then(|v| v.parse::<i64>().ok())
-                .unwrap_or(-1)
-        },
-        get_post_preview,
-    );
+    let post_id_param = move || {
+        params
+            .get()
+            .get("post_id")
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(-1)
+    };
+    let post = Resource::new(post_id_param, get_post_preview);
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+    let current_audience = Resource::new(post_id_param, post_audience_selection);
+    // Client-only: copying the resolved Resource into `audience` must not run
+    // during SSR, where the future can resolve after the per-request reactive
+    // owner is disposed (web-style-guide.md §9). The picker is seeded with the
+    // post's current targeting on the client after hydration.
+    #[cfg(target_arch = "wasm32")]
+    Effect::new(move |_| {
+        if let Some(Ok(selection)) = current_audience.get() {
+            audience.set(selection);
+        }
+    });
 
     view! {
         <Topbar title="Edit Post".to_string() sub="Long-form".to_string() />
@@ -550,6 +639,7 @@ pub fn EditPostPage() -> impl IntoView {
                                         post_tags.get().into_iter().map(|t| t.display).collect(),
                                     ),
                                     summary: common::text::non_empty_owned(summary.get()),
+                                    audience: Some(audience.get()),
                                 });
                         };
                         view! {
@@ -608,6 +698,9 @@ pub fn EditPostPage() -> impl IntoView {
                                         </div>
                                         <div style="margin-top:10px">
                                             <TagInput tags=post_tags />
+                                        </div>
+                                        <div style="margin-top:10px">
+                                            <AudiencePicker selection=audience />
                                         </div>
                                         <div class="j-seg" style="margin-top:10px">
                                             <button
@@ -722,7 +815,6 @@ pub fn EditPostPage() -> impl IntoView {
 
 #[allow(clippy::must_use_candidate)]
 #[component]
-#[must_use]
 pub fn DraftsPage() -> impl IntoView {
     let publish_action = ServerAction::<PublishPost>::new();
     let delete_action = ServerAction::<DeletePost>::new();

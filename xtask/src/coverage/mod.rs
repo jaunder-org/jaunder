@@ -191,8 +191,12 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
     // Likewise regenerate the CRAP manifest when there are no CRAP regressions
     // (Mode::Fix) and it differs from the committed manifest.
     if matches!(mode, Mode::Fix) && verdict.is_clean() && crap_regs.is_empty() {
+        // Compare in canonical (minified, key-sorted) form so equality is
+        // independent of on-disk formatting, but WRITE pretty-printed so the
+        // committed manifest stays human-diffable (a one-line blob makes
+        // coverage diffs unreadable). The baseline is likewise written pretty.
         if normalize_json(&crap_report_str)? != normalize_json_or_empty(&old_crap_manifest) {
-            std::fs::write(CRAP_MANIFEST_PATH, normalize_json(&crap_report_str)?)
+            std::fs::write(CRAP_MANIFEST_PATH, pretty_json(&crap_report_str)?)
                 .with_context(|| format!("writing {CRAP_MANIFEST_PATH}"))?;
             healed = true;
         }
@@ -237,6 +241,16 @@ fn count_lines(buckets: &[FileLines]) -> usize {
 fn normalize_json(s: &str) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(s)?;
     Ok(v.to_string())
+}
+
+/// Canonical (key-sorted, via `serde_json::Value`'s `BTreeMap`) but
+/// pretty-printed with a trailing newline — the on-disk form of the committed
+/// manifest, so coverage diffs stay readable. Compared against [`normalize_json`]
+/// output, which strips formatting, so the stored pretty form never triggers a
+/// spurious rewrite.
+fn pretty_json(s: &str) -> Result<String> {
+    let v: serde_json::Value = serde_json::from_str(s)?;
+    Ok(format!("{}\n", serde_json::to_string_pretty(&v)?))
 }
 
 fn normalize_json_or_empty(s: &str) -> String {

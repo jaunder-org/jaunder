@@ -8,6 +8,7 @@
 )]
 #![allow(unused_macros)]
 
+use common::visibility::AudienceTarget;
 use std::sync::Arc;
 
 use crate::helpers::{backends, Backend, CapturingWebSubClient, TestEnv};
@@ -66,6 +67,7 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
             rendered_html: "<h1>Test</h1>\n<p>Content</p>".to_string(),
             published_at: Some(now),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post");
@@ -126,6 +128,7 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
             rendered_html: "<h1>Test</h1>\n<p>Content</p>".to_string(),
             published_at: Some(now),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post");
@@ -187,6 +190,7 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
             rendered_html: "<h1>Test</h1>\n<p>Content</p>".to_string(),
             published_at: Some(now),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post");
@@ -308,6 +312,11 @@ async fn worker_applies_backoff_on_ping_failure() {
             pool.clone(),
         )),
         posts: std::sync::Arc::new(storage::SqlitePostStorage::new(pool.clone())),
+        subscriptions: std::sync::Arc::new(storage::SqliteSubscriptionStorage::new(
+            pool.clone(),
+            std::sync::Arc::new(common::visibility::OpenSubscriptionPolicy),
+        )),
+        audiences: std::sync::Arc::new(storage::SqliteAudienceStorage::new(pool.clone())),
         media: std::sync::Arc::new(storage::SqliteMediaStorage::new(pool.clone())),
         user_config: std::sync::Arc::new(storage::SqliteUserConfigStorage::new(pool.clone())),
         feed_cache: std::sync::Arc::new(storage::SqliteFeedCacheStorage::new(pool.clone())),
@@ -335,6 +344,7 @@ async fn worker_applies_backoff_on_ping_failure() {
             rendered_html: "<h1>Test</h1>\n<p>Content</p>".to_string(),
             published_at: Some(now),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post");
@@ -407,6 +417,7 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
             rendered_html: "<h1>Test</h1>\n<p>Content</p>".to_string(),
             published_at: Some(now),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post");

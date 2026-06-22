@@ -12,6 +12,7 @@ use chrono::Utc;
 use common::password::Password;
 use common::slug::Slug;
 use common::username::Username;
+use common::visibility::AudienceTarget;
 use jaunder::feed::regenerate::regenerate_feed;
 use storage::{CreatePostInput, PostFormat};
 
@@ -49,6 +50,7 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
             rendered_html: "<p>Post 1 body</p>".to_string(),
             published_at: Some(now),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post 1");
@@ -64,6 +66,7 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
             rendered_html: "<p>Post 2 body</p>".to_string(),
             published_at: Some(now),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post 2");
@@ -232,6 +235,7 @@ async fn regenerate_writes_each_format(#[case] backend: Backend) {
             rendered_html: "<p>Test body</p>".to_string(),
             published_at: Some(now),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create post");
@@ -258,4 +262,86 @@ async fn regenerate_writes_each_format(#[case] backend: Backend) {
         );
         assert!(!row.body.is_empty(), "body not empty for {feed_url}");
     }
+}
+
+/// Published feeds are public-only (M8): `regenerate_feed` resolves posts as an
+/// anonymous viewer, so a mix of Public / Subscribers / Private posts emits ONLY
+/// the Public one. This locks the `ViewerIdentity::Anonymous` intent in
+/// `regenerate_feed` — if a non-anonymous viewer ever leaked in, the
+/// Subscribers/Private titles would appear and this test would fail.
+#[apply(backends)]
+#[tokio::test]
+async fn feed_contains_only_public_posts(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+
+    let username: Username = "alice".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    let user_id = state
+        .users
+        .create_user(&username, &password, None, false)
+        .await
+        .expect("create user");
+
+    let now = Utc::now();
+    let mk = |title: &str, slug: &str, audiences: Vec<AudienceTarget>| CreatePostInput {
+        user_id,
+        title: Some(title.to_string()),
+        slug: slug.parse::<Slug>().expect("valid slug"),
+        body: format!("{title} body"),
+        format: PostFormat::Markdown,
+        rendered_html: format!("<p>{title} body</p>"),
+        published_at: Some(now),
+        summary: None,
+        audiences,
+    };
+
+    state
+        .posts
+        .create_post(&mk(
+            "Public Post",
+            "public-post",
+            vec![AudienceTarget::Public],
+        ))
+        .await
+        .expect("create public post");
+    state
+        .posts
+        .create_post(&mk(
+            "Subscribers Post",
+            "subscribers-post",
+            vec![AudienceTarget::Subscribers],
+        ))
+        .await
+        .expect("create subscribers post");
+    // Private = no audience rows.
+    state
+        .posts
+        .create_post(&mk("Private Post", "private-post", vec![]))
+        .await
+        .expect("create private post");
+
+    let row = regenerate_feed(
+        state.site_config.as_ref(),
+        state.posts.as_ref(),
+        state.feed_cache.as_ref(),
+        "/~alice/feed.rss",
+    )
+    .await
+    .expect("regenerate feed");
+
+    assert!(
+        row.body.contains("Public Post"),
+        "Public post must appear in the feed: {}",
+        row.body
+    );
+    assert!(
+        !row.body.contains("Subscribers Post"),
+        "Subscribers post must NOT appear in the public feed: {}",
+        row.body
+    );
+    assert!(
+        !row.body.contains("Private Post"),
+        "Private post must NOT appear in the public feed: {}",
+        row.body
+    );
 }

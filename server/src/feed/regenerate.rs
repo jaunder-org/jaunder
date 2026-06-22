@@ -43,7 +43,16 @@ pub async fn regenerate_feed(
     };
     let now = Utc::now();
     let published = posts
-        .list_published_in_window(&surface, &window, now)
+        // Published feeds are public-only (M8 / ADR-0020): regeneration resolves
+        // posts as an anonymous viewer, so the resolution filter reduces to the
+        // `public` EXISTS and only Public posts reach the feed. Anonymous is the
+        // permanent, correct value here — feeds have no authenticated viewer.
+        .list_published_in_window(
+            &surface,
+            &window,
+            now,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .map_err(storage_err)?;
 

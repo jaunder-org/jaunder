@@ -12,6 +12,7 @@ pub mod slug;
 pub mod tag;
 pub mod text;
 pub mod username;
+pub mod visibility;
 
 /// True only when the test-only cheap Argon2 parameters are compiled in.
 /// Production builds (no `cheap-kdf`) leave this `false`; downstream binaries

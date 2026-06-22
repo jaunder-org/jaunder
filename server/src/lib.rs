@@ -48,6 +48,10 @@ pub fn create_router(
     let site_config_ext = state.site_config.clone();
     let media_ext = state.media.clone();
     let feed_cache_ext = state.feed_cache.clone();
+    // The AtomPub owner-post-load path constructs a local ViewerIdentity from the
+    // authenticated user, which needs the local channel id from the subscription
+    // store. See `server/src/atompub/posts.rs::owned_post`.
+    let subscriptions_ext = state.subscriptions.clone();
     // The `AuthUser` extractor (web crate) authenticates the session cookie /
     // bearer token, so the raw HTTP handlers and the Leptos request `Parts`
     // need the session store reachable as a request extension.
@@ -116,6 +120,7 @@ pub fn create_router(
         .layer(axum::Extension(site_config_ext))
         .layer(axum::Extension(media_ext))
         .layer(axum::Extension(feed_cache_ext))
+        .layer(axum::Extension(subscriptions_ext))
         .layer(axum::Extension(sessions_ext));
     crate::observability::with_http_observability(app).with_state(leptos_options)
 }

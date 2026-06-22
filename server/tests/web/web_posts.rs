@@ -19,7 +19,8 @@ use storage::PostFormat;
 use tempfile::TempDir;
 use tower::ServiceExt;
 use web::posts::{
-    CreatePostResult, DraftSummary, PublishPostResult, TimelinePage, UpdatePostResult,
+    AudienceSelection, CreatePostResult, DraftSummary, PublishPostResult, TimelinePage,
+    UpdatePostResult,
 };
 
 use rstest::*;
@@ -221,7 +222,10 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
 
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .expect("post should exist");
@@ -394,7 +398,10 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
 
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .expect("post should exist");
@@ -440,7 +447,10 @@ async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
     assert_eq!(created.slug, "titleless-note");
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .expect("post should exist");
@@ -486,7 +496,10 @@ Body text",
     assert_eq!(created.slug, "extracted-title");
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .expect("post should exist");
@@ -594,7 +607,10 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
 
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .expect("post should exist");
@@ -673,7 +689,10 @@ draft",
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -834,7 +853,10 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -1047,7 +1069,7 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
 
     let record = state
         .posts
-        .get_post_by_id(post_id)
+        .get_post_by_id(post_id, &common::visibility::ViewerIdentity::Anonymous)
         .await
         .unwrap()
         .expect("post should exist");
@@ -1546,7 +1568,10 @@ async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Bac
 
     let record = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -1753,7 +1778,10 @@ async fn get_post_finds_author_draft_across_multiple_pages(#[case] backend: Back
     let first_post_id = ids[0];
     let record = state
         .posts
-        .get_post_by_id(first_post_id)
+        .get_post_by_id(
+            first_post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .expect("first draft should exist");
@@ -2154,7 +2182,10 @@ async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
     // The post should now be gone from storage (deleted_at is set)
     let post = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -2602,7 +2633,10 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
 
     let published_at = state
         .posts
-        .get_post_by_id(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap()
         .unwrap()
@@ -3026,4 +3060,432 @@ async fn set_default_post_format_persists_and_retrieves_markdown(#[case] backend
         body, "\"markdown\"",
         "expected format to be markdown after setting"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Content visibility — Layer A (Task 16): timeline reads thread the real
+// viewer (viewer_identity) through the store resolution filter instead of the
+// Anonymous stopgap. These are server-fn-level tests; the exhaustive storage
+// resolution matrix lives in `storage.rs`.
+// ---------------------------------------------------------------------------
+
+/// Creates a published post for `author` with the given audience targeting,
+/// directly through the store (the web create path is Public-only in Layer A).
+async fn create_targeted_post(
+    state: &Arc<storage::AppState>,
+    author: i64,
+    slug: &str,
+    audiences: Vec<common::visibility::AudienceTarget>,
+) -> i64 {
+    state
+        .posts
+        .create_post(&storage::CreatePostInput {
+            user_id: author,
+            title: Some(format!("Post {slug}")),
+            slug: slug.parse().unwrap(),
+            body: "body".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>body</p>".to_string(),
+            published_at: Some(chrono::Utc::now()),
+            summary: None,
+            audiences,
+        })
+        .await
+        .unwrap()
+}
+
+/// The set of post slugs visible in a local-timeline response.
+fn timeline_slugs(page: &TimelinePage) -> std::collections::BTreeSet<String> {
+    page.posts.iter().map(|p| p.slug.clone()).collect()
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend) {
+    use common::visibility::AudienceTarget;
+
+    let TestEnv { state, base: _base } = backend.setup().await;
+
+    let author = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let subscriber = state
+        .users
+        .create_user(
+            &"subby".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let stranger = state
+        .users
+        .create_user(
+            &"stranger".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let local = state.subscriptions.local_channel_id().await.unwrap();
+    // A named audience containing the subscriber's subscription. `subscribe` is
+    // idempotent, so this both establishes the active subscription and yields
+    // the subscription id for audience membership.
+    let friends = state
+        .audiences
+        .create_audience(author, "Friends")
+        .await
+        .unwrap();
+    let sub_id = state
+        .subscriptions
+        .subscribe(author, local, &subscriber.to_string())
+        .await
+        .unwrap();
+    state
+        .audiences
+        .add_member(author, friends, sub_id)
+        .await
+        .unwrap();
+
+    create_targeted_post(&state, author, "public-post", vec![AudienceTarget::Public]).await;
+    create_targeted_post(
+        &state,
+        author,
+        "subscribers-post",
+        vec![AudienceTarget::Subscribers],
+    )
+    .await;
+    create_targeted_post(
+        &state,
+        author,
+        "named-post",
+        vec![AudienceTarget::Named(friends)],
+    )
+    .await;
+    create_targeted_post(&state, author, "private-post", vec![]).await;
+
+    let author_cookie = format!(
+        "session={}",
+        state.sessions.create_session(author, "s").await.unwrap()
+    );
+    let subscriber_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(subscriber, "s")
+            .await
+            .unwrap()
+    );
+    let stranger_cookie = format!(
+        "session={}",
+        state.sessions.create_session(stranger, "s").await.unwrap()
+    );
+
+    // Anonymous viewer: only the Public post.
+    let (status, body) = list_local_timeline_form(Arc::clone(&state), None, None, 50, None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let anon: TimelinePage = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        timeline_slugs(&anon),
+        ["public-post".to_string()].into_iter().collect(),
+        "anonymous viewer sees only Public; body: {body}"
+    );
+
+    // Author: sees all of their own posts, including the private one.
+    let (status, body) =
+        list_local_timeline_form(Arc::clone(&state), None, None, 50, Some(&author_cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let authored: TimelinePage = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        timeline_slugs(&authored),
+        [
+            "public-post".to_string(),
+            "subscribers-post".to_string(),
+            "named-post".to_string(),
+            "private-post".to_string(),
+        ]
+        .into_iter()
+        .collect(),
+        "author sees own posts regardless of audience; body: {body}"
+    );
+
+    // Active subscriber + named member: Public + Subscribers + Named (not Private).
+    let (status, body) =
+        list_local_timeline_form(Arc::clone(&state), None, None, 50, Some(&subscriber_cookie))
+            .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let sub: TimelinePage = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        timeline_slugs(&sub),
+        [
+            "public-post".to_string(),
+            "subscribers-post".to_string(),
+            "named-post".to_string(),
+        ]
+        .into_iter()
+        .collect(),
+        "subscriber sees Public + Subscribers + admitted Named; body: {body}"
+    );
+    assert!(
+        sub.posts.iter().all(|p| !p.is_author),
+        "subscriber is not the author; body: {body}"
+    );
+
+    // Authed non-subscriber: only the Public post (same reach as anonymous,
+    // proving viewer_identity yields a Channel viewer that is correctly *not*
+    // admitted to subscriber/named content).
+    let (status, body) =
+        list_local_timeline_form(Arc::clone(&state), None, None, 50, Some(&stranger_cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let stranger_page: TimelinePage = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        timeline_slugs(&stranger_page),
+        ["public-post".to_string()].into_iter().collect(),
+        "authed non-subscriber sees only Public; body: {body}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] backend: Backend) {
+    use common::visibility::AudienceTarget;
+
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let author = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let subscriber = state
+        .users
+        .create_user(
+            &"subby".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let local = state.subscriptions.local_channel_id().await.unwrap();
+    state
+        .subscriptions
+        .subscribe(author, local, &subscriber.to_string())
+        .await
+        .unwrap();
+
+    let post_id = create_targeted_post(
+        &state,
+        author,
+        "subs-only",
+        vec![AudienceTarget::Subscribers],
+    )
+    .await;
+    let post = state
+        .posts
+        .get_post_by_id(
+            post_id,
+            &common::visibility::ViewerIdentity::local(author, local),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let published = post.published_at.unwrap();
+    let (y, m, d) = (published.year(), published.month(), published.day());
+
+    // Anonymous → 404 (the resolution filter hides the subscribers-only post).
+    let (status, _body) =
+        get_post_form(Arc::clone(&state), "author", y, m, d, "subs-only", None).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "anonymous must not see subscribers-only post"
+    );
+
+    // Active subscriber → 200.
+    let subscriber_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(subscriber, "s")
+            .await
+            .unwrap()
+    );
+    let (status, body) = get_post_form(
+        Arc::clone(&state),
+        "author",
+        y,
+        m,
+        d,
+        "subs-only",
+        Some(&subscriber_cookie),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "subscriber must see subscribers-only post; body: {body}"
+    );
+}
+
+// ── Audience-picker server fns ────────────────────────────────
+
+/// Creates `author` and returns a session cookie for the audience-picker tests.
+async fn author_with_cookie(state: &Arc<storage::AppState>) -> String {
+    user_with_cookie(state, "author").await
+}
+
+/// Creates a user with `username` and returns a session cookie.
+async fn user_with_cookie(state: &Arc<storage::AppState>, username: &str) -> String {
+    let user_id = state
+        .users
+        .create_user(
+            &username.parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
+    format!("session={token}")
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn default_audience_selection_returns_public_by_default(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = author_with_cookie(&state).await;
+
+    let (status, body) = post_json(
+        Arc::clone(&state),
+        "/api/default_audience_selection",
+        serde_json::json!({}),
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let selection: AudienceSelection = serde_json::from_str(&body).unwrap();
+    assert_eq!(selection.base, "public");
+    assert!(selection.named.is_empty());
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn default_audience_selection_rejects_unauthenticated(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+
+    let (status, body) = post_json(
+        Arc::clone(&state),
+        "/api/default_audience_selection",
+        serde_json::json!({}),
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("unauthorized"), "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn post_audience_selection_returns_public_for_new_post(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = author_with_cookie(&state).await;
+
+    let (status, body) = create_post_json(
+        Arc::clone(&state),
+        "Hello",
+        "markdown",
+        None,
+        true,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/post_audience_selection",
+        format!("post_id={}", created.post_id),
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let selection: AudienceSelection = serde_json::from_str(&body).unwrap();
+    // A post created with no audience field defaults to Public.
+    assert_eq!(selection.base, "public");
+    assert!(selection.named.is_empty());
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn post_audience_selection_rejects_missing_post(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = author_with_cookie(&state).await;
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/post_audience_selection",
+        "post_id=99999".to_string(),
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn post_audience_selection_rejects_non_owner(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let author_cookie = user_with_cookie(&state, "author").await;
+    let other_cookie = user_with_cookie(&state, "intruder").await;
+
+    let (status, body) = create_post_json(
+        Arc::clone(&state),
+        "Hello",
+        "markdown",
+        None,
+        true,
+        Some(&author_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    // A different user must not learn another author's targeting.
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/post_audience_selection",
+        format!("post_id={}", created.post_id),
+        Some(&other_cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
 }

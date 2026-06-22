@@ -8,6 +8,7 @@
 )]
 #![allow(unused_macros)]
 
+use common::visibility::AudienceTarget;
 use std::sync::Arc;
 
 use axum::{
@@ -85,6 +86,7 @@ async fn seed_user_and_tagged_post(
             rendered_html: format!("<p>body {slug}</p>"),
             published_at: Some(Utc::now()),
             summary: None,
+            audiences: vec![AudienceTarget::Public],
         })
         .await
         .expect("create_post failed");

@@ -22,9 +22,10 @@ use std::sync::{
 };
 use storage::{
     open_database, open_existing_database, AppState, DbConnectOptions, SqliteAtomicOps,
-    SqliteEmailVerificationStorage, SqliteFeedCacheStorage, SqliteFeedEventStorage,
-    SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage, SqlitePostStorage,
-    SqliteSessionStorage, SqliteSiteConfigStorage, SqliteUserConfigStorage, SqliteUserStorage,
+    SqliteAudienceStorage, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
+    SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage,
+    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
+    SqliteUserConfigStorage, SqliteUserStorage,
 };
 use tempfile::TempDir;
 
@@ -63,14 +64,37 @@ pub struct TestEnv {
     pub base: TempDir,
 }
 
+/// File name (under `TestEnv::base`) holding the Postgres connection string for
+/// the *per-test* database that [`AppState`] was migrated into. Raw-SQL tests
+/// need this because `template_postgres_url` mints a *fresh* clone on every
+/// call, so re-calling it would connect to a different (empty) database than
+/// the one the state seeded. Recorded here (instead of a new `TestEnv` field)
+/// to avoid breaking the many `let TestEnv { state, base } = ...` destructures.
+/// Absent on `SQLite`, where raw access goes through the `base` temp dir directly.
+pub const PG_URL_FILE: &str = "pg_test_url";
+
+/// Returns the Postgres connection string recorded by [`Backend::setup`] for a
+/// test's per-test database. Reuse this for raw-SQL pools so they see rows the
+/// state already inserted. Panics if called on a `SQLite` `TestEnv`.
+pub fn recorded_postgres_url(base: &TempDir) -> String {
+    std::fs::read_to_string(base.path().join(PG_URL_FILE))
+        .expect("Postgres test URL not recorded; recorded_postgres_url is Postgres-only")
+}
+
 impl Backend {
     pub async fn setup(self) -> TestEnv {
         let base = TempDir::new().unwrap();
         let state = match self {
             Backend::Sqlite => open_database(&sqlite_url(&base)).await.unwrap(),
-            Backend::Postgres => open_existing_database(&template_postgres_url().await)
-                .await
-                .unwrap(),
+            Backend::Postgres => {
+                let url = template_postgres_url().await;
+                let state = open_existing_database(&url).await.unwrap();
+                // Record the per-test DB URL so raw-SQL helpers reuse this exact
+                // database rather than minting a fresh (empty) template clone.
+                std::fs::write(base.path().join(PG_URL_FILE), url.to_string())
+                    .expect("write recorded Postgres URL");
+                state
+            }
         };
         TestEnv { state, base }
     }
@@ -128,6 +152,17 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::site::GetSiteIdentity>();
         server_fn::axum::register_explicit::<web::site::UpdateSiteIdentity>();
         server_fn::axum::register_explicit::<web::tags::ListTags>();
+        server_fn::axum::register_explicit::<web::subscriptions::SubscribeTo>();
+        server_fn::axum::register_explicit::<web::subscriptions::UnsubscribeFrom>();
+        server_fn::axum::register_explicit::<web::subscriptions::IsSubscribedTo>();
+        server_fn::axum::register_explicit::<web::audiences::CreateAudience>();
+        server_fn::axum::register_explicit::<web::audiences::RenameAudience>();
+        server_fn::axum::register_explicit::<web::audiences::DeleteAudience>();
+        server_fn::axum::register_explicit::<web::audiences::ListMyAudiences>();
+        server_fn::axum::register_explicit::<web::audiences::ListMySubscribers>();
+        server_fn::axum::register_explicit::<web::audiences::AddSubscriberToAudience>();
+        server_fn::axum::register_explicit::<web::audiences::RemoveSubscriberFromAudience>();
+        server_fn::axum::register_explicit::<web::audiences::ListAudienceMembers>();
     });
 }
 
@@ -381,6 +416,11 @@ pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx
         email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
         password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
         posts: Arc::new(SqlitePostStorage::new(pool.clone())),
+        subscriptions: Arc::new(SqliteSubscriptionStorage::new(
+            pool.clone(),
+            Arc::new(common::visibility::OpenSubscriptionPolicy),
+        )),
+        audiences: Arc::new(SqliteAudienceStorage::new(pool.clone())),
         media: Arc::new(SqliteMediaStorage::new(pool.clone())),
         user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
         feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
@@ -416,6 +456,7 @@ pub async fn seed_posts(
             storage::PostFormat::Markdown,
             published_at,
             None,
+            vec![common::visibility::AudienceTarget::Public],
         )
         .await
         .expect("seed post should be created");

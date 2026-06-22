@@ -13,10 +13,10 @@ use crate::tags::TagSummary;
 #[cfg(feature = "ssr")]
 use {
     super::server::{list_by_tag_rows, parse_post_cursor, timeline_post_summary, to_post_cursor},
-    crate::auth::{require_auth, AuthUser},
+    crate::auth::require_auth,
     crate::error::InternalError,
+    crate::viewer::{viewer_identity, viewer_user_id},
     common::{tag::Tag, username::Username},
-    leptos_axum,
     std::sync::Arc,
     storage::{PostStorage, UserStorage},
 };
@@ -65,16 +65,14 @@ pub async fn list_user_posts(
             .map_err(|e| InternalError::validation(e.to_string()))?;
         let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
 
-        let viewer_user_id = leptos_axum::extract::<AuthUser>()
-            .await
-            .ok()
-            .map(|a| a.user_id);
+        let viewer = viewer_identity().await;
+        let viewer_user_id = viewer_user_id(&viewer);
 
         let page_size = limit.unwrap_or(50).clamp(1, 50);
         let fetch_limit = page_size.saturating_add(1);
 
         let mut rows = posts
-            .list_published_by_user(&username, cursor.as_ref(), fetch_limit)
+            .list_published_by_user(&username, cursor.as_ref(), fetch_limit, &viewer)
             .await
             .map_err(InternalError::storage)?;
 
@@ -108,16 +106,14 @@ pub async fn list_local_timeline(
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
         let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
-        let viewer_user_id = leptos_axum::extract::<AuthUser>()
-            .await
-            .ok()
-            .map(|a| a.user_id);
+        let viewer = viewer_identity().await;
+        let viewer_user_id = viewer_user_id(&viewer);
 
         let page_size = limit.unwrap_or(50).clamp(1, 50);
         let fetch_limit = page_size.saturating_add(1);
 
         let mut rows = posts
-            .list_published(cursor.as_ref(), fetch_limit)
+            .list_published(cursor.as_ref(), fetch_limit, &viewer)
             .await
             .map_err(InternalError::storage)?;
 
@@ -151,11 +147,12 @@ pub async fn list_home_feed(
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
         let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
+        let viewer = viewer_identity().await;
         let page_size = limit.unwrap_or(50).clamp(1, 50);
         let fetch_limit = page_size.saturating_add(1);
 
         let mut rows = posts
-            .list_published_by_user(&auth.username, cursor.as_ref(), fetch_limit)
+            .list_published_by_user(&auth.username, cursor.as_ref(), fetch_limit, &viewer)
             .await
             .map_err(InternalError::storage)?;
 
@@ -192,17 +189,15 @@ pub async fn list_posts_by_tag(
             .parse::<Tag>()
             .map_err(|e| InternalError::validation(e.to_string()))?;
         let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
-        let viewer_user_id = leptos_axum::extract::<AuthUser>()
-            .await
-            .ok()
-            .map(|a| a.user_id);
+        let viewer = viewer_identity().await;
+        let viewer_user_id = viewer_user_id(&viewer);
 
         let page_size = limit.unwrap_or(50).clamp(1, 50);
         let fetch_limit = page_size.saturating_add(1);
 
         let rows = list_by_tag_rows(
             posts
-                .list_posts_by_tag(&tag_slug, cursor.as_ref(), fetch_limit)
+                .list_posts_by_tag(&tag_slug, cursor.as_ref(), fetch_limit, &viewer)
                 .await,
         )?;
 
@@ -246,10 +241,8 @@ pub async fn list_user_posts_by_tag(
             .parse::<Tag>()
             .map_err(|e| InternalError::validation(e.to_string()))?;
         let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
-        let viewer_user_id = leptos_axum::extract::<AuthUser>()
-            .await
-            .ok()
-            .map(|a| a.user_id);
+        let viewer = viewer_identity().await;
+        let viewer_user_id = viewer_user_id(&viewer);
 
         let author = users
             .get_user_by_username(&username)
@@ -262,7 +255,13 @@ pub async fn list_user_posts_by_tag(
 
         let rows = list_by_tag_rows(
             posts
-                .list_user_posts_by_tag(author.user_id, &tag_slug, cursor.as_ref(), fetch_limit)
+                .list_user_posts_by_tag(
+                    author.user_id,
+                    &tag_slug,
+                    cursor.as_ref(),
+                    fetch_limit,
+                    &viewer,
+                )
                 .await,
         )?;
 

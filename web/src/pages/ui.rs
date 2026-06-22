@@ -1,7 +1,11 @@
+use crate::audiences::{list_my_audiences, AudienceSummary};
 use crate::auth::current_user;
 use crate::backup::{backup_warning_visible, current_user_is_operator};
 use crate::pages::upload::MediaPanel;
-use crate::posts::{CreatePost, CreatePostResult, DeletePost, TimelinePostSummary, UnpublishPost};
+use crate::posts::{
+    default_audience_selection, AudienceSelection, CreatePost, CreatePostResult, DeletePost,
+    TimelinePostSummary, UnpublishPost,
+};
 use crate::tags::TagSummary;
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
@@ -463,6 +467,126 @@ pub fn PostCard(
     }
 }
 
+// ─── 3.6b AudiencePicker ──────────────────────────────────────
+
+/// Per-post visibility control for the editor.
+///
+/// Drives a shared `selection` signal: a mutually-exclusive base
+/// (Public / Private / Subscribers) plus a checkbox per named audience the
+/// author owns (union semantics — e.g. Public + a named audience). `Private`
+/// is author-only and the storage layer drops any named selection for it
+/// (see `audience_selection_to_targets`); the named checkboxes are disabled
+/// while Private is chosen to make that explicit.
+#[allow(clippy::must_use_candidate)]
+#[component]
+pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
+    // SSR-resolved Resources serialize their value to the client and are not
+    // re-fetched on hydration; if `list_my_audiences` lost the disposal race and
+    // resolved to `Err` during SSR, the client would reuse that `Err` and the
+    // multiselect would stay empty. So resolve it client-only: SSR renders no
+    // checkboxes, and a wasm-only Effect seeds them after hydration
+    // (web-style-guide.md §9, mirroring `home.rs`).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+    let named = Resource::new(|| (), |()| list_my_audiences());
+    let named_audiences = RwSignal::new(Vec::<AudienceSummary>::new());
+    #[cfg(target_arch = "wasm32")]
+    Effect::new(move |_| {
+        if let Some(Ok(list)) = named.get() {
+            named_audiences.set(list);
+        }
+    });
+
+    let base_options = ["public", "subscribers", "private"];
+    let base_labels = ["Public", "Subscribers", "Private (only me)"];
+
+    view! {
+        <div class="j-field-row" style="grid-template-columns:auto 1fr">
+            <label class="j-field-label" for="audience-base">
+                "Audience"
+            </label>
+            <select
+                id="audience-base"
+                class="j-field-val"
+                on:change=move |ev| {
+                    selection
+                        .update(|sel| {
+                            sel.base = event_target_value(&ev);
+                        });
+                }
+            >
+                {base_options
+                    .iter()
+                    .zip(base_labels)
+                    .map(|(value, label)| {
+                        let value = (*value).to_string();
+                        view! {
+                            <option
+                                value=value.clone()
+                                selected=move || selection.get().base == value
+                            >
+                                {label}
+                            </option>
+                        }
+                    })
+                    .collect_view()}
+            </select>
+        </div>
+        {move || {
+            let audiences = named_audiences.get();
+            if audiences.is_empty() {
+                ().into_any()
+            } else {
+                let rows = audiences
+                    .into_iter()
+                    .map(|a| audience_checkbox(a, selection))
+                    .collect_view();
+                view! {
+                    <div style="margin-top:8px">
+                        <span class="j-field-label">"Also share with"</span>
+                        {rows}
+                    </div>
+                }
+                    .into_any()
+            }
+        }}
+    }
+}
+
+/// One named-audience checkbox row for [`AudiencePicker`]. Toggling it
+/// adds/removes the audience id in the shared selection. Disabled while the
+/// base is `Private`, since Private cannot combine with named audiences.
+fn audience_checkbox(
+    audience: AudienceSummary,
+    selection: RwSignal<AudienceSelection>,
+) -> impl IntoView {
+    let id = audience.audience_id;
+    let input_id = format!("audience-named-{id}");
+    let checked = move || selection.get().named.contains(&id);
+    let disabled = move || selection.get().base == "private";
+    view! {
+        <label style="display:block" for=input_id.clone()>
+            <input
+                id=input_id.clone()
+                type="checkbox"
+                prop:checked=checked
+                disabled=disabled
+                on:change=move |ev| {
+                    let on = event_target_checked(&ev);
+                    selection
+                        .update(|sel| {
+                            sel.named.retain(|x| *x != id);
+                            if on {
+                                sel.named.push(id);
+                            }
+                        });
+                }
+            />
+            " "
+            {audience.name}
+        </label>
+    }
+}
+
 // ─── 3.7 PostCreateForm ───────────────────────────────────────
 
 #[allow(clippy::too_many_lines)]
@@ -483,6 +607,24 @@ pub fn PostCreateForm(
     let format = RwSignal::new("markdown".to_string());
     let summary = RwSignal::new(String::new());
     let tags: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());
+    // A new post starts at the site-wide default audience; default to Public
+    // until that resolves.
+    let audience = RwSignal::new(AudienceSelection {
+        base: "public".to_string(),
+        named: Vec::new(),
+    });
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+    let default_audience = Resource::new(|| (), |()| default_audience_selection());
+    // Client-only: copying the resolved Resource into `audience` must not run
+    // during SSR, where the future can resolve after the per-request reactive
+    // owner is disposed (web-style-guide.md §9). SSR renders the Public
+    // default; the real default is seeded on the client after hydration.
+    #[cfg(target_arch = "wasm32")]
+    Effect::new(move |_| {
+        if let Some(Ok(default)) = default_audience.get() {
+            audience.set(default);
+        }
+    });
 
     #[cfg(target_arch = "wasm32")]
     {
@@ -511,6 +653,7 @@ pub fn PostCreateForm(
                 publish: false,
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
                 summary: Some(summary.get()),
+                audience: Some(audience.get()),
             });
         };
         let dispatch_publish = move |_| {
@@ -521,6 +664,7 @@ pub fn PostCreateForm(
                 publish: true,
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
                 summary: Some(summary.get()),
+                audience: Some(audience.get()),
             });
         };
         view! {
@@ -625,6 +769,7 @@ pub fn PostCreateForm(
                 publish,
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
                 summary: Some(summary.get()),
+                audience: Some(audience.get()),
             });
         };
         view! {
@@ -675,6 +820,9 @@ pub fn PostCreateForm(
                         </div>
                         <div style="margin-top:10px">
                             <TagInput tags=tags />
+                        </div>
+                        <div style="margin-top:10px">
+                            <AudiencePicker selection=audience />
                         </div>
                         <div class="j-seg" style="margin-top:10px">
                             <button
@@ -872,6 +1020,13 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
         ("bookmarks", "Bookmarks", Icons::BOOKMARK, None, true),
         ("drafts", "Drafts", Icons::EDIT, Some("/drafts"), true),
         ("media", "Media", Icons::MEDIA, Some("/media"), true),
+        (
+            "audiences",
+            "Audiences",
+            Icons::BOOKMARK,
+            Some("/audiences"),
+            true,
+        ),
         ("settings", "Settings", Icons::COG, None, true),
     ];
 

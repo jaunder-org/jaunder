@@ -1,3 +1,8 @@
+// Leptos `view!` trees compile to deeply-nested tuple types; the editor's
+// composer view (now carrying the audience picker) exceeds the default type
+// recursion limit, so raise it for this crate.
+#![recursion_limit = "512"]
+
 #[cfg(feature = "ssr")]
 pub use common::username;
 
@@ -8,6 +13,7 @@ macro_rules! boundary {
     };
 }
 
+pub mod audiences;
 pub mod auth;
 pub mod backup;
 pub mod email;
@@ -22,7 +28,9 @@ pub mod posts;
 pub mod profile;
 pub mod sessions;
 pub mod site;
+pub mod subscriptions;
 pub mod tags;
+pub mod viewer;
 
 pub use pages::App;
 
