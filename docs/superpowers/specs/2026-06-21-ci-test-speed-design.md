@@ -126,6 +126,24 @@ Together: production is protected by feature *absence* (resolver-v2 dev-dep isol
 - Targets: workstream 1 cuts build (expect the ~250s build to drop substantially); workstreams 2–3 cut execution (expect the ~76s, and specifically the named SLOW tests, to drop).
 - Gate: `cargo xtask validate` (or `--no-e2e` while iterating) stays green; coverage/CRAP ratchet clean.
 
+### Measured results (2026-06-21)
+
+Rigorous before/after: `main` (`87e04b9`) vs `ci-test-speed` (`64c9620`), identical harness — whole-workspace instrumented coverage suite, both backends, full cold build each, stable `TMPDIR`. Build derived as `run_total − execution` (execution = nextest `Summary` bracket).
+
+| Metric | BEFORE (`main`) | AFTER (branch) | Δ |
+|---|---|---|---|
+| Coverage step total (build + exec) | 296s | 199s | **−97s (−33%)** |
+| Instrumented build | ~229s | ~157s | **−72s (−31%)** |
+| Test execution | 67.2s | 41.7s | **−25.5s (−38%)** |
+| Tests | 1434 | 1435 (+1 prod-params test) | — |
+
+- **Build (−31%)** is the deterministic headline — 23→5 instrumented test-binary links. Confirms the profiling thesis that build dominates.
+- **Execution (−38%)** is real (the total bracket is robust) and is mostly seed-direct: the 4 `web_posts` pagination tests were each **>10s** on `main` and are gone from the slow list on the branch. cheap-kdf additionally dropped `set_password` below the 5s threshold.
+- **Caveat — per-test SLOW flags are contention-noisy:** AFTER reported 12 slow `storage::use_*` token tests that BEFORE did not, yet AFTER's total execution is 25s *faster* — scheduling contention near the 5s line, not a regression. Trust the total bracket, not the slow list.
+- **Correction to the plan's KDF attribution:** cheap-kdf is active (it sped up `set_password`) but did **not** speed up the storage token tests — those are database-setup-bound, not Argon2-bound. The build consolidation and seed-direct carried the win; KDF's payoff is smaller and more diffuse than assumed.
+
+`cargo xtask validate` passes (static + clippy + coverage clean + e2e on both backends).
+
 ## Sequencing
 
 1. **Workstream 1 (consolidation)** — independent, biggest payoff, lowest risk. Land first.
