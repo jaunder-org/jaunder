@@ -154,6 +154,6 @@ Each is independently shippable and independently verifiable.
 
 ## Deferred / future
 
-- The double-compilation question (clippy and coverage each do a full separate workspace build) — plausibly as large a lever as consolidation. Scoped as a follow-up investigation, not part of this spec.
+- ~~The double-compilation question (clippy and coverage each do a full separate workspace build) — plausibly as large a lever as consolidation.~~ **Investigated + measured 2026-06-21 — hypothesis refuted.** CI's only uncached full workspace build is the host `cargo clippy --all-targets` (the `actions/cache` covers `~/.cargo` + `xtask/target`, not the main `target/`). But clippy is a *check*-mode build (`.rmeta` only, no codegen/linking), so a full cold run is just **~56s** on a many-core box (~2–3× on a smaller CI runner), not the minutes assumed. The dominant CI costs are the *codegen* builds — the instrumented coverage build and e2e — both already cachix-cached. The flake already has an unused `clippy` crane check; routing `validate`'s clippy to it would recover most of the ~56s (deps from cachix) but is a modest, low-priority cleanup, not a major lever. Tracked as bead `jaunder-b2i1`.
 - Unit↔integration overlap cleanup on maintenance grounds (not speed).
 - Mutation-testing round (noted: the prior round surfaced missing tests, not redundant ones).
