@@ -169,6 +169,13 @@ tool call. All global edits MUST follow:
 - **Memory edits are low-risk** for *running* instances (already loaded) but
   affect new sessions; still write atomically.
 
+## Implementation findings (2026-06-24, from P2 research)
+
+- **Claude Code v2.1.x PreToolUse hooks cannot rewrite a Bash command** (`updatedInput.command` is ignored for Bash; verified via context-mode `formatters.mjs`). So **G1 can't *strip* the `cd`** — it can only deny or nudge. User chose a **non-blocking `additionalContext` nudge** for G1 (no dead-loop, no baroque workaround).
+- **G3 (echo)** likewise becomes a non-blocking nudge.
+- **G2 (deny-redirect) is deferred out of P2.** Making its guidance show requires moving `grep`/`head`/`tail`/`sed` out of `permissions.deny`, but context-mode **mirrors `permissions.deny`**, so that would re-open those tools on context-mode's shell (a PreToolUse hook only gates the Bash tool). G2 is therefore folded into a later plan **with J4**, where the trade-off is decided deliberately.
+- **Revised plan slicing:** P1 (cleanup+memory, done) → **P2 = G1+G3 nudge hook** → later: G2+J4 (deny-redirect + project deny-list) → J1/J3 skills → J2 dispatch → DX Project/issues. Hooks load at session start, so wired hooks are live-verified only after a restart.
+
 ## Open implementation notes
 
 - Locate and integrate with the existing hook chain (`serena-hooks` global;
