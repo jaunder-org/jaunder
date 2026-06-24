@@ -12,7 +12,7 @@
 
 - **Canonical source of the new history:** `/home/mdorman/jaunder-rebuild/jaunder-spine.bundle` (branch `spine`). The tmpfs clone `/tmp/jaunder-rebuild` is volatile — never the source of truth for the push.
 - **Only `spine`→`main` is pushed** to the new repo. None of the scaffolding refs (`linear-clean`, `orig-baseline`, `spine-topic`, `spine-nextest-green`, `pre-rebuild`, `L0`/`L-cleaned`/`L3-woven`, `prebatch*`, `prepass-done`, `post-*`) go to GitHub.
-- **Target identity (verbatim, from the live repo 2026-06-24):** owner `jaunder-org`, name `jaunder`, `visibility: public`, `default_branch: main`, `has_issues/has_projects/has_wiki: true`, merge-button flags at GitHub defaults, `description` = `` `Jaunder` is an easily-hosted, multi-protocol social media application written in Rust. ``, no homepage.
+- **Target identity (verbatim, from the live repo 2026-06-24):** owner `jaunder-org`, name `jaunder`, `visibility: public`, `default_branch: main`, `has_issues/has_projects/has_wiki: true`, `description` = `` `Jaunder` is an easily-hosted, multi-protocol social media application written in Rust. ``, no homepage. **Customized merge flags (differ from fresh-repo defaults, must be restored):** `allow_squash_merge: false`, `allow_merge_commit: true`, `allow_rebase_merge: false`, `allow_auto_merge: true`, `delete_branch_on_merge: false`.
 - **Settings surface to restore:** core settings + **10 labels** + **1 ruleset**. Confirmed empty (nothing to re-enter): branch protection, webhooks, environments, autolinks, deploy keys, custom properties, Actions/Dependabot secrets, Actions variables; all security-analysis flags disabled.
 - **Content surface to preserve:** **1 open GitHub issue** (#39 "Coverage gate: surface test failures distinctly from coverage regressions", label `tooling`) — erased on delete; must be dumped (Task 2) and recreated (Task 8). Closed issues and all PR threads are intentionally not preserved (§7). The new repo's recreated issue numbers will differ from the old ones.
 - **Destructive steps (Task 5 onward) require an explicit human "go"** in the session, immediately before execution. Never self-authorize.
@@ -242,7 +242,7 @@ git -C "$D" push -q origin main
 ```bash
 M=/home/mdorman/jaunder-rebuild/cutover/manifest
 gh api -X PATCH repos/jaunder-org/jaunder-rehearsal \
-  --input <(jq '{description, homepage, has_issues, has_projects, has_wiki}' "$M/core.json") \
+  --input <(jq '{description, homepage, has_issues, has_projects, has_wiki, allow_squash_merge, allow_merge_commit, allow_rebase_merge, allow_auto_merge, delete_branch_on_merge}' "$M/core.json") \
   --jq '.description'
 ```
 
@@ -278,9 +278,10 @@ Expected: ruleset created (name + enforcement printed).
 
 ```bash
 M=/home/mdorman/jaunder-rebuild/cutover/manifest
-# core:
-diff <(jq -S '{description, homepage, has_issues, has_projects, has_wiki}' "$M/core.json") \
-     <(gh api repos/jaunder-org/jaunder-rehearsal | jq -S '{description, homepage, has_issues, has_projects, has_wiki}') \
+# core (incl. customized merge-button flags):
+CORE_FIELDS='{description, homepage, has_issues, has_projects, has_wiki, allow_squash_merge, allow_merge_commit, allow_rebase_merge, allow_auto_merge, delete_branch_on_merge}'
+diff <(jq -S "$CORE_FIELDS" "$M/core.json") \
+     <(gh api repos/jaunder-org/jaunder-rehearsal | jq -S "$CORE_FIELDS") \
   && echo CORE_OK
 # labels (name+color+description, order-independent):
 diff <(jq -S 'sort_by(.name)' "$M/labels.json") \
@@ -328,8 +329,9 @@ git -C /home/mdorman/jaunder-rebuild/cutover/jaunder-new \
 # First-parent changelog as GitHub will show it on the default branch:
 gh api 'repos/jaunder-org/jaunder-spine-preview/commits?sha=main&per_page=10' \
   --jq '.[].commit.message | split("\n")[0]'
-# PR tab MUST be empty (local --no-ff merges, no PRs):
-gh pr list --repo jaunder-org/jaunder-spine-preview --state all --json number --jq 'length'
+# PR tab MUST be empty (local --no-ff merges, no PRs). REST, not `gh pr list`:
+# this token's GraphQL path 401s, so use the REST pulls endpoint.
+echo -n 'pr_count='; gh api 'repos/jaunder-org/jaunder-spine-preview/pulls?state=all' --jq 'length'
 ```
 
 Expected: the first line is the emacs-plan subject, followed by clean Conventional-Commits merge subjects; PR count `0`. Also open the repo in a browser to eyeball README + `docs/` rendering and the commit graph.
@@ -427,7 +429,7 @@ Expected: `main` (usually already the default after first push; this makes it ex
 ```bash
 M=/home/mdorman/jaunder-rebuild/cutover/manifest
 gh api -X PATCH repos/jaunder-org/jaunder \
-  --input <(jq '{description, homepage, has_issues, has_projects, has_wiki}' "$M/core.json") \
+  --input <(jq '{description, homepage, has_issues, has_projects, has_wiki, allow_squash_merge, allow_merge_commit, allow_rebase_merge, allow_auto_merge, delete_branch_on_merge}' "$M/core.json") \
   --jq '.description'
 ```
 
@@ -490,11 +492,11 @@ Expected: `TREE_OK`.
 
 ```bash
 M=/home/mdorman/jaunder-rebuild/cutover/manifest
-diff <(jq -S '{description,has_issues,has_projects,has_wiki}' "$M/core.json") \
-     <(gh api repos/jaunder-org/jaunder | jq -S '{description,has_issues,has_projects,has_wiki}') && echo CORE_OK
+diff <(jq -S '{description,homepage,has_issues,has_projects,has_wiki,allow_squash_merge,allow_merge_commit,allow_rebase_merge,allow_auto_merge,delete_branch_on_merge}' "$M/core.json") \
+     <(gh api repos/jaunder-org/jaunder | jq -S '{description,homepage,has_issues,has_projects,has_wiki,allow_squash_merge,allow_merge_commit,allow_rebase_merge,allow_auto_merge,delete_branch_on_merge}') && echo CORE_OK
 gh api --paginate repos/jaunder-org/jaunder/labels --jq 'length'
 gh api repos/jaunder-org/jaunder/rulesets --jq 'length'
-gh pr list --repo jaunder-org/jaunder --state all --json number --jq 'length'
+echo -n 'pr_count='; gh api 'repos/jaunder-org/jaunder/pulls?state=all' --jq 'length'   # REST (GraphQL 401s)
 gh run list --repo jaunder-org/jaunder --limit 5 --json status,name,conclusion
 ```
 
@@ -526,22 +528,22 @@ Expected: `origin/main` now shows the rebuilt tip. (A local reset/re-clone of `/
 
 - [ ] **Step 0: Recreate the preserved GitHub issue(s) verbatim**
 
+REST throughout (`gh issue create`/`list` use the GraphQL path, which 401s on this token).
+
 ```bash
 M=/home/mdorman/jaunder-rebuild/cutover/manifest
 jq -c '.[]' "$M/github-issues.json" | while IFS= read -r iss; do
-  title=$(jq -r '.title' <<<"$iss")
-  body=$(jq -r '.body' <<<"$iss")
-  labels=$(jq -r '.labels | join(",")' <<<"$iss")
-  oldnum=$(jq -r '.number' <<<"$iss")
-  gh issue create --repo jaunder-org/jaunder \
-    --title "$title" \
-    --body "$body"$'\n\n'"_Migrated from old #$oldnum during the 2026-06-24 history rebuild._" \
-    ${labels:+--label "$labels"}
+  gh api repos/jaunder-org/jaunder/issues -X POST --input <(
+    jq '{title,
+         body: (.body + "\n\n_Migrated from old #\(.number) during the 2026-06-24 history rebuild._"),
+         labels}' <<<"$iss"
+  ) --jq '"created #\(.number): \(.title)"'
 done
-gh issue list --repo jaunder-org/jaunder --state open --json number,title --jq 'length'
+# Verify (REST — excludes PRs):
+gh api 'repos/jaunder-org/jaunder/issues?state=open' --jq '[.[]|select(.pull_request==null)]|length'
 ```
 
-Expected: `#39`'s content recreated as a new issue (label `tooling`); count `1`. Note its new number — it feeds Step 2 dedup. (Recreate runs before the beads pass so the beads triage can skip any duplicate.)
+Expected: `#39`'s content recreated as a new issue (label `tooling`); open-issue count `1`. Note its new number — it feeds Step 2 dedup. (Recreate runs before the beads pass so the beads triage can skip any duplicate.)
 
 - [ ] **Step 1: Export the open backlog**
 
@@ -562,14 +564,16 @@ Write `/home/mdorman/jaunder-rebuild/cutover/backlog-triage.md` with one line pe
 For each KEEP bead, map per §9: `issue_type`→label, `priority`→one of `P1`–`P4` label, epics→milestone, deps→a `Blocked by #N` line in the body; link design context to `docs/`, don't duplicate it.
 
 ```bash
-# Example for one bead (repeat per KEEP item, substituting fields from open-beads.json):
-gh issue create --repo jaunder-org/jaunder \
-  --title "<bead title>" \
-  --body $'<bead description>\n\nBlocked by: <#N or none>\nContext: docs/<path>' \
-  --label "<issue_type>" --label "P2"
+# Example for one bead (repeat per KEEP item, substituting fields from open-beads.json).
+# REST (GraphQL 401s on this token):
+gh api repos/jaunder-org/jaunder/issues -X POST \
+  -f title="<bead title>" \
+  -f body=$'<bead description>\n\nBlocked by: <#N or none>\nContext: docs/<path>' \
+  -f 'labels[]=<issue_type>' -f 'labels[]=P2' \
+  --jq '"created #\(.number)"'
 ```
 
-Expected: one issue per KEEP bead; verify with `gh issue list --repo jaunder-org/jaunder --json number --jq 'length'`.
+Expected: one issue per KEEP bead; verify with `gh api 'repos/jaunder-org/jaunder/issues?state=open' --jq '[.[]|select(.pull_request==null)]|length'`.
 
 ---
 
