@@ -131,23 +131,31 @@ the run summary say *which* class of failure occurred.
 
 ## Line-map reference frame (#3 + #11, unified)
 
-**Root cause (shared by both issues):** the report is built by Nix from
-**committed** source and the baseline was last healed at some **past commit**,
-but the host gate builds its line-map from `git diff HEAD` (HEAD → working tree).
-Mismatched reference frames manufacture phantom regressions:
+**Verified Nix behavior (2026-06-24):** the report is built by Nix from the
+**working tree** — dirty edits to *tracked* files ARE included (the "Git tree is
+dirty" warning fires and the coverage `.drvPath` changes after a tracked edit);
+only *untracked* files are excluded. In CI the checkout is clean, so the working
+tree equals HEAD there. (An earlier assumption that the report came from
+committed HEAD was disproven and the corresponding memory note deleted.)
 
-- #3: uncommitted line-shifting `.rs` edits make the working-tree map disagree
-  with the committed report → phantom regressions (today's "commit-first"
-  friction).
-- #11: lines also shift across the **commits since the baseline** was healed,
-  which `git diff HEAD` does not capture at all.
+**Root cause (shared by both issues):** the baseline's gaps are numbered at the
+**anchor commit** (the commit that last healed `coverage-baseline.json`), but the
+host gate builds its line-map from `git diff HEAD` — whose *start* point is HEAD,
+not the anchor. So line shifts in commits between the anchor and HEAD misalign
+the gaps and manufacture phantom regressions.
 
-**Fix:** compute the diffmap between the **baseline's commit frame** and the
-**report's commit frame**, consistently. Concretely: record the baseline's
-anchoring commit, and build the diffmap from that commit to the report's commit
-(spanning intervening committed changes, #11). Make a dirty working tree either
-irrelevant to the verdict or a fast, explicit failure — never a silent
-phantom-regression source (#3).
+- #11: lines shift across the **commits since the baseline** was healed; a
+  HEAD-anchored map ignores them entirely.
+- #3: the "commit-first" friction *is* that same anchor<HEAD misalignment — once
+  the map starts at the anchor, the friction disappears (subsumed by the #11
+  fix), with no separate working-tree handling needed.
+
+**Fix:** build the diffmap from the **baseline anchor commit → working tree**:
+`git diff <anchor> --` (a single commit arg diffs the anchor against the working
+tree, so it spans both committed shifts since the anchor *and* any uncommitted
+edits — matching the working-tree report). In CI this reduces to anchor→HEAD
+automatically. The current `git ls-files --others` untracked special-case is dead
+under this model (untracked files never reach the report) and is removed.
 
 This is the **riskiest** section; it is sequenced last and isolated behind its
 own tests.

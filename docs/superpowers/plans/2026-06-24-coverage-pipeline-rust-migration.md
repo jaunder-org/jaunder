@@ -15,7 +15,7 @@
 - **Per-task gate for code touching the main/xtask workspaces:** `cargo xtask check --no-test` (fmt + clippy, no Nix coverage build). For the standalone `coverage`/`devtool` crates, gate with their crate-local commands (given in each task).
 - **Don't reinforce defaults:** never set a value explicitly to what it already defaults to; lock load-bearing behavior with a test instead.
 - New crates use **`edition = "2021"`**, no `rust-version`, `publish = false`.
-- **The coverage report is always built by Nix from committed HEAD** (the flake ignores uncommitted tracked-file edits). Never diff against the working tree when mapping baseline lines.
+- **The coverage report is built by Nix from the WORKING TREE** (dirty tracked-file edits ARE included; only untracked files are excluded — verified 2026-06-24 via `nix eval .#checks.x86_64-linux.coverage.drvPath` changing after a dirty tracked edit). In CI the checkout is clean, so the working tree equals HEAD there. The baseline line-map must therefore target the working tree: `git diff <anchor> --` (anchor commit → working tree), NOT `<anchor>..HEAD`.
 - **Respect the `/xtask/` cache exclusion:** host-gate logic stays in `xtask` (excluded from the coverage derivation src). The `coverage` lib and `devtool` are *not* under `xtask/` and *are* included in the sandbox src.
 - **Single coverage model:** gap-based `coverage-baseline.json` + `crap-manifest.json` (both committed at repo root). The legacy percent model is dead — delete it.
 - Run all commands from the worktree root `/home/mdorman/src/jaunder/.claude/worktrees/coverage-rust-migration`.
@@ -1007,7 +1007,9 @@ git commit -m "ci: upload coverage/e2e diagnostics as an artifact on every run"
 
 ## Phase F — Line-map reference frame (#3 + #11)
 
-The host gate currently builds its line map from `git diff --unified=0 HEAD --` (HEAD→working-tree). But the Nix report is built from committed HEAD, and the baseline was healed at a past commit. The correct frame is **baseline-anchor-commit → HEAD**, never the working tree. This dissolves #3 (uncommitted edits stop manufacturing phantom regressions — they're not in the report) and #11 (committed line shifts since the baseline are now spanned).
+The host gate currently builds its line map from `git diff --unified=0 HEAD --` (HEAD→working-tree). The bug: the baseline's gaps are numbered at the **anchor commit** (the commit that last healed `coverage-baseline.json`), but the map *starts* at HEAD — so any line shifts in commits between the anchor and HEAD misalign the gaps and manufacture phantom regressions (#11). And since the Nix report is built from the **working tree** (verified — see Global Constraints), the map's *endpoint* must be the working tree, not HEAD.
+
+The correct frame is therefore **baseline-anchor-commit → working tree**: `git diff <anchor> --` (a single commit arg diffs anchor against the working tree). This is robust in both environments — in CI the working tree equals HEAD, so it reduces to anchor→HEAD automatically. It dissolves #11 (the map now spans commits since the anchor) and #3 (the "commit-first" friction *was* the anchor<HEAD misalignment; the corrected map removes it, so #3 is subsumed rather than needing separate working-tree handling). The current `git ls-files --others` untracked special-case is dead under this model (untracked files never reach the report) and is removed.
 
 ### Task F1: Compute the baseline anchor commit
 
@@ -1046,19 +1048,22 @@ git add xtask/src/coverage/mod.rs
 git commit -m "feat(xtask): compute the baseline anchor commit for line mapping"
 ```
 
-### Task F2: Diff anchor→HEAD instead of HEAD→working-tree
+### Task F2: Diff anchor→working-tree instead of HEAD→working-tree
 
 **Files:**
 - Modify: `xtask/src/coverage/mod.rs`
 
-- [ ] **Step 1: Write a failing test asserting the diff command spans anchor..HEAD**
+- [ ] **Step 1: Write a failing test asserting the diff spans anchor→working-tree (single commit arg, no range)**
 
-Refactor `git_diff_unified0()` to take an explicit range and add a test of the argument construction via a small pure helper:
+Refactor `git_diff_unified0()` to take the anchor and add a test of the argv via a small pure helper:
 
 ```rust
-/// The `git diff` argv for mapping the baseline anchor to the report's HEAD
-/// frame. Pinned prefixes so repo/CI diff config can't change the `+++ b/`
-/// prefix the parser keys on.
+/// The `git diff` argv for mapping the baseline anchor commit to the report's
+/// frame — the WORKING TREE (the Nix report is built from the working tree; in
+/// CI that equals HEAD). A single commit arg (`<anchor>`, not `<anchor>..HEAD`)
+/// diffs the anchor against the working tree, so uncommitted edits are spanned
+/// too. Pinned prefixes so repo/CI diff config can't change the `+++ b/` prefix
+/// the parser keys on.
 fn diff_args(anchor: &str) -> Vec<String> {
     vec![
         "diff".into(),
@@ -1066,7 +1071,7 @@ fn diff_args(anchor: &str) -> Vec<String> {
         "--no-color".into(),
         "--src-prefix=a/".into(),
         "--dst-prefix=b/".into(),
-        format!("{anchor}..HEAD"),
+        anchor.to_string(),
         "--".into(),
     ]
 }
@@ -1075,10 +1080,12 @@ fn diff_args(anchor: &str) -> Vec<String> {
 mod anchor_tests {
     use super::*;
     #[test]
-    fn diff_args_span_anchor_to_head_not_worktree() {
+    fn diff_args_span_anchor_to_worktree_single_commit() {
         let args = diff_args("abc123");
-        assert!(args.contains(&"abc123..HEAD".to_string()));
-        assert!(!args.contains(&"HEAD".to_string())); // not a bare-HEAD worktree diff
+        assert!(args.contains(&"abc123".to_string()));
+        // A single commit arg = anchor-vs-working-tree; a `..HEAD` range would
+        // wrongly ignore uncommitted edits (which ARE in the Nix report).
+        assert!(!args.iter().any(|a| a.contains("..")));
     }
 }
 ```
@@ -1088,14 +1095,14 @@ mod anchor_tests {
 Run: `cargo test --manifest-path xtask/Cargo.toml anchor_tests`
 Expected: FAIL (function missing) → add `diff_args`, then PASS.
 
-- [ ] **Step 3: Rewrite `git_diff_unified0` to use the anchor range**
+- [ ] **Step 3: Rewrite `git_diff_unified0` to diff the anchor against the working tree**
 
 ```rust
-fn git_diff_anchor_to_head(anchor: &str) -> Result<String> {
+fn git_diff_anchor_to_worktree(anchor: &str) -> Result<String> {
     let out = Command::new("git")
         .args(diff_args(anchor))
         .output()
-        .context("running git diff anchor..HEAD")?;
+        .context("running git diff <anchor> (anchor vs working tree)")?;
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 ```
@@ -1107,32 +1114,12 @@ let diff = git_diff_unified0()?;
 with:
 ```rust
 let anchor = baseline_anchor_commit()?;
-let diff = git_diff_anchor_to_head(&anchor)?;
+let diff = git_diff_anchor_to_worktree(&anchor)?;
 ```
 
-Replace the untracked-file mapping that uses `git ls-files --others` (working-tree-only) with files **added between anchor and HEAD**:
-```rust
-for path in git_added_files_since(&anchor)? {
-```
-where:
-```rust
-/// Files added (status A) between the anchor and HEAD — the committed analogue
-/// of the old untracked-file handling. Their lines have no anchor preimage, so
-/// uncovered lines classify as new_uncovered rather than regression.
-fn git_added_files_since(anchor: &str) -> Result<Vec<String>> {
-    let out = Command::new("git")
-        .args(["diff", "--name-only", "--diff-filter=A", &format!("{anchor}..HEAD")])
-        .output()
-        .context("running git diff --diff-filter=A")?;
-    Ok(String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(String::from)
-        .collect())
-}
-```
-Delete the now-unused `git_diff_unified0` and `git_untracked_files`.
+Then **delete the entire untracked-file mapping block** (the `for path in git_untracked_files()? { ... maps.insert(path, diffmap::LineMap::all_added(&lines)); }` loop). Rationale: untracked files are excluded from the Nix flake source, so they never appear in the report (`current`); and a file added since the anchor (committed or staged) already appears in the anchor→working-tree diff as an all-`+` hunk, so `parse_unified_diff` records its lines in `.added` and the classifier labels uncovered lines `new_uncovered` without any special case. Delete the now-unused `git_diff_unified0` and `git_untracked_files` functions.
+
+(Edge case to preserve: if `coverage-baseline.json` has never been committed, `baseline_anchor_commit()` returns `"HEAD"` — Task F1 — giving a HEAD→working-tree map, i.e. the prior behavior, which is acceptable for that transient state.)
 
 - [ ] **Step 4: Run the full xtask test suite + lint**
 
@@ -1144,7 +1131,7 @@ Expected: pass/clean. (The existing diffmap unit tests in `diffmap.rs` are unaff
 
 ```bash
 git add xtask/src/coverage/mod.rs
-git commit -m "fix(xtask): map baseline anchor->HEAD, not working tree (#3, #11)"
+git commit -m "fix(xtask): map baseline anchor->working-tree, not HEAD (#3, #11)"
 ```
 
 ---
@@ -1241,5 +1228,5 @@ git commit -m "chore: coverage migration end-to-end verification fixups"
 
 ## Notes / risks (carried from the spec)
 - **In-sandbox build cost:** `devtool` + `coverage` compile inside the producer derivation; their deps are small (clap/serde/anyhow) and the producer is never cached/pushed, so cost is bounded and acceptable.
-- **Reference-frame correctness (F):** sequenced last and isolated; relies on the invariant that the Nix report == committed HEAD. If that invariant ever changes (dirty-tree flake builds), revisit F2.
+- **Reference-frame correctness (F):** sequenced last and isolated. Rests on the verified fact that the Nix report is built from the **working tree** (dirty tracked edits included; untracked excluded), so the map is anchor→working-tree. If the flake src ever switches to a committed-only source (e.g. `builtins.fetchGit`/`?ref=HEAD`), revisit F2 (the endpoint would become HEAD).
 - **Refinement from spec §2:** the shared lib is intentionally minimal and the host gate stays in `xtask` (better cache behavior); this is the one deliberate divergence from the written spec and is flagged for the reviewer.
