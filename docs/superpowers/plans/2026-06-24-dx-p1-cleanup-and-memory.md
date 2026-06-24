@@ -39,7 +39,7 @@
 - Consumes: nothing.
 - Produces: a `settings.json` whose only change is the removal of the two `bd prime` hook invocations; all serena / context-mode hooks preserved byte-for-byte.
 
-- [ ] **Step 1: Confirm the symlink direction and back up the real file**
+- [x] **Step 1: Confirm the symlink direction and back up the real file**
 
 ```bash
 readlink -f ~/.claude            # expect: /home/mdorman/.config/claude
@@ -48,7 +48,7 @@ cp -p ~/.config/claude/settings.json ~/.config/claude/settings.json.bak
 ```
 Expected: both paths show inode `62557767`; `.bak` created.
 
-- [ ] **Step 2: Remove the entire `PreCompact` block**
+- [x] **Step 2: Remove the entire `PreCompact` block**
 
 It contains only `bd prime`. Delete this whole top-level key (the trailing comma after the `}` belongs to `PreCompact`'s array close — remove it too so `PreToolUse` becomes the first key):
 
@@ -68,7 +68,7 @@ Remove:
 ```
 Result: `"hooks": {` is immediately followed by `"PreToolUse": [`.
 
-- [ ] **Step 3: Remove the `bd prime` hook object from the first `SessionStart` group**
+- [x] **Step 3: Remove the `bd prime` hook object from the first `SessionStart` group**
 
 Keep `serena-hooks activate`; remove only the `bd prime` object (and its trailing comma):
 
@@ -95,7 +95,7 @@ to this:
         ]
 ```
 
-- [ ] **Step 4: Validate the JSON is well-formed and bd-free**
+- [x] **Step 4: Validate the JSON is well-formed and bd-free**
 
 ```bash
 node -e "const j=require('/home/mdorman/.config/claude/settings.json'); if(JSON.stringify(j).includes('bd prime')) throw new Error('bd prime still present'); if(!('PreToolUse' in j.hooks)||!('SessionStart' in j.hooks)||!('Stop' in j.hooks)) throw new Error('hook group missing'); if('PreCompact' in j.hooks) throw new Error('PreCompact not removed'); console.log('OK: valid JSON, no bd prime, serena+context-mode hooks intact');"
@@ -103,7 +103,7 @@ node -e "const j=require('/home/mdorman/.config/claude/settings.json'); if(JSON.
 Expected: `OK: valid JSON, no bd prime, serena+context-mode hooks intact`.
 (`node` is denied in the jaunder project deny-list but this is global config work; if blocked, run the same check via the sandbox `ctx_execute`.)
 
-- [ ] **Step 5: Remove the backup once validated**
+- [x] **Step 5: Remove the backup once validated**
 
 ```bash
 rm ~/.config/claude/settings.json.bak
@@ -122,7 +122,7 @@ No git commit — this file is outside the repo.
 **Interfaces:**
 - Produces: three fewer memory files; `MEMORY.md` index lines for them removed in Task 4.
 
-- [ ] **Step 1: Confirm each file is beads/RTK-only before deleting**
+- [x] **Step 1: Confirm each file is beads/RTK-only before deleting**
 
 ```bash
 cd ~/.config/claude/projects/-home-mdorman-src-jaunder/memory
@@ -130,14 +130,14 @@ for f in feedback_memory_system_split.md feedback_bd_show_batching.md feedback_b
 ```
 Expected: each is dominated by beads/RTK content (these encode `bd`-command mechanics and the beads-vs-memory split that no longer exists).
 
-- [ ] **Step 2: Delete the three files**
+- [x] **Step 2: Delete the three files**
 
 ```bash
 cd ~/.config/claude/projects/-home-mdorman-src-jaunder/memory
 rm feedback_memory_system_split.md feedback_bd_show_batching.md feedback_bd_graph_creation.md
 ```
 
-- [ ] **Step 3: Verify deletion**
+- [x] **Step 3: Verify deletion**
 
 ```bash
 ls feedback_memory_system_split.md feedback_bd_show_batching.md feedback_bd_graph_creation.md 2>&1
@@ -163,9 +163,9 @@ Apply the **Shared rewrite map**. Each file keeps its insight; only the dead too
 **Interfaces:**
 - Produces: eight memories free of `scripts/verify`, `check-coverage`, and `bd` tokens (except `cargo xtask`).
 
-- [ ] **Step 1: Rewrite each file per the map** (Edit each occurrence; preserve frontmatter and the core insight).
+- [x] **Step 1: Rewrite each file per the map** (Edit each occurrence; preserve frontmatter and the core insight).
 
-- [ ] **Step 2: Verify no residual dead tokens in these eight files**
+- [x] **Step 2: Verify no residual dead tokens in these eight files**
 
 ```bash
 cd ~/.config/claude/projects/-home-mdorman-src-jaunder/memory
@@ -184,13 +184,13 @@ Expected: no matches (`exit=1`).
 - Consumes: the file deletions (Task 2) and the surviving renamed/retargeted memories (Task 3).
 - Produces: an index with no links to deleted files and no stale tooling/Projects wording.
 
-- [ ] **Step 1: Fix the current-state line** — replace the "26 beads → 24 issues w/ native types/deps/**Priority+Layer Projects** + 2 milestones" wording so the Projects read **Jaunder Backlog / Operational Support / Privacy** (per `project_history_rebuild_phaseB_done.md`, which is the accurate record). Keep the pointer to that file.
+- [x] **Step 1: Fix the current-state line** — replace the "26 beads → 24 issues w/ native types/deps/**Priority+Layer Projects** + 2 milestones" wording so the Projects read **Jaunder Backlog / Operational Support / Privacy** (per `project_history_rebuild_phaseB_done.md`, which is the accurate record). Keep the pointer to that file.
 
-- [ ] **Step 2: Remove the index lines** for the three deleted memories (memory-system split, bd show batching, bd graph creation) and for the autonomous-beads memory pending Task 5's outcome.
+- [x] **Step 2: Remove the index lines** for the three deleted memories (memory-system split, bd show batching, bd graph creation) and for the autonomous-beads memory pending Task 5's outcome.
 
-- [ ] **Step 3: Update the "Workflow feedback" entries** whose one-line summaries cite `scripts/verify` (verify-before-commit, ctx-run-long-scripts) to the `cargo xtask` wording.
+- [x] **Step 3: Update the "Workflow feedback" entries** whose one-line summaries cite `scripts/verify` (verify-before-commit, ctx-run-long-scripts) to the `cargo xtask` wording.
 
-- [ ] **Step 4: Verify the index has no dead links or stale tokens**
+- [x] **Step 4: Verify the index has no dead links or stale tokens**
 
 ```bash
 cd ~/.config/claude/projects/-home-mdorman-src-jaunder/memory
@@ -209,13 +209,13 @@ Expected: no `MISSING:` lines; `tokens-exit=1` (no stale tokens).
 **Files:**
 - Modify or Delete: `~/.config/claude/projects/-home-mdorman-src-jaunder/memory/feedback_autonomous_beads_authorization.md`
 
-- [ ] **Step 1: Get the user's choice** between:
+- [x] **Step 1: Get the user's choice** between:
   - **(a) Rewrite** — retarget to GitHub Issues, `cargo xtask validate` as the commit gate, Opus subagents, no trailer; keep the "kickoff-only on go / never main / never push" guardrails. Rename to `feedback_autonomous_work_authorization.md`.
   - **(b) Delete** — drop the standing authorization entirely; require explicit per-task go in future.
 
-- [ ] **Step 2: Apply the choice.** If (a): write the retargeted file, update the `MEMORY.md` index line to the new name. If (b): `rm` the file and remove its `MEMORY.md` index line.
+- [x] **Step 2: Apply the choice.** If (a): write the retargeted file, update the `MEMORY.md` index line to the new name. If (b): `rm` the file and remove its `MEMORY.md` index line.
 
-- [ ] **Step 3: Verify** the file state matches the choice and `MEMORY.md` has no dangling link to it.
+- [x] **Step 3: Verify** the file state matches the choice and `MEMORY.md` has no dangling link to it.
 
 ---
 
@@ -223,7 +223,7 @@ Expected: no `MISSING:` lines; `tokens-exit=1` (no stale tokens).
 
 **Files:** none modified — verification only.
 
-- [ ] **Step 1: Sweep the whole memory dir for dead tooling tokens**
+- [x] **Step 1: Sweep the whole memory dir for dead tooling tokens**
 
 ```bash
 cd ~/.config/claude/projects/-home-mdorman-src-jaunder/memory
@@ -232,7 +232,7 @@ rg -n "\bbd \b|\bbeads\b|\.beads\b" . | rg -v "project_history_rebuild_phaseB_do
 ```
 Expected: `verify-exit=1` (none); the only surviving `bd`/`beads` mentions are the *historical* ones inside `project_history_rebuild_phaseB_done.md` (accurate record of the migration), so `beads-exit=1` after excluding it.
 
-- [ ] **Step 2: Confirm the global config is clean**
+- [x] **Step 2: Confirm the global config is clean**
 
 ```bash
 rg -n "bd prime" ~/.config/claude/settings.json ; echo "exit=$?"
