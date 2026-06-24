@@ -28,7 +28,7 @@
 **Interfaces:**
 - Produces: `export function analyze(command, cwd) → string[]` and `export function formatOutput(nudges) → string|null`, consumed by Task 2's glue and by the sandbox tests.
 
-- [ ] **Step 1: Write the failing test** (sandbox, dynamic import of the not-yet-written functions)
+- [x] **Step 1: Write the failing test** (sandbox, dynamic import of the not-yet-written functions)
 
 Run via `ctx_execute(language: "javascript", code: <below>)`:
 ```javascript
@@ -59,7 +59,7 @@ console.log(fail === 0 ? '\nALL PASS' : '\n' + fail + ' FAILURES');
 ```
 Expected now: import throws (file/exports don't exist) → FAIL.
 
-- [ ] **Step 2: Write the implementation** (create the file with functions only)
+- [x] **Step 2: Write the implementation** (create the file with functions only)
 
 ```javascript
 import path from "node:path";
@@ -110,11 +110,11 @@ export function formatOutput(nudges) {
 }
 ```
 
-- [ ] **Step 3: Run the test to verify it passes**
+- [x] **Step 3: Run the test to verify it passes**
 
 Re-run the Step 1 `ctx_execute`. Expected: `ALL PASS`.
 
-- [ ] **Step 4: Record** (no git commit — global file). Note in the execution log that Task 1 sandbox tests passed.
+- [x] **Step 4: Record** (no git commit — global file). Note in the execution log that Task 1 sandbox tests passed.
 
 ---
 
@@ -127,7 +127,7 @@ Re-run the Step 1 `ctx_execute`. Expected: `ALL PASS`.
 - Consumes: `analyze`, `formatOutput` from Task 1.
 - Produces: an executable hook that reads the PreToolUse stdin JSON (`{tool_name, tool_input:{command}, cwd?}`), and writes the `additionalContext` payload (or nothing), exit 0.
 
-- [ ] **Step 1: Write the failing test** (sandbox — exercises the glue's behavior via the pure functions plus a JSON-shape check; the script is not spawned because `node` is denied)
+- [x] **Step 1: Write the failing test** (sandbox — exercises the glue's behavior via the pure functions plus a JSON-shape check; the script is not spawned because `node` is denied)
 
 ```javascript
 const m = await import('/home/mdorman/.config/claude/hooks/bash-nudges.mjs');
@@ -158,7 +158,7 @@ console.log(fail===0 ? '\nALL PASS' : '\n'+fail+' FAILURES');
 ```
 Expected now: the `import-safe` assertion FAILS if the glue (added next) runs `process.exit` on import; before the glue exists the simulate cases pass but we have not yet proven the real glue is import-safe. Run it to capture the baseline.
 
-- [ ] **Step 2: Append the guarded glue to `bash-nudges.mjs`**
+- [x] **Step 2: Append the guarded glue to `bash-nudges.mjs`**
 
 ```javascript
 import { fileURLToPath } from "node:url";
@@ -187,11 +187,11 @@ if (invokedAsHook) {
 }
 ```
 
-- [ ] **Step 3: Run the test to verify it passes**
+- [x] **Step 3: Run the test to verify it passes**
 
 Re-run Step 1. Expected: all simulate cases `PASS` and `PASS import-safe` (the dynamic `import()` returns and the test keeps running, proving the main-guard works). `ALL PASS`.
 
-- [ ] **Step 4: Make the file executable** (matches the existing hook's shebang convention)
+- [x] **Step 4: Make the file executable** (matches the existing hook's shebang convention)
 
 ```bash
 chmod +x ~/.config/claude/hooks/bash-nudges.mjs
@@ -209,12 +209,12 @@ Then prepend the shebang line `#!/usr/bin/env node` as the first line if absent 
 - Consumes: the tested `bash-nudges.mjs`.
 - Produces: a `PreToolUse` entry (Bash matcher) referencing the hook; serena + context-mode hooks untouched.
 
-- [ ] **Step 1: Back up the real settings file**
+- [x] **Step 1: Back up the real settings file**
 ```bash
 cp -p ~/.config/claude/settings.json ~/.config/claude/settings.json.bak
 ```
 
-- [ ] **Step 2: Add the hook to `PreToolUse`** — a new group with a `Bash` matcher, appended after the existing two PreToolUse groups (serena remind, serena auto-approve). Insert before the closing `]` of `PreToolUse`:
+- [x] **Step 2: Add the hook to `PreToolUse`** — a new group with a `Bash` matcher, appended after the existing two PreToolUse groups (serena remind, serena auto-approve). Insert before the closing `]` of `PreToolUse`:
 
 ```json
       ,{
@@ -228,7 +228,7 @@ cp -p ~/.config/claude/settings.json ~/.config/claude/settings.json.bak
       }
 ```
 
-- [ ] **Step 3: Validate the settings JSON** (sandbox — `node` CLI is denied)
+- [x] **Step 3: Validate the settings JSON** (sandbox — `node` CLI is denied)
 
 ```javascript
 const fs = require('fs');
@@ -243,12 +243,12 @@ console.log('Stop/SessionStart intact: ' + (('Stop' in j.hooks && 'SessionStart'
 ```
 Expected: all OK. If any FAIL, restore from `.bak` and stop.
 
-- [ ] **Step 4: Remove the backup once validated**
+- [x] **Step 4: Remove the backup once validated**
 ```bash
 rm ~/.config/claude/settings.json.bak
 ```
 
-- [ ] **Step 5: Document live verification (next session)** — the hook loads only at session start, so it cannot fire in the authoring session. In the next fresh session, confirm:
+- [x] **Step 5: Document live verification (next session)** — the hook loads only at session start, so it cannot fire in the authoring session. In the next fresh session, confirm:
   1. A Bash call shaped `cd /home/mdorman/src/jaunder && <cmd>` surfaces the G1 nudge and the command still runs (non-blocking).
   2. A Bash call ending `... && echo done` surfaces the G3 nudge and still runs.
   3. `deny-bash-script-runners.mjs` STILL denies a `scripts/...`-style command (i.e. the `additionalContext` hook did not short-circuit the project deny hook). If it did short-circuit, treat as a defect: reorder so the deny hook precedes the nudge hook, or merge the nudge into a single Bash hook chain.
