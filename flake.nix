@@ -328,6 +328,25 @@
           }
         );
 
+        # The in-sandbox dev tool (tools/ workspace: devtool + its coverage
+        # path-dep), built as its OWN crane package with deps vendored from
+        # tools/Cargo.lock. The offline coverage sandbox runs it from PATH
+        # (nativeBuildInputs) instead of an in-sandbox `cargo run`, whose deps
+        # would not be vendored. Building the self-contained tools/ workspace
+        # (not the app root) keeps crane's metadata off the app's deps.
+        devtoolSrc = pkgs.lib.cleanSourceWith {
+          src = craneLib.path ./tools;
+          filter = craneLib.filterCargoSources;
+        };
+        devtoolBin = craneLib.buildPackage {
+          src = devtoolSrc;
+          pname = "devtool";
+          version = "0.1.0";
+          cargoExtraArgs = "-p devtool";
+          strictDeps = true;
+          doCheck = false;
+        };
+
         cargo-crap = pkgs.callPackage (
           {
             lib,
@@ -762,6 +781,7 @@
         packages = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           jaunder = jaunderBin;
           site = site;
+          devtool = devtoolBin;
 
           e2e-sqlite-cold = mkE2eSqliteCheck {
             checkName = "jaunder-e2e-sqlite-cold";

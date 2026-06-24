@@ -109,11 +109,14 @@ pub fn run(out: &str) -> Result<()> {
         "--output",
         raw_crap.to_str().unwrap(),
     ]))?;
-    let crap = fs::read_to_string(&raw_crap)?;
-    fs::write(
-        out.join("crap-report.json"),
-        normalize_crap_paths(&crap, &abs_root)?,
-    )?;
+    // Best-effort: a failed or absent CRAP report must NOT abort the emit — the
+    // producer always succeeds and the gate reads status.json. Default to an
+    // empty report so `crap-report.json` always exists for the install phase.
+    let crap_json = fs::read_to_string(&raw_crap)
+        .ok()
+        .and_then(|raw| normalize_crap_paths(&raw, &abs_root).ok())
+        .unwrap_or_else(|| "{\n  \"entries\": []\n}\n".to_string());
+    fs::write(out.join("crap-report.json"), crap_json)?;
 
     Ok(())
 }
