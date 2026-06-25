@@ -153,23 +153,9 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
     let repo_root = git_repo_root()?;
     let current = report::parse_text_report(&report, &repo_root);
 
-    let diff = git_diff_unified0()?;
-    let mut maps = diffmap::parse_unified_diff(&diff);
-
-    // `git diff HEAD` omits untracked files, so a brand-new untracked file gets
-    // no map → identity → its uncovered lines would be mislabeled `regression`.
-    // Map every untracked file present in the current report as all-added so its
-    // uncovered lines classify as `new_uncovered`. Never overwrite a map already
-    // built from the diff.
-    for path in git_untracked_files()? {
-        if maps.contains_key(&path) {
-            continue;
-        }
-        if let Some(f) = current.iter().find(|f| f.path == path) {
-            let lines: Vec<u32> = f.lines.iter().map(|l| l.line).collect();
-            maps.insert(path, diffmap::LineMap::all_added(&lines));
-        }
-    }
+    let anchor = baseline_anchor_commit()?;
+    let diff = git_diff_anchor_to_worktree(&anchor)?;
+    let maps = diffmap::parse_unified_diff(&diff);
 
     let baseline = Baseline::load(BASELINE_PATH)?;
     let verdict = classify::classify(&current, &baseline, &maps);
@@ -267,35 +253,44 @@ fn git_repo_root() -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-fn git_untracked_files() -> Result<Vec<String>> {
+/// The commit the committed baseline was last healed at. The Nix report is built
+/// from the working tree (== HEAD in CI), so the correct line map is
+/// anchor→working-tree — NOT a HEAD-anchored diff (which ignored shifts
+/// committed since the baseline, #11).
+fn baseline_anchor_commit() -> Result<String> {
     let out = Command::new("git")
-        .args(["ls-files", "--others", "--exclude-standard"])
+        .args(["log", "-1", "--format=%H", "--", BASELINE_PATH])
         .output()
-        .context("running git ls-files --others --exclude-standard")?;
-    Ok(String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(String::from)
-        .collect())
+        .context("running git log for baseline anchor")?;
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok(if sha.is_empty() {
+        "HEAD".to_string()
+    } else {
+        sha
+    })
 }
 
-fn git_diff_unified0() -> Result<String> {
-    // Pin the diff prefixes so a repo/CI with diff.noprefix, diff.mnemonicPrefix,
-    // or color configured can't change the `+++ b/` prefix the parser keys on
-    // (which would silently skip the file and mislabel edits as regressions).
+/// `git diff` argv mapping the baseline anchor to the report's frame — the
+/// WORKING TREE. A single commit arg (`<anchor>`, NOT `<anchor>..HEAD`) diffs the
+/// anchor against the working tree. Pinned prefixes so repo/CI diff config can't
+/// change the `+++ b/` prefix the parser keys on.
+fn diff_args(anchor: &str) -> Vec<String> {
+    vec![
+        "diff".into(),
+        "--unified=0".into(),
+        "--no-color".into(),
+        "--src-prefix=a/".into(),
+        "--dst-prefix=b/".into(),
+        anchor.to_string(),
+        "--".into(),
+    ]
+}
+
+fn git_diff_anchor_to_worktree(anchor: &str) -> Result<String> {
     let out = Command::new("git")
-        .args([
-            "diff",
-            "--unified=0",
-            "--no-color",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
-            "HEAD",
-            "--",
-        ])
+        .args(diff_args(anchor))
         .output()
-        .context("running git diff --unified=0 HEAD")?;
+        .context("running git diff <anchor> (anchor vs working tree)")?;
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
@@ -316,6 +311,34 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn diff_args_span_anchor_to_worktree_single_commit() {
+        let args = diff_args("abc123");
+        assert!(args.contains(&"abc123".to_string()));
+        // A single commit arg = anchor-vs-working-tree; a `..HEAD` range would
+        // wrongly ignore uncommitted edits (which ARE in the Nix report).
+        assert!(!args.iter().any(|a| a.contains("..")));
+    }
+
+    #[test]
+    fn crap_heal_is_idempotent_and_pretty() {
+        // The heal writes pretty, key-sorted JSON and compares via the
+        // formatting-independent `normalize_json`, so re-healing an already-healed
+        // manifest is a no-op — no spurious multi-thousand-line diff churn (#7).
+        let compact =
+            r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
+        let pretty = pretty_json(compact).unwrap();
+        assert!(
+            pretty.contains('\n'),
+            "heal must write multi-line pretty JSON"
+        );
+        assert_eq!(
+            normalize_json(&pretty).unwrap(),
+            normalize_json(compact).unwrap(),
+            "pretty and compact must normalize equal, so a re-heal does not rewrite"
+        );
     }
 
     fn verdict_with_improvement() -> CoverageVerdict {

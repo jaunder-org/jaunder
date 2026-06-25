@@ -76,9 +76,9 @@ mod tests {
             f.lines.iter().map(|l| l.line).collect::<Vec<_>>(),
             vec![2, 3, 4]
         );
-        assert_eq!(f.lines[0].covered, true); // 36
-        assert_eq!(f.lines[1].covered, false); // 0
-        assert_eq!(f.lines[2].covered, true); // 1.36k (non-zero)
+        assert!(f.lines[0].covered); // 36
+        assert!(!f.lines[1].covered); // 0
+        assert!(f.lines[2].covered); // 1.36k (non-zero)
         assert_eq!(f.lines[0].text, "pub fn bar() {");
         assert!(!f.lines.iter().any(|l| l.line == 5)); // excluded by marker
     }

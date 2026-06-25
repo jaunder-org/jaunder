@@ -43,4 +43,34 @@ pub fn run(sh: &Shell, mode: Mode, result: &mut CommandResult) {
         "cargo",
         &["clippy", "--all-targets", "--", "-D", "warnings"],
     ));
+
+    // tools/ workspace (coverage + devtool). It is a separate workspace, so the
+    // app-workspace fmt/clippy above don't cover it; `--all` is required because
+    // the workspace root has no package targets of its own.
+    let tools_fmt_args: &[&str] = match mode {
+        Mode::Check => &[
+            "fmt",
+            "--manifest-path",
+            "tools/Cargo.toml",
+            "--all",
+            "--check",
+        ],
+        Mode::Fix => &["fmt", "--manifest-path", "tools/Cargo.toml", "--all"],
+    };
+    result.push(step(sh, "tools-fmt", "cargo", tools_fmt_args));
+
+    result.push(step(
+        sh,
+        "tools-clippy",
+        "cargo",
+        &[
+            "clippy",
+            "--manifest-path",
+            "tools/Cargo.toml",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ],
+    ));
 }

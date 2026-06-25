@@ -1,5 +1,5 @@
-//! Host-side CRAP regression comparison — mirrors the jq gate
-//! `scripts/check-coverage` runs today. Each CRAP entry is keyed by
+//! Host-side CRAP regression comparison over the CRAP report `devtool coverage
+//! emit` produces. Each CRAP entry is keyed by
 //! `(crate, file, function, line)` (line disambiguates same-named functions in
 //! a file); a key present in BOTH the new report and the old manifest is flagged
 //! when `new.crap > old.crap + EPSILON`. Keys only in new or only in old are not

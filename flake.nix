@@ -328,6 +328,25 @@
           }
         );
 
+        # The in-sandbox dev tool (tools/ workspace: devtool + its coverage
+        # path-dep), built as its OWN crane package with deps vendored from
+        # tools/Cargo.lock. The offline coverage sandbox runs it from PATH
+        # (nativeBuildInputs) instead of an in-sandbox `cargo run`, whose deps
+        # would not be vendored. Building the self-contained tools/ workspace
+        # (not the app root) keeps crane's metadata off the app's deps.
+        devtoolSrc = pkgs.lib.cleanSourceWith {
+          src = craneLib.path ./tools;
+          filter = craneLib.filterCargoSources;
+        };
+        devtoolBin = craneLib.buildPackage {
+          src = devtoolSrc;
+          pname = "devtool";
+          version = "0.1.0";
+          cargoExtraArgs = "-p devtool";
+          strictDeps = true;
+          doCheck = false;
+        };
+
         cargo-crap = pkgs.callPackage (
           {
             lib,
@@ -762,6 +781,7 @@
         packages = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           jaunder = jaunderBin;
           site = site;
+          devtool = devtoolBin;
 
           e2e-sqlite-cold = mkE2eSqliteCheck {
             checkName = "jaunder-e2e-sqlite-cold";
@@ -770,50 +790,6 @@
           e2e-postgres-cold = mkE2ePostgresCheck {
             checkName = "jaunder-e2e-postgres-cold";
           };
-
-          # Regenerates the coverage + CRAP baselines from the reproducible,
-          # no-network Nix sandbox (the CI environment) and exposes the two
-          # manifests as build outputs to copy back into the repo. This is the
-          # only correct way to re-baseline: a host `scripts/check-coverage
-          # --update` bakes in higher numbers for network-sensitive files
-          # (e.g. server/src/websub/http.rs, server/src/commands.rs) that the
-          # sandboxed CI run cannot reproduce, which then fails the gate. Usage:
-          #   nix build .#coverage-update
-          #   cp result/.coverage-manifest.json result/.crap-manifest.json .
-          # Mirrors checks.coverage (keep the build inputs in sync).
-          coverage-update = craneLib.mkCargoDerivation (
-            commonArgs
-            // {
-              src = pkgs.lib.cleanSourceWith {
-                src = ./.;
-                filter =
-                  path: _type:
-                  !(pkgs.lib.hasInfix "/xtask/" path)
-                  && !(pkgs.lib.hasInfix "/docs/" path)
-                  && !(pkgs.lib.hasInfix "/.github/" path);
-              };
-              inherit cargoArtifacts;
-              pname = "jaunder-coverage-update";
-              CARGO_PROFILE_DEV_DEBUG = "0";
-              CARGO_PROFILE_TEST_DEBUG = "0";
-              nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
-                cargo-crap
-                pkgs.cargo-llvm-cov
-                pkgs.cargo-nextest
-                pkgs.jq
-                pkgs.gawk
-                pkgs.postgresql_16
-              ];
-              buildPhaseCargoCommand = ''
-                export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:''${LD_LIBRARY_PATH:-}"
-                bash ./scripts/check-coverage --update
-              '';
-              installPhaseCommand = ''
-                mkdir -p $out
-                cp .coverage-manifest.json crap-manifest.json $out/
-              '';
-            }
-          );
 
           # The e2e aggregate: a symlinkJoin of every `e2e-*` check, exposed as
           # `checks.e2e` and built by `cargo xtask validate`. Adding a new e2e
@@ -900,6 +876,7 @@
                   filter =
                     path: _type:
                     !(pkgs.lib.hasInfix "/xtask/" path)
+                    && !(pkgs.lib.hasInfix "/tools/" path)
                     && !(pkgs.lib.hasInfix "/docs/" path)
                     && !(pkgs.lib.hasInfix "/.github/" path);
                 };
@@ -914,12 +891,11 @@
                 CARGO_PROFILE_DEV_DEBUG = "0";
                 CARGO_PROFILE_TEST_DEBUG = "0";
                 nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
+                  devtoolBin
                   cargo-crap
                   pkgs.cargo-llvm-cov
                   pkgs.cargo-nextest
-                  pkgs.jq
-                  pkgs.gawk
-                  # check-coverage runs the whole test suite under an ephemeral
+                  # devtool runs the whole test suite under an ephemeral
                   # PostgreSQL (via scripts/with-ephemeral-postgres) so
                   # storage/src/postgres/* gets instrumented coverage. The
                   # throwaway cluster needs initdb/pg_ctl/psql available inside
@@ -928,18 +904,44 @@
                 ];
                 buildPhaseCargoCommand = ''
                   export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:''${LD_LIBRARY_PATH:-}"
-                  bash ./scripts/check-coverage --emit
+                  mkdir -p emit-out
+                  # devtool always exits 0 after writing emit-out/status.json;
+                  # gating is the coverage-gate consumer derivation + host xtask.
+                  devtool coverage emit --out emit-out
                 '';
                 installPhaseCommand = ''
                   mkdir -p $out
-                  # Non-dotted names: host xtask reads $out/coverage-report.txt
-                  # and $out/crap-report.json (a plain `cp … $out/` would keep
-                  # the leading dot and hide them).
-                  cp .coverage-report.txt $out/coverage-report.txt
-                  cp .crap-report.json $out/crap-report.json
+                  # emit-out/coverage-report.lcov is intentionally NOT copied: it
+                  # is an intermediate consumed only by `cargo crap`, not a gate
+                  # output the host reads.
+                  cp emit-out/coverage-report.txt $out/coverage-report.txt
+                  cp emit-out/crap-report.json $out/crap-report.json
+                  cp emit-out/status.json $out/status.json
+                  cp -r emit-out/diagnostics $out/diagnostics
                 '';
               }
             );
+            # Belt-and-suspenders: an independent Nix-level red for in-sandbox
+            # failures (test/infra) even if a caller bypasses host xtask. The
+            # coverage-regression verdict is host-only (needs committed baselines
+            # + git) and lives in xtask, not here. Named `jaunder-coverage-gate`
+            # so the cachix pushFilter (jaunder-coverage|jaunder-e2e) excludes it.
+            coverage-gate =
+              pkgs.runCommand "jaunder-coverage-gate"
+                {
+                  nativeBuildInputs = [ pkgs.jq ];
+                }
+                ''
+                  cat ${self.checks.${system}.coverage}/status.json
+                  cat=$(jq -r .category ${self.checks.${system}.coverage}/status.json)
+                  if [ "$cat" != "tests-ok" ]; then
+                    echo "coverage gate failed: category=$cat" >&2
+                    jq -r '.infra_detail // (.failed_tests | join("\n"))' \
+                      ${self.checks.${system}.coverage}/status.json >&2
+                    exit 1
+                  fi
+                  touch $out
+                '';
             prettier-check =
               pkgs.runCommand "prettier-check"
                 {

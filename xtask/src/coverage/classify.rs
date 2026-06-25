@@ -242,32 +242,6 @@ mod tests {
         assert!(!v.is_clean());
     }
 
-    // --- untracked new file: all lines added → uncovered ones are new_uncovered -
-    #[test]
-    fn untracked_file_all_added_uncovered_lines_are_new_uncovered_not_regression() {
-        // An untracked new file has no diff map; coverage::run maps it via
-        // LineMap::all_added over its executable lines. Lines 2,3 uncovered must
-        // classify as new_uncovered, NOT regression.
-        let b = Baseline::default();
-        let mut maps = HashMap::new();
-        maps.insert("new.rs".to_string(), LineMap::all_added(&[2, 3]));
-        let cur = vec![fc("new.rs", &[(2, false), (3, false)])];
-
-        let v = classify(&cur, &b, &maps);
-
-        assert_eq!(
-            v.new_uncovered,
-            vec![FileLines {
-                file: "new.rs".into(),
-                lines: vec![2, 3]
-            }]
-        );
-        assert!(v.regressions.is_empty(), "untracked lines must not regress");
-        assert!(v.structural.is_empty());
-        assert!(v.improvements.is_empty());
-        assert!(!v.is_clean());
-    }
-
     // --- mixed: an added covered line plus an added uncovered line -------------
     #[test]
     fn added_covered_line_is_not_flagged() {

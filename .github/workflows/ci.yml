@@ -52,3 +52,19 @@ jobs:
 
       - name: Validate (static + clippy + coverage + e2e, via xtask)
         run: nix develop .#ci --accept-flake-config -c cargo xtask validate
+
+      # Preserve first-hand failure data: the producer's diagnostics bundle
+      # (nextest log, disk-usage, status sentinel) plus any rescued diagnostics
+      # from a catastrophic in-sandbox failure. Runs even on failure.
+      - name: Upload coverage/e2e diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validate-diagnostics
+          path: |
+            .xtask/diagnostics/
+            .xtask/gcroots/coverage/status.json
+            .xtask/gcroots/coverage/diagnostics/
+            .xtask/last-result.json
+          if-no-files-found: ignore
+          retention-days: 14
