@@ -25,9 +25,9 @@
 **Interfaces:**
 - Produces: an invocable `jaunder-ship` skill whose checklist drives the commit procedure.
 
-- [ ] **Step 1: Invoke superpowers:writing-skills** to author the skill (it governs skill structure, naming, and the verification expectations).
+- [x] **Step 1: Invoke superpowers:writing-skills** to author the skill (it governs skill structure, naming, and the verification expectations).
 
-- [ ] **Step 2: Write `~/.config/claude/skills/jaunder-ship/SKILL.md`** with exactly this content:
+- [x] **Step 2: Write `~/.config/claude/skills/jaunder-ship/SKILL.md`** with exactly this content:
 
 ```markdown
 ---
@@ -65,7 +65,7 @@ ignored).
    DO-NOT-COMMIT instructions and duplicated helpers.
 ```
 
-- [ ] **Step 3: Validate the frontmatter** (sandbox — parse the YAML header, confirm `name` matches the directory and a non-empty `description`):
+- [x] **Step 3: Validate the frontmatter** (sandbox — parse the YAML header, confirm `name` matches the directory and a non-empty `description`):
 
 ```javascript
 const fs = require('fs');
@@ -82,7 +82,7 @@ console.log('no Co-Authored-By leak: ' + !/Co-Authored-By:/i.test(text.replace(/
 ```
 Expected: has frontmatter true; name matches dir; description scoped to jaunder; mentions cargo xtask.
 
-- [ ] **Step 4: Record.** No repo commit (personal file). Note: live discoverability (the skill appearing in the available-skills list and triggering at commit time) is confirmed in the next fresh session, since skills load at session start.
+- [x] **Step 4: Record.** No repo commit (personal file). Note: live discoverability (the skill appearing in the available-skills list and triggering at commit time) is confirmed in the next fresh session, since skills load at session start.
 
 ---
 
