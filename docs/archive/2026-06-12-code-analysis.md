@@ -1,5 +1,9 @@
 # Jaunder codebase analysis — simplification, security, robustness, observability
 
+> **Status: ARCHIVED** — point-in-time codebase analysis snapshot (2026-06-12).
+> Retained as a historical record, not a live to-do list; individual findings may
+> already be addressed. Archived under issue #39.
+
 _Date: 2026-06-12. Scope: the Rust workspace (`common/`, `storage/`, `server/`, `web/`), excluding tests except where they bear on a finding._
 
 ## Executive summary

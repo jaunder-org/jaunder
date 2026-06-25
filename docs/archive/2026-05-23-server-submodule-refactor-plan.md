@@ -1,5 +1,9 @@
 # Plan: Reorganizing Leptos Server Functions into the Server Submodule Pattern
 
+> **Status: COMPLETE** — shipped. The pattern this plan delivered is codified in
+> [ADR-0013: Server Submodule Pattern](../adr/0013-server-submodule-pattern.md)
+> (accepted 2026-05-23). Archived under issue #39.
+
 This document outlines our plan to restructure the files in `web/src/` to eliminate, centralize, and minimize the abundant use of `#[cfg(feature = "ssr")]` annotations.
 
 ---
