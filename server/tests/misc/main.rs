@@ -5,4 +5,5 @@ mod helpers;
 mod backup_interop;
 mod commands;
 mod media_handlers;
+mod pg_teardown;
 mod static_assets;

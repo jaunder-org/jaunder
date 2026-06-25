@@ -61,7 +61,50 @@ pub enum Backend {
 /// also holds the database file alive for the lifetime of the test.
 pub struct TestEnv {
     pub state: Arc<AppState>,
-    pub base: TempDir,
+    pub base: TestBase,
+}
+
+/// Owns a test's temp dir and, on Postgres, the name of the per-test database
+/// cloned from the template. Dropping it removes that clone so the ephemeral
+/// cluster's data dir does not grow with the suite — the disk-exhaustion fix for
+/// issue #28. `Deref`s to the inner `TempDir`, so existing `base.path()` and
+/// `&base` uses keep compiling unchanged.
+pub struct TestBase {
+    dir: TempDir,
+    /// `Some(name)` on Postgres; `None` on `SQLite`.
+    postgres_db: Option<String>,
+}
+
+impl TestBase {
+    fn sqlite(dir: TempDir) -> Self {
+        Self {
+            dir,
+            postgres_db: None,
+        }
+    }
+
+    fn postgres(dir: TempDir, db_name: String) -> Self {
+        Self {
+            dir,
+            postgres_db: Some(db_name),
+        }
+    }
+}
+
+impl std::ops::Deref for TestBase {
+    type Target = TempDir;
+
+    fn deref(&self) -> &Self::Target {
+        &self.dir
+    }
+}
+
+impl Drop for TestBase {
+    fn drop(&mut self) {
+        if let Some(db_name) = self.postgres_db.take() {
+            drop_test_database(&db_name);
+        }
+    }
 }
 
 /// File name (under `TestEnv::base`) holding the Postgres connection string for
@@ -83,17 +126,27 @@ pub fn recorded_postgres_url(base: &TempDir) -> String {
 
 impl Backend {
     pub async fn setup(self) -> TestEnv {
-        let base = TempDir::new().unwrap();
-        let state = match self {
-            Backend::Sqlite => open_database(&sqlite_url(&base)).await.unwrap(),
+        let dir = TempDir::new().unwrap();
+        let (state, base) = match self {
+            Backend::Sqlite => {
+                let state = open_database(&sqlite_url(&dir)).await.unwrap();
+                (state, TestBase::sqlite(dir))
+            }
             Backend::Postgres => {
                 let url = template_postgres_url().await;
                 let state = open_existing_database(&url).await.unwrap();
+                let DbConnectOptions::Postgres { options, .. } = &url else {
+                    unreachable!("template_postgres_url returns Postgres options");
+                };
+                let db_name = options
+                    .get_database()
+                    .expect("per-test database URL includes a name")
+                    .to_owned();
                 // Record the per-test DB URL so raw-SQL helpers reuse this exact
                 // database rather than minting a fresh (empty) template clone.
-                std::fs::write(base.path().join(PG_URL_FILE), url.to_string())
+                std::fs::write(dir.path().join(PG_URL_FILE), url.to_string())
                     .expect("write recorded Postgres URL");
-                state
+                (state, TestBase::postgres(dir, db_name))
             }
         };
         TestEnv { state, base }
@@ -260,6 +313,57 @@ fn unique_postgres_db_name() -> String {
     // resolution.
     let pid = std::process::id();
     format!("jaunder_test_{timestamp}_{pid}_{suffix}")
+}
+
+/// Best-effort `DROP DATABASE <name> WITH (FORCE)` for a per-test clone.
+///
+/// Runs on a dedicated thread with its own current-thread runtime so it is safe
+/// to call from `Drop` regardless of the ambient async context (a fresh thread
+/// has no running Tokio runtime, so building one does not panic). The thread is
+/// joined before returning, so the clone's disk is reclaimed before the next
+/// test allocates. `WITH (FORCE)` (Postgres 13+) terminates any connections
+/// still open to the clone, so teardown is robust to drop ordering relative to
+/// the `AppState` pool. The drop is bounded by a timeout and never panics (it
+/// runs inside `Drop`); a failed or timed-out drop is logged to stderr rather
+/// than returned mutely, since a silently leaking clone is the disk-creep
+/// regression this guards against.
+fn drop_test_database(db_name: &str) {
+    let bootstrap = postgres_bootstrap_url();
+    let statement = format!(
+        "DROP DATABASE {} WITH (FORCE)",
+        quote_postgres_identifier(db_name)
+    );
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                return;
+            };
+            runtime.block_on(async {
+                let Ok(options) = bootstrap.parse::<sqlx::postgres::PgConnectOptions>() else {
+                    return;
+                };
+                let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    let mut conn = sqlx::PgConnection::connect_with(&options).await?;
+                    let dropped = sqlx::query(&statement).execute(&mut conn).await.map(|_| ());
+                    let _ = conn.close().await;
+                    dropped
+                })
+                .await;
+                match outcome {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        eprintln!("issue #28 teardown: dropping {db_name} failed: {error}");
+                    }
+                    Err(_elapsed) => {
+                        eprintln!("issue #28 teardown: dropping {db_name} timed out after 10s");
+                    }
+                }
+            });
+        });
+    });
 }
 
 pub fn nonexistent_postgres_url() -> DbConnectOptions {
