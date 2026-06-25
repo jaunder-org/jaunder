@@ -791,50 +791,6 @@
             checkName = "jaunder-e2e-postgres-cold";
           };
 
-          # Regenerates the coverage + CRAP baselines from the reproducible,
-          # no-network Nix sandbox (the CI environment) and exposes the two
-          # manifests as build outputs to copy back into the repo. This is the
-          # only correct way to re-baseline: a host `scripts/check-coverage
-          # --update` bakes in higher numbers for network-sensitive files
-          # (e.g. server/src/websub/http.rs, server/src/commands.rs) that the
-          # sandboxed CI run cannot reproduce, which then fails the gate. Usage:
-          #   nix build .#coverage-update
-          #   cp result/.coverage-manifest.json result/.crap-manifest.json .
-          # Mirrors checks.coverage (keep the build inputs in sync).
-          coverage-update = craneLib.mkCargoDerivation (
-            commonArgs
-            // {
-              src = pkgs.lib.cleanSourceWith {
-                src = ./.;
-                filter =
-                  path: _type:
-                  !(pkgs.lib.hasInfix "/xtask/" path)
-                  && !(pkgs.lib.hasInfix "/docs/" path)
-                  && !(pkgs.lib.hasInfix "/.github/" path);
-              };
-              inherit cargoArtifacts;
-              pname = "jaunder-coverage-update";
-              CARGO_PROFILE_DEV_DEBUG = "0";
-              CARGO_PROFILE_TEST_DEBUG = "0";
-              nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
-                cargo-crap
-                pkgs.cargo-llvm-cov
-                pkgs.cargo-nextest
-                pkgs.jq
-                pkgs.gawk
-                pkgs.postgresql_16
-              ];
-              buildPhaseCargoCommand = ''
-                export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:''${LD_LIBRARY_PATH:-}"
-                bash ./scripts/check-coverage --update
-              '';
-              installPhaseCommand = ''
-                mkdir -p $out
-                cp .coverage-manifest.json crap-manifest.json $out/
-              '';
-            }
-          );
-
           # The e2e aggregate: a symlinkJoin of every `e2e-*` check, exposed as
           # `checks.e2e` and built by `cargo xtask validate`. Adding a new e2e
           # backend check automatically joins it here. Its `jaunder-e2e*` name
