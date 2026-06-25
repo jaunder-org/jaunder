@@ -16,7 +16,6 @@ use axum::{
 };
 use chrono::Datelike;
 use storage::PostFormat;
-use tempfile::TempDir;
 use tower::ServiceExt;
 use web::posts::{
     AudienceSelection, CreatePostResult, DraftSummary, PublishPostResult, TimelinePage,
@@ -28,7 +27,7 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, Backend, TestEnv};
+use crate::helpers::{backends, Backend, TestBase, TestEnv};
 
 async fn unpublish_post_form(
     state: Arc<storage::AppState>,
@@ -2661,7 +2660,7 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
     assert_eq!(response.tags[0].display, "Performance");
 }
 
-async fn login_and_state(backend: Backend) -> (TempDir, Arc<storage::AppState>, String) {
+async fn login_and_state(backend: Backend) -> (TestBase, Arc<storage::AppState>, String) {
     let TestEnv { state, base } = backend.setup().await;
     let user_id = state
         .users
