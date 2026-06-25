@@ -3,11 +3,13 @@
 //! against the committed baseline, gate on regressions, and (in `Mode::Fix`)
 //! auto-heal the shrink-only baseline + CRAP manifest.
 
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
 
+use crate::coverage::diffmap::LineMap;
 use crate::result::{Mode, StepResult};
 
 pub mod baseline;
@@ -155,7 +157,8 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
 
     let anchor = baseline_anchor_commit()?;
     let diff = git_diff_anchor_to_worktree(&anchor)?;
-    let maps = diffmap::parse_unified_diff(&diff);
+    let mut maps = diffmap::parse_unified_diff(&diff);
+    synthesize_untracked_maps(&mut maps, &current, &untracked_rs_files()?);
 
     let baseline = Baseline::load(BASELINE_PATH)?;
     let verdict = classify::classify(&current, &baseline, &maps);
@@ -294,6 +297,55 @@ fn git_diff_anchor_to_worktree(anchor: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// Parse `git ls-files --others --exclude-standard -z` output: NUL-delimited
+/// repo-root-relative paths. Empty entries (e.g. the trailing NUL) are dropped.
+fn parse_untracked_list(stdout: &str) -> Vec<String> {
+    stdout
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Untracked, non-gitignored `.rs` files in the working tree (repo-root-relative).
+/// The Nix coverage build instruments these (its source includes untracked,
+/// non-gitignored files), but `git diff <anchor>` omits them — so they need a
+/// synthesized all-added map. Thin git wrapper; the logic is in
+/// `parse_untracked_list` / `synthesize_untracked_maps`.
+fn untracked_rs_files() -> Result<Vec<String>> {
+    let out = Command::new("git")
+        .args([
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            "*.rs",
+        ])
+        .output()
+        .context("running git ls-files --others (untracked .rs files)")?;
+    Ok(parse_untracked_list(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// For each untracked file that actually appears in the coverage report, install
+/// an all-added `LineMap` over its reported line numbers, so its uncovered lines
+/// classify as `new_uncovered` instead of a phantom `regression`. Files already
+/// carrying a diff-derived map (they appeared in the anchor diff) are left alone;
+/// untracked files absent from the report (not compiled) are ignored.
+fn synthesize_untracked_maps(
+    maps: &mut HashMap<String, LineMap>,
+    current: &[FileCoverage],
+    untracked: &[String],
+) {
+    let untracked: HashSet<&str> = untracked.iter().map(String::as_str).collect();
+    for f in current {
+        if untracked.contains(f.path.as_str()) && !maps.contains_key(&f.path) {
+            let lines = f.lines.iter().map(|l| l.line);
+            maps.insert(f.path.clone(), LineMap::all_added(lines));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,6 +372,70 @@ mod tests {
         // A single commit arg = anchor-vs-working-tree; a `..HEAD` range would
         // wrongly ignore uncommitted edits (which ARE in the Nix report).
         assert!(!args.iter().any(|a| a.contains("..")));
+    }
+
+    #[test]
+    fn parse_untracked_list_splits_nul_and_drops_empties() {
+        assert_eq!(
+            parse_untracked_list("a.rs\0server/src/b.rs\0"),
+            vec!["a.rs".to_string(), "server/src/b.rs".to_string()]
+        );
+        assert!(parse_untracked_list("").is_empty());
+    }
+
+    #[test]
+    fn synthesizes_all_added_map_for_untracked_file_in_report() {
+        let current = vec![fc("server/src/new.rs", &[(1, true), (2, false)])];
+        let mut maps: HashMap<String, LineMap> = HashMap::new();
+        synthesize_untracked_maps(&mut maps, &current, &["server/src/new.rs".to_string()]);
+        let m = maps.get("server/src/new.rs").expect("synthesized map");
+        let mut added: Vec<u32> = m.added_lines().into_iter().collect();
+        added.sort();
+        assert_eq!(added, vec![1, 2]);
+    }
+
+    #[test]
+    fn does_not_synthesize_for_a_file_not_in_the_untracked_list() {
+        let current = vec![fc("tracked.rs", &[(1, false)])];
+        let mut maps: HashMap<String, LineMap> = HashMap::new();
+        synthesize_untracked_maps(&mut maps, &current, &[]);
+        assert!(
+            !maps.contains_key("tracked.rs"),
+            "tracked file gets no synthesized map"
+        );
+    }
+
+    #[test]
+    fn does_not_overwrite_an_existing_diff_map() {
+        let current = vec![fc("u.rs", &[(5, false)])];
+        let mut maps: HashMap<String, LineMap> = HashMap::new();
+        maps.insert("u.rs".to_string(), diffmap::empty_map()); // already mapped by the anchor diff
+        synthesize_untracked_maps(&mut maps, &current, &["u.rs".to_string()]);
+        assert!(
+            maps.get("u.rs").unwrap().added_lines().is_empty(),
+            "an existing diff map must be preserved, not replaced by all-added"
+        );
+    }
+
+    #[test]
+    fn untracked_uncovered_line_classifies_as_new_uncovered_not_regression() {
+        // The end-to-end logic (minus the git shell): an untracked file's
+        // uncovered line must be new_uncovered, never a phantom regression.
+        let current = vec![fc("new.rs", &[(1, true), (2, false)])];
+        let mut maps: HashMap<String, LineMap> = HashMap::new();
+        synthesize_untracked_maps(&mut maps, &current, &["new.rs".to_string()]);
+        let verdict = classify::classify(&current, &Baseline::default(), &maps);
+        assert_eq!(
+            verdict.new_uncovered,
+            vec![FileLines {
+                file: "new.rs".into(),
+                lines: vec![2]
+            }]
+        );
+        assert!(
+            verdict.regressions.is_empty(),
+            "untracked new code must not be a regression"
+        );
     }
 
     #[test]

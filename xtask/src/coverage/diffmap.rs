@@ -40,6 +40,18 @@ impl LineMap {
         self.added.clone()
     }
 
+    /// Build a map for a file with no committed preimage (e.g. an untracked
+    /// file): every given new-side line number is "added". The classifier uses
+    /// `added_lines()` to bucket such a file's uncovered lines as `new_uncovered`
+    /// rather than `regression`. `map()` is irrelevant here — an untracked file
+    /// has no baseline gaps, so it is never consulted.
+    pub fn all_added(lines: impl IntoIterator<Item = u32>) -> LineMap {
+        LineMap {
+            added: lines.into_iter().collect(),
+            ..LineMap::default()
+        }
+    }
+
     /// Test-only: directly install an old→new mapping (or a deletion via `None`).
     #[cfg(test)]
     pub fn set_for_test(&mut self, old: u32, new: Option<u32>) {
@@ -194,6 +206,18 @@ diff --git a/server/src/x.rs b/server/src/x.rs
     #[test]
     fn empty_map_has_no_added_lines() {
         assert!(empty_map().added_lines().is_empty());
+    }
+
+    #[test]
+    fn all_added_marks_every_given_line() {
+        let m = LineMap::all_added([3, 7, 10]);
+        let mut added: Vec<u32> = m.added_lines().into_iter().collect();
+        added.sort();
+        assert_eq!(added, vec![3, 7, 10]);
+        // An empty input yields no added lines.
+        assert!(LineMap::all_added(std::iter::empty())
+            .added_lines()
+            .is_empty());
     }
 
     // ---- additional tests ----

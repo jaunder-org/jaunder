@@ -4,6 +4,7 @@ mod coverage;
 mod result;
 mod sh;
 mod steps {
+    pub mod host_tests;
     pub mod nix;
     pub mod static_checks;
 }
@@ -21,18 +22,20 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Inner loop (auto-fixes formatting): host static checks + clippy, then the
-    /// Nix coverage check (instrumented test suite + coverage). `--no-test` runs
-    /// static + clippy only.
+    /// Inner loop (auto-fixes formatting): host static checks + clippy + the host
+    /// xtask unit suite, then the Nix coverage check (instrumented test suite +
+    /// coverage). `--no-test` skips only the Nix coverage check; static, clippy,
+    /// and the xtask unit tests still run.
     Check {
-        /// Skip the Nix coverage check — static checks + clippy only.
+        /// Skip the Nix coverage check — static + clippy + host xtask unit tests only.
         #[arg(long)]
         no_test: bool,
     },
-    /// Full gate (never mutates the tree): static + clippy (verify-only) + the Nix
-    /// coverage check + the e2e VMs. `--no-e2e` skips the e2e VMs.
+    /// Full gate (never mutates the tree): static + clippy + the host xtask unit
+    /// suite (verify-only) + the Nix coverage check + the e2e VMs. `--no-e2e` skips
+    /// the e2e VMs.
     Validate {
-        /// Skip the e2e VM checks — static + coverage only.
+        /// Skip the e2e VM checks — static + clippy + xtask tests + coverage only.
         #[arg(long)]
         no_e2e: bool,
     },
@@ -63,6 +66,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("check");
             steps::static_checks::run(&sh, Mode::Fix, &mut result);
+            steps::host_tests::run(&sh, &mut result);
             if !no_test {
                 steps::nix::coverage(&mut result, Mode::Fix);
             }
@@ -74,6 +78,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("validate");
             steps::static_checks::run(&sh, Mode::Check, &mut result);
+            steps::host_tests::run(&sh, &mut result);
             steps::nix::coverage(&mut result, Mode::Check);
             if !no_e2e {
                 steps::nix::e2e(&mut result);
