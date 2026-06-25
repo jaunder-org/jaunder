@@ -104,12 +104,26 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
 fn rescue_diagnostics(check: &str) {
     let dest = format!(".xtask/diagnostics/{check}");
     let _ = std::fs::create_dir_all(&dest);
-    let _ = Command::new("bash")
-        .arg("-c")
-        .arg(format!(
-            "cp -r /tmp/nix-build-jaunder-{check}*/emit-out/diagnostics/* {dest}/ 2>/dev/null || true"
-        ))
-        .status();
+    // Resolve the kept-build-dir glob in Rust and copy with explicit `cp` args
+    // (no `bash -c`) so the check name can never inject into a shell command.
+    // The `emit-out/diagnostics` is_dir guard skips false prefix matches (e.g. a
+    // `coverage-gate` dir scanned for the `coverage` rescue — gate has no bundle).
+    let prefix = format!("nix-build-jaunder-{check}");
+    let Ok(entries) = std::fs::read_dir("/tmp") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if !name.starts_with(&prefix) {
+            continue;
+        }
+        let src = entry.path().join("emit-out/diagnostics");
+        if src.is_dir() {
+            let _ = Command::new("cp").arg("-r").arg(&src).arg(&dest).status();
+        }
+    }
 }
 
 #[cfg(test)]

@@ -911,6 +911,9 @@
                 '';
                 installPhaseCommand = ''
                   mkdir -p $out
+                  # emit-out/coverage-report.lcov is intentionally NOT copied: it
+                  # is an intermediate consumed only by `cargo crap`, not a gate
+                  # output the host reads.
                   cp emit-out/coverage-report.txt $out/coverage-report.txt
                   cp emit-out/crap-report.json $out/crap-report.json
                   cp emit-out/status.json $out/status.json

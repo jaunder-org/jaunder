@@ -9,9 +9,12 @@ use coverage::status::{CoverageStatus, StatusCategory};
 /// sentinel. Infra failures (disk/OOM) take precedence over test failures,
 /// because a disk-full run ALSO produces spurious test FAILs (#28).
 pub fn classify_nextest_output(output: &str) -> CoverageStatus {
+    // Substrings of catastrophic infra failures in the combined nextest output.
+    // `"53100"` is quoted (PG SQLSTATE disk_full, as sqlx Debug prints
+    // `code: "53100"`) so it can't match a bare numeric port/timestamp/count.
     const INFRA_MARKERS: &[&str] = &[
         "No space left on device",
-        "53100",
+        "\"53100\"",
         "Cannot allocate memory",
         "out of memory",
     ];
@@ -74,6 +77,11 @@ pub fn run(out: &str) -> Result<()> {
         "none",
     ]))?;
     fs::write(diag.join("nextest.log"), &nextest)?;
+    // status.json is best-effort: under TRUE disk-full the write below itself
+    // fails and the producer derivation fails before any sentinel exists — the
+    // host's `--keep-failed` + diagnostics-rescue path is the real ENOSPC net.
+    // The in-band marker scan only catches a disk full enough to fail PG but not
+    // these writes.
     let status = classify_nextest_output(&nextest);
     fs::write(out.join("status.json"), status.to_json())?;
 
@@ -115,7 +123,12 @@ pub fn run(out: &str) -> Result<()> {
     let crap_json = fs::read_to_string(&raw_crap)
         .ok()
         .and_then(|raw| normalize_crap_paths(&raw, &abs_root).ok())
-        .unwrap_or_else(|| "{\n  \"entries\": []\n}\n".to_string());
+        .unwrap_or_else(|| {
+            // Breadcrumb so a genuinely-broken `cargo crap` is distinguishable
+            // from "no CRAP changes" (both yield an empty report downstream).
+            eprintln!("devtool: cargo crap produced no usable report; emitting empty CRAP report");
+            "{\n  \"entries\": []\n}\n".to_string()
+        });
     fs::write(out.join("crap-report.json"), crap_json)?;
 
     Ok(())
