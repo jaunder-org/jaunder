@@ -42,9 +42,9 @@ convention). All are currently `accepted`.
 | [0014](adr/0014-atompub-authentication.md) | AtomPub Authentication via App-Specific Passwords | accepted |
 | [0015](adr/0015-atompub-serialization-surfaces.md) | Separate Serialization Surfaces for Syndication and AtomPub | accepted |
 | [0016](adr/0016-dependency-injection-and-appstate.md) | Dependency Injection, the `AppState` Bundle, and the Composition Root | accepted |
-| [0017](adr/0017-error-handling-and-the-public-boundary.md) | Error Handling — Typed Domain Errors and a Masked Public Boundary | accepted |
+| [0017](adr/0017-error-handling-and-the-public-boundary.md) | Error Handling — Typed Domain Errors, a Masked Public Boundary, and Typed Internal Sources | accepted |
 | [0018](adr/0018-constant-time-authentication.md) | Timing-Equalized Authentication (Username-Enumeration Resistance) | accepted |
-| [0019](adr/0019-generic-storage-backend-via-dialect.md) | Generic Storage Backends via a `Backend` Marker and per-trait `Dialect` | accepted |
+| [0019](adr/0019-generic-storage-backend-via-dialect.md) | Generic storage backends via a `Backend` marker and per-trait `Dialect` | accepted |
 | [0020](adr/0020-content-visibility-and-subscription-model.md) | Content Visibility and Subscription Model | accepted |
 
 ## Archive
