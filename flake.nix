@@ -962,6 +962,27 @@
                 '';
               }
             );
+            # Belt-and-suspenders: an independent Nix-level red for in-sandbox
+            # failures (test/infra) even if a caller bypasses host xtask. The
+            # coverage-regression verdict is host-only (needs committed baselines
+            # + git) and lives in xtask, not here. Named `jaunder-coverage-gate`
+            # so the cachix pushFilter (jaunder-coverage|jaunder-e2e) excludes it.
+            coverage-gate =
+              pkgs.runCommand "jaunder-coverage-gate"
+                {
+                  nativeBuildInputs = [ pkgs.jq ];
+                }
+                ''
+                  cat ${self.checks.${system}.coverage}/status.json
+                  cat=$(jq -r .category ${self.checks.${system}.coverage}/status.json)
+                  if [ "$cat" != "tests-ok" ]; then
+                    echo "coverage gate failed: category=$cat" >&2
+                    jq -r '.infra_detail // (.failed_tests | join("\n"))' \
+                      ${self.checks.${system}.coverage}/status.json >&2
+                    exit 1
+                  fi
+                  touch $out
+                '';
             prettier-check =
               pkgs.runCommand "prettier-check"
                 {
