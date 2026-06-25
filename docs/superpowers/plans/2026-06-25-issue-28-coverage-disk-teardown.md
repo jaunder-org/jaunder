@@ -45,7 +45,7 @@
 - Produces: `pub struct TestBase` with `impl Deref<Target = TempDir>` and `impl Drop`; `TestEnv.base: TestBase` (field name unchanged). Private constructors `TestBase::sqlite(TempDir)` / `TestBase::postgres(TempDir, String)`. Private `fn drop_test_database(db_name: &str)`.
 - Consumes: existing `postgres_bootstrap_url`, `quote_postgres_identifier`, `template_postgres_url`, `recorded_postgres_url`, `postgres_testing_enabled`.
 
-- [ ] **Step 1: Write the failing regression test**
+- [x] **Step 1: Write the failing regression test**
 
 Create `server/tests/misc/pg_teardown.rs`:
 
@@ -115,7 +115,7 @@ mod pg_teardown;
 mod static_assets;
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run (from the worktree root):
 ```
@@ -123,7 +123,7 @@ scripts/with-ephemeral-postgres cargo nextest run -p jaunder -E 'test(per_test_d
 ```
 Expected: the test **runs** (Postgres is enabled inside the harness) and **FAILS** the second assertion — the per-test database still exists after `drop(env)`, because `base: TempDir` performs no DB teardown. This demonstrates the leak.
 
-- [ ] **Step 3: Implement `TestBase`, the drop helper, and rewire `setup`**
+- [x] **Step 3: Implement `TestBase`, the drop helper, and rewire `setup`**
 
 In `server/tests/helpers/mod.rs`, change the `TestEnv` definition (the `base` field type only):
 
@@ -252,7 +252,7 @@ fn drop_test_database(db_name: &str) {
 }
 ```
 
-- [ ] **Step 4: Run the regression test to verify it passes**
+- [x] **Step 4: Run the regression test to verify it passes**
 
 Run:
 ```
@@ -260,7 +260,7 @@ scripts/with-ephemeral-postgres cargo nextest run -p jaunder -E 'test(per_test_d
 ```
 Expected: **PASS** — the database exists before `drop(env)` and is gone after.
 
-- [ ] **Step 5: Verify the whole Postgres test suite still compiles and passes**
+- [x] **Step 5: Verify the whole Postgres test suite still compiles and passes**
 
 This proves the 240 `TestEnv { state, base }` destructures and all `&base` / `base.path()` uses still compile under the `Deref` wrapper, and that teardown doesn't break any test.
 
@@ -270,7 +270,7 @@ scripts/with-ephemeral-postgres cargo nextest run -p jaunder
 ```
 Expected: PASS (no compile errors, no test failures). If a site fails to compile because it consumed `base` by value as a `TempDir`, convert it to use `base.path()` or `&*base`; none were found during planning, so this is a safety net.
 
-- [ ] **Step 6: Per-task gate (clippy + fmt)**
+- [x] **Step 6: Per-task gate (clippy + fmt)**
 
 Run:
 ```
@@ -278,7 +278,7 @@ cargo xtask check --no-test
 ```
 Expected: exit 0. Read `.xtask/last-result.json` (`jq '.steps'`) only if it fails.
 
-- [ ] **Step 7: Prepare the commit (request approval per repo policy)**
+- [x] **Step 7: Prepare the commit (request approval per repo policy)**
 
 ```bash
 git add server/tests/helpers/mod.rs server/tests/misc/main.rs server/tests/misc/pg_teardown.rs
