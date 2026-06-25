@@ -41,7 +41,7 @@ All guidance ends with: " (Denied so you switch tools rather than retry — this
 **Interfaces:**
 - Produces: `export function redirectFor(toolName, toolInput) → string|null` and `export function shellTexts(toolName, toolInput) → string[]`.
 
-- [ ] **Step 1: Write the failing test** (sandbox, dynamic import)
+- [x] **Step 1: Write the failing test** (sandbox, dynamic import)
 
 `ctx_execute(language: "javascript", code: <below>)`:
 ```javascript
@@ -75,7 +75,7 @@ console.log(fail===0?'\nALL PASS':'\n'+fail+' FAILURES');
 ```
 Expected now: import throws → FAIL.
 
-- [ ] **Step 2: Write the implementation**
+- [x] **Step 2: Write the implementation**
 
 ```javascript
 // Tool → guidance. Each `re` matches the tool at command position (start, or
@@ -114,9 +114,9 @@ export function redirectFor(toolName, toolInput) {
 }
 ```
 
-- [ ] **Step 3: Run the test — expect `ALL PASS`.** If `bash-grep-flag-ok` fails, the `grep` regex is matching `--grep`; confirm the command-position anchor is correct.
+- [x] **Step 3: Run the test — expect `ALL PASS`.** If `bash-grep-flag-ok` fails, the `grep` regex is matching `--grep`; confirm the command-position anchor is correct.
 
-- [ ] **Step 4: Record** (no commit — global file).
+- [x] **Step 4: Record** (no commit — global file).
 
 ---
 
@@ -128,9 +128,9 @@ export function redirectFor(toolName, toolInput) {
 **Interfaces:**
 - Consumes: `redirectFor`. Produces: an executable hook emitting deny+guidance or nothing.
 
-- [ ] **Step 1: Prepend shebang** `#!/usr/bin/env node` as line 1.
+- [x] **Step 1: Prepend shebang** `#!/usr/bin/env node` as line 1.
 
-- [ ] **Step 2: Append the import-guarded glue**
+- [x] **Step 2: Append the import-guarded glue**
 
 ```javascript
 import path from "node:path";
@@ -166,9 +166,9 @@ if (invokedAsHook) {
 ```
 (Place the two `import` lines at the top with the file's other imports — none exist yet, so add them directly under the shebang.)
 
-- [ ] **Step 3: `chmod +x ~/.config/claude/hooks/redirect-tools.mjs`**
+- [x] **Step 3: `chmod +x ~/.config/claude/hooks/redirect-tools.mjs`**
 
-- [ ] **Step 4: Real-process + import-safety test** (sandbox)
+- [x] **Step 4: Real-process + import-safety test** (sandbox)
 
 ```javascript
 const { spawnSync } = require('child_process');
@@ -203,16 +203,16 @@ Expected: `PASS import-safe` and `ALL PASS` (deny on grep/sed shell, allow on rg
 - Modify: `/home/mdorman/src/jaunder/.claude/settings.local.json` (remove 5 deny tokens)
 - Modify: `~/.config/claude/settings.json` (add two hook groups)
 
-- [ ] **Step 1: Back up both files**
+- [x] **Step 1: Back up both files**
 ```bash
 cp -p ~/.config/claude/settings.json ~/.config/claude/settings.json.bak
 cp -p /home/mdorman/src/jaunder/.claude/settings.local.json /home/mdorman/src/jaunder/.claude/settings.local.json.bak
 ```
 
-- [ ] **Step 2: Read then edit the project deny-list.** Read `/home/mdorman/src/jaunder/.claude/settings.local.json`, then remove exactly these five array entries (leave the two `cd` entries and all `allow` entries intact):
+- [x] **Step 2: Read then edit the project deny-list.** Read `/home/mdorman/src/jaunder/.claude/settings.local.json`, then remove exactly these five array entries (leave the two `cd` entries and all `allow` entries intact):
 `"Bash(sed *)"`, `"Bash(grep *)"`, `"Bash(head *)"`, `"Bash(tail *)"`, `"Bash(node *)"`.
 
-- [ ] **Step 3: Add two hook groups to global `~/.config/claude/settings.json` `PreToolUse`.** The `Bash` group already exists (bash-nudges); add redirect-tools to a Bash group AND a context-mode group. Insert before the `PreToolUse` array's closing `]`:
+- [x] **Step 3: Add two hook groups to global `~/.config/claude/settings.json` `PreToolUse`.** The `Bash` group already exists (bash-nudges); add redirect-tools to a Bash group AND a context-mode group. Insert before the `PreToolUse` array's closing `]`:
 ```json
       ,{
         "matcher": "Bash",
@@ -228,7 +228,7 @@ cp -p /home/mdorman/src/jaunder/.claude/settings.local.json /home/mdorman/src/ja
       }
 ```
 
-- [ ] **Step 4: Validate both JSON files** (sandbox)
+- [x] **Step 4: Validate both JSON files** (sandbox)
 ```javascript
 const fs=require('fs');
 const g=JSON.parse(fs.readFileSync('/home/mdorman/.config/claude/settings.json','utf8'));
@@ -250,7 +250,7 @@ console.log(ok?'\nALL OK':'\nFAIL — restore from .bak');
 ```
 Expected: ALL OK. If any FAIL, restore both from `.bak` and stop.
 
-- [ ] **Step 5: Live-verify in-session** (hooks activate immediately). Confirm:
+- [x] **Step 5: Live-verify in-session** (hooks activate immediately). Confirm:
   1. Bash `grep --version` → now **denied with the rg/Grep guidance** (not the bare "security policy" message).
   2. `ctx_execute(language:"shell", code:"grep --version")` → denied with guidance.
   3. Bash `rg --version` → **runs** (not denied).
@@ -258,7 +258,7 @@ Expected: ALL OK. If any FAIL, restore both from `.bak` and stop.
   5. `ctx_execute(language:"javascript", code:"console.log(1)")` → runs (sanctioned node path untouched).
   Record results. If grep now runs un-denied anywhere (hook didn't catch it), restore from `.bak` and debug before leaving the session.
 
-- [ ] **Step 6: Remove both backups once validated + live-verified**
+- [x] **Step 6: Remove both backups once validated + live-verified**
 ```bash
 rm ~/.config/claude/settings.json.bak
 rm /home/mdorman/src/jaunder/.claude/settings.local.json.bak
