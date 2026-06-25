@@ -920,6 +920,7 @@
                   filter =
                     path: _type:
                     !(pkgs.lib.hasInfix "/xtask/" path)
+                    && !(pkgs.lib.hasInfix "/tools/" path)
                     && !(pkgs.lib.hasInfix "/docs/" path)
                     && !(pkgs.lib.hasInfix "/.github/" path);
                 };
@@ -934,12 +935,11 @@
                 CARGO_PROFILE_DEV_DEBUG = "0";
                 CARGO_PROFILE_TEST_DEBUG = "0";
                 nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
+                  devtoolBin
                   cargo-crap
                   pkgs.cargo-llvm-cov
                   pkgs.cargo-nextest
-                  pkgs.jq
-                  pkgs.gawk
-                  # check-coverage runs the whole test suite under an ephemeral
+                  # devtool runs the whole test suite under an ephemeral
                   # PostgreSQL (via scripts/with-ephemeral-postgres) so
                   # storage/src/postgres/* gets instrumented coverage. The
                   # throwaway cluster needs initdb/pg_ctl/psql available inside
@@ -948,15 +948,17 @@
                 ];
                 buildPhaseCargoCommand = ''
                   export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:''${LD_LIBRARY_PATH:-}"
-                  bash ./scripts/check-coverage --emit
+                  mkdir -p emit-out
+                  # devtool always exits 0 after writing emit-out/status.json;
+                  # gating is the coverage-gate consumer derivation + host xtask.
+                  devtool coverage emit --out emit-out
                 '';
                 installPhaseCommand = ''
                   mkdir -p $out
-                  # Non-dotted names: host xtask reads $out/coverage-report.txt
-                  # and $out/crap-report.json (a plain `cp … $out/` would keep
-                  # the leading dot and hide them).
-                  cp .coverage-report.txt $out/coverage-report.txt
-                  cp .crap-report.json $out/crap-report.json
+                  cp emit-out/coverage-report.txt $out/coverage-report.txt
+                  cp emit-out/crap-report.json $out/crap-report.json
+                  cp emit-out/status.json $out/status.json
+                  cp -r emit-out/diagnostics $out/diagnostics
                 '';
               }
             );
