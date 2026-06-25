@@ -1,5 +1,10 @@
 # Git history rewrite — Phase 1 survey
 
+> **Status: COMPLETE** — phase-1 scratch survey for the git history rewrite, which
+> was executed and verified (see the `2026-06-22-history-rebuild-*` entries in this
+> directory). Originally self-labeled "delete when done"; archived instead to
+> preserve the record. Archived under issue #39.
+
 Working scratch document. Read-only analysis; nothing has been mutated. Delete when done.
 
 ## 0. Chosen approach (decided)
