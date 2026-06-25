@@ -29,7 +29,7 @@
 **Interfaces:**
 - Produces: three new paths under `docs/archive/`; three old paths cease to exist. Task 2's index links the `docs/archive/` directory (not these individual files), so no cross-task path coupling.
 
-- [ ] **Step 1: Move the three files with `git mv`**
+- [x] **Step 1: Move the three files with `git mv`**
 
 ```bash
 git mv docs/code-analysis-2026-06-12.md docs/archive/2026-06-12-code-analysis.md
@@ -37,7 +37,7 @@ git mv docs/server-submodule-refactor-plan.md docs/archive/2026-05-23-server-sub
 git mv HISTORY-REWRITE-SURVEY.md docs/archive/2026-06-22-history-rewrite-survey.md
 ```
 
-- [ ] **Step 2: Prepend the status blockquote to `docs/archive/2026-06-12-code-analysis.md`**
+- [x] **Step 2: Prepend the status blockquote to `docs/archive/2026-06-12-code-analysis.md`**
 
 Insert immediately after the H1 title line (blank line above and below the blockquote):
 
@@ -47,7 +47,7 @@ Insert immediately after the H1 title line (blank line above and below the block
 > already be addressed. Archived under issue #39.
 ```
 
-- [ ] **Step 3: Prepend the status blockquote to `docs/archive/2026-05-23-server-submodule-refactor-plan.md`**
+- [x] **Step 3: Prepend the status blockquote to `docs/archive/2026-05-23-server-submodule-refactor-plan.md`**
 
 Insert immediately after the H1 title line:
 
@@ -59,7 +59,7 @@ Insert immediately after the H1 title line:
 
 (Note: from inside `docs/archive/`, the relative link to the ADR is `../adr/0013-server-submodule-pattern.md`. Use that exact form.)
 
-- [ ] **Step 4: Prepend the status blockquote to `docs/archive/2026-06-22-history-rewrite-survey.md`**
+- [x] **Step 4: Prepend the status blockquote to `docs/archive/2026-06-22-history-rewrite-survey.md`**
 
 Insert immediately after the H1 title line:
 
@@ -70,7 +70,7 @@ Insert immediately after the H1 title line:
 > preserve the record. Archived under issue #39.
 ```
 
-- [ ] **Step 5: Verify no live (non-archive) inbound link breaks**
+- [x] **Step 5: Verify no live (non-archive) inbound link breaks**
 
 Run:
 ```bash
@@ -79,7 +79,7 @@ rg -n --no-heading -g '!docs/archive' -g '!docs/superpowers' -g '!target' \
 ```
 Expected: **no output** (the only references are inside `docs/archive/` — frozen historical record, intentionally left — and `docs/superpowers/` spec/plan, which describe the move). If any live durable doc (README, CONTRIBUTING, docs/*.md, ADRs) appears, update that reference to the new `docs/archive/...` path.
 
-- [ ] **Step 6: Confirm the moves and that working tree is clean of strays**
+- [x] **Step 6: Confirm the moves and that working tree is clean of strays**
 
 Run:
 ```bash
@@ -88,7 +88,7 @@ ls docs/archive/2026-06-12-code-analysis.md docs/archive/2026-05-23-server-submo
 ```
 Expected: the three renames staged (`R`), three content edits, no untracked strays, all three target files exist.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add -A
@@ -106,7 +106,7 @@ git commit -m "docs: archive three shipped/stale planning docs (#39)"
 - Consumes: the `docs/archive/` directory produced/relocated by Task 1 (linked as a directory, so robust to Task 1's exact filenames).
 - Produces: the docs entry-point index. No later task depends on it.
 
-- [ ] **Step 1: Create `docs/README.md` with three sections**
+- [x] **Step 1: Create `docs/README.md` with three sections**
 
 Content (build the ADR rows from `docs/adr/*.md` — numbers, titles, and `Status:` line; all 21 are currently `accepted`). Structure:
 
@@ -151,7 +151,7 @@ them for "why we did X," not for current behavior.
 
 When building the ADR table, the ADR slugs are (verify against `ls docs/adr/`): 0000 documentation-strategy, 0001 pluggable-storage-backends, 0002 frontend-framework, 0003 asset-management, 0004 pagination, 0005 unified-content-model, 0006 storage-isolation, 0007 dual-path-auth, 0008 single-binary-deployment, 0009 high-fidelity-retention, 0010 multi-protocol-integration, 0011 unified-observability, 0012 env-aware-e2e-timeouts, 0013 server-submodule-pattern, 0014 atompub-app-specific-passwords, 0015 serialization-surfaces, 0016 di-appstate-composition-root, 0017 error-handling-boundary, 0018 timing-equalized-auth, 0019 generic-backends-via-dialect, 0020 content-visibility-and-subscription. Titles must be copied from each file's H1 verbatim; statuses from each file's `* Status:` line.
 
-- [ ] **Step 2: Verify every link in the index resolves**
+- [x] **Step 2: Verify every link in the index resolves**
 
 Run (extracts every relative markdown link target from the index and checks each exists, resolved relative to `docs/`):
 ```bash
@@ -159,7 +159,7 @@ cd docs && rg -o '\]\(([^)]+)\)' -r '$1' README.md | while read -r l; do t="${l%
 ```
 Expected: **no `BROKEN:` lines.**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/README.md
@@ -172,7 +172,7 @@ git commit -m "docs: add docs/README.md index (durable docs, ADR index, archive 
 
 **Files:** none (verification only).
 
-- [ ] **Step 1: Re-confirm whole-tree link integrity for the moved docs**
+- [x] **Step 1: Re-confirm whole-tree link integrity for the moved docs**
 
 Run:
 ```bash
@@ -181,7 +181,7 @@ rg -n --no-heading -g '!docs/archive' -g '!docs/superpowers' -g '!target' \
 ```
 Expected: no output.
 
-- [ ] **Step 2: Run the standing gate**
+- [x] **Step 2: Run the standing gate**
 
 Run (bare command, from the worktree root, so context-mode/`isError` is meaningful — but this is docs-only so it should be a fast no-op rebuild):
 ```bash
@@ -189,7 +189,7 @@ cargo xtask validate --no-e2e
 ```
 Expected: exit 0 (`xtask-done: ... ok=true`). Read `.xtask/last-result.json` `steps[]` only if it fails.
 
-- [ ] **Step 3: Confirm clean tree**
+- [x] **Step 3: Confirm clean tree**
 
 Run:
 ```bash
