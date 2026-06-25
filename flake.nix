@@ -15,10 +15,6 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     flake-utils.url = "github:numtide/flake-utils";
-    serena = {
-      inputs.nixpkgs.follows = "nixpkgs";
-      url = "github:oraios/serena";
-    };
     crane.url = "github:ipetkov/crane";
   };
 
@@ -28,7 +24,6 @@
       nixpkgs,
       fenix,
       flake-utils,
-      serena,
       crane,
     }:
     let
@@ -982,10 +977,9 @@
               pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
             ];
             # Interactive-only tools that `cargo xtask validate` never invokes and no
-            # Nix check pulls (serena + the language servers are the bulk). Kept out
-            # of `devShells.ci` so CI does not download/build them.
+            # Nix check pulls (the language servers are the bulk). Kept out of
+            # `devShells.ci` so CI does not download/build them.
             devOnly = [
-              serena.packages.${pkgs.stdenv.hostPlatform.system}.serena
               pkgs.typescript-language-server
               pkgs.vscode-langservers-extracted
               pkgs.cargo-generate
