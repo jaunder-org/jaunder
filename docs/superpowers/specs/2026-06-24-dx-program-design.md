@@ -101,6 +101,7 @@ Out of scope:
 | G5 | Edit read-first hygiene — Read before Edit; re-read if stale | guidance (judgment) | ~73 errors |
 | G6 | Remove dead `bd prime` hooks (PreCompact + SessionStart) | global config | beads retired |
 | G7 | Memory-gardening pass — audit every `MEMORY.md` entry and `feedback_*`/`project_*` file; delete beads-only memories, rewrite `scripts/verify`→`cargo xtask`, fix the old Projects (Priority/Layer → Privacy / Operational Support / Backlog) and stale current-state | global config (memory dir) | stale refs found 2026-06-24 |
+| G8 | Worktree-workflow guidance — default to git worktrees for most dev; reactivate Serena for the worktree path after entering one (cwd moves, Serena stays on the old root) | memory (feedback) | user request 2026-06-24 |
 
 G4/G5 are guidance-lever and honestly cannot be hook-enforced; a skill can
 prompt the habit but not guarantee it.
