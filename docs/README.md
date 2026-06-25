@@ -1,0 +1,55 @@
+# Documentation Index
+
+Entry point and map for Jaunder's documentation. New here? Start with the
+[root README](../README.md), then [CONTRIBUTING](../CONTRIBUTING.md) — the
+definitive working hub for humans and agents.
+
+## Durable docs
+
+| Doc | What it's for |
+|-----|---------------|
+| [CONTRIBUTING](../CONTRIBUTING.md) | Definitive working guide: setup, hooks, workflow, testing, invariants. Read first. |
+| [CONTEXT](../CONTEXT.md) | Domain glossary / ubiquitous language for Jaunder. |
+| [ARCHITECTURE](ARCHITECTURE.md) | System architecture (Leptos, single-binary, storage); links the ADRs. |
+| [DESIGN](DESIGN.md) | High-level design / how an instance runs. |
+| [ROADMAP](ROADMAP.md) | Completed-milestone ledger and direction. |
+| [observability](observability.md) | OpenTelemetry tracing for backend + e2e. |
+| [web-style-guide](web-style-guide.md) | Conventions for `web/src/pages/` components and widgets. |
+| [atompub-marsedit-acceptance](atompub-marsedit-acceptance.md) | Manual MarsEdit/AtomPub (RFC 5023) acceptance checklist. |
+
+## Architecture Decision Records
+
+Architecture decisions live in [`adr/`](adr/), one file per decision (see
+[ADR-0000: Documentation Strategy](adr/0000-documentation-strategy.md) for the
+convention). All are currently `accepted`.
+
+| # | Title | Status |
+|---|-------|--------|
+| [0000](adr/0000-documentation-strategy.md) | Documentation Strategy | accepted |
+| [0001](adr/0001-storage-backends.md) | Pluggable Storage Backends | accepted |
+| [0002](adr/0002-frontend-framework.md) | Frontend Framework Selection | accepted |
+| [0003](adr/0003-asset-management.md) | Asset Management for Single-Binary Distribution | accepted |
+| [0004](adr/0004-pagination-strategy.md) | Pagination Strategy | accepted |
+| [0005](adr/0005-unified-content-model.md) | Unified Content Model | accepted |
+| [0006](adr/0006-storage-isolation.md) | Storage Isolation (Shared Ingestion vs. Private Copies) | accepted |
+| [0007](adr/0007-auth-mechanisms.md) | Dual-Path Authentication Mechanisms | accepted |
+| [0008](adr/0008-deployment-model.md) | Single-Binary Deployment Model | accepted |
+| [0009](adr/0009-edit-delete-policy.md) | High-Fidelity Retention Policy | accepted |
+| [0010](adr/0010-protocol-integration.md) | Multi-Protocol Integration Strategy | accepted |
+| [0011](adr/0011-unified-observability.md) | Unified Observability Strategy | accepted |
+| [0012](adr/0012-environment-aware-timeouts.md) | Environment-Aware E2E Timeouts | accepted |
+| [0013](adr/0013-server-submodule-pattern.md) | Server Submodule Pattern for Web-Layer Modules | accepted |
+| [0014](adr/0014-atompub-authentication.md) | AtomPub Authentication via App-Specific Passwords | accepted |
+| [0015](adr/0015-atompub-serialization-surfaces.md) | Separate Serialization Surfaces for Syndication and AtomPub | accepted |
+| [0016](adr/0016-dependency-injection-and-appstate.md) | Dependency Injection, the `AppState` Bundle, and the Composition Root | accepted |
+| [0017](adr/0017-error-handling-and-the-public-boundary.md) | Error Handling — Typed Domain Errors and a Masked Public Boundary | accepted |
+| [0018](adr/0018-constant-time-authentication.md) | Timing-Equalized Authentication (Username-Enumeration Resistance) | accepted |
+| [0019](adr/0019-generic-storage-backend-via-dialect.md) | Generic Storage Backends via a `Backend` Marker and per-trait `Dialect` | accepted |
+| [0020](adr/0020-content-visibility-and-subscription-model.md) | Content Visibility and Subscription Model | accepted |
+
+## Archive
+
+Superseded planning docs, design specs, and dated snapshots are kept in
+[`archive/`](archive/) rather than deleted, named `YYYY-MM-DD-<topic>.md` (the
+date the work happened or shipped). They are frozen historical records — read
+them for "why we did X," not for current behavior.
