@@ -322,6 +322,25 @@ mod tests {
         assert!(!args.iter().any(|a| a.contains("..")));
     }
 
+    #[test]
+    fn crap_heal_is_idempotent_and_pretty() {
+        // The heal writes pretty, key-sorted JSON and compares via the
+        // formatting-independent `normalize_json`, so re-healing an already-healed
+        // manifest is a no-op — no spurious multi-thousand-line diff churn (#7).
+        let compact =
+            r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
+        let pretty = pretty_json(compact).unwrap();
+        assert!(
+            pretty.contains('\n'),
+            "heal must write multi-line pretty JSON"
+        );
+        assert_eq!(
+            normalize_json(&pretty).unwrap(),
+            normalize_json(compact).unwrap(),
+            "pretty and compact must normalize equal, so a re-heal does not rewrite"
+        );
+    }
+
     fn verdict_with_improvement() -> CoverageVerdict {
         CoverageVerdict {
             improvements: vec![FileLines {
