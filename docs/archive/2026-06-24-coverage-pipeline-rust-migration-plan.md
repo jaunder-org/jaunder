@@ -1,5 +1,14 @@
 # Coverage Pipeline Rust Migration — Implementation Plan
 
+> **Status: COMPLETE — implemented and shipped in PR #36 (2026-06-25).** All
+> tasks done; `cargo xtask validate --no-e2e` green (e2e left to CI). Two
+> execution deviations from this plan: (a) Tasks B2 and B3 were committed
+> together because the classifier is dead code until `run` calls it (clippy
+> `-D warnings`); (b) Phase C was redesigned — `devtool` is built as a crane Nix
+> package in a single `tools/` workspace (with `coverage`) and run from `PATH`,
+> rather than via in-sandbox `cargo run`, because the offline sandbox can't
+> resolve a separate workspace's deps. See the git log for per-task commits.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the fragile `scripts/check-coverage` (bash/awk/jq) with a maintainable Rust `devtool`, make coverage failures self-describing and their first-hand data exfiltrable as CI artifacts, and fold in issues #2, #7, #3, #11.
@@ -65,7 +74,7 @@
   - `coverage::status::CoverageStatus` — `struct { category: StatusCategory, failed_tests: Vec<String>, infra_detail: Option<String> }`, serde.
   - `CoverageStatus::to_json(&self) -> String` (pretty + trailing newline), `CoverageStatus::from_json(s: &str) -> anyhow::Result<CoverageStatus>`.
 
-- [ ] **Step 1: Write `coverage/Cargo.toml`**
+- [x] **Step 1: Write `coverage/Cargo.toml`**
 
 ```toml
 [workspace]
@@ -82,7 +91,7 @@ serde_json = "1"
 anyhow = "1"
 ```
 
-- [ ] **Step 2: Write the failing test in `coverage/src/status.rs`**
+- [x] **Step 2: Write the failing test in `coverage/src/status.rs`**
 
 ```rust
 //! The in-sandbox coverage sentinel: what `devtool coverage emit` can know
@@ -146,7 +155,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Write `coverage/src/lib.rs`**
+- [x] **Step 3: Write `coverage/src/lib.rs`**
 
 ```rust
 pub mod pathnorm;
@@ -159,18 +168,18 @@ pub mod status;
 // coverage/src/pathnorm.rs (placeholder until Task A2)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cargo test --manifest-path coverage/Cargo.toml`
 Expected: PASS (2 tests).
 
-- [ ] **Step 5: Lint + format gate**
+- [x] **Step 5: Lint + format gate**
 
 Run: `cargo fmt --manifest-path coverage/Cargo.toml --check`
 Run: `cargo clippy --manifest-path coverage/Cargo.toml --all-targets -- -D warnings`
 Expected: both clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add coverage/Cargo.toml coverage/src/lib.rs coverage/src/status.rs coverage/src/pathnorm.rs
@@ -187,7 +196,7 @@ The bash `normalize_report_paths` (check-coverage:62-79) strips the absolute Nix
 **Interfaces:**
 - Produces: `coverage::pathnorm::normalize_report_text(report: &str, abs_root: &str) -> String` — strips a leading `"{abs_root}/"` from every line ending in `.rs:`; leaves all other lines untouched; idempotent when paths are already relative.
 
-- [ ] **Step 1: Write the failing test in `coverage/src/pathnorm.rs`**
+- [x] **Step 1: Write the failing test in `coverage/src/pathnorm.rs`**
 
 ```rust
 //! Path normalization for the `cargo llvm-cov report --text` output: rewrite the
@@ -245,18 +254,18 @@ web/src/y.rs:
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they pass**
+- [x] **Step 2: Run tests to verify they pass**
 
 Run: `cargo test --manifest-path coverage/Cargo.toml`
 Expected: PASS (4 tests total).
 
-- [ ] **Step 3: Lint + format gate**
+- [x] **Step 3: Lint + format gate**
 
 Run: `cargo fmt --manifest-path coverage/Cargo.toml --check`
 Run: `cargo clippy --manifest-path coverage/Cargo.toml --all-targets -- -D warnings`
 Expected: clean.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add coverage/src/pathnorm.rs
@@ -277,7 +286,7 @@ git commit -m "feat(coverage): port report path normalization to Rust"
 **Interfaces:**
 - Produces: a binary invoked as `devtool coverage emit`. Exit code is always `0` on a *completed* emit (success is reported via `status.json`, not the exit code); non-zero only on a tool-launch error that prevented producing any output.
 
-- [ ] **Step 1: Write `devtool/Cargo.toml`**
+- [x] **Step 1: Write `devtool/Cargo.toml`**
 
 ```toml
 [workspace]
@@ -296,7 +305,7 @@ anyhow = "1"
 coverage = { path = "../coverage" }
 ```
 
-- [ ] **Step 2: Write `devtool/src/main.rs`**
+- [x] **Step 2: Write `devtool/src/main.rs`**
 
 ```rust
 //! Internal in-sandbox dev tool. Runs inside the Nix coverage/e2e build
@@ -340,13 +349,13 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-- [ ] **Step 3: Write `devtool/src/coverage/mod.rs`**
+- [x] **Step 3: Write `devtool/src/coverage/mod.rs`**
 
 ```rust
 pub mod emit;
 ```
 
-- [ ] **Step 4: Stub `devtool/src/coverage/emit.rs` so it compiles**
+- [x] **Step 4: Stub `devtool/src/coverage/emit.rs` so it compiles**
 
 ```rust
 pub fn run(_out: &str) -> anyhow::Result<()> {
@@ -354,18 +363,18 @@ pub fn run(_out: &str) -> anyhow::Result<()> {
 }
 ```
 
-- [ ] **Step 5: Verify it builds and the CLI parses**
+- [x] **Step 5: Verify it builds and the CLI parses**
 
 Run: `cargo run --manifest-path devtool/Cargo.toml -- coverage emit --help`
 Expected: clap help for `emit` prints; exit 0.
 
-- [ ] **Step 6: Lint + format gate**
+- [x] **Step 6: Lint + format gate**
 
 Run: `cargo fmt --manifest-path devtool/Cargo.toml --check`
 Run: `cargo clippy --manifest-path devtool/Cargo.toml --all-targets -- -D warnings`
 Expected: clean.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add devtool/Cargo.toml devtool/src/main.rs devtool/src/coverage/mod.rs devtool/src/coverage/emit.rs
@@ -385,7 +394,7 @@ The classifier turns captured `cargo llvm-cov nextest` output into a `CoverageSt
 **Interfaces:**
 - Produces: `pub fn classify_nextest_output(output: &str) -> coverage::status::CoverageStatus`.
 
-- [ ] **Step 1: Write the failing tests in `devtool/src/coverage/emit.rs`**
+- [x] **Step 1: Write the failing tests in `devtool/src/coverage/emit.rs`**
 
 ```rust
 use coverage::status::{CoverageStatus, StatusCategory};
@@ -461,18 +470,18 @@ FAIL [ 0.04s] jaunder::web web_posts::get_post_carries_tags::case_2_postgres
 
 (Remove the `run` stub's body collision: keep the `run` fn from Task B1; add the above above it. `run` still `bail!`s for now.)
 
-- [ ] **Step 2: Run tests to verify they pass**
+- [x] **Step 2: Run tests to verify they pass**
 
 Run: `cargo test --manifest-path devtool/Cargo.toml`
 Expected: PASS (3 tests).
 
-- [ ] **Step 3: Lint + format gate**
+- [x] **Step 3: Lint + format gate**
 
 Run: `cargo fmt --manifest-path devtool/Cargo.toml --check`
 Run: `cargo clippy --manifest-path devtool/Cargo.toml --all-targets -- -D warnings`
 Expected: clean.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add devtool/src/coverage/emit.rs
@@ -491,7 +500,7 @@ Port `scripts/check-coverage --emit` (check-coverage:99-141) to `run`. It always
 - Produces (in `out` dir): `coverage-report.txt`, `crap-report.json`, `status.json`, and a `diagnostics/` subdir (`nextest.log`, `disk-usage.txt`).
 - Emits via `std::process::Command`: `cargo llvm-cov clean --profraw-only`; `bash scripts/with-ephemeral-postgres cargo llvm-cov --no-report nextest --show-progress none`; `cargo llvm-cov report --text`; `cargo llvm-cov report --lcov --output-path <lcov>`; `cargo crap --workspace --lcov <lcov> --exclude '**/tests/**' --format json --output <raw-crap>`.
 
-- [ ] **Step 1: Replace the `run` stub with the orchestration**
+- [x] **Step 1: Replace the `run` stub with the orchestration**
 
 ```rust
 use std::fs;
@@ -603,7 +612,7 @@ fn run_capture(cmd: &mut Command) -> Result<String> {
 
 Add `pub` to `classify_nextest_output` if not already, and ensure the `tests` module from B2 stays.
 
-- [ ] **Step 2: Add a `normalize_crap_paths` unit test**
+- [x] **Step 2: Add a `normalize_crap_paths` unit test**
 
 ```rust
     #[test]
@@ -615,14 +624,14 @@ Add `pub` to `classify_nextest_output` if not already, and ensure the `tests` mo
     }
 ```
 
-- [ ] **Step 3: Run tests + lint**
+- [x] **Step 3: Run tests + lint**
 
 Run: `cargo test --manifest-path devtool/Cargo.toml`
 Run: `cargo clippy --manifest-path devtool/Cargo.toml --all-targets -- -D warnings`
 Run: `cargo fmt --manifest-path devtool/Cargo.toml --check`
 Expected: all pass/clean. (The orchestration itself is exercised end-to-end by the Nix build in Phase C — it cannot run on the host without the sandbox PG toolchain.)
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add devtool/src/coverage/emit.rs
@@ -641,7 +650,7 @@ git commit -m "feat(devtool): implement coverage emit orchestration"
 **Interfaces:**
 - Produces: `$out/{coverage-report.txt,crap-report.json,status.json,diagnostics/}` on EVERY run (the build always succeeds).
 
-- [ ] **Step 1: Replace the buildPhase + installPhase of the `coverage` derivation**
+- [x] **Step 1: Replace the buildPhase + installPhase of the `coverage` derivation**
 
 Change `buildPhaseCargoCommand` from `bash ./scripts/check-coverage --emit` to build and run `devtool`, writing directly into the build dir, and drop `gawk`/`jq` from `nativeBuildInputs` (keep `cargo-crap`, `cargo-llvm-cov`, `cargo-nextest`, `postgresql_16`):
 
@@ -664,13 +673,13 @@ Change `buildPhaseCargoCommand` from `bash ./scripts/check-coverage --emit` to b
 
 (Leave the `src` filter unchanged — it already includes `devtool/` and `coverage/` and excludes `/xtask/`.)
 
-- [ ] **Step 2: Build the producer and verify it always succeeds and emits status.json**
+- [x] **Step 2: Build the producer and verify it always succeeds and emits status.json**
 
 Run: `nix build --accept-flake-config --out-link .xtask/gcroots/coverage .#checks.x86_64-linux.coverage`
 Run: `cat .xtask/gcroots/coverage/status.json`
 Expected: build succeeds; `status.json` shows `"category": "tests-ok"` on a green tree; `coverage-report.txt`, `crap-report.json`, and `diagnostics/` present.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add flake.nix
@@ -685,7 +694,7 @@ git commit -m "feat(flake): coverage producer runs devtool and always emits stat
 **Interfaces:**
 - Produces: `checks.<system>.coverage-gate` — fails iff `status.json.category != "tests-ok"`. Its name keeps the `jaunder-coverage` substring so the existing `pushFilter` keeps it out of cachix (always re-evaluated).
 
-- [ ] **Step 1: Add the consumer derivation**
+- [x] **Step 1: Add the consumer derivation**
 
 ```nix
             # Belt-and-suspenders: an independent Nix-level red for in-sandbox
@@ -711,12 +720,12 @@ git commit -m "feat(flake): coverage producer runs devtool and always emits stat
                 '';
 ```
 
-- [ ] **Step 2: Verify the consumer passes on a green tree**
+- [x] **Step 2: Verify the consumer passes on a green tree**
 
 Run: `nix build --accept-flake-config .#checks.x86_64-linux.coverage-gate`
 Expected: success (category is `tests-ok`).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add flake.nix
@@ -731,21 +740,21 @@ The gap baseline is regenerated by `cargo xtask __regen-baseline` (reads the pro
 - Delete: `scripts/check-coverage`
 - Modify: `flake.nix` (remove `coverage-update`)
 
-- [ ] **Step 1: Remove the `coverage-update` derivation block** (flake.nix:774-816, including the comment header). Re-baselining is now documented as: `nix build .#checks.x86_64-linux.coverage --out-link .xtask/gcroots/coverage` then `cargo xtask __regen-baseline`.
+- [x] **Step 1: Remove the `coverage-update` derivation block** (flake.nix:774-816, including the comment header). Re-baselining is now documented as: `nix build .#checks.x86_64-linux.coverage --out-link .xtask/gcroots/coverage` then `cargo xtask __regen-baseline`.
 
-- [ ] **Step 2: Delete the script**
+- [x] **Step 2: Delete the script**
 
 ```bash
 git rm scripts/check-coverage
 ```
 
-- [ ] **Step 3: Verify nothing else references the deleted names**
+- [x] **Step 3: Verify nothing else references the deleted names**
 
 Run: `cargo run --manifest-path devtool/Cargo.toml -- coverage emit --help` (sanity: devtool builds)
 Run: `nix flake check --accept-flake-config --no-build 2>&1 | tail -20` (the flake still evaluates with `coverage-update` gone)
 Expected: no reference errors; flake evaluates.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add -A
@@ -761,18 +770,18 @@ git commit -m "refactor: delete scripts/check-coverage and vestigial coverage-up
 **Files:**
 - Modify: `xtask/Cargo.toml`
 
-- [ ] **Step 1: Add the dependency**
+- [x] **Step 1: Add the dependency**
 
 ```toml
 coverage = { path = "../coverage" }
 ```
 
-- [ ] **Step 2: Verify it builds**
+- [x] **Step 2: Verify it builds**
 
 Run: `cargo build --manifest-path xtask/Cargo.toml`
 Expected: success.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add xtask/Cargo.toml xtask/Cargo.lock
@@ -790,7 +799,7 @@ git commit -m "build(xtask): depend on the shared coverage crate"
 - Consumes: `coverage::status::{CoverageStatus, StatusCategory}` (read from `.xtask/gcroots/coverage/status.json`).
 - Produces: a `StepResult` whose detail names the category (`infra` / `test-failure`) and evidence.
 
-- [ ] **Step 1: Write the failing test** (a pure helper that maps a `CoverageStatus` to a `StepResult` detail string)
+- [x] **Step 1: Write the failing test** (a pure helper that maps a `CoverageStatus` to a `StepResult` detail string)
 
 Add to `xtask/src/steps/nix.rs`:
 
@@ -843,12 +852,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails (function not yet present), then passes after adding it**
+- [x] **Step 2: Run the test to verify it fails (function not yet present), then passes after adding it**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml steps::nix`
 Expected: PASS after Step 1.
 
-- [ ] **Step 3: Wire `coverage()` to build the gate and read the sentinel on failure**
+- [x] **Step 3: Wire `coverage()` to build the gate and read the sentinel on failure**
 
 Replace the body of `pub fn coverage(result: &mut CommandResult, mode: Mode)` so it:
 1. builds the producer (`build_check("nix-coverage", "coverage")`) — always ok now;
@@ -880,14 +889,14 @@ pub fn coverage(result: &mut CommandResult, mode: Mode) {
 
 Note `build_check("nix-coverage-gate", "coverage-gate")` must pass `--out-link .xtask/gcroots/coverage-gate`; it already derives the out-link from the check name. Ensure the producer is built with `--out-link .xtask/gcroots/coverage` (already the case) so `status.json` is reachable.
 
-- [ ] **Step 4: Run the xtask test suite + lint**
+- [x] **Step 4: Run the xtask test suite + lint**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml`
 Run: `cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings`
 Run: `cargo fmt --manifest-path xtask/Cargo.toml --check`
 Expected: pass/clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/steps/nix.rs
@@ -904,11 +913,11 @@ For catastrophic infra failures where the producer cannot even write `status.jso
 **Interfaces:**
 - Produces: on a failed `nix build`, copies `diagnostics/` (if present in the kept build dir) to `.xtask/diagnostics/<check>/`.
 
-- [ ] **Step 1: Add `--keep-failed` to the `nix build` invocation in `build_check`**
+- [x] **Step 1: Add `--keep-failed` to the `nix build` invocation in `build_check`**
 
 In the `Command::new("nix").args([...])` array, add `"--keep-failed"` after `"build"`. (This makes Nix retain `/tmp/nix-build-*.drv-*` on failure; the build log already streams to the CI console.)
 
-- [ ] **Step 2: On failure, best-effort copy diagnostics to a host path**
+- [x] **Step 2: On failure, best-effort copy diagnostics to a host path**
 
 After detecting `Ok(s)` non-success in `build_check`, before returning the `fail` StepResult, attempt to locate the most recent `/tmp/nix-build-jaunder-<check>*` dir and copy any `emit-out/diagnostics` into `.xtask/diagnostics/<check>/`. Keep it best-effort (ignore errors):
 
@@ -929,13 +938,13 @@ fn rescue_diagnostics(check: &str) {
 
 Call `rescue_diagnostics(check)` in the non-success branch of `build_check`.
 
-- [ ] **Step 3: Lint + format gate**
+- [x] **Step 3: Lint + format gate**
 
 Run: `cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings`
 Run: `cargo fmt --manifest-path xtask/Cargo.toml --check`
 Expected: clean. (Behavior is exercised by a real infra failure; not host-unit-testable.)
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add xtask/src/steps/nix.rs
@@ -949,16 +958,16 @@ So `cargo xtask validate` (and `check`) also cover `coverage/` and `devtool/`.
 **Files:**
 - Modify: `xtask/src/steps/static_checks.rs`
 
-- [ ] **Step 1: Append fmt + clippy steps for each standalone crate**
+- [x] **Step 1: Append fmt + clippy steps for each standalone crate**
 
 For each of `coverage` and `devtool`, add a `step(...)` running (Check mode) `cargo fmt --manifest-path <crate>/Cargo.toml --check` and `cargo clippy --manifest-path <crate>/Cargo.toml --all-targets -- -D warnings`; (Fix mode) `cargo fmt --manifest-path <crate>/Cargo.toml`. Mirror the existing `step(sh, ...)` pattern in the file.
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 Run: `cargo run --manifest-path xtask/Cargo.toml -- check --no-test`
 Expected: the new fmt/clippy steps appear and pass.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add xtask/src/steps/static_checks.rs
@@ -974,7 +983,7 @@ git commit -m "build(xtask): lint coverage and devtool crates in static checks"
 **Files:**
 - Modify: `.github/workflows/ci.yml`
 
-- [ ] **Step 1: Add an upload step after the Validate step**
+- [x] **Step 1: Add an upload step after the Validate step**
 
 ```yaml
       - name: Upload coverage/e2e diagnostics
@@ -991,12 +1000,12 @@ git commit -m "build(xtask): lint coverage and devtool crates in static checks"
           retention-days: 14
 ```
 
-- [ ] **Step 2: Validate the workflow YAML parses**
+- [x] **Step 2: Validate the workflow YAML parses**
 
 Run: `python3 -c "import yaml,sys; yaml.safe_load(open('.github/workflows/ci.yml'))"`
 Expected: no error.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .github/workflows/ci.yml
@@ -1019,7 +1028,7 @@ The correct frame is therefore **baseline-anchor-commit → working tree**: `git
 **Interfaces:**
 - Produces: `fn baseline_anchor_commit() -> Result<String>` — `git log -1 --format=%H -- coverage-baseline.json`; on empty output (uncommitted baseline) returns `"HEAD"` (identity map).
 
-- [ ] **Step 1: Add the function**
+- [x] **Step 1: Add the function**
 
 ```rust
 /// The commit the committed baseline was last healed at. The Nix report is built
@@ -1036,12 +1045,12 @@ fn baseline_anchor_commit() -> Result<String> {
 }
 ```
 
-- [ ] **Step 2: Build to verify it compiles**
+- [x] **Step 2: Build to verify it compiles**
 
 Run: `cargo build --manifest-path xtask/Cargo.toml`
 Expected: success.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add xtask/src/coverage/mod.rs
@@ -1053,7 +1062,7 @@ git commit -m "feat(xtask): compute the baseline anchor commit for line mapping"
 **Files:**
 - Modify: `xtask/src/coverage/mod.rs`
 
-- [ ] **Step 1: Write a failing test asserting the diff spans anchor→working-tree (single commit arg, no range)**
+- [x] **Step 1: Write a failing test asserting the diff spans anchor→working-tree (single commit arg, no range)**
 
 Refactor `git_diff_unified0()` to take the anchor and add a test of the argv via a small pure helper:
 
@@ -1090,12 +1099,12 @@ mod anchor_tests {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails, then implement**
+- [x] **Step 2: Run the test to verify it fails, then implement**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml anchor_tests`
 Expected: FAIL (function missing) → add `diff_args`, then PASS.
 
-- [ ] **Step 3: Rewrite `git_diff_unified0` to diff the anchor against the working tree**
+- [x] **Step 3: Rewrite `git_diff_unified0` to diff the anchor against the working tree**
 
 ```rust
 fn git_diff_anchor_to_worktree(anchor: &str) -> Result<String> {
@@ -1121,13 +1130,13 @@ Then **delete the entire untracked-file mapping block** (the `for path in git_un
 
 (Edge case to preserve: if `coverage-baseline.json` has never been committed, `baseline_anchor_commit()` returns `"HEAD"` — Task F1 — giving a HEAD→working-tree map, i.e. the prior behavior, which is acceptable for that transient state.)
 
-- [ ] **Step 4: Run the full xtask test suite + lint**
+- [x] **Step 4: Run the full xtask test suite + lint**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml`
 Run: `cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings`
 Expected: pass/clean. (The existing diffmap unit tests in `diffmap.rs` are unaffected — they test the parser, not the range.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/coverage/mod.rs
@@ -1145,7 +1154,7 @@ The Rust heal already writes pretty, key-sorted JSON compared via a normalized f
 **Files:**
 - Modify: `xtask/src/coverage/mod.rs` (tests)
 
-- [ ] **Step 1: Add the test**
+- [x] **Step 1: Add the test**
 
 ```rust
     #[test]
@@ -1163,12 +1172,12 @@ The Rust heal already writes pretty, key-sorted JSON compared via a normalized f
     }
 ```
 
-- [ ] **Step 2: Run the test**
+- [x] **Step 2: Run the test**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml crap_heal_is_idempotent`
 Expected: PASS.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add xtask/src/coverage/mod.rs
@@ -1181,24 +1190,24 @@ git commit -m "test(xtask): lock CRAP-heal pretty-JSON idempotence (#7)"
 
 ### Task H1: End-to-end validate in the Nix sandbox
 
-- [ ] **Step 1: Run the full host gate**
+- [x] **Step 1: Run the full host gate**
 
 Run: `nix develop .#ci --accept-flake-config -c cargo xtask validate --no-e2e`
 Expected: static checks + coverage producer/consumer + host gate all green; `.xtask/last-result.json` shows `ok: true`.
 
-- [ ] **Step 2: Simulate a test-failure surfaces correctly (manual spot check)**
+- [x] **Step 2: Simulate a test-failure surfaces correctly (manual spot check)**
 
 Temporarily break one test (e.g. add `assert!(false)` to a small unit test), run:
 Run: `nix build --accept-flake-config .#checks.x86_64-linux.coverage-gate 2>&1 | tail -20`
 Expected: gate fails with `category=test-failure` and the test name; the producer (`.#checks.x86_64-linux.coverage`) still **succeeds** and emits `status.json`. Revert the break afterward.
 
-- [ ] **Step 3: Confirm re-baseline flow works**
+- [x] **Step 3: Confirm re-baseline flow works**
 
 Run: `nix build --accept-flake-config --out-link .xtask/gcroots/coverage .#checks.x86_64-linux.coverage`
 Run: `cargo run --manifest-path xtask/Cargo.toml -- __regen-baseline`
 Expected: `coverage-baseline.json` regenerates from the producer report without error.
 
-- [ ] **Step 4: Final commit (only if any fixups were needed)**
+- [x] **Step 4: Final commit (only if any fixups were needed)**
 
 ```bash
 git add -A
