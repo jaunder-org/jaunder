@@ -36,8 +36,8 @@ corpus:
 - **Verbal corrections** confirming the above: verify-before-commit and
   exit-code-blindness (#3, #4, #44, #6), context-mode routing (#7, #9, #14,
   #36, #47), `cd`/`sed`/`cat` (#13, #18, #22, #25, #36, #46, #48), opus
-  subagents + plan-item checkoff (#20, #26, #32, #39), boilerplate/helpers and
-  `AppState` drift (#5, #42).
+  subagents + plan-item checkoff (#20, #26, #32, #39), and boilerplate/helpers
+  (#5).
 
 ## Goals / Non-goals
 
@@ -49,10 +49,10 @@ In scope (three layers, confirmed):
 
 Out of scope:
 
-- **Code-quality / DRY** (helpers-over-boilerplate, keep `AppState`
-  storage-only). Real (#5, #42) but **deferred** — parked as a GH issue, to be
-  picked up after this program lands. Tackle interactively via `/code-review`
-  or `/simplify` in the meantime.
+- **Code-quality / DRY** (factor repeated boilerplate into helpers). Real (#5)
+  but **deferred** — parked as a GH issue, one concern per issue. (The earlier
+  `AppState`-storage-only idea was dropped as a dead issue.) Tackle interactively
+  via `/code-review` or `/simplify` in the meantime.
 
 ## Principles
 
