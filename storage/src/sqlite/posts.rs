@@ -121,50 +121,62 @@ impl PostDialect for Sqlite {
             TaggingError::Internal(sqlx::Error::Decode("invalid tag format".into()))
         })?;
 
-        let mut tx = pool.begin().await?;
+        // ADR-0021: take the write lock up front with BEGIN IMMEDIATE rather than a
+        // deferred BEGIN, so the SELECT->INSERT step performs no shared->reserved lock
+        // upgrade (the SQLITE_BUSY-on-upgrade failure mode). sqlx's Transaction issues
+        // its own deferred BEGIN, so drive the transaction manually on a raw connection,
+        // mirroring update_post / create_user_with_invite / sqlite/backup.rs.
+        let mut conn = pool.acquire().await?;
+        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
 
-        let post_exists: bool =
-            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM posts WHERE post_id = $1")
-                .bind(post_id)
-                .fetch_one(&mut *tx)
-                .await?;
+        let result: Result<(), TaggingError> = async {
+            let post_exists: bool =
+                sqlx::query_scalar("SELECT COUNT(*) > 0 FROM posts WHERE post_id = $1")
+                    .bind(post_id)
+                    .fetch_one(&mut *conn)
+                    .await?;
 
-        if !post_exists {
-            tx.rollback().await.ok();
-            return Err(TaggingError::PostNotFound);
-        }
+            if !post_exists {
+                return Err(TaggingError::PostNotFound);
+            }
 
-        sqlx::query("INSERT OR IGNORE INTO tags (tag_slug) VALUES ($1)")
-            .bind(tag.as_str())
-            .execute(&mut *tx)
-            .await?;
-
-        let tag_id: i64 =
-            sqlx::query_scalar::<_, i64>("SELECT tag_id FROM tags WHERE tag_slug = $1")
+            sqlx::query("INSERT OR IGNORE INTO tags (tag_slug) VALUES ($1)")
                 .bind(tag.as_str())
-                .fetch_one(&mut *tx)
+                .execute(&mut *conn)
                 .await?;
 
-        let result =
-            sqlx::query("INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3)")
-                .bind(post_id)
-                .bind(tag_id)
-                .bind(tag_display)
-                .execute(&mut *tx)
-                .await;
+            let tag_id: i64 =
+                sqlx::query_scalar::<_, i64>("SELECT tag_id FROM tags WHERE tag_slug = $1")
+                    .bind(tag.as_str())
+                    .fetch_one(&mut *conn)
+                    .await?;
+
+            match sqlx::query(
+                "INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3)",
+            )
+            .bind(post_id)
+            .bind(tag_id)
+            .bind(tag_display)
+            .execute(&mut *conn)
+            .await
+            {
+                Ok(_) => Ok(()),
+                Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+                    Err(TaggingError::AlreadyTagged)
+                }
+                Err(e) => Err(TaggingError::Internal(e)),
+            }
+        }
+        .await;
 
         match result {
-            Ok(_) => {
-                tx.commit().await?;
+            Ok(()) => {
+                sqlx::query("COMMIT").execute(&mut *conn).await?;
                 Ok(())
             }
-            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-                tx.rollback().await.ok();
-                Err(TaggingError::AlreadyTagged)
-            }
-            Err(e) => {
-                tx.rollback().await.ok();
-                Err(TaggingError::Internal(e))
+            Err(error) => {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                Err(error)
             }
         }
     }
@@ -238,6 +250,47 @@ mod tests {
             .list_published(None, 10, &common::visibility::ViewerIdentity::Anonymous)
             .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn tag_post_insert_error_returns_internal() {
+        let pool = sqlite_pool().await;
+        sqlx::query(
+            "INSERT INTO users (username, password_hash, created_at, is_operator) VALUES (?, ?, ?, ?)",
+        )
+        .bind("tagger")
+        .bind("hash")
+        .bind(Utc::now())
+        .bind(false)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let storage = SqlitePostStorage::new(pool.clone());
+        let post_id = storage
+            .create_post(&crate::CreatePostInput {
+                user_id: 1,
+                title: Some("Post".to_string()),
+                slug: "post".parse().unwrap(),
+                body: "body".to_string(),
+                format: crate::PostFormat::Markdown,
+                rendered_html: "<p>body</p>".to_string(),
+                published_at: None,
+                summary: None,
+                audiences: vec![common::visibility::AudienceTarget::Public],
+            })
+            .await
+            .unwrap();
+
+        // Break the post_tags INSERT (but not the existence check or tag insert) so it
+        // returns a non-unique Database error: exercises the catch-all Internal arm and
+        // the BEGIN IMMEDIATE rollback path on an unexpected failure.
+        sqlx::query("ALTER TABLE post_tags RENAME COLUMN tag_display TO tag_display_x")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let result = storage.tag_post(post_id, "rust").await;
+        assert!(matches!(result, Err(TaggingError::Internal(_))));
     }
 
     #[tokio::test]
