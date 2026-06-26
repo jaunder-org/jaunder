@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Backend parity (CONTRIBUTING):** SQLite and Postgres must remain behaviorally identical. Any shared (backend-agnostic) change must keep both backends' tests green.
-- **Portable SQL convention:** shared (`storage/src/*.rs`) files use `$N` placeholders and bind duplicate values separately (e.g. `now` bound twice as `$1` and `$3`), not numbered-param reuse. SQLite ≥ 3.35 and Postgres both support `UPDATE … RETURNING`.
+- **Portable SQL convention:** shared (`storage/src/*.rs`) files use `$N` placeholders and bind a reused value once per position it appears (not numbered-param reuse) — `claim_pending_batch` binds `now` as `$1` and `$2`, `use_invite` as `$1` and `$4`, `use_email_verification` as `$1` and `$3`. SQLite ≥ 3.35 and Postgres both support `UPDATE … RETURNING`.
 - **ADR format:** house style is `# NNNN. Title`, then `- Status:` / `- Date:` / `- Deciders:`, then `## Context` / `## Decision` / `## Consequences`. One decision per file. Next free number is **0021**.
 - **No `#[ignore]` tests inside instrumented dialect files** (`storage/src/sqlite/*.rs`): the SQLite coverage pass skips `#[ignore]` and the PG pass is `-p jaunder` only, so an in-file ignored test's instrumented-but-unexecuted lines tank that file's per-file coverage. Concurrency repro test goes in `server/tests/feed/`.
 - **Commits:** no `Co-Authored-By` trailers. One clean, verified commit per task. Do not commit without the user's approval at the cycle's halt points; per-task commits during iterate are authorized once execution begins.
