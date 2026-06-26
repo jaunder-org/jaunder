@@ -1,3 +1,12 @@
+/**
+ * Dependency-free OTLP/HTTP span emitter for the e2e suite.
+ *
+ * Rather than pull in the OTel SDK, this hand-builds the OTLP JSON payload (hex
+ * trace/span ids, nanosecond timestamps, typed attributes) and POSTs it to a
+ * collector's `/v1/traces`. fixtures.ts and perf.ts use it to attach per-test
+ * spans to the trace the e2e harness propagates via the `JAUNDER_E2E_*` env vars.
+ */
+
 import { randomBytes } from "crypto";
 
 type OtlpValue =
@@ -149,6 +158,10 @@ export async function exportSpans(spans: OtlpSpan[]): Promise<void> {
 
   const endpoint =
     process.env.JAUNDER_E2E_OTLP_HTTP_ENDPOINT ?? DEFAULT_OTLP_HTTP_ENDPOINT;
+  // Stay a silent no-op unless the harness has wired up tracing (a collector
+  // endpoint or a propagated traceparent). This lets the spec helpers call into
+  // OTel unconditionally without failing on a plain `playwright test` run that
+  // has no collector to receive the spans.
   const shouldExport =
     process.env.JAUNDER_E2E_OTLP_HTTP_ENDPOINT !== undefined ||
     process.env.JAUNDER_E2E_TRACEPARENT !== undefined;

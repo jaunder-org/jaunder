@@ -1,6 +1,8 @@
 import { devices, defineConfig } from "@playwright/test";
 
 const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
+// Firefox and WebKit hydrate the Leptos WASM bundle slower than Chromium, so
+// their projects below get a scaled-up per-test timeout instead of the Chromium one.
 const hydrationHeavyTimeoutScale = 2.2;
 const chromiumProjectTimeoutMs = 30 * 1000;
 const hydrationHeavyProjectTimeoutMs = Math.ceil(

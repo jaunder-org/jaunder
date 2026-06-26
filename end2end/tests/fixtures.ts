@@ -1,3 +1,11 @@
+/**
+ * Auto-applied Playwright fixture (`_autoPerfSpan`, `auto: true`) that wraps every
+ * test in OTel capture: it instruments page requests, navigations, and hydration,
+ * folds in the action records from actions.ts, and emits a single `e2e.test` span
+ * on teardown. Also exports the hydration-aware timeout scalers tests use to size
+ * their per-browser budgets.
+ */
+
 import {
   expect,
   test as base,
@@ -90,6 +98,10 @@ type NavigationSummary = {
   postHydrateEffectsMs: number | null;
 };
 
+// Non-Chromium engines (Firefox, WebKit) hydrate the Leptos WASM bundle far
+// slower than Chromium, so their timeout budgets are scaled up. The first
+// (cold-cache) navigation also pays the full WASM download + init, so it needs
+// an even larger multiplier than steady-state navigation.
 const hydrationHeavyTimeoutScale = 2.2;
 const hydrationHeavyFirstNavigationScale = 2.6;
 const defaultWarmupUrl = "http://localhost:3000/";
@@ -244,6 +256,9 @@ const test = base.extend<{ _autoPerfSpan: void }>({
           if (globalScope.__jaunderHydrationNotified) return;
           const body = document.body;
           if (!body || !body.hasAttribute("data-hydrated")) return;
+          // body[data-hydrated] can flip before __jaunder_perf is populated, so
+          // poll briefly (up to 20×25ms) for the perf payload before giving up
+          // and notifying without it — otherwise we'd lose the runtime metrics.
           const perf = globalScope.__jaunder_perf;
           if (!perf || typeof perf !== "object") {
             const retries = globalScope.__jaunderHydrationNotifyRetries ?? 0;

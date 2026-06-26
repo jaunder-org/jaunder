@@ -1,3 +1,12 @@
+/**
+ * Records the wall-clock duration of each wrapped page action so fixtures.ts can
+ * emit them as events on the per-test OTel span.
+ *
+ * Records accumulate in one module-level buffer shared by every parallel test;
+ * each is tagged with the active `testKey`, and `drainActionsForTest` extracts
+ * (and removes) only the calling test's records when its span is finalized.
+ */
+
 import type { Page } from "@playwright/test";
 
 export type ActionRecord = {
@@ -59,6 +68,9 @@ export async function withTimedAction<T>(
 }
 
 export function drainActionsForTest(testKey: string): ActionRecord[] {
+  // Compact in place rather than reassign the array: the buffer is shared with
+  // other in-flight parallel tests whose records must survive. Copy survivors
+  // down with a write index, then truncate to drop this test's drained records.
   const mine: ActionRecord[] = [];
   let writeIndex = 0;
   for (let readIndex = 0; readIndex < actionRecords.length; readIndex += 1) {
