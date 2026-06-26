@@ -105,6 +105,10 @@ where
 
         let now = Utc::now();
 
+        // Atomically claim the token in one statement: the UPDATE succeeds only
+        // when it exists, is unused, and is unexpired, so two concurrent requests
+        // cannot both succeed and no read-then-write lock upgrade is needed
+        // (ADR-0021). A miss falls through to a read that classifies the failure.
         let claimed = sqlx::query_as::<_, (i64,)>(
             "UPDATE password_resets SET used_at = $1
              WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
