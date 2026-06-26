@@ -1,3 +1,8 @@
+//! The committed accepted-uncovered baseline (`coverage-baseline.json`): the
+//! ratchet's reference set of known-uncovered lines that the classifier diffs
+//! the current report against. A `BTreeMap` keys files in sorted order so the
+//! committed file always has a stable, reviewable diff.
+
 use std::collections::BTreeMap;
 
 use anyhow::Result;
@@ -23,6 +28,11 @@ impl Baseline {
     }
     pub fn set_gaps(&mut self, path: &str, mut gaps: Vec<Gap>) {
         gaps.sort_by_key(|g| g.line);
+        // Drop the entry entirely for a gap-free file rather than storing an
+        // empty list: `from_files` calls this for every reported file (most are
+        // fully covered), so this keeps the committed baseline to only
+        // files-with-gaps and keeps the heal's JSON-equality check stable — an
+        // empty `"f": []` entry would differ from an absent key and churn.
         if gaps.is_empty() {
             self.files.remove(path);
         } else {
