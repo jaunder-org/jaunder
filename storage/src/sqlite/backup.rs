@@ -20,6 +20,9 @@ pub(crate) async fn export_database(
     mode: BackupMode,
 ) -> Result<BackupManifest, BackupError> {
     let mut connection = pool.acquire().await?;
+    // BEGIN IMMEDIATE takes the write lock up front so the export reads one
+    // consistent snapshot: no writer can interleave across the multi-table read.
+    // (Postgres gets the same guarantee from a REPEATABLE READ snapshot.)
     sqlx::query("BEGIN IMMEDIATE")
         .execute(&mut *connection)
         .await?;
@@ -64,6 +67,10 @@ pub(crate) async fn restore_database(
     let schema_version = schema_version(&mut connection).await?;
     ensure_schema_version(manifest, schema_version)?;
 
+    // Disable FK enforcement for the bulk import so rows need not be inserted in
+    // referential order; integrity is verified once at the end via
+    // `foreign_key_check`. FKs are re-enabled on every exit path below, since the
+    // connection returns to the pool.
     sqlx::query("PRAGMA foreign_keys = OFF")
         .execute(&mut *connection)
         .await?;
@@ -171,6 +178,9 @@ fn bind_json_value<'q>(
         serde_json::Value::Null => query.bind(Option::<String>::None),
         serde_json::Value::Bool(value) => query.bind(*value),
         serde_json::Value::Number(value) => {
+            // Preserve integer affinity: bind as i64 (including u64 that fits) so
+            // large ids round-trip exactly, falling back to f64 only for
+            // genuinely non-integral numbers.
             if let Some(value) = value.as_i64() {
                 query.bind(value)
             } else if let Some(value) = value.as_u64().and_then(|value| i64::try_from(value).ok()) {
