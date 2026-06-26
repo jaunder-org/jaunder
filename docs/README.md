@@ -46,6 +46,8 @@ convention). All are currently `accepted`.
 | [0018](adr/0018-constant-time-authentication.md) | Timing-Equalized Authentication (Username-Enumeration Resistance) | accepted |
 | [0019](adr/0019-generic-storage-backend-via-dialect.md) | Generic storage backends via a `Backend` marker and per-trait `Dialect` | accepted |
 | [0020](adr/0020-content-visibility-and-subscription-model.md) | Content Visibility and Subscription Model | accepted |
+| [0021](adr/0021-sqlite-transaction-discipline.md) | SQLite Dialect Transaction Discipline | accepted |
+| [0022](adr/0022-validate-before-expensive-work.md) | Validate Cheaply Before Expensive Work for High-Entropy Secrets | accepted |
 
 ## Archive
 
