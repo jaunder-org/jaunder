@@ -2379,7 +2379,6 @@ body",
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(body.contains("Deletable Post"), "expected post in timeline");
 
-    // Delete the post
     let (status, body) = delete_post_form(Arc::clone(&state), created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "delete body: {body}");
 
@@ -2453,7 +2452,6 @@ body",
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     assert!(created.published_at.is_some(), "should be published");
 
-    // Unpublish
     let (status, body) =
         unpublish_post_form(Arc::clone(&state), created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "unpublish body: {body}");
@@ -3036,7 +3034,6 @@ async fn get_default_post_format_returns_html_by_default(#[case] backend: Backen
 async fn set_default_post_format_persists_and_retrieves_markdown(#[case] backend: Backend) {
     let (_base, state, cookie) = login_and_state(backend).await;
 
-    // Set format to markdown
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/set_default_post_format",
@@ -3046,7 +3043,6 @@ async fn set_default_post_format_persists_and_retrieves_markdown(#[case] backend
     .await;
     assert_eq!(status, StatusCode::OK, "set body: {body}");
 
-    // Retrieve and verify it was set
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/get_default_post_format",

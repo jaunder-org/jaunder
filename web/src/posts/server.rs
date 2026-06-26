@@ -208,6 +208,10 @@ fn set_not_found_status() {
     }
 }
 
+/// Masks a private/unauthorized post as a 404 instead of a 403: a distinct
+/// "forbidden" would confirm the post exists to a viewer not allowed to see it,
+/// leaking its existence. Fail closed to an indistinguishable not-found while
+/// preserving the real cause in the operator message.
 #[allow(clippy::needless_pass_by_value)]
 pub fn private_post_not_found_error(error: InternalError) -> InternalError {
     set_not_found_status();

@@ -46,7 +46,6 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
     let TestEnv { state, base: _base } = backend.setup().await;
     let capture = Arc::new(CapturingWebSubClient::default());
 
-    // Create a user and a published post
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     let user_id = state
@@ -72,7 +71,6 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
         .await
         .expect("create post");
 
-    // Enqueue a feed event
     let feed_url = "/~alice/feed.rss";
     state
         .feed_events
@@ -80,10 +78,8 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
         .await
         .expect("enqueue feed event");
 
-    // Run the worker
     make_worker(&state, capture.clone()).tick().await;
 
-    // Verify the feed was regenerated
     let cache_row = state
         .feed_cache
         .get(feed_url)
@@ -92,7 +88,6 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
         .expect("cache row should exist");
     assert!(cache_row.body.contains("Test Post"));
 
-    // Verify the event is marked as done (not claimable)
     let pending = state
         .feed_events
         .claim_pending_batch(10, chrono::Duration::minutes(5))
@@ -107,7 +102,6 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let capture = Arc::new(CapturingWebSubClient::default());
 
-    // Create a user and a published post
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     let user_id = state
@@ -133,7 +127,6 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
         .await
         .expect("create post");
 
-    // Set hub URL
     const HUB_URL_KEY: &str = "feeds.websub_hub_url";
     state
         .site_config
@@ -141,7 +134,6 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
         .await
         .expect("set hub url");
 
-    // Enqueue a feed event
     let feed_url = "/~alice/feed.rss";
     state
         .feed_events
@@ -149,10 +141,8 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
         .await
         .expect("enqueue feed event");
 
-    // Run the worker
     make_worker(&state, capture.clone()).tick().await;
 
-    // Verify the ping was captured
     let pings = capture.pings();
     assert_eq!(pings.len(), 1, "should have exactly one ping");
     assert_eq!(pings[0].hub_url, "https://hub.example.com/");
@@ -169,7 +159,6 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
     let TestEnv { state, base: _base } = backend.setup().await;
     let capture = Arc::new(CapturingWebSubClient::default());
 
-    // Create a user and a published post
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     let user_id = state
@@ -195,7 +184,6 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
         .await
         .expect("create post");
 
-    // Set hub URL
     const HUB_URL_KEY: &str = "feeds.websub_hub_url";
     state
         .site_config
@@ -203,7 +191,6 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
         .await
         .expect("set hub url");
 
-    // Enqueue the same feed 5 times
     let feed_url = "/~alice/feed.rss";
     for _ in 0..5 {
         state
@@ -213,7 +200,6 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
             .expect("enqueue feed event");
     }
 
-    // Run the worker
     make_worker(&state, capture.clone()).tick().await;
 
     // Verify only 1 ping was sent (grouping collapses duplicates)
@@ -245,7 +231,6 @@ async fn worker_applies_backoff_on_regen_failure(#[case] backend: Backend) {
     // Run the worker - regeneration will fail.
     make_worker(&state, capture.clone()).tick().await;
 
-    // No cache row should have been written.
     let cache = state.feed_cache.get(feed_url).await.expect("get cache");
     assert!(
         cache.is_none(),
@@ -286,7 +271,6 @@ async fn worker_applies_backoff_on_ping_failure() {
         .await
         .unwrap();
 
-    // Create a failing WebSub client
     struct FailingWebSubClient;
     #[async_trait::async_trait]
     impl jaunder::websub::WebSubClient for FailingWebSubClient {
@@ -323,7 +307,6 @@ async fn worker_applies_backoff_on_ping_failure() {
         feed_events: std::sync::Arc::new(storage::SqliteFeedEventStorage::new(pool)),
     });
 
-    // Create a user and a published post
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     let user_id = state
@@ -349,7 +332,6 @@ async fn worker_applies_backoff_on_ping_failure() {
         .await
         .expect("create post");
 
-    // Set hub URL
     const HUB_URL_KEY: &str = "feeds.websub_hub_url";
     state
         .site_config
@@ -357,7 +339,6 @@ async fn worker_applies_backoff_on_ping_failure() {
         .await
         .expect("set hub url");
 
-    // Enqueue a feed event
     let feed_url = "/~alice/feed.rss";
     state
         .feed_events

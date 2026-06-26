@@ -298,6 +298,11 @@ pub async fn get_post(
             return Ok(post_response(post, is_author));
         }
 
+        // The visibility-filtered lookup above found nothing public at this
+        // permalink. The only remaining legitimate resolution is the author
+        // viewing their own unpublished draft, so require auth and confirm the
+        // requester owns the namespace; everyone else gets an indistinguishable
+        // 404 (never a 403 that would leak the draft's existence).
         let auth = require_auth().await.map_err(private_post_not_found_error)?;
         if auth.username != username_parsed {
             return Err(not_found_error());

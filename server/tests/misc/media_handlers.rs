@@ -177,7 +177,6 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage).await;
 
-    // Upload a file first.
     let (boundary, body_bytes) = multipart_body("serve_test.png", "image/png", b"PNG_CONTENT_HERE");
 
     let upload_response = app

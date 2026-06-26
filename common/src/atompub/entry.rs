@@ -49,7 +49,10 @@ fn control_marks_draft(control: &Extension) -> bool {
 
 /// Sets or clears the `app:control/app:draft` marker on an entry.
 pub fn set_draft(entry: &mut Entry, draft: bool) {
-    // Remove any existing control element under any namespace prefix.
+    // Idempotent replace: strip any existing control element (whatever namespace
+    // prefix it was parsed under) and drop the now-empty extension maps, so
+    // toggling the draft flag never leaves a stale or duplicate marker behind.
+    // The canonical `app`-prefixed control is re-added below only when draft.
     for elements in entry.extensions.values_mut() {
         elements.remove("control");
     }

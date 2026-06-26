@@ -967,7 +967,6 @@ async fn authenticate_correct_password_returns_record_and_sets_last_authenticate
     assert_eq!(record.username.as_str(), "bob");
     assert!(record.last_authenticated_at.is_some());
 
-    // Verify the DB was updated.
     let fetched = users.get_user(record.user_id).await.unwrap().unwrap();
     assert!(fetched.last_authenticated_at.is_some());
 }
@@ -1259,7 +1258,6 @@ async fn create_user_with_invite_creates_user_and_marks_invite_used() {
         .await
         .unwrap();
 
-    // User was created
     let record = users.get_user(user_id).await.unwrap().unwrap();
     assert_eq!(record.username.as_str(), "alice");
     assert_eq!(record.display_name.as_deref(), Some("Alice"));
@@ -2171,7 +2169,6 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    // It should appear before deletion
     let published = state
         .posts
         .list_published(None, 10, &ViewerIdentity::Anonymous)
@@ -2181,7 +2178,6 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
 
     state.posts.soft_delete_post(post_id).await.unwrap();
 
-    // Should not appear after deletion
     let published = state
         .posts
         .list_published(None, 10, &ViewerIdentity::Anonymous)
@@ -2189,7 +2185,6 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
         .unwrap();
     assert!(!published.iter().any(|p| p.post_id == post_id));
 
-    // deleted_at should be set
     let record = state
         .posts
         .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
@@ -2469,7 +2464,6 @@ async fn list_published_returns_published_non_deleted_posts(#[case] backend: Bac
         .await
         .unwrap();
 
-    // Create two published posts
     state
         .posts
         .create_post(&make_published_create_post_input(user_id, "pub-post1"))
@@ -2501,7 +2495,6 @@ async fn list_drafts_by_user_returns_only_drafts(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    // Create two drafts
     state
         .posts
         .create_post(&make_create_post_input(user_id, "draft-a"))
@@ -2534,7 +2527,6 @@ async fn list_drafts_by_user_returns_only_drafts(#[case] backend: Backend) {
 // Tag Tests
 // =============================================================================
 
-// Test: Multiple tags on a single post
 #[apply(backends)]
 #[tokio::test]
 async fn multiple_tags_on_single_post(#[case] backend: Backend) {
@@ -2567,7 +2559,6 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Add multiple tags
     state
         .posts
         .tag_post(post_id, "rust")
@@ -2584,7 +2575,6 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
         .await
         .expect("tag_post failed");
 
-    // Retrieve and verify all tags
     let tags = state
         .posts
         .get_tags_for_post(post_id)
@@ -2598,7 +2588,6 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
     assert!(tag_slugs.contains(&"systems-programming"));
 }
 
-// Test: Post with no tags
 #[apply(backends)]
 #[tokio::test]
 async fn empty_tag_list(#[case] backend: Backend) {
@@ -2631,7 +2620,6 @@ async fn empty_tag_list(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Retrieve tags - should be empty
     let tags = state
         .posts
         .get_tags_for_post(post_id)
@@ -2641,7 +2629,6 @@ async fn empty_tag_list(#[case] backend: Backend) {
     assert_eq!(tags.len(), 0);
 }
 
-// Test: Tag case preservation with different casing
 #[apply(backends)]
 #[tokio::test]
 async fn tag_case_preservation_variants(#[case] backend: Backend) {
@@ -2702,7 +2689,6 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
         .await
         .expect("tag_post post2 failed");
 
-    // Both should resolve to same slug
     let tags1 = state
         .posts
         .get_tags_for_post(post1)
@@ -2719,7 +2705,6 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
     assert_eq!(tags1[0].tag_display, "Web-Development");
     assert_eq!(tags2[0].tag_display, "WEB-DEVELOPMENT");
 
-    // List by tag should find both posts
     let tag_slug: Tag = "web-development".parse().unwrap();
     let posts = state
         .posts
@@ -2730,7 +2715,6 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
     assert_eq!(posts.len(), 2);
 }
 
-// Test: Invalid tag input
 #[apply(backends)]
 #[tokio::test]
 async fn invalid_tag_input(#[case] backend: Backend) {
@@ -2763,7 +2747,6 @@ async fn invalid_tag_input(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Test invalid tags - should return error
     let result = state.posts.tag_post(post_id, "-invalid").await;
     assert!(matches!(result, Err(TaggingError::Internal(_))));
 
@@ -2777,7 +2760,6 @@ async fn invalid_tag_input(#[case] backend: Backend) {
     assert!(matches!(result, Err(TaggingError::Internal(_))));
 }
 
-// Test: Tag pagination with many posts
 #[apply(backends)]
 #[tokio::test]
 async fn tag_list_pagination(#[case] backend: Backend) {
@@ -2794,7 +2776,6 @@ async fn tag_list_pagination(#[case] backend: Backend) {
         .await
         .expect("user creation failed");
 
-    // Create multiple posts with the same tag
     let mut post_ids = Vec::new();
     for i in 0..5 {
         let post_id = state
@@ -2821,7 +2802,6 @@ async fn tag_list_pagination(#[case] backend: Backend) {
             .expect("tag_post failed");
     }
 
-    // List with limit
     let tag_slug: Tag = "pagination-test".parse().unwrap();
     let posts = state
         .posts
@@ -2834,7 +2814,6 @@ async fn tag_list_pagination(#[case] backend: Backend) {
     assert!(posts[0].created_at >= posts[1].created_at);
 }
 
-// Test: User-specific tag listing
 #[apply(backends)]
 #[tokio::test]
 async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
@@ -2862,7 +2841,6 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
         .await
         .expect("user creation failed");
 
-    // Both users tag posts with "shared-tag"
     let post1 = state
         .posts
         .create_post(&CreatePostInput {
@@ -2906,7 +2884,6 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
         .await
         .expect("tag post2 failed");
 
-    // List user1's posts by tag - should only see post1
     let tag_slug: Tag = "shared-tag".parse().unwrap();
     let user1_posts = state
         .posts
@@ -2917,7 +2894,6 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
     assert_eq!(user1_posts.len(), 1);
     assert_eq!(user1_posts[0].post_id, post1);
 
-    // List user2's posts by tag - should only see post2
     let user2_posts = state
         .posts
         .list_user_posts_by_tag(user2, &tag_slug, None, 50, &ViewerIdentity::Anonymous)
@@ -2928,7 +2904,6 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
     assert_eq!(user2_posts[0].post_id, post2);
 }
 
-// Test: Untag multiple times and verify correct tag removed
 #[apply(backends)]
 #[tokio::test]
 async fn selective_untag(#[case] backend: Backend) {
@@ -2961,7 +2936,6 @@ async fn selective_untag(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Add tags
     state
         .posts
         .tag_post(post_id, "tag-a")
@@ -2978,7 +2952,6 @@ async fn selective_untag(#[case] backend: Backend) {
         .await
         .expect("tag_post failed");
 
-    // Verify 3 tags
     let tags = state
         .posts
         .get_tags_for_post(post_id)
@@ -2986,7 +2959,6 @@ async fn selective_untag(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
     assert_eq!(tags.len(), 3);
 
-    // Remove one tag
     let tag_b: Tag = "tag-b".parse().unwrap();
     state
         .posts
@@ -2994,7 +2966,6 @@ async fn selective_untag(#[case] backend: Backend) {
         .await
         .expect("untag_post failed");
 
-    // Verify 2 tags remain and tag-b is gone
     let tags = state
         .posts
         .get_tags_for_post(post_id)
@@ -3007,7 +2978,6 @@ async fn selective_untag(#[case] backend: Backend) {
     assert!(tag_slugs.contains(&"tag-c"));
 }
 
-// Test: Tag with numeric characters
 #[apply(backends)]
 #[tokio::test]
 async fn numeric_tag(#[case] backend: Backend) {
@@ -3040,7 +3010,6 @@ async fn numeric_tag(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag with numeric values
     state
         .posts
         .tag_post(post_id, "python3")
@@ -3057,7 +3026,6 @@ async fn numeric_tag(#[case] backend: Backend) {
         .await
         .expect("tag_post failed");
 
-    // Verify tags
     let tags = state
         .posts
         .get_tags_for_post(post_id)
@@ -3071,7 +3039,6 @@ async fn numeric_tag(#[case] backend: Backend) {
     assert!(tag_slugs.contains(&"0day"));
 }
 
-// Test: Retagging a post with the same tag (duplicate tag error)
 #[apply(backends)]
 #[tokio::test]
 async fn retag_same_post_with_same_tag_fails(#[case] backend: Backend) {
@@ -3104,23 +3071,21 @@ async fn retag_same_post_with_same_tag_fails(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag once
     state
         .posts
         .tag_post(post_id, "learning")
         .await
         .expect("tag_post failed");
 
-    // Try to tag again with the exact same display form
     let result = state.posts.tag_post(post_id, "learning").await;
     assert!(matches!(result, Err(TaggingError::AlreadyTagged)));
 
-    // Try to tag again with different casing of same tag
+    // Dedup is case-insensitive: a different-cased form of an existing tag is
+    // still AlreadyTagged (both canonicalize to the same slug).
     let result = state.posts.tag_post(post_id, "LEARNING").await;
     assert!(matches!(result, Err(TaggingError::AlreadyTagged)));
 }
 
-// Test: Untag from nonexistent post (should fail)
 #[apply(backends)]
 #[tokio::test]
 async fn untag_nonexistent_post(#[case] backend: Backend) {
@@ -3129,11 +3094,9 @@ async fn untag_nonexistent_post(#[case] backend: Backend) {
     let tag_slug: Tag = "phantom".parse().unwrap();
     let result = state.posts.untag_post(99999, &tag_slug).await;
 
-    // Nonexistent post/tag combination should return TagNotFound
     assert!(matches!(result, Err(TaggingError::TagNotFound)));
 }
 
-// Test: Get tags for nonexistent post (should return empty)
 #[apply(backends)]
 #[tokio::test]
 async fn get_tags_nonexistent_post(#[case] backend: Backend) {
@@ -3148,7 +3111,6 @@ async fn get_tags_nonexistent_post(#[case] backend: Backend) {
     assert_eq!(tags.len(), 0);
 }
 
-// Test: List posts by nonexistent tag
 #[apply(backends)]
 #[tokio::test]
 async fn list_posts_by_nonexistent_tag(#[case] backend: Backend) {
@@ -3163,7 +3125,6 @@ async fn list_posts_by_nonexistent_tag(#[case] backend: Backend) {
     assert!(matches!(result, Err(ListByTagError::TagNotFound)));
 }
 
-// Test: List user posts by nonexistent tag
 #[apply(backends)]
 #[tokio::test]
 async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
@@ -3189,7 +3150,6 @@ async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
     assert!(matches!(result, Err(ListByTagError::TagNotFound)));
 }
 
-// Test: Many tags on many posts
 #[apply(backends)]
 #[tokio::test]
 async fn many_tags_many_posts(#[case] backend: Backend) {
@@ -3209,7 +3169,6 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
     let mut post_ids = Vec::new();
     let tags = vec!["rust", "golang", "python", "javascript", "typescript"];
 
-    // Create 3 posts, each with 5 tags
     for i in 0..3 {
         let post_id = state
             .posts
@@ -3237,7 +3196,6 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
         }
     }
 
-    // Verify each post has 5 tags
     for post_id in &post_ids {
         let tags_on_post = state
             .posts
@@ -3247,7 +3205,6 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
         assert_eq!(tags_on_post.len(), 5);
     }
 
-    // Verify each tag is found on all 3 posts
     for tag in &tags {
         let tag_slug: Tag = tag.parse().unwrap();
         let posts = state
@@ -3259,7 +3216,6 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
     }
 }
 
-// Test: Tag with all-numeric slug
 #[apply(backends)]
 #[tokio::test]
 async fn tag_all_numeric(#[case] backend: Backend) {
@@ -3292,7 +3248,6 @@ async fn tag_all_numeric(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag with all-numeric value
     state
         .posts
         .tag_post(post_id, "2024")
@@ -3316,7 +3271,6 @@ async fn tag_all_numeric(#[case] backend: Backend) {
     assert!(tag_slugs.contains(&"42"));
 }
 
-// Test: Tag with hyphens at boundaries
 #[apply(backends)]
 #[tokio::test]
 async fn tag_hyphen_boundaries(#[case] backend: Backend) {
@@ -3384,7 +3338,6 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
     assert!(matches!(result, Err(TaggingError::Internal(_))));
 }
 
-// Test: Tag with long slug and display name
 #[apply(backends)]
 #[tokio::test]
 async fn tag_with_long_display(#[case] backend: Backend) {
@@ -3417,7 +3370,6 @@ async fn tag_with_long_display(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag with long display name
     let long_display = "very-long-technical-term-with-many-hyphens-and-lowercase-letters";
     state
         .posts
@@ -3435,7 +3387,6 @@ async fn tag_with_long_display(#[case] backend: Backend) {
     assert_eq!(tags[0].tag_display, long_display);
 }
 
-// Test: Tag list ordering and consistency
 #[apply(backends)]
 #[tokio::test]
 async fn tag_list_ordering(#[case] backend: Backend) {
@@ -3452,7 +3403,6 @@ async fn tag_list_ordering(#[case] backend: Backend) {
         .await
         .expect("user creation failed");
 
-    // Create posts and tag with multiple tags
     let post1 = state
         .posts
         .create_post(&CreatePostInput {
@@ -3508,7 +3458,6 @@ async fn tag_list_ordering(#[case] backend: Backend) {
         .await
         .expect("tag_post failed");
 
-    // Get tags for post1 - should be ordered by slug
     let tags1 = state
         .posts
         .get_tags_for_post(post1)
@@ -3530,7 +3479,6 @@ async fn tag_list_ordering(#[case] backend: Backend) {
     assert_eq!(tags1_again[0].tag_slug.as_str(), "apple");
 }
 
-// Test: Boundary test for tag operations without tags
 #[apply(backends)]
 #[tokio::test]
 async fn tags_for_multiple_posts(#[case] backend: Backend) {
@@ -3547,7 +3495,6 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
         .await
         .expect("user creation failed");
 
-    // Create multiple posts with varied tag configurations
     let post1 = state
         .posts
         .create_post(&CreatePostInput {
@@ -3580,15 +3527,13 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // post1: no tags
-    // post2: one tag
+    // Only post2 is tagged; post1 stays untagged to assert the empty case.
     state
         .posts
         .tag_post(post2, "featured")
         .await
         .expect("tag_post failed");
 
-    // Verify post1 has no tags
     let tags1 = state
         .posts
         .get_tags_for_post(post1)
@@ -3596,7 +3541,6 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
     assert_eq!(tags1.len(), 0);
 
-    // Verify post2 has one tag
     let tags2 = state
         .posts
         .get_tags_for_post(post2)
@@ -3605,7 +3549,6 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
     assert_eq!(tags2.len(), 1);
 }
 
-// Test: Tag normalization with mixed alphanumeric
 #[apply(backends)]
 #[tokio::test]
 async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
@@ -3638,7 +3581,6 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Test mixed alphanumeric tags
     state
         .posts
         .tag_post(post_id, "version-2-0-1")
@@ -3662,13 +3604,11 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
 
     assert_eq!(tags.len(), 3);
-    // Verify normalization of numeric and alphabetic
     assert_eq!(tags[0].tag_slug.as_str(), "3d-graphics");
     assert_eq!(tags[1].tag_slug.as_str(), "http2");
     assert_eq!(tags[2].tag_slug.as_str(), "version-2-0-1");
 }
 
-// Test: User with single tag on single post, then untag
 #[apply(backends)]
 #[tokio::test]
 async fn simple_tag_lifecycle(#[case] backend: Backend) {
@@ -3701,14 +3641,12 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag the post
     state
         .posts
         .tag_post(post_id, "test")
         .await
         .expect("tag_post failed");
 
-    // Verify it's there
     let tags_before = state
         .posts
         .get_tags_for_post(post_id)
@@ -3717,7 +3655,6 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     assert_eq!(tags_before.len(), 1);
     assert_eq!(tags_before[0].tag_display, "test");
 
-    // List by tag
     let tag_slug: Tag = "test".parse().unwrap();
     let posts_before = state
         .posts
@@ -3726,14 +3663,12 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
         .expect("list_posts_by_tag failed");
     assert_eq!(posts_before.len(), 1);
 
-    // Untag
     state
         .posts
         .untag_post(post_id, &tag_slug)
         .await
         .expect("untag_post failed");
 
-    // Verify tag is gone from post
     let tags_after = state
         .posts
         .get_tags_for_post(post_id)
@@ -3755,7 +3690,6 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
 async fn tag_creation_and_retrieval(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    // Create a user and post
     let user = state
         .users
         .create_user(
@@ -3783,14 +3717,12 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag the post
     state
         .posts
         .tag_post(post_id, "rust")
         .await
         .expect("tag_post failed");
 
-    // Retrieve tags
     let tags = state
         .posts
         .get_tags_for_post(post_id)
@@ -3807,7 +3739,6 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
 async fn tag_normalization(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    // Create a user and post
     let user = state
         .users
         .create_user(&username("bob"), &password("password"), Some("Bob"), false)
@@ -3830,14 +3761,12 @@ async fn tag_normalization(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag with mixed-case display name
     state
         .posts
         .tag_post(post_id, "Rust-Web")
         .await
         .expect("tag_post failed");
 
-    // Retrieve and verify normalization
     let tags = state
         .posts
         .get_tags_for_post(post_id)
@@ -3854,7 +3783,6 @@ async fn tag_normalization(#[case] backend: Backend) {
 async fn untag_post(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    // Create a user and post
     let user = state
         .users
         .create_user(
@@ -3882,14 +3810,12 @@ async fn untag_post(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag the post
     state
         .posts
         .tag_post(post_id, "python")
         .await
         .expect("tag_post failed");
 
-    // Verify it's there
     let tags = state
         .posts
         .get_tags_for_post(post_id)
@@ -3897,7 +3823,6 @@ async fn untag_post(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
     assert_eq!(tags.len(), 1);
 
-    // Untag it
     let tag_slug: Tag = "python".parse().unwrap();
     state
         .posts
@@ -3905,7 +3830,6 @@ async fn untag_post(#[case] backend: Backend) {
         .await
         .expect("untag_post failed");
 
-    // Verify it's gone
     let tags = state
         .posts
         .get_tags_for_post(post_id)
@@ -3919,7 +3843,6 @@ async fn untag_post(#[case] backend: Backend) {
 async fn duplicate_tag_error(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    // Create a user and post
     let user = state
         .users
         .create_user(
@@ -3947,7 +3870,6 @@ async fn duplicate_tag_error(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag the post
     state
         .posts
         .tag_post(post_id, "go")
@@ -3969,7 +3891,6 @@ async fn duplicate_tag_error(#[case] backend: Backend) {
 async fn list_posts_by_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    // Create users
     let user1 = state
         .users
         .create_user(&username("eve"), &password("password"), Some("Eve"), false)
@@ -3987,7 +3908,6 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
         .await
         .expect("user creation failed");
 
-    // Create posts and tag them
     let post1 = state
         .posts
         .create_post(&CreatePostInput {
@@ -4020,7 +3940,6 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag both with "javascript"
     state
         .posts
         .tag_post(post1, "javascript")
@@ -4032,7 +3951,6 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
         .await
         .expect("tag_post failed");
 
-    // List posts by tag
     let tag_slug: Tag = "javascript".parse().unwrap();
     let posts = state
         .posts
@@ -4050,7 +3968,6 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
 async fn list_user_posts_by_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    // Create users
     let user1 = state
         .users
         .create_user(
@@ -4073,7 +3990,6 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
         .await
         .expect("user creation failed");
 
-    // Create posts
     let post1 = state
         .posts
         .create_post(&CreatePostInput {
@@ -4122,7 +4038,6 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag all with "clojure"
     state
         .posts
         .tag_post(post1, "clojure")
@@ -4139,7 +4054,6 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
         .await
         .expect("tag_post failed");
 
-    // List user1's posts by tag
     let tag_slug: Tag = "clojure".parse().unwrap();
     let posts = state
         .posts
@@ -4156,7 +4070,6 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
 async fn tag_not_found_error(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    // Try to list posts by non-existent tag
     let tag_slug: Tag = "nonexistent".parse().unwrap();
     let result = state
         .posts
@@ -4176,7 +4089,6 @@ async fn tag_not_found_error(#[case] backend: Backend) {
 async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    // Create a user and posts
     let user = state
         .users
         .create_user(
@@ -4220,7 +4132,6 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag both
     state
         .posts
         .tag_post(post1, "haskell")
@@ -4232,14 +4143,12 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
         .await
         .expect("tag_post failed");
 
-    // Delete one post
     state
         .posts
         .soft_delete_post(post1)
         .await
         .expect("soft_delete_post failed");
 
-    // List posts by tag - should only see post2
     let tag_slug: Tag = "haskell".parse().unwrap();
     let posts = state
         .posts
@@ -4256,7 +4165,6 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
 async fn tag_post_nonexistent_post_error(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    // Try to tag a post that doesn't exist
     let result = state.posts.tag_post(99999, "nonexistent-post").await;
     match result {
         Err(TaggingError::PostNotFound) => {
@@ -4271,7 +4179,6 @@ async fn tag_post_nonexistent_post_error(#[case] backend: Backend) {
 async fn untag_nonexistent_tag_error(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    // Create a user and post
     let user = state
         .users
         .create_user(
@@ -4299,7 +4206,6 @@ async fn untag_nonexistent_tag_error(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Try to remove a tag that was never added
     let tag_slug: Tag = "nonexistent".parse().unwrap();
     let result = state.posts.untag_post(post_id, &tag_slug).await;
     match result {
@@ -4315,7 +4221,6 @@ async fn untag_nonexistent_tag_error(#[case] backend: Backend) {
 async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    // Create a user and posts
     let user = state
         .users
         .create_user(
@@ -4359,7 +4264,6 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag both
     state
         .posts
         .tag_post(post1, "kotlin")
@@ -4371,7 +4275,6 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
         .await
         .expect("tag_post failed");
 
-    // List posts by tag - should only see published post2
     let tag_slug: Tag = "kotlin".parse().unwrap();
     let posts = state
         .posts
@@ -4385,7 +4288,6 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
 
 // ====== Additional coverage tests for error paths ======
 
-// SQLite: Post update with invalid slug and edge cases
 #[apply(backends)]
 #[tokio::test]
 async fn post_update_invalid_slug(#[case] backend: Backend) {
@@ -4413,7 +4315,6 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Create a second post with a different slug
     let _post_id2 = state
         .posts
         .create_post(&CreatePostInput {
@@ -4430,7 +4331,6 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Try to update post 1 to use post 2's slug (should fail with SlugConflict)
     let update_result = state
         .posts
         .update_post(
@@ -4457,7 +4357,6 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
     }
 }
 
-// SQLite: List published with cursor boundary conditions
 #[apply(backends)]
 #[tokio::test]
 async fn list_published_cursor_boundary(#[case] backend: Backend) {
@@ -4476,7 +4375,6 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
 
     let now = Utc::now();
 
-    // Create multiple posts with slightly different timestamps
     for i in 0..5 {
         let _ = state
             .posts
@@ -4495,7 +4393,6 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
             .expect("post creation failed");
     }
 
-    // Get all posts
     let all = state
         .posts
         .list_published(None, 10, &ViewerIdentity::Anonymous)
@@ -4503,7 +4400,6 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
         .expect("list_published failed");
     assert_eq!(all.len(), 5);
 
-    // Get first 2
     let first = state
         .posts
         .list_published(None, 2, &ViewerIdentity::Anonymous)
@@ -4511,7 +4407,6 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
         .expect("list_published failed");
     assert_eq!(first.len(), 2);
 
-    // Use cursor to get next batch
     if !first.is_empty() {
         let cursor = PostCursor {
             created_at: first[first.len() - 1].created_at,
@@ -4526,7 +4421,6 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
     }
 }
 
-// SQLite: List drafts with cursor
 #[apply(backends)]
 #[tokio::test]
 async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
@@ -4545,7 +4439,6 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
 
     let _now = Utc::now();
 
-    // Create multiple draft posts
     for i in 0..3 {
         let _ = state
             .posts
@@ -4564,7 +4457,6 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
             .expect("post creation failed");
     }
 
-    // Get all drafts
     let all = state
         .posts
         .list_drafts_by_user(user, None, 10)
@@ -4572,7 +4464,6 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
         .expect("list_drafts_by_user failed");
     assert_eq!(all.len(), 3);
 
-    // Get first 1
     let first = state
         .posts
         .list_drafts_by_user(user, None, 1)
@@ -4580,7 +4471,6 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
         .expect("list_drafts_by_user failed");
     assert_eq!(first.len(), 1);
 
-    // Use cursor to get next
     if !first.is_empty() {
         let cursor = PostCursor {
             created_at: first[0].created_at,
@@ -4595,7 +4485,6 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
     }
 }
 
-// SQLite: List user posts by tag with cursor
 #[apply(backends)]
 #[tokio::test]
 async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
@@ -4614,7 +4503,6 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
 
     let now = Utc::now();
 
-    // Create multiple posts and tag them
     for i in 0..3 {
         let post_id = state
             .posts
@@ -4641,7 +4529,6 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
 
     let tag: Tag = "cursor-tag".parse().unwrap();
 
-    // Get all tagged posts
     let all = state
         .posts
         .list_user_posts_by_tag(user, &tag, None, 10, &ViewerIdentity::Anonymous)
@@ -4649,7 +4536,6 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
         .expect("list_user_posts_by_tag failed");
     assert_eq!(all.len(), 3);
 
-    // Get first 1
     let first = state
         .posts
         .list_user_posts_by_tag(user, &tag, None, 1, &ViewerIdentity::Anonymous)
@@ -4657,7 +4543,6 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
         .expect("list_user_posts_by_tag failed");
     assert_eq!(first.len(), 1);
 
-    // Use cursor to get next
     if !first.is_empty() {
         let cursor = PostCursor {
             created_at: first[0].created_at,
@@ -4672,7 +4557,6 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
     }
 }
 
-// SQLite: List posts by tag with cursor
 #[apply(backends)]
 #[tokio::test]
 async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
@@ -4691,7 +4575,6 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
 
     let now = Utc::now();
 
-    // Create multiple posts and tag them
     for i in 0..3 {
         let post_id = state
             .posts
@@ -4718,7 +4601,6 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
 
     let tag: Tag = "global-tag".parse().unwrap();
 
-    // Get all tagged posts
     let all = state
         .posts
         .list_posts_by_tag(&tag, None, 10, &ViewerIdentity::Anonymous)
@@ -4726,7 +4608,6 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
         .expect("list_posts_by_tag failed");
     assert_eq!(all.len(), 3);
 
-    // Get first 1
     let first = state
         .posts
         .list_posts_by_tag(&tag, None, 1, &ViewerIdentity::Anonymous)
@@ -4734,7 +4615,6 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
         .expect("list_posts_by_tag failed");
     assert_eq!(first.len(), 1);
 
-    // Use cursor to get next
     if !first.is_empty() {
         let cursor = PostCursor {
             created_at: first[0].created_at,
@@ -4749,7 +4629,6 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
     }
 }
 
-// SQLite: Soft delete then try operations
 #[apply(backends)]
 #[tokio::test]
 async fn soft_delete_then_operations(#[case] backend: Backend) {
@@ -4782,14 +4661,12 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag the post
     state
         .posts
         .tag_post(post_id, "delete-tag")
         .await
         .expect("tag_post failed");
 
-    // Soft delete
     state
         .posts
         .soft_delete_post(post_id)
@@ -4804,7 +4681,6 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
         .expect("get_post_by_id failed");
     assert!(post.is_none() || post.unwrap().deleted_at.is_some());
 
-    // List published should not include it
     let tag: Tag = "delete-tag".parse().unwrap();
     let posts = state
         .posts
@@ -4816,7 +4692,6 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
 
 // ====== Additional error path and rollback scenario tests ======
 
-// Test tagging with multiple failed attempts
 #[apply(backends)]
 #[tokio::test]
 async fn tag_post_multiple_attempts(#[case] backend: Backend) {
@@ -4849,21 +4724,18 @@ async fn tag_post_multiple_attempts(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // First tag succeeds
     state
         .posts
         .tag_post(post_id, "first-tag")
         .await
         .expect("first tag_post failed");
 
-    // Second tag succeeds
     state
         .posts
         .tag_post(post_id, "second-tag")
         .await
         .expect("second tag_post failed");
 
-    // Try to tag again with first tag (should fail with AlreadyTagged)
     let result = state.posts.tag_post(post_id, "first-tag").await;
     match result {
         Err(TaggingError::AlreadyTagged) => {
@@ -4872,7 +4744,6 @@ async fn tag_post_multiple_attempts(#[case] backend: Backend) {
         other => panic!("Expected AlreadyTagged, got {other:?}"),
     }
 
-    // Verify both tags are present
     let tags = state
         .posts
         .get_tags_for_post(post_id)
@@ -4881,7 +4752,6 @@ async fn tag_post_multiple_attempts(#[case] backend: Backend) {
     assert_eq!(tags.len(), 2);
 }
 
-// Test list_published_by_user with cursor when no posts match
 #[apply(backends)]
 #[tokio::test]
 async fn list_published_by_user_no_posts(#[case] backend: Backend) {
@@ -4898,7 +4768,6 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
         .await
         .expect("user creation failed");
 
-    // User has no posts
     let posts = state
         .posts
         .list_published_by_user(
@@ -4911,7 +4780,6 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
         .expect("list_published_by_user failed");
     assert!(posts.is_empty());
 
-    // With cursor should still be empty
     let cursor = PostCursor {
         created_at: Utc::now(),
         post_id: 999,
@@ -4929,7 +4797,6 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
     assert!(posts.is_empty());
 }
 
-// Test get_post_by_permalink returns None when post is soft-deleted
 #[apply(backends)]
 #[tokio::test]
 async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
@@ -4964,7 +4831,6 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Verify we can get it
     let post = state
         .posts
         .get_post_by_permalink(
@@ -4979,14 +4845,12 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
         .expect("get_post_by_permalink failed");
     assert!(post.is_some());
 
-    // Soft delete it
     state
         .posts
         .soft_delete_post(post_id)
         .await
         .expect("soft_delete_post failed");
 
-    // Now it should return None
     let post = state
         .posts
         .get_post_by_permalink(
@@ -5002,7 +4866,6 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
     assert!(post.is_none());
 }
 
-// Test update_post on soft-deleted post
 #[apply(backends)]
 #[tokio::test]
 async fn update_soft_deleted_post(#[case] backend: Backend) {
@@ -5035,7 +4898,6 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Soft delete
     state
         .posts
         .soft_delete_post(post_id)
@@ -5071,7 +4933,6 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
     assert!(post.is_none() || post.unwrap().deleted_at.is_some());
 }
 
-// Test tag with various edge case formats
 #[apply(backends)]
 #[tokio::test]
 async fn tag_edge_case_formats(#[case] backend: Backend) {
@@ -5104,21 +4965,18 @@ async fn tag_edge_case_formats(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag with numbers
     state
         .posts
         .tag_post(post_id, "123")
         .await
         .expect("numeric tag failed");
 
-    // Tag with hyphens
     state
         .posts
         .tag_post(post_id, "my-tag-here")
         .await
         .expect("hyphenated tag failed");
 
-    // Tag with mixed case (should be normalized)
     state
         .posts
         .tag_post(post_id, "MyTag")
@@ -5131,13 +4989,11 @@ async fn tag_edge_case_formats(#[case] backend: Backend) {
         .await
         .expect("get_tags_for_post failed");
 
-    // Should have 3 tags
     assert_eq!(tags.len(), 3);
 }
 
 // ====== Comprehensive error path coverage ======
 
-// Test get_post_by_id with non-existent post
 #[apply(backends)]
 #[tokio::test]
 async fn get_post_by_id_nonexistent(#[case] backend: Backend) {
@@ -5155,7 +5011,6 @@ async fn get_post_by_id_nonexistent(#[case] backend: Backend) {
     }
 }
 
-// Test list_published with cursor where boundary is crossed
 #[apply(backends)]
 #[tokio::test]
 async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
@@ -5195,7 +5050,6 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
         post_ids.push(post_id);
     }
 
-    // Get first 2
     let first = state
         .posts
         .list_published(None, 2, &ViewerIdentity::Anonymous)
@@ -5214,12 +5068,10 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
             .list_published(Some(&cursor), 2, &ViewerIdentity::Anonymous)
             .await
             .expect("list_published with cursor failed");
-        // Should get remaining 2
         assert_eq!(next.len(), 2);
     }
 }
 
-// Test post revisions are created during update
 #[apply(backends)]
 #[tokio::test]
 async fn post_revisions_created(#[case] backend: Backend) {
@@ -5252,7 +5104,6 @@ async fn post_revisions_created(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Update the post
     let result = state
         .posts
         .update_post(
@@ -5272,13 +5123,11 @@ async fn post_revisions_created(#[case] backend: Backend) {
         .await
         .expect("update_post failed");
 
-    // Verify post was updated (result returned directly from update_post)
     assert_eq!(result.title.as_deref(), Some("Updated"));
     assert_eq!(result.body, "Updated content");
     assert!(result.published_at.is_some());
 }
 
-// Test display preservation of tags
 #[apply(backends)]
 #[tokio::test]
 async fn tag_display_preservation(#[case] backend: Backend) {
@@ -5311,14 +5160,12 @@ async fn tag_display_preservation(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Tag with specific display
     state
         .posts
         .tag_post(post_id, "MySpecialTag")
         .await
         .expect("tag_post failed");
 
-    // Get tags and verify display is preserved
     let tags = state
         .posts
         .get_tags_for_post(post_id)
@@ -5327,11 +5174,9 @@ async fn tag_display_preservation(#[case] backend: Backend) {
 
     assert_eq!(tags.len(), 1);
     assert_eq!(tags[0].tag_display, "MySpecialTag");
-    // Slug should be lowercase
     assert_eq!(tags[0].tag_slug.as_str(), "myspecialtag");
 }
 
-// Test untag operation removes only the specified tag
 #[apply(backends)]
 #[tokio::test]
 async fn untag_preserves_other_tags(#[case] backend: Backend) {
@@ -5364,7 +5209,6 @@ async fn untag_preserves_other_tags(#[case] backend: Backend) {
         .await
         .expect("post creation failed");
 
-    // Add multiple tags
     state
         .posts
         .tag_post(post_id, "tag1")
@@ -5381,7 +5225,6 @@ async fn untag_preserves_other_tags(#[case] backend: Backend) {
         .await
         .expect("tag3 failed");
 
-    // Verify all 3 are present
     let tags = state
         .posts
         .get_tags_for_post(post_id)
@@ -5389,7 +5232,6 @@ async fn untag_preserves_other_tags(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
     assert_eq!(tags.len(), 3);
 
-    // Remove tag2
     let tag2: Tag = "tag2".parse().unwrap();
     state
         .posts
@@ -5397,7 +5239,6 @@ async fn untag_preserves_other_tags(#[case] backend: Backend) {
         .await
         .expect("untag_post failed");
 
-    // Verify only 2 remain and tag2 is gone
     let tags = state
         .posts
         .get_tags_for_post(post_id)
@@ -5415,7 +5256,6 @@ async fn untag_preserves_other_tags(#[case] backend: Backend) {
 async fn site_config_operations(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    // Test get non-existent key
     let value = state.site_config.get("nonexistent.key").await;
     match value {
         Ok(None) => {
@@ -5424,7 +5264,6 @@ async fn site_config_operations(#[case] backend: Backend) {
         other => panic!("Expected Ok(None), got {other:?}"),
     }
 
-    // Test set and get
     state
         .site_config
         .set("test.key", "test.value")
@@ -5439,7 +5278,6 @@ async fn site_config_operations(#[case] backend: Backend) {
         other => panic!("Expected Ok(Some), got {other:?}"),
     }
 
-    // Test update (overwrite)
     state
         .site_config
         .set("test.key", "updated.value")
@@ -5471,7 +5309,6 @@ async fn session_list_operations(#[case] backend: Backend) {
         .await
         .expect("user creation failed");
 
-    // Create multiple sessions
     let session1 = state
         .sessions
         .create_session(user, "session 1")
@@ -5490,7 +5327,6 @@ async fn session_list_operations(#[case] backend: Backend) {
         .await
         .expect("create_session 3 failed");
 
-    // List sessions
     let sessions = state
         .sessions
         .list_sessions(user)
@@ -5499,13 +5335,11 @@ async fn session_list_operations(#[case] backend: Backend) {
 
     assert_eq!(sessions.len(), 3);
 
-    // Verify labels are preserved
     let labels: Vec<_> = sessions.iter().map(|s| s.label.as_str()).collect();
     assert!(labels.contains(&"session 1"));
     assert!(labels.contains(&"session 2"));
     assert!(labels.contains(&"test session"));
 
-    // Verify we can authenticate with one of the tokens
     let record = state
         .sessions
         .authenticate(&session1)
@@ -5523,7 +5357,6 @@ async fn invite_list_operations(#[case] backend: Backend) {
     let future = now + chrono::Duration::hours(1);
     let past = now - chrono::Duration::hours(1);
 
-    // Create multiple invites
     let _invite1 = state
         .invites
         .create_invite(future)
@@ -5536,7 +5369,6 @@ async fn invite_list_operations(#[case] backend: Backend) {
         .await
         .expect("create_invite 2 failed");
 
-    // List invites
     let invites = state
         .invites
         .list_invites()
@@ -5545,7 +5377,6 @@ async fn invite_list_operations(#[case] backend: Backend) {
 
     assert!(invites.len() >= 2);
 
-    // Verify unused flags
     let unused_count = invites.iter().filter(|i| i.used_at.is_none()).count();
     assert!(unused_count >= 2);
 }
@@ -5662,7 +5493,6 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
 
     let now = Utc::now();
 
-    // First create succeeds
     create_rendered_post(
         state.posts.as_ref(),
         user_id,

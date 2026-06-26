@@ -6,6 +6,11 @@
 #[cfg(feature = "ssr")]
 pub use common::username;
 
+/// Wraps a `#[server]` function body in [`error::server_boundary`]: runs the
+/// async block, and on an `InternalError` logs the structured failure (kind,
+/// class, cause chain) and maps it to the public `WebError` so operator detail
+/// never reaches the client. `$name` is the server-fn label used in that log and
+/// in the error metric. Every server function routes its body through this.
 #[macro_export]
 macro_rules! boundary {
     ($name:expr, $body:block) => {

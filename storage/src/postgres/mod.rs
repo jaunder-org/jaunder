@@ -119,6 +119,9 @@ impl AtomicOps for PostgresAtomicOps {
 
         let user_id = match result {
             Ok(id) => id,
+            // Let the UNIQUE(username) constraint be the arbiter rather than a
+            // pre-INSERT existence check: that closes the check-then-insert race
+            // between concurrent registrations.
             Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
                 return Err(RegisterWithInviteError::UsernameTaken);
             }
@@ -144,12 +147,20 @@ impl AtomicOps for PostgresAtomicOps {
         let token_hash =
             crate::auth::hash_token(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
 
+        // Hash the new password before opening the transaction: argon2 is
+        // deliberately slow, so doing it outside the write transaction avoids
+        // holding a serialization lock for the duration of the hash
+        // (ADR-0022 / #60).
         let password_hash = crate::helpers::hash_password(new_password.clone())
             .await
             .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
 
         let mut tx = self.pool.begin().await?;
         let now = Utc::now();
+        // Claim the token in one atomic UPDATE: it matches only when the token
+        // exists, is unused, and is unexpired, so concurrent confirmations cannot
+        // both win (ADR-0021). On a miss we re-read to classify the failure into a
+        // precise NotFound / AlreadyUsed / Expired error.
         let claimed = sqlx::query_as::<_, (i64,)>(
             "UPDATE password_resets SET used_at = $1
              WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3

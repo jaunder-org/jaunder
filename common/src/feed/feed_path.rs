@@ -49,9 +49,7 @@ pub fn canonicalize(surface: &FeedSurface, format: FeedFormat) -> String {
 
 #[must_use]
 pub fn parse(path: &str) -> Option<(FeedSurface, FeedFormat)> {
-    // Strip leading '/'
     let rest = path.strip_prefix('/')?;
-    // Find ".<ext>" suffix
     let (head, ext) = rest.rsplit_once('.')?;
     let format = match ext {
         "rss" => FeedFormat::Rss,

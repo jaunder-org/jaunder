@@ -26,7 +26,6 @@ impl FromStr for Tag {
         if s.is_empty() {
             return Err(InvalidTag);
         }
-        // Normalize to lowercase
         let normalized = s.to_lowercase();
         let mut chars = normalized.chars();
         // First character must be alphanumeric (lowercase)

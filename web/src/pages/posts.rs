@@ -254,7 +254,6 @@ fn SubscribeButton(username: String) -> impl IntoView {
                     }
                     if subscribed {
                         let username = username.clone();
-                        // Hide when logged out or viewing one's own profile.
                         view! {
                             <ActionForm action=unsubscribe>
                                 <input type="hidden" name="author_username" value=username />

@@ -83,6 +83,9 @@ pub async fn revoke_session(token_hash: String) -> WebResult<()> {
             .list_sessions(auth.user_id)
             .await
             .map_err(InternalError::storage)?;
+        // `revoke_session` keys only on the token hash, so confirm the target
+        // belongs to the caller before revoking — otherwise any authenticated
+        // user could revoke another account's session by its hash.
         if !session_records.iter().any(|s| s.token_hash == token_hash) {
             return Err(InternalError::not_found("session"));
         }

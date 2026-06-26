@@ -66,7 +66,6 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    // Create two published posts
     let _post1 = storage::perform_post_creation(
         state.posts.as_ref(),
         storage::PostCreation {
@@ -374,7 +373,6 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
         body.contains("updated_before="),
         "next link lacks cursor: {body}"
     );
-    // Only one entry on this page.
     assert_eq!(
         body.matches("<entry").count(),
         1,
@@ -603,7 +601,6 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
         "response should have Location header: {loc:?}"
     );
 
-    // Now GET that location.
     let app2 = make_app(state, &base).await;
     let loc_path = loc.unwrap();
     let get_response = app2
@@ -693,7 +690,6 @@ async fn update_replaces_post_body(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let (user_id, token) = seed_alice(&state).await;
 
-    // Create an initial post
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
         storage::PostCreation {
@@ -807,7 +803,6 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let (user_id, token) = seed_alice(&state).await;
 
-    // Create a post with a tag
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
         storage::PostCreation {
@@ -825,7 +820,6 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    // Tag it
     state
         .posts
         .tag_post(post.post_id, "original-tag")

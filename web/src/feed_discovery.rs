@@ -8,7 +8,6 @@ use leptos_meta::Link;
 #[component]
 #[allow(clippy::needless_pass_by_value)]
 pub fn FeedDiscovery(surface: FeedSurface) -> impl IntoView {
-    // Build a human-readable label for the feed based on the surface.
     let label = surface_label(&surface);
 
     view! {

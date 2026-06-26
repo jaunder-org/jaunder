@@ -249,6 +249,10 @@ impl AtomicOps for SqliteAtomicOps {
         let token_hash =
             crate::auth::hash_token(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
 
+        // Hash the new password before opening the transaction: argon2 is
+        // deliberately slow, so doing it outside the write transaction avoids
+        // holding the SQLite write lock for the duration of the hash
+        // (ADR-0022 / #60).
         let password_hash = crate::helpers::hash_password(new_password.clone())
             .await
             .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
@@ -256,6 +260,10 @@ impl AtomicOps for SqliteAtomicOps {
         let mut tx = self.pool.begin().await?;
         let now = Utc::now();
 
+        // Claim the token in one atomic UPDATE: it matches only when the token
+        // exists, is unused, and is unexpired, so concurrent confirmations cannot
+        // both win (ADR-0021). On a miss we re-read to classify the failure into a
+        // precise NotFound / AlreadyUsed / Expired error.
         let claimed = sqlx::query_as::<_, (i64,)>(
             "UPDATE password_resets SET used_at = $1
              WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3

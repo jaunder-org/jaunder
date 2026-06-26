@@ -20,6 +20,10 @@ pub(crate) async fn export_database(
     mode: BackupMode,
 ) -> Result<BackupManifest, BackupError> {
     let mut connection = pool.acquire().await?;
+    // Snapshot the whole database at one instant: REPEATABLE READ gives every
+    // table read below the same MVCC snapshot, so a concurrent writer cannot make
+    // the multi-table export internally inconsistent. (SQLite achieves this with
+    // BEGIN IMMEDIATE.)
     sqlx::query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .execute(&mut *connection)
         .await?;
@@ -152,6 +156,9 @@ fn insert_sql(table: &str, columns: &[ColumnInfo]) -> String {
         .map(|(index, column)| format!("CAST(${} AS {})", index + 1, restore_type(column)))
         .collect::<Vec<_>>()
         .join(", ");
+    // `users.user_id` is GENERATED ALWAYS AS IDENTITY, so OVERRIDING SYSTEM VALUE
+    // is required to restore the original ids. The other tables use serial-style
+    // defaults that accept explicit ids without an override.
     if table == "users" {
         format!(
             "INSERT INTO {} ({column_list}) OVERRIDING SYSTEM VALUE VALUES ({placeholders})",
@@ -174,6 +181,11 @@ fn restore_type(column: &ColumnInfo) -> &'static str {
     }
 }
 
+/// Advance each table's identity/serial sequence past the largest id just
+/// imported. Restore inserts explicit ids, which does not move the sequence, so
+/// without this the next INSERT would reuse an existing id and hit a unique
+/// violation. The third `setval` arg (`COUNT(*) > 0`) leaves the sequence
+/// "uncalled" for an empty table, so the first inserted row still gets id 1.
 async fn repair_sequences(connection: &mut PgConnection) -> Result<(), BackupError> {
     for (table, column) in [
         ("users", "user_id"),

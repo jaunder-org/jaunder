@@ -242,7 +242,7 @@ nix build .#checks.x86_64-linux.postgres-integration
 - Use Rust's type system to make invalid states impossible with infallible types.
 - At boundaries (`#[server]` functions, DB calls), parse data into infallible types, reject invalid data, and handle `Result`/`Option` conversion explicitly.
 - Keep data transformations pure where possible so they are easy to test and reason about.
-- Comment for intent, not mechanics. A comment should state **what the code intends to achieve** (so a reviewer can judge whether it is fit for purpose) and, where the chosen path is non-obvious, **why it is done that way** (the reason for the non-obvious route). Do not narrate what the code mechanically does — that is readable from the code itself. For example:
+- Comment for intent, not mechanics. A comment should state **what the code intends to achieve** (so a reviewer can judge whether it is fit for purpose) and, where the code takes a path that is not, at first glance, the obvious one, **why it is done that way**. A why-comment's job is to return surprising-looking code to a state of being obviously correct — the reader stops, understands why the non-obvious path was necessary, and sees that it is right. Do not narrate what the code mechanically does — that is readable from the code itself. For example:
 
   ```rust
   // ❌ mechanical — restates the code

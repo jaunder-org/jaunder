@@ -107,7 +107,6 @@ async fn reupload_identical_returns_200(#[case] backend: Backend) {
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage).await;
 
-    // First upload
     let _resp1 = app
         .clone()
         .oneshot(
@@ -246,7 +245,6 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
         .unwrap()
         .to_string();
 
-    // First delete
     let del_resp = app
         .clone()
         .oneshot(

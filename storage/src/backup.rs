@@ -1,3 +1,8 @@
+//! Database + media backup: exports each table to per-table NDJSON and mirrors
+//! the media tree, as either a directory or a gzipped tar archive; restore
+//! reverses it. Media is content-hash deduplicated against the previous backup
+//! via hard links, so a series of backups doesn't re-store unchanged blobs.
+
 use std::{
     fs::{self, File},
     io::{BufRead, BufReader, BufWriter, Write},
@@ -13,6 +18,9 @@ use thiserror::Error;
 use crate::{resolved_postgres_options, DbConnectOptions};
 pub use common::backup::BackupMode;
 
+// Ordered so a restore can insert tables in array order without tripping a
+// foreign key: a referenced table (`users`, `posts`, `tags`) always precedes the
+// tables that point at it (`sessions`, `post_revisions`, `post_tags`).
 pub(crate) const TABLES_IN_EXPORT_ORDER: &[&str] = &[
     "site_config",
     "users",
@@ -233,6 +241,9 @@ pub(crate) fn build_manifest(
 }
 
 pub(crate) fn order_by_clause(table: &str, quote_identifier: fn(&str) -> String) -> String {
+    // Sort each table by its real primary/unique key (falling back to `rowid`)
+    // so the exported NDJSON is row-stable: re-exporting unchanged data yields
+    // byte-identical files, keeping successive backups diffable.
     let columns = match table {
         "site_config" => &["key"][..],
         "users" => &["user_id"],
@@ -509,6 +520,11 @@ fn copy_or_link_media_file(
         fs::create_dir_all(parent)?;
     }
 
+    // Deduplicate against the previous backup: when this file is byte-identical
+    // to its counterpart there, hard-link to that copy instead of writing a new
+    // one, so a chain of backups doesn't store N copies of an unchanged blob.
+    // Fall through to a real copy if the content differs or the link can't be
+    // made (e.g. the previous backup is on a different filesystem).
     if let Some(previous_file) = previous_backup
         .map(|backup| backup.join("media").join(relative_path))
         .filter(|path| path.is_file())
@@ -548,6 +564,10 @@ fn previous_directory_backup(destination_path: &Path) -> Result<Option<PathBuf>,
         return Ok(None);
     }
 
+    // The previous backup is the newest sibling directory, used only as a
+    // hard-link source for media dedup. Both marker files are required so a
+    // half-written directory is never linked against; date-stamped names sort
+    // lexicographically, so the last after sorting is the most recent.
     let mut candidates = Vec::new();
     for entry in fs::read_dir(parent)? {
         let entry = entry?;

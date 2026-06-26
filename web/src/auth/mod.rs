@@ -182,7 +182,6 @@ pub async fn login(username: String, password: String, label: Option<String>) ->
         let derived_label = if let Some(l) = label.and_then(common::text::non_empty_owned) {
             l
         } else {
-            // Extract User-Agent from request headers and truncate to 200 chars
             let ua = leptos_axum::extract::<axum::http::HeaderMap>()
                 .await
                 .ok()

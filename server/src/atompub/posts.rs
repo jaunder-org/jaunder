@@ -25,7 +25,6 @@ const DEFAULT_PAGE_SIZE: u32 = 25;
 const MAX_PAGE_SIZE: u32 = 50;
 
 /// A strong `ETag` for a post, derived from its last-update time.
-/// Shared with the member update handler (later task).
 pub(crate) fn etag_for(post: &PostRecord) -> String {
     format!("\"{}\"", post.updated_at.timestamp_millis())
 }

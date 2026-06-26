@@ -55,7 +55,6 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
     let TestEnv { state, base } = backend.setup().await;
     let app = make_app(state.clone(), &base).await;
 
-    // Create a user
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     let user_id = state
@@ -64,7 +63,6 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
         .await
         .expect("create user");
 
-    // Create a published post
     let now = Utc::now();
     state
         .posts
@@ -82,7 +80,6 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
         .await
         .expect("create post");
 
-    // Request the feed
     let req = Request::builder()
         .method("GET")
         .uri("/~alice/feed.rss")
@@ -91,10 +88,8 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
 
     let resp = app.clone().oneshot(req).await.expect("request");
 
-    // Assert 200
     assert_eq!(resp.status(), StatusCode::OK, "should return 200");
 
-    // Assert correct content type
     let content_type = resp
         .headers()
         .get(header::CONTENT_TYPE)
@@ -105,13 +100,11 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
         "RSS content type"
     );
 
-    // Assert body is non-empty
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .expect("read body");
     assert!(!body.is_empty(), "response body should not be empty");
 
-    // Assert ETag and Last-Modified headers are present
     let req = Request::builder()
         .method("GET")
         .uri("/~alice/feed.rss")
@@ -127,7 +120,6 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
         "Last-Modified header should be present"
     );
 
-    // Assert feed was cached
     let cached = state
         .feed_cache
         .get("/~alice/feed.rss")
@@ -213,7 +205,6 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
     };
     state.feed_cache.upsert(row).await.expect("upsert cache");
 
-    // Request the feed
     let req = Request::builder()
         .method("GET")
         .uri("/~bob/feed.rss")
@@ -222,7 +213,6 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
 
     let resp = app.clone().oneshot(req).await.expect("request");
 
-    // Assert 200
     assert_eq!(resp.status(), StatusCode::OK, "should return 200");
 
     // Assert body is the stored body (not regenerated)
@@ -242,7 +232,6 @@ async fn handler_if_none_match_returns_304(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let app = make_app(state.clone(), &base).await;
 
-    // Pre-populate the cache
     let etag = "test-etag-123";
     let row = storage::FeedCacheRow {
         feed_url: "/~charlie/feed.rss".to_string(),
@@ -254,7 +243,6 @@ async fn handler_if_none_match_returns_304(#[case] backend: Backend) {
     };
     state.feed_cache.upsert(row).await.expect("upsert cache");
 
-    // Request with If-None-Match header
     let req = Request::builder()
         .method("GET")
         .uri("/~charlie/feed.rss")
@@ -264,7 +252,6 @@ async fn handler_if_none_match_returns_304(#[case] backend: Backend) {
 
     let resp = app.oneshot(req).await.expect("request");
 
-    // Assert 304
     assert_eq!(
         resp.status(),
         StatusCode::NOT_MODIFIED,
@@ -278,7 +265,6 @@ async fn handler_if_modified_since_returns_304_when_unchanged(#[case] backend: B
     let TestEnv { state, base } = backend.setup().await;
     let app = make_app(state.clone(), &base).await;
 
-    // Pre-populate the cache with a known update time
     // Round to seconds to ensure RFC2822 conversion is lossless
     let update_time = Utc::now()
         .with_nanosecond(0)
@@ -303,7 +289,6 @@ async fn handler_if_modified_since_returns_304_when_unchanged(#[case] backend: B
 
     let resp = app.oneshot(req).await.expect("request");
 
-    // Assert 304
     assert_eq!(
         resp.status(),
         StatusCode::NOT_MODIFIED,
@@ -348,7 +333,6 @@ async fn handler_rejects_invalid_request_with_404(
 async fn handler_returns_correct_content_type_per_format(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
 
-    // Create a user with one post
     let username: Username = "eve".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     let user_id = state

@@ -32,6 +32,10 @@ impl PostDialect for Postgres {
         let mut tx = pool.begin().await?;
         let now = Utc::now();
 
+        // FOR UPDATE locks the row for the read-then-write: it stops a concurrent
+        // edit from slipping between this ownership/liveness check and the UPDATE
+        // below (ADR-0021 / #52). SQLite needs no equivalent — its transaction
+        // already serializes writers.
         let existing = sqlx::query_as::<_, (i64, Option<DateTime<Utc>>)>(
             "SELECT user_id, deleted_at FROM posts WHERE post_id = $1 FOR UPDATE",
         )
