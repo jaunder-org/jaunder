@@ -36,12 +36,12 @@
 
 Behavior-preserving refactor: cycle is **green baseline → refactor → still green**, plus one new test that asserts the previously-unasserted wrong-owner `Unauthorized` boundary (and covers that branch).
 
-- [ ] **Step 1: Green baseline.** Confirm the existing update guards pass before changing anything.
+- [x] **Step 1: Green baseline.** Confirm the existing update guards pass before changing anything.
 
 Run: `cargo nextest run -E 'test(post_update_writes_revision_and_updates_record) + test(post_update_not_found_returns_error) + test(update_soft_deleted_post)'`
 Expected: all PASS (sqlite cases; postgres cases require `JAUNDER_PG_TEST_URL`).
 
-- [ ] **Step 2: Replace the function body.** Edit `storage/src/sqlite/posts.rs` so `update_post` reads exactly as below. The statements/binds are identical to the original; only the transaction control changes (deferred `tx` → raw connection + `BEGIN IMMEDIATE` + explicit `COMMIT`/`ROLLBACK`, body in an `async {}.await` block). Note `replace_post_audiences::<Sqlite>(&mut *conn, …)`.
+- [x] **Step 2: Replace the function body.** Edit `storage/src/sqlite/posts.rs` so `update_post` reads exactly as below. The statements/binds are identical to the original; only the transaction control changes (deferred `tx` → raw connection + `BEGIN IMMEDIATE` + explicit `COMMIT`/`ROLLBACK`, body in an `async {}.await` block). Note `replace_post_audiences::<Sqlite>(&mut *conn, …)`.
 
 ```rust
     async fn update_post(
@@ -135,7 +135,7 @@ Expected: all PASS (sqlite cases; postgres cases require `JAUNDER_PG_TEST_URL`).
     }
 ```
 
-- [ ] **Step 3: Add the wrong-owner auth test.** In `server/tests/storage/storage.rs`, immediately after `post_update_not_found_returns_error` (ends ~line 1903), insert the test below. It asserts the `Unauthorized` boundary that `update_soft_deleted_post` only exercises incidentally, and covers the `owner_id != editor_user_id` branch.
+- [x] **Step 3: Add the wrong-owner auth test.** In `server/tests/storage/storage.rs`, immediately after `post_update_not_found_returns_error` (ends ~line 1903), insert the test below. It asserts the `Unauthorized` boundary that `update_soft_deleted_post` only exercises incidentally, and covers the `owner_id != editor_user_id` branch.
 
 ```rust
 #[apply(backends)]
@@ -195,22 +195,22 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
 
 If `UpdatePostError` is not already imported in the test module, add it to the `use storage::{…}` import group (alongside `RegisterWithInviteError` etc.).
 
-- [ ] **Step 4: Run the updated + existing tests.** They must pass; the new test proves the explicit `ROLLBACK` leaves no open transaction on the auth-fail path, and the success/NotFound tests prove `COMMIT`/`ROLLBACK` work.
+- [x] **Step 4: Run the updated + existing tests.** They must pass; the new test proves the explicit `ROLLBACK` leaves no open transaction on the auth-fail path, and the success/NotFound tests prove `COMMIT`/`ROLLBACK` work.
 
 Run: `cargo nextest run -E 'test(post_update) + test(update_soft_deleted_post)'`
 Expected: all `post_update_*` (incl. the new `post_update_by_non_owner_returns_unauthorized`) and `update_soft_deleted_post` PASS.
 
-- [ ] **Step 5: Static gate.**
+- [x] **Step 5: Static gate.**
 
 Run: `cargo xtask check --no-test`
 Expected: exit 0 (clippy + fmt clean).
 
-- [ ] **Step 6: Coverage gate + accept CRAP baseline.** The manual-transaction restructure adds branches, so `Sqlite::update_post`'s CRAP rises (complexity-only). Clear it the same way as #51: set the baseline entry in `crap-manifest.json` to the computed value to remove the regression, then let `cargo xtask check` regenerate/heal the full manifest reproducibly from Nix coverage.
+- [x] **Step 6: Coverage gate + accept CRAP baseline.** The manual-transaction restructure adds branches, so `Sqlite::update_post`'s CRAP rises (complexity-only). Clear it the same way as #51: set the baseline entry in `crap-manifest.json` to the computed value to remove the regression, then let `cargo xtask check` regenerate/heal the full manifest reproducibly from Nix coverage.
 
 Run (verify): `cargo xtask validate --no-e2e`
 Expected: exit 0. If it reports a CRAP regression on `Sqlite::update_post`, read the new value (`jq '.coverage.crap.regressions' .xtask/last-result.json`), set that function's `crap`/`cyclomatic` baseline in `crap-manifest.json` to it, run `cargo xtask check` (heals the manifest), then re-run `cargo xtask validate --no-e2e` to confirm clean. If a `new-uncovered` line appears, add a focused dual-backend test for that arm rather than baseline it.
 
-- [ ] **Step 7: Commit** (hold for user approval at the review gate).
+- [x] **Step 7: Commit** (hold for user approval at the review gate).
 
 ```bash
 git add storage/src/sqlite/posts.rs server/tests/storage/storage.rs crap-manifest.json
@@ -228,7 +228,7 @@ untouched."
 
 ### Task 2: Ship gate
 
-- [ ] **Step 1: Full pre-PR gate.**
+- [x] **Step 1: Full pre-PR gate.**
 
 Run: `cargo xtask validate --no-e2e` (full `cargo xtask validate` with e2e runs at `jaunder-ship`).
 Expected: exit 0 (static + clippy + coverage clean).
