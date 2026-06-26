@@ -39,12 +39,12 @@
 
 This is a behavior-preserving refactor of well-tested code, so the cycle is **green baseline → refactor → still green** (the existing tests are the spec). Do not add a new in-file test (dialect-file coverage rule); do not weaken the existing tests.
 
-- [ ] **Step 1: Establish the green baseline.** Confirm the behavioral guards pass against the current code before changing anything.
+- [x] **Step 1: Establish the green baseline.** Confirm the behavioral guards pass against the current code before changing anything.
 
 Run (bare, via context-mode): `cargo nextest run -p server --test main create_user_with_invite`
 Expected: the five `create_user_with_invite_*` tests PASS. (If `-p server --test main` is not the harness target, fall back to `cargo nextest run -E 'test(create_user_with_invite)'`.)
 
-- [ ] **Step 2: Replace the function body.** Edit `storage/src/sqlite/mod.rs` so `create_user_with_invite` reads exactly as below. The statements and binds are identical to the original; only the transaction control changes (deferred `tx` → raw connection + `BEGIN IMMEDIATE` + explicit `COMMIT`/`ROLLBACK`, with the body in an `async {}.await` block so every exit path settles the transaction).
+- [x] **Step 2: Replace the function body.** Edit `storage/src/sqlite/mod.rs` so `create_user_with_invite` reads exactly as below. The statements and binds are identical to the original; only the transaction control changes (deferred `tx` → raw connection + `BEGIN IMMEDIATE` + explicit `COMMIT`/`ROLLBACK`, with the body in an `async {}.await` block so every exit path settles the transaction).
 
 ```rust
     async fn create_user_with_invite(
@@ -135,22 +135,22 @@ Expected: the five `create_user_with_invite_*` tests PASS. (If `-p server --test
     }
 ```
 
-- [ ] **Step 3: Confirm the guards still pass.** Re-run the same tests; they must pass unchanged. The `..._duplicate_username_returns_username_taken` test (invite left unused) and `..._second_call_returns_already_used`/`..._expired_...`/`..._unknown_code_...` (no user created) prove the explicit `ROLLBACK` is correct; the happy-path test proves `COMMIT` works.
+- [x] **Step 3: Confirm the guards still pass.** Re-run the same tests; they must pass unchanged. The `..._duplicate_username_returns_username_taken` test (invite left unused) and `..._second_call_returns_already_used`/`..._expired_...`/`..._unknown_code_...` (no user created) prove the explicit `ROLLBACK` is correct; the happy-path test proves `COMMIT` works.
 
 Run: `cargo nextest run -p server --test main create_user_with_invite`
 Expected: all five `create_user_with_invite_*` tests PASS.
 
-- [ ] **Step 4: Confirm the in-crate hash-failure test still passes** (covers the `Internal` → `ROLLBACK` path).
+- [x] **Step 4: Confirm the in-crate hash-failure test still passes** (covers the `Internal` → `ROLLBACK` path).
 
 Run: `cargo nextest run -p storage create_user_with_invite_hash_failure_returns_internal_error`
 Expected: PASS.
 
-- [ ] **Step 5: Static gate.**
+- [x] **Step 5: Static gate.**
 
 Run: `cargo xtask check --no-test`
 Expected: exit 0 (clippy clean, fmt clean). Inspect detail via `jq '.steps' .xtask/last-result.json` if it goes red.
 
-- [ ] **Step 6: Commit** (hold for user approval at the review gate).
+- [x] **Step 6: Commit** (hold for user approval at the review gate).
 
 ```bash
 git add storage/src/sqlite/mod.rs
@@ -173,7 +173,7 @@ failure mode per ADR-0021. Behavior unchanged; validation still precedes hashing
 
 **Interfaces:** Documentation only; no code. House style (per `docs/adr/0021` and the #18 plan): `# NNNN. Title`, then `- Status:` / `- Date:` / `- Deciders:`, then `## Context` / `## Decision` / `## Consequences`.
 
-- [ ] **Step 1: Write ADR-0022.** Create `docs/adr/0022-validate-before-expensive-work.md` with exactly:
+- [x] **Step 1: Write ADR-0022.** Create `docs/adr/0022-validate-before-expensive-work.md` with exactly:
 
 ```markdown
 # 0022. Validate cheaply before expensive work when the gate is a high-entropy secret
@@ -236,7 +236,7 @@ dividing line is the **entropy of the thing being validated**:
 - Relates to ADR-0007 (auth mechanisms) and ADR-0018 (timing-equalized auth).
 ```
 
-- [ ] **Step 2: Amend ADR-0018.** In `docs/adr/0018-constant-time-authentication.md`, add an `Amended:` line immediately after the `* Date: 2026-06-13` line:
+- [x] **Step 2: Amend ADR-0018.** In `docs/adr/0018-constant-time-authentication.md`, add an `Amended:` line immediately after the `* Date: 2026-06-13` line:
 
 ```markdown
 * Amended: 2026-06-26 — added the scope boundary vs. ADR-0022 (see *Scope boundary* below); the original decision and durable invariant are unchanged.
@@ -257,7 +257,7 @@ preserves capability-issuance as a throttle). Do not apply this ADR's
 equalizing-dummy-hash rule to high-entropy-secret paths.
 ```
 
-- [ ] **Step 3: Add the ADR-0022 row to the README table.** In `docs/README.md`, after the `| [0020]... |` row (line 48), add:
+- [x] **Step 3: Add the ADR-0022 row to the README table.** In `docs/README.md`, after the `| [0020]... |` row (line 48), add:
 
 ```markdown
 | [0022](adr/0022-validate-before-expensive-work.md) | Validate Cheaply Before Expensive Work for High-Entropy Secrets | accepted |
@@ -265,12 +265,12 @@ equalizing-dummy-hash rule to high-entropy-secret paths.
 
 (No 0021 row — that belongs to `b802c4f`. The transient gap is expected and reconciled when that branch lands.)
 
-- [ ] **Step 4: Sanity-check the docs.** Confirm the three files are well-formed and internally consistent.
+- [x] **Step 4: Sanity-check the docs.** Confirm the three files are well-formed and internally consistent.
 
 Run: `rg -n 'ADR-0022|0022-validate-before-expensive-work|Scope boundary|Amended: 2026-06-26' docs/adr/0018-constant-time-authentication.md docs/adr/0022-validate-before-expensive-work.md docs/README.md`
 Expected: matches in all three files (README row, ADR-0022 title/body, ADR-0018 amendment + scope-boundary subsection).
 
-- [ ] **Step 5: Commit** (hold for user approval).
+- [x] **Step 5: Commit** (hold for user approval).
 
 ```bash
 git add docs/adr/0022-validate-before-expensive-work.md docs/adr/0018-constant-time-authentication.md docs/README.md
@@ -283,18 +283,18 @@ git commit -m "docs(adr): add ADR-0022 validate-before-expensive-work; cross-ref
 
 **Files:** none (verification + GitHub bookkeeping).
 
-- [ ] **Step 1: Run the full pre-PR gate.**
+- [x] **Step 1: Run the full pre-PR gate.**
 
 Run: `cargo xtask validate --no-e2e`
 Expected: exit 0 (static + clippy + coverage). Read `jq '.steps' .xtask/last-result.json` on failure. (The full `cargo xtask validate` with sqlite+postgres e2e runs at the ship gate.)
 
-- [ ] **Step 2: File the follow-up issue** via the `jaunder-issues` skill (assign to the **Robustness** project). Content:
+- [x] **Step 2: File the follow-up issue** via the `jaunder-issues` skill (assign to the **Robustness** project). Content:
 
   - **Title:** `storage: confirm_password_reset hashes the new password before validating the reset token (ADR-0022)`
   - **Body:** `confirm_password_reset` (`storage/src/sqlite/mod.rs:213` and `storage/src/postgres/mod.rs:139`) computes the Argon2 hash of the new password *before* validating the reset token, so a flood of bogus-token requests forces expensive hashing — a CPU-exhaustion amplifier. Per **ADR-0022**, a high-entropy secret (the reset token) must be validated *before* the expensive work. Unlike invite-gated registration, password-reset confirmation has **no capability gate**, so it is strictly more exposed (only request rate-limiting mitigates it). Remediation: validate/claim the token first (the `UPDATE … RETURNING` claim already exists), and hash the new password only on the success path. Preserve backend parity and the existing error variants (`NotFound`/`AlreadyUsed`/`Expired`). Reference: ADR-0022, ADR-0018 (scope boundary), issue #51.
   - **Labels:** `data-integrity` (match #51).
 
-- [ ] **Step 3:** Record the new issue number; it becomes a sibling of #52/#53 under the Robustness project and is handed back to `jaunder-develop`.
+- [x] **Step 3:** Record the new issue number; it becomes a sibling of #52/#53 under the Robustness project and is handed back to `jaunder-develop`.
 
 ---
 
