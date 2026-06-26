@@ -16,7 +16,7 @@ use super::{
 /// and into per-trait axum `Extension`s for the raw HTTP handlers. Consumers
 /// never receive the whole `AppState`: they take exactly the `Arc<dyn FooStorage>`
 /// handles they need. The bundle is purely a construction convenience; per
-/// [ADR-0016](../../docs/decisions/0016-dependency-injection-and-appstate.md) it
+/// [ADR-0016](../../docs/adr/0016-dependency-injection-and-appstate.md) it
 /// holds *only* storage and is never passed beyond the composition root.
 ///
 /// Services that are not storage — the mailer and the `WebSub` publisher — are

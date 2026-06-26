@@ -8,7 +8,7 @@
 //! `#[server]` functions without pulling a SMTP stack into the wasm build.
 //!
 //! The concrete senders here depend on `lettre` (async SMTP) and filesystem
-//! I/O, so they are server-only. Per [ADR-0016](../../../docs/decisions/0016-dependency-injection-and-appstate.md)
+//! I/O, so they are server-only. Per [ADR-0016](../../../docs/adr/0016-dependency-injection-and-appstate.md)
 //! they are constructed at the composition root and injected per-consumer
 //! rather than bundled into shared state:
 //!

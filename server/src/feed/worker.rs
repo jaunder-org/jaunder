@@ -19,7 +19,7 @@ const BACKOFFS_SECS: &[u64] = &[60, 300, 1800, 7200, 7200, 7200];
 /// the `WebSub` hub, declared explicitly as constructor parameters rather than
 /// reached through a shared bundle (see [ADR-0016]).
 ///
-/// [ADR-0016]: ../../../docs/decisions/0016-dependency-injection-and-appstate.md
+/// [ADR-0016]: ../../../docs/adr/0016-dependency-injection-and-appstate.md
 pub struct FeedWorker {
     site_config: Arc<dyn SiteConfigStorage>,
     posts: Arc<dyn PostStorage>,

@@ -108,13 +108,13 @@ The driver for all checks is `cargo xtask`. The host runs only the static checks
 - `cargo clippy --all-targets -- -D warnings` checks the whole workspace, including test, bench, and example targets, for lint errors.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
 - For e2e perf diagnostics, set `JAUNDER_E2E_WARMUP=1` before `playwright test` to warm each test page context before test instrumentation; tune with `JAUNDER_E2E_WARMUP_URL` and `JAUNDER_E2E_WARMUP_TIMEOUT_MS`.
-- In hydration-heavy e2e tests, use `hydrationHeavyTimeoutMs(testInfo, chromiumBudgetMs)` for whole-test budgets and `hydrationHeavyFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)` for first navigation waits (see [ADR-0012](docs/decisions/0012-environment-aware-timeouts.md)).
+- In hydration-heavy e2e tests, use `hydrationHeavyTimeoutMs(testInfo, chromiumBudgetMs)` for whole-test budgets and `hydrationHeavyFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)` for first navigation waits (see [ADR-0012](docs/adr/0012-environment-aware-timeouts.md)).
 
 ### Observability and Performance Analysis
 
-Jaunder uses OpenTelemetry for deep performance analysis (see [ADR-0011](docs/decisions/0011-unified-observability.md)).
+Jaunder uses OpenTelemetry for deep performance analysis (see [ADR-0011](docs/adr/0011-unified-observability.md)).
 
-- **No PII in telemetry**: span fields and the structured error boundary (`error.source`/`error.context`) must never carry user PII or secrets (emails, tokens, passwords, post bodies); use stable identifiers like `user_id`, `db.system`, and `error.kind` instead. See [ADR-0011](docs/decisions/0011-unified-observability.md).
+- **No PII in telemetry**: span fields and the structured error boundary (`error.source`/`error.context`) must never carry user PII or secrets (emails, tokens, passwords, post bodies); use stable identifiers like `user_id`, `db.system`, and `error.kind` instead. See [ADR-0011](docs/adr/0011-unified-observability.md).
 
 - **Trace Analysis**: Use `scripts/analyze-otel-traces` to process trace artifacts (JSONL) from VM runs or local tests.
   ```bash
@@ -253,7 +253,7 @@ nix build .#checks.x86_64-linux.postgres-integration
 - Use specialized storage error enums in `common::storage`, such as `UserAuthError` and `CreateUserError`, with `thiserror`.
 - Use `sqlx` unique violation checks (`is_unique_violation()`) to handle "already exists" errors gracefully.
 - Use the `AppState` struct from `common::storage` to bundle storage handles. In web server functions, retrieve it with `expect_context::<Arc<AppState>>()`.
-- **Dependency injection / composition-root invariant (see [ADR-0016](docs/decisions/0016-dependency-injection-and-appstate.md)):** No type may be both (a) a heterogeneous dependency holder and (b) passed beyond the composition root. Declare a component's dependencies as constructor parameters on the component that uses them — do not add a field to a shared bundle to make a dependency reachable. A storage `Backend` factory may mint storage handles, but only the composition root may hold it; it is never injected into a subsystem (that would be a service locator). Services (mailer, WebSub client, background workers) are constructed at the root and injected per-consumer; there is no "services bundle."
+- **Dependency injection / composition-root invariant (see [ADR-0016](docs/adr/0016-dependency-injection-and-appstate.md)):** No type may be both (a) a heterogeneous dependency holder and (b) passed beyond the composition root. Declare a component's dependencies as constructor parameters on the component that uses them — do not add a field to a shared bundle to make a dependency reachable. A storage `Backend` factory may mint storage handles, but only the composition root may hold it; it is never injected into a subsystem (that would be a service locator). Services (mailer, WebSub client, background workers) are constructed at the root and injected per-consumer; there is no "services bundle."
 - The web framework is Leptos with SSR via `cargo-leptos`.
 - Leptos components should only render data; business logic belongs in server functions or pure transformation functions.
 - API methods are automatically prefixed with `/api`.

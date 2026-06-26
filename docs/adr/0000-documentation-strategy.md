@@ -19,7 +19,7 @@ The Jaunder project's documentation has grown organically, leading to a mix of p
 
 We will adopt a four-tiered documentation strategy:
 
-1.  **Architecture Decision Records (ADRs)**: Located in `docs/decisions/`. These records capture the *reasoning* (the "Why") behind significant architectural and design choices. They follow the MADR template.
+1.  **Architecture Decision Records (ADRs)**: Located in `docs/adr/`. These records capture the *reasoning* (the "Why") behind significant architectural and design choices. They follow the MADR template.
 2.  **ARCHITECTURE.md**: A living document describing the internal technical structure (the "What" and "Where"). It provides a map of the codebase, crate responsibilities, and internal data flow, linking to ADRs for detailed rationale.
 3.  **DESIGN.md**: A living document describing the system's functional behavior and operational model (the "What" and "How"). It focuses on interfaces, user-facing logic, and protocol interactions.
 4.  **ROADMAP.md**: A living document describing the project's strategic vision and future milestones (the "When").

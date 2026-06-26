@@ -7,7 +7,7 @@
 //! (`server/tests/`) instead use the backend-parametric `helpers::test_state*`,
 //! which exercise `SQLite` **and** `PostgreSQL`.
 //!
-//! [ADR-0016]: ../../docs/decisions/0016-dependency-injection-and-appstate.md
+//! [ADR-0016]: ../../docs/adr/0016-dependency-injection-and-appstate.md
 
 use std::path::Path;
 use std::sync::Arc;
