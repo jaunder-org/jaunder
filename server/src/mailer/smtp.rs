@@ -45,6 +45,9 @@ impl LettreMailSender {
 
         let builder = match config.tls_mode {
             SmtpTlsMode::Plain => {
+                // `builder_dangerous` is lettre's explicit opt-in to an
+                // unencrypted connection; Plain mode carries no TLS and is
+                // intended only for a trusted local relay.
                 AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.host)
                     .port(config.port)
             }
