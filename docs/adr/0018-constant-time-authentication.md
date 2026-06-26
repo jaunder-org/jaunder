@@ -3,6 +3,7 @@
 * Status: accepted
 * Deciders: mdorman, Claude Opus
 * Date: 2026-06-13
+* Amended: 2026-06-26 — added the scope boundary vs. ADR-0022 (see *Scope boundary* below); the original decision and durable invariant are unchanged.
 
 ## Context and Problem Statement
 
@@ -27,6 +28,10 @@ On the absent-user path, perform an Argon2id verification against a fixed, valid
 ### Durable invariant
 
 **The absent-user authentication path MUST perform an equalizing Argon2 verification.** Do not remove it as a "fast path" optimization, and preserve it when the two backends' `authenticate` bodies are merged under analysis §1.1 (recorded on `jaunder-kq8w.3`).
+
+### Scope boundary
+
+This ADR governs validating an **enumerable identifier** (username/email), where response timing must be equalized so it cannot reveal account existence. Validating a **high-entropy secret** (invite code, password-reset token) is the opposite case and is governed by **ADR-0022**: there, a cheap rejection of an invalid secret *before* the Argon2 work is both safe (no useful timing oracle exists against a ~256-bit space) and preferred (it bounds DoS amplification and preserves capability-issuance as a throttle). Do not apply this ADR's equalizing-dummy-hash rule to high-entropy-secret paths.
 
 ### Alternatives considered
 
