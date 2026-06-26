@@ -65,7 +65,6 @@ pub async fn upload_handler(
     auth_user: AuthUser,
     mut multipart: Multipart,
 ) -> Result<Response, StatusCode> {
-    // Get the first multipart field.
     let Some(field) = multipart
         .next_field()
         .await
