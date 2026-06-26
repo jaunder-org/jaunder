@@ -275,7 +275,7 @@ already follow it.
 - Consumes: `crate::helpers::InviteRow`, `crate::helpers::invite_record_from_row` (already imported/used in the file); `UseInviteError::{NotFound, AlreadyUsed, Expired}`.
 - Produces: `use_invite` behavior is unchanged; it becomes a single-statement claim. Backend-agnostic — affects both SQLite and Postgres identically.
 
-- [ ] **Step 1: Locate the existing `use_invite` tests (the parity guard)**
+- [x] **Step 1: Locate the existing `use_invite` tests (the parity guard)** — found in `server/tests/storage/storage.rs`: valid, unknown→NotFound, expired→Expired, already-used→AlreadyUsed (double-use already covered; no new test needed).
 
 Run: `rg -n "use_invite|AlreadyUsed|UseInviteError::Expired" server/tests storage/src`
 Expected: find the tests covering success, already-used, expired, and not-found. Confirm a "used invite is rejected" and an "expired invite is rejected" case exist. If a double-use (concurrent or sequential) case is missing, add a sequential one in the same test module:
@@ -286,12 +286,12 @@ let err = state.invites.use_invite(&code, other_user_id).await.unwrap_err();
 assert!(matches!(err, storage::UseInviteError::AlreadyUsed));
 ```
 
-- [ ] **Step 2: Run the existing invite tests — establish the green baseline**
+- [x] **Step 2: Run the existing invite tests — establish the green baseline** — 4 passed.
 
 Run: `cargo test -p jaunder use_invite` (and the storage invite tests if present: `cargo test -p storage invite`)
 Expected: PASS on the current code (both backends, via the `backends` template).
 
-- [ ] **Step 3: Collapse `use_invite` to a single-statement claim**
+- [x] **Step 3: Collapse `use_invite` to a single-statement claim** — used `RETURNING` + `fetch_optional` into the existing `InviteRow` (the generic `DB::QueryResult` has no `rows_affected()`, so the `execute()`+count approach won't compile in a backend-agnostic file; `RETURNING` is the portable shape, matching `use_email_verification`).
 
 Replace the body of `use_invite` (`storage/src/invites.rs:101-140`) with:
 
@@ -341,22 +341,14 @@ Replace the body of `use_invite` (`storage/src/invites.rs:101-140`) with:
 
 Notes: mirrors `use_email_verification` (`storage/src/email.rs:130`). `now` is bound twice (`$1` for the SET, `$4` for the `expires_at >` predicate). Original `expires_at <= now` (expired) maps to the WHERE excluding equality, so an exactly-`now` expiry falls to the disambiguation branch and returns `Expired` — same semantics. The `InviteRow` import already exists; remove the no-longer-used local `tx`.
 
-- [ ] **Step 4: Run the invite tests — verify parity on both backends**
+- [x] **Step 4: Run the invite tests — verify parity on both backends** — 4 passed (SQLite); Postgres parity confirmed by the commit gate's PG test pass.
 
 Run: `cargo test -p jaunder use_invite` (and `cargo test -p storage invite` if applicable)
 Expected: PASS — same results as Step 2, on SQLite and Postgres.
 
-- [ ] **Step 5: Per-task gate**
+- [x] **Step 5: Per-task gate** — `cargo xtask check --no-test` PASSED; commit gate `cargo xtask validate --no-e2e` PASSED (PG tests + coverage clean — 0 structural).
 
-Run: `cargo xtask check --no-test`
-Expected: clippy + fmt clean (exit 0).
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add storage/src/invites.rs server/tests
-git commit -m "fix(storage): collapse use_invite to a single-statement claim (ADR-0021, #18)"
-```
+- [x] **Step 6: Commit** — see commit below.
 
 ---
 
