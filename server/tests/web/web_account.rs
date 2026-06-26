@@ -549,7 +549,6 @@ async fn update_profile_unauthorized_returns_error(#[case] backend: Backend) {
 async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    // Create user and session
     let username: Username = "empty".parse().unwrap();
     let user_id = state
         .users

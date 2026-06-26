@@ -428,7 +428,6 @@ async fn login_correct_password_sets_cookie_and_returns_token(#[case] backend: B
         .set("site.registration_policy", "open")
         .await
         .unwrap();
-    // Register user first.
     post_form(
         Arc::clone(&state),
         "/api/register",
@@ -508,7 +507,6 @@ async fn login_with_label_creates_session_with_label(#[case] backend: Backend) {
         .set("site.registration_policy", "open")
         .await
         .unwrap();
-    // Register.
     post_form(
         Arc::clone(&state),
         "/api/register",
@@ -518,7 +516,6 @@ async fn login_with_label_creates_session_with_label(#[case] backend: Backend) {
     )
     .await;
 
-    // Login with label.
     let (status, _, body) = post_form(
         Arc::clone(&state),
         "/api/login",
@@ -552,7 +549,6 @@ async fn login_with_empty_label_creates_session_without_label(#[case] backend: B
     )
     .await;
 
-    // Login with empty label.
     let (status, _, body) = post_form(
         Arc::clone(&state),
         "/api/login",
@@ -591,7 +587,6 @@ async fn login_truncates_long_user_agent(#[case] backend: Backend) {
     // Build a long User-Agent string (>200 chars)
     let long_ua = "a".repeat(250);
 
-    // Login with a long User-Agent header
     let (status, _, body) = post_form_with_ua(
         Arc::clone(&state),
         "/api/login",

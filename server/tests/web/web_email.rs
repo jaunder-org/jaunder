@@ -212,7 +212,6 @@ async fn request_email_verification_unauthorized_returns_error(#[case] backend: 
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    // No cookie provided
     let (status, _) = post_form(
         state,
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
@@ -232,7 +231,6 @@ async fn request_email_verification_invalid_email_returns_error(#[case] backend:
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    // Create user and session
     let username: Username = "alice".parse().unwrap();
     let user_id = state
         .users
