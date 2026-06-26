@@ -176,9 +176,7 @@ async fn cmd_init_skip_if_exists_succeeds_on_already_initialized() {
 async fn cmd_init_fails_on_invalid_path() {
     let base = TempDir::new().unwrap();
     let args = storage_args(&base).await;
-    // Create a file where the storage directory should be, so create_dir fails
-    // with something other than AlreadyExists (actually it might be AlreadyExists or NotADirectory).
-    // Actually, let's use a path in a non-existent directory.
+    // A storage path under a non-existent parent makes directory creation fail.
     let args = StorageArgs {
         storage_path: base.path().join("nonexistent").join("storage"),
         db: args.db,

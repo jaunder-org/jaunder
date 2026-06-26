@@ -28,7 +28,6 @@ use crate::helpers::{backends, Backend, TestEnv};
 async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    // Create a user
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     let user_id = state
@@ -37,7 +36,6 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
         .await
         .expect("create user");
 
-    // Create 2 published posts
     let now = Utc::now();
     let _post1_id = state
         .posts
@@ -71,7 +69,6 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
         .await
         .expect("create post 2");
 
-    // Regenerate feed
     let row = regenerate_feed(
         state.site_config.as_ref(),
         state.posts.as_ref(),
@@ -81,13 +78,11 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
     .await
     .expect("regenerate feed");
 
-    // Assert content type
     assert_eq!(
         row.content_type, "application/rss+xml; charset=utf-8",
         "RSS content type"
     );
 
-    // Assert cache was written
     let from_cache = state
         .feed_cache
         .get("/~alice/feed.rss")
@@ -119,7 +114,6 @@ async fn regenerate_writes_empty_feed_for_user_with_no_posts(#[case] backend: Ba
         .await
         .expect("create user");
 
-    // Regenerate feed
     let row = regenerate_feed(
         state.site_config.as_ref(),
         state.posts.as_ref(),
@@ -129,13 +123,11 @@ async fn regenerate_writes_empty_feed_for_user_with_no_posts(#[case] backend: Ba
     .await
     .expect("regenerate feed");
 
-    // Should have valid content type and non-empty body
     assert_eq!(
         row.content_type, "application/rss+xml; charset=utf-8",
         "empty feed has correct content type"
     );
     assert!(!row.body.is_empty(), "empty feed still has valid body");
-    // Verify it was cached
     let cached = state
         .feed_cache
         .get("/~bob/feed.rss")

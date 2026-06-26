@@ -79,7 +79,6 @@ async fn create_published_post_enqueues_expected_feeds(
 ) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    // Create a user
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     let user_id = state
@@ -88,7 +87,6 @@ async fn create_published_post_enqueues_expected_feeds(
         .await
         .expect("create user");
 
-    // Create session
     let token = state
         .sessions
         .create_session(user_id, "test session")
@@ -96,7 +94,6 @@ async fn create_published_post_enqueues_expected_feeds(
         .expect("create session");
     let cookie = create_session_cookie(token.as_str());
 
-    // Create published post with the given tags
     let body = json!({
         "body": "Test post",
         "format": "markdown",
@@ -115,7 +112,6 @@ async fn create_published_post_enqueues_expected_feeds(
 
     assert_eq!(status, StatusCode::OK);
 
-    // Claim pending feed events and count them
     let batch = state
         .feed_events
         .claim_pending_batch(100, chrono::Duration::seconds(86400))
@@ -134,7 +130,6 @@ async fn create_published_post_enqueues_expected_feeds(
 async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    // Create a user
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     let user_id = state
@@ -143,7 +138,6 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
         .await
         .expect("create user");
 
-    // Create session
     let token = state
         .sessions
         .create_session(user_id, "test session")
@@ -151,7 +145,6 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
         .expect("create session");
     let cookie = create_session_cookie(token.as_str());
 
-    // Create published post with initial tags {rust, web}
     let create_body = json!({
         "body": "Test post",
         "format": "markdown",
@@ -170,7 +163,6 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
 
     assert_eq!(status, StatusCode::OK);
 
-    // Extract post_id from response
     let create_json: serde_json::Value =
         serde_json::from_str(&create_response).expect("parse create response");
     let post_id = create_json
@@ -185,7 +177,6 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
         .await
         .expect("claim batch");
 
-    // Update post tags from {rust, web} to {rust, leptos}
     // Union should be {leptos, rust, web} = 3 tags
     let update_body = json!({
         "post_id": post_id,
@@ -206,7 +197,6 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
 
     assert_eq!(status, StatusCode::OK);
 
-    // Claim feed events from the update
     let update_batch = state
         .feed_events
         .claim_pending_batch(100, chrono::Duration::seconds(86400))
@@ -226,7 +216,6 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
 async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    // Create a user
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     let user_id = state
@@ -235,7 +224,6 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
         .await
         .expect("create user");
 
-    // Create session
     let token = state
         .sessions
         .create_session(user_id, "test session")
@@ -243,7 +231,6 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
         .expect("create session");
     let cookie = create_session_cookie(token.as_str());
 
-    // Create published post with 1 tag
     let create_body = json!({
         "body": "Test post",
         "format": "markdown",
@@ -262,7 +249,6 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
 
     assert_eq!(status, StatusCode::OK);
 
-    // Extract post_id from response
     let create_json: serde_json::Value =
         serde_json::from_str(&create_response).expect("parse create response");
     let post_id = create_json
@@ -277,7 +263,6 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
         .await
         .expect("claim batch");
 
-    // Unpublish the post
     let unpublish_body = format!("post_id={post_id}");
     let (status, _) = post_json(
         state.clone(),
@@ -289,7 +274,6 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
 
     assert_eq!(status, StatusCode::OK);
 
-    // Claim feed events from the unpublish
     let unpublish_batch = state
         .feed_events
         .claim_pending_batch(100, chrono::Duration::seconds(86400))
@@ -309,7 +293,6 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
 async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    // Create a user
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     let user_id = state
@@ -318,7 +301,6 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
         .await
         .expect("create user");
 
-    // Create session
     let token = state
         .sessions
         .create_session(user_id, "test session")
@@ -326,7 +308,6 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
         .expect("create session");
     let cookie = create_session_cookie(token.as_str());
 
-    // Create published post with 1 tag
     let create_body = json!({
         "body": "Test post",
         "format": "markdown",
@@ -345,7 +326,6 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK);
 
-    // Extract post_id from response
     let create_json: serde_json::Value =
         serde_json::from_str(&create_response).expect("parse create response");
     let post_id = create_json
@@ -360,7 +340,6 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
         .await
         .expect("claim batch");
 
-    // Delete the post
     let delete_body = format!("post_id={post_id}");
     let (status, _) = post_json(
         state.clone(),
@@ -372,7 +351,6 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK);
 
-    // Claim feed events from the delete
     let delete_batch = state
         .feed_events
         .claim_pending_batch(100, chrono::Duration::seconds(86400))
@@ -392,7 +370,6 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
 async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    // Create a user
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     let user_id = state
@@ -401,7 +378,6 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
         .await
         .expect("create user");
 
-    // Create session
     let token = state
         .sessions
         .create_session(user_id, "test session")
@@ -409,7 +385,6 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
         .expect("create session");
     let cookie = create_session_cookie(token.as_str());
 
-    // Create draft post (not published)
     let create_body = json!({
         "body": "Test draft",
         "format": "markdown",
@@ -428,7 +403,6 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK);
 
-    // Extract post_id from response
     let create_json: serde_json::Value =
         serde_json::from_str(&create_response).expect("parse create response");
     let post_id = create_json
@@ -443,7 +417,6 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
         .await
         .expect("claim batch");
 
-    // Delete the draft post
     let delete_body = format!("post_id={post_id}");
     let (status, _) = post_json(
         state.clone(),
@@ -455,7 +428,6 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK);
 
-    // Claim feed events from the delete
     let delete_batch = state
         .feed_events
         .claim_pending_batch(100, chrono::Duration::seconds(86400))
