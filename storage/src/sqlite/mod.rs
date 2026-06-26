@@ -154,60 +154,91 @@ impl AtomicOps for SqliteAtomicOps {
         is_operator: bool,
         invite_code: &str,
     ) -> Result<i64, RegisterWithInviteError> {
-        let mut tx = self.pool.begin().await?;
+        // ADR-0021: take the write lock up front with BEGIN IMMEDIATE rather than a
+        // deferred BEGIN, so the SELECT->INSERT step performs no shared->reserved lock
+        // upgrade (the SQLITE_BUSY-on-upgrade failure mode). sqlx's Transaction issues
+        // its own deferred BEGIN, so drive the transaction manually on a raw connection,
+        // mirroring sqlite/backup.rs.
+        //
+        // ADR-0022: the invite (a high-entropy secret) is validated *before* hashing, so
+        // a bogus code is rejected without paying the Argon2 cost. The hash therefore runs
+        // inside the immediate transaction on the success path only.
+        let mut conn = self.pool.acquire().await?;
+        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
 
-        let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
-            "SELECT used_at, expires_at FROM invites WHERE code = $1",
-        )
-        .bind(invite_code)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(RegisterWithInviteError::InviteNotFound)?;
+        let result: Result<i64, RegisterWithInviteError> = async {
+            // Read the invite's state first so the three failures stay distinct: no row ->
+            // InviteNotFound, used_at set -> InviteAlreadyUsed, past expires_at -> InviteExpired.
+            // These checks deliberately are NOT folded into the write (e.g. a single
+            // `UPDATE ... WHERE used_at IS NULL AND expires_at > now` claim): that would collapse
+            // all three into one indistinguishable "zero rows affected" outcome and lose the
+            // specific error the caller needs. Reporting them distinctly is what keeps this a
+            // read-then-write transaction (hence BEGIN IMMEDIATE above), not a single-statement
+            // claim.
+            let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
+                "SELECT used_at, expires_at FROM invites WHERE code = $1",
+            )
+            .bind(invite_code)
+            .fetch_optional(&mut *conn)
+            .await?
+            .ok_or(RegisterWithInviteError::InviteNotFound)?;
 
-        let (used_at, expires_at) = row;
-        if used_at.is_some() {
-            return Err(RegisterWithInviteError::InviteAlreadyUsed);
+            let (used_at, expires_at) = row;
+            if used_at.is_some() {
+                return Err(RegisterWithInviteError::InviteAlreadyUsed);
+            }
+
+            let now = Utc::now();
+            if expires_at <= now {
+                return Err(RegisterWithInviteError::InviteExpired);
+            }
+
+            let password_hash = crate::helpers::hash_password(password.clone())
+                .await
+                .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;
+
+            let insert = sqlx::query_scalar::<_, i64>(
+                "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
+                 VALUES ($1, $2, $3, $4, $5)
+                 RETURNING user_id",
+            )
+            .bind(username.as_str())
+            .bind(&password_hash)
+            .bind(display_name)
+            .bind(now)
+            .bind(is_operator)
+            .fetch_one(&mut *conn)
+            .await;
+
+            let user_id = match insert {
+                Ok(id) => id,
+                Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
+                    return Err(RegisterWithInviteError::UsernameTaken);
+                }
+                Err(error) => return Err(RegisterWithInviteError::Internal(error)),
+            };
+
+            sqlx::query("UPDATE invites SET used_at = $1, used_by = $2 WHERE code = $3")
+                .bind(now)
+                .bind(user_id)
+                .bind(invite_code)
+                .execute(&mut *conn)
+                .await?;
+
+            Ok(user_id)
         }
-
-        let now = Utc::now();
-        if expires_at <= now {
-            return Err(RegisterWithInviteError::InviteExpired);
-        }
-
-        let password_hash = crate::helpers::hash_password(password.clone())
-            .await
-            .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;
-
-        let result = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
-             VALUES ($1, $2, $3, $4, $5)
-             RETURNING user_id",
-        )
-        .bind(username.as_str())
-        .bind(&password_hash)
-        .bind(display_name)
-        .bind(now)
-        .bind(is_operator)
-        .fetch_one(&mut *tx)
         .await;
 
-        let user_id = match result {
-            Ok(id) => id,
-            Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
-                return Err(RegisterWithInviteError::UsernameTaken);
+        match result {
+            Ok(user_id) => {
+                sqlx::query("COMMIT").execute(&mut *conn).await?;
+                Ok(user_id)
             }
-            Err(error) => return Err(RegisterWithInviteError::Internal(error)),
-        };
-
-        sqlx::query("UPDATE invites SET used_at = $1, used_by = $2 WHERE code = $3")
-            .bind(now)
-            .bind(user_id)
-            .bind(invite_code)
-            .execute(&mut *tx)
-            .await?;
-
-        tx.commit().await?;
-        Ok(user_id)
+            Err(error) => {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                Err(error)
+            }
+        }
     }
 
     async fn confirm_password_reset(
@@ -307,6 +338,35 @@ mod tests {
         let username: common::username::Username = "alice".parse().unwrap();
         let password: common::password::Password =
             "force-hash-error-for-test-coverage".parse().unwrap();
+        let result = storage
+            .create_user_with_invite(&username, &password, None, false, "testcode")
+            .await;
+        assert!(matches!(result, Err(RegisterWithInviteError::Internal(_))));
+    }
+
+    #[tokio::test]
+    async fn create_user_with_invite_insert_error_returns_internal() {
+        let pool = sqlite_pool().await;
+        let now = chrono::Utc::now();
+        sqlx::query(
+            "INSERT INTO invites (code, created_at, expires_at) VALUES ('testcode', $1, $2)",
+        )
+        .bind(now)
+        .bind(now + chrono::Duration::hours(1))
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Break the users INSERT (but not the invite SELECT) so `fetch_one` returns a
+        // non-unique Database error, exercising the catch-all `Internal` arm and the
+        // BEGIN IMMEDIATE rollback path on an unexpected failure.
+        sqlx::query("ALTER TABLE users RENAME COLUMN username TO username_renamed")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let storage = SqliteAtomicOps::new(pool);
+        let username: common::username::Username = "alice".parse().unwrap();
+        let password: common::password::Password = "password123".parse().unwrap();
         let result = storage
             .create_user_with_invite(&username, &password, None, false, "testcode")
             .await;
