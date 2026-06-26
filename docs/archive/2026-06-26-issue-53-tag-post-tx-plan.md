@@ -35,12 +35,12 @@
 - Produces: unchanged trait method
   `async fn tag_post(pool: &Pool<Sqlite>, post_id: i64, tag_display: &str) -> Result<(), TaggingError>`.
 
-- [ ] **Step 1: Green baseline.** Confirm the existing tag guards pass (sqlite cases).
+- [x] **Step 1: Green baseline.** Confirm the existing tag guards pass (sqlite cases).
 
 Run: `cargo nextest run -E '(test(tag_post) | test(retag_same_post_with_same_tag_fails) | test(simple_tag_lifecycle)) & test(sqlite)'`
 Expected: PASS (sqlite cases).
 
-- [ ] **Step 2: Replace the function body.** Edit `storage/src/sqlite/posts.rs` so `tag_post` reads exactly as below (the `let tag: Tag = …` parse is unchanged; replace from `let mut tx = pool.begin().await?;` through the closing brace). Statements/binds identical; only transaction control changes.
+- [x] **Step 2: Replace the function body.** Edit `storage/src/sqlite/posts.rs` so `tag_post` reads exactly as below (the `let tag: Tag = …` parse is unchanged; replace from `let mut tx = pool.begin().await?;` through the closing brace). Statements/binds identical; only transaction control changes.
 
 ```rust
     async fn tag_post(
@@ -113,7 +113,7 @@ Expected: PASS (sqlite cases).
     }
 ```
 
-- [ ] **Step 3: Add the Internal-arm test.** In the in-file `#[cfg(test)] mod tests` of `storage/src/sqlite/posts.rs`, add this test (after the existing `*_with_closed_pool_returns_error` tests). It forces a non-unique DB error on the `post_tags` insert (the existence check and tag insert still succeed), covering the catch-all `Internal` arm and the `BEGIN IMMEDIATE` rollback path.
+- [x] **Step 3: Add the Internal-arm test.** In the in-file `#[cfg(test)] mod tests` of `storage/src/sqlite/posts.rs`, add this test (after the existing `*_with_closed_pool_returns_error` tests). It forces a non-unique DB error on the `post_tags` insert (the existence check and tag insert still succeed), covering the catch-all `Internal` arm and the `BEGIN IMMEDIATE` rollback path.
 
 ```rust
     #[tokio::test]
@@ -160,22 +160,22 @@ Expected: PASS (sqlite cases).
 
 If `TaggingError` is not in scope via `use super::*`, add `use crate::TaggingError;` to the test module.
 
-- [ ] **Step 4: Run the updated + existing tests (sqlite).**
+- [x] **Step 4: Run the updated + existing tests (sqlite).**
 
 Run: `cargo nextest run -E '(test(tag_post) | test(retag_same_post_with_same_tag_fails) | test(simple_tag_lifecycle)) & test(sqlite)'`
 Expected: all PASS, including `tag_post_insert_error_returns_internal`.
 
-- [ ] **Step 5: Static gate.**
+- [x] **Step 5: Static gate.**
 
 Run: `cargo xtask check --no-test`
 Expected: exit 0 (clippy + fmt clean).
 
-- [ ] **Step 6: Coverage gate + accept CRAP baseline.** The manual-transaction restructure adds branches, so `Sqlite::tag_post`'s CRAP rises (complexity-only). Clear it as in #51/#52: read the computed value (`jq '.coverage.crap.regressions' .xtask/last-result.json`), set that function's `crap`/`cyclomatic` baseline in `crap-manifest.json` to it, run `cargo xtask check` (heals the manifest reproducibly from Nix coverage), then re-run `cargo xtask validate --no-e2e` to confirm clean.
+- [x] **Step 6: Coverage gate + accept CRAP baseline.** The manual-transaction restructure adds branches, so `Sqlite::tag_post`'s CRAP rises (complexity-only). Clear it as in #51/#52: read the computed value (`jq '.coverage.crap.regressions' .xtask/last-result.json`), set that function's `crap`/`cyclomatic` baseline in `crap-manifest.json` to it, run `cargo xtask check` (heals the manifest reproducibly from Nix coverage), then re-run `cargo xtask validate --no-e2e` to confirm clean.
 
 Run (verify): `cargo xtask validate --no-e2e`
 Expected: exit 0 after the baseline is accepted. With the Internal-arm test added, expect **0 new-uncovered**; if a new-uncovered line still appears, add a focused test for it rather than baseline it.
 
-- [ ] **Step 7: Commit** (hold for user approval at the review gate).
+- [x] **Step 7: Commit** (hold for user approval at the review gate).
 
 ```bash
 git add storage/src/sqlite/posts.rs crap-manifest.json
@@ -192,7 +192,7 @@ complexity-only CRAP bump. Postgres untouched."
 
 ### Task 2: Ship gate
 
-- [ ] **Step 1: Full pre-PR gate.**
+- [x] **Step 1: Full pre-PR gate.**
 
 Run: `cargo xtask validate --no-e2e` (full `cargo xtask validate` with e2e runs at `jaunder-ship`).
 Expected: exit 0 (static + clippy + coverage clean).
