@@ -99,44 +99,46 @@ where
     }
 
     async fn use_invite(&self, code: &str, user_id: i64) -> Result<(), UseInviteError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| UseInviteError::NotFound)?;
+        let now = Utc::now();
 
+        // Atomically claim the invite in one statement: the UPDATE succeeds only
+        // when the invite exists, is unused, and has not expired. No prior read
+        // is needed, so two concurrent requests cannot both succeed and the
+        // SQLite read-then-write lock upgrade (ADR-0021) is avoided.
+        let claimed = sqlx::query_as::<_, crate::helpers::InviteRow>(
+            "UPDATE invites SET used_at = $1, used_by = $2 \
+             WHERE code = $3 AND used_at IS NULL AND expires_at > $4 \
+             RETURNING code, created_at, expires_at, used_at, used_by",
+        )
+        .bind(now)
+        .bind(user_id)
+        .bind(code)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| UseInviteError::NotFound)?;
+
+        if claimed.is_some() {
+            return Ok(());
+        }
+
+        // Zero rows affected — read the row to return the precise error.
         let row = sqlx::query_as::<_, crate::helpers::InviteRow>(
-            "SELECT code, created_at, expires_at, used_at, used_by
+            "SELECT code, created_at, expires_at, used_at, used_by \
              FROM invites WHERE code = $1",
         )
         .bind(code)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&self.pool)
         .await
         .map_err(|_| UseInviteError::NotFound)?
         .ok_or(UseInviteError::NotFound)?;
 
         let record = crate::helpers::invite_record_from_row(row);
-
         if record.used_at.is_some() {
             return Err(UseInviteError::AlreadyUsed);
         }
-
-        let now = Utc::now();
-        if record.expires_at <= now {
-            return Err(UseInviteError::Expired);
-        }
-
-        sqlx::query("UPDATE invites SET used_at = $1, used_by = $2 WHERE code = $3")
-            .bind(now)
-            .bind(user_id)
-            .bind(code)
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| UseInviteError::NotFound)?;
-
-        tx.commit().await.map_err(|_| UseInviteError::NotFound)?;
-
-        Ok(())
+        // Present and unused but the claim failed ⇒ expired.
+        Err(UseInviteError::Expired)
     }
 
     async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>> {
