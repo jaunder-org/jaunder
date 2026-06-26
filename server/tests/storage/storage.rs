@@ -1900,6 +1900,60 @@ async fn post_update_not_found_returns_error(#[case] backend: Backend) {
     );
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let owner = state
+        .users
+        .create_user(&username("post_owner"), &password("password"), None, false)
+        .await
+        .expect("owner creation failed");
+    let other = state
+        .users
+        .create_user(&username("other_user"), &password("password"), None, false)
+        .await
+        .expect("other creation failed");
+
+    let post_id = state
+        .posts
+        .create_post(&CreatePostInput {
+            user_id: owner,
+            title: Some("Owned".to_string()),
+            slug: "owned".parse().unwrap(),
+            body: "Content".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>Content</p>".to_string(),
+            published_at: None,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        })
+        .await
+        .expect("post creation failed");
+
+    let err = state
+        .posts
+        .update_post(
+            post_id,
+            other,
+            &UpdatePostInput {
+                title: Some("Hijacked".to_string()),
+                slug: "hijacked".parse().unwrap(),
+                body: "Nope".to_string(),
+                format: PostFormat::Markdown,
+                rendered_html: "<p>Nope</p>".to_string(),
+                publish: false,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+            },
+        )
+        .await
+        .expect_err("non-owner update must fail");
+
+    assert!(matches!(err, UpdatePostError::Unauthorized));
+}
+
 // Raw read of a post's `post_audiences` rows as `(target_kind name, audience_id)`,
 // ordered by kind name. Used by the audience-targeting persistence test.
 async fn post_audience_rows(

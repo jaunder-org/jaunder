@@ -28,70 +28,88 @@ impl PostDialect for Sqlite {
         editor_user_id: i64,
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError> {
-        let mut tx = pool.begin().await?;
+        // ADR-0021: take the write lock up front with BEGIN IMMEDIATE rather than a
+        // deferred BEGIN, so the SELECT->INSERT step performs no shared->reserved lock
+        // upgrade (the SQLITE_BUSY-on-upgrade failure mode). sqlx's Transaction issues
+        // its own deferred BEGIN, so drive the transaction manually on a raw connection,
+        // mirroring create_user_with_invite / sqlite/backup.rs.
+        let mut conn = pool.acquire().await?;
+        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
         let now = Utc::now();
 
-        let existing = sqlx::query_as::<_, (i64, Option<DateTime<Utc>>)>(
-            "SELECT user_id, deleted_at FROM posts WHERE post_id = $1",
-        )
-        .bind(post_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+        let result: Result<PostRow, UpdatePostError> = async {
+            let existing = sqlx::query_as::<_, (i64, Option<DateTime<Utc>>)>(
+                "SELECT user_id, deleted_at FROM posts WHERE post_id = $1",
+            )
+            .bind(post_id)
+            .fetch_optional(&mut *conn)
+            .await?;
 
-        match existing {
-            None => {
-                tx.rollback().await.ok();
-                return Err(UpdatePostError::NotFound);
+            match existing {
+                None => return Err(UpdatePostError::NotFound),
+                Some((owner_id, deleted_at))
+                    if owner_id != editor_user_id || deleted_at.is_some() =>
+                {
+                    return Err(UpdatePostError::Unauthorized);
+                }
+                Some(_) => {}
             }
-            Some((owner_id, deleted_at)) if owner_id != editor_user_id || deleted_at.is_some() => {
-                tx.rollback().await.ok();
-                return Err(UpdatePostError::Unauthorized);
-            }
-            Some(_) => {}
+
+            sqlx::query(
+                "INSERT INTO post_revisions (post_id, user_id, title, slug, body, format, rendered_html, edited_at)
+                 SELECT post_id, user_id, title, slug, body, format, rendered_html, $1
+                 FROM posts WHERE post_id = $2",
+            )
+            .bind(now)
+            .bind(post_id)
+            .execute(&mut *conn)
+            .await?;
+
+            let row = sqlx::query_as::<_, PostRow>(
+                "UPDATE posts
+                 SET title = $1,
+                     slug = CASE WHEN published_at IS NULL THEN $2 ELSE slug END,
+                     body = $3,
+                     format = $4,
+                     rendered_html = $5,
+                     published_at = CASE WHEN $6 THEN COALESCE(published_at, $7) ELSE NULL END,
+                     updated_at = $8
+                 WHERE post_id = $9
+                 RETURNING post_id, user_id,
+                           (SELECT username FROM users WHERE user_id = posts.user_id) AS username,
+                           title, slug, body, format, rendered_html,
+                           created_at, updated_at, published_at, deleted_at, summary,
+                           COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]') AS tags",
+            )
+            .bind(&input.title)
+            .bind(input.slug.as_str())
+            .bind(&input.body)
+            .bind(input.format.to_string())
+            .bind(&input.rendered_html)
+            .bind(input.publish)
+            .bind(now)
+            .bind(now)
+            .bind(post_id)
+            .fetch_one(&mut *conn)
+            .await?;
+
+            crate::posts::replace_post_audiences::<Sqlite>(&mut *conn, post_id, &input.audiences)
+                .await?;
+
+            Ok(row)
         }
+        .await;
 
-        sqlx::query(
-            "INSERT INTO post_revisions (post_id, user_id, title, slug, body, format, rendered_html, edited_at)
-             SELECT post_id, user_id, title, slug, body, format, rendered_html, $1
-             FROM posts WHERE post_id = $2",
-        )
-        .bind(now)
-        .bind(post_id)
-        .execute(&mut *tx)
-        .await?;
-
-        let row = sqlx::query_as::<_, PostRow>(
-            "UPDATE posts
-             SET title = $1,
-                 slug = CASE WHEN published_at IS NULL THEN $2 ELSE slug END,
-                 body = $3,
-                 format = $4,
-                 rendered_html = $5,
-                 published_at = CASE WHEN $6 THEN COALESCE(published_at, $7) ELSE NULL END,
-                 updated_at = $8
-             WHERE post_id = $9
-             RETURNING post_id, user_id,
-                       (SELECT username FROM users WHERE user_id = posts.user_id) AS username,
-                       title, slug, body, format, rendered_html,
-                       created_at, updated_at, published_at, deleted_at, summary,
-                       COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]') AS tags",
-        )
-        .bind(&input.title)
-        .bind(input.slug.as_str())
-        .bind(&input.body)
-        .bind(input.format.to_string())
-        .bind(&input.rendered_html)
-        .bind(input.publish)
-        .bind(now)
-        .bind(now)
-        .bind(post_id)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        crate::posts::replace_post_audiences::<Sqlite>(&mut tx, post_id, &input.audiences).await?;
-
-        tx.commit().await?;
-        post_record_from_row(row).map_err(UpdatePostError::Internal)
+        match result {
+            Ok(row) => {
+                sqlx::query("COMMIT").execute(&mut *conn).await?;
+                post_record_from_row(row).map_err(UpdatePostError::Internal)
+            }
+            Err(error) => {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                Err(error)
+            }
+        }
     }
 
     async fn tag_post(
