@@ -77,11 +77,13 @@ pub trait FeedEventStorage: Send + Sync {
 
 /// Backend-specific divergence for [`FeedEventStore`].
 ///
-/// [`claim_pending_batch`][FeedEventDialect::claim_pending_batch] diverges
-/// because `SQLite` requires an explicit two-phase transaction (SELECT ids, then
-/// UPDATE, then SELECT rows) while Postgres can express the whole claim
-/// atomically with `FOR UPDATE SKIP LOCKED` + `UPDATE … RETURNING` in a single
-/// CTE.
+/// [`claim_pending_batch`][FeedEventDialect::claim_pending_batch] diverges in SQL
+/// shape: both backends claim in a single `UPDATE … RETURNING` statement, but
+/// Postgres uses a `FOR UPDATE SKIP LOCKED` CTE for inter-worker skip-locking,
+/// while `SQLite` (which lacks `SKIP LOCKED`) drives the same write from an
+/// `id IN (SELECT … LIMIT …)` subquery. `SQLite` must avoid the earlier
+/// read-then-write transaction (SELECT ids → UPDATE → SELECT rows), which is
+/// `SQLITE_BUSY`-prone under concurrency; see ADR-0021.
 ///
 /// The bulk-id methods (`mark_regenerated`, `mark_pinged`, `mark_failed`,
 /// `mark_exhausted`) also diverge: `SQLite` does not support array binding so

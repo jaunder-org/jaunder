@@ -30,47 +30,27 @@ impl FeedEventDialect for Sqlite {
         lease_cutoff: DateTime<Utc>,
         limit_i: i64,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
-        let mut tx = pool.begin().await?;
-
-        let ids: Vec<i64> = sqlx::query_scalar(
-            "SELECT id FROM feed_events \
-             WHERE (status = 'pending' AND next_attempt_at <= $1) \
-                OR (status = 'claimed' AND claimed_at < $2) \
-             ORDER BY next_attempt_at ASC \
-             LIMIT $3",
+        // Single autocommit statement: SQLite takes the write lock immediately,
+        // so there is no deferred read-then-write lock upgrade (ADR-0021) and the
+        // 5s busy_timeout applies cleanly. Mirrors the Postgres CTE claim.
+        let rows = sqlx::query(
+            "UPDATE feed_events SET status = 'claimed', claimed_at = $1 \
+             WHERE id IN ( \
+                 SELECT id FROM feed_events \
+                 WHERE (status = 'pending' AND next_attempt_at <= $2) \
+                    OR (status = 'claimed' AND claimed_at < $3) \
+                 ORDER BY next_attempt_at ASC \
+                 LIMIT $4 \
+             ) \
+             RETURNING id, feed_url, status, attempts, last_error, next_attempt_at, claimed_at, \
+                       created_at, regenerated_at, pinged_at",
         )
+        .bind(now)
         .bind(now)
         .bind(lease_cutoff)
         .bind(limit_i)
-        .fetch_all(&mut *tx)
+        .fetch_all(pool)
         .await?;
-
-        if ids.is_empty() {
-            tx.commit().await?;
-            return Ok(vec![]);
-        }
-
-        let ph = placeholders(ids.len());
-
-        let update_sql =
-            format!("UPDATE feed_events SET status = 'claimed', claimed_at = ? WHERE id IN ({ph})");
-        let mut update_q = sqlx::query(&update_sql).bind(now);
-        for id in &ids {
-            update_q = update_q.bind(*id);
-        }
-        update_q.execute(&mut *tx).await?;
-
-        let select_sql = format!(
-            "SELECT id, feed_url, status, attempts, last_error, next_attempt_at, claimed_at, \
-                    created_at, regenerated_at, pinged_at \
-             FROM feed_events WHERE id IN ({ph})"
-        );
-        let mut select_q = sqlx::query(&select_sql);
-        for id in &ids {
-            select_q = select_q.bind(*id);
-        }
-        let rows = select_q.fetch_all(&mut *tx).await?;
-        tx.commit().await?;
 
         let records = rows
             .into_iter()

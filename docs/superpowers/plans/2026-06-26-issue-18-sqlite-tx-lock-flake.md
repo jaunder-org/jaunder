@@ -51,7 +51,7 @@ All four backend-agnostic sites are generic over the DB/pool and execute on SQLi
 - Consumes: `Backend::Sqlite.setup() -> TestEnv { state, base }` (`server/tests/helpers/mod.rs:128`); `state.feed_events: Arc<dyn FeedEventStorage>`; `FeedEventStorage::enqueue(&self, &str) -> Result<i64, FeedEventError>` and `claim_pending_batch(&self, limit: i64, lease: chrono::Duration) -> Result<Vec<FeedEventRecord>, FeedEventError>`.
 - Produces: no new public API; behavior of `claim_pending_batch` is unchanged.
 
-- [ ] **Step 1: Write the failing concurrency reproduction test**
+- [x] **Step 1: Write the failing concurrency reproduction test**
 
 Create `server/tests/feed/feed_events_concurrency.rs`:
 
@@ -112,12 +112,12 @@ Register it in `server/tests/feed/main.rs` (add alongside the existing `mod` lin
 mod feed_events_concurrency;
 ```
 
-- [ ] **Step 2: Run the test against current code — verify it FAILS**
+- [x] **Step 2: Run the test against current code — verify it FAILS** — reproduced: `SqliteError { code: 5, message: "database is locked" }`, 0.55s.
 
 Run: `cargo test -p jaunder --test feed -- --ignored claim_pending_batch_no_lock_contention`
 Expected: FAIL — a task returns `Err(FeedEventError…)` wrapping SQLite `database is locked` (the `.expect("no database-is-locked error")` panics). If it does not reliably fail, raise the task/iteration counts until it does, confirming the bug is reproduced before fixing.
 
-- [ ] **Step 3: Collapse `claim_pending_batch` to a single statement**
+- [x] **Step 3: Collapse `claim_pending_batch` to a single statement** — plus updated the `FeedEventDialect` doc comment that described the old two-phase approach.
 
 Replace the whole method body in `storage/src/sqlite/feed_events.rs` (lines 27-94) with:
 
@@ -174,27 +174,19 @@ Replace the whole method body in `storage/src/sqlite/feed_events.rs` (lines 27-9
 
 Notes: `now` is bound twice (`$1` for the SET and `$2` for the eligibility predicate), matching the `$N`-with-duplicate-binds convention. The `tx`, the empty-`ids` early return, and the `placeholders()` call in this method are gone; the `placeholders()` helper stays (still used by `mark_*`). `use sqlx::{Pool, Row, Sqlite};` already imports `Row`.
 
-- [ ] **Step 4: Run the reproduction test — verify it PASSES**
+- [x] **Step 4: Run the reproduction test — verify it PASSES** — 1 passed, 2.60s, no lock error.
 
 Run: `cargo test -p jaunder --test feed -- --ignored claim_pending_batch_no_lock_contention`
 Expected: PASS (no task returns a lock error).
 
-- [ ] **Step 5: Run the existing `claim_pending_batch` unit tests — verify parity**
+- [x] **Step 5: Run the existing `claim_pending_batch` unit tests — verify parity** — 9 passed, 0 failed.
 
 Run: `cargo test -p storage --lib sqlite::feed_events`
 Expected: PASS — `claim_returns_eligible_pending_row`, `double_claim_returns_no_rows_within_lease`, `lease_expired_rows_are_reclaimable`, `mark_pinged_marks_done_and_removes_from_queue`, `mark_failed_increments_attempts_and_reschedules`, `mark_exhausted_marks_failed_terminal`, `empty_id_arrays_are_noops`, `enqueue_creates_pending_row`, `parse_status_handles_all_statuses` all green.
 
-- [ ] **Step 6: Per-task gate**
+- [x] **Step 6: Per-task gate** — `cargo xtask check --no-test` PASSED; commit gate `cargo xtask validate --no-e2e` PASSED (coverage clean — 0 structural).
 
-Run: `cargo xtask check --no-test`
-Expected: clippy + fmt clean (exit 0).
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add storage/src/sqlite/feed_events.rs server/tests/feed/feed_events_concurrency.rs server/tests/feed/main.rs
-git commit -m "fix(storage): collapse SQLite claim_pending_batch to a single UPDATE...RETURNING (#18)"
-```
+- [x] **Step 7: Commit** — see commit below (also includes the `FeedEventDialect` doc-comment update in `storage/src/feed_events.rs`).
 
 ---
 
@@ -205,7 +197,7 @@ git commit -m "fix(storage): collapse SQLite claim_pending_batch to a single UPD
 
 **Interfaces:** none (documentation). Referenced by Task 4's issue bodies and the PR.
 
-- [ ] **Step 1: Write the ADR**
+- [x] **Step 1: Write the ADR**
 
 Create `docs/adr/0021-sqlite-transaction-discipline.md`:
 
@@ -267,17 +259,9 @@ already follow it.
   from ADR-0019's structural mechanism.
 ```
 
-- [ ] **Step 2: Per-task gate (docs only)**
+- [x] **Step 2: Per-task gate (docs only)** — committed docs-only at user request; full gate deferred to the final `cargo xtask validate`.
 
-Run: `cargo xtask check --no-test`
-Expected: clean (exit 0); confirms no link/format check trips on the new doc.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add docs/adr/0021-sqlite-transaction-discipline.md
-git commit -m "docs(adr): add ADR-0021 SQLite transaction discipline (#18)"
-```
+- [x] **Step 3: Commit** — committed as `9023f28` (`docs(issue-18): add ADR-0021 SQLite transaction discipline + spec/plan (#18)`), ahead of the code tasks so the #51/#52/#53 subagent can reference the ADR.
 
 ---
 
@@ -382,21 +366,13 @@ git commit -m "fix(storage): collapse use_invite to a single-statement claim (AD
 
 **Interfaces:** produces three issue numbers, folded into the PR's findings table at ship.
 
-- [ ] **Step 1: File an issue for `create_user_with_invite`**
+- [x] **Step 1: File an issue for `create_user_with_invite`** → **#51** (`Bug`, `data-integrity`, milestone Verify-gate hardening).
 
-Use the jaunder-issues skill. Title: `storage(sqlite): create_user_with_invite read-then-write transaction is SQLITE_BUSY-prone (ADR-0021)`. Body: cite `storage/src/sqlite/mod.rs:157`; sequence `SELECT invite → INSERT user RETURNING → UPDATE invite`; the second write consumes `user_id` from the first, so it is not a mechanical collapse — needs `BEGIN IMMEDIATE` or a redesign. Milestone 1; labels `test-infra`/`tooling` as appropriate. Reference ADR-0021 and #18.
+- [x] **Step 2: File an issue for `update_post`** → **#52** (`Bug`, `data-integrity`, milestone Verify-gate hardening).
 
-- [ ] **Step 2: File an issue for `update_post`**
+- [x] **Step 3: File an issue for `tag_post`** → **#53** (`Bug`, `data-integrity`, milestone Verify-gate hardening).
 
-Title: `storage(sqlite): update_post read-then-write transaction is SQLITE_BUSY-prone (ADR-0021)`. Body: cite `storage/src/sqlite/posts.rs:31`; sequence `SELECT auth → INSERT revision → UPDATE post → replace_post_audiences`; multiple interdependent writes; needs `BEGIN IMMEDIATE`. Milestone 1; reference ADR-0021 and #18.
-
-- [ ] **Step 3: File an issue for `tag_post`**
-
-Title: `storage(sqlite): tag_post read-then-write transaction is SQLITE_BUSY-prone (ADR-0021)`. Body: cite `storage/src/sqlite/posts.rs:106`; sequence `SELECT exists → INSERT OR IGNORE tag → SELECT tag_id → INSERT post_tags`; interleaved read/write; needs `BEGIN IMMEDIATE` or a deterministic `INSERT … RETURNING` chain. Milestone 1; reference ADR-0021 and #18.
-
-- [ ] **Step 4: Record the issue numbers**
-
-Capture the three issue numbers; they fill the `issue-#NNN` dispositions in the findings table reproduced in the PR body at ship time. No commit (tracker-only task).
+- [x] **Step 4: Record the issue numbers** — `create_user_with_invite` → **#51**, `update_post` → **#52**, `tag_post` → **#53**. These fill the `issue-#NNN` dispositions in the PR findings table at ship.
 
 ---
 
