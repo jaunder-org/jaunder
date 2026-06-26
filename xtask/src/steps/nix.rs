@@ -1,4 +1,6 @@
-use std::process::Command;
+use std::fs::File;
+use std::io::{self, Write};
+use std::process::{Command, Stdio};
 
 use crate::result::{CommandResult, Mode, StepResult};
 
@@ -67,31 +69,94 @@ pub fn e2e(result: &mut CommandResult) {
     result.push(build_check("nix-e2e", "e2e"));
 }
 
-/// `nix build --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.<system>.<check>`.
+/// A `Write` that fans every write out to two inner writers, **best-effort**: a
+/// write or flush error from either sink is swallowed and the whole chunk is
+/// always reported consumed. This is deliberate. `build_check` drives it with
+/// `io::copy` to drain a child's stderr pipe, and that drain MUST run to EOF even
+/// if the log file (or our own stderr) goes unwritable mid-build — otherwise the
+/// unread pipe fills and the child blocks forever in `wait()` (the exact
+/// disk-pressure case this capture exists to diagnose). Log capture is a
+/// diagnostic nicety, never a reason to hang the gate.
+struct MultiWriter<A: Write, B: Write>(A, B);
+
+impl<A: Write, B: Write> Write for MultiWriter<A, B> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let _ = self.0.write_all(buf);
+        let _ = self.1.write_all(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let _ = self.0.flush();
+        let _ = self.1.flush();
+        Ok(())
+    }
+}
+
+/// The failure `detail` for a Nix check, naming the installable, the exit status,
+/// and the captured build-log path. Pure so it can be unit-tested.
+fn failure_detail(installable: &str, status: &std::process::ExitStatus, log_path: &str) -> String {
+    format!("nix build {installable} exited with {status}; full build log: {log_path}")
+}
+
+/// `nix build -L --keep-failed --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.<system>.<check>`,
+/// fanning the `-L` build log to both the live terminal and
+/// `.xtask/diagnostics/<check>/build.log` (gitignored; uploaded by ci.yml's
+/// `validate-diagnostics` artifact). On failure the saved log path is named in the
+/// `StepResult` detail so the failure is diagnosable without a rebuild.
 /// --accept-flake-config honors the jaunder-org cachix substituter for the
 /// untrusted local user; --out-link makes the closure a GC root.
 fn build_check(step_name: &str, check: &str) -> StepResult {
     let _ = std::fs::create_dir_all(".xtask/gcroots");
     let out_link = format!(".xtask/gcroots/{check}");
     let installable = format!(".#checks.{SYSTEM}.{check}");
-    let status = Command::new("nix")
+
+    let log_dir = format!(".xtask/diagnostics/{check}");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = format!("{log_dir}/build.log");
+
+    let mut child = match Command::new("nix")
         .args([
             "build",
+            // -L streams every (transitive) derivation's build log to stderr, so
+            // the failing dependency's output is in the stream we capture below.
+            "-L",
             // Retain the failed build dir so a catastrophic in-sandbox failure
-            // (e.g. ENOSPC that prevented writing `$out`) still leaves
-            // first-hand data; `rescue_diagnostics` then copies it out.
+            // (e.g. ENOSPC that prevented writing `$out`) still leaves first-hand
+            // data; `rescue_diagnostics` then copies it out.
             "--keep-failed",
             "--accept-flake-config",
             "--out-link",
             &out_link,
             &installable,
         ])
-        .status();
-    match status {
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return StepResult::fail(step_name).detail(e.to_string()),
+    };
+
+    // Drain the piped stderr to both the live terminal and the log file. We must
+    // drain it regardless (an undrained full pipe would block the child); if the
+    // log file can't be opened we still copy to stderr alone.
+    if let Some(mut stderr_pipe) = child.stderr.take() {
+        match File::create(&log_path) {
+            Ok(file) => {
+                let mut sink = MultiWriter(file, io::stderr());
+                let _ = io::copy(&mut stderr_pipe, &mut sink);
+            }
+            Err(_) => {
+                let _ = io::copy(&mut stderr_pipe, &mut io::stderr());
+            }
+        }
+    }
+
+    match child.wait() {
         Ok(s) if s.success() => StepResult::ok(step_name),
         Ok(s) => {
             rescue_diagnostics(check);
-            StepResult::fail(step_name).detail(format!("nix build {installable} exited with {s}"))
+            StepResult::fail(step_name).detail(failure_detail(&installable, &s, &log_path))
         }
         Err(e) => StepResult::fail(step_name).detail(e.to_string()),
     }
@@ -153,5 +218,62 @@ mod tests {
         let d = sentinel_detail(&s);
         assert!(d.contains("test failure"));
         assert!(d.contains("web_posts::case_3"));
+    }
+
+    use super::{failure_detail, MultiWriter};
+
+    #[test]
+    fn multiwriter_fans_full_input_out_to_both_sinks() {
+        // Larger than io::copy's internal buffer (8 KiB) so the input spans
+        // multiple write() calls — proves we don't assume a single chunk.
+        let input = vec![b'x'; 200_000];
+        let mut a: Vec<u8> = Vec::new();
+        let mut b: Vec<u8> = Vec::new();
+        {
+            let mut sink = MultiWriter(&mut a, &mut b);
+            let mut reader: &[u8] = &input;
+            std::io::copy(&mut reader, &mut sink).unwrap();
+        }
+        assert_eq!(a, input);
+        assert_eq!(b, input);
+    }
+
+    #[test]
+    fn multiwriter_keeps_draining_when_a_sink_errors() {
+        // A sink that always errors must NOT abort the io::copy drain — otherwise a
+        // mid-build log-write failure (e.g. disk full) would leave the child's
+        // stderr pipe unread and hang `wait()`. The healthy sink still gets it all.
+        struct FailingSink;
+        impl std::io::Write for FailingSink {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("sink full"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::other("sink full"))
+            }
+        }
+        let input = vec![b'y'; 200_000];
+        let mut healthy: Vec<u8> = Vec::new();
+        {
+            let mut sink = MultiWriter(FailingSink, &mut healthy);
+            let mut reader: &[u8] = &input;
+            // Completes to EOF and does not error despite the failing sink.
+            std::io::copy(&mut reader, &mut sink).unwrap();
+        }
+        assert_eq!(healthy, input);
+    }
+
+    #[test]
+    fn failure_detail_names_installable_status_and_log_path() {
+        // `false` exits non-zero, giving a real failed ExitStatus to format.
+        let status = std::process::Command::new("false").status().unwrap();
+        let d = failure_detail(
+            ".#checks.x86_64-linux.e2e",
+            &status,
+            ".xtask/diagnostics/e2e/build.log",
+        );
+        assert!(d.contains(".#checks.x86_64-linux.e2e"));
+        assert!(d.contains("exited with"));
+        assert!(d.contains("full build log: .xtask/diagnostics/e2e/build.log"));
     }
 }
