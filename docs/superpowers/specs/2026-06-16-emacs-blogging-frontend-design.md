@@ -1,10 +1,23 @@
 # Emacs blogging front-end for Jaunder (AtomPub) — Epic Design
 
-* Status: draft (awaiting review)
-* Date: 2026-06-16
+* Status: reviewed (revised 2026-06-26; awaiting final spec review)
+* Date: 2026-06-16 (revised 2026-06-26)
 * Deciders: mdorman, Claude
-* Tracking beads: `jaunder-4yjr` (full scheduled-post management UI),
-  `jaunder-hww6` (broaden Emacs media upload beyond images)
+* Milestone: **Emacs blogging front-end** (#4) — units #70–#75, follow-ons #76–#83;
+  see "Issue decomposition & follow-ons". Planning tracked by #68.
+* Deferred-tail issues (already filed): **#15** (full scheduled-post management UI),
+  **#25** (broaden Emacs media upload beyond images)
+
+> **2026-06-26 review note.** This document was revised after a gap review that
+> verified the spec's assumptions against the live codebase. Key changes: auth uses
+> the app-password facility that **already exists**; org metadata is normalized to a
+> canonical body **server-side** (reversing the original "client-side only / no
+> server org parsing" decision); the go-live nudge is made restart-durable; local
+> divergence uses file mtime (best-effort); media links are **never** rewritten in
+> the local buffer; slug generation is made Unicode-robust and never-fail; and the
+> elisp test suite gets a real home in the verify gate. Each change is marked
+> **[2026-06-26]** at its section. A consolidated issue decomposition and a list of
+> follow-on issues are at the end.
 
 ## Goal
 
@@ -24,17 +37,20 @@ front-end needs. Two author workflows:
 
 ## Decomposition and build order
 
-The work is four units. The two server units gate the two Emacs units, so the
-build order is **A → B → (C, D)**. All four are specced here together because they
-share vocabulary (the `j:` namespace and the org keyword/property mapping); each
-section is self-contained enough to drive its own implementation plan.
+The work decomposes into the units below. The server units gate the Emacs units, so
+the build order is **A → B → (elisp infra → C, D)**, with the slug-robustness
+prerequisite landable independently. Each unit is self-contained enough to drive its
+own implementation plan; **C and D are each larger than one code review and fan out
+into several review-sized issues** (see "Issue decomposition").
 
 | Unit | Title | Surface |
 |------|-------|---------|
 | A | Scheduled publishing | storage + web UI + (small) AtomPub |
-| B | AtomPub format media types + Jaunder extension | common + server |
+| B | AtomPub format media types + Jaunder extension + **server-side org canonicalization** | common + server + storage |
+| Infra | **elisp package skeleton + ERT harness + flake/CI wiring** | elisp + flake + xtask |
 | C | Emacs authoring / publish workflow | elisp |
 | D | Emacs blog management / reconcile | elisp |
+| Slug | **Unicode-robust, never-fail slug generation** (product-wide; surfaced by C) | common + storage |
 
 ## Cross-cutting decisions
 
@@ -47,13 +63,34 @@ section is self-contained enough to drive its own implementation plan.
   `atom:category`, publish time → `atom:published`, draft → `app:draft`, and
   per-entry **format** → the standard `atom:content` `type` (a media type). Only
   the server-assigned **slug**, which has no standard home, needs a `j:` element.
-* **Metadata is mapped client-side.** The Emacs client reads org
-  keywords/properties and builds AtomPub elements; the server keeps receiving
-  clean AtomPub. No server-side org-header parsing is added. (`orgize` remains the
-  server's Org→HTML renderer only.)
+* **Metadata lives in structured fields; the server normalizes org bodies to a
+  canonical metadata-free form. [2026-06-26 — revised]** The original decision was
+  "metadata is mapped client-side only; no server-side org-header parsing." That was
+  already untrue: the server parses `#+TITLE:` today (`extract_org_title`,
+  `common/src/render.rs:149-194`). The revised decision: **both** ingestion paths
+  (web/mobile compose form and AtomPub entry) converge on one canonical stored body
+  that is **free of the header lines the server stores elsewhere**. The server
+  strips only the headers it recognizes and stores structurally (today `#+TITLE:`);
+  **unrecognized header lines remain in the body, verbatim**, and round-trip
+  faithfully. Clients **synthesize** their own header block on the way out from
+  clean Atom; the server never emits client-specific (`JAUNDER_*`) markup. See Unit
+  B "Server-side org canonicalization" and Unit C "Org vocabulary / atom:content".
+* **Local representation differs from the served form; the client maps between
+  them. [2026-06-26]** This applies to both the org header block (above) and to
+  **media links** (Unit C): the on-disk org file always carries locally-previewable
+  links and headers; the server always carries clean Atom + a canonical body with
+  resolvable media URLs. Neither side is allowed to corrupt the other.
 * **Record, do not infer.** Post state (draft/scheduled/published) and deletions
   are explicit actions/fields, never inferred from the absence of a value or file.
-* **No secondary index file.** Remote identity lives in the org file itself.
+* **No secondary index file.** Remote identity (and the local sync marker) lives in
+  the org file itself.
+* **Auth uses the existing app-password facility. [2026-06-26]** App passwords
+  already exist server-side — `create_app_password` (`web/src/sessions/mod.rs:56`),
+  `list_sessions`/`revoke_session`, and a browser management page
+  (`web/src/pages/sessions.rs`); they are labelled, non-expiring session tokens
+  accepted over HTTP Basic. v1 consumes a **manually-minted, manually-pasted** app
+  password (no new server work). Self-provisioning and a `WWW-Authenticate`
+  challenge are follow-ons.
 
 ---
 
@@ -98,17 +135,30 @@ Changes:
 1. **Unify public visibility.** Every public read must gate on
    `published_at IS NOT NULL AND published_at <= now`, not `IS NOT NULL` alone.
    Audit `storage/src/posts.rs` and fold the `<= now` condition into the queries
-   that lack it; the window functions already have it.
+   that lack it; the window functions already have it. **Ensure `published_at` is
+   indexed** — the window/catch-up queries below depend on it.
 2. **Author surfaces.** The author still sees drafts and additionally a
    **scheduled** surface (the `IS NULL` drafts query will not show scheduled
    posts). Minimal for v1: scheduled posts appear in the author's post list with a
    "scheduled for <time>" marker. (Full management UI — a scheduled list,
-   in-place reschedule, pull-back-to-draft — is deferred to `jaunder-4yjr`.)
-3. **Go-live.** Pure query-time visibility makes on-demand HTML pages flip
-   instantly. Cached feeds need a nudge: extend the existing scheduler tick to
-   enqueue a feed-regeneration `feed_event` when a scheduled post crosses `now`
-   (≈10s latency). Track activation by querying posts whose `published_at` falls
-   in `(last_tick, now]`.
+   in-place reschedule, pull-back-to-draft — is deferred to **#15**.)
+3. **Go-live (restart-durable). [2026-06-26 — revised]** Pure query-time visibility
+   makes on-demand HTML pages flip instantly; only **cached feeds** need a nudge.
+   The mechanism:
+   * **Steady state** — each scheduler tick enqueues a feed-regeneration event for
+     posts whose `published_at` lands in the in-memory window `(last_tick, now]`,
+     then advances `last_tick`. Cheap; bounded by an indexed range scan.
+   * **Startup catch-up** — `last_tick` is in-memory, so a restart that straddles a
+     scheduled go-live would otherwise drop that window (the post is live on its
+     permalink but silently never enters the cached feeds). To heal this, on
+     startup (`last_tick` unset) run **one feed-relative** pass: enqueue
+     regeneration for any feed with a live post newer than the feed's own
+     `generated_at`, then seed `last_tick = now` and switch to windowing. (Confirm
+     cached feeds store a `generated_at` to compare against; add one if not.)
+   * **Division of labor** — the tick handles *only* future-dated → live
+     transitions. **Immediate publishes, including backdated ones, enqueue their own
+     feed regeneration on the write path**, so the tick never reasons about
+     backdating.
 4. **Compose UI (minimal).** Add a datetime control to the publish form to set a
    future publish time; store UTC, display/accept the author's local time. A past
    value is allowed and means "immediately live with that timestamp" (backdating;
@@ -128,7 +178,7 @@ Changes:
 * Timezone: store UTC, UI in local time.
 * Backdating: allowed (immediately live).
 * Unschedule (clear `published_at` back to draft): rides the existing draft toggle
-  if cheap; otherwise deferred to `jaunder-4yjr`.
+  if cheap; otherwise deferred to **#15**.
 
 ### Edge cases / tests
 
@@ -137,23 +187,24 @@ Changes:
 * The author's own views show draft + scheduled + live distinctly.
 * Backdated create is live immediately with the supplied timestamp.
 * Feed reflects a go-live within one worker tick.
+* **A go-live that occurs while the worker is down is reflected in cached feeds
+  after the next startup catch-up** (simulate a restart straddling `published_at`).
 * Backend parity (SQLite + Postgres) for every changed query.
 
 ### Out of scope
 
-Full scheduled-post management UI (`jaunder-4yjr`).
+Full scheduled-post management UI (**#15**).
 
 ---
 
-## Unit B — AtomPub format media types + Jaunder extension
+## Unit B — AtomPub format media types + Jaunder extension + server-side org canonicalization
 
 ### Goal
 
 Allow a per-entry format choice (so a single blog can mix Org, Markdown, and HTML
 posts) using the **standard `atom:content` `type` attribute** carrying a media
-type, and expose the server-assigned slug via a small `j:` foreign-markup element
-(it has no standard home). Both are ignored or degrade gracefully for non-aware
-clients (e.g. MarsEdit).
+type; expose the server-assigned slug via a small `j:` foreign-markup element; and
+normalize every ingested org body to one canonical, metadata-free stored form.
 
 ### Current state
 
@@ -173,6 +224,12 @@ clients (e.g. MarsEdit).
 * The service document is built from a `ServiceDocument` struct rendered by
   `render_service_document` (`server/src/atompub/service.rs:17-63`,
   `common::atompub::service`).
+* **Org metadata today.** The web create/update path stores title/tags/summary as
+  *separate* fields; only the **title** is derived from the body, via a hand-rolled
+  line scanner `extract_org_title` (`common/src/render.rs:149-194`) that returns
+  `(title, remaining_body)` — but the caller **discards the stripped body**
+  (`render.rs:96`), so the `#+TITLE:` line stays in storage and orgize renders it.
+  No `#+KEYWORDS:`/`#+PROPERTY:` extraction exists.
 
 ### Design
 
@@ -220,6 +277,29 @@ published permalink). If a client sends `j:slug`, the server ignores it. Add
 backed by the existing `extensions` map; extend `write_entry`
 (`common/src/atompub/entry.rs`) to emit it and conditionally declare `xmlns:j`.
 
+**Server-side org canonicalization. [2026-06-26 — new]** Both ingestion paths
+converge on one canonical stored body that is free of the header lines the server
+stores structurally. Concretely:
+
+* Extend the existing `extract_org_title`/`derive_post_metadata` seam to **keep the
+  stripped body it currently discards**, and store *that* as the body. (Today only
+  the title is kept; the stripped body is thrown away at `render.rs:96`.)
+* **Only recognized headers are stripped** (today `#+TITLE:`; the value goes to the
+  title column). **Unrecognized `#+FOO:` header lines remain in the body verbatim**
+  and round-trip.
+* Tags/summary/published/format/slug are already structured on both paths (web form
+  fields; Atom elements from emacs) and were never in the body — no parsing of
+  `#+KEYWORDS:`/`#+DESCRIPTION:` is added. (Teaching the server the *full* header
+  block — so raw-org web authoring works — is follow-on **β**, out of scope here.)
+* **Consequences to handle in this unit:**
+  * Stripping the title line changes web rendering (the org-document title no longer
+    renders inline; the page template's title column shows instead). Verify/remove
+    any resulting double-title; add a regression test.
+  * **Backfill** existing stored bodies that still contain a `#+TITLE:` line, or
+    decide explicitly to leave legacy bodies untouched (strip-on-next-write only).
+  * The canonical form must be **byte-deterministic** so the strip-and-resynthesize
+    round-trip does not produce false divergence in Unit D.
+
 **Capability discovery.** Advertise support in the service document as versioned
 foreign markup so a client can detect it once and degrade gracefully against a
 vanilla/older Jaunder:
@@ -237,7 +317,8 @@ Add the marker to `ServiceDocument` + `render_service_document`
 
 **Supersede ADR-0015.** Its `type="text"`-for-Org/Markdown decision is replaced by
 the media-type mapping above. Write a follow-on ADR (or amend 0015) documenting
-the mapping, the `format_wire` seam, and the lenient parser.
+the mapping, the `format_wire` seam, the lenient parser, and the server-side org
+canonicalization.
 
 ### Compatibility and the documented limitation
 
@@ -266,6 +347,37 @@ the mapping, the `format_wire` seam, and the lenient parser.
 * Incoming `j:slug` is ignored.
 * Service document validates and contains `j:extension` with
   `features="format-media-type slug"`.
+* **Canonicalization:** a body containing a recognized header (`#+TITLE:`) stores a
+  body with that line removed and the title in its column; a body containing an
+  **unrecognized** `#+FOO:` keeps it verbatim; the same post pulled and re-published
+  is byte-identical (round-trip determinism).
+
+---
+
+## Infra unit — elisp package skeleton, ERT harness, and verify-gate wiring
+
+### Goal [2026-06-26 — new]
+
+Give the elisp units a real home in the verify ladder before C/D land. CONTRIBUTING.md
+makes "green → you may move on" an invariant; today there is **zero elisp** in the
+repo and **no emacs** in `flake.nix` or CI, so elisp would otherwise be untested by
+policy. This unit is the foundation C and D build on, and is **its own full issue**.
+
+### Design
+
+* **Package skeleton** — one `.el` package (the directory/file layout C and D extend),
+  with the shared plumbing stubs (HTTP via `url.el`, auth, org↔atom mapping seams).
+* **ERT harness** — an ERT suite plus a documented way to run it.
+* **Toolchain** — add emacs to the flake (devshell + check input, cachix-pulled).
+* **Gate wiring** — run the **pure** ERT unit tests as a host `StepSpec` in
+  **both `check` and `validate`**, mirroring the existing `prettier --check end2end`
+  precedent (`xtask/steps/static_checks.rs`). Revisit the tier only if it becomes a
+  drag. **Live-server integration tests** (publish/pull round-trip against a running
+  jaunder) are the e2e-VM-tier shape and are **a separate issue**, not v1-blocking.
+* **Coverage** — elisp is **exempt from the Rust coverage gate** (cargo-llvm-cov
+  instruments Rust only). State the elisp testing expectation directly instead: unit
+  tests for every pure mapping/transform function. Bringing elisp under coverage is a
+  tracked **p4** follow-on.
 
 ---
 
@@ -291,7 +403,9 @@ and semantically "terms describing the content."
 
 Title is **optional** — a titled post is a blog entry, an untitled post is a
 microblog/note (the server already supports untitled posts; title is `Option`,
-slug derives from the body).
+slug derives from the body). With the Unicode-robust never-fail slug change (see the
+Slug unit), even an untitled note whose body is all-symbol/all-emoji publishes (it
+gets a synthetic slug) rather than failing with `NoSlugFromPost`.
 
 ```org
 #+TITLE: My Post                          ; optional → atom:title
@@ -305,12 +419,17 @@ slug derives from the body).
 #+PROPERTY: JAUNDER_SLUG my-post          ; server-written, read-only
 #+PROPERTY: JAUNDER_ID 42                 ; server-written; presence ⇒ update vs create
 #+PROPERTY: JAUNDER_SYNCED "<etag>"       ; server-written; last-synced ETag (see unit D)
+#+PROPERTY: JAUNDER_SYNCED_AT 2026-07-01T13:00:05Z    ; client-written wall-clock of last sync (local-divergence baseline; see unit D)
 
 Body in org…
 ```
 
 `JAUNDER_STATUS` is the explicit intent and authoritative; `#+DATE:` is the
 timestamp it refers to. No state is inferred from a missing value.
+
+The `JAUNDER_*` properties are **emacs-client-local bookkeeping** and are excluded
+from what is sent as `atom:content` (see "atom:content" below) — the server stores a
+clean, metadata-free canonical body and never sees `JAUNDER_*` markup.
 
 ### Publish time and timezone
 
@@ -347,12 +466,26 @@ Rules:
   `JAUNDER_DATE_TZ` at publish, warn that the timestamp will be interpreted in the
   recorded zone, not the current one.
 
+### atom:content — body only, headers synthesized client-side [2026-06-26 — revised]
+
+`atom:content` is the **org body only**, not the whole buffer. The client maps the
+metadata header block (`#+TITLE:`/`#+KEYWORDS:`/`#+DESCRIPTION:`/`#+PROPERTY:
+JAUNDER_*`) to Atom elements and **strips it from what it sends**; the server then
+applies its canonical normalization (Unit B). On pull, the client **synthesizes** a
+fresh header block from the Atom elements (plus locally-recaptured `JAUNDER_DATE_TZ`)
+and prepends it to the returned body. (The original spec text — "the buffer, headers
+included, is stored verbatim" — is replaced by this.) Round-trip synthesis must be
+byte-deterministic (fixed header order/format) so reconcile (Unit D) does not report
+false divergence.
+
 ### Configuration
 
 A `defcustom` alist maps a local directory → blog: base URL, username, default
 format. Credentials are an **app password** looked up via Emacs `auth-source`
 (`.authinfo.gpg`/`.netrc`) keyed by host + username — secrets never live in the
-config. AtomPub auth is app-password-over-HTTP-Basic and requires HTTPS.
+config. The app password is **minted manually** in the web sessions page
+(`create_app_password`) and pasted into `auth-source` for v1; self-provisioning is a
+follow-on. AtomPub auth is app-password-over-HTTP-Basic and requires HTTPS.
 
 ### HTTP
 
@@ -391,22 +524,39 @@ always an explicit per-buffer action (reconcile never pushes — see unit D).
    `atom:published` (from `#+DATE:`/`JAUNDER_DATE_UTC`), `atom:category` (from
    `#+KEYWORDS:`), `atom:summary` (from `#+DESCRIPTION:`), `app:draft` per
    `JAUNDER_STATUS`, and the `atom:content` `type` media type per
-   `JAUNDER_FORMAT`).
+   `JAUNDER_FORMAT`). The `atom:content` body is the org body **with the metadata
+   header block stripped** (see "atom:content").
 2. Validate: a non-empty body is required; title/tags/summary optional;
    `scheduled` requires a future `#+DATE:`.
-3. Media: scan the body for org links to **local image files**
-   (png/jpg/gif/webp/svg), upload each raw to `/atompub/{user}/media`
-   (idempotent by sha256), rewrite the link to the returned absolute URL.
-   (Non-image attachments deferred to `jaunder-hww6`.)
-4. Send: `JAUNDER_ID` present ⇒ `PUT` (with `If-Match` from the stored ETag),
-   else `POST`. The org source is the entry content; the buffer (headers
-   included) is stored verbatim server-side and rendered by `orgize`.
-5. Write back `JAUNDER_ID`, `JAUNDER_SLUG`, `JAUNDER_SYNCED` (ETag), and the
-   resolved publish time (`#+DATE:`, `JAUNDER_DATE_TZ`, `JAUNDER_DATE_UTC`; see
-   "Publish time and timezone") into the buffer.
+3. **Media (buffer is never rewritten). [2026-06-26 — revised]** Scan the body for
+   org links to **local image files** (png/jpg/gif/webp/svg), upload each raw to
+   `/atompub/{user}/media` (idempotent by sha256), and substitute the returned
+   sha-derived URL (`/media/{sha}/{filename}`) **only in the body sent to the
+   server** — the on-disk buffer keeps its local, previewable links. The mapping is
+   content-addressed (sha256 of the file), so no stored map is needed and divergence
+   detection normalizes local links to their sha-URL before comparing. Links already
+   `http(s)://` are left untouched; a missing/moved local file is surfaced as an
+   error. (Non-image attachments deferred to **#25**.)
+4. **Send (ordered to be safe-to-resume). [2026-06-26 — revised]** `JAUNDER_ID`
+   present ⇒ `PUT` (with `If-Match` from the stored ETag), else `POST`. Perform all
+   network mutations (media, then the entry send) **before** any destructive local
+   change; a pre-response failure (incl. `412` stale ETag) leaves the on-disk file
+   pristine to retry. Media re-upload is safe because it is idempotent.
+5. **Write back, `JAUNDER_ID` first.** On a confirmed response, persist `JAUNDER_ID`
+   *before* anything else that can fail, then `JAUNDER_SLUG`, `JAUNDER_SYNCED`
+   (ETag), `JAUNDER_SYNCED_AT` (now), and the resolved publish time (`#+DATE:`,
+   `JAUNDER_DATE_TZ`, `JAUNDER_DATE_UTC`). Persisting the ID first turns a later
+   failure (e.g. rename) into a self-healing `PUT` next time.
 6. **Rename** the file and buffer from the temporary name to `<JAUNDER_SLUG>.org`
    in the blog's directory (handling a name collision; a no-op if already named).
    The slug is frozen at publish, so the name is stable thereafter.
+
+**Known v1 limitation — create-retry duplicate.** If a create `POST` commits on the
+server but its response is lost (network drop), the client never records
+`JAUNDER_ID` and a retry creates a duplicate (posts have no idempotency mechanism;
+media dedups by sha256, posts do not). For a single-user client this is rare and the
+duplicate is visible and deletable; a server-side idempotency key is a follow-on
+(more important for mobile clients).
 
 ### Edge cases / tests
 
@@ -415,20 +565,25 @@ always an explicit per-buffer action (reconcile never pushes — see unit D).
 * On first publish the temporary file is renamed to `<slug>.org`; a pre-existing
   `<slug>.org` collision is handled, not clobbered.
 * Untitled post publishes; slug derives from the body server-side and round-trips
-  back via `j:slug`.
+  back via `j:slug`. An all-symbol/all-emoji untitled note still publishes (synthetic
+  slug), not `NoSlugFromPost`.
 * Re-publishing an existing post (has `JAUNDER_ID`) updates rather than
   duplicates; a stale ETag yields `412` and is surfaced.
 * A `scheduled` status with a future timestamp produces a server-scheduled post.
-* Media links are uploaded once (idempotent) and rewritten to absolute URLs;
-  re-publish does not re-upload unchanged images.
+* **Media links are uploaded once (idempotent) and substituted to absolute URLs in
+  the sent body only; the on-disk buffer's local links are unchanged** so inline
+  preview keeps working; re-publish does not re-upload unchanged images.
+* A pre-response send failure leaves the on-disk file pristine; `JAUNDER_ID` is
+  persisted before rename so a rename failure self-heals on the next publish.
 * Against a vanilla Jaunder (no `j:extension` advertising `format-media-type`),
   the client warns that a per-entry `text/org`/`text/markdown` content type may
   not be honored (the server would fall back to the account default format).
 
 ### Out of scope
 
-Non-image media (`jaunder-hww6`); Markdown/HTML authoring buffers (the
-`JAUNDER_FORMAT` field is designed to allow them, but v1 targets Org).
+Non-image media (**#25**); Markdown/HTML authoring buffers (the `JAUNDER_FORMAT`
+field is designed to allow them, but v1 targets Org); self-provisioning of app
+passwords (follow-on).
 
 ---
 
@@ -450,15 +605,40 @@ Enumerate both sides — page the AtomPub collection feed; scan the directory's
 | Situation | v1 action |
 |-----------|-----------|
 | Local-only, never synced (no `JAUNDER_ID`) | **Report only** as a local draft not on the server — never auto-pushed |
-| Server-only, no local file | **Pull**: reconstruct the `.org` (body + properties from the entry, content `type`, and `j:slug`), save as `<slug>.org` |
-| Both, `JAUNDER_ID` matches | Compare `JAUNDER_SYNCED` vs the server's current ETag (and file state) → **report** divergence; no auto-resolve |
+| Server-only, no local file | **Pull**: reconstruct the `.org` (synthesized header block + body from the entry, content `type`, and `j:slug`), save as `<slug>.org` |
+| Both, `JAUNDER_ID` matches | Classify with the 2×2 below → **report** divergence; no auto-resolve |
 | Synced locally, server now 404s | **Report** as orphaned / remotely-deleted; no auto-action |
 
+**Divergence detection (2×2). [2026-06-26 — revised]** Two independent best-effort
+signals:
+
+* **server-changed** = the server's current ETag ≠ stored `JAUNDER_SYNCED`.
+* **local-changed** = the file's mtime is meaningfully newer than the recorded
+  `JAUNDER_SYNCED_AT` wall-clock (with a small tolerance, since the final write-back
+  lands a hair after the stamp). The baseline is a recorded wall-clock, **not** a
+  stored mtime — storing the mtime in-file would re-bump it.
+
+| | server ETag == `JAUNDER_SYNCED` | server ETag changed |
+|---|---|---|
+| **local unchanged** | unchanged | **server-ahead** (offer pull) |
+| **local changed** | **local-ahead** (offer publish) | **conflict** (report only) |
+
+Best-effort caveats (tolerable because reconcile only *reports*): git checkout,
+backup restore, or `touch` can produce a false "local-ahead"; an edit inside the
+tolerance window can be missed; the server ETag is time-based today, so a
+content-identical re-save reports as server-ahead (a content-based ETag is a
+follow-on that removes this).
+
+* **Pull keeps server URLs (v1). [2026-06-26]** A pulled server-only post is
+  reconstructed with the server's media URLs in the body (they resolve over the
+  network); media is **not** downloaded and links are **not** localized in v1, so a
+  freshly-pulled post is not yet locally previewable. Download-and-localize on pull
+  is a follow-on.
 * **Pull + report only.** The single mutating action reconcile takes is pulling a
   server-only post into a new local file. Everything else is reported.
-* **Sync marker.** Every publish/pull stores the server ETag as `JAUNDER_SYNCED`,
-  giving the reconcile the data to detect (and report) divergence and to power the
-  future sophisticated reconcile.
+* **Sync marker.** Every publish/pull stores the server ETag as `JAUNDER_SYNCED` and
+  the wall-clock as `JAUNDER_SYNCED_AT`, giving the reconcile the data to detect (and
+  report) divergence and to power the future sophisticated reconcile.
 * **Preview and confirm by default.** Reconcile shows a plan ("N to pull, K
   diverged, J orphaned, M local drafts") and asks before applying the pulls,
   because it writes local files.
@@ -470,11 +650,12 @@ Enumerate both sides — page the AtomPub collection feed; scan the directory's
 
 ### Edge cases / tests
 
-* A new server post pulls down to a correctly named `<slug>.org` with faithful
-  properties and body.
+* A new server post pulls down to a correctly named `<slug>.org` with a faithfully
+  synthesized header block and body.
 * A local-only draft (no `JAUNDER_ID`) is reported but **never pushed** by
   reconcile.
-* A post edited on one side is reported diverged, not overwritten.
+* A post edited on one side is reported (server-ahead / local-ahead), not
+  overwritten; edited on both is reported as a conflict.
 * `jaunder-delete-post` removes both sides; a hand-deleted file resurrects on
   reconcile.
 * Reconcile preview accurately predicts the pulls it then performs.
@@ -484,13 +665,112 @@ Enumerate both sides — page the AtomPub collection feed; scan the directory's
 Automatic divergence resolution (3-way merge / last-write-wins choices); deletion
 propagation for hand-deleted files (would need a tombstone store, deliberately
 avoided); bulk push of local drafts (a future explicit `jaunder-publish-directory`
-action, not a reconcile behavior).
+action, not a reconcile behavior); download-and-localize media on pull (follow-on).
+
+---
+
+## Slug unit — Unicode-robust, never-fail slug generation [2026-06-26 — new]
+
+### Goal
+
+Slugs are the product-wide user-facing URLs. Today generation is ASCII-only and can
+hard-fail; this unit makes it Unicode-faithful and guaranteed to succeed. Surfaced by
+the Emacs untitled-note path but a **general improvement** (its own near-term issue,
+independent of the epic).
+
+### Current state
+
+* `slugify_title` (`common/src/slug.rs:75-94`) keeps **only** `[a-z0-9]`; everything
+  else becomes a hyphen. So `"café"` → `"caf"`, `"Héllo"` → `"h-llo"`, `"日本語"` →
+  `None`. Returns `None` when nothing survives → `NoSlugFromPost`
+  (`storage/src/post_service.rs:286`), surfaced as BadRequest.
+* The `Slug` newtype `FromStr` (`common/src/slug.rs:25-40`) enforces
+  `[a-z0-9][a-z0-9-]*`. This is the **single chokepoint**: both slug *generation* and
+  inbound *URL resolution* funnel through it (`web/src/posts/mod.rs:282-283`).
+* Collision handling exists and is reusable: per-author-per-day unique index +
+  numeric-suffix retry (`candidate_slug`, `post_service.rs:219-227`).
+* **No length cap** anywhere; DB column is `TEXT`.
+
+### Design — (A) Unicode-preserving + never-fail
+
+1. **Never hard-fail.** When derivation yields nothing usable, fall back to a
+   synthetic slug (e.g. `post-<id>` or a short hash). Every post gets a slug.
+2. **Preserve Unicode.** Relax the charset to Unicode letters/digits (Rust
+   `char::is_alphanumeric()` — true for `日`/`é`/`я`/`٣`, false for symbols **and
+   emoji**, which are Unicode *Symbols*, not letters). `日本語` → `日本語`, `café` →
+   `café`. Symbol/emoji-only input keeps nothing → lands on the fallback (correct).
+3. **Normalize in the chokepoint.** Centralize **NFC** normalization and
+   Unicode-lowercasing in `Slug::from_str` so stored slugs and inbound-URL lookups
+   compare consistently (the DB unique index / `WHERE slug = ?` compare bytes).
+4. **Add a length cap** (chars or bytes — CJK inflates ~9 bytes/char when
+   percent-encoded).
+5. **Backward compatible:** existing `[a-z0-9-]` slugs remain valid (the new charset
+   is a superset) → **no data migration**.
+
+### Edge cases / tests
+
+* `slugify_title("café")` → `café`; `"日本語"` → `日本語`; `"Москва"` → `москва`;
+  `"🚀🎉"` and `"!!!"` → synthetic fallback (never `None`/error).
+* On-wire form is percent-encoded UTF-8; **verify Leptos percent-decodes the slug
+  path segment to UTF-8 before `Slug` parsing** (`web/src/pages/mod.rs:176-182`,
+  `web/src/posts/mod.rs:274-291`).
+* NFC: a slug stored in NFC is found by an NFD-encoded inbound request (normalize
+  both).
+* Length cap enforced; collision suffix still works on a Unicode base.
+* Backend parity (SQLite + Postgres) for the unique index and lookups.
 
 ---
 
 ## Testing and conventions
 
-Server/storage units (A, B) follow `CONTRIBUTING.md`: backend parity across SQLite
-and Postgres, the coverage policy, and the verify ladder. Emacs units (C, D) are
-new elisp; establish a small ERT suite and document how to run it. All public
-visibility changes in unit A must be exercised against both backends.
+Server/storage units (A, B, Slug) follow `CONTRIBUTING.md`: backend parity across
+SQLite and Postgres, the coverage policy, and the verify ladder. All public
+visibility changes in unit A must be exercised against both backends. Emacs units
+(C, D) and the Infra unit are new elisp: a host-run ERT suite wired into `check` and
+`validate` (see the Infra unit), with elisp interim-exempt from the Rust coverage
+gate and unit tests required for every pure mapping/transform function.
+
+---
+
+## Issue decomposition & follow-ons [2026-06-26 — new]
+
+**Process (required at implementation kickoff).** The **first** implementation step
+is to create the milestone and all issues below (with native dependency links
+encoding the build order), **before** any code. Once created, **back-fill their
+final identifiers into this spec and into the implementation plan**, replacing the
+placeholder labels. Issue creation follows the `jaunder-issues` conventions.
+
+**Milestone:** *Emacs blogging front-end* — groups every issue below; the
+deferred-tail issues **#15** and **#25** are attached as the post-v1 tail. The issue
+boundary is "**reviewable in a single code review**"; C and D are each too large for
+one review and become **parent issues with review-sized sub-issues**.
+
+**Build order:** A → B → (Slug ∥) → Infra → (C, D). Slug is independent and can land
+in parallel; Infra gates C and D; A and B gate C and D.
+
+| Issue | Unit | Depends on |
+|---|---|---|
+| **#70** | A — Scheduled publishing (storage + web + AtomPub; restart-durable go-live) | — |
+| **#71** | B — Format media types + `j:slug` + server-side org canonicalization | — |
+| **#72** | Slug — Unicode-robust, never-fail slug generation | — |
+| **#73** | Infra — elisp package skeleton + ERT harness + flake/CI wiring | — |
+| **#74** (parent) | C — Emacs authoring / publish — sub-issues (created at C's cycle): ① HTTP/auth client core · ② org↔atom mapping + canonical-body strip · ③ publish flow + write-back/rename · ④ media upload + sha-link mapping | #70, #71, #73 |
+| **#75** (parent) | D — Emacs reconcile — sub-issues (created at D's cycle): ① enumerate/join both sides · ② pull (reconstruct `.org`) · ③ divergence reporting (2×2) · ④ explicit delete | #70, #71, #73 |
+
+**Follow-on issues (file alongside, not in this milestone's v1 critical path):**
+
+* **#76** — Self-provisioning of the app password (client logs in once →
+  `create_app_password` → stores the token) — Unit C enhancement. *(blocked by #74)*
+* **#77 (β)** — server parses the *full* org header block so raw-org web/mobile
+  authoring works (out of scope here; would duplicate the web form fields → needs
+  precedence rules). *(blocked by #71)*
+* **#78** — Content-based ETag (server; removes the time-based divergence
+  false-positive; touches `If-Match`). *(independent)*
+* **#79** — Create idempotency key (server; matters most for mobile clients).
+  *(independent)*
+* **#80** — Download-and-localize media on pull (Unit D enhancement; enables offline
+  preview of pulled posts). *(blocked by #75)*
+* **#81** — `WWW-Authenticate` challenge on 401 — **deferred until we have client code
+  and can experiment**. *(blocked by #74)*
+* **#82** (p4) — include the emacs client in coverage. *(blocked by #74, #75)*
+* **#83** (p4) — include the e2e tests in coverage. *(independent)*
