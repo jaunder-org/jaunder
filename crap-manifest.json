@@ -110,6 +110,15 @@
       "line": 25
     },
     {
+      "coverage": 100.0,
+      "crap": 14.0,
+      "crate": "storage",
+      "cyclomatic": 14.0,
+      "file": "storage/src/sqlite/posts.rs",
+      "function": "Sqlite::tag_post",
+      "line": 115
+    },
+    {
       "coverage": 92.63157894736842,
       "crap": 13.067609855664092,
       "crate": "jaunder",
@@ -225,15 +234,6 @@
       "file": "storage/src/postgres/backup.rs",
       "function": "restore_database",
       "line": 58
-    },
-    {
-      "coverage": 100.0,
-      "crap": 11.0,
-      "crate": "storage",
-      "cyclomatic": 11.0,
-      "file": "storage/src/sqlite/posts.rs",
-      "function": "Sqlite::tag_post",
-      "line": 115
     },
     {
       "coverage": 100.0,
@@ -2087,7 +2087,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/sqlite/posts.rs",
       "function": "Sqlite::untag_post",
-      "line": 172
+      "line": 184
     },
     {
       "coverage": 100.0,
