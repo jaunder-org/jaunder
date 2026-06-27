@@ -48,6 +48,10 @@ convention). All are currently `accepted`.
 | [0020](adr/0020-content-visibility-and-subscription-model.md) | Content Visibility and Subscription Model | accepted |
 | [0021](adr/0021-sqlite-transaction-discipline.md) | SQLite Dialect Transaction Discipline | accepted |
 | [0022](adr/0022-validate-before-expensive-work.md) | Validate Cheaply Before Expensive Work for High-Entropy Secrets | accepted |
+| [0023](adr/0023-atompub-jaunder-wire-extensions.md) | AtomPub Jaunder Wire Extensions | accepted |
+| [0024](adr/0024-server-side-org-canonicalization.md) | Server-Side Org Canonicalization and the Local-vs-Served Representation Principle | accepted |
+| [0025](adr/0025-unicode-slug-generation.md) | Unicode-Preserving, Never-Fail Slug Generation | accepted |
+| [0026](adr/0026-test-fault-injection-hooks-feature.md) | Test-Only Fault-Injection Hooks Behind a `test-utils` Feature | accepted |
 
 ## Archive
 
