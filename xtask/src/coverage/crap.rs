@@ -48,6 +48,12 @@ struct Entry {
 /// those sharing (crate, file, function), ordered by line — a shift-stable
 /// disambiguator for same-named functions in one file (e.g. several `from`
 /// impls), replacing the churn-prone absolute `line` in the compare key (#7).
+///
+/// The ordinal is stable under pure line-shifts but re-assigns if two
+/// same-named functions in one file are reordered, or one is inserted between
+/// them — so a CRAP regression on such a function could be misattributed or
+/// missed. That is a rare, accepted edge; the ordinal remains a strict
+/// improvement over the absolute-line key, which mis-keyed on *every* shift.
 type Key = (String, String, String, usize);
 
 /// Map every entry to its line-independent key → CRAP score.

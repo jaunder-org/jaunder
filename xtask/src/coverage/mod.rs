@@ -244,9 +244,11 @@ fn count_lines(buckets: &[FileLines]) -> usize {
 /// minus its `line`, with key-sorted JSON (serde_json `Value` is a `BTreeMap`),
 /// and the entry set itself sorted. Two reports that differ only in line
 /// attribution (a pure shift) normalize equal, so the Fix-mode heal does not
-/// rewrite `crap-manifest.json` unless a CRAP-relevant field changed (#7). The
-/// `line` field is retained in the written manifest as a non-authoritative
-/// jump-to hint that refreshes wholesale on the next real CRAP change.
+/// rewrite `crap-manifest.json` unless some non-`line` field changed — i.e. the
+/// `crap` score or its `coverage`/`cyclomatic` inputs, or the set of functions
+/// (#7). The `line` field is retained in the written manifest as a
+/// non-authoritative jump-to hint that refreshes wholesale on the next such
+/// change.
 fn normalize_crap_without_line(s: &str) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(s)?;
     let mut rows: Vec<String> = v

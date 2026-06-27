@@ -85,6 +85,10 @@ pub fn reanchor_is_safe(
             .flat_map(|fl| fl.lines.iter().copied())
             .collect();
         appeared.sort_unstable();
+        // A single physical uncovered line consumes at most one structural slot;
+        // dedup guards the multiset bookkeeping if the classifier ever lists a
+        // line in both `regressions` and `new_uncovered` (today it never does).
+        appeared.dedup();
         for line in appeared {
             let text = cur_text
                 .get(&(file.to_string(), line))
@@ -243,6 +247,33 @@ mod tests {
             ..Default::default()
         };
         assert!(reanchor_is_safe(&verdict, &current, &baseline).safe);
+    }
+
+    #[test]
+    fn identical_text_masks_a_new_gap_documented_residual() {
+        // Residual ambiguity (ADR-0029): an accepted gap "}" is removed
+        // (structural) while an UNRELATED brand-new uncovered "}" appears.
+        // Text-identity cannot tell them apart, so the new gap consumes the
+        // structural slot and is accepted. This pins the documented, bounded
+        // behaviour — a future change to it should be deliberate.
+        let baseline = baseline_with(
+            "a.rs",
+            vec![Gap {
+                line: 2,
+                text: "}".into(),
+            }],
+        );
+        let current = vec![fc("a.rs", &[(40, false, "}")])];
+        let verdict = CoverageVerdict {
+            structural: vec![fl("a.rs", &[2])],
+            new_uncovered: vec![fl("a.rs", &[40])],
+            ..Default::default()
+        };
+        let s = reanchor_is_safe(&verdict, &current, &baseline);
+        assert!(
+            s.safe,
+            "documented residual: identical text masks a new gap"
+        );
     }
 
     #[test]
