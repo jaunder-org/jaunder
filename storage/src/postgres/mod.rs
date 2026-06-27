@@ -147,14 +147,6 @@ impl AtomicOps for PostgresAtomicOps {
         let token_hash =
             crate::auth::hash_token(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
 
-        // Hash the new password before opening the transaction: argon2 is
-        // deliberately slow, so doing it outside the write transaction avoids
-        // holding a serialization lock for the duration of the hash
-        // (ADR-0022 / #60).
-        let password_hash = crate::helpers::hash_password(new_password.clone())
-            .await
-            .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
-
         let mut tx = self.pool.begin().await?;
         let now = Utc::now();
         // Claim the token in one atomic UPDATE: it matches only when the token
@@ -190,6 +182,13 @@ impl AtomicOps for PostgresAtomicOps {
                 Some((None, _)) => Err(ConfirmPasswordResetError::Expired),
             };
         };
+
+        // ADR-0022: hash only after the token claim succeeds, so a bogus/used/expired
+        // token is rejected above without paying the Argon2 cost. A hash failure here
+        // `?`-returns and drops the tx → rollback → the claim reverts (token not consumed).
+        let password_hash = crate::helpers::hash_password(new_password.clone())
+            .await
+            .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
             .bind(&password_hash)

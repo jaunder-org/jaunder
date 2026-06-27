@@ -23,14 +23,15 @@ use sqlx::{PgPool, SqlitePool};
 use std::sync::Arc;
 use storage::{
     create_rendered_post, open_database, open_existing_database, perform_post_update,
-    update_rendered_post, AppState, AtomicOps, AudienceError, CreatePostError, CreatePostInput,
-    CreateUserError, DbConnectOptions, EmailVerificationStorage, FeedCacheRow, GoLivePost,
-    InviteStorage, ListByTagError, PasswordResetStorage, PostCursor, PostFormat, PostUpdate,
-    ProfileUpdate, PublishUpdate, RegisterWithInviteError, SessionAuthError, SessionStorage,
-    SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
-    SqlitePasswordResetStorage, SqliteSessionStorage, SqliteSubscriptionStorage, SqliteUserStorage,
-    SubscriptionStorage, TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError,
-    UseInviteError, UsePasswordResetError, UserAuthError, UserStorage,
+    update_rendered_post, AppState, AtomicOps, AudienceError, ConfirmPasswordResetError,
+    CreatePostError, CreatePostInput, CreateUserError, DbConnectOptions, EmailVerificationStorage,
+    FeedCacheRow, GoLivePost, InviteStorage, ListByTagError, PasswordResetStorage, PostCursor,
+    PostFormat, PostUpdate, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
+    SessionAuthError, SessionStorage, SqliteAtomicOps, SqliteEmailVerificationStorage,
+    SqliteInviteStorage, SqlitePasswordResetStorage, SqliteSessionStorage,
+    SqliteSubscriptionStorage, SqliteUserStorage, SubscriptionStorage, TaggingError,
+    UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserAuthError, UserStorage,
 };
 use tempfile::TempDir;
 
@@ -816,6 +817,58 @@ async fn email_verification_and_password_reset_work(#[case] backend: Backend) {
         .await
         .unwrap();
     assert_eq!(authed.user_id, user_id);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn confirm_password_reset_hash_failure_returns_internal(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let user_id = state
+        .users
+        .create_user(
+            &username("reset_hash_fail"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let reset_token = state
+        .password_resets
+        .create_password_reset(user_id, Utc::now() + chrono::Duration::hours(1))
+        .await
+        .unwrap();
+    // Valid token → the claim succeeds, then hashing the new password fails → Internal
+    // (success-path hash failure; the failed hash rolls the claim back).
+    let result = state
+        .atomic
+        .confirm_password_reset(
+            &reset_token,
+            &password("force-hash-error-for-test-coverage"),
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(ConfirmPasswordResetError::Internal(_))
+    ));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn confirm_password_reset_bogus_token_returns_not_found_without_hashing(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    // No password_resets row matches this token. A hash-failing new password proves the
+    // hash is NOT attempted: the claim rejects the token first -> NotFound, not Internal
+    // (ADR-0022). Before the reorder this would have hashed first and returned Internal.
+    let result = state
+        .atomic
+        .confirm_password_reset("dGVzdA", &password("force-hash-error-for-test-coverage"))
+        .await;
+    assert!(matches!(result, Err(ConfirmPasswordResetError::NotFound)));
 }
 
 #[test]

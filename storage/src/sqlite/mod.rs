@@ -249,14 +249,6 @@ impl AtomicOps for SqliteAtomicOps {
         let token_hash =
             crate::auth::hash_token(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
 
-        // Hash the new password before opening the transaction: argon2 is
-        // deliberately slow, so doing it outside the write transaction avoids
-        // holding the SQLite write lock for the duration of the hash
-        // (ADR-0022 / #60).
-        let password_hash = crate::helpers::hash_password(new_password.clone())
-            .await
-            .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
-
         let mut tx = self.pool.begin().await?;
         let now = Utc::now();
 
@@ -291,6 +283,13 @@ impl AtomicOps for SqliteAtomicOps {
                 Some((None, _)) => Err(ConfirmPasswordResetError::Expired),
             };
         };
+
+        // ADR-0022: hash only after the token claim succeeds, so a bogus/used/expired
+        // token is rejected above without paying the Argon2 cost. A hash failure here
+        // `?`-returns and drops the tx → rollback → the claim reverts (token not consumed).
+        let password_hash = crate::helpers::hash_password(new_password.clone())
+            .await
+            .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
             .bind(&password_hash)
@@ -328,7 +327,7 @@ pub(crate) async fn sqlite_pool() -> SqlitePool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError, UserStorage};
+    use crate::{AtomicOps, RegisterWithInviteError};
 
     #[tokio::test]
     async fn create_user_with_invite_hash_failure_returns_internal_error() {
@@ -379,37 +378,5 @@ mod tests {
             .create_user_with_invite(&username, &password, None, false, "testcode")
             .await;
         assert!(matches!(result, Err(RegisterWithInviteError::Internal(_))));
-    }
-
-    #[tokio::test]
-    async fn confirm_password_reset_hash_failure_returns_internal_error() {
-        let pool = sqlite_pool().await;
-        let now = chrono::Utc::now();
-        let expires_at = now + chrono::Duration::hours(1);
-        let good_password: common::password::Password = "password123".parse().unwrap();
-        let user_id = SqliteUserStorage::new(pool.clone())
-            .create_user(&"alice".parse().unwrap(), &good_password, None, false)
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at)
-             VALUES ('dGVzdA', $1, $2, $3)",
-        )
-        .bind(user_id)
-        .bind(now)
-        .bind(expires_at)
-        .execute(&pool)
-        .await
-        .unwrap();
-        let storage = SqliteAtomicOps::new(pool);
-        let bad_password: common::password::Password =
-            "force-hash-error-for-test-coverage".parse().unwrap();
-        let result = storage
-            .confirm_password_reset("dGVzdA", &bad_password)
-            .await;
-        assert!(matches!(
-            result,
-            Err(ConfirmPasswordResetError::Internal(_))
-        ));
     }
 }
