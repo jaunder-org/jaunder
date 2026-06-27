@@ -44,7 +44,7 @@ Separable concern (#93, e2e capture-always + zero-panic gate) is already filed (
 - Consumes: `leptos::reactive::owner::Owner::current() -> Option<Owner>`; `leptos::reactive::computed::ScopedFuture::new_untracked(fut) -> ScopedFuture<Fut>` (impls `Future<Output = Fut::Output>`, holds a strong `Owner`, re-applies it per poll).
 - Produces: unchanged public signature `server_boundary(server_fn: &'static str, future: impl Future<Output = InternalResult<T>>) -> WebResult<T>`.
 
-- [ ] **Step 1: Write the failing test.** In `web/src/error.rs`, inside the existing `mod owner_lifetime` (it already has `Marker`, `YieldOnce`, and `noop_waker`), add:
+- [x] **Step 1: Write the failing test.** In `web/src/error.rs`, inside the existing `mod owner_lifetime` (it already has `Marker`, `YieldOnce`, and `noop_waker`), add:
 
 ```rust
     /// The actual fix: `server_boundary` must keep context alive across an await,
@@ -78,12 +78,12 @@ Separable concern (#93, e2e capture-always + zero-panic gate) is already filed (
     }
 ```
 
-- [ ] **Step 2: Run it; verify it FAILS.**
+- [x] **Step 2: Run it; verify it FAILS.**
 
 Run: `cargo test -p web --features ssr owner_lifetime::server_boundary_keeps_context_alive_across_await`
 Expected: FAIL — `assertion left == right` with `left: Ok(None)` (current `server_boundary` does not preserve the owner across the await).
 
-- [ ] **Step 3: Implement the guarded `ScopedFuture` wrap.** Replace the body of `server_boundary` (`match future.await { ... }`) with:
+- [x] **Step 3: Implement the guarded `ScopedFuture` wrap.** Replace the body of `server_boundary` (`match future.await { ... }`) with:
 
 ```rust
     // #89: a server-fn body that reads Leptos context after an `.await` can panic
@@ -109,12 +109,12 @@ Expected: FAIL — `assertion left == right` with `left: Ok(None)` (current `ser
     }
 ```
 
-- [ ] **Step 4: Run the new test and the whole `owner_lifetime` suite; verify PASS.**
+- [x] **Step 4: Run the new test and the whole `owner_lifetime` suite; verify PASS.**
 
 Run: `cargo test -p web --features ssr owner_lifetime`
 Expected: PASS — all five tests (the four pre-existing + the new `server_boundary_*`).
 
-- [ ] **Step 5: Gate and commit.**
+- [x] **Step 5: Gate and commit.**
 
 Run (via context-mode, `cd` into the worktree, bare): `cargo xtask validate --no-e2e`
 Expected: green.
@@ -137,7 +137,7 @@ git commit -m "fix(web): owner-scope server_boundary so Leptos context survives 
 - Consumes: `expect_context::<Arc<dyn FooStorage>>()` (panics if absent — now guaranteed present by Task 1).
 - Produces: no signature changes; only the in-body storage lookup and comments change.
 
-- [ ] **Step 1: Convert each defensive lookup to `expect_context`.** For every site currently of the form:
+- [x] **Step 1: Convert each defensive lookup to `expect_context`.** For every site currently of the form:
 
 ```rust
 let foo = use_context::<Arc<dyn FooStorage>>()
@@ -155,14 +155,14 @@ Apply to all six sites: `list_my_audiences` and `create_audience` (`AudienceStor
 Run: `rg -n 'use_context::<Arc<dyn .*Storage>>\(\)\s*\n?\s*\.ok_or_else' -U web/src`
 Expected: exactly the six sites above; convert each.
 
-- [ ] **Step 2: Remove the now-false convention comments.** Delete the module-level `//!` SSR-context-loss notes at the top of `audiences/mod.rs` and `subscriptions/mod.rs`, and the per-fn inline comments in `posts/mod.rs`, `audiences/mod.rs` (`create_audience`), and `subscriptions/mod.rs` (`subscribe_to`, the state fn) that explain reading context "before the await". Where a comment is still useful (e.g. on `get_registration_policy`), rewrite it to reference the guarantee, e.g.:
+- [x] **Step 2: Remove the now-false convention comments.** Delete the module-level `//!` SSR-context-loss notes at the top of `audiences/mod.rs` and `subscriptions/mod.rs`, and the per-fn inline comments in `posts/mod.rs`, `audiences/mod.rs` (`create_audience`), and `subscriptions/mod.rs` (`subscribe_to`, the state fn) that explain reading context "before the await". Where a comment is still useful (e.g. on `get_registration_policy`), rewrite it to reference the guarantee, e.g.:
 
 ```rust
 // Storage handles come from Leptos context (ADR-0016). server_boundary owner-scopes
 // the body so this resolves regardless of await ordering (ADR-0016 addendum, #89).
 ```
 
-- [ ] **Step 3: Verify no convention residue and no dangling imports.**
+- [x] **Step 3: Verify no convention residue and no dangling imports.**
 
 Run: `rg -n 'before .*await|task-local|context first|after an await|not in context' web/src` (exclude `error.rs`'s `owner_lifetime` doc/tests, which legitimately describe the mechanism)
 Expected: no remaining "read context before await" workaround comments in `audiences`/`subscriptions`/`posts`.
@@ -170,7 +170,7 @@ Expected: no remaining "read context before await" workaround comments in `audie
 Run: `cargo xtask check --no-test` (clippy will flag any now-unused `InternalError`/`use_context` imports left behind by Step 1 — remove them).
 Expected: green.
 
-- [ ] **Step 4: Gate and commit.**
+- [x] **Step 4: Gate and commit.**
 
 Run (via context-mode, `cd` into the worktree, bare): `cargo xtask validate --no-e2e`
 Expected: green.
