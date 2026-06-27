@@ -288,7 +288,15 @@ pub async fn get_post(
 
         let viewer = viewer_identity().await;
         if let Some(post) = posts
-            .get_post_by_permalink(&username_parsed, year, month, day, &slug_parsed, &viewer)
+            .get_post_by_permalink(
+                &username_parsed,
+                year,
+                month,
+                day,
+                &slug_parsed,
+                &viewer,
+                chrono::Utc::now(),
+            )
             .await
             .map_err(InternalError::storage)?
         {

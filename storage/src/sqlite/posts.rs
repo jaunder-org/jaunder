@@ -247,7 +247,12 @@ mod tests {
         let storage = SqlitePostStorage::new(pool.clone());
         pool.close().await;
         let result = storage
-            .list_published(None, 10, &common::visibility::ViewerIdentity::Anonymous)
+            .list_published(
+                None,
+                10,
+                &common::visibility::ViewerIdentity::Anonymous,
+                Utc::now(),
+            )
             .await;
         assert!(result.is_err());
     }

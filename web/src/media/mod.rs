@@ -149,6 +149,7 @@ pub async fn delete_media(
                 None,
                 1000,
                 &crate::viewer::viewer_identity().await,
+                chrono::Utc::now(),
             )
             .await
             .map_err(InternalError::storage)?;

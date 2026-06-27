@@ -119,7 +119,7 @@ CREATE INDEX IF NOT EXISTS idx_posts_published_at
 
 Each of these five queries currently contains `AND p.published_at IS NOT NULL` (lines 650, 731/758, 795/820, 1030/1059, 1117/1148). The transformation in every case: keep `IS NOT NULL`, add `AND p.published_at <= $K` (new positional bind for `now`), and add `.bind(now)` in the matching position; renumber later positional binds. **Worked example — `get_post_by_permalink`:** the clause `AND p.published_at IS NOT NULL` becomes `AND p.published_at IS NOT NULL AND p.published_at <= $K`, with `now` bound after `slug`/before/after the viewer binds per that query's existing order. Apply the identical edit to all five.
 
-- [ ] **Step 1: Write the failing boundary tests** in `server/tests/storage/storage.rs`. One common test per surface; each seeds a *scheduled* post (`published_at = now + 1h`) and a *live* post (`published_at = now - 1h`) and asserts the boundary. Example for the permalink read (repeat the shape for `list_published_by_user`, `list_published`, `list_posts_by_tag`, `list_user_posts_by_tag`):
+- [x] **Step 1: Write the failing boundary tests** in `server/tests/storage/storage.rs`. One common test per surface; each seeds a *scheduled* post (`published_at = now + 1h`) and a *live* post (`published_at = now - 1h`) and asserts the boundary. Example for the permalink read (repeat the shape for `list_published_by_user`, `list_published`, `list_posts_by_tag`, `list_user_posts_by_tag`):
 
 ```rust
 #[apply(backends)]
@@ -155,13 +155,13 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
 
 Add a small helper `seed_post_published_at(env, username, slug, published_at)` next to the existing `make_published_create_post_input` (storage.rs:1766) that creates a post with an explicit `published_at` via `perform_post_creation` (which already takes `published_at: Option<DateTime<Utc>>`). Reuse `uname`/`slug` helpers if present; otherwise construct `Username`/`Slug` as neighboring tests do.
 
-- [ ] **Step 2: Run them, verify they fail** — `cd <worktree> && cargo nextest run -p jaunder hides_scheduled` (and the other test names). Expected: FAIL to compile first (new `now` arg) — that compile failure is the red state — and, once you stub the signature, FAIL on the assertion (scheduled post leaks).
+- [x] **Step 2: Run them, verify they fail** — `cd <worktree> && cargo nextest run -p jaunder hides_scheduled` (and the other test names). Expected: FAIL to compile first (new `now` arg) — that compile failure is the red state — and, once you stub the signature, FAIL on the assertion (scheduled post leaks). (Red state guaranteed by the signature change: the tests call the 5 reads with a `now` arg that did not exist before the impl.)
 
-- [ ] **Step 3: Implement.** In `storage/src/posts.rs`: add `now: DateTime<Utc>` to the five trait declarations and the five impls; in each query string add `AND p.published_at <= $K` next to the existing `IS NOT NULL`; add the matching `.bind(now)` and renumber subsequent positional binds. Then update every call site to pass `Utc::now()` (web read handlers, any AtomPub reads, and existing tests). Let the compiler list them.
+- [x] **Step 3: Implement.** In `storage/src/posts.rs`: add `now: DateTime<Utc>` to the five trait declarations and the five impls; in each query string add `AND p.published_at <= $K` next to the existing `IS NOT NULL`; add the matching `.bind(now)` and renumber subsequent positional binds. Then update every call site to pass `Utc::now()` (web read handlers, any AtomPub reads, and existing tests). Let the compiler list them.
 
-- [ ] **Step 4: Run them, verify they pass** — the same nextest filters → PASS on both backends. Then `cd <worktree> && cargo xtask check --no-test` → clean.
+- [x] **Step 4: Run them, verify they pass** — the same nextest filters → PASS on both backends (SQLite verified locally: 5/5 passed; Postgres via the controller's Nix gate). Then `cd <worktree> && cargo xtask check --no-test` → clean.
 
-- [ ] **Step 5: Commit** — `feat(storage): gate public reads on published_at <= now for scheduled posts (#70)`.
+- [x] **Step 5: Commit** — `feat(storage): gate public reads on published_at <= now for scheduled posts (#70)`.
 
 ---
 
