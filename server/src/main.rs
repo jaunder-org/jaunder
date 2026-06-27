@@ -31,13 +31,6 @@ async fn main() -> anyhow::Result<()> {
 /// Panics if the implicitly re-parsed `serve` subcommand is absent, which is
 /// unreachable: `Cli::parse_from(["jaunder", "serve"])` always yields one.
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
-    // Hold the telemetry guard for the whole command so its Drop flushes the
-    // OTLP exporters before this one-shot process exits. `serve` initializes and
-    // flushes telemetry itself, so it is skipped here. Binding at function scope
-    // — not inside the `if` — is load-bearing: the guard must outlive the command
-    // dispatch below, not drop at the end of the conditional.
-    let _telemetry = (!matches!(cli.command, Some(Commands::Serve { .. })))
-        .then(|| jaunder::observability::init_tracing(cli.verbose));
     let command = match cli.command {
         Some(cmd) => cmd,
         // The re-parsed `serve` invocation below always yields a subcommand, so
@@ -63,6 +56,15 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             }
         }
     };
+    // Hold the telemetry guard for the whole command so its Drop flushes the
+    // OTLP exporters before this one-shot process exits. Gated on the RESOLVED
+    // command, not raw `cli.command`: `serve` — including the cargo-leptos
+    // implicit-serve path, where `cli.command` was None and resolved to Serve
+    // above — initializes and flushes telemetry itself in `cmd_serve`, so binding
+    // here too would double-init. Binding at function scope (not a narrower block)
+    // is load-bearing: the guard must outlive the dispatch below.
+    let _telemetry = (!matches!(command, Commands::Serve { .. }))
+        .then(|| jaunder::observability::init_tracing(cli.verbose));
     match command {
         Commands::Init {
             storage,

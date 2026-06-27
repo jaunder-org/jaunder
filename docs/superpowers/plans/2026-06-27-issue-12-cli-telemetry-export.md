@@ -327,7 +327,7 @@ git commit -m "feat(observability): flush OTel telemetry before one-shot CLI exi
 
 **Interfaces:** none (docs only).
 
-- [ ] **Step 1: Append the addendum**
+- [x] **Step 1: Append the addendum**
 
 At the end of `docs/adr/0011-unified-observability.md`, add:
 
@@ -353,11 +353,11 @@ not change a command's exit status. This closes the "CLI export" item the
 metrics addendum deferred.
 ```
 
-- [ ] **Step 2: Confirm no `docs/README` ADR-table change is needed**
+- [x] **Step 2: Confirm no `docs/README` ADR-table change is needed**
 
 ADR-0011 is already listed in the `docs/README.md` table; an addendum adds no new row. (If a reviewer prefers a standalone ADR-0026 instead, that is a scoped redo of this task — flagged at the spec gate.)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/adr/0011-unified-observability.md

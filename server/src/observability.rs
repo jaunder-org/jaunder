@@ -478,6 +478,12 @@ mod tests {
             "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
             "http://127.0.0.1:4317",
         );
+        // The returned TelemetryGuard is an unbound temporary that drops here,
+        // so this (and the other valid-endpoint init_tracing_impl tests below)
+        // performs a real shutdown()/force-flush against 127.0.0.1:4317. It
+        // returns promptly because the connection is refused — if one of these
+        // ever hangs in CI, an unreachable-but-not-refused endpoint is the place
+        // to look.
         init_tracing_impl(false);
         std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
     }
@@ -738,23 +744,32 @@ mod tests {
 
     #[tokio::test]
     async fn guard_drop_swallows_shutdown_errors() {
-        // A second shutdown() returns AlreadyShutdown; Drop must log, not panic or
-        // propagate. Covers both Err branches in Drop.
-        let metric_exporter = InMemoryMetricExporter::default();
         let meter = SdkMeterProvider::builder()
-            .with_reader(PeriodicReader::builder(metric_exporter).build())
+            .with_reader(PeriodicReader::builder(InMemoryMetricExporter::default()).build())
             .build();
-        let span_exporter = InMemorySpanExporter::default();
         let tracer = SdkTracerProvider::builder()
-            .with_batch_exporter(span_exporter)
+            .with_batch_exporter(InMemorySpanExporter::default())
             .build();
 
-        // First guard shuts both down cleanly.
-        drop(TelemetryGuard {
-            meter: Some(meter.clone()),
-            tracer: Some(tracer.clone()),
-        });
-        // Second guard's shutdown() now errors (already shut down); Drop swallows it.
+        // Shut both down once cleanly, then assert a second shutdown reports an
+        // error — that is exactly the condition the guard's Drop must swallow.
+        // Asserting it here keeps the test meaningful even if a future OTel
+        // version made shutdown() idempotently return Ok (the Drop Err arms would
+        // otherwise go silently uncovered).
+        meter.shutdown().expect("first meter shutdown succeeds");
+        tracer.shutdown().expect("first tracer shutdown succeeds");
+        assert!(
+            meter.shutdown().is_err(),
+            "second meter shutdown should error"
+        );
+        assert!(
+            tracer.shutdown().is_err(),
+            "second tracer shutdown should error"
+        );
+
+        // The guard's Drop now calls shutdown() on already-shut-down providers; it
+        // must log and swallow the error, not panic or propagate. Covers both Err
+        // arms in Drop.
         drop(TelemetryGuard {
             meter: Some(meter),
             tracer: Some(tracer),
