@@ -34,6 +34,14 @@
   (should (equal (jaunder--basic-auth-header "alice" "secret")
                  (cons "Authorization" "Basic YWxpY2U6c2VjcmV0"))))
 
+(ert-deftest jaunder-basic-auth-header-utf8-roundtrips ()
+  ;; Non-ASCII credentials must not raise; the base64 payload must decode
+  ;; back to the original UTF-8 "user:password" (RFC 7617).
+  (let* ((header (jaunder--basic-auth-header "tëst" "pä"))
+         (b64 (substring (cdr header) (length "Basic "))))
+    (should (equal (decode-coding-string (base64-decode-string b64) 'utf-8)
+                   "tëst:pä"))))
+
 (ert-deftest jaunder-auth-source-spec-derives-host ()
   (should (equal (jaunder--auth-source-spec "https://blog.example.com/path" "alice")
                  '(:host "blog.example.com" :user "alice" :max 1))))

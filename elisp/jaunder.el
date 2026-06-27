@@ -13,10 +13,8 @@
 
 ;;; Code:
 
-(require 'url)
 (require 'url-parse)
 (require 'auth-source)
-(require 'cl-lib)
 
 (defgroup jaunder nil
   "Emacs blogging front-end for Jaunder over AtomPub."
@@ -46,16 +44,22 @@ Signals an error when BASE is nil or empty."
         (tail (delq nil
                     (mapcar (lambda (s)
                               (when (and s (not (string= s "")))
-                                (replace-regexp-in-string "\\`/+\\|/+\\'" "" s)))
+                                (let ((stripped (replace-regexp-in-string "\\`/+\\|/+\\'" "" s)))
+                                  ;; An all-slash segment (e.g. "/") strips to ""; drop it
+                                  ;; rather than relying on `delq' matching interned "".
+                                  (unless (string= stripped "") stripped))))
                             segments))))
-    (mapconcat #'identity (cons head (delq "" tail)) "/")))
+    (mapconcat #'identity (cons head tail) "/")))
 
 (defun jaunder--basic-auth-header (user password)
   "Return the HTTP Basic Authorization header cons for USER and PASSWORD.
-The value is \"Basic <base64(user:password)>\" with no line breaks."
+The value is \"Basic <base64(user:password)>\" with no line breaks.
+Credentials are UTF-8-encoded before base64 (RFC 7617) so non-ASCII
+usernames/passwords are handled rather than raising."
   (cons "Authorization"
         (concat "Basic "
-                (base64-encode-string (concat user ":" password) t))))
+                (base64-encode-string
+                 (encode-coding-string (concat user ":" password) 'utf-8) t))))
 
 (defun jaunder--auth-source-spec (base-url user)
   "Return the `auth-source-search' plist for BASE-URL and USER.

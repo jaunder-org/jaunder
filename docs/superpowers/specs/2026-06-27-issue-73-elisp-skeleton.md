@@ -31,7 +31,7 @@ In scope:
   (formatting) and `ert` (tests).
 * Two hermetic nix checks mirroring the prettier precedent: `ert-check` and
   `elisp-fmt-check`.
-* ADR-0026, a `CONTRIBUTING.md` subsection, and `elisp/README.md`.
+* ADR-0030, a `CONTRIBUTING.md` subsection, and `elisp/README.md`.
 
 Out of scope (each is its own issue):
 
