@@ -10,7 +10,7 @@
 
 **Tech Stack:** Emacs Lisp (built-in `url`, `auth-source`, `ert`, `cl-lib`), ERT, Nix flake, Rust `xtask`.
 
-**Spec:** `docs/superpowers/specs/2026-06-27-issue-73-elisp-skeleton.md`. **ADR:** `docs/adr/0030-elisp-separately-tested-subproject.md` (already written + README row added this cycle).
+**Spec:** `docs/superpowers/specs/2026-06-27-issue-73-elisp-skeleton.md`. **ADR:** `docs/adr/0031-elisp-separately-tested-subproject.md` (already written + README row added this cycle).
 
 ## Global Constraints
 
@@ -570,7 +570,7 @@ git commit -m "build(flake): add hermetic ert-check + elisp-fmt-check; exempt el
 
 ### Task 6: Docs — CONTRIBUTING subsection + elisp README
 
-Document the subproject and how to run it. (ADR-0030, the spec, and the README ADR row are already written this cycle.)
+Document the subproject and how to run it. (ADR-0031, the spec, and the README ADR row are already written this cycle.)
 
 **Files:**
 - Create: `elisp/README.md`
@@ -613,7 +613,7 @@ Both run automatically as `ert` and `elisp-fmt` steps in `cargo xtask check`
 and `cargo xtask validate`, and as the `ert-check` / `elisp-fmt-check` nix
 checks. elisp is interim-exempt from the Rust coverage gate (follow-on #82);
 write an ERT test for every pure mapping/transform function. See
-`docs/adr/0030-elisp-separately-tested-subproject.md`.
+`docs/adr/0031-elisp-separately-tested-subproject.md`.
 ```
 
 - [ ] **Step 2: Add the CONTRIBUTING subsection.** Locate the section listing the verify ladder / subproject tooling (search `CONTRIBUTING.md` for the `prettier`/`end2end` mention) and add a sibling subsection nearby:
@@ -628,13 +628,13 @@ checks. prettier cannot format Emacs Lisp, so `elisp-fmt` uses built-in
 `emacs-lisp-mode` indentation (auto-fix under `check`, verify under
 `validate`). elisp is interim-exempt from the Rust coverage gate (cargo-llvm-cov
 is Rust-only; follow-on #82) — instead, write an ERT test for every pure
-mapping/transform function. Rationale: `docs/adr/0030-elisp-separately-tested-subproject.md`.
+mapping/transform function. Rationale: `docs/adr/0031-elisp-separately-tested-subproject.md`.
 ```
 
 - [ ] **Step 3: Verify the docs render and links resolve.**
 
 Run: `nix develop .#ci -c prettier --check elisp/README.md CONTRIBUTING.md` (prettier *does* format Markdown)
-Expected: exit 0, or run `prettier -w` then re-check. Confirm `docs/adr/0030-elisp-separately-tested-subproject.md` exists.
+Expected: exit 0, or run `prettier -w` then re-check. Confirm `docs/adr/0031-elisp-separately-tested-subproject.md` exists.
 
 - [ ] **Step 4: Commit.**
 
@@ -657,13 +657,13 @@ Expected: exit 0. Confirm via sidecar that `elisp-fmt`, `ert`, and `coverage` ar
 - [ ] **Step 2: Review the branch diff against the fork point.**
 
 Run: `git diff wt-base-issue-73..HEAD --stat`
-Expected: only `elisp/**`, `flake.nix`, `xtask/src/steps/static_checks.rs`, `CONTRIBUTING.md`, and the already-committed `docs/**` (spec, ADR-0030, README row). No stray files; main untouched.
+Expected: only `elisp/**`, `flake.nix`, `xtask/src/steps/static_checks.rs`, `CONTRIBUTING.md`, and the already-committed `docs/**` (spec, ADR-0031, README row). No stray files; main untouched.
 
 ---
 
 ## Self-Review
 
-**Spec coverage:** layout (Task 2) · thin-but-real shared layer w/ auth-source (Task 2) · two host StepSpecs (Task 4) · emacsForCi in flake (Task 1) · two nix checks + coverage denylist (Task 5) · coverage exemption (Task 5 + docs) · ADR-0030 + README row (done in brainstorming) · CONTRIBUTING + elisp/README (Task 6) · harness proves itself with real assertions (Task 2 Step 7, Task 7). All spec sections map to a task.
+**Spec coverage:** layout (Task 2) · thin-but-real shared layer w/ auth-source (Task 2) · two host StepSpecs (Task 4) · emacsForCi in flake (Task 1) · two nix checks + coverage denylist (Task 5) · coverage exemption (Task 5 + docs) · ADR-0031 + README row (done in brainstorming) · CONTRIBUTING + elisp/README (Task 6) · harness proves itself with real assertions (Task 2 Step 7, Task 7). All spec sections map to a task.
 
 **Placeholders:** none — every code/edit step carries complete content; the only deliberate stub is the *negative* drift test (Task 3 Step 3), which is restored.
 

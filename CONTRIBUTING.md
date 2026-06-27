@@ -114,7 +114,7 @@ The driver for all checks is `cargo xtask`. The host runs only the static checks
 
 ### Elisp subproject (`elisp/`)
 
-The Emacs client lives in `elisp/` (see [`elisp/README.md`](elisp/README.md)). Its ERT suite and formatter run in the verify ladder: `ert` and `elisp-fmt` are `cargo xtask check`/`validate` steps, mirrored by the `ert-check` / `elisp-fmt-check` Nix checks. prettier cannot format Emacs Lisp, so `elisp-fmt` uses built-in `emacs-lisp-mode` indentation (auto-fix under `check`, verify under `validate`). elisp is interim-exempt from the Rust coverage gate (cargo-llvm-cov is Rust-only; follow-on #82) — instead, write an ERT test for every pure mapping/transform function. Rationale: [ADR-0030](docs/adr/0030-elisp-separately-tested-subproject.md).
+The Emacs client lives in `elisp/` (see [`elisp/README.md`](elisp/README.md)). Its ERT suite and formatter run in the verify ladder: `ert` and `elisp-fmt` are `cargo xtask check`/`validate` steps, mirrored by the `ert-check` / `elisp-fmt-check` Nix checks. prettier cannot format Emacs Lisp, so `elisp-fmt` uses built-in `emacs-lisp-mode` indentation (auto-fix under `check`, verify under `validate`). elisp is interim-exempt from the Rust coverage gate (cargo-llvm-cov is Rust-only; follow-on #82) — instead, write an ERT test for every pure mapping/transform function. Rationale: [ADR-0031](docs/adr/0031-elisp-separately-tested-subproject.md).
 
 ### Observability and Performance Analysis
 

@@ -1,4 +1,4 @@
-# ADR-0030: Elisp as a Separately-Tested Subproject
+# ADR-0031: Elisp as a Separately-Tested Subproject
 
 * Status: accepted
 * Deciders: mdorman, Claude

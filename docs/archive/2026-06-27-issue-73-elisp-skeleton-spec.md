@@ -6,7 +6,7 @@
 * Milestone: Emacs blogging front-end (#4) — **Infra unit**
 * Epic spec: `docs/superpowers/specs/2026-06-16-emacs-blogging-frontend-design.md`
   ("Infra unit" section)
-* ADR: `docs/adr/0030-elisp-separately-tested-subproject.md`
+* ADR: `docs/adr/0031-elisp-separately-tested-subproject.md`
 
 ## Goal
 
@@ -31,7 +31,7 @@ In scope:
   (formatting) and `ert` (tests).
 * Two hermetic nix checks mirroring the prettier precedent: `ert-check` and
   `elisp-fmt-check`.
-* ADR-0030, a `CONTRIBUTING.md` subsection, and `elisp/README.md`.
+* ADR-0031, a `CONTRIBUTING.md` subsection, and `elisp/README.md`.
 
 Out of scope (each is its own issue):
 
@@ -156,7 +156,7 @@ p4 follow-on #82.
 
 ### 6. Docs
 
-* **ADR-0030** "Elisp as a separately-tested subproject" — records the host ERT
+* **ADR-0031** "Elisp as a separately-tested subproject" — records the host ERT
   StepSpec + nix checks in the verify ladder, emacs-batch indentation for
   formatting, and the coverage exemption with #82 as the follow-on. Plus its row in
   `docs/README.md`.

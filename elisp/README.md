@@ -29,4 +29,4 @@ Both run automatically as the `ert` and `elisp-fmt` steps in `cargo xtask check`
 and `cargo xtask validate`, and as the `ert-check` / `elisp-fmt-check` nix
 checks. elisp is interim-exempt from the Rust coverage gate (follow-on #82);
 write an ERT test for every pure mapping/transform function. See
-[`docs/adr/0030-elisp-separately-tested-subproject.md`](../docs/adr/0030-elisp-separately-tested-subproject.md).
+[`docs/adr/0031-elisp-separately-tested-subproject.md`](../docs/adr/0031-elisp-separately-tested-subproject.md).
