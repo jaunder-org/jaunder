@@ -1,5 +1,7 @@
 # Elisp Package Skeleton + ERT Harness + Verify-Gate Wiring — Implementation Plan (issue #73)
 
+**Status:** Executed 2026-06-27 — all 7 tasks landed (commits `b0c1eb1`..`9dcf4f4`), one gate-verified commit each, plus a code-review fixup. Full `cargo xtask validate --no-e2e` green; ERT 10/10. Deferred follow-on filed: #108 (byte-compile in the gate).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stand up a tested, formatted, gate-wired `elisp/` subproject so units C (#74) and D (#75) have a verified home in the verify ladder.
