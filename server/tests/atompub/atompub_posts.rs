@@ -493,6 +493,20 @@ fn entry_xml(title: &str, content_type: &str, content: &str) -> String {
     )
 }
 
+/// A non-draft text entry carrying an optional `<published>` element (RFC 3339).
+/// `published == None` omits the element entirely (publish-now semantics).
+fn entry_xml_with_published(title: &str, content: &str, published: Option<&str>) -> String {
+    let published_elem =
+        published.map_or_else(String::new, |ts| format!("\n  <published>{ts}</published>"));
+    format!(
+        r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>{title}</title>
+  <content type="text">{content}</content>{published_elem}
+</entry>"#
+    )
+}
+
 /// Which cross-user request a `*_forbids_other_user` case issues. Each variant
 /// builds a request that `alice` (authenticated) directs at `bob`'s resource.
 enum ForbiddenRequest {
@@ -1316,5 +1330,170 @@ async fn create_adopts_default_audience(#[case] backend: Backend) {
         audiences,
         vec![common::visibility::AudienceTarget::Subscribers],
         "AtomPub create must adopt the configured default audience"
+    );
+}
+
+/// Extracts the created post's id from a `POST` response's `Location` header.
+fn location_post_id(response: &axum::response::Response) -> i64 {
+    response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|p| p.rsplit('/').next())
+        .and_then(|id| id.parse::<i64>().ok())
+        .expect("Location header should carry the new post id")
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state.clone(), &base).await;
+
+    // A non-draft entry whose <published> is in the far future schedules the post.
+    let xml = entry_xml_with_published("Future post", "body", Some("2099-01-01T00:00:00Z"));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let post_id = location_post_id(&response);
+
+    // The stored post carries the explicit future timestamp.
+    let viewer = common::visibility::ViewerIdentity::Anonymous;
+    let rec = state
+        .posts
+        .get_post_by_id(post_id, &viewer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rec.published_at.unwrap().to_rfc3339(),
+        "2099-01-01T00:00:00+00:00"
+    );
+
+    // ...and it is invisible on the public permalink at "now".
+    let username = "alice".parse().unwrap();
+    let public = state
+        .posts
+        .get_post_by_permalink(
+            &username,
+            2099,
+            1,
+            1,
+            &rec.slug,
+            &viewer,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        public.is_none(),
+        "future-published AtomPub post must be hidden until due"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state.clone(), &base).await;
+
+    // A non-draft entry whose <published> is in the past is live, backdated.
+    let xml = entry_xml_with_published("Old post", "body", Some("2000-01-01T00:00:00Z"));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let post_id = location_post_id(&response);
+
+    let viewer = common::visibility::ViewerIdentity::Anonymous;
+    let rec = state
+        .posts
+        .get_post_by_id(post_id, &viewer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rec.published_at.unwrap().to_rfc3339(),
+        "2000-01-01T00:00:00+00:00"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let (user_id, token) = seed_alice(&state).await;
+
+    // Start from a live post, then PUT a non-draft entry with a future
+    // <published>: it must become scheduled (future published_at, hidden).
+    let post = storage::perform_post_creation(
+        state.posts.as_ref(),
+        storage::PostCreation {
+            user_id,
+            body: "Old body".to_string(),
+            title: Some("Old"),
+            format: storage::PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(chrono::Utc::now()),
+            max_attempts: 100,
+            summary: None,
+            audiences: vec![common::visibility::AudienceTarget::Public],
+        },
+    )
+    .await
+    .unwrap();
+
+    let app = make_app(state.clone(), &base).await;
+
+    let xml = entry_xml_with_published("Rescheduled", "new body", Some("2099-06-01T00:00:00Z"));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/atompub/alice/posts/{}", post.post_id))
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let viewer = common::visibility::ViewerIdentity::Anonymous;
+    let rec = state
+        .posts
+        .get_post_by_id(post.post_id, &viewer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rec.published_at.unwrap().to_rfc3339(),
+        "2099-06-01T00:00:00+00:00",
+        "update must honor the wire <published> timestamp"
     );
 }

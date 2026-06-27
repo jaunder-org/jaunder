@@ -17,7 +17,7 @@ use common::password::Password;
 use common::slug::Slug;
 use common::username::Username;
 use jaunder::feed::worker::FeedWorker;
-use storage::{CreatePostInput, PostFormat};
+use storage::{CreatePostInput, FeedCacheRow, PostFormat};
 use tempfile::TempDir;
 
 use rstest::*;
@@ -370,6 +370,132 @@ async fn worker_applies_backoff_on_ping_failure() {
         .expect("get cache")
         .expect("cache row should exist even though ping failed");
     assert!(cache_row.body.contains("Test Post"));
+}
+
+/// Restart-straddle (the centerpiece): a future-dated post goes live while the
+/// worker is down. On the worker's first `go_live_pass` (`last_tick` == None) the
+/// startup catch-up must re-enqueue the cached feed whose surface gained a live
+/// post newer than its `generated_at`.
+#[apply(backends)]
+#[tokio::test]
+async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let worker = make_worker(&state, Arc::new(CapturingWebSubClient::default()));
+
+    let username: Username = "alice".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    let user_id = state
+        .users
+        .create_user(&username, &password, None, false)
+        .await
+        .expect("create user");
+
+    let t0 = Utc.with_ymd_and_hms(2026, 6, 26, 10, 0, 0).unwrap();
+    // A cached site feed generated at t0 (stale).
+    state
+        .feed_cache
+        .upsert(FeedCacheRow {
+            feed_url: "/feed.atom".to_string(),
+            body: "stale".to_string(),
+            etag: "etag".to_string(),
+            content_type: "application/atom+xml; charset=utf-8".to_string(),
+            updated_at: t0,
+            generated_at: t0,
+        })
+        .await
+        .expect("seed cached feed");
+
+    // A post that went live at t1 > t0 while the worker was "down".
+    let t1 = t0 + Duration::hours(1);
+    state
+        .posts
+        .create_post(&CreatePostInput {
+            user_id,
+            title: Some("Went live".to_string()),
+            slug: "went-live".parse::<Slug>().expect("valid slug"),
+            body: "# Went live\n\nbody".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<h1>Went live</h1>".to_string(),
+            published_at: Some(t1),
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        })
+        .await
+        .expect("create post");
+
+    // Restart: first go-live pass at t2 > t1 (last_tick == None => catch-up).
+    let t2 = t1 + Duration::hours(1);
+    worker.go_live_pass(t2).await.expect("go-live pass");
+
+    let pending = state
+        .feed_events
+        .claim_pending_batch(100, chrono::Duration::minutes(5))
+        .await
+        .expect("claim pending");
+    assert!(
+        pending.iter().any(|r| r.feed_url == "/feed.atom"),
+        "startup catch-up must enqueue the stale site feed: {:?}",
+        pending.iter().map(|r| &r.feed_url).collect::<Vec<_>>()
+    );
+}
+
+/// Steady state: once seeded, each pass enqueues the author's feed surfaces for
+/// every post that crossed into "live" within the `(last_tick, now]` window.
+#[apply(backends)]
+#[tokio::test]
+async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let worker = make_worker(&state, Arc::new(CapturingWebSubClient::default()));
+
+    let username: Username = "alice".parse().expect("valid username");
+    let password: Password = "password123".parse().expect("valid password");
+    let user_id = state
+        .users
+        .create_user(&username, &password, None, false)
+        .await
+        .expect("create user");
+
+    // First pass seeds last_tick = t0 (startup branch; nothing cached/live).
+    let t0 = Utc.with_ymd_and_hms(2026, 6, 26, 10, 0, 0).unwrap();
+    worker.go_live_pass(t0).await.expect("seed last_tick");
+
+    // A post that goes live between t0 and t1.
+    let go_live = t0 + Duration::minutes(30);
+    state
+        .posts
+        .create_post(&CreatePostInput {
+            user_id,
+            title: Some("Soon".to_string()),
+            slug: "soon".parse::<Slug>().expect("valid slug"),
+            body: "# Soon\n\nbody".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<h1>Soon</h1>".to_string(),
+            published_at: Some(go_live),
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        })
+        .await
+        .expect("create post");
+
+    let t1 = t0 + Duration::hours(1);
+    worker.go_live_pass(t1).await.expect("window pass");
+
+    let pending = state
+        .feed_events
+        .claim_pending_batch(100, chrono::Duration::minutes(5))
+        .await
+        .expect("claim pending");
+    let urls: Vec<&String> = pending.iter().map(|r| &r.feed_url).collect();
+    assert!(
+        urls.iter().any(|u| u.contains("alice")),
+        "the author's feeds must be enqueued on go-live: {urls:?}"
+    );
+    assert!(
+        urls.iter().any(|u| u.as_str() == "/feed.atom"),
+        "the site feed must be enqueued on go-live: {urls:?}"
+    );
 }
 
 #[apply(backends)]

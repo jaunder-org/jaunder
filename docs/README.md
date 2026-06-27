@@ -52,6 +52,7 @@ convention). All are currently `accepted`.
 | [0024](adr/0024-server-side-org-canonicalization.md) | Server-Side Org Canonicalization and the Local-vs-Served Representation Principle | accepted |
 | [0025](adr/0025-unicode-slug-generation.md) | Unicode-Preserving, Never-Fail Slug Generation | accepted |
 | [0026](adr/0026-test-fault-injection-hooks-feature.md) | Test-Only Fault-Injection Hooks Behind a `test-utils` Feature | accepted |
+| [0027](adr/0027-scheduled-publishing-time-gated-visibility.md) | Scheduled Publishing — Time-Gated Visibility and Restart-Durable Go-Live | accepted |
 
 ## Archive
 

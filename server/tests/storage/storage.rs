@@ -22,10 +22,11 @@ use common::visibility::{
 use sqlx::{PgPool, SqlitePool};
 use std::sync::Arc;
 use storage::{
-    create_rendered_post, open_database, open_existing_database, update_rendered_post, AtomicOps,
-    AudienceError, ConfirmPasswordResetError, CreatePostError, CreatePostInput, CreateUserError,
-    DbConnectOptions, EmailVerificationStorage, InviteStorage, ListByTagError,
-    PasswordResetStorage, PostCursor, PostFormat, ProfileUpdate, RegisterWithInviteError,
+    create_rendered_post, open_database, open_existing_database, perform_post_update,
+    update_rendered_post, AppState, AtomicOps, AudienceError, ConfirmPasswordResetError,
+    CreatePostError, CreatePostInput, CreateUserError, DbConnectOptions, EmailVerificationStorage,
+    FeedCacheRow, GoLivePost, InviteStorage, ListByTagError, PasswordResetStorage, PostCursor,
+    PostFormat, PostUpdate, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
     SessionAuthError, SessionStorage, SqliteAtomicOps, SqliteEmailVerificationStorage,
     SqliteInviteStorage, SqlitePasswordResetStorage, SqliteSessionStorage,
     SqliteSubscriptionStorage, SqliteUserStorage, SubscriptionStorage, TaggingError,
@@ -1822,6 +1823,293 @@ fn make_published_create_post_input(user_id: i64, slug: &str) -> CreatePostInput
     }
 }
 
+/// Creates a public post for `user_id` with an explicit `published_at`, returning
+/// the new post id. A future `published_at` seeds a *scheduled* post (publicly
+/// invisible until its time); a past one a live post. Lets the boundary tests
+/// below pin the publication instant relative to the injected `now`.
+async fn seed_post_published_at(
+    state: &Arc<AppState>,
+    user_id: i64,
+    slug: &str,
+    published_at: chrono::DateTime<Utc>,
+) -> i64 {
+    create_rendered_post(
+        &*state.posts,
+        user_id,
+        None,
+        slug.parse().expect("valid slug"),
+        format!("# {slug}\n\nbody"),
+        PostFormat::Markdown,
+        Some(published_at),
+        None,
+        vec![AudienceTarget::Public],
+    )
+    .await
+    .expect("seed post should be created")
+}
+
+// Scheduled-publishing boundary tests (issue #70): each public read must hide a
+// future-dated post (`published_at > now`) and reveal it once `now` reaches its
+// `published_at`. One common test per surface, both backends, fixed injected
+// `now` (no sleeps) asserting both sides of the `<= now` boundary.
+
+#[apply(backends)]
+#[tokio::test]
+async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    let env = backend.setup().await;
+    let state = &env.state;
+    let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
+    let user_id = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
+    seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
+
+    // At `now`: the live post is visible, the scheduled one is not.
+    let got_live = state
+        .posts
+        .get_post_by_permalink(
+            &username("alice"),
+            2026,
+            6,
+            26,
+            &"live-one".parse().unwrap(),
+            &ViewerIdentity::Anonymous,
+            now,
+        )
+        .await
+        .unwrap();
+    assert!(got_live.is_some(), "live post must be visible at now");
+    let got_sched = state
+        .posts
+        .get_post_by_permalink(
+            &username("alice"),
+            2026,
+            6,
+            26,
+            &"sched-one".parse().unwrap(),
+            &ViewerIdentity::Anonymous,
+            now,
+        )
+        .await
+        .unwrap();
+    assert!(
+        got_sched.is_none(),
+        "scheduled post must be hidden before its time"
+    );
+
+    // One second past go-live: the scheduled post appears (locks the boundary).
+    let after = now + Duration::hours(1) + Duration::seconds(1);
+    let got_after = state
+        .posts
+        .get_post_by_permalink(
+            &username("alice"),
+            2026,
+            6,
+            26,
+            &"sched-one".parse().unwrap(),
+            &ViewerIdentity::Anonymous,
+            after,
+        )
+        .await
+        .unwrap();
+    assert!(
+        got_after.is_some(),
+        "scheduled post must appear once now >= published_at"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    let env = backend.setup().await;
+    let state = &env.state;
+    let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
+    let user_id = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
+    let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
+
+    let at_now = state
+        .posts
+        .list_published_by_user(
+            &username("alice"),
+            None,
+            50,
+            &ViewerIdentity::Anonymous,
+            now,
+        )
+        .await
+        .unwrap();
+    let ids_now: Vec<i64> = at_now.iter().map(|p| p.post_id).collect();
+    assert!(ids_now.contains(&live), "live post must be listed at now");
+    assert!(
+        !ids_now.contains(&sched),
+        "scheduled post must be hidden before its time"
+    );
+
+    let after = now + Duration::hours(1) + Duration::seconds(1);
+    let at_after = state
+        .posts
+        .list_published_by_user(
+            &username("alice"),
+            None,
+            50,
+            &ViewerIdentity::Anonymous,
+            after,
+        )
+        .await
+        .unwrap();
+    assert!(
+        at_after.iter().any(|p| p.post_id == sched),
+        "scheduled post must be listed once now >= published_at"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    let env = backend.setup().await;
+    let state = &env.state;
+    let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
+    let user_id = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
+    let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
+
+    let at_now = state
+        .posts
+        .list_published(None, 50, &ViewerIdentity::Anonymous, now)
+        .await
+        .unwrap();
+    let ids_now: Vec<i64> = at_now.iter().map(|p| p.post_id).collect();
+    assert!(ids_now.contains(&live), "live post must be listed at now");
+    assert!(
+        !ids_now.contains(&sched),
+        "scheduled post must be hidden before its time"
+    );
+
+    let after = now + Duration::hours(1) + Duration::seconds(1);
+    let at_after = state
+        .posts
+        .list_published(None, 50, &ViewerIdentity::Anonymous, after)
+        .await
+        .unwrap();
+    assert!(
+        at_after.iter().any(|p| p.post_id == sched),
+        "scheduled post must be listed once now >= published_at"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    let env = backend.setup().await;
+    let state = &env.state;
+    let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
+    let user_id = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
+    let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
+    state.posts.tag_post(live, "scheduling").await.unwrap();
+    state.posts.tag_post(sched, "scheduling").await.unwrap();
+    let tag_slug: Tag = "scheduling".parse().unwrap();
+
+    let at_now = state
+        .posts
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, now)
+        .await
+        .unwrap();
+    let ids_now: Vec<i64> = at_now.iter().map(|p| p.post_id).collect();
+    assert!(ids_now.contains(&live), "live post must be listed at now");
+    assert!(
+        !ids_now.contains(&sched),
+        "scheduled post must be hidden before its time"
+    );
+
+    let after = now + Duration::hours(1) + Duration::seconds(1);
+    let at_after = state
+        .posts
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, after)
+        .await
+        .unwrap();
+    assert!(
+        at_after.iter().any(|p| p.post_id == sched),
+        "scheduled post must be listed once now >= published_at"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    let env = backend.setup().await;
+    let state = &env.state;
+    let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
+    let user_id = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
+    let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
+    state.posts.tag_post(live, "scheduling").await.unwrap();
+    state.posts.tag_post(sched, "scheduling").await.unwrap();
+    let tag_slug: Tag = "scheduling".parse().unwrap();
+
+    let at_now = state
+        .posts
+        .list_user_posts_by_tag(
+            user_id,
+            &tag_slug,
+            None,
+            50,
+            &ViewerIdentity::Anonymous,
+            now,
+        )
+        .await
+        .unwrap();
+    let ids_now: Vec<i64> = at_now.iter().map(|p| p.post_id).collect();
+    assert!(ids_now.contains(&live), "live post must be listed at now");
+    assert!(
+        !ids_now.contains(&sched),
+        "scheduled post must be hidden before its time"
+    );
+
+    let after = now + Duration::hours(1) + Duration::seconds(1);
+    let at_after = state
+        .posts
+        .list_user_posts_by_tag(
+            user_id,
+            &tag_slug,
+            None,
+            50,
+            &ViewerIdentity::Anonymous,
+            after,
+        )
+        .await
+        .unwrap();
+    assert!(
+        at_after.iter().any(|p| p.post_id == sched),
+        "scheduled post must be listed once now >= published_at"
+    );
+}
+
 // Post tests (backend-parametrized)
 
 #[apply(backends)]
@@ -1910,7 +2198,8 @@ async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend
         body: "updated body".to_string(),
         format: PostFormat::Org,
         rendered_html: "<p>updated body</p>".to_string(),
-        publish: false,
+        unpublish: true,
+        explicit_published_at: None,
         summary: None,
         audiences: vec![AudienceTarget::Public],
     };
@@ -1936,7 +2225,8 @@ async fn post_update_not_found_returns_error(#[case] backend: Backend) {
         body: "body".to_string(),
         format: PostFormat::Markdown,
         rendered_html: "<p>body</p>".to_string(),
-        publish: false,
+        unpublish: true,
+        explicit_published_at: None,
         summary: None,
         audiences: vec![AudienceTarget::Public],
     };
@@ -1994,7 +2284,8 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
                 body: "Nope".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Nope</p>".to_string(),
-                publish: false,
+                unpublish: true,
+                explicit_published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
             },
@@ -2003,6 +2294,110 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
         .expect_err("non-owner update must fail");
 
     assert!(matches!(err, UpdatePostError::Unauthorized));
+}
+
+/// Builds a `PostUpdate` with the given publish verb and otherwise-valid,
+/// stable fields. `slug` is pinned via `slug_override` so repeated updates on
+/// different posts never collide on a derived slug.
+fn update_input(
+    post_id: i64,
+    editor_user_id: i64,
+    slug: &str,
+    publish: PublishUpdate,
+) -> PostUpdate<'_> {
+    PostUpdate {
+        post_id,
+        editor_user_id,
+        body: "updated body".to_string(),
+        title: Some("Updated Title"),
+        format: PostFormat::Markdown,
+        slug_override: Some(slug),
+        publish,
+        summary: None,
+        audiences: vec![AudienceTarget::Public],
+    }
+}
+
+// Issue #70: the storage update's publication verb is an explicit
+// `PublishUpdate`, not a bool. One common test, both backends, with an injected
+// `now` pinning the boundary; locks the four publish-timestamp cases.
+#[apply(backends)]
+#[tokio::test]
+async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    let env = backend.setup().await;
+    let state = &env.state;
+    let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
+    let alice = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    // A fresh draft (published_at NULL).
+    let draft = state
+        .posts
+        .create_post(&make_create_post_input(alice, "p"))
+        .await
+        .unwrap();
+
+    // Publish { at: Some(future) } on a draft => scheduled at that instant.
+    let future = now + Duration::days(1);
+    let rec = perform_post_update(
+        &*state.posts,
+        update_input(
+            draft,
+            alice,
+            "p",
+            PublishUpdate::Publish { at: Some(future) },
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        rec.published_at,
+        Some(future),
+        "explicit future timestamp is stored"
+    );
+
+    // Publish { at: None } on an already-published post keeps the existing timestamp.
+    let rec2 = perform_post_update(
+        &*state.posts,
+        update_input(draft, alice, "p", PublishUpdate::Publish { at: None }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        rec2.published_at,
+        Some(future),
+        "publish-without-timestamp keeps existing"
+    );
+
+    // Unpublish clears it.
+    let rec3 = perform_post_update(
+        &*state.posts,
+        update_input(draft, alice, "p", PublishUpdate::Unpublish),
+    )
+    .await
+    .unwrap();
+    assert_eq!(rec3.published_at, None, "unpublish clears published_at");
+
+    // Publish { at: None } on a never-published draft stamps ~now.
+    let draft2 = state
+        .posts
+        .create_post(&make_create_post_input(alice, "q"))
+        .await
+        .unwrap();
+    let rec4 = perform_post_update(
+        &*state.posts,
+        update_input(draft2, alice, "q", PublishUpdate::Publish { at: None }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        rec4.published_at.is_some(),
+        "publish-now stamps a timestamp"
+    );
 }
 
 // Raw read of a post's `post_audiences` rows as `(target_kind name, audience_id)`,
@@ -2034,6 +2429,38 @@ async fn post_audience_rows(
                 .unwrap()
         }
     }
+}
+
+// Scheduled publishing (#70) relies on a standalone `published_at` index for the
+// `published_at <= now` reads and the worker's go-live range scans. This asserts
+// the migration created it; a backend `match` is legitimate here because we are
+// querying each engine's schema catalog, not exercising divergent product
+// behavior.
+#[apply(backends)]
+#[tokio::test]
+async fn posts_published_at_index_exists(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let names: Vec<String> = match backend {
+        Backend::Sqlite => sqlx::query_scalar(
+            "SELECT name FROM sqlite_master \
+             WHERE type = 'index' AND name = 'idx_posts_published_at'",
+        )
+        .fetch_all(&open_pool(&env.base).await)
+        .await
+        .unwrap(),
+        Backend::Postgres => {
+            let pool = PgPool::connect(&recorded_postgres_url(&env.base))
+                .await
+                .unwrap();
+            sqlx::query_scalar(
+                "SELECT indexname FROM pg_indexes WHERE indexname = 'idx_posts_published_at'",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(names, vec!["idx_posts_published_at".to_string()]);
 }
 
 // Create persists `post_audiences` rows matching the input vec; update replaces
@@ -2077,7 +2504,8 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
         body: "body text".to_string(),
         format: PostFormat::Markdown,
         rendered_html: "<p>body text</p>".to_string(),
-        publish: false,
+        unpublish: true,
+        explicit_published_at: None,
         summary: None,
         audiences: vec![AudienceTarget::Private],
     };
@@ -2169,7 +2597,8 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
         body: "body text".to_string(),
         format: PostFormat::Markdown,
         rendered_html: "<p>body text</p>".to_string(),
-        publish: false,
+        unpublish: true,
+        explicit_published_at: None,
         summary: None,
         audiences: vec![AudienceTarget::Subscribers],
     };
@@ -2224,7 +2653,7 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
 
     let published = state
         .posts
-        .list_published(None, 10, &ViewerIdentity::Anonymous)
+        .list_published(None, 10, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .unwrap();
     assert!(published.iter().any(|p| p.post_id == post_id));
@@ -2233,7 +2662,7 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
 
     let published = state
         .posts
-        .list_published(None, 10, &ViewerIdentity::Anonymous)
+        .list_published(None, 10, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .unwrap();
     assert!(!published.iter().any(|p| p.post_id == post_id));
@@ -2382,7 +2811,13 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     // Add a tag to alice-recent-1 and verify site-tag / user-tag feeds.
     let alice_recent_1 = state
         .posts
-        .list_published_by_user(&username("walice"), None, 10, &ViewerIdentity::Anonymous)
+        .list_published_by_user(
+            &username("walice"),
+            None,
+            10,
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .unwrap()
         .into_iter()
@@ -2484,7 +2919,13 @@ async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend
 
     let alice_posts = state
         .posts
-        .list_published_by_user(&username("ealice"), None, 10, &ViewerIdentity::Anonymous)
+        .list_published_by_user(
+            &username("ealice"),
+            None,
+            10,
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .unwrap();
     assert_eq!(alice_posts.len(), 2);
@@ -2492,7 +2933,13 @@ async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend
 
     let bob_posts = state
         .posts
-        .list_published_by_user(&username("ebob"), None, 10, &ViewerIdentity::Anonymous)
+        .list_published_by_user(
+            &username("ebob"),
+            None,
+            10,
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .unwrap();
     assert_eq!(bob_posts.len(), 1);
@@ -2530,7 +2977,7 @@ async fn list_published_returns_published_non_deleted_posts(#[case] backend: Bac
 
     let published = state
         .posts
-        .list_published(None, 10, &ViewerIdentity::Anonymous)
+        .list_published(None, 10, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .unwrap();
     assert_eq!(published.len(), 2);
@@ -2568,12 +3015,210 @@ async fn list_drafts_by_user_returns_only_drafts(#[case] backend: Backend) {
 
     let drafts = state
         .posts
-        .list_drafts_by_user(user_id, None, 10)
+        .list_drafts_by_user(user_id, None, 10, Utc::now())
         .await
         .unwrap();
     assert_eq!(drafts.len(), 2);
     assert!(drafts.iter().all(|p| p.published_at.is_none()));
     assert!(drafts.iter().all(|p| p.user_id == user_id));
+}
+
+// The author's drafts surface is the "not-yet-live" surface: it must include
+// true drafts AND scheduled (future-dated) posts, but exclude posts that are
+// already live (`published_at <= now`). One common test, both backends, fixed
+// injected `now` (issue #70).
+#[apply(backends)]
+#[tokio::test]
+async fn drafts_list_includes_scheduled_excludes_live(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    let env = backend.setup().await;
+    let state = &env.state;
+    let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
+    let user_id = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    // True draft (published_at NULL).
+    state
+        .posts
+        .create_post(&make_create_post_input(user_id, "a-draft"))
+        .await
+        .unwrap();
+    // Scheduled post (published_at in the future).
+    seed_post_published_at(state, user_id, "a-sched", now + Duration::hours(2)).await;
+    // Live post (published_at in the past).
+    seed_post_published_at(state, user_id, "a-live", now - Duration::hours(2)).await;
+
+    let rows = state
+        .posts
+        .list_drafts_by_user(user_id, None, 50, now)
+        .await
+        .unwrap();
+    let slugs: Vec<String> = rows.iter().map(|p| p.slug.as_str().to_string()).collect();
+    assert!(
+        slugs.contains(&"a-draft".to_string()),
+        "drafts must include true drafts: {slugs:?}"
+    );
+    assert!(
+        slugs.contains(&"a-sched".to_string()),
+        "drafts must include scheduled posts: {slugs:?}"
+    );
+    assert!(
+        !slugs.contains(&"a-live".to_string()),
+        "drafts must exclude live posts: {slugs:?}"
+    );
+}
+
+// Go-live window/catch-up reads (issue #70, Task 7): the feed worker uses these
+// to nudge cached feeds when a future-dated post crosses into "live" with no
+// accompanying write. One common test per read, both backends, fixed injected
+// clock (no sleeps).
+
+#[apply(backends)]
+#[tokio::test]
+async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    let env = backend.setup().await;
+    let state = &env.state;
+    let after = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
+    let upto = after + Duration::hours(1);
+    let alice = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let bob = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    // Inside the window (after, upto], tagged: must be returned with its tag.
+    let inside =
+        seed_post_published_at(state, alice, "in-window", after + Duration::minutes(30)).await;
+    state.posts.tag_post(inside, "scheduling").await.unwrap();
+    // Exactly at the inclusive upper bound: must be returned (untagged).
+    seed_post_published_at(state, bob, "at-upto", upto).await;
+    // Exactly at the exclusive lower bound: must be excluded.
+    seed_post_published_at(state, alice, "at-after", after).await;
+    // Past the window: must be excluded.
+    seed_post_published_at(state, alice, "out-window", upto + Duration::hours(1)).await;
+
+    let live: Vec<GoLivePost> = state
+        .posts
+        .list_posts_gone_live_between(after, upto)
+        .await
+        .unwrap();
+    assert_eq!(
+        live.len(),
+        2,
+        "only the (after, upto] posts are returned: {live:?}"
+    );
+
+    let alice_live = live
+        .iter()
+        .find(|p| p.username == username("alice"))
+        .expect("alice's in-window post is present");
+    let slugs: Vec<String> = alice_live
+        .tag_slugs
+        .iter()
+        .map(|t| t.as_str().to_string())
+        .collect();
+    assert_eq!(slugs, vec!["scheduling".to_string()], "tags are hydrated");
+
+    let bob_live = live
+        .iter()
+        .find(|p| p.username == username("bob"))
+        .expect("bob's at-upto post is present (inclusive upper)");
+    assert!(
+        bob_live.tag_slugs.is_empty(),
+        "untagged post yields empty tag_slugs"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    use common::feed::{canonicalize, FeedFormat, FeedSurface};
+    let env = backend.setup().await;
+    let state = &env.state;
+    let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
+    let t0 = now - Duration::hours(2);
+    let alice = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    // A live post, newer than t0, on the site/user feeds and — once tagged —
+    // on the site-tag and user-tag feeds too.
+    let post = seed_post_published_at(state, alice, "live-one", now - Duration::hours(1)).await;
+    state.posts.tag_post(post, "rust").await.unwrap();
+
+    let mk_row = |feed_url: &str, generated_at| FeedCacheRow {
+        feed_url: feed_url.to_string(),
+        body: "cached".to_string(),
+        etag: "etag".to_string(),
+        content_type: "application/atom+xml; charset=utf-8".to_string(),
+        updated_at: generated_at,
+        generated_at,
+    };
+    // The exact feed-url keys for each surface, built the same way the worker
+    // does, so the per-surface arms of `max_published_at_for_surface` are all
+    // exercised (Site, User, SiteTag, UserTag).
+    let tag = "rust".parse().unwrap();
+    let site_tag_url = canonicalize(&FeedSurface::SiteTag { tag }, FeedFormat::Atom);
+    let user_tag_url = canonicalize(
+        &FeedSurface::UserTag {
+            username: username("alice"),
+            tag: "rust".parse().unwrap(),
+        },
+        FeedFormat::Atom,
+    );
+
+    // Stale (generated before go-live) => must be returned.
+    state
+        .feed_cache
+        .upsert(mk_row("/feed.atom", t0))
+        .await
+        .unwrap();
+    state
+        .feed_cache
+        .upsert(mk_row(&site_tag_url, t0))
+        .await
+        .unwrap();
+    state
+        .feed_cache
+        .upsert(mk_row(&user_tag_url, t0))
+        .await
+        .unwrap();
+    // Fresh (generated after the newest live post) => must NOT be returned.
+    state
+        .feed_cache
+        .upsert(mk_row("/~alice/feed.atom", now))
+        .await
+        .unwrap();
+
+    let stale = state.posts.feed_urls_needing_catchup(now).await.unwrap();
+    assert!(
+        stale.contains(&"/feed.atom".to_string()),
+        "a stale site feed is returned: {stale:?}"
+    );
+    assert!(
+        stale.contains(&site_tag_url),
+        "a stale site-tag feed is returned: {stale:?}"
+    );
+    assert!(
+        stale.contains(&user_tag_url),
+        "a stale user-tag feed is returned: {stale:?}"
+    );
+    assert!(
+        !stale.contains(&"/~alice/feed.atom".to_string()),
+        "a feed newer than its surface's newest post is not stale: {stale:?}"
+    );
 }
 
 // =============================================================================
@@ -2761,7 +3406,7 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
     let tag_slug: Tag = "web-development".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .expect("list_posts_by_tag failed");
 
@@ -2858,7 +3503,7 @@ async fn tag_list_pagination(#[case] backend: Backend) {
     let tag_slug: Tag = "pagination-test".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 2, &ViewerIdentity::Anonymous)
+        .list_posts_by_tag(&tag_slug, None, 2, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .expect("list_posts_by_tag failed");
 
@@ -2940,7 +3585,14 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
     let tag_slug: Tag = "shared-tag".parse().unwrap();
     let user1_posts = state
         .posts
-        .list_user_posts_by_tag(user1, &tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .list_user_posts_by_tag(
+            user1,
+            &tag_slug,
+            None,
+            50,
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_user_posts_by_tag failed");
 
@@ -2949,7 +3601,14 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
 
     let user2_posts = state
         .posts
-        .list_user_posts_by_tag(user2, &tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .list_user_posts_by_tag(
+            user2,
+            &tag_slug,
+            None,
+            50,
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_user_posts_by_tag failed");
 
@@ -3172,7 +3831,7 @@ async fn list_posts_by_nonexistent_tag(#[case] backend: Backend) {
     let tag_slug: Tag = "nosuch-tag".parse().unwrap();
     let result = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
         .await;
 
     assert!(matches!(result, Err(ListByTagError::TagNotFound)));
@@ -3197,7 +3856,14 @@ async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
     let tag_slug: Tag = "nonexistent-tag-99".parse().unwrap();
     let result = state
         .posts
-        .list_user_posts_by_tag(user, &tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .list_user_posts_by_tag(
+            user,
+            &tag_slug,
+            None,
+            50,
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await;
 
     assert!(matches!(result, Err(ListByTagError::TagNotFound)));
@@ -3262,7 +3928,7 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
         let tag_slug: Tag = tag.parse().unwrap();
         let posts = state
             .posts
-            .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
+            .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
             .await
             .expect("list_posts_by_tag failed");
         assert_eq!(posts.len(), 3);
@@ -3711,7 +4377,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     let tag_slug: Tag = "test".parse().unwrap();
     let posts_before = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(posts_before.len(), 1);
@@ -3732,7 +4398,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     // List by tag again - should return empty list (tag exists but no posts have it)
     let posts_after = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(posts_after.len(), 0);
@@ -4007,7 +4673,7 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
     let tag_slug: Tag = "javascript".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .expect("list_posts_by_tag failed");
 
@@ -4110,7 +4776,14 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
     let tag_slug: Tag = "clojure".parse().unwrap();
     let posts = state
         .posts
-        .list_user_posts_by_tag(user1, &tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .list_user_posts_by_tag(
+            user1,
+            &tag_slug,
+            None,
+            50,
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_user_posts_by_tag failed");
 
@@ -4126,7 +4799,7 @@ async fn tag_not_found_error(#[case] backend: Backend) {
     let tag_slug: Tag = "nonexistent".parse().unwrap();
     let result = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
         .await;
 
     match result {
@@ -4205,7 +4878,7 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let tag_slug: Tag = "haskell".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .expect("list_posts_by_tag failed");
 
@@ -4331,7 +5004,7 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let tag_slug: Tag = "kotlin".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous)
+        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .expect("list_posts_by_tag failed");
 
@@ -4395,7 +5068,8 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
                 body: "Updated content".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Updated</p>".to_string(),
-                publish: false,
+                unpublish: true,
+                explicit_published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
             },
@@ -4448,14 +5122,14 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
 
     let all = state
         .posts
-        .list_published(None, 10, &ViewerIdentity::Anonymous)
+        .list_published(None, 10, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .expect("list_published failed");
     assert_eq!(all.len(), 5);
 
     let first = state
         .posts
-        .list_published(None, 2, &ViewerIdentity::Anonymous)
+        .list_published(None, 2, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .expect("list_published failed");
     assert_eq!(first.len(), 2);
@@ -4467,7 +5141,7 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_published(Some(&cursor), 2, &ViewerIdentity::Anonymous)
+            .list_published(Some(&cursor), 2, &ViewerIdentity::Anonymous, Utc::now())
             .await
             .expect("list_published with cursor failed");
         assert_eq!(next.len(), 2);
@@ -4512,14 +5186,14 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
 
     let all = state
         .posts
-        .list_drafts_by_user(user, None, 10)
+        .list_drafts_by_user(user, None, 10, Utc::now())
         .await
         .expect("list_drafts_by_user failed");
     assert_eq!(all.len(), 3);
 
     let first = state
         .posts
-        .list_drafts_by_user(user, None, 1)
+        .list_drafts_by_user(user, None, 1, Utc::now())
         .await
         .expect("list_drafts_by_user failed");
     assert_eq!(first.len(), 1);
@@ -4531,7 +5205,7 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_drafts_by_user(user, Some(&cursor), 2)
+            .list_drafts_by_user(user, Some(&cursor), 2, Utc::now())
             .await
             .expect("list_drafts_by_user with cursor failed");
         assert!(next.len() <= 2);
@@ -4584,14 +5258,14 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
 
     let all = state
         .posts
-        .list_user_posts_by_tag(user, &tag, None, 10, &ViewerIdentity::Anonymous)
+        .list_user_posts_by_tag(user, &tag, None, 10, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .expect("list_user_posts_by_tag failed");
     assert_eq!(all.len(), 3);
 
     let first = state
         .posts
-        .list_user_posts_by_tag(user, &tag, None, 1, &ViewerIdentity::Anonymous)
+        .list_user_posts_by_tag(user, &tag, None, 1, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .expect("list_user_posts_by_tag failed");
     assert_eq!(first.len(), 1);
@@ -4603,7 +5277,14 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_user_posts_by_tag(user, &tag, Some(&cursor), 2, &ViewerIdentity::Anonymous)
+            .list_user_posts_by_tag(
+                user,
+                &tag,
+                Some(&cursor),
+                2,
+                &ViewerIdentity::Anonymous,
+                Utc::now(),
+            )
             .await
             .expect("list_user_posts_by_tag with cursor failed");
         assert!(next.len() <= 2);
@@ -4656,14 +5337,14 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
 
     let all = state
         .posts
-        .list_posts_by_tag(&tag, None, 10, &ViewerIdentity::Anonymous)
+        .list_posts_by_tag(&tag, None, 10, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(all.len(), 3);
 
     let first = state
         .posts
-        .list_posts_by_tag(&tag, None, 1, &ViewerIdentity::Anonymous)
+        .list_posts_by_tag(&tag, None, 1, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(first.len(), 1);
@@ -4675,7 +5356,13 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_posts_by_tag(&tag, Some(&cursor), 2, &ViewerIdentity::Anonymous)
+            .list_posts_by_tag(
+                &tag,
+                Some(&cursor),
+                2,
+                &ViewerIdentity::Anonymous,
+                Utc::now(),
+            )
             .await
             .expect("list_posts_by_tag with cursor failed");
         assert!(next.len() <= 2);
@@ -4737,7 +5424,7 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
     let tag: Tag = "delete-tag".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag, None, 10, &ViewerIdentity::Anonymous)
+        .list_posts_by_tag(&tag, None, 10, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .expect("list_posts_by_tag failed");
     assert!(posts.is_empty());
@@ -4828,6 +5515,7 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
             None,
             10,
             &ViewerIdentity::Anonymous,
+            Utc::now(),
         )
         .await
         .expect("list_published_by_user failed");
@@ -4844,6 +5532,7 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
             Some(&cursor),
             10,
             &ViewerIdentity::Anonymous,
+            Utc::now(),
         )
         .await
         .expect("list_published_by_user with cursor failed");
@@ -4893,6 +5582,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
             created_at.day(),
             &"permalink-test".parse().unwrap(),
             &ViewerIdentity::Anonymous,
+            Utc::now(),
         )
         .await
         .expect("get_post_by_permalink failed");
@@ -4913,6 +5603,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
             created_at.day(),
             &"permalink-test".parse().unwrap(),
             &ViewerIdentity::Anonymous,
+            Utc::now(),
         )
         .await
         .expect("get_post_by_permalink after delete failed");
@@ -4969,7 +5660,8 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
                 body: "New content".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>New</p>".to_string(),
-                publish: true,
+                unpublish: false,
+                explicit_published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
             },
@@ -5105,7 +5797,7 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
 
     let first = state
         .posts
-        .list_published(None, 2, &ViewerIdentity::Anonymous)
+        .list_published(None, 2, &ViewerIdentity::Anonymous, Utc::now())
         .await
         .expect("list_published failed");
     assert_eq!(first.len(), 2);
@@ -5118,7 +5810,7 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_published(Some(&cursor), 2, &ViewerIdentity::Anonymous)
+            .list_published(Some(&cursor), 2, &ViewerIdentity::Anonymous, Utc::now())
             .await
             .expect("list_published with cursor failed");
         assert_eq!(next.len(), 2);
@@ -5168,7 +5860,8 @@ async fn post_revisions_created(#[case] backend: Backend) {
                 body: "Updated content".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Updated</p>".to_string(),
-                publish: true,
+                unpublish: false,
+                explicit_published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
             },
@@ -5615,7 +6308,7 @@ async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Back
         "update-render-md".parse().unwrap(),
         "**updated**".to_string(),
         PostFormat::Markdown,
-        false,
+        PublishUpdate::Unpublish,
         None,
         vec![AudienceTarget::Public],
     )
@@ -5660,7 +6353,7 @@ async fn update_rendered_post_org_renders_and_updates(#[case] backend: Backend) 
         "update-render-org".parse().unwrap(),
         "*bold org*".to_string(),
         PostFormat::Org,
-        false,
+        PublishUpdate::Unpublish,
         None,
         vec![AudienceTarget::Public],
     )
@@ -5690,7 +6383,7 @@ async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: B
         "no-post".parse().unwrap(),
         "body".to_string(),
         PostFormat::Markdown,
-        false,
+        PublishUpdate::Unpublish,
         None,
         vec![AudienceTarget::Public],
     )
@@ -6550,7 +7243,7 @@ async fn resolution_matrix(#[case] backend: Backend) {
     for (vi, (vlabel, viewer)) in viewers.iter().enumerate() {
         let listed: std::collections::HashSet<i64> = state
             .posts
-            .list_published(None, 100, viewer)
+            .list_published(None, 100, viewer, Utc::now())
             .await
             .unwrap()
             .into_iter()

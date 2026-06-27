@@ -3,10 +3,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::websub::WebSubClient;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
+use common::feed::affected_feed_urls;
 use storage::{
     FeedCacheStorage, FeedEventRecord, FeedEventStorage, PostStorage, SiteConfigStorage,
 };
+use tokio::sync::Mutex;
 
 use super::regenerate::regenerate_feed;
 
@@ -26,6 +28,10 @@ pub struct FeedWorker {
     feed_cache: Arc<dyn FeedCacheStorage>,
     feed_events: Arc<dyn FeedEventStorage>,
     websub: Arc<dyn WebSubClient>,
+    /// The instant of the previous [`go_live_pass`](Self::go_live_pass), or
+    /// `None` before the first pass. `None` triggers the feed-relative startup
+    /// catch-up; a `Some(last)` runs the steady-state `(last, now]` window.
+    last_tick: Mutex<Option<DateTime<Utc>>>,
 }
 
 impl FeedWorker {
@@ -45,13 +51,56 @@ impl FeedWorker {
             feed_cache,
             feed_events,
             websub,
+            last_tick: Mutex::new(None),
         }
+    }
+
+    /// Enqueues feed regeneration for posts that crossed into "live" since the
+    /// last pass — the durability mechanism for future-dated posts, which reach
+    /// cached feeds with no accompanying write (immediate/backdated publishes
+    /// self-enqueue on the write path and are never reasoned about here).
+    ///
+    /// The first call (`last_tick == None`) runs the feed-relative startup
+    /// catch-up: any cached feed whose surface has a live post newer than its
+    /// `generated_at` is re-enqueued, healing a restart that straddled a
+    /// go-live. Every later call runs the steady-state `(last_tick, now]` window
+    /// pass, fanning each newly-live post out to its affected feed surfaces.
+    /// Both branches seed `last_tick = now`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a storage read or feed-event enqueue fails.
+    pub async fn go_live_pass(&self, now: DateTime<Utc>) -> anyhow::Result<()> {
+        let mut last_tick = self.last_tick.lock().await;
+        match *last_tick {
+            None => {
+                for url in self.posts.feed_urls_needing_catchup(now).await? {
+                    self.feed_events.enqueue(&url).await?;
+                }
+            }
+            Some(last) => {
+                for post in self.posts.list_posts_gone_live_between(last, now).await? {
+                    for url in affected_feed_urls(&post.username, &post.tag_slugs) {
+                        self.feed_events.enqueue(&url).await?;
+                    }
+                }
+            }
+        }
+        *last_tick = Some(now);
+        Ok(())
     }
 
     /// Processes a batch of pending feed events: regenerates feeds and pings the
     /// `WebSub` hub. Groups events by `feed_url` to avoid redundant regeneration.
     #[allow(clippy::too_many_lines)]
     pub async fn tick(&self) {
+        // Enqueue go-live regeneration first so the same tick drains what it
+        // just enqueued. A failure here must not abort the tick — the queue
+        // drain below is independent — so it is logged, not propagated.
+        if let Err(e) = self.go_live_pass(Utc::now()).await {
+            tracing::error!(error = %e, "feed worker go-live pass failed");
+        }
+
         let claimed = match self
             .feed_events
             .claim_pending_batch(

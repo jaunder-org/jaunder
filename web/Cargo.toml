@@ -42,6 +42,16 @@ web-sys = { workspace = true, features = [
 thiserror.workspace = true
 tracing = { workspace = true, optional = true }
 
+# Browser-only: used to convert the compose form's naive `datetime-local`
+# value (author local time) to a UTC RFC3339 instant via `js_sys::Date`.
+# Kept off the server build (no `Date` binding is needed there).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
+# `wasm_bindgen::JsValue` is used to build a `js_sys::Date` from the compose
+# form's local datetime-local string (#70). wasm-only: the conversion only runs
+# in the browser.
+wasm-bindgen = { workspace = true }
+
 [dev-dependencies]
 base64.workspace = true
 common = { workspace = true, features = ["test-utils"] }

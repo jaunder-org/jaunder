@@ -179,9 +179,13 @@ pub struct UpdatePostInput {
     pub body: String,
     pub format: PostFormat,
     pub rendered_html: String,
-    /// If `true`, publish the post (sets `published_at` to now if not already set).
-    /// If `false`, un-publish the post (clears `published_at`).
-    pub publish: bool,
+    /// If `true`, clear `published_at` back to NULL (draft / unschedule). Takes
+    /// precedence over `explicit_published_at`.
+    pub unpublish: bool,
+    /// An exact publication instant to store (future = scheduled, past =
+    /// backdated). `None` keeps any existing timestamp, or stamps `now` for a
+    /// previously-unpublished post. Ignored when `unpublish` is `true`.
+    pub explicit_published_at: Option<DateTime<Utc>>,
     /// Optional summary/excerpt of the post.
     pub summary: Option<String>,
     /// Audience targeting for the post. On update the existing
@@ -205,6 +209,15 @@ pub struct PostTag {
     pub tag_slug: Tag,
     /// The original case-sensitive display name of the tag.
     pub tag_display: String,
+}
+
+/// A post that crossed into "live" within a time window, carrying exactly the
+/// data the feed worker needs to compute its affected feed URLs (the author's
+/// username and the post's tag slugs).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoLivePost {
+    pub username: Username,
+    pub tag_slugs: Vec<Tag>,
 }
 
 /// The slug-level difference between a post's existing tags and a desired set
@@ -305,6 +318,13 @@ pub trait PostStorage: Send + Sync {
 
     /// Fetches a post by its public permalink components, applying the
     /// viewer-resolution filter. See ADR-0020.
+    ///
+    /// `now` gates scheduled posts: a post with `published_at > now` is
+    /// future-dated and stays invisible on this public surface until its time.
+    // The permalink is addressed by its full date + slug + author, so the eight
+    // parameters are irreducible (adding `now` for scheduled visibility tips it
+    // one over the clippy default).
+    #[allow(clippy::too_many_arguments)]
     async fn get_post_by_permalink(
         &self,
         username: &Username,
@@ -313,6 +333,7 @@ pub trait PostStorage: Send + Sync {
         day: u32,
         slug: &Slug,
         viewer: &ViewerIdentity,
+        now: DateTime<Utc>,
     ) -> sqlx::Result<Option<PostRecord>>;
 
     /// Updates a post and creates a new revision.
@@ -336,29 +357,44 @@ pub trait PostStorage: Send + Sync {
 
     /// Lists published posts for a specific user, ordered by creation date,
     /// applying the viewer-resolution filter. See ADR-0020.
+    ///
+    /// `now` gates scheduled posts (`published_at > now`) off this public
+    /// surface until their time.
     async fn list_published_by_user(
         &self,
         username: &Username,
         cursor: Option<&PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
+        now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Lists all published posts across the entire site, applying the
     /// viewer-resolution filter. See ADR-0020.
+    ///
+    /// `now` gates scheduled posts (`published_at > now`) off this public
+    /// surface until their time.
     async fn list_published(
         &self,
         cursor: Option<&PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
+        now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Lists draft posts for a specific user.
+    ///
+    /// This is the author's "not-yet-live" surface: it returns true drafts
+    /// (`published_at IS NULL`) **and** scheduled posts (`published_at > now`),
+    /// so a future-dated post — invisible on every public surface until its
+    /// time — stays visible to its own author. `now` gates which posts count
+    /// as not-yet-live.
     async fn list_drafts_by_user(
         &self,
         user_id: i64,
         cursor: Option<&PostCursor>,
         limit: u32,
+        now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Lists all of a user's non-soft-deleted posts (drafts + published)
@@ -382,16 +418,23 @@ pub trait PostStorage: Send + Sync {
 
     /// Lists published posts that carry a specific tag, applying the
     /// viewer-resolution filter. See ADR-0020.
+    ///
+    /// `now` gates scheduled posts (`published_at > now`) off this public
+    /// surface until their time.
     async fn list_posts_by_tag(
         &self,
         tag_slug: &Tag,
         cursor: Option<&PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
+        now: DateTime<Utc>,
     ) -> Result<Vec<PostRecord>, ListByTagError>;
 
     /// Lists published posts for a specific user that carry a specific tag,
     /// applying the viewer-resolution filter. See ADR-0020.
+    ///
+    /// `now` gates scheduled posts (`published_at > now`) off this public
+    /// surface until their time.
     async fn list_user_posts_by_tag(
         &self,
         user_id: i64,
@@ -399,6 +442,7 @@ pub trait PostStorage: Send + Sync {
         cursor: Option<&PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
+        now: DateTime<Utc>,
     ) -> Result<Vec<PostRecord>, ListByTagError>;
 
     /// Returns tag records whose slug begins with `prefix` (case-insensitive
@@ -420,6 +464,23 @@ pub trait PostStorage: Send + Sync {
         now: DateTime<Utc>,
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<Vec<PostRecord>>;
+
+    /// Lists posts that crossed into "live" within the window `(after, upto]`
+    /// (exclusive lower, inclusive upper): `published_at > after AND
+    /// published_at <= upto AND deleted_at IS NULL`. Each [`GoLivePost`] carries
+    /// its author username and tag slugs so the feed worker can fan out to the
+    /// affected feed surfaces. Drives the steady-state go-live pass.
+    async fn list_posts_gone_live_between(
+        &self,
+        after: DateTime<Utc>,
+        upto: DateTime<Utc>,
+    ) -> sqlx::Result<Vec<GoLivePost>>;
+
+    /// Returns the URLs of cached feeds whose surface has a live post
+    /// (`published_at <= now`, not deleted) strictly newer than the feed's own
+    /// `generated_at` — i.e. cached feeds that missed a go-live while the worker
+    /// was down. Drives the feed-relative startup catch-up.
+    async fn feed_urls_needing_catchup(&self, now: DateTime<Utc>) -> sqlx::Result<Vec<String>>;
 
     /// Reads a post's audience targeting as a [`Vec<AudienceTarget>`], for
     /// pre-selecting the editor's audience picker.
@@ -516,6 +577,8 @@ where
     (i64, i64, String, String): for<'r> sqlx::FromRow<'r, DB::Row>,
     (i64, String): for<'r> sqlx::FromRow<'r, DB::Row>,
     (String, Option<i64>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (String, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -628,6 +691,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
+    #[allow(clippy::too_many_arguments)]
     async fn get_post_by_permalink(
         &self,
         username: &Username,
@@ -636,9 +700,11 @@ where
         day: u32,
         slug: &Slug,
         viewer: &ViewerIdentity,
+        now: DateTime<Utc>,
     ) -> sqlx::Result<Option<PostRecord>> {
         let date_str = format!("{year:04}-{month:02}-{day:02}");
-        let (resolution, binds, _) = resolution_where(viewer, 4);
+        let (resolution, binds, _) = resolution_where(viewer, 5);
+        // `published_at <= $4` hides scheduled (future-dated) posts until due.
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                     p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -648,6 +714,7 @@ where
              WHERE u.username = $1
                AND p.slug = $2
                AND p.published_at IS NOT NULL
+               AND p.published_at <= $4
                AND p.deleted_at IS NULL
                AND {date_clause}
                AND {resolution}",
@@ -657,7 +724,8 @@ where
         let query = sqlx::query_as::<_, PostRow>(&sql)
             .bind(username.as_str())
             .bind(slug.as_str())
-            .bind(date_str.as_str());
+            .bind(date_str.as_str())
+            .bind(now);
         let row = binds.bind_onto(query).fetch_optional(&self.pool).await?;
         Ok(row.map(post_record_from_row).transpose()?)
     }
@@ -715,12 +783,14 @@ where
         cursor: Option<&PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
+        now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
-            // Binds: $1 username, $2/$3 cursor, $4 post_id, $5..$9 resolution,
-            // $10 limit.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 5);
+            // Binds: $1 username, $2/$3 cursor, $4 post_id, $5 now,
+            // $6..$10 resolution, $11 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 6);
+            // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -729,6 +799,7 @@ where
                  JOIN users u ON p.user_id = u.user_id
                  WHERE u.username = $1
                    AND p.published_at IS NOT NULL
+                   AND p.published_at <= $5
                    AND p.deleted_at IS NULL
                    AND (p.created_at < $2 OR (p.created_at = $3 AND p.post_id < $4))
                    AND {resolution}
@@ -739,15 +810,17 @@ where
                 .bind(username.as_str())
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(cursor.post_id);
+                .bind(cursor.post_id)
+                .bind(now);
             binds
                 .bind_onto(query)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            // Binds: $1 username, $2..$6 resolution, $7 limit.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 2);
+            // Binds: $1 username, $2 now, $3..$7 resolution, $8 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 3);
+            // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -756,12 +829,15 @@ where
                  JOIN users u ON p.user_id = u.user_id
                  WHERE u.username = $1
                    AND p.published_at IS NOT NULL
+                   AND p.published_at <= $2
                    AND p.deleted_at IS NULL
                    AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRow>(&sql).bind(username.as_str());
+            let query = sqlx::query_as::<_, PostRow>(&sql)
+                .bind(username.as_str())
+                .bind(now);
             binds
                 .bind_onto(query)
                 .bind(i64::from(limit))
@@ -781,11 +857,14 @@ where
         cursor: Option<&PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
+        now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
-            // Binds: $1/$2 cursor, $3 post_id, $4..$8 resolution, $9 limit.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 4);
+            // Binds: $1/$2 cursor, $3 post_id, $4 now, $5..$9 resolution,
+            // $10 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 5);
+            // `published_at <= $4` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -793,6 +872,7 @@ where
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.published_at IS NOT NULL
+                   AND p.published_at <= $4
                    AND p.deleted_at IS NULL
                    AND (p.created_at < $1 OR (p.created_at = $2 AND p.post_id < $3))
                    AND {resolution}
@@ -802,15 +882,17 @@ where
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(cursor.post_id);
+                .bind(cursor.post_id)
+                .bind(now);
             binds
                 .bind_onto(query)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            // Binds: $1..$5 resolution, $6 limit.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 1);
+            // Binds: $1 now, $2..$6 resolution, $7 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 2);
+            // `published_at <= $1` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -818,12 +900,13 @@ where
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.published_at IS NOT NULL
+                   AND p.published_at <= $1
                    AND p.deleted_at IS NULL
                    AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRow>(&sql);
+            let query = sqlx::query_as::<_, PostRow>(&sql).bind(now);
             binds
                 .bind_onto(query)
                 .bind(i64::from(limit))
@@ -843,9 +926,12 @@ where
         user_id: i64,
         cursor: Option<&PostCursor>,
         limit: u32,
+        now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
+            // `published_at IS NULL OR published_at > $5` surfaces both true
+            // drafts and scheduled (future-dated) posts to the author.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -853,21 +939,24 @@ where
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.user_id = $1
-                   AND p.published_at IS NULL
+                   AND (p.published_at IS NULL OR p.published_at > $5)
                    AND p.deleted_at IS NULL
                    AND (p.created_at < $2 OR (p.created_at = $3 AND p.post_id < $4))
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT $5"
+                 LIMIT $6"
             );
             sqlx::query_as::<_, PostRow>(&sql)
                 .bind(user_id)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
                 .bind(cursor.post_id)
+                .bind(now)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
         } else {
+            // `published_at IS NULL OR published_at > $2` surfaces both true
+            // drafts and scheduled (future-dated) posts to the author.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -875,13 +964,14 @@ where
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.user_id = $1
-                   AND p.published_at IS NULL
+                   AND (p.published_at IS NULL OR p.published_at > $2)
                    AND p.deleted_at IS NULL
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT $2"
+                 LIMIT $3"
             );
             sqlx::query_as::<_, PostRow>(&sql)
                 .bind(user_id)
+                .bind(now)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
@@ -1003,6 +1093,7 @@ where
         cursor: Option<&PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
+        now: DateTime<Utc>,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         let tag_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
@@ -1016,8 +1107,10 @@ where
 
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
-            // Binds: $1 tag, $2/$3 cursor, $4 post_id, $5..$9 resolution, $10 limit.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 5);
+            // Binds: $1 tag, $2/$3 cursor, $4 post_id, $5 now,
+            // $6..$10 resolution, $11 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 6);
+            // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -1028,6 +1121,7 @@ where
                  JOIN tags t ON pt.tag_id = t.tag_id
                  WHERE t.tag_slug = $1
                    AND p.published_at IS NOT NULL
+                   AND p.published_at <= $5
                    AND p.deleted_at IS NULL
                    AND (p.created_at < $2 OR (p.created_at = $3 AND p.post_id < $4))
                    AND {resolution}
@@ -1038,15 +1132,17 @@ where
                 .bind(tag_slug.as_str())
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(cursor.post_id);
+                .bind(cursor.post_id)
+                .bind(now);
             binds
                 .bind_onto(query)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            // Binds: $1 tag, $2..$6 resolution, $7 limit.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 2);
+            // Binds: $1 tag, $2 now, $3..$7 resolution, $8 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 3);
+            // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -1057,12 +1153,15 @@ where
                  JOIN tags t ON pt.tag_id = t.tag_id
                  WHERE t.tag_slug = $1
                    AND p.published_at IS NOT NULL
+                   AND p.published_at <= $2
                    AND p.deleted_at IS NULL
                    AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRow>(&sql).bind(tag_slug.as_str());
+            let query = sqlx::query_as::<_, PostRow>(&sql)
+                .bind(tag_slug.as_str())
+                .bind(now);
             binds
                 .bind_onto(query)
                 .bind(i64::from(limit))
@@ -1088,6 +1187,7 @@ where
         cursor: Option<&PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
+        now: DateTime<Utc>,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         let tag_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
@@ -1101,9 +1201,10 @@ where
 
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
-            // Binds: $1 user_id, $2 tag, $3/$4 cursor, $5 post_id,
-            // $6..$10 resolution, $11 limit.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 6);
+            // Binds: $1 user_id, $2 tag, $3/$4 cursor, $5 post_id, $6 now,
+            // $7..$11 resolution, $12 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 7);
+            // `published_at <= $6` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -1115,6 +1216,7 @@ where
                  WHERE p.user_id = $1
                    AND t.tag_slug = $2
                    AND p.published_at IS NOT NULL
+                   AND p.published_at <= $6
                    AND p.deleted_at IS NULL
                    AND (p.created_at < $3 OR (p.created_at = $4 AND p.post_id < $5))
                    AND {resolution}
@@ -1126,15 +1228,17 @@ where
                 .bind(tag_slug.as_str())
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(cursor.post_id);
+                .bind(cursor.post_id)
+                .bind(now);
             binds
                 .bind_onto(query)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            // Binds: $1 user_id, $2 tag, $3..$7 resolution, $8 limit.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 3);
+            // Binds: $1 user_id, $2 tag, $3 now, $4..$8 resolution, $9 limit.
+            let (resolution, binds, limit_idx) = resolution_where(viewer, 4);
+            // `published_at <= $3` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -1146,6 +1250,7 @@ where
                  WHERE p.user_id = $1
                    AND t.tag_slug = $2
                    AND p.published_at IS NOT NULL
+                   AND p.published_at <= $3
                    AND p.deleted_at IS NULL
                    AND {resolution}
                  ORDER BY p.created_at DESC, p.post_id DESC
@@ -1153,7 +1258,8 @@ where
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(user_id)
-                .bind(tag_slug.as_str());
+                .bind(tag_slug.as_str())
+                .bind(now);
             binds
                 .bind_onto(query)
                 .bind(i64::from(limit))
@@ -1238,6 +1344,82 @@ where
         )
         .await?;
         rows.into_iter().map(post_record_from_row).collect()
+    }
+
+    #[tracing::instrument(
+        name = "storage.posts.list_posts_gone_live_between",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn list_posts_gone_live_between(
+        &self,
+        after: DateTime<Utc>,
+        upto: DateTime<Utc>,
+    ) -> sqlx::Result<Vec<GoLivePost>> {
+        // `published_at > $1 AND published_at <= $2` selects exactly the posts
+        // that crossed into "live" within the half-open window `(after, upto]`.
+        // The standard post projection (incl. the JSON tag subquery) is reused
+        // so the row decodes through `post_record_from_row`; we then keep only
+        // the username + tag slugs the feed fan-out needs. No viewer filter:
+        // go-live regeneration is independent of any reader's audience.
+        let tags = DB::TAGS_SUBQUERY;
+        let sql = format!(
+            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                    p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+                    {tags} AS tags
+             FROM posts p
+             JOIN users u ON p.user_id = u.user_id
+             WHERE p.published_at > $1
+               AND p.published_at <= $2
+               AND p.deleted_at IS NULL
+             ORDER BY p.published_at ASC, p.post_id ASC"
+        );
+        let rows = sqlx::query_as::<_, PostRow>(&sql)
+            .bind(after)
+            .bind(upto)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                let rec = post_record_from_row(row)?;
+                Ok(GoLivePost {
+                    username: rec.author_username,
+                    tag_slugs: rec.tags.into_iter().map(|t| t.tag_slug).collect(),
+                })
+            })
+            .collect()
+    }
+
+    #[tracing::instrument(
+        name = "storage.posts.feed_urls_needing_catchup",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn feed_urls_needing_catchup(&self, now: DateTime<Utc>) -> sqlx::Result<Vec<String>> {
+        // Cached feeds live in the same database, so they are enumerated here
+        // and, for each, the newest live post on that surface is compared
+        // against the feed's own `generated_at`. Feed count is small, so a
+        // per-feed check is simpler than a set-based join and keeps the
+        // `feed_url` → surface parsing in Rust (`common::feed::parse`).
+        let cached: Vec<(String, DateTime<Utc>)> =
+            sqlx::query_as("SELECT feed_url, generated_at FROM feed_cache")
+                .fetch_all(&self.pool)
+                .await?;
+        let mut needing = Vec::new();
+        for (feed_url, generated_at) in cached {
+            let Some((surface, _format)) = common::feed::parse(&feed_url) else {
+                continue;
+            };
+            if let Some(max) = max_published_at_for_surface::<DB>(&self.pool, &surface, now).await?
+            {
+                // Strictly newer => a go-live happened after this feed was last
+                // generated, so it must be regenerated.
+                if max > generated_at {
+                    needing.push(feed_url);
+                }
+            }
+        }
+        Ok(needing)
     }
 }
 
@@ -1571,6 +1753,85 @@ where
             binds.bind_onto(query).fetch_all(pool).await
         }
     }
+}
+
+/// The most recent `published_at` of a *live* post (`published_at <= now`, not
+/// deleted) on `surface`, or `None` when the surface has no live post. Each
+/// surface variant adds exactly the joins/predicates that define its post set,
+/// mirroring the window query's surface filters. Used by
+/// [`PostStorage::feed_urls_needing_catchup`] to detect a cached feed that is
+/// stale relative to a go-live the worker may have missed while down.
+async fn max_published_at_for_surface<DB>(
+    pool: &Pool<DB>,
+    surface: &common::feed::FeedSurface,
+    now: DateTime<Utc>,
+) -> sqlx::Result<Option<DateTime<Utc>>>
+where
+    DB: PostDialect,
+    (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    use common::feed::FeedSurface;
+    let row: Option<(DateTime<Utc>,)> = match surface {
+        FeedSurface::Site => {
+            sqlx::query_as(
+                "SELECT p.published_at FROM posts p
+                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
+                   AND p.deleted_at IS NULL
+                 ORDER BY p.published_at DESC LIMIT 1",
+            )
+            .bind(now)
+            .fetch_optional(pool)
+            .await?
+        }
+        FeedSurface::User { username } => {
+            sqlx::query_as(
+                "SELECT p.published_at FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
+                   AND p.deleted_at IS NULL AND u.username = $2
+                 ORDER BY p.published_at DESC LIMIT 1",
+            )
+            .bind(now)
+            .bind(username.as_str())
+            .fetch_optional(pool)
+            .await?
+        }
+        FeedSurface::SiteTag { tag } => {
+            sqlx::query_as(
+                "SELECT p.published_at FROM posts p
+                 JOIN post_tags pt ON p.post_id = pt.post_id
+                 JOIN tags t ON pt.tag_id = t.tag_id
+                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
+                   AND p.deleted_at IS NULL AND t.tag_slug = $2
+                 ORDER BY p.published_at DESC LIMIT 1",
+            )
+            .bind(now)
+            .bind(tag.as_str())
+            .fetch_optional(pool)
+            .await?
+        }
+        FeedSurface::UserTag { username, tag } => {
+            sqlx::query_as(
+                "SELECT p.published_at FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 JOIN post_tags pt ON p.post_id = pt.post_id
+                 JOIN tags t ON pt.tag_id = t.tag_id
+                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
+                   AND p.deleted_at IS NULL AND u.username = $2 AND t.tag_slug = $3
+                 ORDER BY p.published_at DESC LIMIT 1",
+            )
+            .bind(now)
+            .bind(username.as_str())
+            .bind(tag.as_str())
+            .fetch_optional(pool)
+            .await?
+        }
+    };
+    Ok(row.map(|(published_at,)| published_at))
 }
 
 #[cfg(test)]

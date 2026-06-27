@@ -5,6 +5,7 @@
 //! and the `Entry` type for both incoming (create/update) and outgoing
 //! (collection member) operations.
 
+use chrono::{DateTime, Utc};
 use common::atompub::{is_draft, set_draft, Category, Content, Entry, Link, Text};
 use storage::{PostFormat, PostRecord};
 
@@ -23,6 +24,10 @@ pub struct PostFields {
     pub categories: Vec<String>,
     /// Whether the entry is marked as draft.
     pub is_draft: bool,
+    /// Explicit publication time from the entry's `<published>` element
+    /// (`None` when absent). A future time schedules the post; a past time
+    /// backdates it. The inverse of [`post_to_entry`]'s `published` mapping.
+    pub published: Option<DateTime<Utc>>,
 }
 
 /// Maps an incoming `AtomPub` `Entry` to Jaunder post fields.
@@ -56,6 +61,9 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
         .map(|c| c.term().to_string())
         .collect();
     let is_draft = is_draft(entry);
+    // Inverse of `post_to_entry`'s `published: post.published_at.map(fixed_offset)`:
+    // read the entry's `<published>` (a fixed-offset datetime) back to UTC.
+    let published = entry.published().map(|d| d.with_timezone(&Utc));
 
     PostFields {
         title,
@@ -64,6 +72,7 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
         summary,
         categories,
         is_draft,
+        published,
     }
 }
 

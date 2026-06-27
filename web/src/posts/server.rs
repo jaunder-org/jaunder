@@ -170,7 +170,7 @@ pub async fn find_draft_by_permalink_for_user(
     // while still being large enough for almost any user's draft list.
     for _ in 0..200 {
         let drafts = posts
-            .list_drafts_by_user(user_id, cursor.as_ref(), 50)
+            .list_drafts_by_user(user_id, cursor.as_ref(), 50, chrono::Utc::now())
             .await
             .map_err(InternalError::storage)?;
         if drafts.is_empty() {
