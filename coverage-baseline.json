@@ -1,7 +1,7 @@
 {
   "common/src/atompub/entry.rs": [
     {
-      "line": 339,
+      "line": 377,
       "text": "            None => Ok(String::new()),"
     }
   ],
@@ -731,11 +731,11 @@
   ],
   "storage/src/post_service.rs": [
     {
-      "line": 352,
+      "line": 370,
       "text": "            Err(CreatePostError::Internal(e)) => {"
     },
     {
-      "line": 353,
+      "line": 371,
       "text": "                return Err(PerformCreationError::Storage(e));"
     }
   ],
@@ -809,10 +809,6 @@
     {
       "line": 105,
       "text": "            .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;"
-    },
-    {
-      "line": 156,
-      "text": "            .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;"
     }
   ],
   "storage/src/sqlite/backup.rs": [
