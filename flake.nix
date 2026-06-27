@@ -504,6 +504,16 @@
           filter = path: _type: !(pkgs.lib.hasInfix "/node_modules" path);
         };
 
+        emacsSrc = pkgs.lib.cleanSourceWith {
+          src = ./elisp;
+        };
+
+        # One emacs for both the host verify gate (the xtask StepSpecs) and the
+        # hermetic nix checks, so they cannot diverge. withPackages (vs bare
+        # pkgs.emacs) is the extension point for units C/D to add elisp packages
+        # via nix; the skeleton needs only built-in libraries, so the list is empty.
+        emacsForCi = pkgs.emacs.pkgs.withPackages (epkgs: [ ]);
+
         interactiveTestingVmRunner = pkgs.writeShellApplication {
           name = "interactive-testing-vm";
           text = ''
@@ -962,6 +972,7 @@
               pkgs.cargo-llvm-cov
               pkgs.cargo-nextest
               pkgs.dart-sass
+              emacsForCi
               pkgs.jq
               pkgs.leptosfmt
               pkgs.nodejs
