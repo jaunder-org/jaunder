@@ -35,6 +35,26 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
         Mode::Check => vec!["--check", "end2end"],
         Mode::Fix => vec!["-w", "end2end"],
     };
+    // elisp-fmt — emacs-batch indentation; prettier cannot format Emacs Lisp, so
+    // the elisp subproject is formatted with built-in emacs-lisp-mode indentation.
+    let elisp_fmt_args = match mode {
+        Mode::Check => vec![
+            "--batch",
+            "-Q",
+            "-l",
+            "elisp/scripts/format.el",
+            "-f",
+            "jaunder-fmt-check",
+        ],
+        Mode::Fix => vec![
+            "--batch",
+            "-Q",
+            "-l",
+            "elisp/scripts/format.el",
+            "-f",
+            "jaunder-fmt-fix",
+        ],
+    };
     // tools/ workspace (coverage + devtool): a separate *virtual* workspace, so
     // `--all` is required because the workspace root has no package targets.
     let tools_fmt_args = match mode {
@@ -69,6 +89,16 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
             name: "prettier",
             program: "prettier",
             args: prettier_args,
+        },
+        StepSpec {
+            name: "elisp-fmt",
+            program: "emacs",
+            args: elisp_fmt_args,
+        },
+        StepSpec {
+            name: "ert",
+            program: "emacs",
+            args: vec!["--batch", "-Q", "-l", "elisp/scripts/run-tests.el"],
         },
         StepSpec {
             name: "cargo-deny",
@@ -179,11 +209,54 @@ mod tests {
     }
 
     #[test]
+    fn elisp_fmt_checks_in_check_writes_in_fix() {
+        let check = find(&specs(Mode::Check), "elisp-fmt").args.clone();
+        assert_eq!(
+            check,
+            [
+                "--batch",
+                "-Q",
+                "-l",
+                "elisp/scripts/format.el",
+                "-f",
+                "jaunder-fmt-check"
+            ]
+        );
+        let fix = find(&specs(Mode::Fix), "elisp-fmt").args.clone();
+        assert_eq!(
+            fix,
+            [
+                "--batch",
+                "-Q",
+                "-l",
+                "elisp/scripts/format.el",
+                "-f",
+                "jaunder-fmt-fix"
+            ]
+        );
+    }
+
+    #[test]
+    fn ert_runs_the_batch_runner_in_both_modes() {
+        for mode in [Mode::Check, Mode::Fix] {
+            let s = specs(mode);
+            let ert = find(&s, "ert");
+            assert_eq!(ert.program, "emacs");
+            assert_eq!(
+                ert.args,
+                ["--batch", "-Q", "-l", "elisp/scripts/run-tests.el"]
+            );
+        }
+    }
+
+    #[test]
     fn step_order_is_locked() {
         let expected = [
             "fmt",
             "leptosfmt",
             "prettier",
+            "elisp-fmt",
+            "ert",
             "cargo-deny",
             "clippy",
             "tools-fmt",
