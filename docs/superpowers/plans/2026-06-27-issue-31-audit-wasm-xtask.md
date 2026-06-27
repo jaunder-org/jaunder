@@ -31,12 +31,12 @@ Investigation surfaced **no new issues to file**. The ADR-0026 pre-classificatio
 **Files:**
 - Already written (spec phase): `docs/superpowers/specs/2026-06-27-issue-31-audit-wasm-xtask.md`, `docs/adr/0026-devtool-vs-xtask-boundary.md`, `docs/README.md` (ADR table), `docs/superpowers/plans/2026-06-27-issue-31-audit-wasm-xtask.md` (this file).
 
-- [ ] **Step 1: Verify the working tree holds only the planning docs**
+- [x] **Step 1: Verify the working tree holds only the planning docs**
 
 Run: `git status --porcelain`
 Expected: only the four files above are new/modified, nothing else.
 
-- [ ] **Step 2: Commit the planning artifacts**
+- [x] **Step 2: Commit the planning artifacts**
 
 ```bash
 git add docs/superpowers/specs/2026-06-27-issue-31-audit-wasm-xtask.md \
@@ -67,7 +67,7 @@ git commit -m "docs(issue-31): spec + ADR-0026 devtool/xtask boundary + plan"
   - `pub fn brotli_size(bytes: &[u8]) -> u64`
   - `pub fn render_table(report: &AuditReport) -> String`
 
-- [ ] **Step 1: Add the compression dependencies**
+- [x] **Step 1: Add the compression dependencies**
 
 In `xtask/Cargo.toml`, under `[dependencies]`, add:
 
@@ -76,7 +76,7 @@ flate2 = "1"
 brotli = "7"
 ```
 
-- [ ] **Step 2: Register the module**
+- [x] **Step 2: Register the module**
 
 In `xtask/src/lib.rs`, add alongside the existing `mod coverage;` / `mod result;` lines:
 
@@ -84,7 +84,7 @@ In `xtask/src/lib.rs`, add alongside the existing `mod coverage;` / `mod result;
 mod audit_wasm;
 ```
 
-- [ ] **Step 3: Write the failing tests**
+- [x] **Step 3: Write the failing tests**
 
 Create `xtask/src/audit_wasm.rs` with the types, `use`s, and a `#[cfg(test)]` block (leave the helper bodies as `todo!()` for now so it compiles-and-fails):
 
@@ -188,12 +188,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they fail**
+- [x] **Step 4: Run the tests to verify they fail**
 
 Run: `cargo test -p xtask audit_wasm`
 Expected: FAIL (panics from `todo!()`).
 
-- [ ] **Step 5: Implement the pure helpers**
+- [x] **Step 5: Implement the pure helpers**
 
 Replace the `todo!()` bodies in `xtask/src/audit_wasm.rs`:
 
@@ -263,12 +263,12 @@ pub fn render_table(report: &AuditReport) -> String {
 }
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `cargo test -p xtask audit_wasm`
 Expected: PASS (5 tests).
 
-- [ ] **Step 7: Run the iteration gate, then the commit gate**
+- [x] **Step 7: Run the iteration gate, then the commit gate**
 
 Run: `cargo xtask check --no-test`
 Expected: static + clippy + host xtask unit suite pass.
@@ -276,7 +276,7 @@ Expected: static + clippy + host xtask unit suite pass.
 Run: `cargo xtask validate --no-e2e`
 Expected: PASSED.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add xtask/Cargo.toml xtask/Cargo.lock xtask/src/audit_wasm.rs xtask/src/lib.rs
@@ -296,7 +296,7 @@ git commit -m "feat(xtask): audit-wasm report types + pure size/format helpers"
   - `pub fn resolve_site_path(explicit: Option<&str>) -> anyhow::Result<String>`
   - `pub fn run(site_path: Option<&str>) -> anyhow::Result<AuditReport>`
 
-- [ ] **Step 1: Write the failing test (artifact-missing error path — no `nix` needed)**
+- [x] **Step 1: Write the failing test (artifact-missing error path — no `nix` needed)**
 
 Add to the `#[cfg(test)] mod tests` in `xtask/src/audit_wasm.rs`:
 
@@ -313,12 +313,12 @@ fn run_errors_when_artifact_missing() {
 }
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cargo test -p xtask audit_wasm::tests::run_errors_when_artifact_missing`
 Expected: FAIL ("cannot find function `run`" — not yet implemented).
 
-- [ ] **Step 3: Implement the I/O**
+- [x] **Step 3: Implement the I/O**
 
 Add to `xtask/src/audit_wasm.rs` (top: `use anyhow::{bail, Context, Result};` and `use std::process::Command;`):
 
@@ -365,12 +365,12 @@ pub fn run(site_path: Option<&str>) -> Result<AuditReport> {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cargo test -p xtask audit_wasm`
 Expected: PASS (6 tests).
 
-- [ ] **Step 5: Run the gates**
+- [x] **Step 5: Run the gates**
 
 Run: `cargo xtask check --no-test`
 Expected: pass.
@@ -378,7 +378,7 @@ Expected: pass.
 Run: `cargo xtask validate --no-e2e`
 Expected: PASSED.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/src/audit_wasm.rs
@@ -396,7 +396,7 @@ git commit -m "feat(xtask): audit-wasm site-path resolution + report builder"
 **Interfaces:**
 - Consumes: `audit_wasm::run`, `AuditReport`, `render_table` (Tasks 2–3).
 
-- [ ] **Step 1: Write the failing test (envelope carries + renders the audit report)**
+- [x] **Step 1: Write the failing test (envelope carries + renders the audit report)**
 
 Add to the `#[cfg(test)] mod tests` in `xtask/src/result.rs`:
 
@@ -420,12 +420,12 @@ fn audit_report_serializes_and_renders_in_envelope() {
 }
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cargo test -p xtask audit_report_serializes_and_renders_in_envelope`
 Expected: FAIL (no field `audit` on `CommandResult`).
 
-- [ ] **Step 3: Add the `audit` payload to the envelope**
+- [x] **Step 3: Add the `audit` payload to the envelope**
 
 In `xtask/src/result.rs`, add the field to `CommandResult` (next to `coverage`):
 
@@ -448,12 +448,12 @@ In `print_human`, after the steps loop and before the verdict line, render the t
         }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cargo test -p xtask audit_report_serializes_and_renders_in_envelope`
 Expected: PASS.
 
-- [ ] **Step 5: Add the self-documenting subcommand**
+- [x] **Step 5: Add the self-documenting subcommand**
 
 In `xtask/src/lib.rs`, add a variant to `enum Command` (the doc comment IS the `--help` documentation — problem, when, and how):
 
@@ -507,7 +507,7 @@ In `run`, add the arm (before the closing `}` of the `match cli.command`):
 
 Add `StepResult` to the `use` in `lib.rs` if not already imported (it re-exports via `pub use result::{CommandResult, Mode, StepResult};` — already present).
 
-- [ ] **Step 6: Verify the help renders and the command runs**
+- [x] **Step 6: Verify the help renders and the command runs**
 
 Run: `cargo run -p xtask -- audit-wasm --help`
 Expected: shows the problem/when description and the EXAMPLES block.
@@ -515,7 +515,7 @@ Expected: shows the problem/when description and the EXAMPLES block.
 Run: `cargo run -p xtask -- audit-wasm --site-path /tmp/definitely-missing`
 Expected: `[FAIL] audit-wasm — reading artifact /tmp/definitely-missing/pkg/jaunder_bg.wasm ...`, exit 1.
 
-- [ ] **Step 7: Run the gates**
+- [x] **Step 7: Run the gates**
 
 Run: `cargo xtask check --no-test`
 Expected: pass.
@@ -523,7 +523,7 @@ Expected: pass.
 Run: `cargo xtask validate --no-e2e`
 Expected: PASSED.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add xtask/src/result.rs xtask/src/lib.rs
@@ -540,13 +540,13 @@ git commit -m "feat(xtask): wire self-documenting audit-wasm subcommand + envelo
 - Modify: `docs/ARCHITECTURE.md:103`
 - Modify: `docs/observability.md:111-116`
 
-- [ ] **Step 1: Delete the Node.js script**
+- [x] **Step 1: Delete the Node.js script**
 
 ```bash
 git rm scripts/audit-wasm-bundle
 ```
 
-- [ ] **Step 2: Update `CONTRIBUTING.md`**
+- [x] **Step 2: Update `CONTRIBUTING.md`**
 
 Replace the "WASM Audit" bullet (lines 136-140) with:
 
@@ -558,7 +558,7 @@ Replace the "WASM Audit" bullet (lines 136-140) with:
   Useful options: `--json` (global flag: `cargo xtask --json audit-wasm`) for machine-readable output, or `--site-path` to reuse a build. See `cargo xtask audit-wasm --help`.
 ```
 
-- [ ] **Step 3: Update `docs/ARCHITECTURE.md`**
+- [x] **Step 3: Update `docs/ARCHITECTURE.md`**
 
 Replace line 103 with:
 
@@ -566,7 +566,7 @@ Replace line 103 with:
 -   **`cargo xtask audit-wasm`**: Measures deterministic WASM bundle sizes (raw, gzip, brotli) from Nix build outputs.
 ```
 
-- [ ] **Step 4: Update `docs/observability.md`**
+- [x] **Step 4: Update `docs/observability.md`**
 
 Replace the body of the "## WASM Bundle Audit" section (lines 111-116) so the prose and example use `cargo xtask audit-wasm`:
 
@@ -579,12 +579,12 @@ cargo xtask audit-wasm
 ```
 ```
 
-- [ ] **Step 5: Confirm no stale references remain**
+- [x] **Step 5: Confirm no stale references remain**
 
 Run: `git grep -n "scripts/audit-wasm-bundle"`
 Expected: no output (all references updated; the archived design doc under `docs/archive/` is a frozen historical record and is intentionally left untouched — confirm any remaining hits are only under `docs/archive/`).
 
-- [ ] **Step 6: Run the gates**
+- [x] **Step 6: Run the gates**
 
 Run: `cargo xtask check --no-test`
 Expected: pass.
@@ -592,7 +592,7 @@ Expected: pass.
 Run: `cargo xtask validate --no-e2e`
 Expected: PASSED.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add scripts/audit-wasm-bundle CONTRIBUTING.md docs/ARCHITECTURE.md docs/observability.md
