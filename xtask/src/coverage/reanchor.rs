@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn identical_text_masks_a_new_gap_documented_residual() {
-        // Residual ambiguity (ADR-0029): an accepted gap "}" is removed
+        // Residual ambiguity (ADR-0030): an accepted gap "}" is removed
         // (structural) while an UNRELATED brand-new uncovered "}" appears.
         // Text-identity cannot tell them apart, so the new gap consumes the
         // structural slot and is accepted. This pins the documented, bounded
