@@ -1,5 +1,5 @@
-//! Throwaway PostgreSQL 16 cluster for the instrumented test suite. Ports
-//! `scripts/with-ephemeral-postgres`: an `initdb` cluster on a private TCP port
+//! Throwaway PostgreSQL 16 cluster for the instrumented test suite. Replaces the
+//! former `scripts/with-ephemeral-postgres` bash: an `initdb` cluster on a private TCP port
 //! with durability disabled (it is discarded after the run, so crash-safety is
 //! traded for speed), the `jaunder` app role/database created, and the cluster
 //! torn down on every exit path — normal return, panic, or SIGINT/SIGTERM.

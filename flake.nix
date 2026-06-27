@@ -891,7 +891,7 @@
                   pkgs.cargo-llvm-cov
                   pkgs.cargo-nextest
                   # devtool runs the whole test suite under an ephemeral
-                  # PostgreSQL (via scripts/with-ephemeral-postgres) so
+                  # PostgreSQL (via devtool pg) so
                   # storage/src/postgres/* gets instrumented coverage. The
                   # throwaway cluster needs initdb/pg_ctl/psql available inside
                   # the build sandbox.
