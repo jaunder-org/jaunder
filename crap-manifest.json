@@ -1983,9 +1983,9 @@
     },
     {
       "coverage": 100.0,
-      "crap": 3.0,
+      "crap": 4.0,
       "crate": "web",
-      "cyclomatic": 3.0,
+      "cyclomatic": 4.0,
       "file": "web/src/error.rs",
       "function": "server_boundary",
       "line": 371
