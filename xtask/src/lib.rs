@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 
 mod audit_wasm;
 mod coverage;
+pub mod git;
 mod result;
 mod sh;
 mod steps {

@@ -20,8 +20,8 @@
 
 ## File Structure
 
-- `xtask/src/git.rs` *(new)* — git helpers: `porcelain_is_dirty`, `needs_hooks_path` (pure, tested); `working_tree_status`, `is_working_tree_dirty`, `hooks_path`, `ensure_hooks_path` (shell wrappers); `HOOKS_PATH` const.
-- `xtask/src/lib.rs` *(modify)* — register `mod git;`; add `--allow-dirty` to `Validate`; add `clean_tree_precheck` + wire it into the `Validate` arm; add `ensure_hooks_installed()`.
+- `xtask/src/git.rs` *(new)* — git helpers: `porcelain_is_dirty`, `needs_hooks_path` (pure, tested); `working_tree_status`, `hooks_path`, `ensure_hooks_path` (shell wrappers); `HOOKS_PATH` const. Exposed as `pub mod git` so its helpers (consumed in Tasks 2/5) are crate API and do not trip `dead_code` under clippy `-D warnings` when the module lands ahead of its consumers.
+- `xtask/src/lib.rs` *(modify)* — register `pub mod git;`; add `--allow-dirty` to `Validate`; add `clean_tree_precheck` + wire it into the `Validate` arm; add `ensure_hooks_installed()`.
 - `xtask/src/main.rs` *(modify)* — call `xtask::ensure_hooks_installed()` before dispatch.
 - `.githooks/pre-commit` *(rewrite)* — `cargo xtask check` + fail-and-restage + `SKIP_PRE_COMMIT`.
 - `.githooks/pre-push` *(confirm; no change expected)* — `cargo xtask validate --no-e2e` + `SKIP_PRE_PUSH`.
@@ -38,7 +38,7 @@
 - Test: in-file `#[cfg(test)]` in `xtask/src/git.rs`
 
 **Interfaces:**
-- Produces: `git::HOOKS_PATH: &str`; `git::porcelain_is_dirty(&str) -> bool`; `git::needs_hooks_path(Option<&str>) -> bool`; `git::working_tree_status(&Shell) -> anyhow::Result<String>`; `git::is_working_tree_dirty(&Shell) -> anyhow::Result<bool>`; `git::hooks_path(&Shell) -> Option<String>`; `git::ensure_hooks_path(&Shell) -> anyhow::Result<bool>`.
+- Produces: `git::HOOKS_PATH: &str`; `git::porcelain_is_dirty(&str) -> bool`; `git::needs_hooks_path(Option<&str>) -> bool`; `git::working_tree_status(&Shell) -> anyhow::Result<String>`; `git::hooks_path(&Shell) -> Option<String>`; `git::ensure_hooks_path(&Shell) -> anyhow::Result<bool>`. Module is `pub mod git` (crate API) so helpers landing ahead of their Task 2/5 consumers don't trip `dead_code`.
 
 - [ ] **Step 1: Write the failing tests** — create `xtask/src/git.rs` with only the tests + a `use super::*;`:
 
@@ -81,7 +81,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Register the module** — in `xtask/src/lib.rs`, add `mod git;` alongside the other top-level `mod` lines (after `mod coverage;`).
+- [ ] **Step 2: Register the module** — in `xtask/src/lib.rs`, add `pub mod git;` alongside the other top-level `mod` lines (after `mod coverage;`). It must be `pub` so the helpers (whose consumers land in Tasks 2/5) count as crate API and don't trip `dead_code` under clippy `-D warnings`.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
