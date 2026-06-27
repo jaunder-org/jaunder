@@ -164,7 +164,7 @@ violated it were the bugs.
 and re-applies it on each poll. This makes `expect_context` in a server function reliable
 **regardless of await ordering**, so the per-trait Leptos-context DI is sound as written, and the
 "read context first" convention is retired (its explanatory comments are corrected, not its code).
-The wrap is guarded on `Owner::current().is_some()`: `ScopedFuture::new` captures
+The wrap is guarded on `Owner::current().is_some()`: `ScopedFuture::new_untracked` captures
 `Owner::current().unwrap_or_default()`, so wrapping with no current owner would capture an *empty*
 owner and lose context deterministically — strictly worse than the race. The guarantee is proven
 by the deterministic `owner_lifetime` tests in `web/src/error.rs` (the mechanism, the fix, and the

@@ -377,9 +377,11 @@ pub async fn server_boundary<T>(
     // strong ref is dropped while the future is suspended at an await, the owner's
     // context map is freed and the post-await `expect_context` finds nothing.
     // `ScopedFuture` captures a *strong* owner ref and re-applies it on every poll,
-    // keeping context alive across awaits. Guard on a current owner: `ScopedFuture::new`
-    // captures `Owner::current().unwrap_or_default()`, so wrapping with no owner would
-    // capture an empty owner and lose context deterministically. See ADR-0016 addendum.
+    // keeping context alive across awaits. Guard on a current owner:
+    // `ScopedFuture::new_untracked` captures `Owner::current().unwrap_or_default()`, so
+    // wrapping with no owner would capture an empty owner and lose context
+    // deterministically; the guard instead falls back to a plain await (today's behavior).
+    // See ADR-0016 addendum.
     let outcome = if leptos::reactive::owner::Owner::current().is_some() {
         leptos::reactive::computed::ScopedFuture::new_untracked(future).await
     } else {
@@ -944,7 +946,7 @@ mod owner_lifetime {
         owner.set();
         provide_context(Marker(7));
 
-        let mut fut = Box::pin(ScopedFuture::new(async {
+        let mut fut = Box::pin(ScopedFuture::new_untracked(async {
             let pre = use_context::<Marker>();
             YieldOnce(false).await;
             let post = use_context::<Marker>();
@@ -1004,7 +1006,9 @@ mod owner_lifetime {
             "precondition: no current owner at wrap time"
         );
 
-        let mut fut = Box::pin(ScopedFuture::new(async { use_context::<Marker>() }));
+        let mut fut = Box::pin(ScopedFuture::new_untracked(async {
+            use_context::<Marker>()
+        }));
         let mut cx = Context::from_waker(Waker::noop());
         let result = step(fut.as_mut().poll(&mut cx)).expect("future did not complete");
         assert_eq!(
