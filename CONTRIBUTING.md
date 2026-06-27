@@ -78,7 +78,7 @@ SKIP_PRE_PUSH=1 git push
 - Write and commit preparatory refactors before the behavior changes that use them.
 - Every module should have comprehensive internal documentation.
 - Avoid `cat >>` or other append-only shell edits when modifying files; use structured editing tools.
-- Address all `clippy` lints.
+- Address all `clippy` lints **by fixing the code**, not by silencing them. Adding a lint suppression — `#[allow(...)]` or `#[expect(...)]`, whether a `clippy::` lint or a rustc lint — requires **explicit user approval** before it lands; do not introduce one to make the gate pass on your own initiative (this is the actionable form of the "never suppress … linting without explicit approval" rule under Testing).
 - Unless explicitly instructed otherwise, request review before committing.
 
 ## Testing
