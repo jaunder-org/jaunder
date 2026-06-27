@@ -9,12 +9,18 @@
 
 ;;; Code:
 
+(defconst jaunder-fmt--dir
+  (file-name-directory
+   (directory-file-name
+    (file-name-directory
+     (or load-file-name buffer-file-name default-directory))))
+  "Root of the elisp/ subproject (the parent of this scripts/ directory).
+Captured at load time because `jaunder-fmt-fix' / `jaunder-fmt-check' run
+via `-f' after loading, when `load-file-name' is no longer set.")
+
 (defun jaunder-fmt--files ()
   "Return all .el files under the elisp/ subproject."
-  (let* ((this (file-name-directory
-                (or load-file-name buffer-file-name default-directory)))
-         (root (file-name-directory (directory-file-name this))))
-    (directory-files-recursively root "\\.el\\'")))
+  (directory-files-recursively jaunder-fmt--dir "\\.el\\'"))
 
 (defun jaunder-fmt--canonical (file)
   "Return the canonically-formatted contents of FILE as a string."

@@ -883,7 +883,8 @@
                     !(pkgs.lib.hasInfix "/xtask/" path)
                     && !(pkgs.lib.hasInfix "/tools/" path)
                     && !(pkgs.lib.hasInfix "/docs/" path)
-                    && !(pkgs.lib.hasInfix "/.github/" path);
+                    && !(pkgs.lib.hasInfix "/.github/" path)
+                    && !(pkgs.lib.hasInfix "/elisp/" path);
                 };
                 inherit cargoArtifacts;
                 pname = "jaunder-coverage";
@@ -954,6 +955,24 @@
                 }
                 ''
                   prettier --check ${end2endSrc}
+                  touch $out
+                '';
+            ert-check =
+              pkgs.runCommand "ert-check"
+                {
+                  nativeBuildInputs = [ emacsForCi ];
+                }
+                ''
+                  emacs --batch -Q -l ${emacsSrc}/scripts/run-tests.el
+                  touch $out
+                '';
+            elisp-fmt-check =
+              pkgs.runCommand "elisp-fmt-check"
+                {
+                  nativeBuildInputs = [ emacsForCi ];
+                }
+                ''
+                  emacs --batch -Q -l ${emacsSrc}/scripts/format.el -f jaunder-fmt-check
                   touch $out
                 '';
           };
