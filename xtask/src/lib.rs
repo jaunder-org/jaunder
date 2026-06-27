@@ -212,6 +212,28 @@ fn regen_baseline_inner(gcroot: &str) -> anyhow::Result<usize> {
     Ok(with_gaps)
 }
 
+/// A `git -C <repo_dir>` command scrubbed of the ambient env vars that redirect
+/// git at a different repository. A git hook (e.g. `.githooks/pre-push` running
+/// `cargo xtask validate`) exports `GIT_DIR`/`GIT_INDEX_FILE`; those would make
+/// `git -C <repo_dir>` operate on the HOOK's repo instead of `repo_dir`, so a
+/// command meant for `repo_dir` (or a throwaway test repo) could corrupt the
+/// surrounding worktree. Clearing them pins the target to `-C <repo_dir>`.
+fn git_at(repo_dir: &std::path::Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-C").arg(repo_dir);
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd
+}
+
 /// Register the keep-ours merge driver in `repo_dir`'s local git config. The
 /// driver command is `true`: it exits 0 without touching `%A` (ours), so a merge
 /// of the generated coverage artifacts resolves to our side with no conflict
@@ -219,11 +241,7 @@ fn regen_baseline_inner(gcroot: &str) -> anyhow::Result<usize> {
 fn register_keepours(repo_dir: &std::path::Path) -> anyhow::Result<()> {
     use anyhow::ensure;
     let cfg = |args: &[&str]| -> anyhow::Result<()> {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(repo_dir)
-            .args(args)
-            .status()?;
+        let status = git_at(repo_dir).args(args).status()?;
         ensure!(status.success(), "git {:?} failed", args);
         Ok(())
     };
@@ -307,27 +325,15 @@ mod cli_tests {
 
 #[cfg(test)]
 mod merge_driver_tests {
-    use super::register_keepours;
-    use std::process::Command;
+    use super::{git_at, register_keepours};
 
     fn git(dir: &std::path::Path, args: &[&str]) {
-        let ok = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .status()
-            .unwrap()
-            .success();
+        let ok = git_at(dir).args(args).status().unwrap().success();
         assert!(ok, "git {args:?} failed");
     }
 
     fn git_stdout(dir: &std::path::Path, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .output()
-            .unwrap();
+        let out = git_at(dir).args(args).output().unwrap();
         String::from_utf8(out.stdout).unwrap().trim().to_string()
     }
 
@@ -361,9 +367,7 @@ mod merge_driver_tests {
         git(&tmp, &["commit", "-qam", "ours"]);
 
         // Merge must succeed (exit 0) and keep "ours" with no conflict markers.
-        let merged = Command::new("git")
-            .arg("-C")
-            .arg(&tmp)
+        let merged = git_at(&tmp)
             .args(["merge", "-q", "--no-edit", "feature"])
             .status()
             .unwrap();
