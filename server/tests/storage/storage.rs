@@ -1983,6 +1983,38 @@ async fn post_audience_rows(
     }
 }
 
+// Scheduled publishing (#70) relies on a standalone `published_at` index for the
+// `published_at <= now` reads and the worker's go-live range scans. This asserts
+// the migration created it; a backend `match` is legitimate here because we are
+// querying each engine's schema catalog, not exercising divergent product
+// behavior.
+#[apply(backends)]
+#[tokio::test]
+async fn posts_published_at_index_exists(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let names: Vec<String> = match backend {
+        Backend::Sqlite => sqlx::query_scalar(
+            "SELECT name FROM sqlite_master \
+             WHERE type = 'index' AND name = 'idx_posts_published_at'",
+        )
+        .fetch_all(&open_pool(&env.base).await)
+        .await
+        .unwrap(),
+        Backend::Postgres => {
+            let pool = PgPool::connect(&recorded_postgres_url(&env.base))
+                .await
+                .unwrap();
+            sqlx::query_scalar(
+                "SELECT indexname FROM pg_indexes WHERE indexname = 'idx_posts_published_at'",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(names, vec!["idx_posts_published_at".to_string()]);
+}
+
 // Create persists `post_audiences` rows matching the input vec; update replaces
 // them (delete-all-then-insert). `Private`/empty → no rows. See ADR-0020.
 #[apply(backends)]

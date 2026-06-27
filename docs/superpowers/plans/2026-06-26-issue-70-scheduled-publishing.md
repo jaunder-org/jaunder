@@ -51,7 +51,7 @@ None new. The full scheduled-post management UI (a dedicated scheduled list, in-
 **Interfaces:**
 - Produces: a `idx_posts_published_at` index supporting `WHERE published_at <= now AND deleted_at IS NULL` range scans used by Tasks 2 and 7.
 
-- [ ] **Step 1: Write the failing test** in `server/tests/storage/storage.rs` (asserts the index exists after migrations; one common test, both backends):
+- [x] **Step 1: Write the failing test** in `server/tests/storage/storage.rs` (asserts the index exists after migrations; one common test, both backends):
 
 ```rust
 #[apply(backends)]
@@ -78,9 +78,9 @@ async fn posts_published_at_index_exists(#[case] backend: Backend) {
 
 (If `env` exposes pools under different accessors, match the existing helper API in `server/tests/helpers/mod.rs`; this is the one place a backend `match` is legitimate — it asserts a backend-specific catalog, not divergent product behavior.)
 
-- [ ] **Step 2: Run it, verify it fails** — `cd <worktree> && cargo nextest run -p server posts_published_at_index_exists` → FAIL (index missing).
+- [x] **Step 2: Run it, verify it fails** — `cd <worktree> && cargo nextest run -p jaunder posts_published_at_index_exists` → FAIL (index missing).
 
-- [ ] **Step 3: Write the migrations.** SQLite (`...sqlite/00NN_index_posts_published_at.sql`):
+- [x] **Step 3: Write the migrations** (`0022_index_posts_published_at.sql`). SQLite (`...sqlite/0022_index_posts_published_at.sql`):
 
 ```sql
 CREATE INDEX IF NOT EXISTS idx_posts_published_at
@@ -96,9 +96,9 @@ CREATE INDEX IF NOT EXISTS idx_posts_published_at
     WHERE deleted_at IS NULL;
 ```
 
-- [ ] **Step 4: Run it, verify it passes** — same nextest command → PASS (both backends, Postgres permitting).
+- [x] **Step 4: Run it, verify it passes** — same nextest command → PASS (SQLite locally; Postgres + full coverage via `cargo xtask validate --no-e2e`). NOTE: adding migration 0022 bumped `schema_version_returns_migration_count` in `storage/src/sqlite/backup.rs` (21→22) — update it.
 
-- [ ] **Step 5: Commit** — `feat(storage): index posts.published_at for scheduled-publishing reads (#70)`.
+- [x] **Step 5: Commit** — `feat(storage): index posts.published_at for scheduled-publishing reads (#70)`.
 
 ---
 
@@ -155,7 +155,7 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
 
 Add a small helper `seed_post_published_at(env, username, slug, published_at)` next to the existing `make_published_create_post_input` (storage.rs:1766) that creates a post with an explicit `published_at` via `perform_post_creation` (which already takes `published_at: Option<DateTime<Utc>>`). Reuse `uname`/`slug` helpers if present; otherwise construct `Username`/`Slug` as neighboring tests do.
 
-- [ ] **Step 2: Run them, verify they fail** — `cd <worktree> && cargo nextest run -p server hides_scheduled` (and the other test names). Expected: FAIL to compile first (new `now` arg) — that compile failure is the red state — and, once you stub the signature, FAIL on the assertion (scheduled post leaks).
+- [ ] **Step 2: Run them, verify they fail** — `cd <worktree> && cargo nextest run -p jaunder hides_scheduled` (and the other test names). Expected: FAIL to compile first (new `now` arg) — that compile failure is the red state — and, once you stub the signature, FAIL on the assertion (scheduled post leaks).
 
 - [ ] **Step 3: Implement.** In `storage/src/posts.rs`: add `now: DateTime<Utc>` to the five trait declarations and the five impls; in each query string add `AND p.published_at <= $K` next to the existing `IS NOT NULL`; add the matching `.bind(now)` and renumber subsequent positional binds. Then update every call site to pass `Utc::now()` (web read handlers, any AtomPub reads, and existing tests). Let the compiler list them.
 
@@ -203,13 +203,13 @@ async fn drafts_list_includes_scheduled_excludes_live(#[case] backend: Backend) 
 }
 ```
 
-- [ ] **Step 2: Run it, verify it fails** — `cd <worktree> && cargo nextest run -p server drafts_list_includes_scheduled` → FAIL (compile, then assertion).
+- [ ] **Step 2: Run it, verify it fails** — `cd <worktree> && cargo nextest run -p jaunder drafts_list_includes_scheduled` → FAIL (compile, then assertion).
 
 - [ ] **Step 3: Implement the query.** In `storage/src/posts.rs` add `now: DateTime<Utc>` to `list_drafts_by_user` (trait + impl) and change the gate from `AND p.published_at IS NULL` to `AND (p.published_at IS NULL OR p.published_at > $K)` in both the cursor and no-cursor branches, binding `now`.
 
 - [ ] **Step 4: Surface the marker through the web layer.** In `web/src/posts/mod.rs`: add `scheduled_at: Option<String>` to `DraftSummary` (144); in `list_drafts` (493) pass `Utc::now()` and set `scheduled_at = post.published_at.map(|t| t.to_rfc3339())` (only populated when `published_at` is in the future — true drafts stay `None`). In `web/src/pages/posts.rs` `DraftsPage` (818), when `scheduled_at` is `Some`, render a "Scheduled for {local time}" badge instead of the draft label (format the RFC3339 string to the viewer's locale with the existing date-rendering helper used elsewhere in that page).
 
-- [ ] **Step 5: Write + run the web server-fn test** in `server/tests/web/web_posts.rs`: create a post scheduled in the future, call `list_drafts`, assert the returned `DraftSummary` has `scheduled_at: Some(_)` and that a live post does not appear. Run: `cd <worktree> && cargo nextest run -p server -E 'test(list_drafts)'` → PASS. Then `cargo xtask check --no-test` → clean.
+- [ ] **Step 5: Write + run the web server-fn test** in `server/tests/web/web_posts.rs`: create a post scheduled in the future, call `list_drafts`, assert the returned `DraftSummary` has `scheduled_at: Some(_)` and that a live post does not appear. Run: `cd <worktree> && cargo nextest run -p jaunder -E 'test(list_drafts)'` → PASS. Then `cargo xtask check --no-test` → clean.
 
 - [ ] **Step 6: Commit** — `feat(web): show scheduled posts in the author drafts surface with a marker (#70)`.
 
@@ -278,7 +278,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
 
 `update_input(...)` is a small local helper building a `PostUpdate` with the given `publish` and otherwise-unchanged fields (mirror `make_*` helpers).
 
-- [ ] **Step 2: Run them, verify they fail** — `cd <worktree> && cargo nextest run -p server update_publish_timestamp_semantics` → FAIL (compile: `PublishUpdate` undefined / `publish` is `bool`).
+- [ ] **Step 2: Run them, verify they fail** — `cd <worktree> && cargo nextest run -p jaunder update_publish_timestamp_semantics` → FAIL (compile: `PublishUpdate` undefined / `publish` is `bool`).
 
 - [ ] **Step 3: Implement the type + service.** Add `PublishUpdate` to `storage/src/post_service.rs`; change `PostUpdate.publish` to `PublishUpdate`; in `perform_post_update` derive `(unpublish: bool, explicit_at: Option<DateTime<Utc>>)` from it and pass both (plus `now`) into `UpdatePostInput`.
 
@@ -296,7 +296,7 @@ where `$U` = `unpublish` (bool), `$E` = `explicit_at` (`Option<DateTime<Utc>>`),
 
 - [ ] **Step 5: Update callers (keep the build green).** `server/src/atompub/posts.rs:381` `publish: !fields.is_draft` → `PublishUpdate` (Task 5 refines this; for now `if fields.is_draft { Unpublish } else { Publish { at: None } }`). `web/src/posts/mod.rs` `update_post` (345): `publish: if publish { Publish { at: None } } else { Unpublish }`. `publish_post` (531): `Publish { at: None }`.
 
-- [ ] **Step 6: Run tests + gate** — `cargo nextest run -p server update_publish_timestamp_semantics` → PASS both backends; `cargo xtask check --no-test` → clean.
+- [ ] **Step 6: Run tests + gate** — `cargo nextest run -p jaunder update_publish_timestamp_semantics` → PASS both backends; `cargo xtask check --no-test` → clean.
 
 - [ ] **Step 7: Commit** — `feat(storage): replace update publish bool with explicit publish timestamp (#70)`.
 
@@ -358,7 +358,7 @@ async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) 
 
 Keep the existing `create_draft_entry_is_unpublished` (atompub_posts.rs:978) passing unchanged.
 
-- [ ] **Step 2: Run them, verify they fail** — `cd <worktree> && cargo nextest run -p server -E 'test(create_with_future_published) + test(create_with_past_published)'` → FAIL.
+- [ ] **Step 2: Run them, verify they fail** — `cd <worktree> && cargo nextest run -p jaunder -E 'test(create_with_future_published) + test(create_with_past_published)'` → FAIL.
 
 - [ ] **Step 3: Implement parsing.** In `server/src/atompub/mapping.rs`: add `published: Option<DateTime<Utc>>` to `PostFields`; in `entry_to_post_fields` read the entry's `<published>` (the `atom_syndication`/`feed-rs` entry type already used; map `published` to `DateTime<Utc>`), set `None` when absent.
 
@@ -423,13 +423,13 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
 
 (Adapt to the actual server-fn test harness shape in `web_posts.rs`.)
 
-- [ ] **Step 2: Run it, verify it fails** — `cd <worktree> && cargo nextest run -p server create_post_with_future_publish_at` → FAIL (no `publish_at` param).
+- [ ] **Step 2: Run it, verify it fails** — `cd <worktree> && cargo nextest run -p jaunder create_post_with_future_publish_at` → FAIL (no `publish_at` param).
 
 - [ ] **Step 3: Implement the server fns.** Add `publish_at: Option<DateTime<Utc>>` to `create_post` (189) and `update_post` (345). `create_post`: `let published_at = publish.then(|| publish_at.unwrap_or_else(Utc::now));`. `update_post`: `publish: if publish { PublishUpdate::Publish { at: publish_at } } else { PublishUpdate::Unpublish }`. Read handlers that call the Task-2 reads pass `Utc::now()`.
 
 - [ ] **Step 4: Implement the UI control.** In the editor form (`web/src/pages/ui.rs`) add an optional `datetime-local` input ("Publish at (optional)"). On submit, interpret the local value as the author's local time, convert to UTC, and pass as `publish_at`; leaving it empty sends `None` (publish-now on Publish). Display existing scheduled times in local time when editing. Keep "Save draft" = `publish: false`.
 
-- [ ] **Step 5: Run test + gate** — `cargo nextest run -p server create_post_with_future_publish_at` → PASS; `cargo xtask check --no-test` → clean.
+- [ ] **Step 5: Run test + gate** — `cargo nextest run -p jaunder create_post_with_future_publish_at` → PASS; `cargo xtask check --no-test` → clean.
 
 - [ ] **Step 6: Commit** — `feat(web): add a publish-at datetime control to the compose form (#70)`.
 
@@ -558,7 +558,7 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
 
 Add small test helpers as needed (`make_feed_worker`, `seed_cached_feed`, `feed_events_pending_urls` — the last can wrap `claim_pending_batch` or a direct `SELECT feed_url FROM feed_events WHERE status='pending'`).
 
-- [ ] **Step 2: Run them, verify they fail** — `cd <worktree> && cargo nextest run -p server -E 'test(startup_catchup_regenerates_feed) + test(steady_state_window_enqueues)'` → FAIL (no `go_live_pass`).
+- [ ] **Step 2: Run them, verify they fail** — `cd <worktree> && cargo nextest run -p jaunder -E 'test(startup_catchup_regenerates_feed) + test(steady_state_window_enqueues)'` → FAIL (no `go_live_pass`).
 
 - [ ] **Step 3: Implement.** Add `last_tick: tokio::sync::Mutex<Option<DateTime<Utc>>>` to `FeedWorker` (and its constructor). Implement `go_live_pass`:
   - lock `last_tick`;
