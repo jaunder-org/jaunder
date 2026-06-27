@@ -27,7 +27,7 @@ Out-of-scope separable concern captured up front so it can be picked up independ
 
 **Files:** none (GitHub issue only).
 
-- [ ] **Step 1: Create the issue**
+- [x] **Step 1: Create the issue**
 
 ```bash
 gh issue create -R jaunder-org/jaunder \
@@ -43,7 +43,7 @@ Relates to #99 (git-enforced gate convergence)."
 
 Expected: prints the new issue URL.
 
-- [ ] **Step 2: Record the issue number** in the PR description later (no commit).
+- [x] **Step 2: Record the issue number** in the PR description later (no commit).
 
 ---
 
@@ -53,7 +53,7 @@ Expected: prints the new issue URL.
 - Create: `docs/adr/0029-coverage-reanchor-text-identity.md`
 - Modify: `docs/README.md` (ADR table — add the 0029 row, matching the existing row format)
 
-- [ ] **Step 1: Write the ADR**
+- [x] **Step 1: Write the ADR**
 
 Create `docs/adr/0029-coverage-reanchor-text-identity.md`:
 
@@ -105,7 +105,7 @@ counterpart (genuine lowering), the gate still fails.
   and, later, the explicit reanchor command (#88).
 ```
 
-- [ ] **Step 2: Add the ADR table row in `docs/README.md`**
+- [x] **Step 2: Add the ADR table row in `docs/README.md`**
 
 Find the ADR table (rows like `| 0028 | ... | accepted |`) and add, in number order:
 
@@ -115,7 +115,7 @@ Find the ADR table (rows like `| 0028 | ... | accepted |`) and add, in number or
 
 Match the exact column layout of the surrounding rows (read the 0028 row first and mirror it).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/adr/0029-coverage-reanchor-text-identity.md docs/README.md
@@ -139,7 +139,7 @@ The #86 primitive. Pure function over the classifier verdict + current report + 
   - `pub struct ReanchorSafety { pub safe: bool, pub lowering: Vec<LineText> }` (derives `Clone, Debug, Default, PartialEq`)
   - `pub fn reanchor_is_safe(verdict: &CoverageVerdict, current: &[FileCoverage], baseline: &Baseline) -> ReanchorSafety`
 
-- [ ] **Step 1: Register the module**
+- [x] **Step 1: Register the module**
 
 In `xtask/src/coverage/mod.rs`, add to the module list (with the existing `pub mod baseline; pub mod classify; ...`):
 
@@ -147,7 +147,7 @@ In `xtask/src/coverage/mod.rs`, add to the module list (with the existing `pub m
 pub mod reanchor;
 ```
 
-- [ ] **Step 2: Write failing tests**
+- [x] **Step 2: Write failing tests**
 
 Create `xtask/src/coverage/reanchor.rs` with only the tests first (the types/fn won't exist yet → compile fail is the "failure"):
 
@@ -303,12 +303,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `cargo test -p xtask --lib coverage::reanchor`
 Expected: FAIL — `reanchor_is_safe` not found.
 
-- [ ] **Step 4: Implement the predicate**
+- [x] **Step 4: Implement the predicate**
 
 Insert above the `#[cfg(test)]` module in `reanchor.rs`:
 
@@ -386,12 +386,12 @@ pub fn reanchor_is_safe(
 }
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `cargo test -p xtask --lib coverage::reanchor`
 Expected: PASS (6 tests).
 
-- [ ] **Step 6: Gate + commit**
+- [x] **Step 6: Gate + commit**
 
 ```bash
 cargo xtask check --no-test
@@ -412,7 +412,7 @@ Replace the line-identity `verdict.is_clean()` gate/heal condition with the text
 - Consumes: `reanchor::{reanchor_is_safe, ReanchorSafety}` (Task 3).
 - Produces: `heal_baseline(safety: &ReanchorSafety, crap_regs: &[CrapRegression], current: &[FileCoverage], loaded: &Baseline, mode: Mode) -> (Option<Baseline>, bool)`.
 
-- [ ] **Step 1: Change `heal_baseline` to take `ReanchorSafety`**
+- [x] **Step 1: Change `heal_baseline` to take `ReanchorSafety`**
 
 In `mod.rs`, replace the `heal_baseline` signature and the `clean` line:
 
@@ -439,7 +439,7 @@ fn heal_baseline(
 
 (Update the doc comment above it: heal happens when the run is a *safe re-anchor* — `safety.safe` — with no CRAP regressions, generalising the old line-clean condition.)
 
-- [ ] **Step 2: Wire it into `run_inner`**
+- [x] **Step 2: Wire it into `run_inner`**
 
 In `run_inner`, after `let verdict = classify::classify(&current, &baseline, &maps);` add:
 
@@ -483,7 +483,7 @@ Replace the `gate_fails` detail/`else` detail blocks with:
     };
 ```
 
-- [ ] **Step 3: Update existing `heal_baseline` unit tests**
+- [x] **Step 3: Update existing `heal_baseline` unit tests**
 
 The tests `heals_a_shrunk_baseline_when_clean_in_fix_mode`, `does_not_heal_when_a_regression_is_present_even_in_fix_mode`, `does_not_heal_when_crap_regressions_present`, and `never_heals_in_check_mode` call `heal_baseline(&verdict, ...)`. They now pass a `ReanchorSafety`. Update each call site:
 
@@ -494,7 +494,7 @@ The tests `heals_a_shrunk_baseline_when_clean_in_fix_mode`, `does_not_heal_when_
 
 Add `use crate::coverage::reanchor;` to the test module if not already in scope. Delete the now-unused `verdict_with_improvement()` helper if it is no longer referenced (or keep it only if a remaining test uses it — verify with the compiler).
 
-- [ ] **Step 4: Add a gate-level test for the re-anchor pass**
+- [x] **Step 4: Add a gate-level test for the re-anchor pass**
 
 In `mod.rs` tests, add:
 
@@ -519,12 +519,12 @@ In `mod.rs` tests, add:
     }
 ```
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run: `cargo test -p xtask --lib coverage::`
 Expected: PASS.
 
-- [ ] **Step 6: Gate + commit**
+- [x] **Step 6: Gate + commit**
 
 ```bash
 cargo xtask check --no-test
@@ -544,7 +544,7 @@ git commit --no-verify -m "feat(xtask): gate + heal on text-identity re-anchor, 
 **Interfaces:**
 - Produces: `pub fn compare(new_report: &str, old_manifest: &str) -> Result<Vec<CrapRegression>>` (unchanged signature; internal key changes).
 
-- [ ] **Step 1: Add failing tests**
+- [x] **Step 1: Add failing tests**
 
 Add to the `#[cfg(test)]` module in `crap.rs`:
 
@@ -585,12 +585,12 @@ Add to the `#[cfg(test)]` module in `crap.rs`:
     }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cargo test -p xtask --lib coverage::crap`
 Expected: FAIL — `detects_regression_across_a_line_shift` fails (current line-keyed compare misses the shift).
 
-- [ ] **Step 3: Replace the key + `compare`**
+- [x] **Step 3: Replace the key + `compare`**
 
 Change the `Key` type and rewrite the keying. Replace:
 
@@ -674,12 +674,12 @@ pub fn compare(new_report: &str, old_manifest: &str) -> Result<Vec<CrapRegressio
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `cargo test -p xtask --lib coverage::crap`
 Expected: PASS (existing + 3 new tests).
 
-- [ ] **Step 5: Gate + commit**
+- [x] **Step 5: Gate + commit**
 
 ```bash
 cargo xtask check --no-test
@@ -696,7 +696,7 @@ git commit --no-verify -m "fix(xtask): key CRAP compare on ordinal, not absolute
 **Files:**
 - Modify: `xtask/src/coverage/mod.rs` (replace `normalize_json` / `normalize_json_or_empty` with `normalize_crap_without_line`; update the trigger; update the `crap_heal_is_idempotent_and_pretty` test; add a line-shift no-op test)
 
-- [ ] **Step 1: Update the idempotence test + add a line-shift test**
+- [x] **Step 1: Update the idempotence test + add a line-shift test**
 
 In `mod.rs` tests, replace `crap_heal_is_idempotent_and_pretty` with:
 
@@ -733,12 +733,12 @@ In `mod.rs` tests, replace `crap_heal_is_idempotent_and_pretty` with:
     }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cargo test -p xtask --lib coverage::`
 Expected: FAIL — `normalize_crap_without_line` not found.
 
-- [ ] **Step 3: Replace the normalizers**
+- [x] **Step 3: Replace the normalizers**
 
 In `mod.rs`, delete `normalize_json` and `normalize_json_or_empty`. Keep `pretty_json`. Add:
 
@@ -772,7 +772,7 @@ fn normalize_crap_without_line(s: &str) -> Result<String> {
 }
 ```
 
-- [ ] **Step 4: Update the rewrite trigger**
+- [x] **Step 4: Update the rewrite trigger**
 
 Replace the trigger body (the `if normalize_json(...) != normalize_json_or_empty(...)` block) with:
 
@@ -791,12 +791,12 @@ Replace the trigger body (the `if normalize_json(...) != normalize_json_or_empty
 
 (The enclosing `if matches!(mode, Mode::Fix) && safety.safe && crap_regs.is_empty()` from Task 4 stays.)
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run: `cargo test -p xtask --lib coverage::`
 Expected: PASS.
 
-- [ ] **Step 6: Gate + commit**
+- [x] **Step 6: Gate + commit**
 
 ```bash
 cargo xtask check --no-test
@@ -817,7 +817,7 @@ git commit --no-verify -m "fix(xtask): rewrite crap-manifest only on real CRAP c
 **Interfaces:**
 - Produces: `Command::InstallMergeDriver`; `fn register_keepours(repo_dir: &std::path::Path) -> anyhow::Result<()>`.
 
-- [ ] **Step 1: Create `.gitattributes`**
+- [x] **Step 1: Create `.gitattributes`**
 
 Create `.gitattributes` at the repo root:
 
@@ -830,7 +830,7 @@ coverage-baseline.json merge=coverage-keepours
 crap-manifest.json merge=coverage-keepours
 ```
 
-- [ ] **Step 2: Add the command variant**
+- [x] **Step 2: Add the command variant**
 
 In `xtask/src/lib.rs`, add to the `Command` enum (after `AuditWasm { .. }`):
 
@@ -862,7 +862,7 @@ Add the `run` arm (in the `match cli.command`):
         }
 ```
 
-- [ ] **Step 3: Add the implementation**
+- [x] **Step 3: Add the implementation**
 
 Add these functions to `xtask/src/lib.rs` (near `regen_baseline`):
 
@@ -900,7 +900,7 @@ fn install_merge_driver() -> StepResult {
 }
 ```
 
-- [ ] **Step 4: Add a keep-ours integration test**
+- [x] **Step 4: Add a keep-ours integration test**
 
 Add a test module (or extend the existing one) in `xtask/src/lib.rs`:
 
@@ -968,12 +968,12 @@ mod merge_driver_tests {
 
 Note: if `git init` produces a `main` default branch, replace `"master"` with the branch reported by `git -C <tmp> branch --show-current` after the base commit. To be robust, capture it: `let base = String::from_utf8(Command::new("git").arg("-C").arg(&tmp).args(["branch","--show-current"]).output().unwrap().stdout).unwrap().trim().to_string();` right after the base commit, and `git(&tmp, &["checkout","-q",&base]);` instead of the hardcoded `"master"`.
 
-- [ ] **Step 5: Run the test**
+- [x] **Step 5: Run the test**
 
 Run: `cargo test -p xtask --lib merge_driver_tests`
 Expected: PASS.
 
-- [ ] **Step 6: Gate + commit**
+- [x] **Step 6: Gate + commit**
 
 ```bash
 cargo xtask check --no-test
@@ -988,7 +988,7 @@ git commit --no-verify -m "feat(xtask): keep-ours merge driver for coverage arti
 **Files:**
 - Modify: `CONTRIBUTING.md` (the "Coverage and dependency policy" section, around line 186-194)
 
-- [ ] **Step 1: Extend the coverage policy prose**
+- [x] **Step 1: Extend the coverage policy prose**
 
 After the existing paragraph that begins "The gate does **line-identity** classification…" (line 186) and the auto-heal paragraph (line 188), add:
 
@@ -1000,7 +1000,7 @@ The heal is keyed on **uncovered-text identity**, not line number: a line-shifti
 The two committed artifacts (`coverage-baseline.json`, `crap-manifest.json`) use a **keep-ours git merge driver** (`.gitattributes`) so overlapping branches do not produce conflict markers; the Fix-mode heal restores authoritative content on the next `cargo xtask check`. Register the driver once per clone/worktree with `cargo xtask install-merge-driver`.
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add CONTRIBUTING.md
@@ -1013,7 +1013,7 @@ git commit --no-verify -m "docs(contributing): coverage re-anchor + crap line-hi
 
 **Files:** possibly `coverage-baseline.json` / `crap-manifest.json` (only if the new logic heals them).
 
-- [ ] **Step 1: Run the inner Fix gate to heal any artifact drift**
+- [x] **Step 1: Run the inner Fix gate to heal any artifact drift**
 
 ```bash
 cargo xtask check
@@ -1021,7 +1021,7 @@ cargo xtask check
 
 Expected: exit 0. This runs the Nix coverage check and exercises the new engine against the real reports. If it re-anchors the baseline or rewrites the manifest, those files become dirty.
 
-- [ ] **Step 2: Inspect any artifact changes**
+- [x] **Step 2: Inspect any artifact changes**
 
 ```bash
 git status --porcelain
@@ -1030,14 +1030,14 @@ git diff --stat coverage-baseline.json crap-manifest.json
 
 If either file changed, confirm the diff is a legitimate re-anchor / real-CRAP refresh (not a coverage lowering). If a lowering appears, STOP — that is a real regression to investigate, not to commit.
 
-- [ ] **Step 3: Commit any healed artifacts (if changed)**
+- [x] **Step 3: Commit any healed artifacts (if changed)**
 
 ```bash
 git add coverage-baseline.json crap-manifest.json
 git commit --no-verify -m "chore(coverage): re-anchor baseline/manifest under new heal (#86, #7)"
 ```
 
-- [ ] **Step 4: Run the authoritative gate**
+- [x] **Step 4: Run the authoritative gate**
 
 ```bash
 cargo xtask validate --no-e2e
@@ -1049,7 +1049,7 @@ Expected: exit 0 (static + clippy + host xtask tests + Nix coverage, Check mode)
 git diff --quiet && echo "tree clean (validate is verify-only)"
 ```
 
-- [ ] **Step 5: Self-review against the spec**
+- [x] **Step 5: Self-review against the spec**
 
 Confirm each spec deliverable maps to a landed task: #86 predicate (Task 3) + gate/heal (Task 4); #7 ordinal compare (Task 5) + rewrite trigger (Task 6); merge driver (Task 7); ADR (Task 2); docs (Task 8); follow-on issue (Task 1). Request code review (`superpowers:requesting-code-review`) before shipping.
 
