@@ -37,7 +37,7 @@
   - `fn build_otel_meter(endpoint: &str) -> Result<opentelemetry_sdk::metrics::SdkMeterProvider, String>`
 - Consumes: existing `otel_exporter_otlp_endpoint()`, `resolved_filter`, `use_json_format`, `SlowSpanLayer`, and the `use opentelemetry::trace::TracerProvider as _;` import (kept — `init_tracing_impl` now calls `provider.tracer("jaunder")`).
 
-- [ ] **Step 1: Write the failing flush-on-drop tests**
+- [x] **Step 1: Write the failing flush-on-drop tests**
 
 Add to the `#[cfg(test)] mod tests` block in `server/src/observability.rs`. Add the import line `use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};` and `use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};` at the top of the test module (next to the existing `use super::*;`). (Mirror the working metrics template at `common/src/metrics.rs:240-262`.)
 
@@ -123,12 +123,12 @@ async fn guard_drop_swallows_shutdown_errors() {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo nextest run -p jaunder observability::tests::guard_`
 Expected: FAIL — `cannot find struct TelemetryGuard` (not yet defined) / `init_tracing_impl` field types. Compilation error is the expected failure here.
 
-- [ ] **Step 3: Add `TelemetryGuard` + `Drop`**
+- [x] **Step 3: Add `TelemetryGuard` + `Drop`**
 
 In `server/src/observability.rs`, after `init_tracing` (replacing nothing yet), add:
 
@@ -168,7 +168,7 @@ impl Drop for TelemetryGuard {
 }
 ```
 
-- [ ] **Step 4: Change `build_otel_tracer` / `build_otel_meter` to return their providers**
+- [x] **Step 4: Change `build_otel_tracer` / `build_otel_meter` to return their providers**
 
 Replace `build_otel_tracer` (currently `observability.rs:51-63`) with:
 
@@ -205,7 +205,7 @@ fn build_otel_meter(endpoint: &str) -> Result<opentelemetry_sdk::metrics::SdkMet
 }
 ```
 
-- [ ] **Step 5: Make `init_tracing_impl` build the guard, and `init_tracing` return it; remove `Once`**
+- [x] **Step 5: Make `init_tracing_impl` build the guard, and `init_tracing` return it; remove `Once`**
 
 In `init_tracing_impl` (currently `observability.rs:155`), change the signature to `-> TelemetryGuard` and replace the OTel-layer + metrics section (currently lines 180-198) and the trailing `try_init` block so it reads:
 
@@ -271,7 +271,7 @@ pub fn init_tracing(verbose: bool) -> TelemetryGuard {
 
 Delete `use std::sync::Once;` (line 1) and `static INIT_TRACING: Once = Once::new();` (line 18). Idempotency was previously enforced by `Once`; it is now moot because `init_tracing` is called exactly once per process (production), and `try_init` / `LogTracer::init` already report repeat installs non-fatally (exercised by `init_tracing_impl_reports_failure_when_already_initialized`, and by the `run()` tests that dispatch twice in one process with no endpoint → inert guards).
 
-- [ ] **Step 6: Bind the guard at the two call sites**
+- [x] **Step 6: Bind the guard at the two call sites**
 
 In `server/src/main.rs`, replace the `if !matches!(...)` block (lines 34-36) — hoist the guard to function scope so it outlives the dispatch:
 
@@ -296,22 +296,22 @@ In `server/src/commands.rs:410`, replace `crate::observability::init_tracing(ver
 
 (Footgun: a bare `init_tracing(verbose);` statement — or `let _ = ...` — would drop the guard immediately and shut telemetry down right after install. Use the named binding `_telemetry`.)
 
-- [ ] **Step 7: Run the new tests and verify they pass**
+- [x] **Step 7: Run the new tests and verify they pass**
 
 Run: `cargo nextest run -p jaunder observability::tests::guard_`
 Expected: PASS (4 tests: flush meter, flush tracer, inert no-op, swallow shutdown errors).
 
-- [ ] **Step 8: Run the full observability + run/serve suites to confirm no regression**
+- [x] **Step 8: Run the full observability + run/serve suites to confirm no regression**
 
 Run: `cargo nextest run -p jaunder observability:: run_ cmd_serve`
 Expected: PASS — existing `init_tracing_impl_*`, `run_*`, and serve tests still green (each now drops a guard; with no/refused OTLP endpoint, `shutdown()` returns promptly).
 
-- [ ] **Step 9: Gate**
+- [x] **Step 9: Gate**
 
 Run: `cargo xtask check --no-test`
 Expected: clippy + fmt clean (exit 0). Fix any lint before committing.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add server/src/observability.rs server/src/main.rs server/src/commands.rs
