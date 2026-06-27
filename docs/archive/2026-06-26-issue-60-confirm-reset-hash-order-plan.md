@@ -35,12 +35,12 @@
 
 **Interfaces:** unchanged trait method `async fn confirm_password_reset(&self, raw_token: &str, new_password: &Password) -> Result<(), ConfirmPasswordResetError>` in both backends.
 
-- [ ] **Step 1: Green baseline (sqlite).**
+- [x] **Step 1: Green baseline (sqlite).**
 
 Run: `cargo nextest run -E '(test(password_reset) | test(email_verification_and_password_reset_work)) & test(sqlite)'`
 Expected: PASS (sqlite cases), including `confirm_password_reset_hash_failure_returns_internal_error`.
 
-- [ ] **Step 2: Reorder the SQLite impl.** In `storage/src/sqlite/mod.rs::confirm_password_reset`, (a) delete the pre-transaction hash block:
+- [x] **Step 2: Reorder the SQLite impl.** In `storage/src/sqlite/mod.rs::confirm_password_reset`, (a) delete the pre-transaction hash block:
 
 ```rust
         let password_hash = crate::helpers::hash_password(new_password.clone())
@@ -78,11 +78,11 @@ and (b) insert the hash after the claim's `else { … };` block, immediately bef
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
 ```
 
-- [ ] **Step 3: Reorder the Postgres impl.** Apply the **identical** two edits to `storage/src/postgres/mod.rs::confirm_password_reset` (delete the pre-`begin()` hash block; insert the same hash-with-comment after the claim's `else { … };` block, before `UPDATE users`). The surrounding code is line-for-line the same as SQLite.
+- [x] **Step 3: Reorder the Postgres impl.** Apply the **identical** two edits to `storage/src/postgres/mod.rs::confirm_password_reset` (delete the pre-`begin()` hash block; insert the same hash-with-comment after the claim's `else { … };` block, before `UPDATE users`). The surrounding code is line-for-line the same as SQLite.
 
-- [ ] **Step 4: Remove the SQLite-only in-file hash-failure test.** Delete `confirm_password_reset_hash_failure_returns_internal_error` (`storage/src/sqlite/mod.rs`, ~376-406). It is replaced by the dual-backend tests in Step 5 (which cover the SQLite *and* Postgres reorder). Its setup also relied on hash-before-claim — a non-matching token that only returned `Internal` because the hash ran first — so it would assert the wrong variant post-reorder anyway.
+- [x] **Step 4: Remove the SQLite-only in-file hash-failure test.** Delete `confirm_password_reset_hash_failure_returns_internal_error` (`storage/src/sqlite/mod.rs`, ~376-406). It is replaced by the dual-backend tests in Step 5 (which cover the SQLite *and* Postgres reorder). Its setup also relied on hash-before-claim — a non-matching token that only returned `Internal` because the hash ran first — so it would assert the wrong variant post-reorder anyway.
 
-- [ ] **Step 5: Add two dual-backend ordering tests.** In `server/tests/storage/storage.rs`, after `email_verification_and_password_reset_work` (ends ~line 818), add (uses `state` + storage-trait methods only — no raw SQL):
+- [x] **Step 5: Add two dual-backend ordering tests.** In `server/tests/storage/storage.rs`, after `email_verification_and_password_reset_work` (ends ~line 818), add (uses `state` + storage-trait methods only — no raw SQL):
 
 ```rust
 #[apply(backends)]
@@ -129,22 +129,22 @@ async fn confirm_password_reset_bogus_token_returns_not_found_without_hashing(
 
 If `ConfirmPasswordResetError` is not already in the test module's `use storage::{…}` group, add it. (`username`, `password`, `Backend` are already imported and used by neighboring tests; `password("force-hash-error-for-test-coverage")` parses the magic hash-failing string via the same helper the in-file test used.)
 
-- [ ] **Step 6: Run the updated tests (sqlite cases).**
+- [x] **Step 6: Run the updated tests (sqlite cases).**
 
 Run: `cargo nextest run -E 'test(confirm_password_reset) & test(sqlite)'`
 Expected: PASS — `confirm_password_reset_hash_failure_returns_internal::case_1_sqlite` (`Internal`) and `confirm_password_reset_bogus_token_returns_not_found_without_hashing::case_1_sqlite` (`NotFound`). (Run `email_verification_and_password_reset_work & test(sqlite)` too to confirm the success path still passes.)
 
-- [ ] **Step 7: Static gate.**
+- [x] **Step 7: Static gate.**
 
 Run: `cargo xtask check --no-test`
 Expected: exit 0 (clippy + fmt clean).
 
-- [ ] **Step 8: Coverage gate.**
+- [x] **Step 8: Coverage gate.**
 
 Run: `cargo xtask validate --no-e2e`
 Expected: exit 0 — clean, **0 new-uncovered, 0 CRAP regressions** (the reorder relocates a line without adding branches; the two in-file tests keep the success-path hash and the bogus-token paths covered). If a CRAP regression or new-uncovered nonetheless appears, accept the baseline / add a focused test as in #51.
 
-- [ ] **Step 9: Commit** (hold for user approval).
+- [x] **Step 9: Commit** (hold for user approval).
 
 ```bash
 git add storage/src/sqlite/mod.rs storage/src/postgres/mod.rs
@@ -170,7 +170,7 @@ heal changed it). **ADR-0026 + the `docs/README.md` rows go in a separate
 
 ### Task 2: Ship gate
 
-- [ ] **Step 1: Full pre-PR gate.**
+- [x] **Step 1: Full pre-PR gate.**
 
 Run: `cargo xtask validate --no-e2e` (full `cargo xtask validate` with e2e runs at `jaunder-ship`).
 Expected: exit 0.
