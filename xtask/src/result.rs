@@ -58,6 +58,8 @@ pub struct CommandResult {
     pub steps: Vec<StepResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coverage: Option<crate::coverage::CoverageReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audit: Option<crate::audit_wasm::AuditReport>,
 }
 
 impl CommandResult {
@@ -69,6 +71,7 @@ impl CommandResult {
             finished_at_unix: 0,
             steps: Vec::new(),
             coverage: None,
+            audit: None,
         }
     }
 
@@ -119,6 +122,11 @@ impl CommandResult {
                 .unwrap_or_default();
             println!("[{mark}] {}{detail}", s.name);
         }
+        // Informational payload: the audit subcommand's whole point is this table,
+        // not the pass/fail line, so render it inline when present.
+        if let Some(audit) = &self.audit {
+            print!("{}", crate::audit_wasm::render_table(audit));
+        }
         let verdict = if self.ok { "PASSED" } else { "FAILED" };
         println!(
             "xtask {} {verdict} in {} ms",
@@ -145,6 +153,24 @@ mod tests {
         assert_eq!(v["steps"][0]["name"], "clippy");
         assert_eq!(v["steps"][0]["detail"], "0 warnings");
         assert_eq!(v["steps"][1]["ok"], false);
+    }
+
+    #[test]
+    fn audit_report_serializes_in_envelope() {
+        let mut r = CommandResult::new("audit-wasm");
+        r.push(StepResult::ok("audit-wasm").detail("2 artifact(s)"));
+        r.audit = Some(crate::audit_wasm::AuditReport {
+            site_path: "/nix/store/x-jaunder-site".into(),
+            artifacts: vec![crate::audit_wasm::ArtifactMetrics {
+                path: "/nix/store/x-jaunder-site/pkg/jaunder_bg.wasm".into(),
+                raw_bytes: 2 * 1024 * 1024,
+                gzip_bytes: 700 * 1024,
+                brotli_bytes: 600 * 1024,
+            }],
+        });
+        let v: serde_json::Value = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["audit"]["site_path"], "/nix/store/x-jaunder-site");
+        assert_eq!(v["audit"]["artifacts"][0]["raw_bytes"], 2 * 1024 * 1024);
     }
 
     #[test]
