@@ -28,7 +28,7 @@ pub struct ArtifactMetrics {
 
 /// Human-readable byte size. Mirrors the old Node script's rounding exactly:
 /// whole numbers for bytes and for any value ≥ 10 in its unit, one decimal
-/// otherwise — so existing audit output stays comparable.
+/// otherwise — so the rendered size table stays comparable with the old script.
 pub fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
     let mut value = bytes as f64;
@@ -52,7 +52,10 @@ pub fn parse_store_path(nix_output: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// gzip size at level 9 (`Z_BEST_COMPRESSION`), matching the script.
+/// gzip size at level 9 (`Z_BEST_COMPRESSION`), matching the script. Absolute
+/// byte counts may differ by a few bytes from Node's `zlib` backend (`flate2`
+/// uses `miniz_oxide`); the compression *parameters* — what governs the trend
+/// this tool tracks — are identical.
 pub fn gzip_size(bytes: &[u8]) -> u64 {
     use flate2::{write::GzEncoder, Compression};
     let mut enc = GzEncoder::new(Vec::new(), Compression::best());
@@ -156,9 +159,10 @@ mod tests {
         assert_eq!(format_bytes(512), "512 B");
         assert_eq!(format_bytes(1024), "1.0 KiB");
         assert_eq!(format_bytes(1536), "1.5 KiB");
-        // >= 10 in the unit → 0 decimals
+        // >= 10 in the unit → 0 decimals (the realistic MiB-range bundle path too)
         assert_eq!(format_bytes(10 * 1024), "10 KiB");
         assert_eq!(format_bytes(1024 * 1024), "1.0 MiB");
+        assert_eq!(format_bytes(10 * 1024 * 1024), "10 MiB");
         assert_eq!(format_bytes(1024_u64.pow(3)), "1.0 GiB");
     }
 
@@ -189,22 +193,37 @@ mod tests {
 
     #[test]
     fn render_table_has_header_site_path_and_relative_names() {
+        // Two artifacts, as a real run emits — locks both the relative-naming and
+        // the per-row column alignment that is the tool's whole output.
         let report = AuditReport {
             site_path: "/nix/store/x-jaunder-site".into(),
-            artifacts: vec![ArtifactMetrics {
-                path: "/nix/store/x-jaunder-site/pkg/jaunder_bg.wasm".into(),
-                raw_bytes: 2 * 1024 * 1024,
-                gzip_bytes: 700 * 1024,
-                brotli_bytes: 600 * 1024,
-            }],
+            artifacts: vec![
+                ArtifactMetrics {
+                    path: "/nix/store/x-jaunder-site/pkg/jaunder_bg.wasm".into(),
+                    raw_bytes: 2 * 1024 * 1024,
+                    gzip_bytes: 700 * 1024,
+                    brotli_bytes: 600 * 1024,
+                },
+                ArtifactMetrics {
+                    path: "/nix/store/x-jaunder-site/pkg/jaunder.js".into(),
+                    raw_bytes: 40 * 1024,
+                    gzip_bytes: 12 * 1024,
+                    brotli_bytes: 10 * 1024,
+                },
+            ],
         };
         let t = render_table(&report);
         assert!(t.contains("WASM bundle audit"));
         assert!(t.contains("site output: /nix/store/x-jaunder-site"));
         assert!(t.contains("artifact"));
-        // relative path, not the absolute one
+        // relative paths, not the absolute ones
         assert!(t.contains("pkg/jaunder_bg.wasm"));
+        assert!(t.contains("pkg/jaunder.js"));
         assert!(!t.contains("/nix/store/x-jaunder-site/pkg/jaunder_bg.wasm"));
+        // each artifact renders its own row
+        assert_eq!(t.lines().filter(|l| l.contains("pkg/")).count(), 2);
+        // right-aligned size column, e.g. "2.0 MiB" for the wasm raw size
+        assert!(t.contains("2.0 MiB"));
     }
 
     #[test]
