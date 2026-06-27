@@ -148,6 +148,20 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
     }
 }
 
+/// Self-healing hook installation: point `core.hooksPath` at `.githooks` if it is not
+/// already, so fresh clones and new worktrees wire up on first run. Best-effort — a
+/// failure here must never block the actual command.
+pub fn ensure_hooks_installed() {
+    let Ok(sh) = xshell::Shell::new() else {
+        return;
+    };
+    match git::ensure_hooks_path(&sh) {
+        Ok(true) => eprintln!("xtask: set core.hooksPath = {}", git::HOOKS_PATH),
+        Ok(false) => {}
+        Err(e) => eprintln!("xtask: warning: could not set core.hooksPath: {e:#}"),
+    }
+}
+
 /// One-shot: parse `<gcroot>/coverage-report.txt`, build the accepted-uncovered
 /// baseline from the currently-uncovered executable lines, and write it to
 /// `coverage-baseline.json` (repo-relative paths via `git rev-parse`).
