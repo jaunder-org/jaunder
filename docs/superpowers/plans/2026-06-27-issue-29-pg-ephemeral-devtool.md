@@ -1,6 +1,6 @@
 # Issue #29 — `with-ephemeral-postgres` → `devtool` Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Move the throwaway-PostgreSQL lifecycle from `scripts/with-ephemeral-postgres` into `tools/devtool` (Rust), expose it as both an in-process API and a `devtool pg run` CLI subcommand, delete the script, and give the `tools/` workspace tests a place to run.
 
@@ -96,7 +96,7 @@ wraps them in the orchestration.
   - `fn psql_args(host: &str, port: u16) -> Vec<String>`
   - `const BOOTSTRAP_SQL: &str`
 
-- [ ] **Step 1: Register the module**
+- [x] **Step 1: Register the module**
 
 In `tools/devtool/src/main.rs`, add below `mod coverage;`:
 
@@ -104,7 +104,7 @@ In `tools/devtool/src/main.rs`, add below `mod coverage;`:
 mod pg;
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Create `tools/devtool/src/pg.rs` with only the test module (and the imports it
 needs) so the build fails on the missing items:
@@ -174,12 +174,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `cargo test --manifest-path tools/Cargo.toml -p devtool pg::`
 Expected: FAIL — `cannot find function/value` for `resolve_port`, `app_url`, etc.
 
-- [ ] **Step 4: Write the minimal implementation**
+- [x] **Step 4: Write the minimal implementation**
 
 Prepend to `tools/devtool/src/pg.rs` (above the test module):
 
@@ -263,12 +263,12 @@ NOTE: `app_url`/`bootstrap_url`/`initdb_args`/`server_settings`/`psql_args`/
 module-level `#![allow(dead_code)]` at the top of `pg.rs`) so `tools-clippy`
 (`-D warnings`) passes this task. Remove the allow in Task 3 once they are wired in.
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `cargo test --manifest-path tools/Cargo.toml -p devtool pg::`
 Expected: PASS (6 tests).
 
-- [ ] **Step 6: Per-task gate + commit**
+- [x] **Step 6: Per-task gate + commit**
 
 Run: `cargo xtask check --no-test`
 Expected: exit 0.
@@ -294,7 +294,7 @@ cluster boot — see spec); verified here by compile + clippy, and end-to-end by
 - Consumes: all Task 2 helpers + `PgEnv`.
 - Produces: `pub fn with_ephemeral<T>(body: impl FnOnce(&PgEnv) -> anyhow::Result<T>) -> anyhow::Result<T>` (used by Tasks 4–5).
 
-- [ ] **Step 1: Add dependencies**
+- [x] **Step 1: Add dependencies**
 
 In `tools/devtool/Cargo.toml` under `[dependencies]`:
 
@@ -303,7 +303,7 @@ tempfile = "3"
 signal-hook = "0.3"
 ```
 
-- [ ] **Step 2: Implement the lifecycle**
+- [x] **Step 2: Implement the lifecycle**
 
 Remove the dead-code allow from Task 2. Add to `tools/devtool/src/pg.rs` (above the
 test module), and extend the imports at the top to:
@@ -436,13 +436,13 @@ NOTE on `.keep()`: on older `tempfile` the method is `into_path()`. If
 instead (same effect: take ownership of the dir so `TempDir::drop` won't delete it
 while the server is still running).
 
-- [ ] **Step 3: Per-task gate**
+- [x] **Step 3: Per-task gate**
 
 Run: `cargo xtask check --no-test`
 Expected: exit 0 (compiles; clippy clean; Task 2 unit tests still pass under
 `tools-test` when run, helpers now all used).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tools/devtool/src/pg.rs tools/devtool/Cargo.toml tools/Cargo.lock
@@ -461,7 +461,7 @@ git commit -m "feat(devtool): boot ephemeral postgres with Drop + signal teardow
 - Consumes: `pg::with_ephemeral`, `PgEnv`.
 - Produces: `pub fn run_command(cmd: &[String]) -> anyhow::Result<()>` (never returns on success — exits with the child's code).
 
-- [ ] **Step 1: Add `run_command` to `pg.rs`**
+- [x] **Step 1: Add `run_command` to `pg.rs`**
 
 ```rust
 /// CLI entry: run `cmd` with the ephemeral cluster's env, propagating its exit code.
@@ -481,7 +481,7 @@ pub fn run_command(cmd: &[String]) -> Result<()> {
 }
 ```
 
-- [ ] **Step 2: Wire the subcommand in `main.rs`**
+- [x] **Step 2: Wire the subcommand in `main.rs`**
 
 Add a `Pg` arm to `Command` and a `PgCmd` enum; extend the `match`:
 
@@ -517,7 +517,7 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-- [ ] **Step 3: Per-task gate + manual smoke**
+- [x] **Step 3: Per-task gate + manual smoke**
 
 Run: `cargo xtask check --no-test`
 Expected: exit 0.
@@ -527,7 +527,7 @@ Run: `cargo run --manifest-path tools/Cargo.toml -p devtool -- pg run -- bash -c
 Expected: prints `postgres://jaunder@127.0.0.1:54329/jaunder`, exits 0, leaves no
 `/tmp/jaunder-pg.*` dir behind.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tools/devtool/src/main.rs tools/devtool/src/pg.rs
@@ -544,7 +544,7 @@ git commit -m "feat(devtool): add 'pg run' CLI over the ephemeral-postgres API"
 **Interfaces:**
 - Consumes: `crate::pg::with_ephemeral`, `PgEnv`; existing private `run_capture`.
 
-- [ ] **Step 1: Replace the bash-shim call**
+- [x] **Step 1: Replace the bash-shim call**
 
 At the top of `emit.rs`, add `use crate::pg;`. Replace the block that builds
 `nextest` (currently `run_capture(Command::new("bash").args(["scripts/with-ephemeral-postgres", …]))`)
@@ -570,7 +570,7 @@ with:
 (The `.env(...)` calls attach to the `Command` before `args`/after — both compile;
 keep them chained on the `Command` as shown. `run_capture` already takes `&mut Command`.)
 
-- [ ] **Step 2: Per-task gate**
+- [x] **Step 2: Per-task gate**
 
 Run: `cargo xtask check --no-test`
 Expected: exit 0 (the 4 existing `emit.rs` classify/normalize tests still pass under
@@ -580,7 +580,7 @@ Expected: exit 0 (the 4 existing `emit.rs` classify/normalize tests still pass u
 Run: `rg -n 'with-ephemeral-postgres' tools/`
 Expected: no matches.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tools/devtool/src/coverage/emit.rs
@@ -598,13 +598,13 @@ git commit -m "refactor(devtool): emit uses in-process pg::with_ephemeral, not t
 
 **Interfaces:** none (cleanup + docs).
 
-- [ ] **Step 1: Delete the script**
+- [x] **Step 1: Delete the script**
 
 ```bash
 git rm scripts/with-ephemeral-postgres
 ```
 
-- [ ] **Step 2: Reword the flake comment**
+- [x] **Step 2: Reword the flake comment**
 
 In `flake.nix`, the coverage check's `nativeBuildInputs` comment currently reads
 "devtool runs the whole test suite under an ephemeral PostgreSQL (via
@@ -612,7 +612,7 @@ In `flake.nix`, the coverage check's `nativeBuildInputs` comment currently reads
 `devtool pg`)". No derivation logic changes; `postgresql_16` stays in
 `nativeBuildInputs`.
 
-- [ ] **Step 3: Update CONTRIBUTING.md**
+- [x] **Step 3: Update CONTRIBUTING.md**
 
 - Line ~167: change `scripts/with-ephemeral-postgres cargo nextest run -p jaunder`
   to `cargo run --manifest-path tools/Cargo.toml -p devtool -- pg run -- cargo nextest run -p jaunder`
@@ -621,13 +621,13 @@ In `flake.nix`, the coverage check's `nativeBuildInputs` comment currently reads
 - Line ~306: change "prefer `scripts/with-ephemeral-postgres`" to
   "prefer `devtool pg run -- …`".
 
-- [ ] **Step 4: Confirm no dangling references**
+- [x] **Step 4: Confirm no dangling references**
 
 Run: `rg -n 'with-ephemeral-postgres' --glob '!docs/archive/**'`
 Expected: only `docs/adr/0028-devtool-vs-xtask-boundary.md` (historical table) — no
 live code, flake, or CONTRIBUTING references.
 
-- [ ] **Step 5: Final gate — full validate**
+- [x] **Step 5: Final gate — full validate**
 
 Run: `cargo xtask validate`
 Expected: exit 0. This compiles `devtool` (Nix `devtoolBin`), runs the `coverage`
@@ -637,7 +637,7 @@ check which boots the **real** ephemeral cluster via the new `pg` module, the
 Inspect the sidecar if anything is unclear:
 Run: `jq '.steps[] | {name, ok}' .xtask/last-result.json`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/with-ephemeral-postgres flake.nix CONTRIBUTING.md

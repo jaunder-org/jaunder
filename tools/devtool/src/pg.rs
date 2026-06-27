@@ -186,13 +186,19 @@ pub fn with_ephemeral<T>(body: impl FnOnce(&PgEnv) -> Result<T>) -> Result<T> {
 
     // Parity with the bash `trap cleanup INT TERM`: a dedicated thread tears the
     // cluster down on signal, then emulates the default disposition so the process
-    // still dies with the right status. The Drop guard covers normal return + panic.
+    // still dies with the right status. The thread holds only a `Weak` ref so
+    // `cluster` stays the *sole* strong owner — that way an unwinding panic in
+    // `body` drops the last strong Arc and fires `Cluster::drop`, rather than the
+    // thread's clone pinning the refcount and leaking a running server. The Drop
+    // guard thus covers normal return AND panic; the signal path covers INT/TERM.
     let mut signals = Signals::new([SIGINT, SIGTERM]).context("installing signal handler")?;
-    let sig_cluster = Arc::clone(&cluster);
+    let sig_cluster = Arc::downgrade(&cluster);
     let handle = signals.handle();
     let joiner = std::thread::spawn(move || {
         if let Some(sig) = signals.forever().next() {
-            sig_cluster.teardown();
+            if let Some(c) = sig_cluster.upgrade() {
+                c.teardown();
+            }
             let _ = signal_hook::low_level::emulate_default_handler(sig);
         }
     });
