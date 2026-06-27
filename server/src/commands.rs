@@ -407,7 +407,9 @@ pub async fn cmd_serve(
     prod: bool,
     verbose: bool,
 ) -> anyhow::Result<()> {
-    crate::observability::init_tracing(verbose);
+    // Bind the guard for the server's lifetime; a bare statement or `let _` would
+    // drop it immediately and shut telemetry down right after install.
+    let _telemetry = crate::observability::init_tracing(verbose);
 
     let PreparedServer {
         listener,
