@@ -12,8 +12,8 @@ mod xml;
 
 pub mod entry;
 pub use entry::{
-    entry_from_xml, entry_to_xml, is_draft, render_feed, render_media_link_entry, set_draft,
-    FeedMeta, MediaLinkEntry,
+    entry_from_xml, entry_to_xml, is_draft, j_slug, render_feed, render_media_link_entry,
+    set_draft, set_j_slug, FeedMeta, MediaLinkEntry,
 };
 
 pub mod service;
@@ -35,6 +35,8 @@ use thiserror::Error;
 pub const ATOM_NS: &str = "http://www.w3.org/2005/Atom";
 /// The Atom Publishing Protocol control namespace URI (RFC 5023 §B).
 pub const APP_NS: &str = "http://www.w3.org/2007/app";
+/// Jaunder foreign-markup namespace (ADR-0023): `j:slug`, `j:extension`.
+pub const J_NS: &str = "https://jaunder.org/ns/atompub";
 
 /// Errors produced when reading or writing `AtomPub` wire documents.
 #[derive(Debug, Error)]

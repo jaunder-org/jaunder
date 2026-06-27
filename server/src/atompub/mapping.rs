@@ -6,7 +6,7 @@
 //! (collection member) operations.
 
 use chrono::{DateTime, Utc};
-use common::atompub::{is_draft, set_draft, Category, Content, Entry, Link, Text};
+use common::atompub::{is_draft, set_draft, set_j_slug, Category, Content, Entry, Link, Text};
 use storage::{PostFormat, PostRecord};
 
 /// The post-shaped data carried by an incoming `AtomPub` `Entry`.
@@ -88,6 +88,8 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
         .map(|c| c.term().to_string())
         .collect();
     let is_draft = is_draft(entry);
+    // Any incoming `j:slug` is deliberately ignored (ADR-0023): the slug is a
+    // read-only server property, derived here from the title/body, never the wire.
     // Inverse of `post_to_entry`'s `published: post.published_at.map(fixed_offset)`:
     // read the entry's `<published>` (a fixed-offset datetime) back to UTC.
     let published = entry.published().map(|d| d.with_timezone(&Utc));
@@ -158,6 +160,8 @@ pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
     };
 
     set_draft(&mut entry, post.published_at.is_none());
+    // Read-only server slug (ADR-0023): emitted on every entry, draft or live.
+    set_j_slug(&mut entry, post.slug.as_str());
     entry
 }
 

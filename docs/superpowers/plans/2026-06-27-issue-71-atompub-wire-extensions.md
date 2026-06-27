@@ -130,7 +130,7 @@ fn wire_to_format(content_type: Option<&str>, default: PostFormat) -> PostFormat
   pub fn set_j_slug(entry: &mut Entry, slug: &str);
   ```
 
-- [ ] **Step 1: Write failing unit tests** in `entry.rs` `mod tests`:
+- [x] **Step 1: Write failing unit tests** in `entry.rs` `mod tests`:
 ```rust
 #[test]
 fn set_and_read_j_slug_round_trips() {
@@ -154,16 +154,16 @@ fn no_j_slug_means_no_namespace_declared() {
 }
 ```
 
-- [ ] **Step 2: Run → FAIL** — `cd <worktree> && cargo nextest run -p common j_slug`.
+- [x] **Step 2: Run → FAIL** — `cd <worktree> && cargo nextest run -p common j_slug`.
 
-- [ ] **Step 3: Add `J_NS`** to `common/src/atompub/mod.rs` (next to `APP_NS`):
+- [x] **Step 3: Add `J_NS`** to `common/src/atompub/mod.rs` (next to `APP_NS`):
 ```rust
 /// Jaunder foreign-markup namespace (ADR-0023): `j:slug`, `j:extension`.
 pub const J_NS: &str = "https://jaunder.org/ns/atompub";
 ```
 Import it in `entry.rs` (`use super::{AtomPubError, APP_NS, ATOM_NS, J_NS};`).
 
-- [ ] **Step 4: Implement helpers** in `entry.rs` (mirror `set_draft`/`is_draft`; the extensions map is prefix→localname→Vec<Extension>):
+- [x] **Step 4: Implement helpers** in `entry.rs` (mirror `set_draft`/`is_draft`; the extensions map is prefix→localname→Vec<Extension>):
 ```rust
 /// Read the read-only server slug from a `j:slug` extension, if present.
 #[must_use]
@@ -194,7 +194,7 @@ pub fn set_j_slug(entry: &mut Entry, slug: &str) {
 }
 ```
 
-- [ ] **Step 5: Emit in `write_entry`** — (a) conditional namespace: after the `xmlns:app` block, add
+- [x] **Step 5: Emit in `write_entry`** — (a) conditional namespace: after the `xmlns:app` block, add
 ```rust
 if j_slug(entry).is_some() {
     root.push_attribute(("xmlns:j", J_NS));
@@ -208,11 +208,11 @@ if let Some(slug) = j_slug(entry) {
 ```
   In `render_feed`, the feed root already declares `xmlns`/`xmlns:app` unconditionally; add `root.push_attribute(("xmlns:j", J_NS));` there too (every entry carries a slug, so the feed always needs it; embedded entries pass `declare_namespaces=false` and inherit it).
 
-- [ ] **Step 6: Wire into the server mapping** (`server/src/atompub/mapping.rs`): in `post_to_entry`, after building the entry, `set_j_slug(&mut entry, post.slug.as_str());` (use the post's slug field — confirm its accessor on the `post` arg). `entry_to_post_fields` needs **no** change to ignore incoming `j:slug` (it never reads slug from the entry) — add a one-line comment noting the deliberate ignore.
+- [x] **Step 6: Wire into the server mapping** (`server/src/atompub/mapping.rs`): in `post_to_entry`, after building the entry, `set_j_slug(&mut entry, post.slug.as_str());` (use the post's slug field — confirm its accessor on the `post` arg). `entry_to_post_fields` needs **no** change to ignore incoming `j:slug` (it never reads slug from the entry) — add a one-line comment noting the deliberate ignore.
 
-- [ ] **Step 7: Run unit tests → PASS**; then add an AtomPub integration test in `atompub_posts.rs` (`#[apply(backends)]`): create a post, GET the member, assert the body contains `<j:slug>` with the post's slug and `xmlns:j`; create a **draft** and assert its entry also carries `<j:slug>` (the gap being fixed). Add a test that POSTing an entry containing `<j:slug>client-supplied</j:slug>` does **not** set the stored slug to that value (server derives its own).
+- [x] **Step 7: Run unit tests → PASS**; then add an AtomPub integration test in `atompub_posts.rs` (`#[apply(backends)]`): create a post, GET the member, assert the body contains `<j:slug>` with the post's slug and `xmlns:j`; create a **draft** and assert its entry also carries `<j:slug>` (the gap being fixed). Add a test that POSTing an entry containing `<j:slug>client-supplied</j:slug>` does **not** set the stored slug to that value (server derives its own).
 
-- [ ] **Step 8: Gate + commit** — `cargo xtask validate --no-e2e` green; commit `feat(atompub): emit read-only j:slug on every entry (#71)`.
+- [x] **Step 8: Gate + commit** — `cargo xtask validate --no-e2e` green; commit `feat(atompub): emit read-only j:slug on every entry (#71)`.
 
 ---
 
