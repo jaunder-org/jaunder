@@ -504,6 +504,16 @@
           filter = path: _type: !(pkgs.lib.hasInfix "/node_modules" path);
         };
 
+        emacsSrc = pkgs.lib.cleanSourceWith {
+          src = ./elisp;
+        };
+
+        # One emacs for both the host verify gate (the xtask StepSpecs) and the
+        # hermetic nix checks, so they cannot diverge. withPackages (vs bare
+        # pkgs.emacs) is the extension point for units C/D to add elisp packages
+        # via nix; the skeleton needs only built-in libraries, so the list is empty.
+        emacsForCi = pkgs.emacs.pkgs.withPackages (epkgs: [ ]);
+
         interactiveTestingVmRunner = pkgs.writeShellApplication {
           name = "interactive-testing-vm";
           text = ''
@@ -873,7 +883,8 @@
                     !(pkgs.lib.hasInfix "/xtask/" path)
                     && !(pkgs.lib.hasInfix "/tools/" path)
                     && !(pkgs.lib.hasInfix "/docs/" path)
-                    && !(pkgs.lib.hasInfix "/.github/" path);
+                    && !(pkgs.lib.hasInfix "/.github/" path)
+                    && !(pkgs.lib.hasInfix "/elisp/" path);
                 };
                 inherit cargoArtifacts;
                 pname = "jaunder-coverage";
@@ -946,6 +957,24 @@
                   prettier --check ${end2endSrc}
                   touch $out
                 '';
+            ert-check =
+              pkgs.runCommand "ert-check"
+                {
+                  nativeBuildInputs = [ emacsForCi ];
+                }
+                ''
+                  emacs --batch -Q -l ${emacsSrc}/scripts/run-tests.el
+                  touch $out
+                '';
+            elisp-fmt-check =
+              pkgs.runCommand "elisp-fmt-check"
+                {
+                  nativeBuildInputs = [ emacsForCi ];
+                }
+                ''
+                  emacs --batch -Q -l ${emacsSrc}/scripts/format.el -f jaunder-fmt-check
+                  touch $out
+                '';
           };
 
         devShells =
@@ -962,6 +991,7 @@
               pkgs.cargo-llvm-cov
               pkgs.cargo-nextest
               pkgs.dart-sass
+              emacsForCi
               pkgs.jq
               pkgs.leptosfmt
               pkgs.nodejs
