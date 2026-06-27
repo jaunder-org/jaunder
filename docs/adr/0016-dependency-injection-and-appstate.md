@@ -142,3 +142,30 @@ no omnibus threaded everywhere, there is no bag to dump into, and the invariant 
   the over-construction is measured and the mint-on-demand safety is verified.
 * Note: this ADR does not change the §1.1 decision to stay on runtime `sqlx::query`/`query_as`
   (not the `query!` macros); see ADR-0001 / the analysis doc §1.1.
+
+## Addendum (2026-06-27): SSR context lifetime across `await`s (#89)
+
+The decision above keeps the web layer's per-trait DI on Leptos context
+(`expect_context::<Arc<dyn FooStorage>>()`). A hazard not addressed at the time: this is only
+reliable **while the reactive owner that carries the context is alive.**
+
+In `reactive_graph`, the thread-local "current owner" is a *weak* reference, and a context's
+storage is freed when the owner's last *strong* reference is dropped. During SSR, a server
+function invoked as a `Resource`/`Suspense` future can have its owner's strong refs dropped while
+it is suspended at an `.await` (more likely under load, when a DB call is slow). A context read
+**after** that await then resolves to `None`, and `expect_context` panics (#89) — a rare,
+load-correlated race that surfaced as flaky hydration timeouts. Server functions had only worked
+around this by an unwritten convention of reading context **before** any await; three fns that
+violated it were the bugs.
+
+**Resolution.** Every server-fn body routes through `server_boundary` (the `boundary!` macro).
+`server_boundary` now runs the body inside a `reactive_graph` `ScopedFuture` (`new_untracked`)
+**when an owner is current** — which holds a *strong* owner reference (keeping the context alive)
+and re-applies it on each poll. This makes `expect_context` in a server function reliable
+**regardless of await ordering**, so the per-trait Leptos-context DI is sound as written, and the
+"read context first" convention is retired (its explanatory comments are corrected, not its code).
+The wrap is guarded on `Owner::current().is_some()`: `ScopedFuture::new` captures
+`Owner::current().unwrap_or_default()`, so wrapping with no current owner would capture an *empty*
+owner and lose context deterministically — strictly worse than the race. The guarantee is proven
+by the deterministic `owner_lifetime` tests in `web/src/error.rs` (the mechanism, the fix, and the
+empty-owner trap), not by the flaky e2e.
