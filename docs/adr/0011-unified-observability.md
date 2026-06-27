@@ -106,3 +106,27 @@ which request paths a given integration test happens to hit.
     utilization, storage bytes, time-since-last-backup) — jaunder-kq8w.24.
 *   Making one-shot **CLI** emits actually export (provider init + `force_flush`)
     — jaunder-kq8w.25. CLI emit sites exist but are no-ops without a provider.
+
+## Addendum (2026-06-27): Flushing telemetry from one-shot processes (issue #12)
+
+The metrics addendum above installs an OTLP `MeterProvider` (and the tracer
+installs a `TracerProvider`) gated on the OTLP endpoint. Diagnosis of the CLI
+case (the kq8w.25 item deferred above) found the providers *were* already
+installed for one-shot commands — `run()` calls `init_tracing` for every
+non-`serve` command — but both exporters are deferred: the metric reader is
+periodic and the span processor batches, so they only export on an interval the
+long-running server easily reaches and a one-shot CLI command exits long before.
+The CLI's metric and span emits were therefore installed correctly yet silently
+dropped. The fix is to flush before exit, not to install a provider.
+
+Convention: `init_tracing` returns a `#[must_use]` `TelemetryGuard` owning the
+installed providers. A process holds the guard for its working scope; the guard's
+`Drop` calls `shutdown()` (force-flush + shutdown) on each provider, exporting
+buffered telemetry on every exit path — success, `?` error-return, and panic
+unwind. A single binding at the `run()` dispatch boundary owns telemetry for
+*every* command — `serve` included — so command bodies (including `cmd_serve`)
+carry no telemetry-lifecycle code; for `serve` the guard is simply held for the
+process lifetime and flushes at shutdown. Export failures (e.g. an unreachable
+collector) are logged, never propagated — a telemetry failure must not change a
+command's exit status. This closes the "CLI export" item the metrics addendum
+deferred (metrics **and** traces, since both shared the drop-on-exit defect).

@@ -31,9 +31,6 @@ async fn main() -> anyhow::Result<()> {
 /// Panics if the implicitly re-parsed `serve` subcommand is absent, which is
 /// unreachable: `Cli::parse_from(["jaunder", "serve"])` always yields one.
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
-    if !matches!(cli.command, Some(Commands::Serve { .. })) {
-        jaunder::observability::init_tracing(cli.verbose);
-    }
     let command = match cli.command {
         Some(cmd) => cmd,
         // The re-parsed `serve` invocation below always yields a subcommand, so
@@ -59,6 +56,16 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             }
         }
     };
+    // `run` owns telemetry for *every* command, `serve` included: one guard,
+    // held across the whole dispatch, whose Drop flushes the OTLP exporters
+    // before exit. For a one-shot command that means before the process returns
+    // (on success, `?` error, or panic unwind); for `serve` the guard is simply
+    // held for the process lifetime and flushes at shutdown. `cmd_serve` no
+    // longer inits telemetry itself, so all commands share this one mechanism.
+    // Bound after command resolution so the no-subcommand `--help` path exits via
+    // clap without initializing telemetry it would never use; bound at function
+    // scope so the guard outlives the dispatch below.
+    let _telemetry = jaunder::observability::init_tracing(cli.verbose);
     match command {
         Commands::Init {
             storage,
@@ -79,8 +86,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             bind,
             environment,
         } => {
-            jaunder::commands::cmd_serve(&storage, bind, environment.is_prod(), cli.verbose)
-                .await?;
+            jaunder::commands::cmd_serve(&storage, bind, environment.is_prod()).await?;
         }
         Commands::UserCreate {
             storage,

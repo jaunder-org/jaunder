@@ -1,4 +1,3 @@
-use std::sync::Once;
 use std::time::{Duration, Instant};
 
 use axum::http::HeaderName;
@@ -14,8 +13,6 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-
-static INIT_TRACING: Once = Once::new();
 
 fn default_filter(verbose: bool) -> EnvFilter {
     if verbose {
@@ -48,7 +45,9 @@ fn otel_exporter_otlp_endpoint() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn build_otel_tracer(endpoint: &str) -> Result<opentelemetry_sdk::trace::Tracer, String> {
+fn build_otel_tracer(
+    endpoint: &str,
+) -> Result<opentelemetry_sdk::trace::SdkTracerProvider, String> {
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint)
@@ -57,12 +56,16 @@ fn build_otel_tracer(endpoint: &str) -> Result<opentelemetry_sdk::trace::Tracer,
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_batch_exporter(exporter)
         .build();
-    let tracer = provider.tracer("jaunder");
-    opentelemetry::global::set_tracer_provider(provider);
-    Ok(tracer)
+    // Clone into the global registry; keep the original handle so the caller can
+    // flush it on exit (a one-shot process exits before the batch processor's
+    // interval fires).
+    opentelemetry::global::set_tracer_provider(provider.clone());
+    Ok(provider)
 }
 
-fn build_otel_meter(endpoint: &str) -> Result<(), String> {
+fn build_otel_meter(
+    endpoint: &str,
+) -> Result<opentelemetry_sdk::metrics::SdkMeterProvider, String> {
     let exporter = opentelemetry_otlp::MetricExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint)
@@ -71,8 +74,10 @@ fn build_otel_meter(endpoint: &str) -> Result<(), String> {
     let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
         .with_periodic_exporter(exporter)
         .build();
-    opentelemetry::global::set_meter_provider(provider);
-    Ok(())
+    // Clone into the global registry; keep the original handle for flush-on-exit
+    // (the periodic reader otherwise only exports on its interval).
+    opentelemetry::global::set_meter_provider(provider.clone());
+    Ok(provider)
 }
 
 pub fn slow_op_threshold() -> Duration {
@@ -152,7 +157,7 @@ fn slow_span_report(started_at: Option<SpanStartedAt>, threshold: Duration) -> O
     slow_span_values(started_at?.0.elapsed(), threshold)
 }
 
-fn init_tracing_impl(verbose: bool) {
+fn init_tracing_impl(verbose: bool) -> TelemetryGuard {
     // Forward any existing `log` macros to tracing so we can migrate in
     // phases without duplicate logging calls. A failure here is non-fatal (it
     // means a `log` bridge is already installed), but tracing isn't up yet, so
@@ -177,9 +182,15 @@ fn init_tracing_impl(verbose: bool) {
         fmt::layer().boxed()
     };
 
-    let otel_layer =
-        otel_exporter_otlp_endpoint().and_then(|endpoint| match build_otel_tracer(&endpoint) {
-            Ok(tracer) => Some(tracing_opentelemetry::layer().with_tracer(tracer)),
+    // Resolve the endpoint once; traces and metrics share it. The provider
+    // handles are retained in the returned guard so a one-shot process can flush
+    // them before exit.
+    let endpoint = otel_exporter_otlp_endpoint();
+
+    let tracer = endpoint
+        .as_deref()
+        .and_then(|endpoint| match build_otel_tracer(endpoint) {
+            Ok(provider) => Some(provider),
             Err(error) => {
                 eprintln!(
                     "OTel disabled because exporter setup failed (endpoint {endpoint}): {error}"
@@ -187,15 +198,22 @@ fn init_tracing_impl(verbose: bool) {
                 None
             }
         });
+    let otel_layer = tracer
+        .as_ref()
+        .map(|provider| tracing_opentelemetry::layer().with_tracer(provider.tracer("jaunder")));
 
     // Metrics share the OTLP endpoint with traces; setup failure is non-fatal.
-    if let Some(endpoint) = otel_exporter_otlp_endpoint() {
-        if let Err(error) = build_otel_meter(&endpoint) {
-            eprintln!(
-                "OTel metrics disabled because exporter setup failed (endpoint {endpoint}): {error}"
-            );
-        }
-    }
+    let meter = endpoint
+        .as_deref()
+        .and_then(|endpoint| match build_otel_meter(endpoint) {
+            Ok(provider) => Some(provider),
+            Err(error) => {
+                eprintln!(
+                    "OTel metrics disabled because exporter setup failed (endpoint {endpoint}): {error}"
+                );
+                None
+            }
+        });
 
     // `try_init` fails only if a global subscriber is already installed. That
     // leaves the process running without our configured layers, which is worth
@@ -210,10 +228,52 @@ fn init_tracing_impl(verbose: bool) {
     {
         eprintln!("tracing subscriber init failed (continuing without it): {error}");
     }
+
+    TelemetryGuard { meter, tracer }
 }
 
-pub fn init_tracing(verbose: bool) {
-    INIT_TRACING.call_once(|| init_tracing_impl(verbose));
+#[must_use]
+pub fn init_tracing(verbose: bool) -> TelemetryGuard {
+    // Called once per process from `run` (production), for every command —
+    // `serve` included. The previous `Once` guard is gone because returning an
+    // owned guard is incompatible with `call_once`; repeat installs (only seen in
+    // tests that dispatch twice in one process) are already reported non-fatally
+    // by `try_init`/`LogTracer::init`.
+    init_tracing_impl(verbose)
+}
+
+/// Owns the OTLP providers installed by [`init_tracing`] so a short-lived
+/// process flushes buffered telemetry before exit. The periodic metric reader
+/// and batch span processor only export on their interval — which a one-shot
+/// CLI command exits long before — so without this the CLI's metric and span
+/// emits are silently dropped. Holding the guard for the command's scope and
+/// letting `Drop` run `shutdown()` (force-flush + shutdown) exports them on
+/// every exit path: success, `?` error-return, and panic unwind.
+///
+/// Both fields are `None` when no OTLP endpoint is configured, making the guard
+/// an inert no-op (the common dev/test case).
+pub struct TelemetryGuard {
+    meter: Option<opentelemetry_sdk::metrics::SdkMeterProvider>,
+    tracer: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
+}
+
+impl Drop for TelemetryGuard {
+    fn drop(&mut self) {
+        // A telemetry-export failure (e.g. the collector is unreachable) must
+        // never change the command's outcome, so errors are logged, not
+        // propagated — mirroring the non-fatal exporter-setup handling in
+        // `init_tracing_impl`.
+        if let Some(meter) = self.meter.take() {
+            if let Err(error) = meter.shutdown() {
+                eprintln!("OTel meter provider shutdown failed during flush: {error}");
+            }
+        }
+        if let Some(tracer) = self.tracer.take() {
+            if let Err(error) = tracer.shutdown() {
+                eprintln!("OTel tracer provider shutdown failed during flush: {error}");
+            }
+        }
+    }
 }
 
 /// Trace context extracted from inbound request headers (W3C `traceparent`),
@@ -292,6 +352,8 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{HeaderMap, Request, StatusCode};
+    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
+    use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
     use std::sync::{Mutex, MutexGuard};
     use tower::ServiceExt;
 
@@ -416,6 +478,12 @@ mod tests {
             "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
             "http://127.0.0.1:4317",
         );
+        // The returned TelemetryGuard is an unbound temporary that drops here,
+        // so this (and the other valid-endpoint init_tracing_impl tests below)
+        // performs a real shutdown()/force-flush against 127.0.0.1:4317. It
+        // returns promptly because the connection is refused — if one of these
+        // ever hangs in CI, an unreachable-but-not-refused endpoint is the place
+        // to look.
         init_tracing_impl(false);
         std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
     }
@@ -617,5 +685,94 @@ mod tests {
             .extensions_mut()
             .insert(ExtractedTraceContext(opentelemetry::Context::new()));
         let _span = make_request_span(&request);
+    }
+
+    #[tokio::test]
+    async fn guard_drop_flushes_meter_provider() {
+        use opentelemetry::metrics::MeterProvider as _;
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+
+        // Emit a counter on this provider, then let the guard's Drop flush it.
+        let counter = provider.meter("test").u64_counter("test.counter").build();
+        counter.add(1, &[]);
+        drop(TelemetryGuard {
+            meter: Some(provider),
+            tracer: None,
+        });
+
+        let metrics = exporter.get_finished_metrics().expect("metrics");
+        let found = metrics
+            .iter()
+            .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
+            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+            .any(|metric| metric.name() == "test.counter");
+        assert!(found, "metric not exported on guard drop");
+    }
+
+    #[tokio::test]
+    async fn guard_drop_flushes_tracer_provider() {
+        use opentelemetry::trace::{Tracer as _, TracerProvider as _};
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_batch_exporter(exporter.clone())
+            .build();
+
+        provider.tracer("test").in_span("test-span", |_cx| {});
+        drop(TelemetryGuard {
+            meter: None,
+            tracer: Some(provider),
+        });
+
+        let spans = exporter.get_finished_spans().expect("spans");
+        assert!(
+            spans.iter().any(|span| span.name == "test-span"),
+            "span not exported on guard drop"
+        );
+    }
+
+    #[test]
+    fn guard_drop_is_noop_when_inert() {
+        // No OTLP endpoint configured -> both providers None -> Drop does nothing
+        // and must not panic.
+        drop(TelemetryGuard {
+            meter: None,
+            tracer: None,
+        });
+    }
+
+    #[tokio::test]
+    async fn guard_drop_swallows_shutdown_errors() {
+        let meter = SdkMeterProvider::builder()
+            .with_reader(PeriodicReader::builder(InMemoryMetricExporter::default()).build())
+            .build();
+        let tracer = SdkTracerProvider::builder()
+            .with_batch_exporter(InMemorySpanExporter::default())
+            .build();
+
+        // Shut both down once cleanly, then assert a second shutdown reports an
+        // error — that is exactly the condition the guard's Drop must swallow.
+        // Asserting it here keeps the test meaningful even if a future OTel
+        // version made shutdown() idempotently return Ok (the Drop Err arms would
+        // otherwise go silently uncovered).
+        meter.shutdown().expect("first meter shutdown succeeds");
+        tracer.shutdown().expect("first tracer shutdown succeeds");
+        assert!(
+            meter.shutdown().is_err(),
+            "second meter shutdown should error"
+        );
+        assert!(
+            tracer.shutdown().is_err(),
+            "second tracer shutdown should error"
+        );
+
+        // The guard's Drop now calls shutdown() on already-shut-down providers; it
+        // must log and swallow the error, not panic or propagate. Covers both Err
+        // arms in Drop.
+        drop(TelemetryGuard {
+            meter: Some(meter),
+            tracer: Some(tracer),
+        });
     }
 }

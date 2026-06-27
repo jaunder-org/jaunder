@@ -237,7 +237,7 @@
       "text": "                .map_err(|e| anyhow::anyhow!(\"{e}; auto-init failed\"))?"
     },
     {
-      "line": 424,
+      "line": 420,
       "text": "    Ok(())"
     }
   ],
@@ -579,55 +579,55 @@
       "text": "}"
     },
     {
-      "line": 48,
+      "line": 45,
       "text": "            if std::env::var_os(\"LEPTOS_OUTPUT_NAME\").is_some() {"
     },
     {
-      "line": 52,
+      "line": 49,
       "text": "                let implicit = Cli::parse_from([\"jaunder\", \"serve\"]);"
     },
     {
-      "line": 53,
+      "line": 50,
       "text": "                implicit.command.expect(\"serve subcommand present\")"
     },
     {
-      "line": 57,
+      "line": 54,
       "text": "                Cli::parse_from([\"jaunder\", \"--help\"]);"
     },
     {
-      "line": 58,
+      "line": 55,
       "text": "                unreachable!()"
     },
     {
-      "line": 118,
+      "line": 124,
       "text": "            storage,"
     },
     {
-      "line": 119,
+      "line": 125,
       "text": "            mode,"
     },
     {
-      "line": 120,
+      "line": 126,
       "text": "            path,"
     },
     {
-      "line": 122,
+      "line": 128,
       "text": "            jaunder::commands::cmd_backup(&storage, mode.into(), path).await?;"
     },
     {
-      "line": 124,
+      "line": 130,
       "text": "        Commands::Restore { storage, path } => {"
     },
     {
-      "line": 125,
+      "line": 131,
       "text": "            jaunder::commands::cmd_restore(&storage, &path).await?;"
     },
     {
-      "line": 269,
+      "line": 275,
       "text": "        });"
     },
     {
-      "line": 388,
+      "line": 394,
       "text": "        });"
     }
   ],
@@ -657,11 +657,11 @@
   ],
   "server/src/observability.rs": [
     {
-      "line": 115,
+      "line": 120,
       "text": "            return;"
     },
     {
-      "line": 577,
+      "line": 645,
       "text": "                        StatusCode::INTERNAL_SERVER_ERROR"
     }
   ],
@@ -809,10 +809,6 @@
     {
       "line": 105,
       "text": "            .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;"
-    },
-    {
-      "line": 156,
-      "text": "            .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;"
     }
   ],
   "storage/src/sqlite/backup.rs": [

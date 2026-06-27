@@ -401,14 +401,10 @@ pub async fn prepare_server(
 ///
 /// Returns an error if setup fails (see [`prepare_server`]) or the server exits
 /// with an error.
-pub async fn cmd_serve(
-    storage: &StorageArgs,
-    bind: SocketAddr,
-    prod: bool,
-    verbose: bool,
-) -> anyhow::Result<()> {
-    crate::observability::init_tracing(verbose);
-
+pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> anyhow::Result<()> {
+    // Telemetry is owned by `run`, which holds the TelemetryGuard across this
+    // call (see `server/src/main.rs`); `cmd_serve` does not init it, matching
+    // every other `cmd_*`.
     let PreparedServer {
         listener,
         router,
