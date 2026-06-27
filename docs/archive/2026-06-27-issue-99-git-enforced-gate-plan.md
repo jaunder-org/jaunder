@@ -1,5 +1,15 @@
 # Git-Enforced Dev Gate Implementation Plan
 
+> **COMPLETION STATUS (archived).** Tasks 1–5 implemented, verified, and committed
+> (`014d244` git helpers, `0ab3a45` dirty-refusal, `73048da`→`a59f77c` two-pass
+> pre-commit hook, `266f415` ADR-0029, `14f4cb1` installer). Mid-implementation the
+> single-pass `check` hook was found to abort every commit (Fix-mode coverage churns
+> the manifests, #7) and was reworked to the two-pass form (Approach A; see ADR-0029).
+> Both hook paths were tested live (happy path: validate passes, zero churn; fail path:
+> aborts before validate on a fmt fix). **Task 6 (skill/memory ripple) was deliberately
+> deferred to the merge boundary** — those files are global and would otherwise describe
+> a reality not yet true on `main`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make git mechanically enforce the right verify gate — `check` at pre-commit, `validate --no-e2e` at pre-push — and make `validate` refuse a dirty tree, so the gate is trustworthy and e2e stays ship/CI-only.
