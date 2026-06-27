@@ -69,6 +69,13 @@ pub enum Command {
         #[arg(long)]
         site_path: Option<String>,
     },
+    /// Register the keep-ours git merge driver for the generated coverage
+    /// artifacts. `.gitattributes` maps `coverage-baseline.json` and
+    /// `crap-manifest.json` to `merge=coverage-keepours`; git config is not
+    /// version-controlled, so this one-shot wires the driver into the local
+    /// clone (run once per clone/worktree).
+    #[command(name = "install-merge-driver")]
+    InstallMergeDriver,
 }
 
 impl Cli {
@@ -78,6 +85,7 @@ impl Cli {
             Command::Validate { .. } => "validate",
             Command::RegenBaseline { .. } => "__regen-baseline",
             Command::AuditWasm { .. } => "audit-wasm",
+            Command::InstallMergeDriver => "install-merge-driver",
         }
     }
 }
@@ -126,6 +134,13 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let mut result = CommandResult::new("__regen-baseline");
             let step = regen_baseline(&gcroot);
             result.push(step);
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::InstallMergeDriver => {
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("install-merge-driver");
+            result.push(install_merge_driver());
             finalize(&mut result, start);
             Ok(result)
         }
@@ -197,6 +212,38 @@ fn regen_baseline_inner(gcroot: &str) -> anyhow::Result<usize> {
     Ok(with_gaps)
 }
 
+/// Register the keep-ours merge driver in `repo_dir`'s local git config. The
+/// driver command is `true`: it exits 0 without touching `%A` (ours), so a merge
+/// of the generated coverage artifacts resolves to our side with no conflict
+/// markers. The next `cargo xtask check` re-heals to the merged-tree state.
+fn register_keepours(repo_dir: &std::path::Path) -> anyhow::Result<()> {
+    use anyhow::ensure;
+    let cfg = |args: &[&str]| -> anyhow::Result<()> {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo_dir)
+            .args(args)
+            .status()?;
+        ensure!(status.success(), "git {:?} failed", args);
+        Ok(())
+    };
+    cfg(&[
+        "config",
+        "merge.coverage-keepours.name",
+        "keep ours for generated coverage artifacts",
+    ])?;
+    cfg(&["config", "merge.coverage-keepours.driver", "true"])?;
+    Ok(())
+}
+
+fn install_merge_driver() -> StepResult {
+    match register_keepours(std::path::Path::new(".")) {
+        Ok(()) => StepResult::ok("install-merge-driver")
+            .detail("registered merge.coverage-keepours (keep-ours)"),
+        Err(e) => StepResult::fail("install-merge-driver").detail(e.to_string()),
+    }
+}
+
 fn finalize(result: &mut CommandResult, start: std::time::Instant) {
     result.duration_ms = start.elapsed().as_millis();
     result.finished_at_unix = std::time::SystemTime::now()
@@ -255,5 +302,76 @@ mod cli_tests {
             Command::Validate { allow_dirty, .. } => assert!(!allow_dirty),
             _ => panic!("expected validate"),
         }
+    }
+}
+
+#[cfg(test)]
+mod merge_driver_tests {
+    use super::register_keepours;
+    use std::process::Command;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?} failed");
+    }
+
+    fn git_stdout(dir: &std::path::Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    #[test]
+    fn keepours_driver_resolves_merge_to_ours_without_markers() {
+        let tmp = std::env::temp_dir().join(format!("jaunder-mergetest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        git(&tmp, &["init", "-q"]);
+        git(&tmp, &["config", "user.email", "t@t"]);
+        git(&tmp, &["config", "user.name", "t"]);
+        register_keepours(&tmp).unwrap();
+        std::fs::write(
+            tmp.join(".gitattributes"),
+            "crap-manifest.json merge=coverage-keepours\n",
+        )
+        .unwrap();
+        std::fs::write(tmp.join("crap-manifest.json"), "base\n").unwrap();
+        git(&tmp, &["add", "."]);
+        git(&tmp, &["commit", "-q", "-m", "base"]);
+        // The default branch name varies (main vs master) — capture it.
+        let base = git_stdout(&tmp, &["branch", "--show-current"]);
+
+        git(&tmp, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(tmp.join("crap-manifest.json"), "theirs\n").unwrap();
+        git(&tmp, &["commit", "-qam", "theirs"]);
+
+        git(&tmp, &["checkout", "-q", &base]);
+        std::fs::write(tmp.join("crap-manifest.json"), "ours\n").unwrap();
+        git(&tmp, &["commit", "-qam", "ours"]);
+
+        // Merge must succeed (exit 0) and keep "ours" with no conflict markers.
+        let merged = Command::new("git")
+            .arg("-C")
+            .arg(&tmp)
+            .args(["merge", "-q", "--no-edit", "feature"])
+            .status()
+            .unwrap();
+        assert!(merged.success(), "keep-ours merge must not conflict");
+        let content = std::fs::read_to_string(tmp.join("crap-manifest.json")).unwrap();
+        assert_eq!(content, "ours\n", "keep-ours must retain our side");
+        assert!(!content.contains("<<<<<<<"), "no conflict markers");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
