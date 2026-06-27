@@ -211,6 +211,15 @@ pub struct PostTag {
     pub tag_display: String,
 }
 
+/// A post that crossed into "live" within a time window, carrying exactly the
+/// data the feed worker needs to compute its affected feed URLs (the author's
+/// username and the post's tag slugs).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoLivePost {
+    pub username: Username,
+    pub tag_slugs: Vec<Tag>,
+}
+
 /// The slug-level difference between a post's existing tags and a desired set
 /// of display tokens, as computed by [`post_tag_diff`].
 ///
@@ -456,6 +465,23 @@ pub trait PostStorage: Send + Sync {
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
+    /// Lists posts that crossed into "live" within the window `(after, upto]`
+    /// (exclusive lower, inclusive upper): `published_at > after AND
+    /// published_at <= upto AND deleted_at IS NULL`. Each [`GoLivePost`] carries
+    /// its author username and tag slugs so the feed worker can fan out to the
+    /// affected feed surfaces. Drives the steady-state go-live pass.
+    async fn list_posts_gone_live_between(
+        &self,
+        after: DateTime<Utc>,
+        upto: DateTime<Utc>,
+    ) -> sqlx::Result<Vec<GoLivePost>>;
+
+    /// Returns the URLs of cached feeds whose surface has a live post
+    /// (`published_at <= now`, not deleted) strictly newer than the feed's own
+    /// `generated_at` — i.e. cached feeds that missed a go-live while the worker
+    /// was down. Drives the feed-relative startup catch-up.
+    async fn feed_urls_needing_catchup(&self, now: DateTime<Utc>) -> sqlx::Result<Vec<String>>;
+
     /// Reads a post's audience targeting as a [`Vec<AudienceTarget>`], for
     /// pre-selecting the editor's audience picker.
     ///
@@ -551,6 +577,8 @@ where
     (i64, i64, String, String): for<'r> sqlx::FromRow<'r, DB::Row>,
     (i64, String): for<'r> sqlx::FromRow<'r, DB::Row>,
     (String, Option<i64>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (String, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -1317,6 +1345,82 @@ where
         .await?;
         rows.into_iter().map(post_record_from_row).collect()
     }
+
+    #[tracing::instrument(
+        name = "storage.posts.list_posts_gone_live_between",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn list_posts_gone_live_between(
+        &self,
+        after: DateTime<Utc>,
+        upto: DateTime<Utc>,
+    ) -> sqlx::Result<Vec<GoLivePost>> {
+        // `published_at > $1 AND published_at <= $2` selects exactly the posts
+        // that crossed into "live" within the half-open window `(after, upto]`.
+        // The standard post projection (incl. the JSON tag subquery) is reused
+        // so the row decodes through `post_record_from_row`; we then keep only
+        // the username + tag slugs the feed fan-out needs. No viewer filter:
+        // go-live regeneration is independent of any reader's audience.
+        let tags = DB::TAGS_SUBQUERY;
+        let sql = format!(
+            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                    p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+                    {tags} AS tags
+             FROM posts p
+             JOIN users u ON p.user_id = u.user_id
+             WHERE p.published_at > $1
+               AND p.published_at <= $2
+               AND p.deleted_at IS NULL
+             ORDER BY p.published_at ASC, p.post_id ASC"
+        );
+        let rows = sqlx::query_as::<_, PostRow>(&sql)
+            .bind(after)
+            .bind(upto)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                let rec = post_record_from_row(row)?;
+                Ok(GoLivePost {
+                    username: rec.author_username,
+                    tag_slugs: rec.tags.into_iter().map(|t| t.tag_slug).collect(),
+                })
+            })
+            .collect()
+    }
+
+    #[tracing::instrument(
+        name = "storage.posts.feed_urls_needing_catchup",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn feed_urls_needing_catchup(&self, now: DateTime<Utc>) -> sqlx::Result<Vec<String>> {
+        // Cached feeds live in the same database, so they are enumerated here
+        // and, for each, the newest live post on that surface is compared
+        // against the feed's own `generated_at`. Feed count is small, so a
+        // per-feed check is simpler than a set-based join and keeps the
+        // `feed_url` → surface parsing in Rust (`common::feed::parse`).
+        let cached: Vec<(String, DateTime<Utc>)> =
+            sqlx::query_as("SELECT feed_url, generated_at FROM feed_cache")
+                .fetch_all(&self.pool)
+                .await?;
+        let mut needing = Vec::new();
+        for (feed_url, generated_at) in cached {
+            let Some((surface, _format)) = common::feed::parse(&feed_url) else {
+                continue;
+            };
+            if let Some(max) = max_published_at_for_surface::<DB>(&self.pool, &surface, now).await?
+            {
+                // Strictly newer => a go-live happened after this feed was last
+                // generated, so it must be regenerated.
+                if max > generated_at {
+                    needing.push(feed_url);
+                }
+            }
+        }
+        Ok(needing)
+    }
 }
 
 /// The viewer-resolution binds folded into a read query's `WHERE`, in the exact
@@ -1649,6 +1753,85 @@ where
             binds.bind_onto(query).fetch_all(pool).await
         }
     }
+}
+
+/// The most recent `published_at` of a *live* post (`published_at <= now`, not
+/// deleted) on `surface`, or `None` when the surface has no live post. Each
+/// surface variant adds exactly the joins/predicates that define its post set,
+/// mirroring the window query's surface filters. Used by
+/// [`PostStorage::feed_urls_needing_catchup`] to detect a cached feed that is
+/// stale relative to a go-live the worker may have missed while down.
+async fn max_published_at_for_surface<DB>(
+    pool: &Pool<DB>,
+    surface: &common::feed::FeedSurface,
+    now: DateTime<Utc>,
+) -> sqlx::Result<Option<DateTime<Utc>>>
+where
+    DB: PostDialect,
+    (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    use common::feed::FeedSurface;
+    let row: Option<(DateTime<Utc>,)> = match surface {
+        FeedSurface::Site => {
+            sqlx::query_as(
+                "SELECT p.published_at FROM posts p
+                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
+                   AND p.deleted_at IS NULL
+                 ORDER BY p.published_at DESC LIMIT 1",
+            )
+            .bind(now)
+            .fetch_optional(pool)
+            .await?
+        }
+        FeedSurface::User { username } => {
+            sqlx::query_as(
+                "SELECT p.published_at FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
+                   AND p.deleted_at IS NULL AND u.username = $2
+                 ORDER BY p.published_at DESC LIMIT 1",
+            )
+            .bind(now)
+            .bind(username.as_str())
+            .fetch_optional(pool)
+            .await?
+        }
+        FeedSurface::SiteTag { tag } => {
+            sqlx::query_as(
+                "SELECT p.published_at FROM posts p
+                 JOIN post_tags pt ON p.post_id = pt.post_id
+                 JOIN tags t ON pt.tag_id = t.tag_id
+                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
+                   AND p.deleted_at IS NULL AND t.tag_slug = $2
+                 ORDER BY p.published_at DESC LIMIT 1",
+            )
+            .bind(now)
+            .bind(tag.as_str())
+            .fetch_optional(pool)
+            .await?
+        }
+        FeedSurface::UserTag { username, tag } => {
+            sqlx::query_as(
+                "SELECT p.published_at FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 JOIN post_tags pt ON p.post_id = pt.post_id
+                 JOIN tags t ON pt.tag_id = t.tag_id
+                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
+                   AND p.deleted_at IS NULL AND u.username = $2 AND t.tag_slug = $3
+                 ORDER BY p.published_at DESC LIMIT 1",
+            )
+            .bind(now)
+            .bind(username.as_str())
+            .bind(tag.as_str())
+            .fetch_optional(pool)
+            .await?
+        }
+    };
+    Ok(row.map(|(published_at,)| published_at))
 }
 
 #[cfg(test)]

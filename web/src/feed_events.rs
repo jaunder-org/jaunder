@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use common::feed::{canonicalize, FeedFormat, FeedSurface};
+use common::feed::affected_feed_urls;
 use common::{tag::Tag, username::Username};
 use storage::{FeedEventError, FeedEventStorage};
 
@@ -31,23 +31,8 @@ pub async fn enqueue_feed_events(
     username: &Username,
     tag_slugs: &BTreeSet<Tag>,
 ) -> Result<(), FeedEventError> {
-    let mut surfaces = vec![
-        FeedSurface::Site,
-        FeedSurface::User {
-            username: username.clone(),
-        },
-    ];
-    for tag in tag_slugs {
-        surfaces.push(FeedSurface::SiteTag { tag: tag.clone() });
-        surfaces.push(FeedSurface::UserTag {
-            username: username.clone(),
-            tag: tag.clone(),
-        });
-    }
-    for surface in &surfaces {
-        for format in [FeedFormat::Rss, FeedFormat::Atom, FeedFormat::Json] {
-            events.enqueue(&canonicalize(surface, format)).await?;
-        }
+    for url in affected_feed_urls(username, tag_slugs) {
+        events.enqueue(&url).await?;
     }
     Ok(())
 }

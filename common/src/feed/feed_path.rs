@@ -47,6 +47,37 @@ pub fn canonicalize(surface: &FeedSurface, format: FeedFormat) -> String {
     }
 }
 
+/// Every feed URL a post by `username` carrying `tags` can appear on: the site
+/// feed, the author's feed, and the site-/user-tag feeds for each tag — each in
+/// all three [`FeedFormat`]s. Shared by the write-path feed fan-out (`web`) and
+/// the feed worker's go-live pass so both enqueue exactly the same surfaces.
+#[must_use]
+pub fn affected_feed_urls<'a, I>(username: &Username, tags: I) -> Vec<String>
+where
+    I: IntoIterator<Item = &'a Tag>,
+{
+    let mut surfaces = vec![
+        FeedSurface::Site,
+        FeedSurface::User {
+            username: username.clone(),
+        },
+    ];
+    for tag in tags {
+        surfaces.push(FeedSurface::SiteTag { tag: tag.clone() });
+        surfaces.push(FeedSurface::UserTag {
+            username: username.clone(),
+            tag: tag.clone(),
+        });
+    }
+    let mut urls = Vec::with_capacity(surfaces.len() * 3);
+    for surface in &surfaces {
+        for format in [FeedFormat::Rss, FeedFormat::Atom, FeedFormat::Json] {
+            urls.push(canonicalize(surface, format));
+        }
+    }
+    urls
+}
+
 #[must_use]
 pub fn parse(path: &str) -> Option<(FeedSurface, FeedFormat)> {
     let rest = path.strip_prefix('/')?;

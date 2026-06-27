@@ -24,13 +24,13 @@ use std::sync::Arc;
 use storage::{
     create_rendered_post, open_database, open_existing_database, perform_post_update,
     update_rendered_post, AppState, AtomicOps, AudienceError, CreatePostError, CreatePostInput,
-    CreateUserError, DbConnectOptions, EmailVerificationStorage, InviteStorage, ListByTagError,
-    PasswordResetStorage, PostCursor, PostFormat, PostUpdate, ProfileUpdate, PublishUpdate,
-    RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteAtomicOps,
-    SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
-    SqliteSessionStorage, SqliteSubscriptionStorage, SqliteUserStorage, SubscriptionStorage,
-    TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
-    UsePasswordResetError, UserAuthError, UserStorage,
+    CreateUserError, DbConnectOptions, EmailVerificationStorage, FeedCacheRow, GoLivePost,
+    InviteStorage, ListByTagError, PasswordResetStorage, PostCursor, PostFormat, PostUpdate,
+    ProfileUpdate, PublishUpdate, RegisterWithInviteError, SessionAuthError, SessionStorage,
+    SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
+    SqlitePasswordResetStorage, SqliteSessionStorage, SqliteSubscriptionStorage, SqliteUserStorage,
+    SubscriptionStorage, TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError,
+    UseInviteError, UsePasswordResetError, UserAuthError, UserStorage,
 };
 use tempfile::TempDir;
 
@@ -3015,6 +3015,156 @@ async fn drafts_list_includes_scheduled_excludes_live(#[case] backend: Backend) 
     assert!(
         !slugs.contains(&"a-live".to_string()),
         "drafts must exclude live posts: {slugs:?}"
+    );
+}
+
+// Go-live window/catch-up reads (issue #70, Task 7): the feed worker uses these
+// to nudge cached feeds when a future-dated post crosses into "live" with no
+// accompanying write. One common test per read, both backends, fixed injected
+// clock (no sleeps).
+
+#[apply(backends)]
+#[tokio::test]
+async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    let env = backend.setup().await;
+    let state = &env.state;
+    let after = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
+    let upto = after + Duration::hours(1);
+    let alice = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let bob = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    // Inside the window (after, upto], tagged: must be returned with its tag.
+    let inside =
+        seed_post_published_at(state, alice, "in-window", after + Duration::minutes(30)).await;
+    state.posts.tag_post(inside, "scheduling").await.unwrap();
+    // Exactly at the inclusive upper bound: must be returned (untagged).
+    seed_post_published_at(state, bob, "at-upto", upto).await;
+    // Exactly at the exclusive lower bound: must be excluded.
+    seed_post_published_at(state, alice, "at-after", after).await;
+    // Past the window: must be excluded.
+    seed_post_published_at(state, alice, "out-window", upto + Duration::hours(1)).await;
+
+    let live: Vec<GoLivePost> = state
+        .posts
+        .list_posts_gone_live_between(after, upto)
+        .await
+        .unwrap();
+    assert_eq!(
+        live.len(),
+        2,
+        "only the (after, upto] posts are returned: {live:?}"
+    );
+
+    let alice_live = live
+        .iter()
+        .find(|p| p.username == username("alice"))
+        .expect("alice's in-window post is present");
+    let slugs: Vec<String> = alice_live
+        .tag_slugs
+        .iter()
+        .map(|t| t.as_str().to_string())
+        .collect();
+    assert_eq!(slugs, vec!["scheduling".to_string()], "tags are hydrated");
+
+    let bob_live = live
+        .iter()
+        .find(|p| p.username == username("bob"))
+        .expect("bob's at-upto post is present (inclusive upper)");
+    assert!(
+        bob_live.tag_slugs.is_empty(),
+        "untagged post yields empty tag_slugs"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    use common::feed::{canonicalize, FeedFormat, FeedSurface};
+    let env = backend.setup().await;
+    let state = &env.state;
+    let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
+    let t0 = now - Duration::hours(2);
+    let alice = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    // A live post, newer than t0, on the site/user feeds and — once tagged —
+    // on the site-tag and user-tag feeds too.
+    let post = seed_post_published_at(state, alice, "live-one", now - Duration::hours(1)).await;
+    state.posts.tag_post(post, "rust").await.unwrap();
+
+    let mk_row = |feed_url: &str, generated_at| FeedCacheRow {
+        feed_url: feed_url.to_string(),
+        body: "cached".to_string(),
+        etag: "etag".to_string(),
+        content_type: "application/atom+xml; charset=utf-8".to_string(),
+        updated_at: generated_at,
+        generated_at,
+    };
+    // The exact feed-url keys for each surface, built the same way the worker
+    // does, so the per-surface arms of `max_published_at_for_surface` are all
+    // exercised (Site, User, SiteTag, UserTag).
+    let tag = "rust".parse().unwrap();
+    let site_tag_url = canonicalize(&FeedSurface::SiteTag { tag }, FeedFormat::Atom);
+    let user_tag_url = canonicalize(
+        &FeedSurface::UserTag {
+            username: username("alice"),
+            tag: "rust".parse().unwrap(),
+        },
+        FeedFormat::Atom,
+    );
+
+    // Stale (generated before go-live) => must be returned.
+    state
+        .feed_cache
+        .upsert(mk_row("/feed.atom", t0))
+        .await
+        .unwrap();
+    state
+        .feed_cache
+        .upsert(mk_row(&site_tag_url, t0))
+        .await
+        .unwrap();
+    state
+        .feed_cache
+        .upsert(mk_row(&user_tag_url, t0))
+        .await
+        .unwrap();
+    // Fresh (generated after the newest live post) => must NOT be returned.
+    state
+        .feed_cache
+        .upsert(mk_row("/~alice/feed.atom", now))
+        .await
+        .unwrap();
+
+    let stale = state.posts.feed_urls_needing_catchup(now).await.unwrap();
+    assert!(
+        stale.contains(&"/feed.atom".to_string()),
+        "a stale site feed is returned: {stale:?}"
+    );
+    assert!(
+        stale.contains(&site_tag_url),
+        "a stale site-tag feed is returned: {stale:?}"
+    );
+    assert!(
+        stale.contains(&user_tag_url),
+        "a stale user-tag feed is returned: {stale:?}"
+    );
+    assert!(
+        !stale.contains(&"/~alice/feed.atom".to_string()),
+        "a feed newer than its surface's newest post is not stale: {stale:?}"
     );
 }
 

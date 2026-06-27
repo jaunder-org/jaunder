@@ -462,11 +462,11 @@ async fn list_posts_gone_live_between(
 
 SQL: posts where `published_at > $after AND published_at <= $upto AND deleted_at IS NULL`, joined to the author's username and the post's tag slugs (reuse the `TAGS_SUBQUERY` dialect const or a join + aggregate). One row per post; `tag_slugs` empty when untagged.
 
-- [ ] **Step 1: Failing test** — `#[apply(backends)]` test: seed a post `published_at = T_after + 30min` (inside the window) and another at `T_upto + 1h` (outside); call `list_posts_gone_live_between(T_after, T_upto)`; assert only the in-window post is returned, with the right username and tags.
+- [x] **Step 1: Failing test** — `#[apply(backends)]` test `list_posts_gone_live_between_returns_only_window_with_tags`: in-window tagged post, an at-`upto` post (inclusive upper, different author), an at-`after` post (exclusive lower), and an out-of-window post; asserts only the `(after, upto]` posts return, with correct username + hydrated/empty tags.
 - [ ] **Step 2: Run → FAIL.**
-- [ ] **Step 3: Implement** the trait method + generic impl in `storage/src/posts.rs`.
-- [ ] **Step 4: Run → PASS** (both backends); `cargo xtask check --no-test` → clean.
-- [ ] **Step 5: Commit** — `feat(storage): query posts gone live within a window (#70)`.
+- [x] **Step 3: Implement** the trait method + generic impl in `storage/src/posts.rs`.
+- [x] **Step 4: Run → PASS** (sqlite verified locally; both backends via the Nix gate); `cargo xtask check --no-test` → clean.
+- [x] **Step 5: Commit** — folded into the combined Task 7 commit below.
 
 ### Task 7b: Storage — feeds needing startup catch-up
 
@@ -486,11 +486,11 @@ async fn feed_urls_needing_catchup(
 
 Implementation: iterate cached feeds (`feed_cache` rows carry `feed_url` + `generated_at`, confirmed present — no migration needed); for each, derive its `FeedSurface` (reuse the existing `feed_url` → surface parsing used by `regenerate_feed`) and check whether `max(published_at)` for that surface (`published_at <= now`, not deleted) exceeds the row's `generated_at`. Return the URLs that do. (A single set-based SQL is preferable if the surface↔post join is expressible; otherwise a per-row check over `feed_cache` is acceptable given feed count is small.)
 
-- [ ] **Step 1: Failing test** — seed a cached feed row with `generated_at = T0` and a live post for that surface with `published_at = T1 > T0`; assert the feed URL is returned. Add a control: a feed whose `generated_at` is newer than its newest post is **not** returned.
+- [x] **Step 1: Failing test** — `feed_urls_needing_catchup_returns_stale_feeds`: a stale site feed (`generated_at = T0`) with a live post `published_at > T0` is returned; a control feed whose `generated_at` is newer than its surface's newest post is not.
 - [ ] **Step 2: Run → FAIL.**
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run → PASS** (both backends); `cargo xtask check --no-test` → clean.
-- [ ] **Step 5: Commit** — `feat(storage): identify cached feeds needing go-live catch-up (#70)`.
+- [x] **Step 3: Implement.** Added `feed_urls_needing_catchup` to `PostStorage` + impl in `storage/src/posts.rs`, backed by a `max_published_at_for_surface` helper; enumerates `feed_cache` rows and parses each `feed_url` via `common::feed::parse`.
+- [x] **Step 4: Run → PASS** (sqlite verified locally; both backends via the Nix gate); `cargo xtask check --no-test` → clean.
+- [x] **Step 5: Commit** — folded into the combined Task 7 commit below.
 
 ### Task 7c: Worker — go-live pass (window + startup catch-up)
 
@@ -558,9 +558,10 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
 
 Add small test helpers as needed (`make_feed_worker`, `seed_cached_feed`, `feed_events_pending_urls` — the last can wrap `claim_pending_batch` or a direct `SELECT feed_url FROM feed_events WHERE status='pending'`).
 
+- [x] **Step 1 (done): Restart-straddle test** `startup_catchup_regenerates_feed_for_go_live_while_down` + steady-state test `steady_state_window_enqueues_newly_live_posts` added to `server/tests/feed/feed_worker.rs`, reusing the existing `make_worker` helper and asserting via `claim_pending_batch`.
 - [ ] **Step 2: Run them, verify they fail** — `cd <worktree> && cargo nextest run -p jaunder -E 'test(startup_catchup_regenerates_feed) + test(steady_state_window_enqueues)'` → FAIL (no `go_live_pass`).
 
-- [ ] **Step 3: Implement.** Add `last_tick: tokio::sync::Mutex<Option<DateTime<Utc>>>` to `FeedWorker` (and its constructor). Implement `go_live_pass`:
+- [x] **Step 3: Implement.** Add `last_tick: tokio::sync::Mutex<Option<DateTime<Utc>>>` to `FeedWorker` (and its constructor). Implement `go_live_pass`:
   - lock `last_tick`;
   - if `None`: `for url in storage.feed_urls_needing_catchup(now) { feed_events.enqueue(&url).await?; }`;
   - else `Some(last)`: `for p in storage.list_posts_gone_live_between(last, now) { for url in feed_urls_for(&p.username, &p.tag_slugs) { feed_events.enqueue(&url).await?; } }`;
@@ -568,11 +569,11 @@ Add small test helpers as needed (`make_feed_worker`, `seed_cached_feed`, `feed_
   - `feed_urls_for` reuses the existing surface→URL construction (mirror `web/src/feed_events.rs::enqueue_feed_events`'s Site + User + per-tag × {Rss,Atom,Json} fan-out); if that logic is only in the web crate, extract a shared helper into the server/common crate and call it from both places (no behavior change to the web path).
   - Wire `self.go_live_pass(Utc::now()).await` into `tick()` before `claim_pending_batch`.
 
-- [ ] **Step 4: Run them, verify they pass** — same filters → PASS both backends; `cd <worktree> && cargo xtask check --no-test` → clean.
+- [x] **Step 4: Run them, verify they pass** — same filters → PASS (sqlite verified locally; both backends via the Nix gate); `cd <worktree> && cargo xtask check --no-test` → clean.
 
 - [ ] **Step 5: Final gate** — `cd <worktree> && cargo xtask validate --no-e2e` → green (static + clippy + coverage).
 
-- [ ] **Step 6: Commit** — `feat(server): restart-durable go-live pass in the feed worker (#70)`.
+- [x] **Step 6: Commit** — `feat(server): restart-durable go-live pass in the feed worker (#70)` (combined 7a+7b+7c). Extracted `common::feed::affected_feed_urls` as the single surface-fan-out source (web `enqueue_feed_events` refactored onto it). Coverage re-anchor accepts 1 line — `server/src/feed/worker.rs:101`, the defensive go-live error log — per user approval; the four `max_published_at_for_surface` surface arms are test-covered.
 
 ---
 

@@ -395,59 +395,63 @@
   ],
   "server/src/feed/worker.rs": [
     {
-      "line": 64,
+      "line": 101,
+      "text": "            tracing::error!(error = %e, \"feed worker go-live pass failed\");"
+    },
+    {
+      "line": 113,
       "text": "            Err(e) => {"
     },
     {
-      "line": 65,
+      "line": 114,
       "text": "                tracing::error!(error = %e, \"feed worker claim failed\");"
     },
     {
-      "line": 66,
+      "line": 115,
       "text": "                return;"
     },
     {
-      "line": 70,
+      "line": 119,
       "text": "            return;"
     },
     {
-      "line": 108,
+      "line": 157,
       "text": "                        item_bytes = row.body.len(),"
     },
     {
-      "line": 109,
+      "line": 158,
       "text": "                        duration_ms = started.elapsed().as_millis(),"
     },
     {
-      "line": 175,
+      "line": 224,
       "text": "                        let _ = self.feed_events.mark_exhausted(&ids, &e.to_string()).await;"
     },
     {
-      "line": 203,
+      "line": 252,
       "text": "            move |_uuid, _lock| {"
     },
     {
-      "line": 204,
+      "line": 253,
       "text": "                let worker = worker.clone();"
     },
     {
-      "line": 205,
+      "line": 254,
       "text": "                Box::pin(async move {"
     },
     {
-      "line": 206,
+      "line": 255,
       "text": "                    worker.tick().await;"
     },
     {
-      "line": 207,
+      "line": 256,
       "text": "                })"
     },
     {
-      "line": 208,
+      "line": 257,
       "text": "            },"
     },
     {
-      "line": 209,
+      "line": 258,
       "text": "        )?;"
     }
   ],
