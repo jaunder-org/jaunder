@@ -370,11 +370,18 @@ pub trait PostStorage: Send + Sync {
     ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Lists draft posts for a specific user.
+    ///
+    /// This is the author's "not-yet-live" surface: it returns true drafts
+    /// (`published_at IS NULL`) **and** scheduled posts (`published_at > now`),
+    /// so a future-dated post — invisible on every public surface until its
+    /// time — stays visible to its own author. `now` gates which posts count
+    /// as not-yet-live.
     async fn list_drafts_by_user(
         &self,
         user_id: i64,
         cursor: Option<&PostCursor>,
         limit: u32,
+        now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Lists all of a user's non-soft-deleted posts (drafts + published)
@@ -887,9 +894,12 @@ where
         user_id: i64,
         cursor: Option<&PostCursor>,
         limit: u32,
+        now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
+            // `published_at IS NULL OR published_at > $5` surfaces both true
+            // drafts and scheduled (future-dated) posts to the author.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -897,21 +907,24 @@ where
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.user_id = $1
-                   AND p.published_at IS NULL
+                   AND (p.published_at IS NULL OR p.published_at > $5)
                    AND p.deleted_at IS NULL
                    AND (p.created_at < $2 OR (p.created_at = $3 AND p.post_id < $4))
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT $5"
+                 LIMIT $6"
             );
             sqlx::query_as::<_, PostRow>(&sql)
                 .bind(user_id)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
                 .bind(cursor.post_id)
+                .bind(now)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
         } else {
+            // `published_at IS NULL OR published_at > $2` surfaces both true
+            // drafts and scheduled (future-dated) posts to the author.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -919,13 +932,14 @@ where
                  FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.user_id = $1
-                   AND p.published_at IS NULL
+                   AND (p.published_at IS NULL OR p.published_at > $2)
                    AND p.deleted_at IS NULL
                  ORDER BY p.created_at DESC, p.post_id DESC
-                 LIMIT $2"
+                 LIMIT $3"
             );
             sqlx::query_as::<_, PostRow>(&sql)
                 .bind(user_id)
+                .bind(now)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?

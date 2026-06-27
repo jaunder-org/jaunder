@@ -1522,6 +1522,79 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     assert_eq!(ids, expected_ids);
 }
 
+// A future-scheduled post is surfaced through `list_drafts` with a populated
+// `scheduled_at`, while a live post stays off the drafts surface (issue #70).
+#[apply(backends)]
+#[tokio::test]
+async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let author_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let author_cookie = format!(
+        "session={}",
+        state
+            .sessions
+            .create_session(author_id, "test session")
+            .await
+            .unwrap()
+    );
+
+    // Seed a scheduled post (future `published_at`) and a live post (past)
+    // directly via storage — the web compose datetime control is Task 6.
+    let scheduled_post =
+        |slug: &str, published_at: chrono::DateTime<chrono::Utc>| storage::CreatePostInput {
+            user_id: author_id,
+            title: Some(format!("Post {slug}")),
+            slug: slug.parse().unwrap(),
+            body: "body".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>body</p>".to_string(),
+            published_at: Some(published_at),
+            summary: None,
+            audiences: vec![common::visibility::AudienceTarget::Public],
+        };
+    let now = chrono::Utc::now();
+    let sched_id = state
+        .posts
+        .create_post(&scheduled_post(
+            "sched-web",
+            now + chrono::Duration::days(3),
+        ))
+        .await
+        .unwrap();
+    let live_id = state
+        .posts
+        .create_post(&scheduled_post("live-web", now - chrono::Duration::days(1)))
+        .await
+        .unwrap();
+
+    let (status, body) =
+        list_drafts_form(Arc::clone(&state), None, None, 50, Some(&author_cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let drafts: Vec<DraftSummary> = serde_json::from_str(&body).unwrap();
+
+    let sched = drafts
+        .iter()
+        .find(|d| d.post_id == sched_id)
+        .unwrap_or_else(|| panic!("scheduled post must appear in drafts: {body}"));
+    assert!(
+        sched.scheduled_at.is_some(),
+        "scheduled post must carry scheduled_at: {body}"
+    );
+    assert!(
+        !drafts.iter().any(|d| d.post_id == live_id),
+        "live post must not appear in drafts: {body}"
+    );
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Backend) {

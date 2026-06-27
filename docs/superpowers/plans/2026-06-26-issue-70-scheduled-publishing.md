@@ -179,7 +179,7 @@ Add a small helper `seed_post_published_at(env, username, slug, published_at)` n
 
 Rationale: a scheduled post (`published_at NOT NULL AND > now`) currently falls out of `list_drafts_by_user` (gates `IS NULL`) *and*, after Task 2, out of every public list — it would be invisible to its own author until go-live. Broadening the drafts query to `published_at IS NULL OR published_at > now` gives scheduled posts a home with a marker, satisfying the spec's minimal author surface. Full management UI stays in #15.
 
-- [ ] **Step 1: Write the failing storage test** in `server/tests/storage/storage.rs`:
+- [x] **Step 1: Write the failing storage test** in `server/tests/storage/storage.rs`:
 
 ```rust
 #[apply(backends)]
@@ -203,15 +203,15 @@ async fn drafts_list_includes_scheduled_excludes_live(#[case] backend: Backend) 
 }
 ```
 
-- [ ] **Step 2: Run it, verify it fails** — `cd <worktree> && cargo nextest run -p jaunder drafts_list_includes_scheduled` → FAIL (compile, then assertion).
+- [x] **Step 2: Run it, verify it fails** — `cd <worktree> && cargo nextest run -p jaunder drafts_list_includes_scheduled` → FAIL (compile, then assertion).
 
-- [ ] **Step 3: Implement the query.** In `storage/src/posts.rs` add `now: DateTime<Utc>` to `list_drafts_by_user` (trait + impl) and change the gate from `AND p.published_at IS NULL` to `AND (p.published_at IS NULL OR p.published_at > $K)` in both the cursor and no-cursor branches, binding `now`.
+- [x] **Step 3: Implement the query.** In `storage/src/posts.rs` add `now: DateTime<Utc>` to `list_drafts_by_user` (trait + impl) and change the gate from `AND p.published_at IS NULL` to `AND (p.published_at IS NULL OR p.published_at > $K)` in both the cursor and no-cursor branches, binding `now`.
 
-- [ ] **Step 4: Surface the marker through the web layer.** In `web/src/posts/mod.rs`: add `scheduled_at: Option<String>` to `DraftSummary` (144); in `list_drafts` (493) pass `Utc::now()` and set `scheduled_at = post.published_at.map(|t| t.to_rfc3339())` (only populated when `published_at` is in the future — true drafts stay `None`). In `web/src/pages/posts.rs` `DraftsPage` (818), when `scheduled_at` is `Some`, render a "Scheduled for {local time}" badge instead of the draft label (format the RFC3339 string to the viewer's locale with the existing date-rendering helper used elsewhere in that page).
+- [x] **Step 4: Surface the marker through the web layer.** In `web/src/posts/mod.rs`: add `scheduled_at: Option<String>` to `DraftSummary` (144); in `list_drafts` (493) pass `Utc::now()` and set `scheduled_at = post.published_at.map(|t| t.to_rfc3339())` (only populated when `published_at` is in the future — true drafts stay `None`). In `web/src/pages/posts.rs` `DraftsPage` (818), when `scheduled_at` is `Some`, render a "Scheduled for {local time}" badge instead of the draft label (format the RFC3339 string to the viewer's locale with the existing date-rendering helper used elsewhere in that page).
 
-- [ ] **Step 5: Write + run the web server-fn test** in `server/tests/web/web_posts.rs`: create a post scheduled in the future, call `list_drafts`, assert the returned `DraftSummary` has `scheduled_at: Some(_)` and that a live post does not appear. Run: `cd <worktree> && cargo nextest run -p jaunder -E 'test(list_drafts)'` → PASS. Then `cargo xtask check --no-test` → clean.
+- [x] **Step 5: Write + run the web server-fn test** in `server/tests/web/web_posts.rs`: create a post scheduled in the future, call `list_drafts`, assert the returned `DraftSummary` has `scheduled_at: Some(_)` and that a live post does not appear. Run: `cd <worktree> && cargo nextest run -p jaunder -E 'test(list_drafts)'` → PASS. Then `cargo xtask check --no-test` → clean.
 
-- [ ] **Step 6: Commit** — `feat(web): show scheduled posts in the author drafts surface with a marker (#70)`.
+- [x] **Step 6: Commit** — `feat(web): show scheduled posts in the author drafts surface with a marker (#70)`. (Includes a coverage-baseline re-anchor accepting the 4 page-component badge-render lines in `web/src/pages/posts.rs` — auto-approved per policy.)
 
 ---
 

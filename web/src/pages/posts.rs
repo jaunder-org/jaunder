@@ -896,6 +896,12 @@ fn render_draft_row(
 ) -> impl IntoView {
     let post_id = draft.post_id;
     let label = draft.title.clone().unwrap_or(draft.summary_label.clone());
+    // A scheduled post (future `published_at`) carries `scheduled_at`; mark it
+    // distinctly from a true draft so the author can tell the two apart on this
+    // shared "not-yet-live" surface. Full management UI is out of scope (#15).
+    let scheduled_badge = draft.scheduled_at.clone().map(|when| {
+        view! { <span class="j-badge j-badge-scheduled">{format!("Scheduled for {when}")}</span> }
+    });
     view! {
         <li>
             <div class="j-draft-row">
@@ -904,6 +910,8 @@ fn render_draft_row(
                     " ("
                     {draft.slug}
                     ") "
+                    {scheduled_badge}
+                    " "
                     <a href=draft.preview_url>"Preview"</a>
                     " "
                     <a href=draft.permalink>"Permalink"</a>

@@ -2852,12 +2852,60 @@ async fn list_drafts_by_user_returns_only_drafts(#[case] backend: Backend) {
 
     let drafts = state
         .posts
-        .list_drafts_by_user(user_id, None, 10)
+        .list_drafts_by_user(user_id, None, 10, Utc::now())
         .await
         .unwrap();
     assert_eq!(drafts.len(), 2);
     assert!(drafts.iter().all(|p| p.published_at.is_none()));
     assert!(drafts.iter().all(|p| p.user_id == user_id));
+}
+
+// The author's drafts surface is the "not-yet-live" surface: it must include
+// true drafts AND scheduled (future-dated) posts, but exclude posts that are
+// already live (`published_at <= now`). One common test, both backends, fixed
+// injected `now` (issue #70).
+#[apply(backends)]
+#[tokio::test]
+async fn drafts_list_includes_scheduled_excludes_live(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    let env = backend.setup().await;
+    let state = &env.state;
+    let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
+    let user_id = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    // True draft (published_at NULL).
+    state
+        .posts
+        .create_post(&make_create_post_input(user_id, "a-draft"))
+        .await
+        .unwrap();
+    // Scheduled post (published_at in the future).
+    seed_post_published_at(state, user_id, "a-sched", now + Duration::hours(2)).await;
+    // Live post (published_at in the past).
+    seed_post_published_at(state, user_id, "a-live", now - Duration::hours(2)).await;
+
+    let rows = state
+        .posts
+        .list_drafts_by_user(user_id, None, 50, now)
+        .await
+        .unwrap();
+    let slugs: Vec<String> = rows.iter().map(|p| p.slug.as_str().to_string()).collect();
+    assert!(
+        slugs.contains(&"a-draft".to_string()),
+        "drafts must include true drafts: {slugs:?}"
+    );
+    assert!(
+        slugs.contains(&"a-sched".to_string()),
+        "drafts must include scheduled posts: {slugs:?}"
+    );
+    assert!(
+        !slugs.contains(&"a-live".to_string()),
+        "drafts must exclude live posts: {slugs:?}"
+    );
 }
 
 // =============================================================================
@@ -4824,14 +4872,14 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
 
     let all = state
         .posts
-        .list_drafts_by_user(user, None, 10)
+        .list_drafts_by_user(user, None, 10, Utc::now())
         .await
         .expect("list_drafts_by_user failed");
     assert_eq!(all.len(), 3);
 
     let first = state
         .posts
-        .list_drafts_by_user(user, None, 1)
+        .list_drafts_by_user(user, None, 1, Utc::now())
         .await
         .expect("list_drafts_by_user failed");
     assert_eq!(first.len(), 1);
@@ -4843,7 +4891,7 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_drafts_by_user(user, Some(&cursor), 2)
+            .list_drafts_by_user(user, Some(&cursor), 2, Utc::now())
             .await
             .expect("list_drafts_by_user with cursor failed");
         assert!(next.len() <= 2);

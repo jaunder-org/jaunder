@@ -155,7 +155,7 @@ pub async fn delete_media(
             .map_err(InternalError::storage)?;
 
         let drafts = posts
-            .list_drafts_by_user(auth.user_id, None, 1000)
+            .list_drafts_by_user(auth.user_id, None, 1000, chrono::Utc::now())
             .await
             .map_err(InternalError::storage)?;
 

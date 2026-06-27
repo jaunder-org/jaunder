@@ -148,6 +148,10 @@ pub struct DraftSummary {
     pub slug: String,
     pub created_at: String,
     pub updated_at: String,
+    /// RFC3339 UTC publication instant for a *scheduled* post (`published_at`
+    /// in the future); `None` for true drafts. Drives the "Scheduled for …"
+    /// author marker.
+    pub scheduled_at: Option<String>,
     pub preview_url: String,
     pub edit_url: String,
     pub permalink: String,
@@ -515,7 +519,12 @@ pub async fn list_drafts(
         let parsed_cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
         let page_size = limit.unwrap_or(50).clamp(1, 50);
         let drafts = posts
-            .list_drafts_by_user(auth.user_id, parsed_cursor.as_ref(), page_size)
+            .list_drafts_by_user(
+                auth.user_id,
+                parsed_cursor.as_ref(),
+                page_size,
+                chrono::Utc::now(),
+            )
             .await
             .map_err(InternalError::storage)?;
 
@@ -523,6 +532,10 @@ pub async fn list_drafts(
             .into_iter()
             .map(|draft| {
                 let permalink = draft.permalink();
+                // `list_drafts_by_user` only returns drafts (`published_at`
+                // NULL) and scheduled posts (`published_at` in the future), so
+                // a `Some(published_at)` here is necessarily a scheduled time.
+                let scheduled_at = draft.published_at.map(|t| t.to_rfc3339());
                 DraftSummary {
                     post_id: draft.post_id,
                     title: draft.title.clone(),
@@ -530,6 +543,7 @@ pub async fn list_drafts(
                     slug: draft.slug.to_string(),
                     created_at: draft.created_at.to_rfc3339(),
                     updated_at: draft.updated_at.to_rfc3339(),
+                    scheduled_at,
                     preview_url: format!("/draft/{}/preview", draft.post_id),
                     edit_url: format!("/posts/{}/edit", draft.post_id),
                     permalink,
