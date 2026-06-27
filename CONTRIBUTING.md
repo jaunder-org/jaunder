@@ -161,10 +161,10 @@ When a change is confined to one area, run the relevant target directly.
 
 The integration suite is backend-parametric via [`rstest`](https://docs.rs/rstest): a storage behavior is written **once** and annotated `#[apply(backends)]`, which expands it into two cases — `::case_1_sqlite` and `::case_2_postgres`. A `Backend` enum selects the backend through `Backend::setup()` (defined in `server/tests/helpers/mod.rs`); genuinely single-backend tests use `#[apply(sqlite_only)]` or `#[apply(postgres_only)]`. The HTTP-layer integration tests are backend-parametric too: they use the same `Backend::setup()` fixture (`#[apply(backends)]`, or a `#[values(Backend::Sqlite, Backend::Postgres)]` + `#[case]` matrix for clustered rejection/authorization tests), so the **whole** integration suite — storage and HTTP — runs on both backends per run; the old env-selected `test_state` harness is gone. Both cases run in the same single nextest pass. The consequence is that a bare `cargo nextest run` **requires a reachable PostgreSQL**: the postgres cases connect to `JAUNDER_PG_TEST_URL` (defaulting to `postgres://jaunder@127.0.0.1:55432/jaunder`) and fail if nothing is listening. Each test creates its own database — a clone of a once-migrated template (see `server/tests/helpers/mod.rs`) — so the cases run **in parallel**; no `--test-threads=1` is needed. (The `#[template]`/`#[apply]` macros come from the `rstest_reuse` dev-dependency, which requires the bare `use rstest_reuse;` import at the top of any test file that uses them.)
 
-The simplest way to run them against a throwaway PostgreSQL is the wrapper, which starts an ephemeral cluster, exports the connection env, runs the command, and tears everything down:
+The simplest way to run them against a throwaway PostgreSQL is `devtool pg run`, which starts an ephemeral cluster, exports the connection env, runs the command, and tears everything down:
 
 ```bash
-scripts/with-ephemeral-postgres cargo nextest run -p jaunder
+cargo run --manifest-path tools/Cargo.toml -p devtool -- pg run -- cargo nextest run -p jaunder
 ```
 
 To use a persistent instance instead (e.g. the dev VM), set the env yourself:
@@ -303,4 +303,4 @@ nix build .#checks.x86_64-linux.postgres-integration
 - Start it with `nix run .#postgres-testing-vm`.
 - The forwarded connection string is `postgres://jaunder@127.0.0.1:55432/jaunder`.
 - Point the app at it with `export JAUNDER_DB=postgres://jaunder@127.0.0.1:55432/jaunder`.
-- The PostgreSQL-backed tests each create their own database (template clones), so they run in parallel without interference; see "PostgreSQL-backed Rust tests" above. For a self-contained run, prefer `scripts/with-ephemeral-postgres`.
+- The PostgreSQL-backed tests each create their own database (template clones), so they run in parallel without interference; see "PostgreSQL-backed Rust tests" above. For a self-contained run, prefer `devtool pg run`.

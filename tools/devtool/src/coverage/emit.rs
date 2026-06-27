@@ -5,6 +5,8 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use coverage::status::{CoverageStatus, StatusCategory};
 
+use crate::pg;
+
 /// Classify captured `cargo llvm-cov nextest` output into the in-sandbox
 /// sentinel. Infra failures (disk/OOM) take precedence over test failures,
 /// because a disk-full run ALSO produces spurious test FAILs (#28).
@@ -67,15 +69,20 @@ pub fn run(out: &str) -> Result<()> {
     // 2. Instrumented suite under an ephemeral PostgreSQL. Capture combined
     //    output for classification + the diagnostics bundle. A non-zero exit is
     //    NOT fatal here: a test failure or infra failure is reported via status.
-    let nextest = run_capture(Command::new("bash").args([
-        "scripts/with-ephemeral-postgres",
-        "cargo",
-        "llvm-cov",
-        "--no-report",
-        "nextest",
-        "--show-progress",
-        "none",
-    ]))?;
+    let nextest = pg::with_ephemeral(|env| {
+        run_capture(
+            Command::new("cargo")
+                .args([
+                    "llvm-cov",
+                    "--no-report",
+                    "nextest",
+                    "--show-progress",
+                    "none",
+                ])
+                .env("JAUNDER_PG_TEST_URL", &env.test_url)
+                .env("JAUNDER_PG_BOOTSTRAP_TEST_URL", &env.bootstrap_url),
+        )
+    })?;
     fs::write(diag.join("nextest.log"), &nextest)?;
     // status.json is best-effort: under TRUE disk-full the write below itself
     // fails and the producer derivation fails before any sentinel exists — the

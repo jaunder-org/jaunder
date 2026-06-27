@@ -6,6 +6,7 @@
 use clap::{Parser, Subcommand};
 
 mod coverage;
+mod pg;
 
 #[derive(Parser)]
 #[command(name = "devtool", about = "Jaunder in-sandbox dev tooling")]
@@ -19,6 +20,9 @@ enum Command {
     /// Coverage pipeline subcommands.
     #[command(subcommand)]
     Coverage(CoverageCmd),
+    /// Ephemeral PostgreSQL subcommands.
+    #[command(subcommand)]
+    Pg(PgCmd),
 }
 
 #[derive(Subcommand)]
@@ -31,9 +35,20 @@ enum CoverageCmd {
     },
 }
 
+#[derive(Subcommand)]
+enum PgCmd {
+    /// Run a command with a throwaway PostgreSQL 16 cluster.
+    Run {
+        /// Command (and its arguments) to run, after `--`.
+        #[arg(trailing_var_arg = true, required = true)]
+        cmd: Vec<String>,
+    },
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Coverage(CoverageCmd::Emit { out }) => coverage::emit::run(&out),
+        Command::Pg(PgCmd::Run { cmd }) => pg::run_command(&cmd),
     }
 }
