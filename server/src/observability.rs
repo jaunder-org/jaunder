@@ -234,11 +234,11 @@ fn init_tracing_impl(verbose: bool) -> TelemetryGuard {
 
 #[must_use]
 pub fn init_tracing(verbose: bool) -> TelemetryGuard {
-    // Called exactly once per process (production): `main` -> `run` for a
-    // one-shot command, or `run` -> `cmd_serve`. The previous `Once` guard is
-    // gone because returning an owned guard is incompatible with `call_once`;
-    // repeat installs (only seen in tests that dispatch twice in one process)
-    // are already reported non-fatally by `try_init`/`LogTracer::init`.
+    // Called once per process from `run` (production), for every command —
+    // `serve` included. The previous `Once` guard is gone because returning an
+    // owned guard is incompatible with `call_once`; repeat installs (only seen in
+    // tests that dispatch twice in one process) are already reported non-fatally
+    // by `try_init`/`LogTracer::init`.
     init_tracing_impl(verbose)
 }
 

@@ -123,10 +123,10 @@ Convention: `init_tracing` returns a `#[must_use]` `TelemetryGuard` owning the
 installed providers. A process holds the guard for its working scope; the guard's
 `Drop` calls `shutdown()` (force-flush + shutdown) on each provider, exporting
 buffered telemetry on every exit path — success, `?` error-return, and panic
-unwind. A single binding at the `run()` dispatch boundary covers every current
-and future one-shot command, so command bodies carry no telemetry-lifecycle code.
-The server binds the same guard for its process lifetime. Export failures (e.g.
-an unreachable collector) are logged, never propagated — a telemetry failure must
-not change a command's exit status. This closes the "CLI export" item the metrics
-addendum deferred (metrics **and** traces, since both shared the drop-on-exit
-defect).
+unwind. A single binding at the `run()` dispatch boundary owns telemetry for
+*every* command — `serve` included — so command bodies (including `cmd_serve`)
+carry no telemetry-lifecycle code; for `serve` the guard is simply held for the
+process lifetime and flushes at shutdown. Export failures (e.g. an unreachable
+collector) are logged, never propagated — a telemetry failure must not change a
+command's exit status. This closes the "CLI export" item the metrics addendum
+deferred (metrics **and** traces, since both shared the drop-on-exit defect).

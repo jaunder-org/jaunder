@@ -318,7 +318,7 @@ async fn cmd_serve_fails_when_not_initialized() {
     let args = uninitialized_storage_args(&base);
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
 
-    let result = cmd_serve(&args, bind, true, false).await;
+    let result = cmd_serve(&args, bind, true).await;
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
