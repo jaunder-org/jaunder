@@ -2,10 +2,10 @@
   "$schema": "https://raw.githubusercontent.com/minikin/cargo-crap/main/schemas/report-v1.json",
   "entries": [
     {
-      "coverage": 81.66666666666667,
-      "crap": 26.259717592592587,
+      "coverage": 80.7017543859649,
+      "crap": 25.478554804987233,
       "crate": "jaunder",
-      "cyclomatic": 23.0,
+      "cyclomatic": 22.0,
       "file": "server/src/main.rs",
       "function": "run",
       "line": 33
@@ -17,16 +17,7 @@
       "cyclomatic": 21.0,
       "file": "common/src/atompub/entry.rs",
       "function": "read_xhtml_content",
-      "line": 235
-    },
-    {
-      "coverage": 66.66666666666666,
-      "crap": 19.259259259259267,
-      "crate": "storage",
-      "cyclomatic": 13.0,
-      "file": "storage/src/postgres/mod.rs",
-      "function": "PostgresAtomicOps::confirm_password_reset",
-      "line": 139
+      "line": 276
     },
     {
       "coverage": 66.66666666666666,
@@ -44,7 +35,7 @@
       "cyclomatic": 17.0,
       "file": "common/src/feed/feed_path.rs",
       "function": "parse",
-      "line": 51
+      "line": 82
     },
     {
       "coverage": 100.0,
@@ -62,7 +53,7 @@
       "cyclomatic": 6.0,
       "file": "server/src/mailer/smtp.rs",
       "function": "LettreMailSender::send_email",
-      "line": 77
+      "line": 80
     },
     {
       "coverage": 88.88888888888889,
@@ -72,6 +63,24 @@
       "file": "server/src/feed/handlers.rs",
       "function": "serve",
       "line": 24
+    },
+    {
+      "coverage": 91.83673469387756,
+      "crap": 14.106622240733028,
+      "crate": "jaunder",
+      "cyclomatic": 14.0,
+      "file": "server/src/feed/worker.rs",
+      "function": "FeedWorker::tick",
+      "line": 96
+    },
+    {
+      "coverage": 96.36363636363636,
+      "crap": 14.00942449286251,
+      "crate": "storage",
+      "cyclomatic": 14.0,
+      "file": "storage/src/post_service.rs",
+      "function": "perform_post_creation",
+      "line": 300
     },
     {
       "coverage": 98.46153846153848,
@@ -89,7 +98,7 @@
       "cyclomatic": 14.0,
       "file": "common/src/atompub/entry.rs",
       "function": "Parser::start",
-      "line": 128
+      "line": 169
     },
     {
       "coverage": 100.0,
@@ -98,7 +107,7 @@
       "cyclomatic": 14.0,
       "file": "common/src/atompub/entry.rs",
       "function": "entry_from_xml",
-      "line": 199
+      "line": 240
     },
     {
       "coverage": 100.0,
@@ -116,16 +125,16 @@
       "cyclomatic": 14.0,
       "file": "storage/src/sqlite/posts.rs",
       "function": "Sqlite::tag_post",
-      "line": 115
+      "line": 123
     },
     {
-      "coverage": 92.63157894736842,
-      "crap": 13.067609855664092,
+      "coverage": 100.0,
+      "crap": 14.0,
       "crate": "jaunder",
-      "cyclomatic": 13.0,
-      "file": "server/src/feed/worker.rs",
-      "function": "FeedWorker::tick",
-      "line": 54
+      "cyclomatic": 14.0,
+      "file": "server/src/atompub/posts.rs",
+      "function": "member_put",
+      "line": 340
     },
     {
       "coverage": 95.83333333333334,
@@ -134,16 +143,7 @@
       "cyclomatic": 13.0,
       "file": "storage/src/backup.rs",
       "function": "export_directory_backup",
-      "line": 158
-    },
-    {
-      "coverage": 96.15384615384616,
-      "crap": 13.009615384615383,
-      "crate": "storage",
-      "cyclomatic": 13.0,
-      "file": "storage/src/post_service.rs",
-      "function": "perform_post_creation",
-      "line": 262
+      "line": 166
     },
     {
       "coverage": 100.0,
@@ -152,16 +152,16 @@
       "cyclomatic": 13.0,
       "file": "storage/src/sqlite/backup.rs",
       "function": "restore_database",
-      "line": 58
+      "line": 61
     },
     {
       "coverage": 100.0,
       "crap": 13.0,
-      "crate": "jaunder",
+      "crate": "storage",
       "cyclomatic": 13.0,
-      "file": "server/src/atompub/posts.rs",
-      "function": "member_put",
-      "line": 339
+      "file": "storage/src/postgres/mod.rs",
+      "function": "PostgresAtomicOps::confirm_password_reset",
+      "line": 142
     },
     {
       "coverage": 100.0,
@@ -188,7 +188,7 @@
       "cyclomatic": 12.0,
       "file": "storage/src/backup.rs",
       "function": "restore_media_entries",
-      "line": 425
+      "line": 436
     },
     {
       "coverage": 95.0,
@@ -197,7 +197,16 @@
       "cyclomatic": 12.0,
       "file": "common/src/atompub/entry.rs",
       "function": "resolve_ref",
-      "line": 332
+      "line": 373
+    },
+    {
+      "coverage": 100.0,
+      "crap": 12.0,
+      "crate": "common",
+      "cyclomatic": 12.0,
+      "file": "common/src/render.rs",
+      "function": "canonicalize_org_body",
+      "line": 210
     },
     {
       "coverage": 0.0,
@@ -207,6 +216,15 @@
       "file": "web/src/pages/backup.rs",
       "function": "backup_settings_form",
       "line": 47
+    },
+    {
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
+      "file": "web/src/pages/ui.rs",
+      "function": "local_datetime_to_utc_rfc3339",
+      "line": 324
     },
     {
       "coverage": 100.0,
@@ -233,7 +251,16 @@
       "cyclomatic": 11.0,
       "file": "storage/src/postgres/backup.rs",
       "function": "restore_database",
-      "line": 58
+      "line": 62
+    },
+    {
+      "coverage": 100.0,
+      "crap": 11.0,
+      "crate": "common",
+      "cyclomatic": 11.0,
+      "file": "common/src/atompub/entry.rs",
+      "function": "write_entry",
+      "line": 465
     },
     {
       "coverage": 100.0,
@@ -251,7 +278,7 @@
       "cyclomatic": 11.0,
       "file": "storage/src/postgres/posts.rs",
       "function": "Postgres::tag_post",
-      "line": 99
+      "line": 111
     },
     {
       "coverage": 100.0,
@@ -269,7 +296,7 @@
       "cyclomatic": 11.0,
       "file": "server/src/atompub/posts.rs",
       "function": "collection_post",
-      "line": 260
+      "line": 259
     },
     {
       "coverage": 90.625,
@@ -278,7 +305,7 @@
       "cyclomatic": 10.0,
       "file": "storage/src/backup.rs",
       "function": "mirror_media_entries",
-      "line": 467
+      "line": 478
     },
     {
       "coverage": 90.74074074074076,
@@ -305,7 +332,16 @@
       "cyclomatic": 10.0,
       "file": "storage/src/backup.rs",
       "function": "order_by_clause",
-      "line": 235
+      "line": 243
+    },
+    {
+      "coverage": 100.0,
+      "crap": 10.0,
+      "crate": "jaunder",
+      "cyclomatic": 10.0,
+      "file": "server/src/feed/worker.rs",
+      "function": "FeedWorker::go_live_pass",
+      "line": 73
     },
     {
       "coverage": 92.5925925925926,
@@ -323,7 +359,7 @@
       "cyclomatic": 9.0,
       "file": "server/src/media.rs",
       "function": "serve_response",
-      "line": 136
+      "line": 135
     },
     {
       "coverage": 100.0,
@@ -341,16 +377,16 @@
       "cyclomatic": 9.0,
       "file": "common/src/atompub/entry.rs",
       "function": "Parser::text",
-      "line": 168
+      "line": 209
     },
     {
       "coverage": 100.0,
       "crap": 9.0,
-      "crate": "common",
+      "crate": "storage",
       "cyclomatic": 9.0,
-      "file": "common/src/atompub/entry.rs",
-      "function": "write_entry",
-      "line": 424
+      "file": "storage/src/posts.rs",
+      "function": "max_published_at_for_surface",
+      "line": 1764
     },
     {
       "coverage": 100.0,
@@ -377,7 +413,7 @@
       "cyclomatic": 8.0,
       "file": "storage/src/sqlite/backup.rs",
       "function": "bind_json_value",
-      "line": 166
+      "line": 173
     },
     {
       "coverage": 94.73684210526316,
@@ -386,7 +422,7 @@
       "cyclomatic": 8.0,
       "file": "storage/src/backup.rs",
       "function": "previous_directory_backup",
-      "line": 543
+      "line": 559
     },
     {
       "coverage": 95.0,
@@ -395,7 +431,7 @@
       "cyclomatic": 8.0,
       "file": "storage/src/backup.rs",
       "function": "copy_or_link_media_file",
-      "line": 502
+      "line": 513
     },
     {
       "coverage": 100.0,
@@ -413,7 +449,7 @@
       "cyclomatic": 8.0,
       "file": "storage/src/backup.rs",
       "function": "restore_backup",
-      "line": 109
+      "line": 117
     },
     {
       "coverage": 100.0,
@@ -422,7 +458,16 @@
       "cyclomatic": 8.0,
       "file": "storage/src/sqlite/backup.rs",
       "function": "export_table",
-      "line": 217
+      "line": 227
+    },
+    {
+      "coverage": 100.0,
+      "crap": 8.0,
+      "crate": "storage",
+      "cyclomatic": 8.0,
+      "file": "storage/src/post_service.rs",
+      "function": "perform_post_update",
+      "line": 179
     },
     {
       "coverage": 100.0,
@@ -440,7 +485,7 @@
       "cyclomatic": 8.0,
       "file": "storage/src/postgres/backup.rs",
       "function": "export_table",
-      "line": 219
+      "line": 231
     },
     {
       "coverage": 100.0,
@@ -458,7 +503,7 @@
       "cyclomatic": 8.0,
       "file": "server/src/atompub/posts.rs",
       "function": "collection_get",
-      "line": 52
+      "line": 51
     },
     {
       "coverage": 82.75862068965517,
@@ -467,7 +512,7 @@
       "cyclomatic": 7.0,
       "file": "storage/src/postgres/backup.rs",
       "function": "import_table",
-      "line": 108
+      "line": 112
     },
     {
       "coverage": 56.25,
@@ -476,7 +521,7 @@
       "cyclomatic": 5.0,
       "file": "server/src/feed/worker.rs",
       "function": "FeedWorker::start",
-      "line": 198
+      "line": 247
     },
     {
       "coverage": 92.3076923076923,
@@ -485,7 +530,7 @@
       "cyclomatic": 7.0,
       "file": "storage/src/sqlite/backup.rs",
       "function": "import_table",
-      "line": 118
+      "line": 125
     },
     {
       "coverage": 100.0,
@@ -521,7 +566,7 @@
       "cyclomatic": 7.0,
       "file": "web/src/posts/server.rs",
       "function": "perform_creation_error",
-      "line": 235
+      "line": 239
     },
     {
       "coverage": 100.0,
@@ -530,7 +575,7 @@
       "cyclomatic": 7.0,
       "file": "storage/src/backup.rs",
       "function": "restore_directory_backup",
-      "line": 192
+      "line": 200
     },
     {
       "coverage": 100.0,
@@ -539,7 +584,7 @@
       "cyclomatic": 7.0,
       "file": "storage/src/backup.rs",
       "function": "read_table_rows",
-      "line": 300
+      "line": 311
     },
     {
       "coverage": 100.0,
@@ -555,18 +600,9 @@
       "crap": 7.0,
       "crate": "storage",
       "cyclomatic": 7.0,
-      "file": "storage/src/post_service.rs",
-      "function": "perform_post_update",
-      "line": 152
-    },
-    {
-      "coverage": 100.0,
-      "crap": 7.0,
-      "crate": "storage",
-      "cyclomatic": 7.0,
       "file": "storage/src/postgres/backup.rs",
       "function": "schema_checksum",
-      "line": 261
+      "line": 273
     },
     {
       "coverage": 100.0,
@@ -575,7 +611,7 @@
       "cyclomatic": 7.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::create_post",
-      "line": 534
+      "line": 597
     },
     {
       "coverage": 100.0,
@@ -584,7 +620,7 @@
       "cyclomatic": 7.0,
       "file": "server/src/media.rs",
       "function": "content_disposition",
-      "line": 286
+      "line": 285
     },
     {
       "coverage": 100.0,
@@ -620,7 +656,7 @@
       "cyclomatic": 7.0,
       "file": "server/src/atompub/posts.rs",
       "function": "owned_post",
-      "line": 149
+      "line": 148
     },
     {
       "coverage": 100.0,
@@ -656,7 +692,7 @@
       "cyclomatic": 6.0,
       "file": "common/src/tag.rs",
       "function": "parse_and_validate_tags",
-      "line": 111
+      "line": 110
     },
     {
       "coverage": 100.0,
@@ -683,7 +719,7 @@
       "cyclomatic": 6.0,
       "file": "common/src/atompub/entry.rs",
       "function": "build_entry",
-      "line": 269
+      "line": 310
     },
     {
       "coverage": 0.0,
@@ -710,7 +746,7 @@
       "cyclomatic": 2.0,
       "file": "web/src/pages/ui.rs",
       "function": "PostCreateForm",
-      "line": 595
+      "line": 624
     },
     {
       "coverage": 100.0,
@@ -755,7 +791,7 @@
       "cyclomatic": 6.0,
       "file": "storage/src/backup.rs",
       "function": "json_value_as_restore_text",
-      "line": 331
+      "line": 342
     },
     {
       "coverage": 100.0,
@@ -764,7 +800,7 @@
       "cyclomatic": 6.0,
       "file": "storage/src/backup.rs",
       "function": "files_have_same_content",
-      "line": 527
+      "line": 543
     },
     {
       "coverage": 100.0,
@@ -809,7 +845,7 @@
       "cyclomatic": 6.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::list_posts_by_tag",
-      "line": 1000
+      "line": 1090
     },
     {
       "coverage": 100.0,
@@ -818,7 +854,16 @@
       "cyclomatic": 6.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::list_user_posts_by_tag",
-      "line": 1084
+      "line": 1183
+    },
+    {
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "storage",
+      "cyclomatic": 6.0,
+      "file": "storage/src/posts.rs",
+      "function": "PostStore::feed_urls_needing_catchup",
+      "line": 1398
     },
     {
       "coverage": 100.0,
@@ -845,16 +890,7 @@
       "cyclomatic": 6.0,
       "file": "server/src/media.rs",
       "function": "validate_serve_params",
-      "line": 242
-    },
-    {
-      "coverage": 100.0,
-      "crap": 6.0,
-      "crate": "jaunder",
-      "cyclomatic": 6.0,
-      "file": "server/src/observability.rs",
-      "function": "init_tracing_impl",
-      "line": 155
+      "line": 241
     },
     {
       "coverage": 100.0,
@@ -899,7 +935,7 @@
       "cyclomatic": 6.0,
       "file": "server/src/atompub/posts.rs",
       "function": "apply_categories",
-      "line": 209
+      "line": 208
     },
     {
       "coverage": 71.42857142857143,
@@ -962,7 +998,7 @@
       "cyclomatic": 5.0,
       "file": "common/src/atompub/entry.rs",
       "function": "Parser::empty",
-      "line": 154
+      "line": 195
     },
     {
       "coverage": 100.0,
@@ -971,16 +1007,7 @@
       "cyclomatic": 5.0,
       "file": "common/src/atompub/entry.rs",
       "function": "render_feed",
-      "line": 495
-    },
-    {
-      "coverage": 100.0,
-      "crap": 5.0,
-      "crate": "web",
-      "cyclomatic": 5.0,
-      "file": "web/src/feed_events.rs",
-      "function": "enqueue_feed_events",
-      "line": 29
+      "line": 543
     },
     {
       "coverage": 100.0,
@@ -989,7 +1016,7 @@
       "cyclomatic": 5.0,
       "file": "web/src/pages/ui.rs",
       "function": "is_valid_tag_slug",
-      "line": 1168
+      "line": 1220
     },
     {
       "coverage": 100.0,
@@ -1016,7 +1043,7 @@
       "cyclomatic": 5.0,
       "file": "web/src/feed_discovery.rs",
       "function": "surface_label",
-      "line": 59
+      "line": 58
     },
     {
       "coverage": 100.0,
@@ -1052,7 +1079,7 @@
       "cyclomatic": 5.0,
       "file": "storage/src/backup.rs",
       "function": "export_archive_backup",
-      "line": 142
+      "line": 150
     },
     {
       "coverage": 100.0,
@@ -1061,7 +1088,7 @@
       "cyclomatic": 5.0,
       "file": "storage/src/backup.rs",
       "function": "write_manifest",
-      "line": 254
+      "line": 265
     },
     {
       "coverage": 100.0,
@@ -1070,7 +1097,7 @@
       "cyclomatic": 5.0,
       "file": "storage/src/backup.rs",
       "function": "write_tar_gz",
-      "line": 398
+      "line": 409
     },
     {
       "coverage": 100.0,
@@ -1088,7 +1115,7 @@
       "cyclomatic": 5.0,
       "file": "storage/src/sqlite/backup.rs",
       "function": "schema_checksum",
-      "line": 274
+      "line": 284
     },
     {
       "coverage": 100.0,
@@ -1205,7 +1232,7 @@
       "cyclomatic": 5.0,
       "file": "storage/src/postgres/backup.rs",
       "function": "restore_type",
-      "line": 168
+      "line": 175
     },
     {
       "coverage": 100.0,
@@ -1214,7 +1241,7 @@
       "cyclomatic": 5.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::list_tags",
-      "line": 1175
+      "line": 1281
     },
     {
       "coverage": 100.0,
@@ -1223,7 +1250,7 @@
       "cyclomatic": 5.0,
       "file": "storage/src/posts.rs",
       "function": "audience_target_row",
-      "line": 1354
+      "line": 1536
     },
     {
       "coverage": 100.0,
@@ -1232,7 +1259,7 @@
       "cyclomatic": 5.0,
       "file": "storage/src/posts.rs",
       "function": "audience_target_from_row",
-      "line": 1372
+      "line": 1554
     },
     {
       "coverage": 100.0,
@@ -1241,7 +1268,7 @@
       "cyclomatic": 5.0,
       "file": "storage/src/posts.rs",
       "function": "replace_post_audiences",
-      "line": 1387
+      "line": 1569
     },
     {
       "coverage": 100.0,
@@ -1250,7 +1277,7 @@
       "cyclomatic": 5.0,
       "file": "storage/src/posts.rs",
       "function": "list_published_in_window_rows",
-      "line": 1425
+      "line": 1607
     },
     {
       "coverage": 100.0,
@@ -1277,7 +1304,16 @@
       "cyclomatic": 5.0,
       "file": "server/src/media.rs",
       "function": "serve_result",
-      "line": 122
+      "line": 121
+    },
+    {
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "jaunder",
+      "cyclomatic": 5.0,
+      "file": "server/src/observability.rs",
+      "function": "TelemetryGuard::drop",
+      "line": 261
     },
     {
       "coverage": 100.0,
@@ -1325,6 +1361,15 @@
       "line": 245
     },
     {
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "jaunder",
+      "cyclomatic": 5.0,
+      "file": "server/src/atompub/mapping.rs",
+      "function": "wire_to_format",
+      "line": 45
+    },
+    {
       "coverage": 66.66666666666666,
       "crap": 4.5925925925925934,
       "crate": "web",
@@ -1349,7 +1394,7 @@
       "cyclomatic": 4.0,
       "file": "web/src/pages/ui.rs",
       "function": "SidebarNavItem",
-      "line": 957
+      "line": 1009
     },
     {
       "coverage": 90.0,
@@ -1419,6 +1464,15 @@
       "crap": 4.0,
       "crate": "common",
       "cyclomatic": 4.0,
+      "file": "common/src/feed/feed_path.rs",
+      "function": "affected_feed_urls",
+      "line": 55
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "common",
+      "cyclomatic": 4.0,
       "file": "common/src/feed/window.rs",
       "function": "HybridWindow::select",
       "line": 32
@@ -1430,7 +1484,7 @@
       "cyclomatic": 4.0,
       "file": "common/src/atompub/service.rs",
       "function": "write_collection",
-      "line": 70
+      "line": 80
     },
     {
       "coverage": 100.0,
@@ -1511,7 +1565,7 @@
       "cyclomatic": 4.0,
       "file": "web/src/posts/server.rs",
       "function": "perform_update_error",
-      "line": 223
+      "line": 227
     },
     {
       "coverage": 100.0,
@@ -1529,7 +1583,7 @@
       "cyclomatic": 4.0,
       "file": "storage/src/backup.rs",
       "function": "read_manifest",
-      "line": 263
+      "line": 274
     },
     {
       "coverage": 100.0,
@@ -1538,7 +1592,7 @@
       "cyclomatic": 4.0,
       "file": "storage/src/backup.rs",
       "function": "ensure_empty_or_absent",
-      "line": 341
+      "line": 352
     },
     {
       "coverage": 100.0,
@@ -1547,7 +1601,7 @@
       "cyclomatic": 4.0,
       "file": "storage/src/backup.rs",
       "function": "extract_archive_backup",
-      "line": 408
+      "line": 419
     },
     {
       "coverage": 100.0,
@@ -1592,7 +1646,7 @@
       "cyclomatic": 4.0,
       "file": "storage/src/post_service.rs",
       "function": "PerformUpdateError::from",
-      "line": 108
+      "line": 110
     },
     {
       "coverage": 100.0,
@@ -1655,7 +1709,7 @@
       "cyclomatic": 4.0,
       "file": "storage/src/postgres/mod.rs",
       "function": "open_postgres_database",
-      "line": 250
+      "line": 260
     },
     {
       "coverage": 100.0,
@@ -1664,7 +1718,7 @@
       "cyclomatic": 4.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::list_published_by_user",
-      "line": 712
+      "line": 780
     },
     {
       "coverage": 100.0,
@@ -1673,7 +1727,7 @@
       "cyclomatic": 4.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::list_published",
-      "line": 779
+      "line": 855
     },
     {
       "coverage": 100.0,
@@ -1682,7 +1736,7 @@
       "cyclomatic": 4.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::list_drafts_by_user",
-      "line": 841
+      "line": 924
     },
     {
       "coverage": 100.0,
@@ -1691,7 +1745,7 @@
       "cyclomatic": 4.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::list_collection_by_user",
-      "line": 897
+      "line": 987
     },
     {
       "coverage": 100.0,
@@ -1710,6 +1764,15 @@
       "file": "server/src/backup.rs",
       "function": "backup_size_bytes",
       "line": 74
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "jaunder",
+      "cyclomatic": 4.0,
+      "file": "server/src/observability.rs",
+      "function": "init_tracing_impl",
+      "line": 160
     },
     {
       "coverage": 100.0,
@@ -1744,8 +1807,8 @@
       "crate": "jaunder",
       "cyclomatic": 4.0,
       "file": "server/src/atompub/mapping.rs",
-      "function": "post_to_entry",
-      "line": 79
+      "function": "format_to_wire",
+      "line": 35
     },
     {
       "coverage": 100.0,
@@ -1784,8 +1847,8 @@
       "line": 208
     },
     {
-      "coverage": 94.44444444444444,
-      "crap": 3.001543209876543,
+      "coverage": 91.66666666666666,
+      "crap": 3.0052083333333335,
       "crate": "jaunder",
       "cyclomatic": 3.0,
       "file": "server/src/commands.rs",
@@ -1844,7 +1907,7 @@
       "cyclomatic": 3.0,
       "file": "common/src/atompub/entry.rs",
       "function": "append",
-      "line": 356
+      "line": 397
     },
     {
       "coverage": 100.0,
@@ -1853,7 +1916,7 @@
       "cyclomatic": 3.0,
       "file": "common/src/atompub/entry.rs",
       "function": "decode_text",
-      "line": 385
+      "line": 426
     },
     {
       "coverage": 100.0,
@@ -1881,6 +1944,15 @@
       "file": "web/src/viewer.rs",
       "function": "local_channel_id",
       "line": 101
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
+      "file": "web/src/feed_events.rs",
+      "function": "enqueue_feed_events",
+      "line": 29
     },
     {
       "coverage": 100.0,
@@ -1970,7 +2042,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/backup.rs",
       "function": "export_backup",
-      "line": 97
+      "line": 105
     },
     {
       "coverage": 100.0,
@@ -1979,7 +2051,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/backup.rs",
       "function": "TemporaryBackupDirectory::near",
-      "line": 363
+      "line": 374
     },
     {
       "coverage": 100.0,
@@ -1988,7 +2060,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/backup.rs",
       "function": "restore_media_directory",
-      "line": 417
+      "line": 428
     },
     {
       "coverage": 100.0,
@@ -1997,7 +2069,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/backup.rs",
       "function": "mirror_media_directory",
-      "line": 455
+      "line": 466
     },
     {
       "coverage": 100.0,
@@ -2006,7 +2078,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/backup.rs",
       "function": "file_sha256",
-      "line": 536
+      "line": 552
     },
     {
       "coverage": 100.0,
@@ -2024,7 +2096,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/sqlite/backup.rs",
       "function": "existing_export_tables",
-      "line": 101
+      "line": 108
     },
     {
       "coverage": 100.0,
@@ -2033,7 +2105,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/sqlite/backup.rs",
       "function": "validate_foreign_keys",
-      "line": 187
+      "line": 197
     },
     {
       "coverage": 100.0,
@@ -2087,7 +2159,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/sqlite/posts.rs",
       "function": "Sqlite::untag_post",
-      "line": 184
+      "line": 192
     },
     {
       "coverage": 100.0,
@@ -2142,6 +2214,15 @@
       "file": "storage/src/db.rs",
       "function": "database_has_users",
       "line": 140
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "storage",
+      "cyclomatic": 3.0,
+      "file": "storage/src/post_service.rs",
+      "function": "PublishUpdate::into_inputs",
+      "line": 136
     },
     {
       "coverage": 100.0,
@@ -2213,7 +2294,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/helpers.rs",
       "function": "verify_password",
-      "line": 389
+      "line": 393
     },
     {
       "coverage": 100.0,
@@ -2222,7 +2303,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/postgres/backup.rs",
       "function": "existing_export_tables",
-      "line": 89
+      "line": 93
     },
     {
       "coverage": 100.0,
@@ -2231,7 +2312,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/postgres/backup.rs",
       "function": "repair_sequences",
-      "line": 177
+      "line": 189
     },
     {
       "coverage": 100.0,
@@ -2249,7 +2330,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/postgres/posts.rs",
       "function": "Postgres::untag_post",
-      "line": 156
+      "line": 168
     },
     {
       "coverage": 100.0,
@@ -2258,7 +2339,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/postgres/mod.rs",
       "function": "resolved_postgres_options",
-      "line": 240
+      "line": 250
     },
     {
       "coverage": 100.0,
@@ -2267,7 +2348,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/postgres/mod.rs",
       "function": "database_has_users",
-      "line": 260
+      "line": 270
     },
     {
       "coverage": 100.0,
@@ -2276,7 +2357,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::get_post_by_id",
-      "line": 581
+      "line": 644
     },
     {
       "coverage": 100.0,
@@ -2285,7 +2366,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::get_post_by_permalink",
-      "line": 631
+      "line": 695
     },
     {
       "coverage": 100.0,
@@ -2294,7 +2375,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/posts.rs",
       "function": "resolution_where",
-      "line": 1278
+      "line": 1460
     },
     {
       "coverage": 100.0,
@@ -2402,7 +2483,7 @@
       "cyclomatic": 3.0,
       "file": "server/src/atompub/posts.rs",
       "function": "member_delete",
-      "line": 234
+      "line": 233
     },
     {
       "coverage": 100.0,
@@ -2438,7 +2519,7 @@
       "cyclomatic": 2.0,
       "file": "server/src/observability.rs",
       "function": "SlowSpanLayer::on_close",
-      "line": 113
+      "line": 118
     },
     {
       "coverage": 100.0,
@@ -2491,8 +2572,17 @@
       "crate": "common",
       "cyclomatic": 2.0,
       "file": "common/src/atompub/entry.rs",
+      "function": "set_j_slug",
+      "line": 101
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "common",
+      "cyclomatic": 2.0,
+      "file": "common/src/atompub/entry.rs",
       "function": "Parser::end",
-      "line": 182
+      "line": 223
     },
     {
       "coverage": 100.0,
@@ -2501,7 +2591,7 @@
       "cyclomatic": 2.0,
       "file": "common/src/atompub/entry.rs",
       "function": "capture_link",
-      "line": 322
+      "line": 363
     },
     {
       "coverage": 100.0,
@@ -2663,7 +2753,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "PostDisplay",
-      "line": 319
+      "line": 348
     },
     {
       "coverage": 0.0,
@@ -2672,7 +2762,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "PostCard",
-      "line": 381
+      "line": 410
     },
     {
       "coverage": 0.0,
@@ -2681,7 +2771,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "AudiencePicker",
-      "line": 482
+      "line": 511
     },
     {
       "coverage": 0.0,
@@ -2690,7 +2780,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "audience_checkbox",
-      "line": 558
+      "line": 587
     },
     {
       "coverage": 0.0,
@@ -2699,7 +2789,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "InlineComposer",
-      "line": 900
+      "line": 952
     },
     {
       "coverage": 0.0,
@@ -2708,7 +2798,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "TagInput",
-      "line": 1197
+      "line": 1249
     },
     {
       "coverage": 0.0,
@@ -2744,7 +2834,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "DraftPreviewPage",
-      "line": 458
+      "line": 457
     },
     {
       "coverage": 0.0,
@@ -2753,7 +2843,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "EditPostPage",
-      "line": 560
+      "line": 559
     },
     {
       "coverage": 0.0,
@@ -2762,7 +2852,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "DraftsPage",
-      "line": 818
+      "line": 837
     },
     {
       "coverage": 0.0,
@@ -2771,7 +2861,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "render_draft_row",
-      "line": 893
+      "line": 912
     },
     {
       "coverage": 0.0,
@@ -2780,7 +2870,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "render_delete_form",
-      "line": 938
+      "line": 965
     },
     {
       "coverage": 0.0,
@@ -2789,7 +2879,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "render_delete_result",
-      "line": 957
+      "line": 984
     },
     {
       "coverage": 0.0,
@@ -2798,7 +2888,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "SiteTagPage",
-      "line": 976
+      "line": 1003
     },
     {
       "coverage": 0.0,
@@ -2807,7 +2897,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "UserTagPage",
-      "line": 1121
+      "line": 1148
     },
     {
       "coverage": 100.0,
@@ -2843,15 +2933,6 @@
       "cyclomatic": 2.0,
       "file": "storage/src/backup.rs",
       "function": "validate_manifest",
-      "line": 276
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/backup.rs",
-      "function": "ensure_schema_version",
       "line": 287
     },
     {
@@ -2860,8 +2941,17 @@
       "crate": "storage",
       "cyclomatic": 2.0,
       "file": "storage/src/backup.rs",
+      "function": "ensure_schema_version",
+      "line": 298
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/backup.rs",
       "function": "ensure_absent",
-      "line": 351
+      "line": 362
     },
     {
       "coverage": 100.0,
@@ -2870,7 +2960,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/backup.rs",
       "function": "TemporaryBackupDirectory::in_temp",
-      "line": 378
+      "line": 389
     },
     {
       "coverage": 100.0,
@@ -2915,7 +3005,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/sqlite/backup.rs",
       "function": "columns",
-      "line": 201
+      "line": 211
     },
     {
       "coverage": 100.0,
@@ -2924,7 +3014,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/sqlite/backup.rs",
       "function": "schema_version",
-      "line": 265
+      "line": 275
     },
     {
       "coverage": 100.0,
@@ -3050,7 +3140,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/post_service.rs",
       "function": "candidate_slug",
-      "line": 221
+      "line": 259
     },
     {
       "coverage": 100.0,
@@ -3239,7 +3329,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/postgres/backup.rs",
       "function": "insert_sql",
-      "line": 143
+      "line": 147
     },
     {
       "coverage": 100.0,
@@ -3248,7 +3338,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/postgres/backup.rs",
       "function": "columns",
-      "line": 196
+      "line": 208
     },
     {
       "coverage": 100.0,
@@ -3257,7 +3347,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/postgres/backup.rs",
       "function": "schema_version",
-      "line": 252
+      "line": 264
     },
     {
       "coverage": 100.0,
@@ -3320,7 +3410,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/postgres/mod.rs",
       "function": "postgres_password_from_env",
-      "line": 225
+      "line": 235
     },
     {
       "coverage": 100.0,
@@ -3329,7 +3419,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::get_post_audiences",
-      "line": 607
+      "line": 670
     },
     {
       "coverage": 100.0,
@@ -3338,7 +3428,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::soft_delete_post",
-      "line": 684
+      "line": 752
     },
     {
       "coverage": 100.0,
@@ -3347,7 +3437,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::unpublish_post",
-      "line": 699
+      "line": 767
     },
     {
       "coverage": 100.0,
@@ -3356,7 +3446,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::get_tags_for_post",
-      "line": 968
+      "line": 1058
     },
     {
       "coverage": 100.0,
@@ -3365,7 +3455,16 @@
       "cyclomatic": 2.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::list_published_in_window",
-      "line": 1223
+      "line": 1329
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/posts.rs",
+      "function": "PostStore::list_posts_gone_live_between",
+      "line": 1354
     },
     {
       "coverage": 100.0,
@@ -3392,7 +3491,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/feed/handlers.rs",
       "function": "feed_site",
-      "line": 91
+      "line": 94
     },
     {
       "coverage": 100.0,
@@ -3401,7 +3500,7 @@
       "cyclomatic": 2.0,
       "file": "server/src/media.rs",
       "function": "serve_handler",
-      "line": 106
+      "line": 105
     },
     {
       "coverage": 100.0,
@@ -3410,7 +3509,7 @@
       "cyclomatic": 2.0,
       "file": "server/src/media.rs",
       "function": "proxy_handler",
-      "line": 217
+      "line": 216
     },
     {
       "coverage": 100.0,
@@ -3419,7 +3518,7 @@
       "cyclomatic": 2.0,
       "file": "server/src/media.rs",
       "function": "resolve_media_path",
-      "line": 262
+      "line": 261
     },
     {
       "coverage": 100.0,
@@ -3437,7 +3536,7 @@
       "cyclomatic": 2.0,
       "file": "server/src/observability.rs",
       "function": "default_filter",
-      "line": 20
+      "line": 17
     },
     {
       "coverage": 100.0,
@@ -3446,7 +3545,7 @@
       "cyclomatic": 2.0,
       "file": "server/src/observability.rs",
       "function": "build_otel_tracer",
-      "line": 51
+      "line": 48
     },
     {
       "coverage": 100.0,
@@ -3455,7 +3554,7 @@
       "cyclomatic": 2.0,
       "file": "server/src/observability.rs",
       "function": "build_otel_meter",
-      "line": 65
+      "line": 66
     },
     {
       "coverage": 100.0,
@@ -3464,7 +3563,7 @@
       "cyclomatic": 2.0,
       "file": "server/src/observability.rs",
       "function": "SlowSpanLayer::on_new_span",
-      "line": 102
+      "line": 107
     },
     {
       "coverage": 100.0,
@@ -3473,7 +3572,7 @@
       "cyclomatic": 2.0,
       "file": "server/src/observability.rs",
       "function": "slow_span_values",
-      "line": 134
+      "line": 139
     },
     {
       "coverage": 100.0,
@@ -3482,7 +3581,7 @@
       "cyclomatic": 2.0,
       "file": "server/src/observability.rs",
       "function": "slow_span_report",
-      "line": 151
+      "line": 156
     },
     {
       "coverage": 100.0,
@@ -3491,7 +3590,7 @@
       "cyclomatic": 2.0,
       "file": "server/src/observability.rs",
       "function": "make_request_span",
-      "line": 251
+      "line": 311
     },
     {
       "coverage": 100.0,
@@ -3526,8 +3625,8 @@
       "crate": "jaunder",
       "cyclomatic": 2.0,
       "file": "server/src/atompub/mapping.rs",
-      "function": "entry_to_post_fields",
-      "line": 35
+      "function": "post_to_entry",
+      "line": 117
     },
     {
       "coverage": 100.0,
@@ -3545,7 +3644,7 @@
       "cyclomatic": 2.0,
       "file": "server/src/atompub/posts.rs",
       "function": "owner_viewer",
-      "line": 136
+      "line": 135
     },
     {
       "coverage": 100.0,
@@ -3554,7 +3653,7 @@
       "cyclomatic": 2.0,
       "file": "server/src/atompub/posts.rs",
       "function": "member_get",
-      "line": 176
+      "line": 175
     },
     {
       "coverage": 100.0,
@@ -3608,7 +3707,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/feed/handlers.rs",
       "function": "feed_user_tag",
-      "line": 160
+      "line": 163
     },
     {
       "coverage": 52.94117647058824,
@@ -3626,7 +3725,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "UserTimelinePage",
-      "line": 286
+      "line": 285
     },
     {
       "coverage": 70.0,
@@ -3689,7 +3788,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "Sidebar",
-      "line": 1003
+      "line": 1055
     },
     {
       "coverage": 91.17647058823528,
@@ -3701,13 +3800,13 @@
       "line": 9
     },
     {
-      "coverage": 94.23076923076924,
-      "crap": 1.000192023213473,
+      "coverage": 94.33962264150944,
+      "crap": 1.000181357765135,
       "crate": "web",
       "cyclomatic": 1.0,
       "file": "web/src/posts/mod.rs",
       "function": "publish_post",
-      "line": 531
+      "line": 601
     },
     {
       "coverage": 95.0,
@@ -3725,7 +3824,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/feed/handlers.rs",
       "function": "feed_site_tag",
-      "line": 112
+      "line": 115
     },
     {
       "coverage": 96.29629629629628,
@@ -3737,22 +3836,22 @@
       "line": 172
     },
     {
-      "coverage": 97.14285714285714,
-      "crap": 1.0000233236151603,
+      "coverage": 97.5609756097561,
+      "crap": 1.0000145093657955,
       "crate": "web",
       "cyclomatic": 1.0,
       "file": "web/src/posts/listing.rs",
       "function": "list_posts_by_tag",
-      "line": 179
+      "line": 191
     },
     {
-      "coverage": 98.07692307692308,
-      "crap": 1.0000071119708691,
+      "coverage": 98.1132075471698,
+      "crap": 1.0000067169542644,
       "crate": "web",
       "cyclomatic": 1.0,
       "file": "web/src/posts/listing.rs",
       "function": "list_user_posts_by_tag",
-      "line": 225
+      "line": 243
     },
     {
       "coverage": 100.0,
@@ -4004,7 +4103,7 @@
       "cyclomatic": 1.0,
       "file": "common/src/render.rs",
       "function": "render_markdown",
-      "line": 197
+      "line": 257
     },
     {
       "coverage": 100.0,
@@ -4013,7 +4112,7 @@
       "cyclomatic": 1.0,
       "file": "common/src/render.rs",
       "function": "render_org",
-      "line": 213
+      "line": 273
     },
     {
       "coverage": 100.0,
@@ -4184,7 +4283,7 @@
       "cyclomatic": 1.0,
       "file": "common/src/tag.rs",
       "function": "Tag::try_from",
-      "line": 48
+      "line": 47
     },
     {
       "coverage": 100.0,
@@ -4193,7 +4292,7 @@
       "cyclomatic": 1.0,
       "file": "common/src/tag.rs",
       "function": "String::from",
-      "line": 54
+      "line": 53
     },
     {
       "coverage": 100.0,
@@ -4202,7 +4301,7 @@
       "cyclomatic": 1.0,
       "file": "common/src/tag.rs",
       "function": "Tag::as_str",
-      "line": 61
+      "line": 60
     },
     {
       "coverage": 100.0,
@@ -4211,7 +4310,7 @@
       "cyclomatic": 1.0,
       "file": "common/src/tag.rs",
       "function": "Tag::fmt",
-      "line": 67
+      "line": 66
     },
     {
       "coverage": 100.0,
@@ -4318,8 +4417,17 @@
       "crate": "common",
       "cyclomatic": 1.0,
       "file": "common/src/atompub/entry.rs",
+      "function": "j_slug",
+      "line": 90
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "common",
+      "cyclomatic": 1.0,
+      "file": "common/src/atompub/entry.rs",
       "function": "parse_dt",
-      "line": 312
+      "line": 353
     },
     {
       "coverage": 100.0,
@@ -4328,7 +4436,7 @@
       "cyclomatic": 1.0,
       "file": "common/src/atompub/entry.rs",
       "function": "trimmed",
-      "line": 316
+      "line": 357
     },
     {
       "coverage": 100.0,
@@ -4337,7 +4445,7 @@
       "cyclomatic": 1.0,
       "file": "common/src/atompub/entry.rs",
       "function": "local_name",
-      "line": 363
+      "line": 404
     },
     {
       "coverage": 100.0,
@@ -4346,7 +4454,7 @@
       "cyclomatic": 1.0,
       "file": "common/src/atompub/entry.rs",
       "function": "local_name_end",
-      "line": 367
+      "line": 408
     },
     {
       "coverage": 100.0,
@@ -4355,7 +4463,7 @@
       "cyclomatic": 1.0,
       "file": "common/src/atompub/entry.rs",
       "function": "attr_value",
-      "line": 371
+      "line": 412
     },
     {
       "coverage": 100.0,
@@ -4364,7 +4472,7 @@
       "cyclomatic": 1.0,
       "file": "common/src/atompub/entry.rs",
       "function": "entry_to_xml",
-      "line": 406
+      "line": 447
     },
     {
       "coverage": 100.0,
@@ -4373,7 +4481,7 @@
       "cyclomatic": 1.0,
       "file": "common/src/atompub/entry.rs",
       "function": "render_media_link_entry",
-      "line": 554
+      "line": 605
     },
     {
       "coverage": 100.0,
@@ -4418,7 +4526,7 @@
       "cyclomatic": 1.0,
       "file": "common/src/atompub/mod.rs",
       "function": "AtomPubError::from",
-      "line": 48
+      "line": 50
     },
     {
       "coverage": 100.0,
@@ -4427,7 +4535,7 @@
       "cyclomatic": 1.0,
       "file": "common/src/atompub/mod.rs",
       "function": "AtomPubError::from",
-      "line": 54
+      "line": 56
     },
     {
       "coverage": 100.0,
@@ -4490,7 +4598,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "SidebarSource",
-      "line": 985
+      "line": 1037
     },
     {
       "coverage": 100.0,
@@ -4499,7 +4607,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "normalize_tag_token",
-      "line": 1179
+      "line": 1231
     },
     {
       "coverage": 100.0,
@@ -4535,7 +4643,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/lib.rs",
       "function": "shell",
-      "line": 41
+      "line": 46
     },
     {
       "coverage": 100.0,
@@ -5057,7 +5165,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/feed_discovery.rs",
       "function": "RsdDiscovery",
-      "line": 42
+      "line": 41
     },
     {
       "coverage": 100.0,
@@ -5066,7 +5174,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/feed_discovery.rs",
       "function": "rsd_href",
-      "line": 54
+      "line": 53
     },
     {
       "coverage": 100.0,
@@ -5120,7 +5228,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/auth/mod.rs",
       "function": "logout",
-      "line": 218
+      "line": 217
     },
     {
       "coverage": 100.0,
@@ -5138,7 +5246,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/posts/listing.rs",
       "function": "list_local_timeline",
-      "line": 100
+      "line": 106
     },
     {
       "coverage": 100.0,
@@ -5147,7 +5255,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/posts/listing.rs",
       "function": "list_home_feed",
-      "line": 140
+      "line": 146
     },
     {
       "coverage": 100.0,
@@ -5192,7 +5300,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/posts/server.rs",
       "function": "private_post_not_found_error",
-      "line": 212
+      "line": 216
     },
     {
       "coverage": 100.0,
@@ -5209,8 +5317,17 @@
       "crate": "web",
       "cyclomatic": 1.0,
       "file": "web/src/posts/mod.rs",
+      "function": "parse_publish_at",
+      "line": 196
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web",
+      "cyclomatic": 1.0,
+      "file": "web/src/posts/mod.rs",
       "function": "create_post",
-      "line": 189
+      "line": 215
     },
     {
       "coverage": 100.0,
@@ -5219,7 +5336,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/posts/mod.rs",
       "function": "get_post",
-      "line": 269
+      "line": 305
     },
     {
       "coverage": 100.0,
@@ -5228,7 +5345,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/posts/mod.rs",
       "function": "get_post_preview",
-      "line": 323
+      "line": 372
     },
     {
       "coverage": 100.0,
@@ -5237,7 +5354,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/posts/mod.rs",
       "function": "update_post",
-      "line": 345
+      "line": 394
     },
     {
       "coverage": 100.0,
@@ -5246,7 +5363,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/posts/mod.rs",
       "function": "default_audience_selection",
-      "line": 444
+      "line": 504
     },
     {
       "coverage": 100.0,
@@ -5255,7 +5372,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/posts/mod.rs",
       "function": "post_audience_selection",
-      "line": 467
+      "line": 527
     },
     {
       "coverage": 100.0,
@@ -5264,7 +5381,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/posts/mod.rs",
       "function": "list_drafts",
-      "line": 493
+      "line": 553
     },
     {
       "coverage": 100.0,
@@ -5273,7 +5390,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/posts/mod.rs",
       "function": "delete_post",
-      "line": 598
+      "line": 669
     },
     {
       "coverage": 100.0,
@@ -5282,7 +5399,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/posts/mod.rs",
       "function": "unpublish_post",
-      "line": 635
+      "line": 706
     },
     {
       "coverage": 100.0,
@@ -5291,7 +5408,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/backup.rs",
       "function": "build_manifest",
-      "line": 219
+      "line": 227
     },
     {
       "coverage": 100.0,
@@ -5300,7 +5417,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/backup.rs",
       "function": "TemporaryBackupDirectory::path",
-      "line": 387
+      "line": 398
     },
     {
       "coverage": 100.0,
@@ -5309,7 +5426,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/backup.rs",
       "function": "TemporaryBackupDirectory::drop",
-      "line": 393
+      "line": 404
     },
     {
       "coverage": 100.0,
@@ -5345,7 +5462,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/sqlite/backup.rs",
       "function": "insert_sql",
-      "line": 150
+      "line": 157
     },
     {
       "coverage": 100.0,
@@ -5354,7 +5471,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/sqlite/backup.rs",
       "function": "json_select",
-      "line": 237
+      "line": 247
     },
     {
       "coverage": 100.0,
@@ -5363,7 +5480,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/sqlite/backup.rs",
       "function": "is_bool_column",
-      "line": 261
+      "line": 271
     },
     {
       "coverage": 100.0,
@@ -5372,7 +5489,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/sqlite/backup.rs",
       "function": "quote_identifier",
-      "line": 295
+      "line": 305
     },
     {
       "coverage": 100.0,
@@ -5381,7 +5498,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/sqlite/backup.rs",
       "function": "quote_literal",
-      "line": 299
+      "line": 309
     },
     {
       "coverage": 100.0,
@@ -5417,7 +5534,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/sqlite/mod.rs",
       "function": "sqlite_pool",
-      "line": 304
+      "line": 311
     },
     {
       "coverage": 100.0,
@@ -5660,7 +5777,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/helpers.rs",
       "function": "dummy_password_hash",
-      "line": 374
+      "line": 378
     },
     {
       "coverage": 100.0,
@@ -5678,7 +5795,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/postgres/backup.rs",
       "function": "json_select",
-      "line": 239
+      "line": 251
     },
     {
       "coverage": 100.0,
@@ -5687,7 +5804,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/postgres/backup.rs",
       "function": "quote_identifier",
-      "line": 288
+      "line": 300
     },
     {
       "coverage": 100.0,
@@ -5741,7 +5858,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/postgres/mod.rs",
       "function": "make_postgres_app_state",
-      "line": 203
+      "line": 213
     },
     {
       "coverage": 100.0,
@@ -5768,7 +5885,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/posts.rs",
       "function": "post_tag_diff",
-      "line": 233
+      "line": 246
     },
     {
       "coverage": 100.0,
@@ -5777,7 +5894,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::new",
-      "line": 504
+      "line": 565
     },
     {
       "coverage": 100.0,
@@ -5786,7 +5903,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::update_post",
-      "line": 670
+      "line": 738
     },
     {
       "coverage": 100.0,
@@ -5795,7 +5912,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::tag_post",
-      "line": 950
+      "line": 1040
     },
     {
       "coverage": 100.0,
@@ -5804,7 +5921,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/posts.rs",
       "function": "PostStore::untag_post",
-      "line": 959
+      "line": 1049
     },
     {
       "coverage": 100.0,
@@ -5813,7 +5930,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/posts.rs",
       "function": "ResolutionBinds::bind_onto",
-      "line": 1334
+      "line": 1516
     },
     {
       "coverage": 100.0,
@@ -5831,7 +5948,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/feed/worker.rs",
       "function": "FeedWorker::new",
-      "line": 35
+      "line": 41
     },
     {
       "coverage": 100.0,
@@ -5840,7 +5957,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/feed/handlers.rs",
       "function": "feed_user",
-      "line": 136
+      "line": 139
     },
     {
       "coverage": 100.0,
@@ -5876,7 +5993,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/media.rs",
       "function": "serve_internal_error",
-      "line": 314
+      "line": 313
     },
     {
       "coverage": 100.0,
@@ -5930,7 +6047,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/observability.rs",
       "function": "resolved_filter",
-      "line": 28
+      "line": 25
     },
     {
       "coverage": 100.0,
@@ -5939,7 +6056,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/observability.rs",
       "function": "use_json_format",
-      "line": 34
+      "line": 31
     },
     {
       "coverage": 100.0,
@@ -5948,7 +6065,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/observability.rs",
       "function": "otel_exporter_otlp_endpoint",
-      "line": 43
+      "line": 40
     },
     {
       "coverage": 100.0,
@@ -5957,7 +6074,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/observability.rs",
       "function": "slow_op_threshold",
-      "line": 78
+      "line": 83
     },
     {
       "coverage": 100.0,
@@ -5966,7 +6083,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/observability.rs",
       "function": "SlowSpanLayer::new",
-      "line": 93
+      "line": 98
     },
     {
       "coverage": 100.0,
@@ -5975,33 +6092,6 @@
       "cyclomatic": 1.0,
       "file": "server/src/observability.rs",
       "function": "init_tracing",
-      "line": 215
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "jaunder",
-      "cyclomatic": 1.0,
-      "file": "server/src/observability.rs",
-      "function": "HeaderExtractor::get",
-      "line": 227
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "jaunder",
-      "cyclomatic": 1.0,
-      "file": "server/src/observability.rs",
-      "function": "HeaderExtractor::keys",
-      "line": 231
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "jaunder",
-      "cyclomatic": 1.0,
-      "file": "server/src/observability.rs",
-      "function": "extract_trace_context",
       "line": 236
     },
     {
@@ -6010,8 +6100,35 @@
       "crate": "jaunder",
       "cyclomatic": 1.0,
       "file": "server/src/observability.rs",
+      "function": "HeaderExtractor::get",
+      "line": 287
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "jaunder",
+      "cyclomatic": 1.0,
+      "file": "server/src/observability.rs",
+      "function": "HeaderExtractor::keys",
+      "line": 291
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "jaunder",
+      "cyclomatic": 1.0,
+      "file": "server/src/observability.rs",
+      "function": "extract_trace_context",
+      "line": 296
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "jaunder",
+      "cyclomatic": 1.0,
+      "file": "server/src/observability.rs",
       "function": "with_http_observability",
-      "line": 270
+      "line": 330
     },
     {
       "coverage": 100.0,
@@ -6126,6 +6243,15 @@
       "crap": 1.0,
       "crate": "jaunder",
       "cyclomatic": 1.0,
+      "file": "server/src/atompub/mapping.rs",
+      "function": "entry_to_post_fields",
+      "line": 71
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "jaunder",
+      "cyclomatic": 1.0,
       "file": "server/src/atompub/media.rs",
       "function": "media_link_entry",
       "line": 23
@@ -6146,7 +6272,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/atompub/posts.rs",
       "function": "etag_for",
-      "line": 29
+      "line": 28
     },
     {
       "coverage": 100.0,
@@ -6155,7 +6281,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/atompub/posts.rs",
       "function": "utf8_encode",
-      "line": 125
+      "line": 124
     },
     {
       "coverage": 100.0,

@@ -16,6 +16,7 @@ pub mod baseline;
 pub mod classify;
 pub mod crap;
 pub mod diffmap;
+pub mod reanchor;
 pub mod report;
 
 use baseline::Baseline;
@@ -56,8 +57,11 @@ pub struct CoverageVerdict {
 }
 
 impl CoverageVerdict {
-    /// Clean iff there is nothing that fails the gate: no regressions and no
-    /// new uncovered lines. (structural/improvements are heals, not failures.)
+    /// Line-clean iff there is no line-identity failure: no regressions and no
+    /// new uncovered lines. The gate itself keys on re-anchor safety
+    /// (`reanchor::reanchor_is_safe`), not this; it remains a convenience for the
+    /// classifier's own tests, which assert the per-bucket outcome.
+    #[cfg(test)]
     pub fn is_clean(&self) -> bool {
         self.regressions.is_empty() && self.new_uncovered.is_empty()
     }
@@ -87,24 +91,24 @@ const CRAP_MANIFEST_PATH: &str = "crap-manifest.json";
 /// Decide whether to heal the accepted-uncovered baseline, returning the
 /// (possibly) new baseline to persist and the `healed` flag.
 ///
-/// Heal happens ONLY when the run is clean: `Mode::Fix`, no gate-failing
-/// coverage delta (`verdict.is_clean()`), and no CRAP regressions. When clean,
-/// the new baseline is simply `Baseline::from_files(&current)` — "clean" means
-/// every current uncovered line is an already-accepted gap, so regenerating from
-/// the current report drops improved (now-covered) and structural (deleted) gaps
-/// and re-numbers survivors to working-tree lines, and never adds a new gap
-/// (shrink-only holds by construction). We only persist when it differs from the
-/// loaded baseline.
+/// Heal happens ONLY when the run is a safe re-anchor: `Mode::Fix`, no genuine
+/// coverage lowering (`safety.safe` — see [`reanchor`]), and no CRAP
+/// regressions. The new baseline is simply `Baseline::from_files(&current)`:
+/// "safe" means every current uncovered line is either an already-accepted gap
+/// or the re-anchored image of one (identical text), so regenerating from the
+/// current report drops improved (now-covered) and structural (deleted) gaps,
+/// re-numbers survivors to working-tree lines, and never accepts a genuinely
+/// new uncovered text. We only persist when it differs from the loaded baseline.
 ///
 /// Returns `(None, false)` whenever anything fails or in `Mode::Check`.
 fn heal_baseline(
-    verdict: &CoverageVerdict,
+    safety: &reanchor::ReanchorSafety,
     crap_regs: &[CrapRegression],
     current: &[FileCoverage],
     loaded: &Baseline,
     mode: Mode,
 ) -> (Option<Baseline>, bool) {
-    let clean = verdict.is_clean() && crap_regs.is_empty();
+    let clean = safety.safe && crap_regs.is_empty();
     if !matches!(mode, Mode::Fix) || !clean {
         return (None, false);
     }
@@ -162,6 +166,11 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
 
     let baseline = Baseline::load(BASELINE_PATH)?;
     let verdict = classify::classify(&current, &baseline, &maps);
+    // Line-identity is only the first pass: a line-shifting change can flag
+    // phantom regressions/new_uncovered. Re-anchor safety keys the gate on
+    // uncovered-TEXT identity, so a pure move (removed-then-reappeared with the
+    // same text) is recognised as safe rather than a lowering.
+    let safety = reanchor::reanchor_is_safe(&verdict, &current, &baseline);
 
     let old_crap_manifest = std::fs::read_to_string(CRAP_MANIFEST_PATH).unwrap_or_default();
     let crap_regs = if old_crap_manifest.trim().is_empty() {
@@ -170,21 +179,23 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
         crap::compare(&crap_report_str, &old_crap_manifest)?
     };
 
-    let gate_fails = !verdict.is_clean() || !crap_regs.is_empty();
+    let gate_fails = !safety.safe || !crap_regs.is_empty();
 
-    // Auto-heal — only when clean (Mode::Fix), never on failure.
-    let (new_baseline, mut healed) = heal_baseline(&verdict, &crap_regs, &current, &baseline, mode);
+    // Auto-heal — only on a safe re-anchor (Mode::Fix), never on a lowering.
+    let (new_baseline, mut healed) = heal_baseline(&safety, &crap_regs, &current, &baseline, mode);
     if let Some(b) = &new_baseline {
         b.save(BASELINE_PATH)?;
     }
     // Likewise regenerate the CRAP manifest when there are no CRAP regressions
     // (Mode::Fix) and it differs from the committed manifest.
-    if matches!(mode, Mode::Fix) && verdict.is_clean() && crap_regs.is_empty() {
-        // Compare in canonical (minified, key-sorted) form so equality is
-        // independent of on-disk formatting, but WRITE pretty-printed so the
-        // committed manifest stays human-diffable (a one-line blob makes
-        // coverage diffs unreadable). The baseline is likewise written pretty.
-        if normalize_json(&crap_report_str)? != normalize_json_or_empty(&old_crap_manifest) {
+    if matches!(mode, Mode::Fix) && safety.safe && crap_regs.is_empty() {
+        // Compare line-independently so a pure line-shift is a no-op; write the
+        // full pretty manifest (WITH line, the labelled hint) only when a
+        // CRAP-relevant field actually changed. Writing pretty keeps coverage
+        // diffs human-readable (a one-line blob makes them unreadable).
+        let new_canon = normalize_crap_without_line(&crap_report_str)?;
+        let old_canon = normalize_crap_without_line(&old_crap_manifest).unwrap_or_default();
+        if new_canon != old_canon {
             std::fs::write(CRAP_MANIFEST_PATH, pretty_json(&crap_report_str)?)
                 .with_context(|| format!("writing {CRAP_MANIFEST_PATH}"))?;
             healed = true;
@@ -204,15 +215,17 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
 
     let step = if gate_fails {
         let detail = format!(
-            "{} regression(s), {} new-uncovered, {} CRAP regression(s)",
-            count_lines(&verdict.regressions),
-            count_lines(&verdict.new_uncovered),
+            "{} coverage lowering(s), {} CRAP regression(s)",
+            safety.lowering.len(),
             crap_regs.len(),
         );
         StepResult::fail("coverage").detail(detail)
     } else {
+        // When safe, any line-flagged regression/new_uncovered was a pure move,
+        // i.e. re-anchored rather than a real loss.
+        let reanchored = count_lines(&verdict.regressions) + count_lines(&verdict.new_uncovered);
         let detail = format!(
-            "clean — {} structural, {} improvement(s){}",
+            "clean — {reanchored} re-anchored, {} structural, {} improvement(s){}",
             count_lines(&verdict.structural),
             count_lines(&verdict.improvements),
             if healed { "; baselines healed" } else { "" },
@@ -227,25 +240,42 @@ fn count_lines(buckets: &[FileLines]) -> usize {
     buckets.iter().map(|b| b.lines.len()).sum()
 }
 
-fn normalize_json(s: &str) -> Result<String> {
+/// Canonical, line- and order-independent form of a CRAP report: each entry
+/// minus its `line`, with key-sorted JSON (serde_json `Value` is a `BTreeMap`),
+/// and the entry set itself sorted. Two reports that differ only in line
+/// attribution (a pure shift) normalize equal, so the Fix-mode heal does not
+/// rewrite `crap-manifest.json` unless some non-`line` field changed — i.e. the
+/// `crap` score or its `coverage`/`cyclomatic` inputs, or the set of functions
+/// (#7). The `line` field is retained in the written manifest as a
+/// non-authoritative jump-to hint that refreshes wholesale on the next such
+/// change.
+fn normalize_crap_without_line(s: &str) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(s)?;
-    Ok(v.to_string())
+    let mut rows: Vec<String> = v
+        .get("entries")
+        .and_then(|e| e.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|e| {
+                    let mut e = e.clone();
+                    if let Some(o) = e.as_object_mut() {
+                        o.remove("line");
+                    }
+                    e.to_string()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    rows.sort();
+    Ok(rows.join("\n"))
 }
 
 /// Canonical (key-sorted, via `serde_json::Value`'s `BTreeMap`) but
 /// pretty-printed with a trailing newline — the on-disk form of the committed
-/// manifest, so coverage diffs stay readable. Compared against [`normalize_json`]
-/// output, which strips formatting, so the stored pretty form never triggers a
-/// spurious rewrite.
+/// manifest, so coverage diffs stay readable.
 fn pretty_json(s: &str) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(s)?;
     Ok(format!("{}\n", serde_json::to_string_pretty(&v)?))
-}
-
-fn normalize_json_or_empty(s: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(s)
-        .map(|v| v.to_string())
-        .unwrap_or_default()
 }
 
 fn git_repo_root() -> Result<String> {
@@ -439,38 +469,47 @@ mod tests {
     }
 
     #[test]
-    fn crap_heal_is_idempotent_and_pretty() {
-        // The heal writes pretty, key-sorted JSON and compares via the
-        // formatting-independent `normalize_json`, so re-healing an already-healed
-        // manifest is a no-op — no spurious multi-thousand-line diff churn (#7).
-        let compact =
-            r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
-        let pretty = pretty_json(compact).unwrap();
-        assert!(
-            pretty.contains('\n'),
-            "heal must write multi-line pretty JSON"
-        );
+    fn crap_normalize_ignores_line_and_formatting() {
+        // Same scores, different line attribution + key order + whitespace →
+        // equal canonical form, so the heal does not rewrite the manifest (#7).
+        let a = r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
+        let b = r#"{ "entries": [ {"crap":2.0,"function":"f","file":"a.rs","crate":"c","line":888} ] }"#;
         assert_eq!(
-            normalize_json(&pretty).unwrap(),
-            normalize_json(compact).unwrap(),
-            "pretty and compact must normalize equal, so a re-heal does not rewrite"
+            normalize_crap_without_line(a).unwrap(),
+            normalize_crap_without_line(b).unwrap(),
+            "line + key order + whitespace must not affect the canonical form"
         );
     }
 
-    fn verdict_with_improvement() -> CoverageVerdict {
-        CoverageVerdict {
-            improvements: vec![FileLines {
-                file: "a.rs".into(),
-                lines: vec![2],
-            }],
-            ..Default::default()
+    #[test]
+    fn crap_normalize_detects_a_score_change() {
+        let a = r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
+        let c = r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":9.0}]}"#;
+        assert_ne!(
+            normalize_crap_without_line(a).unwrap(),
+            normalize_crap_without_line(c).unwrap(),
+            "a real CRAP change must change the canonical form"
+        );
+    }
+
+    #[test]
+    fn crap_pretty_json_is_multiline() {
+        let compact =
+            r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
+        assert!(pretty_json(compact).unwrap().contains('\n'));
+    }
+
+    fn safe() -> reanchor::ReanchorSafety {
+        reanchor::ReanchorSafety {
+            safe: true,
+            lowering: vec![],
         }
     }
 
     #[test]
-    fn heals_a_shrunk_baseline_when_clean_in_fix_mode() {
+    fn heals_a_shrunk_baseline_when_safe_in_fix_mode() {
         // Baseline accepted line 2 as a gap; current report shows line 2 now
-        // covered (an improvement) and no failing delta → clean.
+        // covered (an improvement) and no genuine lowering → safe.
         let mut loaded = Baseline::default();
         loaded.set_gaps(
             "a.rs",
@@ -480,18 +519,17 @@ mod tests {
             }],
         );
         let current = vec![fc("a.rs", &[(2, true)])];
-        let verdict = verdict_with_improvement();
 
-        let (new_baseline, healed) = heal_baseline(&verdict, &[], &current, &loaded, Mode::Fix);
+        let (new_baseline, healed) = heal_baseline(&safe(), &[], &current, &loaded, Mode::Fix);
 
-        assert!(healed, "clean + improvement must heal in Fix mode");
+        assert!(healed, "safe + improvement must heal in Fix mode");
         let b = new_baseline.expect("expected a healed baseline");
         // The improved gap is dropped — the new baseline has no gap for a.rs.
         assert!(b.gaps("a.rs").is_empty());
     }
 
     #[test]
-    fn does_not_heal_when_a_regression_is_present_even_in_fix_mode() {
+    fn does_not_heal_when_a_lowering_is_present_even_in_fix_mode() {
         let mut loaded = Baseline::default();
         loaded.set_gaps(
             "a.rs",
@@ -501,17 +539,18 @@ mod tests {
             }],
         );
         let current = vec![fc("a.rs", &[(2, true), (5, false)])];
-        let verdict = CoverageVerdict {
-            regressions: vec![FileLines {
+        let unsafe_ = reanchor::ReanchorSafety {
+            safe: false,
+            lowering: vec![reanchor::LineText {
                 file: "a.rs".into(),
-                lines: vec![5],
+                line: 5,
+                text: String::new(),
             }],
-            ..Default::default()
         };
 
-        let (new_baseline, healed) = heal_baseline(&verdict, &[], &current, &loaded, Mode::Fix);
+        let (new_baseline, healed) = heal_baseline(&unsafe_, &[], &current, &loaded, Mode::Fix);
 
-        assert!(!healed, "a regression must never heal");
+        assert!(!healed, "a genuine lowering must never heal");
         assert!(new_baseline.is_none());
     }
 
@@ -519,7 +558,6 @@ mod tests {
     fn does_not_heal_when_crap_regressions_present() {
         let loaded = Baseline::default();
         let current = vec![fc("a.rs", &[(1, true)])];
-        let verdict = CoverageVerdict::default();
         let crap = vec![CrapRegression {
             file: "a.rs".into(),
             function: "f".into(),
@@ -527,7 +565,8 @@ mod tests {
             new: 9.0,
         }];
 
-        let (new_baseline, healed) = heal_baseline(&verdict, &crap, &current, &loaded, Mode::Fix);
+        // Safe re-anchor but a CRAP regression independently blocks the heal.
+        let (new_baseline, healed) = heal_baseline(&safe(), &crap, &current, &loaded, Mode::Fix);
 
         assert!(!healed);
         assert!(new_baseline.is_none());
@@ -544,11 +583,38 @@ mod tests {
             }],
         );
         let current = vec![fc("a.rs", &[(2, true)])];
-        let verdict = verdict_with_improvement();
 
-        let (new_baseline, healed) = heal_baseline(&verdict, &[], &current, &loaded, Mode::Check);
+        let (new_baseline, healed) = heal_baseline(&safe(), &[], &current, &loaded, Mode::Check);
 
         assert!(!healed, "Mode::Check must never heal");
         assert!(new_baseline.is_none());
+    }
+
+    #[test]
+    fn safe_reanchor_heals_in_fix_and_not_in_check() {
+        // A baseline gap re-anchors to a new line (same text); the heal
+        // regenerates from current in Fix, and never mutates in Check.
+        let mut loaded = Baseline::default();
+        loaded.set_gaps(
+            "a.rs",
+            vec![baseline::Gap {
+                line: 2,
+                text: "x".into(),
+            }],
+        );
+        let current = vec![FileCoverage {
+            path: "a.rs".into(),
+            lines: vec![LineCov {
+                line: 9,
+                covered: false,
+                text: "x".into(),
+            }],
+        }];
+
+        let (fix, healed) = heal_baseline(&safe(), &[], &current, &loaded, Mode::Fix);
+        assert!(healed && fix.is_some(), "Fix re-anchors a safe drift");
+
+        let (chk, healed) = heal_baseline(&safe(), &[], &current, &loaded, Mode::Check);
+        assert!(!healed && chk.is_none(), "Check never mutates");
     }
 }
