@@ -189,11 +189,13 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
     // Likewise regenerate the CRAP manifest when there are no CRAP regressions
     // (Mode::Fix) and it differs from the committed manifest.
     if matches!(mode, Mode::Fix) && safety.safe && crap_regs.is_empty() {
-        // Compare in canonical (minified, key-sorted) form so equality is
-        // independent of on-disk formatting, but WRITE pretty-printed so the
-        // committed manifest stays human-diffable (a one-line blob makes
-        // coverage diffs unreadable). The baseline is likewise written pretty.
-        if normalize_json(&crap_report_str)? != normalize_json_or_empty(&old_crap_manifest) {
+        // Compare line-independently so a pure line-shift is a no-op; write the
+        // full pretty manifest (WITH line, the labelled hint) only when a
+        // CRAP-relevant field actually changed. Writing pretty keeps coverage
+        // diffs human-readable (a one-line blob makes them unreadable).
+        let new_canon = normalize_crap_without_line(&crap_report_str)?;
+        let old_canon = normalize_crap_without_line(&old_crap_manifest).unwrap_or_default();
+        if new_canon != old_canon {
             std::fs::write(CRAP_MANIFEST_PATH, pretty_json(&crap_report_str)?)
                 .with_context(|| format!("writing {CRAP_MANIFEST_PATH}"))?;
             healed = true;
@@ -238,25 +240,40 @@ fn count_lines(buckets: &[FileLines]) -> usize {
     buckets.iter().map(|b| b.lines.len()).sum()
 }
 
-fn normalize_json(s: &str) -> Result<String> {
+/// Canonical, line- and order-independent form of a CRAP report: each entry
+/// minus its `line`, with key-sorted JSON (serde_json `Value` is a `BTreeMap`),
+/// and the entry set itself sorted. Two reports that differ only in line
+/// attribution (a pure shift) normalize equal, so the Fix-mode heal does not
+/// rewrite `crap-manifest.json` unless a CRAP-relevant field changed (#7). The
+/// `line` field is retained in the written manifest as a non-authoritative
+/// jump-to hint that refreshes wholesale on the next real CRAP change.
+fn normalize_crap_without_line(s: &str) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(s)?;
-    Ok(v.to_string())
+    let mut rows: Vec<String> = v
+        .get("entries")
+        .and_then(|e| e.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|e| {
+                    let mut e = e.clone();
+                    if let Some(o) = e.as_object_mut() {
+                        o.remove("line");
+                    }
+                    e.to_string()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    rows.sort();
+    Ok(rows.join("\n"))
 }
 
 /// Canonical (key-sorted, via `serde_json::Value`'s `BTreeMap`) but
 /// pretty-printed with a trailing newline — the on-disk form of the committed
-/// manifest, so coverage diffs stay readable. Compared against [`normalize_json`]
-/// output, which strips formatting, so the stored pretty form never triggers a
-/// spurious rewrite.
+/// manifest, so coverage diffs stay readable.
 fn pretty_json(s: &str) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(s)?;
     Ok(format!("{}\n", serde_json::to_string_pretty(&v)?))
-}
-
-fn normalize_json_or_empty(s: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(s)
-        .map(|v| v.to_string())
-        .unwrap_or_default()
 }
 
 fn git_repo_root() -> Result<String> {
@@ -450,22 +467,34 @@ mod tests {
     }
 
     #[test]
-    fn crap_heal_is_idempotent_and_pretty() {
-        // The heal writes pretty, key-sorted JSON and compares via the
-        // formatting-independent `normalize_json`, so re-healing an already-healed
-        // manifest is a no-op — no spurious multi-thousand-line diff churn (#7).
+    fn crap_normalize_ignores_line_and_formatting() {
+        // Same scores, different line attribution + key order + whitespace →
+        // equal canonical form, so the heal does not rewrite the manifest (#7).
+        let a = r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
+        let b = r#"{ "entries": [ {"crap":2.0,"function":"f","file":"a.rs","crate":"c","line":888} ] }"#;
+        assert_eq!(
+            normalize_crap_without_line(a).unwrap(),
+            normalize_crap_without_line(b).unwrap(),
+            "line + key order + whitespace must not affect the canonical form"
+        );
+    }
+
+    #[test]
+    fn crap_normalize_detects_a_score_change() {
+        let a = r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
+        let c = r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":9.0}]}"#;
+        assert_ne!(
+            normalize_crap_without_line(a).unwrap(),
+            normalize_crap_without_line(c).unwrap(),
+            "a real CRAP change must change the canonical form"
+        );
+    }
+
+    #[test]
+    fn crap_pretty_json_is_multiline() {
         let compact =
             r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
-        let pretty = pretty_json(compact).unwrap();
-        assert!(
-            pretty.contains('\n'),
-            "heal must write multi-line pretty JSON"
-        );
-        assert_eq!(
-            normalize_json(&pretty).unwrap(),
-            normalize_json(compact).unwrap(),
-            "pretty and compact must normalize equal, so a re-heal does not rewrite"
-        );
+        assert!(pretty_json(compact).unwrap().contains('\n'));
     }
 
     fn safe() -> reanchor::ReanchorSafety {
