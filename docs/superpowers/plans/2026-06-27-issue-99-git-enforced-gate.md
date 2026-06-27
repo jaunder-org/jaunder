@@ -325,15 +325,20 @@ git commit -m "feat(xtask): validate refuses a dirty tree, add --allow-dirty (is
 
 **Interfaces:** none (bash). Hooks are inert until Task 5 installs them.
 
-- [ ] **Step 1: Rewrite `.githooks/pre-commit`** with exactly:
+> **DESIGN REVISION (mid-implementation).** The original single-pass `cargo xtask check`
+> hook was found to abort *every* commit: `check`'s Fix-mode coverage step regenerates
+> `coverage-baseline.json` / `crap-manifest.json` on every run (non-idempotent, #7), so
+> the porcelain diff always fired. Rather than entangle the hook with regen behavior the
+> coverage work owns, the hook is split into two non-mutating passes (Approach A). See
+> ADR-0029. The obvious single-pass form returns once coverage auto-healing (#86) makes
+> `check` idempotent.
+
+- [ ] **Step 1: Rewrite `.githooks/pre-commit`** to the two-pass form (see the live file
+  for the full explanatory header comment):
 
 ```bash
 #!/usr/bin/env bash
-# Pre-commit gate: full `cargo xtask check` (static + clippy + xtask units + Nix
-# coverage, Fix-mode). check may rewrite files (fmt, clippy, coverage-baseline); if it
-# does, fail-and-restage — abort so the author stages the fixes consciously rather than
-# silently folding them in. Happy path (check already run before committing): the tree
-# is unchanged, so this is a fast cache-hit pass. SKIP_PRE_COMMIT=1 bypasses for WIP.
+# (header comment elided here — see .githooks/pre-commit for the full rationale)
 set -euo pipefail
 
 if [ "${SKIP_PRE_COMMIT:-0}" = "1" ]; then
@@ -341,15 +346,18 @@ if [ "${SKIP_PRE_COMMIT:-0}" = "1" ]; then
     exit 0
 fi
 
-echo "--- pre-commit: cargo xtask check ---"
+echo "--- pre-commit: cargo xtask check --no-test (fix formatting) ---"
 pre=$(git status --porcelain)
-cargo xtask check
+cargo xtask check --no-test          # fixes fmt/clippy; SKIPS Nix coverage => no manifest churn
 post=$(git status --porcelain)
 
 if [ "$pre" != "$post" ]; then
     echo "--- pre-commit: check applied fixes — review, git add, and re-commit ---" >&2
-    exit 1
+    exit 1                           # fail-and-restage (catches only real formatting fixes)
 fi
+
+echo "--- pre-commit: cargo xtask validate --no-e2e --allow-dirty (verify gate) ---"
+cargo xtask validate --no-e2e --allow-dirty   # Check-mode coverage: verify-only, no churn, no refuse
 
 echo "--- pre-commit: all checks passed ---"
 ```
