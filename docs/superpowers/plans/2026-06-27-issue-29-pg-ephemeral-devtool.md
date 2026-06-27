@@ -32,7 +32,7 @@ means every later task's tests are live in `cargo xtask check`.
 - Consumes: `crate::sh::step`, `crate::result::CommandResult` (already used here).
 - Produces: a `tools-test` step running `cargo test --manifest-path tools/Cargo.toml`.
 
-- [ ] **Step 1: Add the step**
+- [x] **Step 1: Add the step**
 
 In `xtask/src/steps/host_tests.rs`, after the existing `xtask-tests` push, add a
 second push (update the doc comment to mention both workspaces):
@@ -57,7 +57,7 @@ pub fn run(sh: &Shell, result: &mut CommandResult) {
 }
 ```
 
-- [ ] **Step 2: Verify the previously-dead emit.rs tests now run**
+- [x] **Step 2: Verify the previously-dead emit.rs tests now run**
 
 Run: `cargo xtask check --no-test`
 Expected: exit 0; the sidecar shows a `tools-test` step. Confirm it executed the
@@ -66,7 +66,7 @@ existing `emit.rs` tests:
 Run: `jq -r '.steps[] | select(.name=="tools-test") | "\(.name) ok=\(.ok)"' .xtask/last-result.json`
 Expected: `tools-test ok=true`
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add xtask/src/steps/host_tests.rs
