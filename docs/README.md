@@ -54,6 +54,7 @@ convention). All are currently `accepted`.
 | [0026](adr/0026-test-fault-injection-hooks-feature.md) | Test-Only Fault-Injection Hooks Behind a `test-utils` Feature | accepted |
 | [0027](adr/0027-scheduled-publishing-time-gated-visibility.md) | Scheduled Publishing — Time-Gated Visibility and Restart-Durable Go-Live | accepted |
 | [0028](adr/0028-devtool-vs-xtask-boundary.md) | The `devtool` / `xtask` Boundary — In-Sandbox Producer vs. Host Analyzer | accepted |
+| [0029](adr/0029-git-enforced-verify-gate.md) | Git-Enforced Verify Gate — Hook-Routed check/validate and Clean-Tree Gating | accepted |
 
 ## Archive
 
