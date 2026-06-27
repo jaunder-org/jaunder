@@ -198,8 +198,8 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
     assert!(etag.is_some(), "response should have ETag header");
     let body = body_string(response).await;
     assert!(
-        body.contains("type=\"text\""),
-        "body should contain type=text (native source)"
+        body.contains("type=\"text/markdown\""),
+        "body should carry the text/markdown media type (native source, ADR-0023)"
     );
     assert!(
         body.contains("# Markdown body"),
@@ -635,8 +635,8 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
         "retrieved entry should contain body"
     );
     assert!(
-        body.contains("type=\"text\""),
-        "retrieved entry should have text content type"
+        body.contains("type=\"text/markdown\""),
+        "a Markdown post round-trips as the text/markdown media type (ADR-0023)"
     );
 }
 
@@ -695,6 +695,68 @@ async fn create_html_entry_is_stored_as_html(#[case] backend: Backend) {
     assert!(
         body.contains("type=\"html\""),
         "entry should be stored with type=html"
+    );
+}
+
+// Shape B — per-entry format media type (ADR-0023, Task 1). POSTing a content
+// `type` media type stores the matching format, and the round-tripped member
+// echoes the same media type. `text/org`→Org, `text/markdown`→Markdown. The
+// account default format is irrelevant here: the explicit media type wins.
+#[rstest]
+#[case::org("text/org", "* Org heading\nbody")]
+#[case::markdown("text/markdown", "# Markdown heading\nbody")]
+#[tokio::test]
+async fn create_format_media_type_round_trips(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] content_type: &str,
+    #[case] content: &str,
+) {
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state.clone(), &base).await;
+
+    let xml = entry_xml("Formatted", content_type, content);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // GET the member back: it must echo the same content media type.
+    let get = make_app(state, &base)
+        .await
+        .oneshot(
+            Request::builder()
+                .uri(&location)
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(get.status(), StatusCode::OK);
+    let body = body_string(get).await;
+    assert!(
+        body.contains(&format!("type=\"{content_type}\"")),
+        "member should round-trip type={content_type}: {body}"
     );
 }
 
@@ -1031,6 +1093,110 @@ async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
     let body = body_string(get).await;
     // A draft post round-trips the app:draft marker.
     assert!(body.contains("app:draft"), "draft marker missing: {body}");
+    // The read-only j:slug is emitted on every entry, drafts included (ADR-0023).
+    assert!(
+        body.contains("xmlns:j=\"https://jaunder.org/ns/atompub\""),
+        "draft entry should declare xmlns:j: {body}"
+    );
+    assert!(
+        body.contains("<j:slug>"),
+        "draft entry should carry j:slug: {body}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let (user_id, token) = seed_alice(&state).await;
+
+    let post = storage::perform_post_creation(
+        state.posts.as_ref(),
+        storage::PostCreation {
+            user_id,
+            body: "Body".to_string(),
+            title: Some("My Post"),
+            format: storage::PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(chrono::Utc::now()),
+            max_attempts: 100,
+            summary: None,
+            audiences: vec![common::visibility::AudienceTarget::Public],
+        },
+    )
+    .await
+    .unwrap();
+
+    let app = make_app(state, &base).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/atompub/alice/posts/{}", post.post_id))
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    assert!(
+        body.contains("xmlns:j=\"https://jaunder.org/ns/atompub\""),
+        "member should declare xmlns:j: {body}"
+    );
+    assert!(
+        body.contains(&format!("<j:slug>{}</j:slug>", post.slug.as_str())),
+        "member should carry the post's slug as j:slug: {body}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state.clone(), &base).await;
+
+    // A client-supplied <j:slug> must NOT determine the stored slug — the server
+    // derives its own from the title (ADR-0023: j:slug is read-only).
+    let xml = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom" xmlns:j="https://jaunder.org/ns/atompub">
+  <title>Server Derives This</title>
+  <content type="text">body</content>
+  <j:slug>client-supplied</j:slug>
+</entry>"#;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let post_id = location_post_id(&response);
+
+    let viewer = common::visibility::ViewerIdentity::Anonymous;
+    let rec = state
+        .posts
+        .get_post_by_id(post_id, &viewer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        rec.slug.as_str(),
+        "client-supplied",
+        "incoming j:slug must not become the stored slug"
+    );
 }
 
 #[apply(backends)]

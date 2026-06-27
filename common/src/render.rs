@@ -193,6 +193,66 @@ fn extract_org_title(body: &str) -> Option<(String, String)> {
     found.map(|title| (title, output.join("\n").trim().to_owned()))
 }
 
+/// Canonicalize an ingested Org body (ADR-0024): remove the body's title-source
+/// line (a `#+TITLE:` header, or a leading top-level `* heading` when there is no
+/// `#+TITLE:`) and strip leading blank lines, while preserving every other line —
+/// including unrecognized `#+FOO:` headers and content headings — verbatim. Output
+/// is byte-deterministic and idempotent so reconcile (Unit D) never sees false
+/// divergence.
+///
+/// A top-level `* heading` is treated as the title source only when it is the very
+/// first content of the body (nothing kept before it and no `#+TITLE:` seen). This
+/// gate is what makes the function idempotent: once the title source is stripped, a
+/// later `* heading` left behind sits after kept header lines and so is content, not
+/// a new title source on the next pass. (This is a deliberate, test-pinned refinement
+/// of `extract_org_title`'s precedence; see the `canon_*` unit tests.)
+#[must_use]
+pub fn canonicalize_org_body(body: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut in_header = true; // still scanning the leading blank/#+/title region
+    let mut saw_title = false;
+
+    for line in body.lines() {
+        if !in_header {
+            // Past the header region everything is preserved verbatim — except we
+            // keep dropping blank lines while nothing has been kept yet, because a
+            // dropped title-source heading turns its trailing blanks into leading
+            // blanks.
+            if kept.is_empty() && line.trim().is_empty() {
+                continue;
+            }
+            kept.push(line);
+            continue;
+        }
+        let t = line.trim_start();
+        if t.is_empty() {
+            // Drop leading blank lines; preserve a blank once a header line is kept.
+            if !kept.is_empty() {
+                kept.push(line);
+            }
+            continue;
+        }
+        if t.to_ascii_lowercase().starts_with("#+title:") {
+            saw_title = true; // recognized title header → drop
+            continue;
+        }
+        if t.starts_with("#+") {
+            kept.push(line); // unrecognized header → preserve verbatim
+            continue;
+        }
+        // The first non-blank, non-`#+` line ends the header region. A top-level
+        // `* heading` at the very start of the body (nothing kept before it and no
+        // `#+TITLE:` seen) is the title source → drop it; anything else is content.
+        in_header = false;
+        if !saw_title && kept.is_empty() && t.starts_with("* ") {
+            continue;
+        }
+        kept.push(line);
+    }
+
+    kept.join("\n").trim_end().to_string()
+}
+
 /// Renders Markdown to HTML using pulldown-cmark with common extensions.
 fn render_markdown(body: &str) -> String {
     use pulldown_cmark::{html, Options, Parser};
@@ -593,5 +653,62 @@ mod tests {
     fn render_html_format_is_identity() {
         let body = "<p>hi <b>there</b></p>";
         assert_eq!(render(body, &PostFormat::Html), body.to_string());
+    }
+
+    // -- canonicalize_org_body tests (ADR-0024; load-bearing, user-flagged) --
+
+    #[test]
+    fn canon_strips_title_header_keeps_unknown_and_later_heading() {
+        // #+TITLE: present → strip it; keep #+FOO:; a LATER * heading is content → keep.
+        let out = canonicalize_org_body("#+TITLE: My Post\n#+FOO: keepme\n\n* Section\nBody\n");
+        assert_eq!(out, "#+FOO: keepme\n\n* Section\nBody");
+    }
+
+    #[test]
+    fn canon_strips_leading_heading_when_no_title_header() {
+        // No #+TITLE: → the leading * heading IS the title source → strip it.
+        let out = canonicalize_org_body("* My Title\n\nBody line\n");
+        assert_eq!(out, "Body line");
+    }
+
+    #[test]
+    fn canon_strips_title_amidst_other_headers_and_leading_blanks() {
+        let out = canonicalize_org_body("\n\n#+FOO: x\n#+title: T\n#+BAR: y\n\nbody\n");
+        assert_eq!(out, "#+FOO: x\n#+BAR: y\n\nbody");
+    }
+
+    #[test]
+    fn canon_no_title_source_preserves_headers_and_content() {
+        let out = canonicalize_org_body("#+FOO: x\n\njust content\n");
+        assert_eq!(out, "#+FOO: x\n\njust content");
+    }
+
+    #[test]
+    fn canon_non_top_level_heading_is_not_a_title_source() {
+        // "** Sub" is not a top-level heading → not the title → keep.
+        let out = canonicalize_org_body("** Sub\n\nBody\n");
+        assert_eq!(out, "** Sub\n\nBody");
+    }
+
+    #[test]
+    fn canon_heading_after_body_text_is_content_not_title() {
+        let out = canonicalize_org_body("intro\n* Later\nmore\n");
+        assert_eq!(out, "intro\n* Later\nmore");
+    }
+
+    #[test]
+    fn canon_is_idempotent() {
+        for body in [
+            "#+TITLE: T\n#+FOO: x\n\n* H\nText\n",
+            "* My Title\n\nBody\n",
+            "#+FOO: x\n\ncontent\n",
+        ] {
+            let once = canonicalize_org_body(body);
+            assert_eq!(
+                canonicalize_org_body(&once),
+                once,
+                "idempotent for {body:?}"
+            );
+        }
     }
 }

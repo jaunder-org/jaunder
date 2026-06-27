@@ -114,6 +114,13 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
     assert!(body.contains("image/webp"));
     // The tagged post surfaces as an inline category in the posts collection.
     assert!(body.contains("term=\"rust\""), "categories missing: {body}");
+    // Capability discovery (ADR-0023): the service document advertises the
+    // Jaunder wire extensions this server understands.
+    assert!(body.contains("j:extension"), "j:extension missing: {body}");
+    assert!(
+        body.contains("features=\"format-media-type slug\""),
+        "extension features missing: {body}"
+    );
 }
 
 #[apply(backends)]

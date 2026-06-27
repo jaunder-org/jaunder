@@ -6,7 +6,7 @@
 //! (collection member) operations.
 
 use chrono::{DateTime, Utc};
-use common::atompub::{is_draft, set_draft, Category, Content, Entry, Link, Text};
+use common::atompub::{is_draft, set_draft, set_j_slug, Category, Content, Entry, Link, Text};
 use storage::{PostFormat, PostRecord};
 
 /// The post-shaped data carried by an incoming `AtomPub` `Entry`.
@@ -30,11 +30,42 @@ pub struct PostFields {
     pub published: Option<DateTime<Utc>>,
 }
 
+/// The wire `atom:content` `type` for a post format (ADR-0023). `Html` uses the
+/// `html` token (markup), NOT `text/html` (which would mean escaped text).
+fn format_to_wire(format: &PostFormat) -> &'static str {
+    match format {
+        PostFormat::Org => "text/org",
+        PostFormat::Markdown => "text/markdown",
+        PostFormat::Html => "html",
+    }
+}
+
+/// Lenient inverse: never fails, falls back to `default` for `text`/absent/unknown
+/// so reading is robust to any client. Tolerates a media-type parameter.
+fn wire_to_format(content_type: Option<&str>, default: PostFormat) -> PostFormat {
+    let Some(ct) = content_type else {
+        return default;
+    };
+    let base = ct
+        .split(';')
+        .next()
+        .unwrap_or(ct)
+        .trim()
+        .to_ascii_lowercase();
+    match base.as_str() {
+        "text/org" => PostFormat::Org,
+        "text/markdown" => PostFormat::Markdown,
+        "html" | "xhtml" | "text/html" => PostFormat::Html,
+        _ => default,
+    }
+}
+
 /// Maps an incoming `AtomPub` `Entry` to Jaunder post fields.
 ///
-/// Per ADR-0015, the entry's content `type` selects the storage format:
-/// `html`/`xhtml` content is stored as [`PostFormat::Html`] verbatim; `text`
-/// (or absent) content is stored using the user's `default_format`. Body is the
+/// Per ADR-0023, the entry's content `type` carries the storage format as a media
+/// type, parsed leniently by [`wire_to_format`]: `text/org`→Org,
+/// `text/markdown`→Markdown, `html`/`xhtml`/`text/html`→Html, and bare `text`
+/// (or absent/unknown) falls back to the user's `default_format`. Body is the
 /// content value (empty string when the entry carries no content).
 #[must_use]
 pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFields {
@@ -43,11 +74,7 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
         .and_then(|c| c.value().map(|v| (c.content_type(), v)))
         .unwrap_or((None, ""));
 
-    let format = if matches!(ctype, Some("html" | "xhtml")) {
-        PostFormat::Html
-    } else {
-        default_format
-    };
+    let format = wire_to_format(ctype, default_format);
 
     let body = value.to_string();
     let title = {
@@ -61,6 +88,8 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
         .map(|c| c.term().to_string())
         .collect();
     let is_draft = is_draft(entry);
+    // Any incoming `j:slug` is deliberately ignored (ADR-0023): the slug is a
+    // read-only server property, derived here from the title/body, never the wire.
     // Inverse of `post_to_entry`'s `published: post.published_at.map(fixed_offset)`:
     // read the entry's `<published>` (a fixed-offset datetime) back to UTC.
     let published = entry.published().map(|d| d.with_timezone(&Utc));
@@ -79,21 +108,19 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
 /// Builds the `AtomPub` member `Entry` for a post.
 ///
 /// `base_url` is the site's absolute origin (no trailing slash), e.g.
-/// `https://example.com`. Per ADR-0015 the content is emitted in *native source*
-/// form: a Markdown/Org post becomes `type="text"` carrying its raw body; an
-/// `Html` post becomes `type="html"`. The stable id and the `rel="edit"` link
-/// both point at the member edit URI; a public `rel="alternate"` link is added
-/// only for published posts.
+/// `https://example.com`. Per ADR-0023 the content is emitted in *native source*
+/// form, with the post's format carried in the `atom:content` `type` as a media
+/// type via [`format_to_wire`]: Org→`text/org`, Markdown→`text/markdown`,
+/// Html→`html`. The stable id and the `rel="edit"` link both point at the member
+/// edit URI; a public `rel="alternate"` link is added only for published posts.
 #[must_use]
 pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
     let username = post.author_username.as_str();
     let edit_uri = format!("{base_url}/atompub/{username}/posts/{}", post.post_id);
 
-    // Content: the post's format selects the wire `type` (native source form).
-    let (content_type, body) = match post.format {
-        PostFormat::Html => ("html", post.body.clone()),
-        PostFormat::Markdown | PostFormat::Org => ("text", post.body.clone()),
-    };
+    // Content: the post's format becomes the wire media `type` (native source form).
+    let content_type = format_to_wire(&post.format);
+    let body = post.body.clone();
 
     // Links: always an `edit` link; a public `alternate` only when published.
     let mut links = vec![Link {
@@ -133,6 +160,8 @@ pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
     };
 
     set_draft(&mut entry, post.published_at.is_none());
+    // Read-only server slug (ADR-0023): emitted on every entry, draft or live.
+    set_j_slug(&mut entry, post.slug.as_str());
     entry
 }
 
@@ -140,6 +169,51 @@ pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
 mod tests {
     use super::*;
     use chrono::{DateTime, Utc};
+
+    // -----------------------------------------------------------------------
+    // format_wire seam tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn format_wire_round_trips_every_format() {
+        for f in [PostFormat::Org, PostFormat::Markdown, PostFormat::Html] {
+            let wire = format_to_wire(&f);
+            assert_eq!(
+                wire_to_format(Some(wire), PostFormat::Markdown),
+                f,
+                "round-trip {wire}"
+            );
+        }
+    }
+
+    #[test]
+    fn wire_to_format_is_lenient() {
+        let d = PostFormat::Html; // distinctive default
+        assert_eq!(wire_to_format(Some("text/org"), d.clone()), PostFormat::Org);
+        assert_eq!(
+            wire_to_format(Some("text/markdown"), d.clone()),
+            PostFormat::Markdown
+        );
+        assert_eq!(
+            wire_to_format(Some("text/markdown; variant=GFM"), d.clone()),
+            PostFormat::Markdown
+        );
+        assert_eq!(
+            wire_to_format(Some("html"), PostFormat::Org),
+            PostFormat::Html
+        );
+        assert_eq!(
+            wire_to_format(Some("xhtml"), PostFormat::Org),
+            PostFormat::Html
+        );
+        assert_eq!(
+            wire_to_format(Some("text/html"), PostFormat::Org),
+            PostFormat::Html
+        );
+        assert_eq!(wire_to_format(Some("text"), d.clone()), d.clone()); // bare text → default
+        assert_eq!(wire_to_format(None, d.clone()), d.clone()); // absent → default
+        assert_eq!(wire_to_format(Some("application/x-weird"), d.clone()), d); // unknown → default
+    }
 
     // -----------------------------------------------------------------------
     // entry_to_post_fields tests
@@ -194,6 +268,42 @@ mod tests {
 
         assert_eq!(fields.format, PostFormat::Markdown);
         assert_eq!(fields.body, "# Markdown");
+    }
+
+    #[test]
+    fn entry_to_post_fields_text_org_is_org() {
+        let xml = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>Test</title>
+  <id>id</id>
+  <updated>2026-05-31T00:00:00Z</updated>
+  <content type="text/org">* Org body</content>
+</entry>"#;
+
+        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        // Default is Markdown, but the explicit media type selects Org.
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+
+        assert_eq!(fields.format, PostFormat::Org);
+        assert_eq!(fields.body, "* Org body");
+    }
+
+    #[test]
+    fn entry_to_post_fields_text_markdown_is_markdown() {
+        let xml = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>Test</title>
+  <id>id</id>
+  <updated>2026-05-31T00:00:00Z</updated>
+  <content type="text/markdown"># Markdown body</content>
+</entry>"#;
+
+        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        // Default is Org, but the explicit media type selects Markdown.
+        let fields = entry_to_post_fields(&entry, PostFormat::Org);
+
+        assert_eq!(fields.format, PostFormat::Markdown);
+        assert_eq!(fields.body, "# Markdown body");
     }
 
     #[test]
@@ -415,7 +525,10 @@ mod tests {
 
         let entry = post_to_entry(&post, "https://example.com");
 
-        assert_eq!(entry.content().unwrap().content_type(), Some("text"));
+        assert_eq!(
+            entry.content().unwrap().content_type(),
+            Some("text/markdown")
+        );
         assert_eq!(entry.content().unwrap().value(), Some("# Markdown Body"));
     }
 
@@ -434,7 +547,7 @@ mod tests {
 
         let entry = post_to_entry(&post, "https://example.com");
 
-        assert_eq!(entry.content().unwrap().content_type(), Some("text"));
+        assert_eq!(entry.content().unwrap().content_type(), Some("text/org"));
         assert_eq!(entry.content().unwrap().value(), Some("* Org Body"));
     }
 

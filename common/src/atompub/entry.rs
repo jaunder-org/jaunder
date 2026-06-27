@@ -20,7 +20,7 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesRef, BytesStart, BytesText, Ev
 use quick_xml::{Reader, Writer};
 
 use super::xml::{write_empty_element, write_link, write_text_element};
-use super::{AtomPubError, APP_NS, ATOM_NS};
+use super::{AtomPubError, APP_NS, ATOM_NS, J_NS};
 
 // ---------------------------------------------------------------------------
 // Draft flag (app:control/app:draft) helpers
@@ -79,6 +79,44 @@ pub fn set_draft(entry: &mut Entry, draft: bool) {
             .or_default()
             .insert("control".to_string(), vec![control]);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Slug marker (j:slug) helpers
+// ---------------------------------------------------------------------------
+
+/// Read the read-only server slug from a `j:slug` extension, if present.
+#[must_use]
+pub fn j_slug(entry: &Entry) -> Option<String> {
+    entry.extensions.values().find_map(|by_local| {
+        by_local
+            .get("slug")
+            .and_then(|exts| exts.first())
+            .and_then(|e| e.value.clone())
+    })
+}
+
+/// Set (idempotently replace) the `j:slug` extension. Emitted on every outgoing
+/// entry; the server never reads an incoming one.
+pub fn set_j_slug(entry: &mut Entry, slug: &str) {
+    // Idempotent replace: drop any existing slug (whatever prefix it was parsed
+    // under) and prune now-empty extension maps, then re-add under the canonical
+    // `j` prefix — so re-setting never leaves a stale or duplicate marker behind.
+    for by_local in entry.extensions.values_mut() {
+        by_local.remove("slug");
+    }
+    entry.extensions.retain(|_, by_local| !by_local.is_empty());
+    let ext = Extension {
+        name: "j:slug".to_string(),
+        value: Some(slug.to_string()),
+        attrs: BTreeMap::new(),
+        children: BTreeMap::new(),
+    };
+    entry
+        .extensions
+        .entry("j".to_string())
+        .or_default()
+        .insert("slug".to_string(), vec![ext]);
 }
 
 // ---------------------------------------------------------------------------
@@ -432,6 +470,9 @@ fn write_entry(writer: &mut Writer<Vec<u8>>, entry: &Entry, declare_namespaces: 
         if draft {
             root.push_attribute(("xmlns:app", APP_NS));
         }
+        if j_slug(entry).is_some() {
+            root.push_attribute(("xmlns:j", J_NS));
+        }
     }
     let _ = writer.write_event(Event::Start(root));
 
@@ -461,6 +502,10 @@ fn write_entry(writer: &mut Writer<Vec<u8>>, entry: &Entry, declare_namespaces: 
         let _ = writer.write_event(Event::Start(BytesStart::new("app:control")));
         write_text_element(writer, "app:draft", "yes");
         let _ = writer.write_event(Event::End(BytesEnd::new("app:control")));
+    }
+    // Read-only server slug (ADR-0023): emitted on every outgoing entry.
+    if let Some(slug) = j_slug(entry) {
+        write_text_element(writer, "j:slug", &slug);
     }
 
     let _ = writer.write_event(Event::End(BytesEnd::new("entry")));
@@ -502,6 +547,9 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> String {
     let mut root = BytesStart::new("feed");
     root.push_attribute(("xmlns", ATOM_NS));
     root.push_attribute(("xmlns:app", APP_NS));
+    // Every embedded entry carries a read-only j:slug (ADR-0023) and is written
+    // with declare_namespaces=false, so the feed root declares xmlns:j for them.
+    root.push_attribute(("xmlns:j", J_NS));
     let _ = writer.write_event(Event::Start(root));
 
     write_text_element(&mut writer, "id", &meta.id);
@@ -731,6 +779,32 @@ mod tests {
             updated: chrono::DateTime::parse_from_rfc3339("2026-01-02T00:00:00Z").unwrap(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn set_and_read_j_slug_round_trips() {
+        let mut entry = sample_entry();
+        set_j_slug(&mut entry, "my-post");
+        assert_eq!(j_slug(&entry), Some("my-post".to_string()));
+    }
+
+    #[test]
+    fn j_slug_is_serialized_with_namespace() {
+        let mut entry = sample_entry();
+        set_j_slug(&mut entry, "my-post");
+        let out = entry_to_xml(&entry);
+        assert!(
+            out.contains(r#"xmlns:j="https://jaunder.org/ns/atompub""#),
+            "out: {out}"
+        );
+        assert!(out.contains("<j:slug>my-post</j:slug>"), "out: {out}");
+    }
+
+    #[test]
+    fn no_j_slug_means_no_namespace_declared() {
+        let entry = sample_entry();
+        let out = entry_to_xml(&entry);
+        assert!(!out.contains("xmlns:j"), "out: {out}");
     }
 
     #[test]
