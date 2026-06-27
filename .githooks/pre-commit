@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
+# Pre-commit gate: full `cargo xtask check` (static + clippy + xtask units + Nix
+# coverage, Fix-mode). check may rewrite files (fmt, clippy, coverage-baseline); if it
+# does, fail-and-restage — abort so the author stages the fixes consciously rather than
+# silently folding them in. Happy path (check already run before committing): the tree
+# is unchanged, so this is a fast cache-hit pass. SKIP_PRE_COMMIT=1 bypasses for WIP.
 set -euo pipefail
 
-echo "--- pre-commit: checking formatting ---"
-leptosfmt -x .direnv -x .git -x target --check '**/*.rs'
-cargo fmt --check
-prettier --check end2end
+if [ "${SKIP_PRE_COMMIT:-0}" = "1" ]; then
+    echo "--- pre-commit: SKIP_PRE_COMMIT=1, skipping ---"
+    exit 0
+fi
 
-echo "--- pre-commit: linting ---"
-cargo clippy --all-targets -- -D warnings
+echo "--- pre-commit: cargo xtask check ---"
+pre=$(git status --porcelain)
+cargo xtask check
+post=$(git status --porcelain)
 
-echo "--- pre-commit: running tests ---"
-cargo nextest run
+if [ "$pre" != "$post" ]; then
+    echo "--- pre-commit: check applied fixes — review, git add, and re-commit ---" >&2
+    exit 1
+fi
 
 echo "--- pre-commit: all checks passed ---"
