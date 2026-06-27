@@ -271,7 +271,7 @@ Import `J_NS` in `service.rs`.
   - Everything from the first kept content line onward is preserved **verbatim**.
   - Strip leading empty lines from the result; trim trailing whitespace. **Idempotent and byte-deterministic.**
 
-- [ ] **Step 1: Write failing unit tests** in `render.rs` `mod tests` (exhaustive — this is the load-bearing, user-flagged surface):
+- [x] **Step 1: Write failing unit tests** in `render.rs` `mod tests` (exhaustive — this is the load-bearing, user-flagged surface):
 ```rust
 #[test]
 fn canon_strips_title_header_keeps_unknown_and_later_heading() {
@@ -321,9 +321,9 @@ fn canon_is_idempotent() {
 
 (Notes for the implementer: `* heading` precedence matches `extract_org_title` — top-level `* ` only, before any body text, and only when no `#+TITLE:` preceded it. Mirror that scanner's structure so the title FOUND and the title STRIPPED can never disagree.)
 
-- [ ] **Step 2: Run → FAIL** — `cargo nextest run -p common canonicalize_org`.
+- [x] **Step 2: Run → FAIL** — `cargo nextest run -p common canonicalize_org`.
 
-- [ ] **Step 3: Implement** `canonicalize_org_body` in `render.rs` — a single line-scanner that mirrors `extract_org_title`'s precedence so the title found and the title stripped never disagree:
+- [x] **Step 3: Implement** `canonicalize_org_body` in `render.rs` — a single line-scanner that mirrors `extract_org_title`'s precedence so the title found and the title stripped never disagree:
 ```rust
 /// Canonicalize an ingested Org body (ADR-0024): remove the body's title-source
 /// line (a `#+TITLE:` header, or a leading top-level `* heading` when there is no
@@ -370,7 +370,7 @@ pub fn canonicalize_org_body(body: &str) -> String {
 ```
 *(The unit tests in Step 1 pin this contract exactly; if a test and this sketch disagree, the tests win — re-read `extract_org_title` (render.rs:149) for the exact `* `/`#+` precedence.)*
 
-- [ ] **Step 4: Apply at the storage seam** in `storage/src/post_service.rs`. In **both** `perform_post_creation` (~307) and `perform_post_update` (~195), after `derive_post_metadata(...)` (which still reads the *original* body for the title) compute the canonical body for Org and use it for render + storage:
+- [x] **Step 4: Apply at the storage seam** in `storage/src/post_service.rs`. In **both** `perform_post_creation` (~307) and `perform_post_update` (~195), after `derive_post_metadata(...)` (which still reads the *original* body for the title) compute the canonical body for Org and use it for render + storage:
 ```rust
 let body = if matches!(format, PostFormat::Org) {
     common::render::canonicalize_org_body(&body)
@@ -380,11 +380,11 @@ let body = if matches!(format, PostFormat::Org) {
 ```
 Place this **before** `render(&body, &format)` / `create_rendered_post(...)` and before building `UpdatePostInput`. (Order matters: derive title first from the original body, then canonicalize.)
 
-- [ ] **Step 5: Storage test** in `post_service.rs` `mod tests` (or `server/tests/storage/storage.rs` if it needs a backend): create an Org post whose body is `"#+TITLE: Hi\n#+FOO: x\n\nHello"`; assert the stored `record.body` has no `#+TITLE:` line, still contains `#+FOO: x` and `Hello`, and `record.title == Some("Hi")`. Add a Markdown control: a Markdown body with a leading `# H1` is stored unchanged (canonicalization is Org-only).
+- [x] **Step 5: Storage test** in `post_service.rs` `mod tests` (or `server/tests/storage/storage.rs` if it needs a backend): create an Org post whose body is `"#+TITLE: Hi\n#+FOO: x\n\nHello"`; assert the stored `record.body` has no `#+TITLE:` line, still contains `#+FOO: x` and `Hello`, and `record.title == Some("Hi")`. Add a Markdown control: a Markdown body with a leading `# H1` is stored unchanged (canonicalization is Org-only).
 
-- [ ] **Step 6: Double-title regression** — add an AtomPub or web test asserting an Org post with `#+TITLE:` renders the title once: the stored body (hence `rendered_html`) no longer contains the title text from the `#+TITLE:` line, while `record.title` carries it. (Web render double-title at `web/src/pages/ui.rs:379–396` is resolved by the stripped body.)
+- [x] **Step 6: Double-title regression** — add an AtomPub or web test asserting an Org post with `#+TITLE:` renders the title once: the stored body (hence `rendered_html`) no longer contains the title text from the `#+TITLE:` line, while `record.title` carries it. (Web render double-title at `web/src/pages/ui.rs:379–396` is resolved by the stripped body.)
 
-- [ ] **Step 7: Gate + commit** — `cargo xtask validate --no-e2e` green; commit `feat(storage): canonicalize ingested Org bodies (strip #+TITLE:, keep the rest) (#71)`.
+- [x] **Step 7: Gate + commit** — `cargo xtask validate --no-e2e` green; commit `feat(storage): canonicalize ingested Org bodies (strip the title source, keep the rest) (#71)`. (Two test-forced refinements to the canonicalize sketch: preserve the blank after a kept header; gate the `* heading` drop on `kept.is_empty()` for idempotency. Added a `perform_post_update` Org-canonicalize test to cover the update-path branch.)
 
 ---
 

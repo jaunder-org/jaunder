@@ -194,6 +194,15 @@ pub async fn perform_post_update(
     let metadata =
         derive_post_metadata(title, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
 
+    // Derive the title from the *original* body above, then canonicalize the stored
+    // Org body (ADR-0024): strip the title-source line, keep everything else. Web and
+    // AtomPub thus converge on one stored body. Non-Org bodies are stored verbatim.
+    let body = if matches!(format, PostFormat::Org) {
+        common::render::canonicalize_org_body(&body)
+    } else {
+        body
+    };
+
     let slug = match slug_override.and_then(common::text::non_empty) {
         Some(raw) => raw
             .to_ascii_lowercase()
@@ -305,6 +314,15 @@ pub async fn perform_post_creation(
     } = input;
     let metadata =
         derive_post_metadata(title, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
+
+    // Derive the title from the *original* body above, then canonicalize the stored
+    // Org body (ADR-0024): strip the title-source line, keep everything else. Web and
+    // AtomPub thus converge on one stored body. Non-Org bodies are stored verbatim.
+    let body = if matches!(format, PostFormat::Org) {
+        common::render::canonicalize_org_body(&body)
+    } else {
+        body
+    };
 
     let slug_seed = match slug_override.and_then(common::text::non_empty) {
         Some(raw) => raw
@@ -648,6 +666,152 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, PerformCreationError::Exhausted(2)));
+    }
+
+    #[tokio::test]
+    async fn test_perform_post_creation_canonicalizes_org_body() {
+        let (_pool, storage) = setup_test_db().await;
+        // Title is derived from the original body's #+TITLE:, then the stored body is
+        // canonicalized: the #+TITLE: line is stripped while #+FOO: and content stay.
+        let record = perform_post_creation(
+            &storage,
+            PostCreation {
+                user_id: 1,
+                body: "#+TITLE: Hi\n#+FOO: x\n\nHello".to_owned(),
+                title: None,
+                format: PostFormat::Org,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(record.title.as_deref(), Some("Hi"));
+        assert!(
+            !record.body.contains("#+TITLE:"),
+            "stored body still has the title header: {:?}",
+            record.body
+        );
+        assert!(record.body.contains("#+FOO: x"), "body: {:?}", record.body);
+        assert!(record.body.contains("Hello"), "body: {:?}", record.body);
+    }
+
+    #[tokio::test]
+    async fn test_perform_post_update_canonicalizes_org_body() {
+        let (_pool, storage) = setup_test_db().await;
+        // Canonicalization runs on the update path too: a re-saved Org body has its
+        // #+TITLE: stripped while an unrecognized #+FOO: and the content survive.
+        let created = perform_post_creation(
+            &storage,
+            PostCreation {
+                user_id: 1,
+                body: "#+TITLE: First\n\noriginal".to_owned(),
+                title: None,
+                format: PostFormat::Org,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+            },
+        )
+        .await
+        .unwrap();
+
+        let record = perform_post_update(
+            &storage,
+            PostUpdate {
+                post_id: created.post_id,
+                editor_user_id: 1,
+                body: "#+TITLE: Second\n#+FOO: keep\n\nupdated".to_owned(),
+                title: None,
+                format: PostFormat::Org,
+                slug_override: None,
+                publish: PublishUpdate::Publish { at: None },
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(record.title.as_deref(), Some("Second"));
+        assert!(
+            !record.body.contains("#+TITLE:"),
+            "stored body still has the title header: {:?}",
+            record.body
+        );
+        assert!(
+            record.body.contains("#+FOO: keep"),
+            "body: {:?}",
+            record.body
+        );
+        assert!(record.body.contains("updated"), "body: {:?}", record.body);
+    }
+
+    #[tokio::test]
+    async fn test_perform_post_creation_markdown_body_is_not_canonicalized() {
+        let (_pool, storage) = setup_test_db().await;
+        // Canonicalization is Org-only: a Markdown body with a leading `# H1` is
+        // stored verbatim (the `# H1` is not stripped).
+        let record = perform_post_creation(
+            &storage,
+            PostCreation {
+                user_id: 1,
+                body: "# H1\n\nBody text".to_owned(),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(record.body, "# H1\n\nBody text");
+    }
+
+    #[tokio::test]
+    async fn test_perform_post_creation_org_title_rendered_once() {
+        let (_pool, storage) = setup_test_db().await;
+        // Double-title regression: the title text from the #+TITLE: line must not
+        // survive into the stored body (hence rendered_html), so the page chrome's
+        // title is the only place it appears. record.title still carries it.
+        let record = perform_post_creation(
+            &storage,
+            PostCreation {
+                user_id: 1,
+                body: "#+TITLE: Distinct Headline\n\nParagraph body".to_owned(),
+                title: None,
+                format: PostFormat::Org,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(record.title.as_deref(), Some("Distinct Headline"));
+        assert!(
+            !record.body.contains("Distinct Headline"),
+            "stored body still carries the title text: {:?}",
+            record.body
+        );
+        assert!(
+            !record.rendered_html.contains("Distinct Headline"),
+            "rendered html double-renders the title: {:?}",
+            record.rendered_html
+        );
     }
 
     #[test]
