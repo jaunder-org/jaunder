@@ -226,7 +226,7 @@ if let Some(slug) = j_slug(entry) {
 - Consumes: `J_NS` (Task 2).
 - Produces: the service `<app:service>` root declares `xmlns:j` and contains `<j:extension version="1" features="format-media-type slug"/>`.
 
-- [ ] **Step 1: Write failing unit test** in `service.rs` `mod tests` (extend `service_document_lists_two_collections` or add a new test):
+- [x] **Step 1: Write failing unit test** in `service.rs` `mod tests` (extend `service_document_lists_two_collections` or add a new test):
 ```rust
 #[test]
 fn service_document_advertises_jaunder_extension() {
@@ -237,9 +237,9 @@ fn service_document_advertises_jaunder_extension() {
 ```
 (If the existing test builds the doc inline, factor a small local `sample_doc()` or inline the same construction.)
 
-- [ ] **Step 2: Run → FAIL** — `cargo nextest run -p common service_document_advertises`.
+- [x] **Step 2: Run → FAIL** — `cargo nextest run -p common service_document_advertises`.
 
-- [ ] **Step 3: Implement** in `render_service_document`: add `root.push_attribute(("xmlns:j", J_NS));` after the `xmlns:app` push; and between the `app:workspace` open and the collection writes, emit the marker:
+- [x] **Step 3: Implement** in `render_service_document`: add `root.push_attribute(("xmlns:j", J_NS));` after the `xmlns:app` push; and between the `app:workspace` open and the collection writes, emit the marker:
 ```rust
 let mut ext = BytesStart::new("j:extension");
 ext.push_attribute(("version", "1"));
@@ -248,9 +248,9 @@ let _ = writer.write_event(Event::Empty(ext));
 ```
 Import `J_NS` in `service.rs`.
 
-- [ ] **Step 4: Run unit test → PASS**; add/extend a server integration assertion in `atompub_service.rs` (`service_document_returns_200_with_app_password`) that the returned doc contains `j:extension` and `features="format-media-type slug"`.
+- [x] **Step 4: Run unit test → PASS**; add/extend a server integration assertion in `atompub_service.rs` (`service_document_returns_200_with_app_password`) that the returned doc contains `j:extension` and `features="format-media-type slug"`.
 
-- [ ] **Step 5: Gate + commit** — `cargo xtask validate --no-e2e` green; commit `feat(atompub): advertise j:extension capability in the service document (#71)`.
+- [x] **Step 5: Gate + commit** — `cargo xtask validate --no-e2e` green; commit `feat(atompub): advertise j:extension capability in the service document (#71)`.
 
 ---
 
