@@ -1,15 +1,55 @@
 #!/usr/bin/env bash
+# Pre-commit gate — two passes, and yes, this is a deliberate hack. Read on.
+#
+# What we WANT: every commit is formatting-clean and passes the full coverage/test
+# gate, so history stays green commit-by-commit.
+#
+# Why not just `cargo xtask check` (the obvious one)? `check` runs the Nix coverage
+# step in *Fix* mode, which regenerates `coverage-baseline.json` and `crap-manifest.json`
+# on essentially every run (the manifests are not yet idempotent — see #7 and the
+# coverage auto-heal work, #86). A pre-commit hook that runs Fix-mode coverage therefore
+# rewrites those manifests every time, so the "did the gate change anything?" check below
+# would fire on EVERY commit, and we'd be entangling the hook with regen behavior the
+# coverage work owns. Not our lane, not right now.
+#
+# So we split the gate into two passes that never touch the manifests:
+#   1. `check --no-test` — fixes fmt/leptosfmt/prettier and runs clippy. It SKIPS the
+#      Nix coverage step, so it cannot churn the coverage manifests. If it changed
+#      anything (i.e. it reformatted staged code), we fail-and-restage: abort so the
+#      author consciously `git add`s the fix rather than us silently folding it in.
+#      The porcelain before/after diff is safe here precisely because `--no-test` means
+#      the only thing that can change is real formatting, never manifest churn.
+#   2. `cargo xtask validate --no-e2e --allow-dirty` — runs the real coverage/test gate
+#      in *Check* mode, which is verify-only and never mutates the tree (no churn).
+#      `--allow-dirty` is required because at pre-commit time the staged commit content
+#      itself makes the tree "dirty" by validate's strict definition; validate's
+#      clean-tree refusal is meant for *pre-push* (where the tree really is clean), not
+#      here. So we explicitly opt out of the refusal and do our own fix-detection above.
+#
+# Cost of the hack: fmt + clippy run twice (Fix in pass 1, Check in pass 2). Coverage,
+# the expensive part, runs once. Once coverage auto-healing lands (#86) and `check`
+# becomes idempotent on a clean tree, this whole file collapses back to a single
+# `cargo xtask check` with the porcelain-diff fail-and-restage.
+#
+# SKIP_PRE_COMMIT=1 bypasses for WIP commits.
 set -euo pipefail
 
-echo "--- pre-commit: checking formatting ---"
-leptosfmt -x .direnv -x .git -x target --check '**/*.rs'
-cargo fmt --check
-prettier --check end2end
+if [ "${SKIP_PRE_COMMIT:-0}" = "1" ]; then
+    echo "--- pre-commit: SKIP_PRE_COMMIT=1, skipping ---"
+    exit 0
+fi
 
-echo "--- pre-commit: linting ---"
-cargo clippy --all-targets -- -D warnings
+echo "--- pre-commit: cargo xtask check --no-test (fix formatting) ---"
+pre=$(git status --porcelain)
+cargo xtask check --no-test
+post=$(git status --porcelain)
 
-echo "--- pre-commit: running tests ---"
-cargo nextest run
+if [ "$pre" != "$post" ]; then
+    echo "--- pre-commit: check applied fixes — review, git add, and re-commit ---" >&2
+    exit 1
+fi
+
+echo "--- pre-commit: cargo xtask validate --no-e2e --allow-dirty (verify gate) ---"
+cargo xtask validate --no-e2e --allow-dirty
 
 echo "--- pre-commit: all checks passed ---"
