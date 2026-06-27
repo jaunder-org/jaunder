@@ -503,13 +503,7 @@ pub async fn update_post(
 #[server(endpoint = "/default_audience_selection")]
 pub async fn default_audience_selection() -> WebResult<AudienceSelection> {
     boundary!("default_audience_selection", {
-        // Read context BEFORE the first `.await`: a Resource resolved during SSR
-        // is polled by the renderer and can resume on a worker where the Leptos
-        // task-local context is gone, so a `use_context` placed after an await
-        // returns `None` (mirrors `get_registration_policy`, which reads context
-        // first). `require_auth` itself reads its `Parts` context before awaiting.
-        let site_config = use_context::<Arc<dyn SiteConfigStorage>>()
-            .ok_or_else(|| InternalError::server_message("SiteConfigStorage not in context"))?;
+        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         require_auth().await?;
         let default = site_config
             .get_default_audience()
@@ -526,9 +520,7 @@ pub async fn default_audience_selection() -> WebResult<AudienceSelection> {
 #[server(endpoint = "/post_audience_selection")]
 pub async fn post_audience_selection(post_id: i64) -> WebResult<AudienceSelection> {
     boundary!("post_audience_selection", {
-        // Read context before the first `.await` (see `default_audience_selection`).
-        let posts = use_context::<Arc<dyn PostStorage>>()
-            .ok_or_else(|| InternalError::server_message("PostStorage not in context"))?;
+        let posts = expect_context::<Arc<dyn PostStorage>>();
         let auth = require_auth().await.map_err(private_post_not_found_error)?;
 
         let post = posts
