@@ -270,10 +270,12 @@ pub async fn collection_post(
     let default_format =
         storage::get_default_post_format(user_config.as_ref(), auth_user.user_id).await?;
     let fields = entry_to_post_fields(&entry, default_format);
+    // Non-draft entries honor the wire `<published>`: a future time schedules
+    // the post, a past time backdates it; absent falls back to "now".
     let published_at = if fields.is_draft {
         None
     } else {
-        Some(chrono::Utc::now())
+        Some(fields.published.unwrap_or_else(chrono::Utc::now))
     };
 
     // AtomPub has no audience picker; new posts adopt the instance default.
@@ -377,12 +379,15 @@ pub async fn member_put(
             title: fields.title.as_deref(),
             format: fields.format,
             slug_override: None,
-            // Task 5 will derive `at` from the wire `<published>`; for now a
-            // non-draft publishes with no explicit timestamp.
+            // A non-draft entry publishes at the wire `<published>` timestamp
+            // (future = scheduled, past = backdated, absent = keep/now); a draft
+            // clears publication.
             publish: if fields.is_draft {
                 storage::PublishUpdate::Unpublish
             } else {
-                storage::PublishUpdate::Publish { at: None }
+                storage::PublishUpdate::Publish {
+                    at: fields.published,
+                }
             },
             summary: fields.summary,
             audiences,

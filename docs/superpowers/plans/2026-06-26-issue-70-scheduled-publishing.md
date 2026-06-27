@@ -315,7 +315,7 @@ where `$U` = `unpublish` (bool), `$E` = `explicit_at` (`Option<DateTime<Utc>>`),
 
 Semantics: **create** — draft entry → `published_at = None`; non-draft with `<published>` → that timestamp (future = scheduled, past = backdated); non-draft without `<published>` → `Utc::now()`. **update** — draft entry → `PublishUpdate::Unpublish`; non-draft → `PublishUpdate::Publish { at: fields.published }`.
 
-- [ ] **Step 1: Write the failing tests** in `server/tests/atompub/atompub_posts.rs` (one common test, both backends; use the existing `entry_xml` builder (487) and `make_app`/`basic_header`/`seed_alice` helpers). The `entry_xml` builder may need an optional `<published>` argument — add it if absent:
+- [x] **Step 1: Write the failing tests** in `server/tests/atompub/atompub_posts.rs` (one common test, both backends; use the existing `entry_xml` builder (487) and `make_app`/`basic_header`/`seed_alice` helpers). The `entry_xml` builder may need an optional `<published>` argument — add it if absent:
 
 ```rust
 #[apply(backends)]
@@ -358,11 +358,11 @@ async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) 
 
 Keep the existing `create_draft_entry_is_unpublished` (atompub_posts.rs:978) passing unchanged.
 
-- [ ] **Step 2: Run them, verify they fail** — `cd <worktree> && cargo nextest run -p jaunder -E 'test(create_with_future_published) + test(create_with_past_published)'` → FAIL.
+- [x] **Step 2: Run them, verify they fail** — `cd <worktree> && cargo nextest run -p jaunder -E 'test(create_with_future_published) + test(create_with_past_published)'` → FAIL.
 
-- [ ] **Step 3: Implement parsing.** In `server/src/atompub/mapping.rs`: add `published: Option<DateTime<Utc>>` to `PostFields`; in `entry_to_post_fields` read the entry's `<published>` (the `atom_syndication`/`feed-rs` entry type already used; map `published` to `DateTime<Utc>`), set `None` when absent.
+- [x] **Step 3: Implement parsing.** In `server/src/atompub/mapping.rs`: add `published: Option<DateTime<Utc>>` to `PostFields`; in `entry_to_post_fields` read the entry's `<published>` (the `atom_syndication`/`feed-rs` entry type already used; map `published` to `DateTime<Utc>`), set `None` when absent.
 
-- [ ] **Step 4: Implement create.** In `collection_post` replace the `Utc::now()` stamp (274-278):
+- [x] **Step 4: Implement create.** In `collection_post` replace the `Utc::now()` stamp (274-278):
 
 ```rust
 let published_at = if fields.is_draft {
@@ -372,7 +372,7 @@ let published_at = if fields.is_draft {
 };
 ```
 
-- [ ] **Step 5: Implement update.** In `member_put` (381) build the `PublishUpdate`:
+- [x] **Step 5: Implement update.** In `member_put` (381) build the `PublishUpdate`:
 
 ```rust
 publish: if fields.is_draft {
@@ -382,9 +382,9 @@ publish: if fields.is_draft {
 },
 ```
 
-- [ ] **Step 6: Run tests + gate** — the new tests + `create_draft_entry_is_unpublished` → PASS both backends; `cargo xtask check --no-test` → clean.
+- [x] **Step 6: Run tests + gate** — the new tests + `create_draft_entry_is_unpublished` → PASS both backends; `cargo xtask check --no-test` → clean.
 
-- [ ] **Step 7: Commit** — `feat(atompub): honor entry <published> on create and update (#70)`.
+- [x] **Step 7: Commit** — `feat(atompub): honor entry <published> on create and update (#70)`.
 
 ---
 
