@@ -13,6 +13,7 @@ This is the definitive working guide for both human contributors and coding agen
 - `flake.nix`: development environment, comprehensive test environment, and PostgreSQL testing
 - `common/`: code shared between other packages
 - `end2end/`: Playwright end-to-end tests
+- `elisp/`: Emacs blogging client (`jaunder.el`), ERT-tested
 - `hydrate/`: frontend driver
 - `storage/`: storage traits, records, migrations, and backend-specific storage support
 - `server/`: backend, CLI, server runner, and integration tests
@@ -105,10 +106,15 @@ The driver for all checks is `cargo xtask`. The host runs only the static checks
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that contain Leptos `view!` macros.
 - `prettier --check end2end` checks Playwright and other frontend test assets.
+- `elisp-fmt` and `ert` run the elisp subproject's formatter and ERT suite under `emacs --batch` (see the Elisp subproject section below).
 - `cargo clippy --all-targets -- -D warnings` checks the whole workspace, including test, bench, and example targets, for lint errors.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
 - For e2e perf diagnostics, set `JAUNDER_E2E_WARMUP=1` before `playwright test` to warm each test page context before test instrumentation; tune with `JAUNDER_E2E_WARMUP_URL` and `JAUNDER_E2E_WARMUP_TIMEOUT_MS`.
 - In hydration-heavy e2e tests, use `hydrationHeavyTimeoutMs(testInfo, chromiumBudgetMs)` for whole-test budgets and `hydrationHeavyFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)` for first navigation waits (see [ADR-0012](docs/adr/0012-environment-aware-timeouts.md)).
+
+### Elisp subproject (`elisp/`)
+
+The Emacs client lives in `elisp/` (see [`elisp/README.md`](elisp/README.md)). Its ERT suite and formatter run in the verify ladder: `ert` and `elisp-fmt` are `cargo xtask check`/`validate` steps, mirrored by the `ert-check` / `elisp-fmt-check` Nix checks. prettier cannot format Emacs Lisp, so `elisp-fmt` uses built-in `emacs-lisp-mode` indentation (auto-fix under `check`, verify under `validate`). elisp is interim-exempt from the Rust coverage gate (cargo-llvm-cov is Rust-only; follow-on #82) — instead, write an ERT test for every pure mapping/transform function. Rationale: [ADR-0030](docs/adr/0030-elisp-separately-tested-subproject.md).
 
 ### Observability and Performance Analysis
 
@@ -215,6 +221,8 @@ Some areas have inherent host-side coverage gaps and should not be force-fitted 
 - `checks.x86_64-linux.rustfmt` — rustfmt
 - `checks.x86_64-linux.leptosfmt-check` — leptosfmt
 - `checks.x86_64-linux.prettier-check` — prettier for `end2end/`
+- `checks.x86_64-linux.ert-check` — ERT suite for `elisp/`
+- `checks.x86_64-linux.elisp-fmt-check` — emacs-lisp indentation check for `elisp/`
 - `checks.x86_64-linux.deny` — cargo-deny
 - `checks.x86_64-linux.e2e-sqlite` — Playwright end-to-end flow against SQLite with `JAUNDER_E2E_WARMUP=1` (default)
 - `checks.x86_64-linux.e2e-postgres` — Playwright end-to-end flow against PostgreSQL with `JAUNDER_E2E_WARMUP=1` (default)
