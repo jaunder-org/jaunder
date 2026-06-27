@@ -26,7 +26,7 @@ use {
     crate::error::InternalError,
     crate::feed_events::enqueue_feed_events,
     crate::viewer::viewer_identity,
-    chrono::{NaiveDate, Utc},
+    chrono::{DateTime, NaiveDate, Utc},
     common::{slug::Slug, tag::Tag, username::Username},
     std::{collections::BTreeSet, sync::Arc},
     storage::{
@@ -188,13 +188,36 @@ pub struct PostResponse {
     pub summary: Option<String>,
 }
 
+/// Parses the wire `publish_at` (an optional RFC3339 UTC instant from the
+/// compose/editor datetime control) into a `DateTime<Utc>`. An absent or
+/// blank value is `None`; a present-but-unparseable value is a validation
+/// error.
+#[cfg(feature = "ssr")]
+fn parse_publish_at(raw: Option<&str>) -> crate::error::InternalResult<Option<DateTime<Utc>>> {
+    raw.and_then(common::text::non_empty)
+        .map(|s| {
+            DateTime::parse_from_rfc3339(s)
+                .map(|dt| dt.with_timezone(&Utc))
+                .map_err(|e| InternalError::validation(format!("invalid publish_at: {e}")))
+        })
+        .transpose()
+}
+
 /// Creates a post for the authenticated user.
+///
+/// `publish_at` is an optional RFC3339 UTC instant supplied by the compose
+/// form's datetime control. It is carried as a `String` (not `DateTime<Utc>`)
+/// because `chrono` is an `ssr`-only dependency here and the server-fn
+/// signature must also compile for the wasm client. The wire is UTC; the
+/// browser converts the author's local `datetime-local` value before sending.
+#[allow(clippy::too_many_arguments)]
 #[server(endpoint = "/create_post", input = Json)]
 pub async fn create_post(
     body: String,
     format: String,
     slug_override: Option<String>,
     publish: bool,
+    publish_at: Option<String>,
     tags: Option<Vec<String>>,
     summary: Option<String>,
     audience: Option<AudienceSelection>,
@@ -209,7 +232,16 @@ pub async fn create_post(
         let format = format
             .parse::<PostFormat>()
             .map_err(|e| InternalError::validation(e.to_string()))?;
-        let published_at = publish.then(Utc::now);
+        // Publish + a supplied time = scheduled (future) or backdated (past);
+        // publish + no time = live now; not publishing = draft (NULL).
+        let published_at = if publish {
+            Some(match parse_publish_at(publish_at.as_deref())? {
+                Some(at) => at,
+                None => Utc::now(),
+            })
+        } else {
+            None
+        };
         let normalized_summary = summary.and_then(common::text::non_empty_owned);
         let audiences = audience_targets_or_public(audience.as_ref());
 
@@ -365,6 +397,9 @@ pub async fn update_post(
     format: String,
     slug_override: Option<String>,
     publish: bool,
+    // Optional RFC3339 UTC instant from the editor's datetime control. See
+    // `create_post` for why this crosses the boundary as a `String`.
+    publish_at: Option<String>,
     tags: Option<Vec<String>>,
     summary: Option<String>,
     audience: Option<AudienceSelection>,
@@ -398,6 +433,10 @@ pub async fn update_post(
         let normalized_summary = summary.and_then(common::text::non_empty_owned);
         let audiences = audience_targets_or_public(audience.as_ref());
 
+        // A supplied time schedules/backdates; `None` lets storage keep an
+        // existing timestamp or stamp `now` for a not-yet-published post.
+        let publish_at = parse_publish_at(publish_at.as_deref())?;
+
         let record = perform_post_update(
             posts.as_ref(),
             PostUpdate {
@@ -408,7 +447,7 @@ pub async fn update_post(
                 format,
                 slug_override: slug_override.as_deref(),
                 publish: if publish {
-                    PublishUpdate::Publish { at: None }
+                    PublishUpdate::Publish { at: publish_at }
                 } else {
                     PublishUpdate::Unpublish
                 },

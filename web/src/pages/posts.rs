@@ -7,8 +7,8 @@ use crate::{
     pages::{
         signal_read::read_signal,
         ui::{
-            AudiencePicker, ComposerFields, PostCard, PostCreateForm, PostDisplay, TagContext,
-            TagInput, Topbar,
+            local_datetime_to_utc_rfc3339, AudiencePicker, ComposerFields, PostCard,
+            PostCreateForm, PostDisplay, TagContext, TagInput, Topbar,
         },
         MediaPanel,
     },
@@ -563,6 +563,9 @@ pub fn EditPostPage() -> impl IntoView {
     let format = RwSignal::new("markdown".to_string());
     let slug_override = RwSignal::new(String::new());
     let summary = RwSignal::new(String::new());
+    // Optional scheduled-publish time for an unpublished/draft post (naive
+    // local wall-clock from a `datetime-local` control); empty publishes now.
+    let publish_at = RwSignal::new(String::new());
     let post_tags: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());
     // Pre-selected with the post's current targeting (defaults to Public until
     // it resolves).
@@ -634,6 +637,7 @@ pub fn EditPostPage() -> impl IntoView {
                                     format: format.get(),
                                     slug_override: slug_override_arg,
                                     publish,
+                                    publish_at: local_datetime_to_utc_rfc3339(&publish_at.get()),
                                     tags: Some(
                                         post_tags.get().into_iter().map(|t| t.display).collect(),
                                     ),
@@ -674,6 +678,22 @@ pub fn EditPostPage() -> impl IntoView {
                                                             prop:value=slug_override
                                                             on:input=move |ev| {
                                                                 slug_override.set(event_target_value(&ev));
+                                                            }
+                                                        />
+                                                    </div>
+                                                    // Optional schedule for a draft: a future
+                                                    // time schedules it; empty publishes now.
+                                                    <div style="margin-top:10px">
+                                                        <label class="j-field-label" for="edit-publish-at">
+                                                            "Publish at (optional)"
+                                                        </label>
+                                                        <input
+                                                            id="edit-publish-at"
+                                                            type="datetime-local"
+                                                            class="j-field-val"
+                                                            prop:value=publish_at
+                                                            on:input=move |ev| {
+                                                                publish_at.set(event_target_value(&ev));
                                                             }
                                                         />
                                                     </div>

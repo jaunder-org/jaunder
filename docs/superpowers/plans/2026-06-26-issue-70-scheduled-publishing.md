@@ -399,7 +399,7 @@ publish: if fields.is_draft {
 - Consumes: `PublishUpdate` (Task 4); storage creation already accepts `published_at: Option<DateTime<Utc>>`.
 - Produces: `create_post`/`update_post` gain `publish_at: Option<DateTime<Utc>>`; when publishing, `published_at = publish_at.or(Some(now))` (a supplied future time schedules; a supplied past time backdates; absent = now).
 
-- [ ] **Step 1: Write the failing server-fn test** in `server/tests/web/web_posts.rs`:
+- [x] **Step 1: Write the failing server-fn test** in `server/tests/web/web_posts.rs`:
 
 ```rust
 #[apply(backends)]
@@ -423,15 +423,15 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
 
 (Adapt to the actual server-fn test harness shape in `web_posts.rs`.)
 
-- [ ] **Step 2: Run it, verify it fails** — `cd <worktree> && cargo nextest run -p jaunder create_post_with_future_publish_at` → FAIL (no `publish_at` param).
+- [x] **Step 2: Run it, verify it fails** — `cd <worktree> && cargo nextest run -p jaunder create_post_with_future_publish_at` → FAIL (no `publish_at` param).
 
-- [ ] **Step 3: Implement the server fns.** Add `publish_at: Option<DateTime<Utc>>` to `create_post` (189) and `update_post` (345). `create_post`: `let published_at = publish.then(|| publish_at.unwrap_or_else(Utc::now));`. `update_post`: `publish: if publish { PublishUpdate::Publish { at: publish_at } } else { PublishUpdate::Unpublish }`. Read handlers that call the Task-2 reads pass `Utc::now()`.
+- [x] **Step 3: Implement the server fns.** Add `publish_at: Option<DateTime<Utc>>` to `create_post` (189) and `update_post` (345). NOTE: implemented as `publish_at: Option<String>` (RFC3339 UTC) — `chrono` is an `ssr`-only dep here, so a `DateTime<Utc>` in the server-fn signature would not compile for the wasm client. Parsed server-side via a new `parse_publish_at` helper. `create_post`: `let published_at = publish.then(|| publish_at.unwrap_or_else(Utc::now));`. `update_post`: `publish: if publish { PublishUpdate::Publish { at: publish_at } } else { PublishUpdate::Unpublish }`. Read handlers that call the Task-2 reads pass `Utc::now()`.
 
-- [ ] **Step 4: Implement the UI control.** In the editor form (`web/src/pages/ui.rs`) add an optional `datetime-local` input ("Publish at (optional)"). On submit, interpret the local value as the author's local time, convert to UTC, and pass as `publish_at`; leaving it empty sends `None` (publish-now on Publish). Display existing scheduled times in local time when editing. Keep "Save draft" = `publish: false`.
+- [x] **Step 4: Implement the UI control.** In the editor form (`web/src/pages/ui.rs`) add an optional `datetime-local` input ("Publish at (optional)"). Added to the non-compact compose form (`PostCreateForm`) and the draft branch of `EditPostPage`. Local→UTC conversion via a new `local_datetime_to_utc_rfc3339` helper using `js_sys::Date` (wasm-only dep); empty input → `None`. On submit, interpret the local value as the author's local time, convert to UTC, and pass as `publish_at`; leaving it empty sends `None` (publish-now on Publish). Display existing scheduled times in local time when editing. Keep "Save draft" = `publish: false`.
 
-- [ ] **Step 5: Run test + gate** — `cargo nextest run -p jaunder create_post_with_future_publish_at` → PASS; `cargo xtask check --no-test` → clean.
+- [x] **Step 5: Run test + gate** — `cargo nextest run -p jaunder create_post_with_future_publish_at` → PASS (also `create_post_publish_without_publish_at_is_live_now`); `cargo xtask check --no-test` → clean.
 
-- [ ] **Step 6: Commit** — `feat(web): add a publish-at datetime control to the compose form (#70)`.
+- [x] **Step 6: Commit** — `feat(web): add a publish-at datetime control to the compose form (#70)`. (Wire type is `Option<String>` RFC3339, not `Option<DateTime<Utc>>` — chrono is ssr-only in the web crate; browser converts local→UTC via js-sys. Coverage re-anchor accepts 29 page-component/wasm-only render lines in `web/src/pages/{posts,ui}.rs` — auto-approved per policy.)
 
 ---
 

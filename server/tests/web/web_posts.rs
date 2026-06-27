@@ -1595,6 +1595,144 @@ async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backen
     );
 }
 
+// A future `publish_at` on create schedules the post: storage records the exact
+// future instant and the post stays off the public timeline until then (#70).
+#[apply(backends)]
+#[tokio::test]
+async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backend) {
+    use chrono::TimeZone;
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
+    let cookie = format!("session={token}");
+
+    let future = chrono::Utc.with_ymd_and_hms(2099, 1, 1, 0, 0, 0).unwrap();
+    let payload = serde_json::json!({
+        "body": "scheduled body",
+        "format": "markdown",
+        "publish": true,
+        "publish_at": future.to_rfc3339(),
+    });
+    let (status, body) = post_json(
+        Arc::clone(&state),
+        "/api/create_post",
+        payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let record = state
+        .posts
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
+        .await
+        .unwrap()
+        .expect("post should exist");
+    assert_eq!(record.published_at, Some(future));
+
+    // The scheduled post is invisible on the public timeline at "now".
+    let published = state
+        .posts
+        .list_published(
+            None,
+            50,
+            &common::visibility::ViewerIdentity::Anonymous,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !published.iter().any(|p| p.post_id == created.post_id),
+        "scheduled post must not appear in the public timeline"
+    );
+}
+
+// Publishing without a `publish_at` goes live immediately: the post is stamped
+// ~now and appears on the public timeline (#70).
+#[apply(backends)]
+#[tokio::test]
+async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let user_id = state
+        .users
+        .create_user(
+            &"author".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
+    let cookie = format!("session={token}");
+
+    let (status, body) = create_post_json(
+        Arc::clone(&state),
+        "live now body",
+        "markdown",
+        None,
+        true,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+
+    let record = state
+        .posts
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
+        .await
+        .unwrap()
+        .expect("post should exist");
+    let published_at = record
+        .published_at
+        .expect("published post has published_at");
+    let now = chrono::Utc::now();
+    assert!(
+        (now - published_at).num_seconds().abs() < 60,
+        "publish-now should stamp ~now, got {published_at}"
+    );
+
+    let published = state
+        .posts
+        .list_published(
+            None,
+            50,
+            &common::visibility::ViewerIdentity::Anonymous,
+            now,
+        )
+        .await
+        .unwrap();
+    assert!(
+        published.iter().any(|p| p.post_id == created.post_id),
+        "publish-now post must appear in the public timeline"
+    );
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Backend) {

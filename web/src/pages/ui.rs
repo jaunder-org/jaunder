@@ -313,6 +313,35 @@ pub(crate) fn format_post_time(ts: &str) -> String {
     }
 }
 
+/// Converts a `datetime-local` input value — a naive local wall-clock such as
+/// "2026-07-01T13:30" — into a UTC RFC3339 instant string for the server.
+/// Returns `None` for an empty/whitespace input (i.e. publish-now).
+///
+/// The browser's `Date` does the local→UTC conversion so it honors the
+/// author's timezone and DST. Form dispatch is client-only, so the non-wasm
+/// build only needs this to compile (the stub is never executed there).
+#[allow(clippy::must_use_candidate)]
+pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
+    let trimmed = local.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        // `new Date("YYYY-MM-DDTHH:MM")` (time present, no offset) is parsed as
+        // local time per ECMAScript; `toISOString()` re-renders it in UTC.
+        let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(trimmed));
+        if date.get_time().is_nan() {
+            return None;
+        }
+        date.to_iso_string().as_string()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Some(trimmed.to_string())
+    }
+}
+
 #[allow(clippy::needless_pass_by_value)]
 #[allow(clippy::must_use_candidate)]
 #[component]
@@ -606,6 +635,11 @@ pub fn PostCreateForm(
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
     let summary = RwSignal::new(String::new());
+    // Optional scheduled-publish time (naive local wall-clock from a
+    // `datetime-local` control); empty = publish now / draft. Only the
+    // non-compact form renders the control; the compact composer leaves it
+    // empty (publish-now).
+    let publish_at = RwSignal::new(String::new());
     let tags: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());
     // A new post starts at the site-wide default audience; default to Public
     // until that resolves.
@@ -634,6 +668,7 @@ pub fn PostCreateForm(
                 on_success.run(created);
                 body.set(String::new());
                 summary.set(String::new());
+                publish_at.set(String::new());
                 tags.set(Vec::new());
             }
         });
@@ -651,6 +686,7 @@ pub fn PostCreateForm(
                 format: format.get(),
                 slug_override: None,
                 publish: false,
+                publish_at: local_datetime_to_utc_rfc3339(&publish_at.get()),
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
                 summary: Some(summary.get()),
                 audience: Some(audience.get()),
@@ -662,6 +698,7 @@ pub fn PostCreateForm(
                 format: format.get(),
                 slug_override: None,
                 publish: true,
+                publish_at: local_datetime_to_utc_rfc3339(&publish_at.get()),
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
                 summary: Some(summary.get()),
                 audience: Some(audience.get()),
@@ -767,6 +804,7 @@ pub fn PostCreateForm(
                 format: format.get(),
                 slug_override,
                 publish,
+                publish_at: local_datetime_to_utc_rfc3339(&publish_at.get()),
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
                 summary: Some(summary.get()),
                 audience: Some(audience.get()),
@@ -823,6 +861,20 @@ pub fn PostCreateForm(
                         </div>
                         <div style="margin-top:10px">
                             <AudiencePicker selection=audience />
+                        </div>
+                        // Optional schedule: a future time schedules the post;
+                        // a past time backdates it; empty publishes immediately.
+                        <div style="margin-top:10px">
+                            <label class="j-field-label" for="compose-publish-at">
+                                "Publish at (optional)"
+                            </label>
+                            <input
+                                id="compose-publish-at"
+                                type="datetime-local"
+                                class="j-field-val"
+                                prop:value=publish_at
+                                on:input=move |ev| publish_at.set(event_target_value(&ev))
+                            />
                         </div>
                         <div class="j-seg" style="margin-top:10px">
                             <button
