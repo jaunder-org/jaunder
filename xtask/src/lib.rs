@@ -35,11 +35,14 @@ pub enum Command {
     },
     /// Full gate (never mutates the tree): static + clippy + the host xtask unit
     /// suite (verify-only) + the Nix coverage check + the e2e VMs. `--no-e2e` skips
-    /// the e2e VMs.
+    /// the e2e VMs. Refuses a dirty working tree unless `--allow-dirty`.
     Validate {
         /// Skip the e2e VM checks — static + clippy + xtask tests + coverage only.
         #[arg(long)]
         no_e2e: bool,
+        /// Run even when the working tree is dirty (skip the clean-tree precheck).
+        #[arg(long)]
+        allow_dirty: bool,
     },
     /// Regenerate the accepted-uncovered baseline (`coverage-baseline.json`)
     /// from a coverage check's `coverage-report.txt`. One-shot, hidden helper.
@@ -93,10 +96,22 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             finalize(&mut result, start);
             Ok(result)
         }
-        Command::Validate { no_e2e } => {
+        Command::Validate {
+            no_e2e,
+            allow_dirty,
+        } => {
             let sh = xshell::Shell::new()?;
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("validate");
+            // Clean-tree backstop: refuse a dirty tree so what is measured equals the
+            // committed tip (== what CI sees). Fail fast before the expensive steps.
+            let precheck = clean_tree_precheck(&sh, allow_dirty);
+            let blocked = !precheck.ok && !precheck.skipped;
+            result.push(precheck);
+            if blocked {
+                finalize(&mut result, start);
+                return Ok(result);
+            }
             steps::static_checks::run(&sh, Mode::Check, &mut result);
             steps::host_tests::run(&sh, &mut result);
             steps::nix::coverage(&mut result, Mode::Check);
@@ -174,4 +189,57 @@ fn finalize(result: &mut CommandResult, start: std::time::Instant) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+}
+
+/// The clean-tree precheck step for `validate`. With `--allow-dirty`, a skip.
+/// Otherwise: `ok` when the tree is clean; `fail` when dirty (detail = the porcelain
+/// status) or when git cannot be queried — the gate refuses to certify a tree it
+/// cannot prove clean. `check` deliberately has no such precheck (Fix-mode runs on a
+/// dirty tree by design).
+fn clean_tree_precheck(sh: &xshell::Shell, allow_dirty: bool) -> StepResult {
+    if allow_dirty {
+        return StepResult::skip("clean-tree").detail("--allow-dirty");
+    }
+    match git::working_tree_status(sh) {
+        Ok(status) if git::porcelain_is_dirty(&status) => {
+            StepResult::fail("clean-tree").detail(format!(
+                "working tree is dirty — commit/stash or pass --allow-dirty:\n{}",
+                status.trim()
+            ))
+        }
+        Ok(_) => StepResult::ok("clean-tree"),
+        Err(e) => {
+            StepResult::fail("clean-tree").detail(format!("could not determine cleanliness: {e:#}"))
+        }
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn validate_allow_dirty_parses() {
+        let cli = Cli::try_parse_from(["xtask", "validate", "--allow-dirty"]).unwrap();
+        match cli.command {
+            Command::Validate {
+                no_e2e,
+                allow_dirty,
+            } => {
+                assert!(!no_e2e);
+                assert!(allow_dirty);
+            }
+            _ => panic!("expected validate"),
+        }
+    }
+
+    #[test]
+    fn validate_defaults_reject_dirty() {
+        let cli = Cli::try_parse_from(["xtask", "validate"]).unwrap();
+        match cli.command {
+            Command::Validate { allow_dirty, .. } => assert!(!allow_dirty),
+            _ => panic!("expected validate"),
+        }
+    }
 }
