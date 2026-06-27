@@ -340,7 +340,11 @@ pub(crate) fn password_reset_claim_error(
 
 #[tracing::instrument(name = "crypto.password.hash", skip(password))]
 pub(crate) async fn hash_password(password: common::password::Password) -> io::Result<String> {
-    #[cfg(test)]
+    // Test-only hash-failure injection. Gated on `test` (storage's own unit tests) OR the
+    // `test-utils` feature (enabled by `server`'s dev-dependencies) so the cross-backend
+    // integration tests can exercise the `Internal` / validate-before-hash paths too;
+    // absent from production builds, which enable neither.
+    #[cfg(any(test, feature = "test-utils"))]
     if password.as_str() == "force-hash-error-for-test-coverage" {
         return Err(io::Error::other("forced hash error"));
     }
