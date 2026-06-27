@@ -65,18 +65,20 @@ pub async fn update_rendered_post(
     slug: Slug,
     body: String,
     format: PostFormat,
-    publish: bool,
+    publish: PublishUpdate,
     summary: Option<String>,
     audiences: Vec<AudienceTarget>,
 ) -> Result<PostRecord, UpdatePostError> {
     let rendered_html = render(&body, &format);
+    let (unpublish, explicit_published_at) = publish.into_inputs();
     let input = UpdatePostInput {
         title,
         slug,
         body,
         format,
         rendered_html,
-        publish,
+        unpublish,
+        explicit_published_at,
         summary,
         audiences,
     };
@@ -114,6 +116,31 @@ impl From<UpdatePostError> for PerformUpdateError {
     }
 }
 
+/// What an update does to a post's publication state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishUpdate {
+    /// Clear `published_at` back to NULL (draft / unschedule).
+    Unpublish,
+    /// Publish. `at = Some(t)` sets `published_at = t` (future = scheduled,
+    /// past = backdated-live). `at = None` keeps an existing timestamp or
+    /// stamps `now` for a previously-unpublished post.
+    Publish { at: Option<DateTime<Utc>> },
+}
+
+impl PublishUpdate {
+    /// Splits the publication verb into the `(unpublish, explicit_published_at)`
+    /// pair the dialect `update_post` SQL binds. `unpublish` clears the
+    /// timestamp; `explicit_published_at` is an exact instant to store; with
+    /// both inert the SQL keeps any existing timestamp (or stamps `now`).
+    #[must_use]
+    fn into_inputs(self) -> (bool, Option<DateTime<Utc>>) {
+        match self {
+            Self::Unpublish => (true, None),
+            Self::Publish { at } => (false, at),
+        }
+    }
+}
+
 /// Raw, front-end-supplied inputs to [`perform_post_update`].
 ///
 /// Grouping these into a struct keeps the easy-to-transpose pair
@@ -131,8 +158,8 @@ pub struct PostUpdate<'a> {
     pub format: PostFormat,
     /// Explicit slug, or `None` to derive one from the title/body.
     pub slug_override: Option<&'a str>,
-    /// Whether to publish the post as part of this update.
-    pub publish: bool,
+    /// What this update does to the post's publication state.
+    pub publish: PublishUpdate,
     /// Optional summary/excerpt.
     pub summary: Option<String>,
     /// Audience targeting for the post (replaces its existing rows). An empty
@@ -179,13 +206,15 @@ pub async fn perform_post_update(
     };
 
     let rendered_html = render(&body, &format);
+    let (unpublish, explicit_published_at) = publish.into_inputs();
     let input = UpdatePostInput {
         title: metadata.title,
         slug,
         body,
         format,
         rendered_html,
-        publish,
+        unpublish,
+        explicit_published_at,
         summary,
         audiences,
     };

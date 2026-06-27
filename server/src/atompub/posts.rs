@@ -377,7 +377,13 @@ pub async fn member_put(
             title: fields.title.as_deref(),
             format: fields.format,
             slug_override: None,
-            publish: !fields.is_draft,
+            // Task 5 will derive `at` from the wire `<published>`; for now a
+            // non-draft publishes with no explicit timestamp.
+            publish: if fields.is_draft {
+                storage::PublishUpdate::Unpublish
+            } else {
+                storage::PublishUpdate::Publish { at: None }
+            },
             summary: fields.summary,
             audiences,
         },

@@ -31,8 +31,8 @@ use {
     std::{collections::BTreeSet, sync::Arc},
     storage::{
         perform_post_creation, perform_post_update, FeedEventStorage, PerformUpdateError,
-        PostCreation, PostFormat, PostStorage, PostUpdate, SiteConfigStorage, UpdatePostError,
-        UpdatePostInput,
+        PostCreation, PostFormat, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
+        UpdatePostError, UpdatePostInput,
     },
 };
 
@@ -407,7 +407,11 @@ pub async fn update_post(
                 title: None,
                 format,
                 slug_override: slug_override.as_deref(),
-                publish,
+                publish: if publish {
+                    PublishUpdate::Publish { at: None }
+                } else {
+                    PublishUpdate::Unpublish
+                },
                 summary: normalized_summary,
                 audiences,
             },
@@ -588,7 +592,8 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
                     format: existing.format,
                     rendered_html: existing.rendered_html,
                     summary: existing.summary,
-                    publish: true,
+                    unpublish: false,
+                    explicit_published_at: None,
                     audiences,
                 },
             )

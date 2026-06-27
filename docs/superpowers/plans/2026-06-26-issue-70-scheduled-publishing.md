@@ -241,7 +241,7 @@ pub enum PublishUpdate {
 
   `PostUpdate.publish` changes from `bool` to `PublishUpdate`. `perform_post_update` derives the three SQL inputs and passes them to `update_post`.
 
-- [ ] **Step 1: Write the failing storage tests** in `server/tests/storage/storage.rs` (one common test, both backends):
+- [x] **Step 1: Write the failing storage tests** in `server/tests/storage/storage.rs` (one common test, both backends):
 
 ```rust
 #[apply(backends)]
@@ -278,11 +278,11 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
 
 `update_input(...)` is a small local helper building a `PostUpdate` with the given `publish` and otherwise-unchanged fields (mirror `make_*` helpers).
 
-- [ ] **Step 2: Run them, verify they fail** — `cd <worktree> && cargo nextest run -p jaunder update_publish_timestamp_semantics` → FAIL (compile: `PublishUpdate` undefined / `publish` is `bool`).
+- [x] **Step 2: Run them, verify they fail** — `cd <worktree> && cargo nextest run -p jaunder update_publish_timestamp_semantics` → FAIL (compile: `PublishUpdate` undefined / `publish` is `bool`).
 
-- [ ] **Step 3: Implement the type + service.** Add `PublishUpdate` to `storage/src/post_service.rs`; change `PostUpdate.publish` to `PublishUpdate`; in `perform_post_update` derive `(unpublish: bool, explicit_at: Option<DateTime<Utc>>)` from it and pass both (plus `now`) into `UpdatePostInput`.
+- [x] **Step 3: Implement the type + service.** Add `PublishUpdate` to `storage/src/post_service.rs`; change `PostUpdate.publish` to `PublishUpdate`; in `perform_post_update` derive `(unpublish: bool, explicit_at: Option<DateTime<Utc>>)` from it and pass both (plus `now`) into `UpdatePostInput`.
 
-- [ ] **Step 4: Implement the dialect SQL** in **both** `storage/src/sqlite/posts.rs` and `storage/src/postgres/posts.rs`. Replace the `published_at` CASE:
+- [x] **Step 4: Implement the dialect SQL** in **both** `storage/src/sqlite/posts.rs` and `storage/src/postgres/posts.rs`. Replace the `published_at` CASE:
 
 ```sql
 published_at = CASE
@@ -294,11 +294,11 @@ END
 
 where `$U` = `unpublish` (bool), `$E` = `explicit_at` (`Option<DateTime<Utc>>`), `$N` = `now`. Read the current bind list in each file, replace the single `publish` bind with the `unpublish` + `explicit_at` binds, keep the `now`/`updated_at` binds, and renumber every positional placeholder consistently. The slug-freeze CASE and the revision insert are unchanged.
 
-- [ ] **Step 5: Update callers (keep the build green).** `server/src/atompub/posts.rs:381` `publish: !fields.is_draft` → `PublishUpdate` (Task 5 refines this; for now `if fields.is_draft { Unpublish } else { Publish { at: None } }`). `web/src/posts/mod.rs` `update_post` (345): `publish: if publish { Publish { at: None } } else { Unpublish }`. `publish_post` (531): `Publish { at: None }`.
+- [x] **Step 5: Update callers (keep the build green).** `server/src/atompub/posts.rs:381` `publish: !fields.is_draft` → `PublishUpdate` (Task 5 refines this; for now `if fields.is_draft { Unpublish } else { Publish { at: None } }`). `web/src/posts/mod.rs` `update_post` (345): `publish: if publish { Publish { at: None } } else { Unpublish }`. `publish_post` (531): `Publish { at: None }`.
 
-- [ ] **Step 6: Run tests + gate** — `cargo nextest run -p jaunder update_publish_timestamp_semantics` → PASS both backends; `cargo xtask check --no-test` → clean.
+- [x] **Step 6: Run tests + gate** — `cargo nextest run -p jaunder update_publish_timestamp_semantics` → PASS both backends; `cargo xtask check --no-test` → clean.
 
-- [ ] **Step 7: Commit** — `feat(storage): replace update publish bool with explicit publish timestamp (#70)`.
+- [x] **Step 7: Commit** — `feat(storage): replace update publish bool with explicit publish timestamp (#70)`.
 
 ---
 

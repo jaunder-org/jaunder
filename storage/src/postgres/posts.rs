@@ -72,9 +72,13 @@ impl PostDialect for Postgres {
                  body = $3,
                  format = $4,
                  rendered_html = $5,
-                 published_at = CASE WHEN $6 THEN COALESCE(published_at, $7) ELSE NULL END,
-                 updated_at = $8
-             WHERE post_id = $9
+                 published_at = CASE
+                     WHEN $6 THEN NULL
+                     WHEN $7 IS NOT NULL THEN $8
+                     ELSE COALESCE(published_at, $9)
+                 END,
+                 updated_at = $10
+             WHERE post_id = $11
              RETURNING post_id, user_id,
                        (SELECT username FROM users WHERE user_id = posts.user_id) AS username,
                        title, slug, body, format, rendered_html,
@@ -86,7 +90,11 @@ impl PostDialect for Postgres {
         .bind(&input.body)
         .bind(input.format.to_string())
         .bind(&input.rendered_html)
-        .bind(input.publish)
+        // $6 unpublish, $7/$8 explicit_published_at (bound twice: NULL-test
+        // then value), $9 now (COALESCE fallback), $10 now (updated_at).
+        .bind(input.unpublish)
+        .bind(input.explicit_published_at)
+        .bind(input.explicit_published_at)
         .bind(now)
         .bind(now)
         .bind(post_id)

@@ -179,9 +179,13 @@ pub struct UpdatePostInput {
     pub body: String,
     pub format: PostFormat,
     pub rendered_html: String,
-    /// If `true`, publish the post (sets `published_at` to now if not already set).
-    /// If `false`, un-publish the post (clears `published_at`).
-    pub publish: bool,
+    /// If `true`, clear `published_at` back to NULL (draft / unschedule). Takes
+    /// precedence over `explicit_published_at`.
+    pub unpublish: bool,
+    /// An exact publication instant to store (future = scheduled, past =
+    /// backdated). `None` keeps any existing timestamp, or stamps `now` for a
+    /// previously-unpublished post. Ignored when `unpublish` is `true`.
+    pub explicit_published_at: Option<DateTime<Utc>>,
     /// Optional summary/excerpt of the post.
     pub summary: Option<String>,
     /// Audience targeting for the post. On update the existing

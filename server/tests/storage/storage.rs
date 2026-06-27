@@ -22,14 +22,15 @@ use common::visibility::{
 use sqlx::{PgPool, SqlitePool};
 use std::sync::Arc;
 use storage::{
-    create_rendered_post, open_database, open_existing_database, update_rendered_post, AppState,
-    AtomicOps, AudienceError, CreatePostError, CreatePostInput, CreateUserError, DbConnectOptions,
-    EmailVerificationStorage, InviteStorage, ListByTagError, PasswordResetStorage, PostCursor,
-    PostFormat, ProfileUpdate, RegisterWithInviteError, SessionAuthError, SessionStorage,
-    SqliteAtomicOps, SqliteEmailVerificationStorage, SqliteInviteStorage,
-    SqlitePasswordResetStorage, SqliteSessionStorage, SqliteSubscriptionStorage, SqliteUserStorage,
-    SubscriptionStorage, TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError,
-    UseInviteError, UsePasswordResetError, UserAuthError, UserStorage,
+    create_rendered_post, open_database, open_existing_database, perform_post_update,
+    update_rendered_post, AppState, AtomicOps, AudienceError, CreatePostError, CreatePostInput,
+    CreateUserError, DbConnectOptions, EmailVerificationStorage, InviteStorage, ListByTagError,
+    PasswordResetStorage, PostCursor, PostFormat, PostUpdate, ProfileUpdate, PublishUpdate,
+    RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteAtomicOps,
+    SqliteEmailVerificationStorage, SqliteInviteStorage, SqlitePasswordResetStorage,
+    SqliteSessionStorage, SqliteSubscriptionStorage, SqliteUserStorage, SubscriptionStorage,
+    TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserAuthError, UserStorage,
 };
 use tempfile::TempDir;
 
@@ -2144,7 +2145,8 @@ async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend
         body: "updated body".to_string(),
         format: PostFormat::Org,
         rendered_html: "<p>updated body</p>".to_string(),
-        publish: false,
+        unpublish: true,
+        explicit_published_at: None,
         summary: None,
         audiences: vec![AudienceTarget::Public],
     };
@@ -2170,7 +2172,8 @@ async fn post_update_not_found_returns_error(#[case] backend: Backend) {
         body: "body".to_string(),
         format: PostFormat::Markdown,
         rendered_html: "<p>body</p>".to_string(),
-        publish: false,
+        unpublish: true,
+        explicit_published_at: None,
         summary: None,
         audiences: vec![AudienceTarget::Public],
     };
@@ -2228,7 +2231,8 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
                 body: "Nope".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Nope</p>".to_string(),
-                publish: false,
+                unpublish: true,
+                explicit_published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
             },
@@ -2237,6 +2241,110 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
         .expect_err("non-owner update must fail");
 
     assert!(matches!(err, UpdatePostError::Unauthorized));
+}
+
+/// Builds a `PostUpdate` with the given publish verb and otherwise-valid,
+/// stable fields. `slug` is pinned via `slug_override` so repeated updates on
+/// different posts never collide on a derived slug.
+fn update_input(
+    post_id: i64,
+    editor_user_id: i64,
+    slug: &str,
+    publish: PublishUpdate,
+) -> PostUpdate<'_> {
+    PostUpdate {
+        post_id,
+        editor_user_id,
+        body: "updated body".to_string(),
+        title: Some("Updated Title"),
+        format: PostFormat::Markdown,
+        slug_override: Some(slug),
+        publish,
+        summary: None,
+        audiences: vec![AudienceTarget::Public],
+    }
+}
+
+// Issue #70: the storage update's publication verb is an explicit
+// `PublishUpdate`, not a bool. One common test, both backends, with an injected
+// `now` pinning the boundary; locks the four publish-timestamp cases.
+#[apply(backends)]
+#[tokio::test]
+async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    let env = backend.setup().await;
+    let state = &env.state;
+    let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
+    let alice = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+
+    // A fresh draft (published_at NULL).
+    let draft = state
+        .posts
+        .create_post(&make_create_post_input(alice, "p"))
+        .await
+        .unwrap();
+
+    // Publish { at: Some(future) } on a draft => scheduled at that instant.
+    let future = now + Duration::days(1);
+    let rec = perform_post_update(
+        &*state.posts,
+        update_input(
+            draft,
+            alice,
+            "p",
+            PublishUpdate::Publish { at: Some(future) },
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        rec.published_at,
+        Some(future),
+        "explicit future timestamp is stored"
+    );
+
+    // Publish { at: None } on an already-published post keeps the existing timestamp.
+    let rec2 = perform_post_update(
+        &*state.posts,
+        update_input(draft, alice, "p", PublishUpdate::Publish { at: None }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        rec2.published_at,
+        Some(future),
+        "publish-without-timestamp keeps existing"
+    );
+
+    // Unpublish clears it.
+    let rec3 = perform_post_update(
+        &*state.posts,
+        update_input(draft, alice, "p", PublishUpdate::Unpublish),
+    )
+    .await
+    .unwrap();
+    assert_eq!(rec3.published_at, None, "unpublish clears published_at");
+
+    // Publish { at: None } on a never-published draft stamps ~now.
+    let draft2 = state
+        .posts
+        .create_post(&make_create_post_input(alice, "q"))
+        .await
+        .unwrap();
+    let rec4 = perform_post_update(
+        &*state.posts,
+        update_input(draft2, alice, "q", PublishUpdate::Publish { at: None }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        rec4.published_at.is_some(),
+        "publish-now stamps a timestamp"
+    );
 }
 
 // Raw read of a post's `post_audiences` rows as `(target_kind name, audience_id)`,
@@ -2343,7 +2451,8 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
         body: "body text".to_string(),
         format: PostFormat::Markdown,
         rendered_html: "<p>body text</p>".to_string(),
-        publish: false,
+        unpublish: true,
+        explicit_published_at: None,
         summary: None,
         audiences: vec![AudienceTarget::Private],
     };
@@ -2435,7 +2544,8 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
         body: "body text".to_string(),
         format: PostFormat::Markdown,
         rendered_html: "<p>body text</p>".to_string(),
-        publish: false,
+        unpublish: true,
+        explicit_published_at: None,
         summary: None,
         audiences: vec![AudienceTarget::Subscribers],
     };
@@ -4755,7 +4865,8 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
                 body: "Updated content".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Updated</p>".to_string(),
-                publish: false,
+                unpublish: true,
+                explicit_published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
             },
@@ -5346,7 +5457,8 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
                 body: "New content".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>New</p>".to_string(),
-                publish: true,
+                unpublish: false,
+                explicit_published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
             },
@@ -5545,7 +5657,8 @@ async fn post_revisions_created(#[case] backend: Backend) {
                 body: "Updated content".to_string(),
                 format: PostFormat::Markdown,
                 rendered_html: "<p>Updated</p>".to_string(),
-                publish: true,
+                unpublish: false,
+                explicit_published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
             },
@@ -5992,7 +6105,7 @@ async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Back
         "update-render-md".parse().unwrap(),
         "**updated**".to_string(),
         PostFormat::Markdown,
-        false,
+        PublishUpdate::Unpublish,
         None,
         vec![AudienceTarget::Public],
     )
@@ -6037,7 +6150,7 @@ async fn update_rendered_post_org_renders_and_updates(#[case] backend: Backend) 
         "update-render-org".parse().unwrap(),
         "*bold org*".to_string(),
         PostFormat::Org,
-        false,
+        PublishUpdate::Unpublish,
         None,
         vec![AudienceTarget::Public],
     )
@@ -6067,7 +6180,7 @@ async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: B
         "no-post".parse().unwrap(),
         "body".to_string(),
         PostFormat::Markdown,
-        false,
+        PublishUpdate::Unpublish,
         None,
         vec![AudienceTarget::Public],
     )
