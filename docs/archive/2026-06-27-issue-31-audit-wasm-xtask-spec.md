@@ -3,7 +3,7 @@
 **Date:** 2026-06-27
 **Issue:** #31 (milestone 3, "Devtool migration")
 **Status:** Approved design (pre-implementation)
-**Related:** [ADR-0026](../../adr/0026-devtool-vs-xtask-boundary.md) (the `devtool`/`xtask` boundary)
+**Related:** [ADR-0028](../../adr/0028-devtool-vs-xtask-boundary.md) (the `devtool`/`xtask` boundary)
 
 ## Context
 
@@ -15,7 +15,7 @@ developers; it has **no programmatic callers** (referenced only in
 
 Issue #31, like its four siblings, was filed "migrate into `devtool`." But
 `audit-wasm-bundle` runs `nix build .#site` — which cannot run inside a Nix build
-sandbox — and otherwise does pure host-side analysis. Per **ADR-0026**, its home
+sandbox — and otherwise does pure host-side analysis. Per **ADR-0028**, its home
 is **`xtask`** (host orchestration/analysis), not `devtool` (in-sandbox producer).
 This spec implements that placement.
 
@@ -120,7 +120,7 @@ Add to `xtask/Cargo.toml`: `flate2` (gzip) and `brotli`.
 ### Docs maintenance (incidental)
 
 The `docs/README.md` ADR table had silently fallen behind (stopped at 0022 while
-0023–0025 existed). Restored 0023–0025 and added 0026 as part of landing this
+0023–0025 existed). Restored 0023–0025 and added 0028 as part of landing this
 ADR, so the table is whole again.
 
 ## Testing

@@ -4,13 +4,13 @@
 
 **Goal:** Replace the Node.js `scripts/audit-wasm-bundle` with a self-documenting `cargo xtask audit-wasm` host subcommand that reports raw/gzip/brotli frontend bundle sizes.
 
-**Architecture:** Per [ADR-0026](../../adr/0026-devtool-vs-xtask-boundary.md), this host-side analysis tool lives in `xtask` (not `devtool`). A new `xtask/src/audit_wasm.rs` module holds the report types, pure size/format helpers (unit-tested), and the `nix build`/fs I/O. The report rides xtask's existing `CommandResult` envelope (mirroring the `coverage` payload) and reuses the global `--json` flag.
+**Architecture:** Per [ADR-0028](../../adr/0028-devtool-vs-xtask-boundary.md), this host-side analysis tool lives in `xtask` (not `devtool`). A new `xtask/src/audit_wasm.rs` module holds the report types, pure size/format helpers (unit-tested), and the `nix build`/fs I/O. The report rides xtask's existing `CommandResult` envelope (mirroring the `coverage` payload) and reuses the global `--json` flag.
 
 **Tech Stack:** Rust, `clap` (derive), `flate2` (gzip), `brotli`, `serde`/`serde_json`.
 
 ## Global Constraints
 
-- **Placement:** host-side `xtask`, NOT `devtool` (ADR-0026 litmus: it runs `nix build`).
+- **Placement:** host-side `xtask`, NOT `devtool` (ADR-0028 litmus: it runs `nix build`).
 - **Behavior-preserving:** same artifacts (`pkg/jaunder_bg.wasm`, `pkg/jaunder.js`), same raw/gzip/brotli columns, same `--site-path` override.
 - **Compression parity:** gzip at level 9 (`Compression::best()` = Node `Z_BEST_COMPRESSION`); brotli quality 11, window 22 (= the script's `BROTLI_PARAM_QUALITY: 11`, default window).
 - **Self-documenting:** `cargo xtask audit-wasm --help` must state the problem it solves, when to use it, and how (examples).
@@ -22,14 +22,14 @@
 
 ## Note on separable concerns
 
-Investigation surfaced **no new issues to file**. The ADR-0026 pre-classification of #32/#33 targets issues that already exist (reconfirmed in their own cycles), and the `docs/README.md` ADR-table restoration (0023–0025) was approved to fold into this branch. The only administrative follow-up is **editing #31's own text** to reflect the xtask placement — handled at ship, not as a new issue.
+Investigation surfaced **no new issues to file**. The ADR-0028 pre-classification of #32/#33 targets issues that already exist (reconfirmed in their own cycles), and the `docs/README.md` ADR-table restoration (0023–0025) was approved to fold into this branch. The only administrative follow-up is **editing #31's own text** to reflect the xtask placement — handled at ship, not as a new issue.
 
 ---
 
 ## Task 1: Planning artifacts commit
 
 **Files:**
-- Already written (spec phase): `docs/superpowers/specs/2026-06-27-issue-31-audit-wasm-xtask.md`, `docs/adr/0026-devtool-vs-xtask-boundary.md`, `docs/README.md` (ADR table), `docs/superpowers/plans/2026-06-27-issue-31-audit-wasm-xtask.md` (this file).
+- Already written (spec phase): `docs/superpowers/specs/2026-06-27-issue-31-audit-wasm-xtask.md`, `docs/adr/0028-devtool-vs-xtask-boundary.md`, `docs/README.md` (ADR table), `docs/superpowers/plans/2026-06-27-issue-31-audit-wasm-xtask.md` (this file).
 
 - [x] **Step 1: Verify the working tree holds only the planning docs**
 
@@ -40,10 +40,10 @@ Expected: only the four files above are new/modified, nothing else.
 
 ```bash
 git add docs/superpowers/specs/2026-06-27-issue-31-audit-wasm-xtask.md \
-        docs/adr/0026-devtool-vs-xtask-boundary.md \
+        docs/adr/0028-devtool-vs-xtask-boundary.md \
         docs/README.md \
         docs/superpowers/plans/2026-06-27-issue-31-audit-wasm-xtask.md
-git commit -m "docs(issue-31): spec + ADR-0026 devtool/xtask boundary + plan"
+git commit -m "docs(issue-31): spec + ADR-0028 devtool/xtask boundary + plan"
 ```
 
 (No code gate needed — docs only. The ADR/README belong on the branch from the start so the boundary rationale is committed before the code that depends on it.)

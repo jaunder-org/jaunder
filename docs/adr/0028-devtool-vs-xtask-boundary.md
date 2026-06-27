@@ -1,4 +1,4 @@
-# ADR-0026: The `devtool` / `xtask` Boundary — In-Sandbox Producer vs. Host Analyzer
+# ADR-0028: The `devtool` / `xtask` Boundary — In-Sandbox Producer vs. Host Analyzer
 
 * Status: accepted
 * Deciders: mdorman, Claude

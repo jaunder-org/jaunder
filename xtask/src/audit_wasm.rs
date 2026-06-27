@@ -1,6 +1,6 @@
 //! `cargo xtask audit-wasm` — measure frontend bundle download weight.
 //!
-//! Host-side analysis tool (ADR-0026): it shells out to `nix build .#site` and
+//! Host-side analysis tool (ADR-0028): it shells out to `nix build .#site` and
 //! sizes the built artifacts, so it lives in `xtask` (the host analyzer), not
 //! `devtool` (the in-sandbox producer). The pure size/format helpers are split
 //! out and unit-tested; the `nix`/filesystem I/O lives in `run`/`resolve_site_path`.
