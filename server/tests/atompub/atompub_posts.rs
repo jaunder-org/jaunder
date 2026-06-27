@@ -198,8 +198,8 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
     assert!(etag.is_some(), "response should have ETag header");
     let body = body_string(response).await;
     assert!(
-        body.contains("type=\"text\""),
-        "body should contain type=text (native source)"
+        body.contains("type=\"text/markdown\""),
+        "body should carry the text/markdown media type (native source, ADR-0023)"
     );
     assert!(
         body.contains("# Markdown body"),
@@ -635,8 +635,8 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
         "retrieved entry should contain body"
     );
     assert!(
-        body.contains("type=\"text\""),
-        "retrieved entry should have text content type"
+        body.contains("type=\"text/markdown\""),
+        "a Markdown post round-trips as the text/markdown media type (ADR-0023)"
     );
 }
 
@@ -695,6 +695,68 @@ async fn create_html_entry_is_stored_as_html(#[case] backend: Backend) {
     assert!(
         body.contains("type=\"html\""),
         "entry should be stored with type=html"
+    );
+}
+
+// Shape B — per-entry format media type (ADR-0023, Task 1). POSTing a content
+// `type` media type stores the matching format, and the round-tripped member
+// echoes the same media type. `text/org`→Org, `text/markdown`→Markdown. The
+// account default format is irrelevant here: the explicit media type wins.
+#[rstest]
+#[case::org("text/org", "* Org heading\nbody")]
+#[case::markdown("text/markdown", "# Markdown heading\nbody")]
+#[tokio::test]
+async fn create_format_media_type_round_trips(
+    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] content_type: &str,
+    #[case] content: &str,
+) {
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state.clone(), &base).await;
+
+    let xml = entry_xml("Formatted", content_type, content);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(xml))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // GET the member back: it must echo the same content media type.
+    let get = make_app(state, &base)
+        .await
+        .oneshot(
+            Request::builder()
+                .uri(&location)
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(get.status(), StatusCode::OK);
+    let body = body_string(get).await;
+    assert!(
+        body.contains(&format!("type=\"{content_type}\"")),
+        "member should round-trip type={content_type}: {body}"
     );
 }
 
