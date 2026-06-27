@@ -133,11 +133,11 @@ Jaunder uses OpenTelemetry for deep performance analysis (see [ADR-0011](docs/ad
   - `--trace TRACE_ID`: Analyze a specific trace.
   - `--project NAME`: Filter by browser (e.g., `firefox`, `webkit`).
 
-- **WASM Audit**: Use `scripts/audit-wasm-bundle` to measure the size of the frontend WASM and JS bundles from the deterministic Nix build.
+- **WASM Audit**: Use `cargo xtask audit-wasm` to measure the size of the frontend WASM and JS bundles from the deterministic Nix build.
   ```bash
-  scripts/audit-wasm-bundle
+  cargo xtask audit-wasm
   ```
-  Useful options: `--json` for machine-readable output, or `--site-path` to reuse a build.
+  Useful options: `cargo xtask --json audit-wasm` for machine-readable output, or `--site-path` to reuse a build. Run `cargo xtask audit-wasm --help` for details.
 
 - **Run & Analyze**: Use `scripts/run-e2e-trace-analysis` to run the full VM e2e suite and immediately analyze the results.
   - Use `--cold` to run against cold caches instead of the default warmup checks.

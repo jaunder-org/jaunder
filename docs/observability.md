@@ -108,11 +108,11 @@ as warm-cache behavior.
 
 ## WASM Bundle Audit
 
-Use `scripts/audit-wasm-bundle` to measure frontend bundle size from the
+Use `cargo xtask audit-wasm` to measure frontend bundle size from the
 deterministic Nix `site` build output:
 
 ```bash
-scripts/audit-wasm-bundle
+cargo xtask audit-wasm
 ```
 
 This reports raw, gzip, and brotli sizes for:

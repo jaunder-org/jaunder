@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+mod audit_wasm;
 mod coverage;
 mod result;
 mod sh;
@@ -47,6 +48,23 @@ pub enum Command {
         #[arg(long, default_value = ".xtask/gcroots/coverage")]
         gcroot: String,
     },
+    /// Measure the frontend WASM/JS bundle size — raw, gzip, and brotli.
+    ///
+    /// Reports the download weight of the deterministic `nix build .#site`
+    /// output (`pkg/jaunder_bg.wasm`, `pkg/jaunder.js`) so you can catch
+    /// bundle-size bloat before it ships and compare a change's effect on what
+    /// users download. Run it after a change you expect to move the bundle (a new
+    /// dependency, a feature touching the client), or periodically to watch the
+    /// trend. This is a manual tool — it is not part of `check`/`validate`.
+    #[command(after_help = "EXAMPLES:\n  \
+        cargo xtask audit-wasm\n  \
+        cargo xtask audit-wasm --site-path /nix/store/...-jaunder-site\n  \
+        cargo xtask --json audit-wasm")]
+    AuditWasm {
+        /// Audit a prebuilt `.#site` store path instead of running `nix build`.
+        #[arg(long)]
+        site_path: Option<String>,
+    },
 }
 
 impl Cli {
@@ -55,6 +73,7 @@ impl Cli {
             Command::Check { .. } => "check",
             Command::Validate { .. } => "validate",
             Command::RegenBaseline { .. } => "__regen-baseline",
+            Command::AuditWasm { .. } => "audit-wasm",
         }
     }
 }
@@ -91,6 +110,22 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let mut result = CommandResult::new("__regen-baseline");
             let step = regen_baseline(&gcroot);
             result.push(step);
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::AuditWasm { site_path } => {
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("audit-wasm");
+            match audit_wasm::run(site_path.as_deref()) {
+                Ok(report) => {
+                    let n = report.artifacts.len();
+                    result.audit = Some(report);
+                    result.push(StepResult::ok("audit-wasm").detail(format!("{n} artifact(s)")));
+                }
+                Err(e) => {
+                    result.push(StepResult::fail("audit-wasm").detail(format!("{e:#}")));
+                }
+            }
             finalize(&mut result, start);
             Ok(result)
         }
