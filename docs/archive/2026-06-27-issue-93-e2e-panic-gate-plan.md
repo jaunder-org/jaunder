@@ -41,7 +41,7 @@ git commit -m "docs(issue-93): add spec, plan, and ADR-0032 (e2e zero-panic gate
 **Interfaces:**
 - Produces: per-backend `jaunder-journal-<backend>.log` files in each e2e check's `$out` (and thus in the `e2e` symlinkJoin output). Task 2 consumes those names.
 
-- [ ] **Step 1: Add the shared gate function.** In `flake.nix`, in the same `let` scope as `mkE2eSqliteCheck` (just before it), add:
+- [x] **Step 1: Add the shared gate function.** In `flake.nix`, in the same `let` scope as `mkE2eSqliteCheck` (just before it), add:
 
 ```nix
         # #93 / ADR-0032: shared zero-panic gate appended to each e2e testScript.
@@ -61,7 +61,7 @@ git commit -m "docs(issue-93): add spec, plan, and ADR-0032 (e2e zero-panic gate
 
 (`${backend}` is Nix interpolation; `\n` is literal in a `''` string, which is what the Python source needs. The snippet contains no other `${`.)
 
-- [ ] **Step 2: Append the gate to the sqlite testScript.** After the existing last line of the sqlite `testScript`:
+- [x] **Step 2: Append the gate to the sqlite testScript.** After the existing last line of the sqlite `testScript`:
 
 ```python
               machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-sqlite.jsonl")
@@ -73,7 +73,7 @@ add, at the same 14-space indent, on its own line:
               ${e2ePanicGate "sqlite"}
 ```
 
-- [ ] **Step 3: Append the gate to the postgres testScript.** After the postgres `testScript`'s last line:
+- [x] **Step 3: Append the gate to the postgres testScript.** After the postgres `testScript`'s last line:
 
 ```python
               machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-postgres.jsonl")
@@ -85,12 +85,12 @@ add, at the same indent, on its own line:
               ${e2ePanicGate "postgres"}
 ```
 
-- [ ] **Step 4: Verify the flake evaluates.**
+- [x] **Step 4: Verify the flake evaluates.**
 
 Run: `nix flake check --no-build 2>&1 | rg -i 'error|warning' || echo OK`
 Expected: no evaluation errors (the `testScript`s build into valid derivations). This catches Nix syntax / interpolation / indentation mistakes without the ~25-min VM build.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 Run: `cargo xtask validate --no-e2e` (must be green — confirms nothing else broke).
 
@@ -110,7 +110,7 @@ git commit -m "test(e2e): fail the e2e check on any server panic; journal to \$o
 - Consumes: `jaunder-journal-<backend>.log` files at `.xtask/gcroots/e2e/` (Task 1's output, realized by the `--out-link`).
 - Produces: those files copied into `.xtask/diagnostics/e2e/` (CI uploads that dir with `if: always()`).
 
-- [ ] **Step 1: Write the failing unit test.** In `xtask/src/steps/nix.rs`, inside `#[cfg(test)] mod tests`, add:
+- [x] **Step 1: Write the failing unit test.** In `xtask/src/steps/nix.rs`, inside `#[cfg(test)] mod tests`, add:
 
 ```rust
     #[test]
@@ -131,12 +131,12 @@ git commit -m "test(e2e): fail the e2e check on any server panic; journal to \$o
     }
 ```
 
-- [ ] **Step 2: Run it; verify it FAILS.**
+- [x] **Step 2: Run it; verify it FAILS.**
 
 Run: `cargo test -p xtask copy_journals_between -- --nocapture`
 Expected: FAIL to compile — `copy_journals_between` not defined.
 
-- [ ] **Step 3: Implement the copy + wire it into `e2e()`.** Add to `xtask/src/steps/nix.rs` (e.g. after `e2e`), and call it from `e2e`:
+- [x] **Step 3: Implement the copy + wire it into `e2e()`.** Add to `xtask/src/steps/nix.rs` (e.g. after `e2e`), and call it from `e2e`:
 
 ```rust
 pub fn e2e(result: &mut CommandResult) {
@@ -179,12 +179,12 @@ fn copy_journals_between(src_dir: &std::path::Path, dest_dir: &std::path::Path) 
 }
 ```
 
-- [ ] **Step 4: Run the test; verify it PASSES.**
+- [x] **Step 4: Run the test; verify it PASSES.**
 
 Run: `cargo test -p xtask copy_journals_between -- --nocapture`
 Expected: PASS.
 
-- [ ] **Step 5: Gate and commit.**
+- [x] **Step 5: Gate and commit.**
 
 Run: `cargo xtask validate --no-e2e` (green).
 
