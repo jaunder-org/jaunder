@@ -139,6 +139,26 @@ pub fn run(out_dir: &str, mode: Mode) -> (StepResult, Option<CoverageReport>) {
     }
 }
 
+/// Classify the current coverage against the **anchor-commit** baseline and compute
+/// text-identity re-anchor safety — the shared core of the gate verdict and the
+/// `coverage reanchor` command. Loading the baseline at the anchor (not the working
+/// tree) keeps its frame aligned with the diff's "from" frame (#110).
+fn classify_against_anchor(
+    current: &[FileCoverage],
+) -> Result<(Baseline, CoverageVerdict, reanchor::ReanchorSafety)> {
+    let anchor = baseline_anchor_commit()?;
+    let diff = git_diff_anchor_to_worktree(&anchor)?;
+    let mut maps = diffmap::parse_unified_diff(&diff);
+    synthesize_untracked_maps(&mut maps, current, &untracked_rs_files()?);
+    let baseline = load_baseline_at_anchor(&anchor)?;
+    let verdict = classify::classify(current, &baseline, &maps);
+    // Line-identity is only the first pass: a line-shifting change can flag phantom
+    // regressions/new_uncovered. Re-anchor safety keys on uncovered-TEXT identity, so a
+    // pure move (removed-then-reappeared with the same text) is recognised as safe.
+    let safety = reanchor::reanchor_is_safe(&verdict, current, &baseline);
+    Ok((baseline, verdict, safety))
+}
+
 fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageReport>)> {
     let report_path = format!("{out_dir}/coverage-report.txt");
     let crap_path = format!("{out_dir}/crap-report.json");
@@ -166,22 +186,7 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
     let repo_root = git_repo_root()?;
     let current = report::parse_text_report(&report, &repo_root);
 
-    let anchor = baseline_anchor_commit()?;
-    let diff = git_diff_anchor_to_worktree(&anchor)?;
-    let mut maps = diffmap::parse_unified_diff(&diff);
-    synthesize_untracked_maps(&mut maps, &current, &untracked_rs_files()?);
-
-    // Load the baseline from the anchor commit (NOT the working tree) so its
-    // frame matches the diff's "from" frame even when a Fix-mode heal left an
-    // uncommitted working-tree baseline — otherwise the next classify would
-    // double-shift it and `validate` would contradict `check` (#110).
-    let baseline = load_baseline_at_anchor(&anchor)?;
-    let verdict = classify::classify(&current, &baseline, &maps);
-    // Line-identity is only the first pass: a line-shifting change can flag
-    // phantom regressions/new_uncovered. Re-anchor safety keys the gate on
-    // uncovered-TEXT identity, so a pure move (removed-then-reappeared with the
-    // same text) is recognised as safe rather than a lowering.
-    let safety = reanchor::reanchor_is_safe(&verdict, &current, &baseline);
+    let (baseline, verdict, safety) = classify_against_anchor(&current)?;
 
     let old_crap_manifest = std::fs::read_to_string(CRAP_MANIFEST_PATH).unwrap_or_default();
     let crap_regs = if old_crap_manifest.trim().is_empty() {
