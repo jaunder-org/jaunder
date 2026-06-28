@@ -16,7 +16,8 @@ Examples:
   scripts/run-e2e-trace-analysis
   scripts/run-e2e-trace-analysis --top 40
   scripts/run-e2e-trace-analysis --trace 11111111111111111111111111111111
-  scripts/run-e2e-trace-analysis --cold`);
+  scripts/run-e2e-trace-analysis --cold
+  scripts/run-e2e-trace-analysis --browser firefox`);
 }
 
 function parseArgs(argv) {
