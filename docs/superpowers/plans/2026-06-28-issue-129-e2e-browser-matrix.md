@@ -214,7 +214,7 @@ Refs #129"
 - Consumes (from Task 1): the `checks.x86_64-linux.e2e-<backend>-<browser>` attrs.
 - Produces (consumed by Task 4): CLI `cargo xtask e2e <backend> <browser>` building one combo through `build_check` (so `.xtask/diagnostics/e2e-<backend>-<browser>/build.log` + rescued journal exist on failure) and writing `.xtask/last-result.json`.
 
-- [ ] **Step 1: Write the failing parse test**
+- [x] **Step 1: Write the failing parse test**
 
 Add to the `#[cfg(test)] mod tests` in `xtask/src/lib.rs`:
 
@@ -232,12 +232,12 @@ Add to the `#[cfg(test)] mod tests` in `xtask/src/lib.rs`:
     }
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cargo test -p xtask e2e_combo_parses_backend_and_browser`
 Expected: FAIL to compile — `Command::E2e` / `E2eBackend` / `E2eBrowser` undefined.
 
-- [ ] **Step 3: Add the enums + command variant**
+- [x] **Step 3: Add the enums + command variant**
 
 In `xtask/src/lib.rs`, add value enums and the variant. Use clap `ValueEnum` so invalid values are rejected:
 
@@ -289,7 +289,7 @@ Add to `enum Command`:
 
 Add to the `name()` match: `Command::E2e { .. } => "e2e",`.
 
-- [ ] **Step 4: Add the dispatch arm in `run()`**
+- [x] **Step 4: Add the dispatch arm in `run()`**
 
 ```rust
         Command::E2e { backend, browser } => {
@@ -302,7 +302,7 @@ Add to the `name()` match: `Command::E2e { .. } => "e2e",`.
 
 (Match the surrounding pattern for how other arms build/return `CommandResult` and how the sidecar/`last-result.json` is written — mirror `Command::Validate`.)
 
-- [ ] **Step 5: Add `e2e_combo` in `steps/nix.rs`**
+- [x] **Step 5: Add `e2e_combo` in `steps/nix.rs`**
 
 ```rust
 /// Build a single e2e {backend}×{browser} combo check via `build_check` (so the
@@ -320,7 +320,7 @@ pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
 }
 ```
 
-- [ ] **Step 6: Run the parse test + the gate**
+- [x] **Step 6: Run the parse test + the gate**
 
 Run: `cargo test -p xtask e2e_combo_parses_backend_and_browser`
 Expected: PASS.

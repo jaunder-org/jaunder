@@ -22,6 +22,36 @@ pub struct Cli {
     pub command: Command,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum E2eBackend {
+    Sqlite,
+    Postgres,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum E2eBrowser {
+    Chromium,
+    Firefox,
+}
+
+impl E2eBackend {
+    fn as_str(self) -> &'static str {
+        match self {
+            E2eBackend::Sqlite => "sqlite",
+            E2eBackend::Postgres => "postgres",
+        }
+    }
+}
+
+impl E2eBrowser {
+    fn as_str(self) -> &'static str {
+        match self {
+            E2eBrowser::Chromium => "chromium",
+            E2eBrowser::Firefox => "firefox",
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum Command {
     /// Inner loop (auto-fixes formatting): host static checks + clippy + the host
@@ -64,6 +94,15 @@ pub enum Command {
     /// Coverage-baseline maintenance.
     #[command(subcommand)]
     Coverage(CoverageCommand),
+    /// Build ONE e2e VM check (a {backend}×{browser} combo) through the same
+    /// diagnostic-preserving wrapper `validate` uses. For CI matrix fan-out;
+    /// not part of `check`/`validate`. Runs on the host only.
+    E2e {
+        #[arg(value_enum)]
+        backend: E2eBackend,
+        #[arg(value_enum)]
+        browser: E2eBrowser,
+    },
 }
 
 /// `coverage` subcommands.
@@ -104,6 +143,7 @@ impl Cli {
             Command::AuditWasm { .. } => "audit-wasm",
             Command::Coverage(CoverageCommand::Reanchor { .. }) => "coverage-reanchor",
             Command::Coverage(CoverageCommand::RefreshCrap { .. }) => "coverage-refresh-crap",
+            Command::E2e { .. } => "e2e",
         }
     }
 }
@@ -174,6 +214,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("coverage-refresh-crap");
             result.push(coverage::refresh_crap(&gcroot));
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::E2e { backend, browser } => {
+            let start = std::time::Instant::now();
+            let label = format!("e2e-{}-{}", backend.as_str(), browser.as_str());
+            let mut result = CommandResult::new(&label);
+            steps::nix::e2e_combo(&mut result, backend.as_str(), browser.as_str());
             finalize(&mut result, start);
             Ok(result)
         }
@@ -389,6 +437,18 @@ mod cli_tests {
                 assert_eq!(gcroot, "/tmp/x")
             }
             _ => panic!("expected coverage refresh-crap"),
+        }
+    }
+
+    #[test]
+    fn e2e_combo_parses_backend_and_browser() {
+        let cli = Cli::try_parse_from(["xtask", "e2e", "postgres", "firefox"]).unwrap();
+        match cli.command {
+            Command::E2e { backend, browser } => {
+                assert_eq!(backend, E2eBackend::Postgres);
+                assert_eq!(browser, E2eBrowser::Firefox);
+            }
+            _ => panic!("expected e2e"),
         }
     }
 }

@@ -75,6 +75,20 @@ pub fn e2e(result: &mut CommandResult) {
     result.push(step);
 }
 
+/// Build a single e2e {backend}×{browser} combo check via `build_check` (so the
+/// `nix build -L --keep-failed` log + `rescue_diagnostics` failure bundle land in
+/// `.xtask/diagnostics/e2e-<backend>-<browser>/`), then copy that combo's journal
+/// into the canonical diagnostics dir. Used by CI's e2e matrix.
+pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
+    let check = format!("e2e-{backend}-{browser}");
+    let step_name = format!("nix-{check}");
+    result.push(build_check(&step_name, &check));
+    copy_journals_between(
+        std::path::Path::new(&format!(".xtask/gcroots/{check}")),
+        std::path::Path::new(&format!(".xtask/diagnostics/{check}")),
+    );
+}
+
 /// Copy the realized e2e check's `jaunder-journal-*.log` files into the canonical
 /// diagnostics dir. Best-effort; silent on a missing out-link (e.g. a failed build).
 fn copy_e2e_journals() {
