@@ -274,10 +274,22 @@ fn failure_report(lowering: &[reanchor::LineText], crap_regs: &[CrapRegression])
             let _ = write!(s, "\n    … and {} more", crap_regs.len() - MAX);
         }
     }
-    s.push_str(
-        "\n  → real loss: add a test or get baseline/CRAP approval.\
-         \n  → benign post-rebase/line-shift drift: `cargo xtask check` re-anchors it, then commit.",
-    );
+    // Truthful, category-split guidance. The gate already absorbs benign
+    // line-shifts before failing, so a shown report is a real failure — don't
+    // promise an auto-fix that can't apply here.
+    if !lowering.is_empty() {
+        s.push_str(
+            "\n  → these lines are a real coverage loss unless the baseline is stale\
+             \n    (a shift the anchor diff couldn't see, e.g. after a rebase): add a\
+             \n    test, or re-anchor only after confirming they are not a genuine loss.",
+        );
+    }
+    if !crap_regs.is_empty() {
+        s.push_str(
+            "\n  → CRAP: reduce the function's complexity or improve its coverage;\
+             \n    refresh crap-manifest.json (with approval) only if it is stale drift.",
+        );
+    }
     s
 }
 
@@ -680,7 +692,25 @@ mod tests {
         assert!(r.contains("1 coverage lowering(s), 1 CRAP regression(s)"));
         assert!(r.contains("a.rs:10: let x = bar()?;"), "{r}"); // text trimmed
         assert!(r.contains("b.rs::f  9.00 → 11.00"), "{r}");
-        assert!(r.contains("cargo xtask check"), "recovery hint: {r}");
+        assert!(r.contains("real coverage loss"), "lowering guidance: {r}");
+        assert!(r.contains("CRAP: reduce"), "crap guidance: {r}");
+    }
+
+    #[test]
+    fn failure_report_guidance_is_category_conditional() {
+        // CRAP-only failure must not show the coverage-lowering guidance, and
+        // must never claim `cargo xtask check` re-anchors it (it can't here).
+        let crap = vec![CrapRegression {
+            file: "b.rs".into(),
+            function: "f".into(),
+            old: 9.0,
+            new: 11.0,
+        }];
+        let r = failure_report(&[], &crap);
+        assert!(!r.contains("coverage dropped here"), "{r}");
+        assert!(!r.contains("real coverage loss"), "{r}");
+        assert!(!r.contains("cargo xtask check"), "no false auto-fix: {r}");
+        assert!(r.contains("CRAP: reduce"), "{r}");
     }
 
     #[test]
