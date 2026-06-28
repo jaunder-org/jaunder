@@ -13,9 +13,9 @@ use std::sync::OnceLock;
 #[allow(unused_imports)]
 pub use db_test_harness::{
     backends, nonexistent_postgres_url, noop_mailer, postgres_bootstrap_url, postgres_only,
-    postgres_test_authority, postgres_testing_enabled, postgres_url, postgres_url_string,
-    recorded_postgres_url, seed_posts, sqlite_only, sqlite_url, template_postgres_url,
-    test_sqlite_state_with_pool, unique_postgres_url, Backend, TestBase, TestEnv, PG_URL_FILE,
+    postgres_test_authority, postgres_testing_enabled, recorded_postgres_url, seed_posts,
+    sqlite_only, sqlite_url, template_postgres_url, test_sqlite_state_with_pool,
+    unique_postgres_url, Backend, TestBase, TestEnv, PG_URL_FILE,
 };
 
 mod websub_capturing;

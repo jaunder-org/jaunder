@@ -1,28 +1,14 @@
 //! Shared both-backend test harness: the `Backend` enum, per-test database
-//! provisioning (SQLite tempdir; Postgres clone-from-template via
+//! provisioning (`SQLite` tempdir; Postgres clone-from-template via
 //! `JAUNDER_PG_TEST_URL`), the `AppState`-level `TestEnv`, and the
 //! `backends`/`sqlite_only`/`postgres_only` rstest templates. Consumed as a
 //! dev-dependency by `storage` and `server` so both can parametrize tests over
-//! SQLite and Postgres from one mechanism.
+//! `SQLite` and Postgres from one mechanism.
 
-// This crate is test-support scaffolding compiled as a *library* (not a test
-// target), so clippy applies pedantic lints that it suppresses inside the
-// integration-test `helpers` module the code moved from: `missing_panics_doc` /
-// `doc_markdown` on the relocated provisioning fns, and `must_use_candidate` on
-// the small value-returning test helpers (a `#[must_use]` on each would be
-// noise). Allow that pedantic set here, mirroring the rationale of the original
-// `server/tests/helpers/mod.rs` allow block.
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::missing_panics_doc,
-    clippy::must_use_candidate,
-    clippy::doc_markdown,
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::items_after_statements,
-    clippy::unused_async
-)]
+// This crate is deliberately unwrap/expect-heavy test scaffolding, so the
+// workspace's `unwrap_used`/`expect_used = deny` lints don't apply; everything
+// else clippy-pedantic flags is fixed in place rather than allowed.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use common::mailer::{MailSender, NoopMailSender};
 use sqlx::Connection;
@@ -115,13 +101,26 @@ pub const PG_URL_FILE: &str = "pg_test_url";
 
 /// Returns the Postgres connection string recorded by [`Backend::setup`] for a
 /// test's per-test database. Reuse this for raw-SQL pools so they see rows the
-/// state already inserted. Panics if called on a `SQLite` `TestEnv`.
+/// state already inserted.
+///
+/// # Panics
+///
+/// If called on a `SQLite` `TestEnv`, where no URL was recorded.
+#[must_use]
 pub fn recorded_postgres_url(base: &TempDir) -> String {
     std::fs::read_to_string(base.path().join(PG_URL_FILE))
         .expect("Postgres test URL not recorded; recorded_postgres_url is Postgres-only")
 }
 
 impl Backend {
+    /// Builds a fresh [`TestEnv`] (an `AppState` plus its backing temp dir) for
+    /// this backend: a `SQLite` file under a tempdir, or a per-test Postgres
+    /// database cloned from the migrated template.
+    ///
+    /// # Panics
+    ///
+    /// If the database cannot be opened/migrated (e.g. Postgres is unreachable
+    /// or `JAUNDER_PG_TEST_URL` is misconfigured) — a setup failure fails the test.
     pub async fn setup(self) -> TestEnv {
         let dir = TempDir::new().unwrap();
         let (state, base) = match self {
@@ -174,20 +173,32 @@ pub fn postgres_only(#[case] backend: Backend) {}
 #[case::postgres(Backend::Postgres)]
 pub fn backends(#[case] backend: Backend) {}
 
+/// The `SQLite` connect options for a `test.db` under `base`.
+///
+/// # Panics
+///
+/// If the constructed `sqlite:` URL fails to parse.
+#[must_use]
 pub fn sqlite_url(base: &TempDir) -> DbConnectOptions {
     format!("sqlite:{}", base.path().join("test.db").display())
         .parse()
         .unwrap()
 }
 
-pub fn postgres_url() -> DbConnectOptions {
+pub(crate) fn postgres_url() -> DbConnectOptions {
     postgres_url_string().parse().unwrap()
 }
 
+/// Whether Postgres-backed tests are enabled (i.e. `JAUNDER_PG_TEST_URL` is set).
+#[must_use]
 pub fn postgres_testing_enabled() -> bool {
     std::env::var("JAUNDER_PG_TEST_URL").is_ok()
 }
 
+/// The superuser bootstrap URL used to create/drop per-test databases —
+/// `JAUNDER_PG_BOOTSTRAP_TEST_URL` if set, else a `postgres` URL derived from the
+/// test URL's authority.
+#[must_use]
 pub fn postgres_bootstrap_url() -> String {
     bootstrap_url(
         std::env::var("JAUNDER_PG_BOOTSTRAP_TEST_URL").ok(),
@@ -206,7 +217,7 @@ fn bootstrap_url(explicit: Option<String>, test_url: &str) -> String {
     })
 }
 
-pub fn postgres_url_string() -> String {
+pub(crate) fn postgres_url_string() -> String {
     std::env::var("JAUNDER_PG_TEST_URL")
         .unwrap_or_else(|_| "postgres://jaunder@127.0.0.1:55432/jaunder".to_owned())
 }
@@ -226,6 +237,8 @@ fn postgres_url_authority(url: &str) -> String {
         .to_owned()
 }
 
+/// The `host:port` authority of the bootstrap connection (for raw cluster ops).
+#[must_use]
 pub fn postgres_test_authority() -> String {
     postgres_url_authority(&postgres_bootstrap_url())
 }
@@ -329,12 +342,25 @@ fn report_drop_outcome(
     }
 }
 
+/// A connect URL naming a per-test database that has **not** been created — for
+/// tests that exercise the "database is absent" path.
+///
+/// # Panics
+///
+/// If the constructed URL fails to parse.
+#[must_use]
 pub fn nonexistent_postgres_url() -> DbConnectOptions {
     postgres_url_with_db_name(&unique_postgres_db_name())
         .parse()
         .unwrap()
 }
 
+/// Creates a fresh, empty per-test Postgres database and returns its connect URL.
+///
+/// # Panics
+///
+/// If the test URL lacks a username, or the admin connection / `CREATE DATABASE`
+/// fails.
 pub async fn unique_postgres_url() -> DbConnectOptions {
     let db_name = unique_postgres_db_name();
 
@@ -429,6 +455,10 @@ async fn ensure_template_db() {
 /// Creates a fresh, already-migrated per-test database cloned from the template
 /// and returns its connection options. Owned by the same role as the configured
 /// test URL so the application user can access every cloned object.
+///
+/// # Panics
+///
+/// If template setup, the admin connection, or the `CREATE DATABASE` clone fails.
 pub async fn template_postgres_url() -> DbConnectOptions {
     ensure_template_db().await;
 
@@ -454,12 +484,17 @@ pub async fn template_postgres_url() -> DbConnectOptions {
 }
 
 /// Default mailer for tests that don't care about email sending.
+#[must_use]
 pub fn noop_mailer() -> Arc<dyn MailSender> {
     Arc::new(NoopMailSender)
 }
 
-/// Like `test_state` but also returns the underlying `SQLite` pool for raw SQL access.
-/// Only available when Postgres testing is disabled; panics otherwise.
+/// Builds a `SQLite` `AppState` and also returns the underlying pool for raw-SQL
+/// access (the pool isn't otherwise reachable from `AppState`).
+///
+/// # Panics
+///
+/// If the `SQLite` pool cannot be opened or migrated.
 pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx::SqlitePool) {
     let pool = sqlx::SqlitePool::connect_with(
         format!("sqlite:{}", base.path().join("test.db").display())
@@ -500,6 +535,10 @@ pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx
 /// negligible; the cost we avoid is axum routing + `server_fn` per call).
 /// `published == true` sets `published_at = now` so list/timeline endpoints
 /// return them; `false` leaves them as drafts. Returns ids in creation order.
+///
+/// # Panics
+///
+/// If a slug fails to parse or a post fails to persist.
 pub async fn seed_posts(
     state: &Arc<AppState>,
     user_id: i64,
