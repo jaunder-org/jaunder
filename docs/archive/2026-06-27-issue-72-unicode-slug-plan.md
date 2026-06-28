@@ -1,5 +1,7 @@
 # Unicode-Preserving, Never-Fail Slug Generation — Implementation Plan (issue #72)
 
+**Status:** Executed 2026-06-28 — all tasks landed (commits `5cf0d43`..`2fce271`). Full `cargo xtask validate` (incl. e2e on SQLite + Postgres) green; coverage clean. Code-reviewed (ready to merge); follow-up #120 filed (combining-mark scripts). Note: a one-time production `SELECT max(char_length(slug)) FROM posts` audit is advised before deploy (the 80-char `from_str` cap is enforced read-side).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make slug generation Unicode-faithful and guaranteed to succeed, with the charset chokepoint normalizing/validating Unicode and a length cap — no data migration.
