@@ -57,6 +57,7 @@ convention). All are currently `accepted`.
 | [0029](adr/0029-git-enforced-verify-gate.md) | Git-Enforced Verify Gate — Hook-Routed check/validate and Clean-Tree Gating | accepted |
 | [0030](adr/0030-coverage-reanchor-text-identity.md) | Coverage Re-Anchor by Text Identity | accepted |
 | [0031](adr/0031-elisp-separately-tested-subproject.md) | Elisp as a Separately-Tested Subproject | accepted |
+| [0032](adr/0032-coverage-text-verified-classification.md) | Coverage Classification Verified by Uncovered-Line Text | accepted |
 
 ## Archive
 
