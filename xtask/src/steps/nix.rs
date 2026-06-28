@@ -66,7 +66,43 @@ fn sentinel_detail(status: &coverage::status::CoverageStatus) -> String {
 /// `e2e-checks` aggregate), not here. `postgres-integration` is deliberately
 /// not dispatched — its tests already run under the coverage check.
 pub fn e2e(result: &mut CommandResult) {
-    result.push(build_check("nix-e2e", "e2e"));
+    let step = build_check("nix-e2e", "e2e");
+    // #93: surface the per-backend server journals in the one canonical, always-
+    // uploaded diagnostics dir, regardless of cache-hit/pass/fail. Best-effort: a
+    // failed e2e derivation produces no out-link, but its panic is already in
+    // build.log (the `-L` stream + the gate's assertion message).
+    copy_e2e_journals();
+    result.push(step);
+}
+
+/// Copy the realized e2e check's `jaunder-journal-*.log` files into the canonical
+/// diagnostics dir. Best-effort; silent on a missing out-link (e.g. a failed build).
+fn copy_e2e_journals() {
+    copy_journals_between(
+        std::path::Path::new(".xtask/gcroots/e2e"),
+        std::path::Path::new(".xtask/diagnostics/e2e"),
+    );
+}
+
+/// Copy every `jaunder-journal-*.log` from `src_dir` into `dest_dir` (created if
+/// needed). Returns the count copied. Pure path logic so it is unit-testable.
+fn copy_journals_between(src_dir: &std::path::Path, dest_dir: &std::path::Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(src_dir) else {
+        return 0;
+    };
+    let _ = std::fs::create_dir_all(dest_dir);
+    let mut copied = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name.starts_with("jaunder-journal-")
+            && name.ends_with(".log")
+            && std::fs::copy(entry.path(), dest_dir.join(name)).is_ok()
+        {
+            copied += 1;
+        }
+    }
+    copied
 }
 
 /// A `Write` that fans every write out to two inner writers, **best-effort**: a
@@ -275,5 +311,22 @@ mod tests {
         assert!(d.contains(".#checks.x86_64-linux.e2e"));
         assert!(d.contains("exited with"));
         assert!(d.contains("full build log: .xtask/diagnostics/e2e/build.log"));
+    }
+
+    #[test]
+    fn copy_journals_between_copies_only_journal_logs() {
+        let tmp = std::env::temp_dir().join(format!("xtask-j-{}", std::process::id()));
+        let src = tmp.join("src");
+        let dest = tmp.join("dest");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("jaunder-journal-sqlite.log"), b"ok").unwrap();
+        std::fs::write(src.join("otel-traces-sqlite.jsonl"), b"no").unwrap();
+
+        let n = super::copy_journals_between(&src, &dest);
+
+        assert_eq!(n, 1, "only the jaunder-journal-*.log file should be copied");
+        assert!(dest.join("jaunder-journal-sqlite.log").exists());
+        assert!(!dest.join("otel-traces-sqlite.jsonl").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

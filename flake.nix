@@ -530,6 +530,22 @@
           '';
         };
 
+        # #93 / ADR-0032: shared zero-panic gate appended to each e2e testScript.
+        # A server Rust panic is isolated (tests still pass), so without this it
+        # gets cached green and stays invisible. Dump the service journal, copy it
+        # to $out (before the assert, so a failing run is still diagnosable), then
+        # fail the check on any `panicked at` line. Default-deny via `allowed_panics`.
+        e2ePanicGate = backend: ''
+          machine.succeed("journalctl -u jaunder.service --no-pager -o cat > /tmp/jaunder-journal-${backend}.log")
+          # copy_from_vm's 2nd arg is a target *directory*; "" lands the file flat at
+          # $out/jaunder-journal-${backend}.log (the per-backend name comes from the source).
+          machine.copy_from_vm("/tmp/jaunder-journal-${backend}.log", "")
+          journal = machine.succeed("cat /tmp/jaunder-journal-${backend}.log")
+          allowed_panics: list[str] = []  # default-deny; add a proven-benign substring + a comment here if one ever appears
+          panics = [l for l in journal.splitlines() if "panicked at" in l and not any(a in l for a in allowed_panics)]
+          assert not panics, "e2e zero-panic gate (${backend}): jaunder.service logged Rust panic(s):\n" + "\n".join(panics)
+        '';
+
         mkE2eSqliteCheck =
           {
             checkName,
@@ -636,6 +652,8 @@
               machine.succeed("systemctl stop otel-collector.service")
               machine.succeed("test -s /var/lib/jaunder/otel-traces.jsonl")
               machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-sqlite.jsonl")
+
+              ${e2ePanicGate "sqlite"}
             '';
           };
 
@@ -778,6 +796,8 @@
               machine.succeed("systemctl stop otel-collector.service")
               machine.succeed("test -s /var/lib/jaunder/otel-traces.jsonl")
               machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-postgres.jsonl")
+
+              ${e2ePanicGate "postgres"}
             '';
           };
 
