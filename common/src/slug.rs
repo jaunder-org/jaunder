@@ -2,41 +2,54 @@ use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use unicode_normalization::UnicodeNormalization;
 
-/// A validated post slug matching `[a-z0-9][a-z0-9-]*`.
+/// Maximum slug length, in Unicode scalar values counted after NFC
+/// normalization. Bounds the percent-encoded URL and the stored value (CJK
+/// inflates ~3 bytes/char in UTF-8, more percent-encoded).
+pub const MAX_SLUG_CHARS: usize = 80;
+
+/// A validated post slug: NFC-normalized, Unicode-lowercased, made of Unicode
+/// letters/digits (`char::is_alphanumeric`) and `-`, at most [`MAX_SLUG_CHARS`].
 ///
-/// Constructed via [`FromStr`]; invalid strings are rejected at the boundary
-/// so interior code works only with already-valid slugs. The `try_from`/`into`
-/// serde bridge routes (de)serialization through that same validation, so a
-/// `Slug` serializes as a plain string and rejects invalid input on the wire —
-/// safe to use as a (de)serialized DTO field.
+/// Constructed via [`FromStr`], the single chokepoint both slug *generation* and
+/// inbound *URL resolution* funnel through; it normalizes so the stored form and
+/// an inbound lookup compare byte-for-byte regardless of the request's case or
+/// normal form. The `try_from`/`into` serde bridge routes (de)serialization
+/// through that same validation, so a `Slug` serializes as a plain string and
+/// rejects invalid input on the wire — safe as a (de)serialized DTO field.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Slug(String);
 
 /// Error returned when a string cannot be parsed as a [`Slug`].
 #[derive(Debug, Error)]
-#[error("slug must be non-empty and match [a-z0-9][a-z0-9-]*")]
+#[error("slug must be non-empty, at most 80 characters, and contain only Unicode letters/digits and '-'")]
 pub struct InvalidSlug;
 
 impl FromStr for Slug {
     type Err = InvalidSlug;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.is_empty() {
-            return Err(InvalidSlug);
-        }
-        let mut chars = s.chars();
-        // First character must be alphanumeric (lowercase)
+        // Normalize so stored slugs and inbound-URL lookups compare consistently
+        // regardless of case or Unicode normal form: lowercase (full-Unicode),
+        // then NFC-compose. Idempotent on an already-stored slug, so the read-path
+        // re-parse (storage::helpers) and inbound lookups agree on bytes.
+        let normalized: String = s.to_lowercase().nfc().collect();
+        let mut chars = normalized.chars();
+        // First character must be a Unicode letter or digit (no leading '-').
         let first = chars.next().ok_or(InvalidSlug)?;
-        if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+        if !first.is_alphanumeric() {
             return Err(InvalidSlug);
         }
-        // Remaining characters: lowercase alphanumeric or hyphen
-        if !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        // Remaining characters: Unicode letters/digits or hyphen.
+        if !chars.all(|c| c.is_alphanumeric() || c == '-') {
             return Err(InvalidSlug);
         }
-        Ok(Slug(s.to_owned()))
+        if normalized.chars().count() > MAX_SLUG_CHARS {
+            return Err(InvalidSlug);
+        }
+        Ok(Slug(normalized))
     }
 }
 
@@ -98,28 +111,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slug_parses_valid_values() {
-        assert!("hello-world".parse::<Slug>().is_ok());
-        assert!("abc123".parse::<Slug>().is_ok());
-        assert!("a".parse::<Slug>().is_ok());
-        assert!("0".parse::<Slug>().is_ok());
-        assert!("my-post-2024".parse::<Slug>().is_ok());
+    fn slug_accepts_ascii_and_unicode_lowercasing() {
+        assert_eq!(
+            "hello-world".parse::<Slug>().unwrap().as_str(),
+            "hello-world"
+        );
+        assert_eq!(
+            "my-post-2024".parse::<Slug>().unwrap().as_str(),
+            "my-post-2024"
+        );
+        // Uppercase is now accepted (lowercased), not rejected.
+        assert_eq!("Héllo".parse::<Slug>().unwrap().as_str(), "héllo");
+        assert_eq!("日本語".parse::<Slug>().unwrap().as_str(), "日本語");
+        assert_eq!("Москва".parse::<Slug>().unwrap().as_str(), "москва");
+        assert_eq!("café".parse::<Slug>().unwrap().as_str(), "café");
+    }
+
+    #[test]
+    fn slug_normalizes_nfd_input_to_nfc() {
+        // "cafe" + combining acute (NFD) normalizes to NFC "café" so an
+        // NFD-encoded inbound request matches an NFC-stored slug.
+        let nfd = "cafe\u{0301}";
+        assert_eq!(nfd.parse::<Slug>().unwrap().as_str(), "café");
+        assert_eq!(
+            nfd.parse::<Slug>().unwrap(),
+            "café".parse::<Slug>().unwrap()
+        );
     }
 
     #[test]
     fn slug_rejects_invalid_values() {
-        // empty
-        assert!("".parse::<Slug>().is_err());
-        // uppercase
-        assert!("Hello".parse::<Slug>().is_err());
-        // starts with hyphen
-        assert!("-hello".parse::<Slug>().is_err());
-        // spaces
-        assert!("hello world".parse::<Slug>().is_err());
-        // underscore
-        assert!("hello_world".parse::<Slug>().is_err());
-        // special chars
-        assert!("hello@world".parse::<Slug>().is_err());
+        assert!("".parse::<Slug>().is_err()); // empty
+        assert!("-hello".parse::<Slug>().is_err()); // leading hyphen
+        assert!("hello world".parse::<Slug>().is_err()); // space
+        assert!("hello_world".parse::<Slug>().is_err()); // underscore
+        assert!("hello@world".parse::<Slug>().is_err()); // symbol
+        assert!("🚀".parse::<Slug>().is_err()); // emoji is a Unicode Symbol, not alnum
+    }
+
+    #[test]
+    fn slug_enforces_length_cap() {
+        let max: String = "a".repeat(MAX_SLUG_CHARS);
+        assert!(max.parse::<Slug>().is_ok());
+        let over: String = "a".repeat(MAX_SLUG_CHARS + 1);
+        assert!(over.parse::<Slug>().is_err());
     }
 
     #[test]
