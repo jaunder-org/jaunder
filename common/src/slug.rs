@@ -24,7 +24,9 @@ pub struct Slug(String);
 
 /// Error returned when a string cannot be parsed as a [`Slug`].
 #[derive(Debug, Error)]
-#[error("slug must be non-empty, at most 80 characters, and contain only Unicode letters/digits and '-'")]
+#[error(
+    "slug must be non-empty, at most {MAX_SLUG_CHARS} characters, and contain only Unicode letters/digits and '-'"
+)]
 pub struct InvalidSlug;
 
 impl FromStr for Slug {
