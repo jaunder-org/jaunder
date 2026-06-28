@@ -1,7 +1,23 @@
+//! Shared both-backend test harness: the `Backend` enum, per-test database
+//! provisioning (SQLite tempdir; Postgres clone-from-template via
+//! `JAUNDER_PG_TEST_URL`), the `AppState`-level `TestEnv`, and the
+//! `backends`/`sqlite_only`/`postgres_only` rstest templates. Consumed as a
+//! dev-dependency by `storage` and `server` so both can parametrize tests over
+//! SQLite and Postgres from one mechanism.
+
+// This crate is test-support scaffolding compiled as a *library* (not a test
+// target), so clippy applies pedantic lints that it suppresses inside the
+// integration-test `helpers` module the code moved from: `missing_panics_doc` /
+// `doc_markdown` on the relocated provisioning fns, and `must_use_candidate` on
+// the small value-returning test helpers (a `#[must_use]` on each would be
+// noise). Allow that pedantic set here, mirroring the rationale of the original
+// `server/tests/helpers/mod.rs` allow block.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::doc_markdown,
     clippy::too_many_lines,
     clippy::similar_names,
     clippy::items_after_statements,
@@ -9,6 +25,21 @@
 )]
 #![allow(dead_code)]
 #![allow(unused_macros)]
+
+use common::mailer::{MailSender, NoopMailSender};
+use sqlx::Connection;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
+use storage::{
+    open_database, open_existing_database, AppState, DbConnectOptions, SqliteAtomicOps,
+    SqliteAudienceStorage, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
+    SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage,
+    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
+    SqliteUserConfigStorage, SqliteUserStorage,
+};
+use tempfile::TempDir;
 
 // This crate only *defines* the templates, so it needs just the `template`
 // attribute. `#[export]` is consumed by `#[template]` (no import needed), and the
@@ -24,10 +55,104 @@ pub enum Backend {
     Postgres,
 }
 
-// `#[export]` adds `#[macro_export]` to the generated template macro so it is
-// reachable at this crate's root and `#[apply]`-able from *other* crates
-// (`storage` tests, `server` tests). Without it the macro is `pub(crate)` and a
-// cross-crate `use db_test_harness::backends` fails with "private macro".
+/// A ready-to-use [`AppState`] plus the temp dir backing it. `base` doubles as
+/// the media-storage root HTTP tests need on both backends, and on `SQLite` it
+/// also holds the database file alive for the lifetime of the test.
+pub struct TestEnv {
+    pub state: Arc<AppState>,
+    pub base: TestBase,
+}
+
+/// Owns a test's temp dir and, on Postgres, the name of the per-test database
+/// cloned from the template. Dropping it removes that clone so the ephemeral
+/// cluster's data dir does not grow with the suite — the disk-exhaustion fix for
+/// issue #28. `Deref`s to the inner `TempDir`, so existing `base.path()` and
+/// `&base` uses keep compiling unchanged.
+pub struct TestBase {
+    dir: TempDir,
+    /// `Some(name)` on Postgres; `None` on `SQLite`.
+    postgres_db: Option<String>,
+}
+
+impl TestBase {
+    fn sqlite(dir: TempDir) -> Self {
+        Self {
+            dir,
+            postgres_db: None,
+        }
+    }
+
+    fn postgres(dir: TempDir, db_name: String) -> Self {
+        Self {
+            dir,
+            postgres_db: Some(db_name),
+        }
+    }
+}
+
+impl std::ops::Deref for TestBase {
+    type Target = TempDir;
+
+    fn deref(&self) -> &Self::Target {
+        &self.dir
+    }
+}
+
+impl Drop for TestBase {
+    fn drop(&mut self) {
+        if let Some(db_name) = self.postgres_db.take() {
+            drop_test_database(&db_name);
+        }
+    }
+}
+
+/// File name (under `TestEnv::base`) holding the Postgres connection string for
+/// the *per-test* database that [`AppState`] was migrated into. Raw-SQL tests
+/// need this because `template_postgres_url` mints a *fresh* clone on every
+/// call, so re-calling it would connect to a different (empty) database than
+/// the one the state seeded. Recorded here (instead of a new `TestEnv` field)
+/// to avoid breaking the many `let TestEnv { state, base } = ...` destructures.
+/// Absent on `SQLite`, where raw access goes through the `base` temp dir directly.
+pub const PG_URL_FILE: &str = "pg_test_url";
+
+/// Returns the Postgres connection string recorded by [`Backend::setup`] for a
+/// test's per-test database. Reuse this for raw-SQL pools so they see rows the
+/// state already inserted. Panics if called on a `SQLite` `TestEnv`.
+pub fn recorded_postgres_url(base: &TempDir) -> String {
+    std::fs::read_to_string(base.path().join(PG_URL_FILE))
+        .expect("Postgres test URL not recorded; recorded_postgres_url is Postgres-only")
+}
+
+impl Backend {
+    pub async fn setup(self) -> TestEnv {
+        let dir = TempDir::new().unwrap();
+        let (state, base) = match self {
+            Backend::Sqlite => {
+                let state = open_database(&sqlite_url(&dir)).await.unwrap();
+                (state, TestBase::sqlite(dir))
+            }
+            Backend::Postgres => {
+                let url = template_postgres_url().await;
+                let state = open_existing_database(&url).await.unwrap();
+                // template_postgres_url() always yields Postgres, so unreachable.
+                let DbConnectOptions::Postgres { options, .. } = &url else {
+                    unreachable!() // cov:ignore
+                };
+                let db_name = options
+                    .get_database()
+                    .expect("per-test database URL includes a name")
+                    .to_owned();
+                // Record the per-test DB URL so raw-SQL helpers reuse this exact
+                // database rather than minting a fresh (empty) template clone.
+                std::fs::write(dir.path().join(PG_URL_FILE), url.to_string())
+                    .expect("write recorded Postgres URL");
+                (state, TestBase::postgres(dir, db_name))
+            }
+        };
+        TestEnv { state, base }
+    }
+}
+
 #[template]
 #[export]
 #[rstest]
@@ -40,9 +165,413 @@ pub fn sqlite_only(#[case] backend: Backend) {}
 #[case::postgres(Backend::Postgres)]
 pub fn postgres_only(#[case] backend: Backend) {}
 
+// `#[export]` adds `#[macro_export]` to the generated template macro so it is
+// reachable at this crate's root and `#[apply]`-able from *other* crates
+// (`storage` tests, `server` tests). Without it the macro is `pub(crate)` and a
+// cross-crate `use db_test_harness::backends` fails with "private macro".
 #[template]
 #[export]
 #[rstest]
 #[case::sqlite(Backend::Sqlite)]
 #[case::postgres(Backend::Postgres)]
 pub fn backends(#[case] backend: Backend) {}
+
+pub fn sqlite_url(base: &TempDir) -> DbConnectOptions {
+    format!("sqlite:{}", base.path().join("test.db").display())
+        .parse()
+        .unwrap()
+}
+
+pub fn postgres_url() -> DbConnectOptions {
+    postgres_url_string().parse().unwrap()
+}
+
+pub fn postgres_testing_enabled() -> bool {
+    std::env::var("JAUNDER_PG_TEST_URL").is_ok()
+}
+
+pub fn postgres_bootstrap_url() -> String {
+    bootstrap_url(
+        std::env::var("JAUNDER_PG_BOOTSTRAP_TEST_URL").ok(),
+        &postgres_url_string(),
+    )
+}
+
+/// Pure core of [`postgres_bootstrap_url`]: the `explicit` bootstrap URL when set,
+/// else a `postgres` superuser URL on the same authority as `test_url`. Split out
+/// from the env read so both arms are unit-testable (the env read itself is
+/// covered whenever the suite provisions Postgres).
+fn bootstrap_url(explicit: Option<String>, test_url: &str) -> String {
+    explicit.unwrap_or_else(|| {
+        let authority = postgres_url_authority(test_url);
+        format!("postgres://postgres@{authority}/postgres")
+    })
+}
+
+pub fn postgres_url_string() -> String {
+    std::env::var("JAUNDER_PG_TEST_URL")
+        .unwrap_or_else(|_| "postgres://jaunder@127.0.0.1:55432/jaunder".to_owned())
+}
+
+fn postgres_url_authority(url: &str) -> String {
+    let without_scheme = url
+        .strip_prefix("postgres://")
+        .or_else(|| url.strip_prefix("postgresql://"))
+        .unwrap_or(url);
+    let after_credentials = without_scheme
+        .rsplit_once('@')
+        .map_or(without_scheme, |(_, authority_and_path)| authority_and_path);
+    after_credentials
+        .split('/')
+        .next()
+        .expect("bootstrap URL should include an authority")
+        .to_owned()
+}
+
+pub fn postgres_test_authority() -> String {
+    postgres_url_authority(&postgres_bootstrap_url())
+}
+
+fn quote_postgres_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+fn postgres_url_with_db_name(db_name: &str) -> String {
+    splice_db_name(&postgres_url_string(), db_name)
+}
+
+/// Pure core of [`postgres_url_with_db_name`]: replace the database segment of
+/// `template` with `db_name`, preserving any `?query`. Split out from the env read
+/// so the with-query and without-query arms are unit-testable.
+fn splice_db_name(template: &str, db_name: &str) -> String {
+    let (base, query) = template
+        .split_once('?')
+        .map_or((template, None), |(base, query)| (base, Some(query)));
+    let (prefix, _) = base
+        .rsplit_once('/')
+        .expect("PostgreSQL test URL should include a database name");
+    match query {
+        Some(query) => format!("{prefix}/{db_name}?{query}"),
+        None => format!("{prefix}/{db_name}"),
+    }
+}
+
+fn unique_postgres_db_name() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let suffix = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+    // nextest runs each test in its own process, so `COUNTER` (and thus
+    // `suffix`) restarts at 0 per process; the nanosecond timestamp alone can
+    // collide when two parallel test processes start within the same tick. The
+    // process id makes the name unique across processes regardless of clock
+    // resolution.
+    let pid = std::process::id();
+    format!("jaunder_test_{timestamp}_{pid}_{suffix}")
+}
+
+/// Best-effort `DROP DATABASE <name> WITH (FORCE)` for a per-test clone.
+///
+/// Runs on a dedicated thread with its own current-thread runtime so it is safe
+/// to call from `Drop` regardless of the ambient async context (a fresh thread
+/// has no running Tokio runtime, so building one does not panic). The thread is
+/// joined before returning, so the clone's disk is reclaimed before the next
+/// test allocates. `WITH (FORCE)` (Postgres 13+) terminates any connections
+/// still open to the clone, so teardown is robust to drop ordering relative to
+/// the `AppState` pool. The drop is bounded by a timeout and never panics (it
+/// runs inside `Drop`); a failed or timed-out drop is logged to stderr rather
+/// than returned mutely, since a silently leaking clone is the disk-creep
+/// regression this guards against.
+fn drop_test_database(db_name: &str) {
+    let bootstrap = postgres_bootstrap_url();
+    let statement = format!(
+        "DROP DATABASE {} WITH (FORCE)",
+        quote_postgres_identifier(db_name)
+    );
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                return; // cov:ignore — current-thread runtime build only fails under OOM
+            };
+            runtime.block_on(async {
+                let Ok(options) = bootstrap.parse::<sqlx::postgres::PgConnectOptions>() else {
+                    return; // cov:ignore — bootstrap URL is always a valid Postgres URL
+                };
+                let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    let mut conn = sqlx::PgConnection::connect_with(&options).await?;
+                    let dropped = sqlx::query(&statement).execute(&mut conn).await.map(|_| ());
+                    let _ = conn.close().await;
+                    dropped
+                })
+                .await;
+                report_drop_outcome(db_name, outcome);
+            });
+        });
+    });
+}
+
+/// Logs the outcome of the best-effort per-test database drop. Split out of
+/// [`drop_test_database`] so its failure/timeout arms — which fire only when a
+/// `DROP DATABASE` errors or exceeds the timeout, never in a normal run — can be
+/// `// cov:ignore`-marked at an indentation where the marker fits on the line.
+fn report_drop_outcome(
+    db_name: &str,
+    outcome: Result<Result<(), sqlx::Error>, tokio::time::error::Elapsed>,
+) {
+    match outcome {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => eprintln!("issue #28: drop {db_name} failed: {error}"), // cov:ignore
+        Err(_elapsed) => eprintln!("issue #28: drop {db_name} timed out"),        // cov:ignore
+    }
+}
+
+pub fn nonexistent_postgres_url() -> DbConnectOptions {
+    postgres_url_with_db_name(&unique_postgres_db_name())
+        .parse()
+        .unwrap()
+}
+
+pub async fn unique_postgres_url() -> DbConnectOptions {
+    let db_name = unique_postgres_db_name();
+
+    let bootstrap: sqlx::postgres::PgConnectOptions = postgres_bootstrap_url().parse().unwrap();
+    let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
+        panic!("expected postgres options"); // cov:ignore — postgres_url() always parses to Postgres
+    };
+    let owner = options.get_username();
+    assert!(
+        !owner.is_empty(),
+        "PostgreSQL test URL must include a username"
+    );
+
+    let mut admin_conn = sqlx::PgConnection::connect_with(&bootstrap).await.unwrap();
+    sqlx::query(&format!(
+        "CREATE DATABASE {} OWNER {}",
+        quote_postgres_identifier(&db_name),
+        quote_postgres_identifier(owner),
+    ))
+    .execute(&mut admin_conn)
+    .await
+    .unwrap();
+
+    postgres_url_with_db_name(&db_name).parse().unwrap()
+}
+
+/// Name of the once-migrated template database that per-test databases are
+/// cloned from. Cloning via `CREATE DATABASE ... TEMPLATE` block-copies an
+/// already-migrated schema, so each test pays a fast copy instead of re-running
+/// every migration.
+const TEMPLATE_DB: &str = "jaunder_test_template";
+
+/// Advisory-lock key serialising template creation across nextest's
+/// process-per-test workers. The first worker migrates the template; the rest
+/// see it already exists and skip straight to cloning.
+const TEMPLATE_LOCK_KEY: i64 = 78_316_621;
+
+/// Ensures [`TEMPLATE_DB`] exists and is fully migrated. Safe to call
+/// concurrently from many processes: creation is guarded by a session-level
+/// advisory lock taken on the bootstrap connection.
+async fn ensure_template_db() {
+    let bootstrap: sqlx::postgres::PgConnectOptions = postgres_bootstrap_url().parse().unwrap();
+    let mut admin = sqlx::PgConnection::connect_with(&bootstrap).await.unwrap();
+
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(TEMPLATE_LOCK_KEY)
+        .execute(&mut admin)
+        .await
+        .unwrap();
+
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+            .bind(TEMPLATE_DB)
+            .fetch_one(&mut admin)
+            .await
+            .unwrap();
+
+    if !exists {
+        let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
+            panic!("expected postgres options"); // cov:ignore — postgres_url() always parses to Postgres
+        };
+        let owner = options.get_username();
+        sqlx::query(&format!(
+            "CREATE DATABASE {} OWNER {}",
+            quote_postgres_identifier(TEMPLATE_DB),
+            quote_postgres_identifier(owner),
+        ))
+        .execute(&mut admin)
+        .await
+        .unwrap();
+
+        // Migrate the template through its own pool, then close it: a database
+        // can only serve as a CREATE DATABASE template when nobody is connected
+        // to it.
+        let pool = sqlx::PgPool::connect(&postgres_url_with_db_name(TEMPLATE_DB))
+            .await
+            .unwrap();
+        sqlx::migrate!("../storage/migrations/postgres")
+            .run(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(TEMPLATE_LOCK_KEY)
+        .execute(&mut admin)
+        .await
+        .unwrap();
+}
+
+/// Creates a fresh, already-migrated per-test database cloned from the template
+/// and returns its connection options. Owned by the same role as the configured
+/// test URL so the application user can access every cloned object.
+pub async fn template_postgres_url() -> DbConnectOptions {
+    ensure_template_db().await;
+
+    let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
+        panic!("expected postgres options"); // cov:ignore — postgres_url() always parses to Postgres
+    };
+    let owner = options.get_username();
+    let db_name = unique_postgres_db_name();
+
+    let bootstrap: sqlx::postgres::PgConnectOptions = postgres_bootstrap_url().parse().unwrap();
+    let mut admin = sqlx::PgConnection::connect_with(&bootstrap).await.unwrap();
+    sqlx::query(&format!(
+        "CREATE DATABASE {} OWNER {} TEMPLATE {}",
+        quote_postgres_identifier(&db_name),
+        quote_postgres_identifier(owner),
+        quote_postgres_identifier(TEMPLATE_DB),
+    ))
+    .execute(&mut admin)
+    .await
+    .unwrap();
+
+    postgres_url_with_db_name(&db_name).parse().unwrap()
+}
+
+/// Default mailer for tests that don't care about email sending.
+pub fn noop_mailer() -> Arc<dyn MailSender> {
+    Arc::new(NoopMailSender)
+}
+
+/// Like `test_state` but also returns the underlying `SQLite` pool for raw SQL access.
+/// Only available when Postgres testing is disabled; panics otherwise.
+pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx::SqlitePool) {
+    let pool = sqlx::SqlitePool::connect_with(
+        format!("sqlite:{}", base.path().join("test.db").display())
+            .parse::<sqlx::sqlite::SqliteConnectOptions>()
+            .unwrap()
+            .create_if_missing(true),
+    )
+    .await
+    .unwrap();
+    sqlx::migrate!("../storage/migrations/sqlite")
+        .run(&pool)
+        .await
+        .unwrap();
+    let state = Arc::new(AppState {
+        site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
+        users: Arc::new(SqliteUserStorage::new(pool.clone())),
+        sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
+        invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
+        atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
+        email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
+        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
+        posts: Arc::new(SqlitePostStorage::new(pool.clone())),
+        subscriptions: Arc::new(SqliteSubscriptionStorage::new(
+            pool.clone(),
+            Arc::new(common::visibility::OpenSubscriptionPolicy),
+        )),
+        audiences: Arc::new(SqliteAudienceStorage::new(pool.clone())),
+        media: Arc::new(SqliteMediaStorage::new(pool.clone())),
+        user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
+        feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
+        feed_events: Arc::new(SqliteFeedEventStorage::new(pool.clone())),
+    });
+    (state, pool)
+}
+
+/// Seeds `count` posts for `user_id` directly through the storage service,
+/// bypassing the HTTP/server-fn path (markdown render of trivial bodies is
+/// negligible; the cost we avoid is axum routing + `server_fn` per call).
+/// `published == true` sets `published_at = now` so list/timeline endpoints
+/// return them; `false` leaves them as drafts. Returns ids in creation order.
+pub async fn seed_posts(
+    state: &Arc<AppState>,
+    user_id: i64,
+    count: usize,
+    published: bool,
+) -> Vec<i64> {
+    let mut ids = Vec::with_capacity(count);
+    for i in 0..count {
+        let published_at = if published {
+            Some(chrono::Utc::now())
+        } else {
+            None
+        };
+        let id = storage::create_rendered_post(
+            &*state.posts,
+            user_id,
+            None,
+            format!("seed-{i}").parse().expect("valid slug"),
+            format!("# Post {i}\n\nbody"),
+            storage::PostFormat::Markdown,
+            published_at,
+            None,
+            vec![common::visibility::AudienceTarget::Public],
+        )
+        .await
+        .expect("seed post should be created");
+        ids.push(id);
+    }
+    ids
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bootstrap_url, splice_db_name};
+
+    #[test]
+    fn bootstrap_url_prefers_explicit_when_set() {
+        assert_eq!(
+            bootstrap_url(
+                Some("postgres://admin@db:5432/postgres".to_owned()),
+                "postgres://jaunder@127.0.0.1:55432/jaunder",
+            ),
+            "postgres://admin@db:5432/postgres"
+        );
+    }
+
+    #[test]
+    fn bootstrap_url_derives_superuser_url_on_test_authority_when_unset() {
+        assert_eq!(
+            bootstrap_url(None, "postgres://jaunder@127.0.0.1:55432/jaunder"),
+            "postgres://postgres@127.0.0.1:55432/postgres"
+        );
+    }
+
+    #[test]
+    fn splice_db_name_replaces_the_database_segment() {
+        assert_eq!(
+            splice_db_name("postgres://jaunder@127.0.0.1:55432/jaunder", "clone_1"),
+            "postgres://jaunder@127.0.0.1:55432/clone_1"
+        );
+    }
+
+    #[test]
+    fn splice_db_name_preserves_the_query_string() {
+        assert_eq!(
+            splice_db_name(
+                "postgres://jaunder@127.0.0.1:55432/jaunder?sslmode=require",
+                "clone_1",
+            ),
+            "postgres://jaunder@127.0.0.1:55432/clone_1?sslmode=require"
+        );
+    }
+}

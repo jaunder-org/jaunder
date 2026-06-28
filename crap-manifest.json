@@ -1379,6 +1379,15 @@
       "line": 52
     },
     {
+      "coverage": 77.77777777777779,
+      "crap": 4.175582990397805,
+      "crate": "db-test-harness",
+      "cyclomatic": 4.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "report_drop_outcome",
+      "line": 323
+    },
+    {
       "coverage": 83.33333333333334,
       "crap": 4.0740740740740735,
       "crate": "jaunder",
@@ -1865,6 +1874,15 @@
       "line": 404
     },
     {
+      "coverage": 94.44444444444444,
+      "crap": 3.001543209876543,
+      "crate": "db-test-harness",
+      "cyclomatic": 3.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "Backend::setup",
+      "line": 127
+    },
+    {
       "coverage": 100.0,
       "crap": 3.0,
       "crate": "common",
@@ -1926,6 +1944,24 @@
       "file": "common/src/atompub/entry.rs",
       "function": "decode_text",
       "line": 426
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 3.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "splice_db_name",
+      "line": 246
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 3.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "seed_posts",
+      "line": 505
     },
     {
       "coverage": 100.0,
@@ -2522,6 +2558,15 @@
       "line": 118
     },
     {
+      "coverage": 97.5609756097561,
+      "crap": 2.0000580374631824,
+      "crate": "db-test-harness",
+      "cyclomatic": 2.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "ensure_template_db",
+      "line": 380
+    },
+    {
       "coverage": 100.0,
       "crap": 2.0,
       "crate": "common",
@@ -2612,31 +2657,13 @@
       "line": 20
     },
     {
-      "coverage": null,
+      "coverage": 100.0,
       "crap": 2.0,
       "crate": "db-test-harness",
-      "cyclomatic": 1.0,
+      "cyclomatic": 2.0,
       "file": "db-test-harness/src/lib.rs",
-      "function": "sqlite_only",
-      "line": 35
-    },
-    {
-      "coverage": null,
-      "crap": 2.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "postgres_only",
-      "line": 41
-    },
-    {
-      "coverage": null,
-      "crap": 2.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "backends",
-      "line": 48
+      "function": "TestBase::drop",
+      "line": 102
     },
     {
       "coverage": 100.0,
@@ -3827,6 +3854,15 @@
       "line": 9
     },
     {
+      "coverage": 92.0,
+      "crap": 1.000512,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "drop_test_database",
+      "line": 288
+    },
+    {
       "coverage": 94.33962264150944,
       "crap": 1.000181357765135,
       "crate": "web",
@@ -3843,6 +3879,24 @@
       "file": "web/src/subscriptions/mod.rs",
       "function": "is_subscribed_to",
       "line": 104
+    },
+    {
+      "coverage": 94.73684210526316,
+      "crap": 1.0001457938474996,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "unique_postgres_url",
+      "line": 340
+    },
+    {
+      "coverage": 94.73684210526316,
+      "crap": 1.0001457938474996,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "template_postgres_url",
+      "line": 434
     },
     {
       "coverage": 95.23809523809524,
@@ -4563,6 +4617,195 @@
       "file": "common/src/atompub/mod.rs",
       "function": "AtomPubError::from",
       "line": 56
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "TestBase::sqlite",
+      "line": 78
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "TestBase::postgres",
+      "line": 85
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "TestBase::deref",
+      "line": 96
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "recorded_postgres_url",
+      "line": 121
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "sqlite_only",
+      "line": 160
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "postgres_only",
+      "line": 166
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "backends",
+      "line": 177
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "sqlite_url",
+      "line": 179
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "postgres_url",
+      "line": 185
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "postgres_testing_enabled",
+      "line": 189
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "postgres_bootstrap_url",
+      "line": 193
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "bootstrap_url",
+      "line": 204
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "postgres_url_string",
+      "line": 211
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "postgres_url_authority",
+      "line": 216
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "postgres_test_authority",
+      "line": 231
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "quote_postgres_identifier",
+      "line": 235
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "postgres_url_with_db_name",
+      "line": 239
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "unique_postgres_db_name",
+      "line": 259
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "nonexistent_postgres_url",
+      "line": 334
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "noop_mailer",
+      "line": 459
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "db-test-harness",
+      "cyclomatic": 1.0,
+      "file": "db-test-harness/src/lib.rs",
+      "function": "test_sqlite_state_with_pool",
+      "line": 465
     },
     {
       "coverage": 100.0,

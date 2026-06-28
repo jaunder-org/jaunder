@@ -1784,6 +1784,7 @@ dependencies = [
  "clap",
  "common",
  "croner",
+ "db-test-harness",
  "email_address",
  "flate2",
  "futures-util",
