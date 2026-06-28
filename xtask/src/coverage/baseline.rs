@@ -31,8 +31,9 @@ impl Baseline {
         // Drop the entry entirely for a gap-free file rather than storing an
         // empty list: `from_files` calls this for every reported file (most are
         // fully covered), so this keeps the committed baseline to only
-        // files-with-gaps and keeps the heal's JSON-equality check stable — an
-        // empty `"f": []` entry would differ from an absent key and churn.
+        // files-with-gaps and keeps the heal's line-independent fingerprint
+        // comparison (`text_fingerprint`) stable — an empty `"f": []` entry would
+        // differ from an absent key and churn.
         if gaps.is_empty() {
             self.files.remove(path);
         } else {

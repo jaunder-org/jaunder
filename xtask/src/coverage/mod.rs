@@ -117,6 +117,9 @@ fn heal_baseline(
     // texts, new line numbers) is NOT rewritten — the committed line numbers are
     // a hint, so the baseline doesn't churn on every shift and the pre-commit
     // gate's fail-and-restage fires only on genuine coverage changes (#113).
+    // (Skipping leaves the anchor — the last commit that touched the file — in
+    // place, so the anchor→worktree diff can span more history; that only grows
+    // the diff, the reanchor text-multiset check stays sound regardless.)
     if healed.text_fingerprint() != loaded.text_fingerprint() {
         (Some(healed), true)
     } else {
