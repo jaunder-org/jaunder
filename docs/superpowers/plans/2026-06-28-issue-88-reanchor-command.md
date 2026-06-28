@@ -391,23 +391,23 @@ Now redundant — `coverage reanchor` is the discoverable, safe replacement.
 
 **Interfaces:** removes `Command::RegenBaseline` and the `regen_baseline*` fns; no new API.
 
-- [ ] **Step 1: Delete the `RegenBaseline` enum variant**
+- [x] **Step 1: Delete the `RegenBaseline` enum variant**
 
 In `xtask/src/lib.rs`, remove (the doc comment + `#[command(name = "__regen-baseline", hide = true)]` + `RegenBaseline { gcroot: String }`, currently ~lines 47-54).
 
-- [ ] **Step 2: Delete the `command_name` arm**
+- [x] **Step 2: Delete the `command_name` arm**
 
 Remove `Command::RegenBaseline { .. } => "__regen-baseline",` (~line 79).
 
-- [ ] **Step 3: Delete the `run` dispatch arm**
+- [x] **Step 3: Delete the `run` dispatch arm**
 
 Remove the `Command::RegenBaseline { gcroot } => { … }` block (~lines 124-131).
 
-- [ ] **Step 4: Delete the `regen_baseline` / `regen_baseline_inner` fns**
+- [x] **Step 4: Delete the `regen_baseline` / `regen_baseline_inner` fns**
 
 Remove both functions (~lines 168-198). If a helper they used (e.g. a local with-gaps count) is now unreferenced, remove it too — let the compiler/clippy guide you.
 
-- [ ] **Step 5: Verify build, clippy, and tests are clean**
+- [x] **Step 5: Verify build, clippy, and tests are clean**
 
 Run: `cargo xtask check --no-test`
 Expected: exit 0. The `command_name` and `run` matches over `Command` are exhaustive — the compiler confirms every `RegenBaseline` reference is gone; no `unused function` warnings (nothing else called `regen_baseline*`).
@@ -415,12 +415,12 @@ Expected: exit 0. The `command_name` and `run` matches over `Command` are exhaus
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml`
 Expected: PASS — no test referenced `__regen-baseline`.
 
-- [ ] **Step 6: Confirm no stray references**
+- [x] **Step 6: Confirm no stray references**
 
 Run: `git grep -n -- '__regen-baseline\|regen_baseline' -- ':!docs/archive' ':!docs/superpowers'`
 Expected: no matches (the only historical references live in archived docs).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add xtask/src/lib.rs

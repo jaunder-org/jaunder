@@ -44,14 +44,6 @@ pub enum Command {
         #[arg(long)]
         allow_dirty: bool,
     },
-    /// Regenerate the accepted-uncovered baseline (`coverage-baseline.json`)
-    /// from a coverage check's `coverage-report.txt`. One-shot, hidden helper.
-    #[command(name = "__regen-baseline", hide = true)]
-    RegenBaseline {
-        /// GC-root / out-link directory holding `coverage-report.txt`.
-        #[arg(long, default_value = ".xtask/gcroots/coverage")]
-        gcroot: String,
-    },
     /// Measure the frontend WASM/JS bundle size — raw, gzip, and brotli.
     ///
     /// Reports the download weight of the deterministic `nix build .#site`
@@ -96,7 +88,6 @@ impl Cli {
         match self.command {
             Command::Check { .. } => "check",
             Command::Validate { .. } => "validate",
-            Command::RegenBaseline { .. } => "__regen-baseline",
             Command::AuditWasm { .. } => "audit-wasm",
             Command::Coverage(CoverageCommand::Reanchor { .. }) => "coverage-reanchor",
         }
@@ -142,14 +133,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             finalize(&mut result, start);
             Ok(result)
         }
-        Command::RegenBaseline { gcroot } => {
-            let start = std::time::Instant::now();
-            let mut result = CommandResult::new("__regen-baseline");
-            let step = regen_baseline(&gcroot);
-            result.push(step);
-            finalize(&mut result, start);
-            Ok(result)
-        }
         Command::AuditWasm { site_path } => {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("audit-wasm");
@@ -188,41 +171,6 @@ pub fn ensure_hooks_installed() {
         Ok(false) => {}
         Err(e) => eprintln!("xtask: warning: could not set core.hooksPath: {e:#}"),
     }
-}
-
-/// One-shot: parse `<gcroot>/coverage-report.txt`, build the accepted-uncovered
-/// baseline from the currently-uncovered executable lines, and write it to
-/// `coverage-baseline.json` (repo-relative paths via `git rev-parse`).
-fn regen_baseline(gcroot: &str) -> StepResult {
-    match regen_baseline_inner(gcroot) {
-        Ok(n) => StepResult::ok("regen-baseline").detail(format!(
-            "wrote coverage-baseline.json ({n} file(s) with gaps)"
-        )),
-        Err(e) => StepResult::fail("regen-baseline").detail(e.to_string()),
-    }
-}
-
-fn regen_baseline_inner(gcroot: &str) -> anyhow::Result<usize> {
-    use anyhow::Context as _;
-    let report_path = format!("{gcroot}/coverage-report.txt");
-    let report =
-        std::fs::read_to_string(&report_path).with_context(|| format!("reading {report_path}"))?;
-    let repo_root = String::from_utf8(
-        std::process::Command::new("git")
-            .args(["rev-parse", "--show-toplevel"])
-            .output()
-            .context("running git rev-parse --show-toplevel")?
-            .stdout,
-    )?;
-    let repo_root = repo_root.trim();
-    let files = coverage::report::parse_text_report(&report, repo_root);
-    let baseline = coverage::baseline::Baseline::from_files(&files);
-    baseline.save("coverage-baseline.json")?;
-    let with_gaps = files
-        .iter()
-        .filter(|f| f.lines.iter().any(|l| !l.covered))
-        .count();
-    Ok(with_gaps)
 }
 
 /// A `git -C <repo_dir>` command scrubbed of the ambient env vars that redirect
