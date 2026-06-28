@@ -37,6 +37,7 @@ pub mod subscriptions;
 pub mod tags;
 pub mod viewer;
 
+pub use error::server_resource;
 pub use pages::App;
 
 use leptos::prelude::*;

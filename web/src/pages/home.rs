@@ -36,7 +36,7 @@ pub fn HomePage() -> impl IntoView {
     let on_mutate = Callback::new(move |()| refresh_version.update(|v| *v += 1));
 
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
-    let initial_page = Resource::new(
+    let initial_page = crate::server_resource(
         move || refresh_version.get(),
         |_| async move {
             match current_user().await {

@@ -8,7 +8,7 @@ use leptos::prelude::*;
 #[component]
 pub fn ProfilePage() -> impl IntoView {
     let update_action = ServerAction::<UpdateProfile>::new();
-    let profile = Resource::new(move || update_action.version().get(), |_| get_profile());
+    let profile = crate::server_resource(move || update_action.version().get(), |_| get_profile());
 
     view! {
         <Topbar title="Profile".to_string() sub="Your details".to_string() />
@@ -67,7 +67,7 @@ pub fn ProfilePage() -> impl IntoView {
 #[component]
 fn DefaultPostFormatControl() -> impl IntoView {
     let action = ServerAction::<SetDefaultPostFormat>::new();
-    let initial = Resource::new(|| (), |()| get_default_post_format());
+    let initial = crate::server_resource(|| (), |()| get_default_post_format());
 
     view! {
         <Suspense fallback=|| ()>

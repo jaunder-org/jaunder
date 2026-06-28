@@ -10,7 +10,7 @@ use leptos::prelude::*;
 #[component]
 pub fn EmailPage() -> impl IntoView {
     let request_action = ServerAction::<RequestEmailVerification>::new();
-    let profile = Resource::new(move || request_action.version().get(), |_| get_profile());
+    let profile = crate::server_resource(move || request_action.version().get(), |_| get_profile());
 
     view! {
         <Topbar title="Email".to_string() sub="Verify your address".to_string() />
@@ -64,7 +64,7 @@ pub fn VerifyEmailPage() -> impl IntoView {
 
     let query = use_query_map();
     let token = move || query.with(|q| q.get("token").unwrap_or_default());
-    let result = Resource::new(token, verify_email);
+    let result = crate::server_resource(token, verify_email);
 
     view! {
         <Topbar title="Verify Email".to_string() />

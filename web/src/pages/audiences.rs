@@ -42,9 +42,9 @@ pub fn AudiencesPage() -> impl IntoView {
     // placeholder; wasm-only Effects seed the lists after hydration, and any
     // mutation bumps `version` to re-fetch.
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
-    let audiences_res = Resource::new(version, |_| list_my_audiences());
+    let audiences_res = crate::server_resource(version, |_| list_my_audiences());
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
-    let subscribers_res = Resource::new(version, |_| list_my_subscribers());
+    let subscribers_res = crate::server_resource(version, |_| list_my_subscribers());
     // `None` = still loading; `Some(Ok/Err)` once resolved on the client.
     let audiences = RwSignal::new(None::<Result<Vec<AudienceSummary>, String>>);
     let subscribers = RwSignal::new(Vec::<SubscriberSummary>::new());
@@ -155,7 +155,7 @@ fn AudienceRow(
     // client-only (web-style-guide.md §9): an SSR-serialized `Err` from the
     // disposal race would otherwise stick. `None` = loading.
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
-    let members_res = Resource::new(
+    let members_res = crate::server_resource(
         move || (add_action.version().get(), remove_action.version().get()),
         move |_| list_audience_members(audience_id),
     );

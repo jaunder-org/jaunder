@@ -362,6 +362,40 @@ fn render_operator_message(public: &WebError, source: Option<&anyhow::Error>) ->
     }
 }
 
+/// Wraps a `Resource` fetcher's future so the reactive owner — captured here, while it
+/// is still current (the resource's own owner) — is held by a *strong* ref and
+/// re-applied on every poll. This keeps server-fn context (storage trait objects and
+/// request `Parts`) alive even when the future is later polled on a worker thread
+/// detached from the owner. The owner is live only at fetcher invocation; an
+/// `async fn` body has no synchronous prologue, so this cannot live in the handler.
+/// `new_untracked` so context reads don't create spurious reactive subscriptions.
+/// Extends #89's [`server_boundary`] mechanism to the `Resource` layer; see the
+/// ADR-0016 #124 addendum.
+fn scoped_fetcher_future<Fut>(fut: Fut) -> leptos::reactive::computed::ScopedFuture<Fut>
+where
+    Fut: std::future::Future,
+{
+    leptos::reactive::computed::ScopedFuture::new_untracked(fut)
+}
+
+/// The sanctioned way to create a `Resource` in `web`: identical to
+/// `leptos::prelude::Resource::new`, but wraps the fetcher's future via
+/// [`scoped_fetcher_future`] so server-fn context survives SSR polling on a worker
+/// thread detached from the owner (issue #124). Raw `Resource::new` is banned in
+/// `web` outside this definition (static guard).
+pub fn server_resource<T, S, Fut>(
+    source: impl Fn() -> S + Send + Sync + 'static,
+    fetcher: impl Fn(S) -> Fut + Send + Sync + 'static,
+) -> leptos::prelude::Resource<T>
+where
+    T: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
+    S: PartialEq + Clone + Send + Sync + 'static,
+    Fut: std::future::Future<Output = T> + Send + 'static,
+{
+    #[allow(clippy::disallowed_methods)] // the one sanctioned Resource::new (issue #124)
+    leptos::prelude::Resource::new(source, move |s| scoped_fetcher_future(fetcher(s)))
+}
+
 /// Awaits the given future, converting any `InternalError` to its public `WebError` form.
 ///
 /// # Errors
@@ -1016,6 +1050,38 @@ mod owner_lifetime {
             "ScopedFuture wrapped with no current owner captures an empty owner"
         );
         drop(owner);
+    }
+
+    /// #124: a `Resource` fetcher's future wrapped by `scoped_fetcher_future` (what
+    /// `server_resource` applies) keeps its context across an owner drop — even when
+    /// the owner's strong ref is gone before the future is first polled, the
+    /// SSR-resource detachment that `server_boundary` could not cover.
+    #[test]
+    fn scoped_fetcher_future_keeps_context_across_owner_drop() {
+        let owner = Owner::new();
+        owner.set();
+        provide_context(Marker(7));
+
+        // Build the future exactly as `server_resource` does, then drop our owner
+        // ref *before the first poll* (the SSR-resource detachment).
+        let mut fut = Box::pin(crate::error::scoped_fetcher_future(async {
+            let pre = use_context::<Marker>();
+            YieldOnce(false).await;
+            let post = use_context::<Marker>();
+            (pre, post)
+        }));
+        drop(owner);
+
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(step(fut.as_mut().poll(&mut cx)).is_none());
+        let (pre, post) =
+            step(fut.as_mut().poll(&mut cx)).expect("future did not complete on second poll");
+        assert_eq!(
+            pre,
+            Some(Marker(7)),
+            "context present at first (detached) poll"
+        );
+        assert_eq!(post, Some(Marker(7)), "context survives the await");
     }
 
     /// The actual fix: `server_boundary` must keep context alive across an await,

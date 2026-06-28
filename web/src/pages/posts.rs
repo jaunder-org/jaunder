@@ -27,7 +27,7 @@ use leptos_router::hooks::use_params_map;
 #[allow(clippy::must_use_candidate)]
 #[component]
 pub fn CreatePostPage() -> impl IntoView {
-    let current_user = Resource::new(|| (), |()| current_user());
+    let current_user = crate::server_resource(|| (), |()| current_user());
     let last_result: RwSignal<Option<CreatePostResult>> = RwSignal::new(None);
 
     view! {
@@ -133,7 +133,7 @@ pub fn PostPage() -> impl IntoView {
         (username, year, month, day, slug)
     };
 
-    let post = Resource::new(
+    let post = crate::server_resource(
         post_data,
         |(username, year, month, day, slug): (Option<String>, i32, u32, u32, String)| async move {
             let username = match username {
@@ -225,7 +225,7 @@ fn SubscribeButton(username: String) -> impl IntoView {
 
     // Re-query after either action mutates the subscription.
     let username_for_state = username.clone();
-    let state = Resource::new(
+    let state = crate::server_resource(
         move || (subscribe.version().get(), unsubscribe.version().get()),
         move |_| {
             let username = username_for_state.clone();
@@ -298,7 +298,7 @@ pub fn UserTimelinePage() -> impl IntoView {
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
-    let initial_page = Resource::new(
+    let initial_page = crate::server_resource(
         move || (username.get(), mutate_version.get()),
         |(username, _)| async move {
             if username.is_empty() {
@@ -459,7 +459,7 @@ pub fn DraftPreviewPage() -> impl IntoView {
     let publish_action = ServerAction::<PublishPost>::new();
     let params = use_params_map();
 
-    let preview = Resource::new(
+    let preview = crate::server_resource(
         move || params.get(),
         |params| async move {
             let post_id = params
@@ -597,9 +597,9 @@ pub fn EditPostPage() -> impl IntoView {
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(-1)
     };
-    let post = Resource::new(post_id_param, get_post_preview);
+    let post = crate::server_resource(post_id_param, get_post_preview);
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
-    let current_audience = Resource::new(post_id_param, post_audience_selection);
+    let current_audience = crate::server_resource(post_id_param, post_audience_selection);
     // Client-only: copying the resolved Resource into `audience` must not run
     // during SSR, where the future can resolve after the per-request reactive
     // owner is disposed (web-style-guide.md §9). The picker is seeded with the
@@ -837,7 +837,7 @@ pub fn EditPostPage() -> impl IntoView {
 pub fn DraftsPage() -> impl IntoView {
     let publish_action = ServerAction::<PublishPost>::new();
     let delete_action = ServerAction::<DeletePost>::new();
-    let drafts = Resource::new(
+    let drafts = crate::server_resource(
         move || {
             (
                 publish_action.version().get(),
@@ -1008,7 +1008,7 @@ pub fn SiteTagPage() -> impl IntoView {
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
-    let initial_page = Resource::new(
+    let initial_page = crate::server_resource(
         move || (tag.get(), mutate_version.get()),
         |(tag, _)| async move {
             if tag.is_empty() {
@@ -1162,7 +1162,7 @@ pub fn UserTagPage() -> impl IntoView {
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
-    let initial_page = Resource::new(
+    let initial_page = crate::server_resource(
         move || (username.get(), tag.get(), mutate_version.get()),
         |(username, tag, _)| async move {
             if username.is_empty() {

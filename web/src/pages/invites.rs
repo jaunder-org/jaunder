@@ -10,8 +10,8 @@ use leptos::prelude::*;
 #[component]
 pub fn InvitesPage() -> impl IntoView {
     let create_action = ServerAction::<CreateInvite>::new();
-    let policy = Resource::new(|| (), |()| get_registration_policy());
-    let invites = Resource::new(move || create_action.version().get(), |_| list_invites());
+    let policy = crate::server_resource(|| (), |()| get_registration_policy());
+    let invites = crate::server_resource(move || create_action.version().get(), |_| list_invites());
 
     view! {
         <Topbar title="Invites".to_string() sub="Manage codes".to_string() />

@@ -8,7 +8,7 @@ use leptos::prelude::*;
 #[component]
 pub fn SiteSettingsPage() -> impl IntoView {
     let update_action = ServerAction::<UpdateSiteIdentity>::new();
-    let settings = Resource::new(
+    let settings = crate::server_resource(
         move || update_action.version().get(),
         |_| get_site_identity(),
     );
