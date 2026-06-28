@@ -76,3 +76,23 @@ classifier — after a rebase, `cargo xtask check` regenerates the baseline from
 *actual* coverage (no guessing), and #110 made that re-heal consistent (load the
 baseline from the anchor commit, not the working tree). The classifier remains
 line-identity with this text check as its diff-visible safety net.
+
+## Supplement (#88) — the explicit reanchor command
+
+ADR-0030 anticipated "the explicit reanchor command (#88)". It lands as
+`cargo xtask coverage reanchor`, and it does **not** introduce a second, weaker
+safety notion: it reuses this ADR's `reanchor_is_safe` predicate (diff-based,
+`appeared ⊆ structural`), so it refuses a genuine lowering exactly when the gate
+does. The issue's original "uncovered-text-set unchanged/shrank" wording — a naive
+multiset check — is **not** what shipped; that is the text-primary approach the #112
+supplement above rejected as unsound.
+
+The command is **candidate-promotion only**: a safe move re-anchors
+`coverage-baseline.json` in place; a genuine lowering is refused (non-zero exit) and
+the would-be baseline is written to `.xtask/coverage-baseline.candidate.json` (under
+the gitignored `/.xtask/`), never the committed file. There is deliberately **no
+accept-all path** — the removed `__regen-baseline` was exactly that footgun.
+Accepting an approved lowering is a manual `cp` of the candidate, so it always lands
+as a reviewable diff under the coverage-baseline policy. The failing coverage gate
+prints `cargo xtask coverage reanchor` as the recovery for a lowering; the symmetric
+CRAP-manifest refresh path is tracked separately (the #88 CRAP follow-on, #131).

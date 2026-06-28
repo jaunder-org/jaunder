@@ -500,7 +500,7 @@ baseline-only)."
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Document the command in CONTRIBUTING**
+- [x] **Step 1: Document the command in CONTRIBUTING**
 
 In `CONTRIBUTING.md`, in the coverage-gate paragraph that explains the heal / re-anchor (around the "uncovered-text identity" / "re-anchor" discussion, ~lines 188-194), add a sentence documenting the command and the candidate-promotion flow:
 
@@ -510,7 +510,7 @@ When a coverage gate fails on a genuine lowering, run `cargo xtask coverage rean
 
 (Place it adjacent to the existing re-anchor discussion; do not duplicate the merge-driver paragraph.)
 
-- [ ] **Step 2: Append the ADR-0030 supplement**
+- [x] **Step 2: Append the ADR-0030 supplement**
 
 At the end of `docs/adr/0030-coverage-reanchor-text-identity.md`, append:
 
@@ -537,17 +537,17 @@ prints `cargo xtask coverage reanchor` as the recovery for a lowering; the symme
 CRAP-manifest refresh path is tracked separately (the #88 CRAP follow-on).
 ```
 
-- [ ] **Step 3: Sanity-check**
+- [x] **Step 3: Sanity-check**
 
 Run: `git grep -n 'coverage reanchor' CONTRIBUTING.md docs/adr/0030-coverage-reanchor-text-identity.md`
 Expected: the new references are present.
 
-- [ ] **Step 4: Per-task gate**
+- [x] **Step 4: Per-task gate**
 
 Run: `cargo xtask check --no-test`
 Expected: exit 0 (prettier/markdown formatting clean).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add CONTRIBUTING.md docs/adr/0030-coverage-reanchor-text-identity.md
