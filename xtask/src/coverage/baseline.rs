@@ -31,8 +31,9 @@ impl Baseline {
         // Drop the entry entirely for a gap-free file rather than storing an
         // empty list: `from_files` calls this for every reported file (most are
         // fully covered), so this keeps the committed baseline to only
-        // files-with-gaps and keeps the heal's JSON-equality check stable — an
-        // empty `"f": []` entry would differ from an absent key and churn.
+        // files-with-gaps and keeps the heal's line-independent fingerprint
+        // comparison (`text_fingerprint`) stable — an empty `"f": []` entry would
+        // differ from an absent key and churn.
         if gaps.is_empty() {
             self.files.remove(path);
         } else {
@@ -57,6 +58,20 @@ impl Baseline {
     }
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).unwrap()
+    }
+    /// A line-independent fingerprint: per file (sorted, via the `BTreeMap`), the
+    /// sorted gap texts. Two baselines with equal fingerprints differ only in
+    /// line numbers — a pure line-shift — so the heal can skip rewriting and let
+    /// the committed line numbers be a hint rather than churn every shift (#113).
+    pub fn text_fingerprint(&self) -> BTreeMap<String, Vec<String>> {
+        self.files
+            .iter()
+            .map(|(f, gaps)| {
+                let mut texts: Vec<String> = gaps.iter().map(|g| g.text.clone()).collect();
+                texts.sort();
+                (f.clone(), texts)
+            })
+            .collect()
     }
     pub fn from_json(s: &str) -> Result<Self> {
         Ok(serde_json::from_str(s)?)

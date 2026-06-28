@@ -113,7 +113,14 @@ fn heal_baseline(
         return (None, false);
     }
     let healed = Baseline::from_files(current);
-    if healed.to_json() != loaded.to_json() {
+    // Compare line-INDEPENDENTLY: a pure line-shift (same accepted-uncovered
+    // texts, new line numbers) is NOT rewritten — the committed line numbers are
+    // a hint, so the baseline doesn't churn on every shift and the pre-commit
+    // gate's fail-and-restage fires only on genuine coverage changes (#113).
+    // (Skipping leaves the anchor — the last commit that touched the file — in
+    // place, so the anchor→worktree diff can span more history; that only grows
+    // the diff, the reanchor text-multiset check stays sound regardless.)
+    if healed.text_fingerprint() != loaded.text_fingerprint() {
         (Some(healed), true)
     } else {
         (None, false)
@@ -819,9 +826,10 @@ mod tests {
     }
 
     #[test]
-    fn safe_reanchor_heals_in_fix_and_not_in_check() {
-        // A baseline gap re-anchors to a new line (same text); the heal
-        // regenerates from current in Fix, and never mutates in Check.
+    fn fix_skips_pure_line_shift_but_heals_a_real_change() {
+        // line is a hint (#113): a pure line-shift (gap "x" 2→9, same text) must
+        // NOT rewrite, so the pre-commit fail-and-restage doesn't fire on benign
+        // shifts. A genuine coverage change (gap covered) still heals.
         let mut loaded = Baseline::default();
         loaded.set_gaps(
             "a.rs",
@@ -830,7 +838,9 @@ mod tests {
                 text: "x".into(),
             }],
         );
-        let current = vec![FileCoverage {
+
+        // Pure line-shift: "x" moved to line 9, still uncovered.
+        let shifted = vec![FileCoverage {
             path: "a.rs".into(),
             lines: vec![LineCov {
                 line: 9,
@@ -838,11 +848,26 @@ mod tests {
                 text: "x".into(),
             }],
         }];
+        let (b, healed) = heal_baseline(&safe(), &[], &shifted, &loaded, Mode::Fix);
+        assert!(
+            !healed && b.is_none(),
+            "a pure line-shift must not rewrite (line is a hint)"
+        );
 
-        let (fix, healed) = heal_baseline(&safe(), &[], &current, &loaded, Mode::Fix);
-        assert!(healed && fix.is_some(), "Fix re-anchors a safe drift");
+        // Real change: "x" is now covered → gap drops (texts differ) → heal.
+        let covered = vec![FileCoverage {
+            path: "a.rs".into(),
+            lines: vec![LineCov {
+                line: 9,
+                covered: true,
+                text: "x".into(),
+            }],
+        }];
+        let (b, healed) = heal_baseline(&safe(), &[], &covered, &loaded, Mode::Fix);
+        assert!(healed && b.is_some(), "a real coverage change still heals");
 
-        let (chk, healed) = heal_baseline(&safe(), &[], &current, &loaded, Mode::Check);
+        // Check never mutates, even on a real change.
+        let (chk, healed) = heal_baseline(&safe(), &[], &covered, &loaded, Mode::Check);
         assert!(!healed && chk.is_none(), "Check never mutates");
     }
 }
