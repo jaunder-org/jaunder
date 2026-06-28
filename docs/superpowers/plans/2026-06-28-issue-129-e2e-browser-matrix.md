@@ -570,16 +570,11 @@ Refs #129"
 - Modify: `CLAUDE.md` (`# xtask` section, the table + invariant describing CI).
 - Modify: `flake.nix` / `xtask/src/steps/nix.rs` — any comment still saying CI runs both VM checks in one `nix build` / "via xtask validate".
 
-- [ ] **Step 1: Update CLAUDE.md `# xtask` section**
+- [x] **Step 1: Update CLAUDE.md `# xtask` section** — the live `CLAUDE.md` is an untracked personal symlink to `AGENTS.md` (not in the worktree, not in git), so the tracked home of this prose is `CONTRIBUTING.md`. Updated the `cargo xtask validate` table row + added a CI paragraph there (referencing ADR-0033); the untracked `AGENTS.md` `# xtask` table is left for the controller to decide (surfaced as a concern).
 
-Adjust the prose/table that states CI runs `nix develop .#ci -c cargo xtask validate` as one command: CI now runs `cargo xtask validate --no-e2e` in one job plus a `{backend}×{browser}` e2e matrix (each job `cargo xtask e2e <backend> <browser>`) aggregated by `e2e-gate`; `cargo xtask validate` remains the full local gate. Reference ADR-0033.
+- [x] **Step 2: Fix stale comments** — sweep of `flake.nix`/`xtask/src`/`.github` for stale flow comments returned no hits (Task 1 already corrected the flake aggregate comment). Restored the dropped ci.yml rationale comments (cachix `pushFilter`, "Cache xtask host build") in both `validate-no-e2e` and `e2e` jobs.
 
-- [ ] **Step 2: Fix stale comments**
-
-Run: `rg -n 'both backend VM checks|both VM checks|via .cargo xtask validate.|runs both' flake.nix xtask/src .github`
-Update each hit that now misdescribes the flow (e.g. the ci.yml `max-jobs`/"both VM checks" comment block, the `e2e()`/`e2e-checks` comments) to reflect: local `validate` builds the aggregate (parallel via max-jobs); CI fans out per combo.
-
-- [ ] **Step 3: Verify no stale references remain**
+- [x] **Step 3: Verify no stale references remain**
 
 Run: `rg -n 'cargo xtask validate$|both backend VM checks' CLAUDE.md flake.nix .github/workflows/ci.yml`
 Expected: only intended mentions (e.g. "local full gate") remain.

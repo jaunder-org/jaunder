@@ -20,7 +20,13 @@ jobs:
         with:
           name: jaunder-org
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          # Push build products to the cache, but NOT the test-result check
+          # derivations (jaunder-coverage / jaunder-e2e): CI must always re-run
+          # the tests and never trust a cached green check (flaky-pass / impurity
+          # protection).
           pushFilter: "jaunder-coverage|jaunder-e2e"
+      # xtask is host-only, so cachix can't cover it; cache its compiled deps
+      # between runs.
       - name: Cache xtask host build
         uses: actions/cache@v6
         with:
@@ -65,7 +71,13 @@ jobs:
         with:
           name: jaunder-org
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          # Push build products to the cache, but NOT the test-result check
+          # derivations (jaunder-coverage / jaunder-e2e): CI must always re-run
+          # the tests and never trust a cached green check (flaky-pass / impurity
+          # protection).
           pushFilter: "jaunder-coverage|jaunder-e2e"
+      # xtask is host-only, so cachix can't cover it; cache its compiled deps
+      # between runs.
       - name: Cache xtask host build
         uses: actions/cache@v6
         with:

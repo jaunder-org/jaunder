@@ -38,8 +38,8 @@ Use `scripts/analyze-otel-traces` on one or more artifact files, for example:
 
 ```bash
 scripts/analyze-otel-traces \
-  /nix/store/...-vm-test-run-jaunder-e2e-sqlite/otel-traces-sqlite.jsonl/otel-traces.jsonl \
-  /nix/store/...-vm-test-run-jaunder-e2e-postgres/otel-traces-postgres.jsonl/otel-traces.jsonl
+  /nix/store/...-vm-test-run-jaunder-e2e-sqlite-chromium/otel-traces-sqlite.jsonl/otel-traces.jsonl \
+  /nix/store/...-vm-test-run-jaunder-e2e-postgres-firefox/otel-traces-postgres.jsonl/otel-traces.jsonl
 ```
 
 The analyzer reports:

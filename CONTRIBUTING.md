@@ -91,9 +91,11 @@ The driver for all checks is `cargo xtask`. The host runs only the static checks
 | `cargo xtask check --no-test` | host static checks + clippy | auto-fixes |
 | `cargo xtask check` | + the Nix `coverage` check (full instrumented test suite — SQLite + PostgreSQL together under an ephemeral PostgreSQL — plus the coverage gate) | auto-fixes |
 | `cargo xtask validate --no-e2e` | static (verify-only) + coverage — the pre-push gate (the `.githooks/pre-push` hook runs this) | never mutates |
-| `cargo xtask validate` | + e2e (sqlite + postgres) — the full, CI-faithful gate; this is what CI runs | never mutates |
+| `cargo xtask validate` | + e2e (all four `{sqlite,postgres}×{chromium,firefox}` combos) — the full local gate | never mutates |
 
 `check` is the inner-loop fixer: it auto-fixes formatting and (in Fix mode) auto-heals the coverage baseline when a change only removes or covers gaps. `validate` is the strict, never-mutating gate. Both commands write a machine-readable result to `.xtask/last-result.json` and a `xtask-done:` completion line to stderr.
+
+CI does **not** run `cargo xtask validate` as a single job. It runs `cargo xtask validate --no-e2e` (static + clippy + coverage) in one job, plus a `{backend}×{browser}` e2e matrix where each job runs `cargo xtask e2e <backend> <browser>` for one combo, aggregated by an `e2e-gate` job. Running every combo in parallel across runners cuts e2e wall-clock; `cargo xtask validate` remains the full local equivalent. See [ADR-0033](docs/adr/0033-ci-e2e-matrix-distribution.md).
 
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that contain Leptos `view!` macros.
@@ -221,8 +223,10 @@ Some areas have inherent host-side coverage gaps and should not be force-fitted 
 - `checks.x86_64-linux.ert-check` — ERT suite for `elisp/`
 - `checks.x86_64-linux.elisp-fmt-check` — emacs-lisp indentation check for `elisp/`
 - `checks.x86_64-linux.deny` — cargo-deny
-- `checks.x86_64-linux.e2e-sqlite` — Playwright end-to-end flow against SQLite with `JAUNDER_E2E_WARMUP=1` (default)
-- `checks.x86_64-linux.e2e-postgres` — Playwright end-to-end flow against PostgreSQL with `JAUNDER_E2E_WARMUP=1` (default)
+- `checks.x86_64-linux.e2e-sqlite-chromium` — Playwright end-to-end flow against SQLite on Chromium with `JAUNDER_E2E_WARMUP=1` (default)
+- `checks.x86_64-linux.e2e-sqlite-firefox` — Playwright end-to-end flow against SQLite on Firefox with `JAUNDER_E2E_WARMUP=1` (default)
+- `checks.x86_64-linux.e2e-postgres-chromium` — Playwright end-to-end flow against PostgreSQL on Chromium with `JAUNDER_E2E_WARMUP=1` (default)
+- `checks.x86_64-linux.e2e-postgres-firefox` — Playwright end-to-end flow against PostgreSQL on Firefox with `JAUNDER_E2E_WARMUP=1` (default)
 - `checks.x86_64-linux.postgres-integration` — every `server/tests/*.rs` integration binary against PostgreSQL (including the ignored PostgreSQL-only cases), all in one VM
 
 Additional Nix-backed checks available as packages (not run by default):
@@ -237,8 +241,8 @@ All PostgreSQL integration binaries run in a **single** VM (`postgres-integratio
 If you only need one of the VM-backed checks, you can run it directly:
 
 ```bash
-nix build .#checks.x86_64-linux.e2e-sqlite
-nix build .#checks.x86_64-linux.e2e-postgres
+nix build .#checks.x86_64-linux.e2e-sqlite-chromium
+nix build .#checks.x86_64-linux.e2e-postgres-firefox
 nix build .#packages.x86_64-linux.e2e-sqlite-firefox-cold
 nix build .#packages.x86_64-linux.e2e-postgres-firefox-cold
 nix build .#checks.x86_64-linux.postgres-integration
