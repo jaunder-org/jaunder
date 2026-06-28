@@ -69,13 +69,6 @@ pub enum Command {
         #[arg(long)]
         site_path: Option<String>,
     },
-    /// Register the keep-ours git merge driver for the generated coverage
-    /// artifacts. `.gitattributes` maps `coverage-baseline.json` and
-    /// `crap-manifest.json` to `merge=coverage-keepours`; git config is not
-    /// version-controlled, so this one-shot wires the driver into the local
-    /// clone (run once per clone/worktree).
-    #[command(name = "install-merge-driver")]
-    InstallMergeDriver,
 }
 
 impl Cli {
@@ -85,7 +78,6 @@ impl Cli {
             Command::Validate { .. } => "validate",
             Command::RegenBaseline { .. } => "__regen-baseline",
             Command::AuditWasm { .. } => "audit-wasm",
-            Command::InstallMergeDriver => "install-merge-driver",
         }
     }
 }
@@ -134,13 +126,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let mut result = CommandResult::new("__regen-baseline");
             let step = regen_baseline(&gcroot);
             result.push(step);
-            finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::InstallMergeDriver => {
-            let start = std::time::Instant::now();
-            let mut result = CommandResult::new("install-merge-driver");
-            result.push(install_merge_driver());
             finalize(&mut result, start);
             Ok(result)
         }
@@ -303,14 +288,6 @@ pub fn ensure_merge_driver_installed() {
         Err(e) => {
             eprintln!("xtask: warning: could not register merge.coverage-keepours: {e:#}")
         }
-    }
-}
-
-fn install_merge_driver() -> StepResult {
-    match register_keepours(std::path::Path::new(".")) {
-        Ok(()) => StepResult::ok("install-merge-driver")
-            .detail("registered merge.coverage-keepours (keep-ours)"),
-        Err(e) => StepResult::fail("install-merge-driver").detail(e.to_string()),
     }
 }
 

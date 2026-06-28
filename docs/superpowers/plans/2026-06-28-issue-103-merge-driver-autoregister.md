@@ -191,7 +191,7 @@ run (config is shared per-clone, so all worktrees inherit it). Includes the
 - Consumes: nothing new.
 - Produces: no public API; `register_keepours` keeps exactly one caller (`ensure_merge_driver` from Task 1), so no dead-code warning.
 
-- [ ] **Step 1: Delete the enum variant**
+- [x] **Step 1: Delete the enum variant**
 
 In `xtask/src/lib.rs`, remove the doc comment + variant (currently ~lines 72-78):
 
@@ -205,7 +205,7 @@ In `xtask/src/lib.rs`, remove the doc comment + variant (currently ~lines 72-78)
     InstallMergeDriver,
 ```
 
-- [ ] **Step 2: Delete the `command_name` match arm**
+- [x] **Step 2: Delete the `command_name` match arm**
 
 In `impl Cli::command_name`, remove the line (currently ~88):
 
@@ -213,7 +213,7 @@ In `impl Cli::command_name`, remove the line (currently ~88):
             Command::InstallMergeDriver => "install-merge-driver",
 ```
 
-- [ ] **Step 3: Delete the `run` dispatch arm**
+- [x] **Step 3: Delete the `run` dispatch arm**
 
 In `pub fn run`, remove the arm (currently ~140-146):
 
@@ -227,7 +227,7 @@ In `pub fn run`, remove the arm (currently ~140-146):
         }
 ```
 
-- [ ] **Step 4: Delete the `install_merge_driver()` fn**
+- [x] **Step 4: Delete the `install_merge_driver()` fn**
 
 Remove (currently ~257-263):
 
@@ -241,7 +241,7 @@ fn install_merge_driver() -> StepResult {
 }
 ```
 
-- [ ] **Step 5: Verify the build and tests are clean**
+- [x] **Step 5: Verify the build and tests are clean**
 
 Run: `cd /home/mdorman/src/jaunder/.claude/worktrees/issue-103-merge-driver-autoregister && cargo xtask check --no-test`
 Expected: exit 0. The `command_name` and `run` matches over `Command` are exhaustive (no wildcard), so the compiler confirms every reference to `InstallMergeDriver` is gone; no `unused function` warning for `register_keepours` (Task 1's `ensure_merge_driver` still calls it).
@@ -249,7 +249,7 @@ Expected: exit 0. The `command_name` and `run` matches over `Command` are exhaus
 Run: `cargo nextest run -p xtask`
 Expected: PASS — including the `cli_tests` and `merge_driver_tests` modules; no test referenced the removed command.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/src/lib.rs
