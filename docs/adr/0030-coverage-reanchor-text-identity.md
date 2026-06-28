@@ -43,3 +43,36 @@ counterpart (genuine lowering), the gate still fails.
   *excuses* line failures the diff explains as moves.
 - The predicate is a single primitive (`reanchor_is_safe`) reused by the gate
   and, later, the explicit reanchor command (#88).
+
+## Supplement (2026-06-28) — text identity is a safety net, not a classifier (#112)
+
+This ADR uses text identity *only* to excuse line failures the diff already
+explains as moves (the `appeared ⊆ structural` check above). A later attempt
+(#112) to promote it to the **primary** classifier — keying pass/fail on
+uncovered-line text instead of mapping lines through the diff, to make the gate
+robust to a pre-PR rebase — was **rejected as unsound for a ratchet**, and the
+classifier deliberately stays line-identity.
+
+Why it cannot work: after a rebase the gap's move is *invisible* to the gate. The
+working tree equals the anchor commit's tree, so `git diff <anchor>..worktree` is
+empty, and the committed baseline holds only a stale line number plus the text.
+With no diff to say what was *removed*, text alone **cannot distinguish "the
+accepted gap moved here" from "a different line independently regressed to the
+same text."** A text-primary classifier therefore silently masks real
+regressions on collision-prone texts (`}`, `Ok(())`, `.await?`), which are
+exactly the lines most often both uncovered and duplicated. This is strictly
+weaker than the line-identity classifier it would replace; uniqueness-, count-,
+and deletion-based patches all fail because the distinguishing information was
+destroyed by the rebase. (A strong review proved it with concrete
+counterexamples; #112 was closed not-planned.)
+
+The crucial difference from this ADR's safe use: here, the diff supplies the
+`structural` (removed) set, so a same-text appearance is matched against a gap we
+*know* was removed — a verifiable move. Without that removed-set evidence
+(the rebase case) the match is a guess, and a ratchet must not guess.
+
+**Therefore:** rebase-robustness comes from a sound **re-heal**, not the
+classifier — after a rebase, `cargo xtask check` regenerates the baseline from
+*actual* coverage (no guessing), and #110 made that re-heal consistent (load the
+baseline from the anchor commit, not the working tree). The classifier remains
+line-identity with this text check as its diff-visible safety net.
