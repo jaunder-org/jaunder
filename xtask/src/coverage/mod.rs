@@ -164,7 +164,11 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
     let mut maps = diffmap::parse_unified_diff(&diff);
     synthesize_untracked_maps(&mut maps, &current, &untracked_rs_files()?);
 
-    let baseline = Baseline::load(BASELINE_PATH)?;
+    // Load the baseline from the anchor commit (NOT the working tree) so its
+    // frame matches the diff's "from" frame even when a Fix-mode heal left an
+    // uncommitted working-tree baseline — otherwise the next classify would
+    // double-shift it and `validate` would contradict `check` (#110).
+    let baseline = load_baseline_at_anchor(&anchor)?;
     let verdict = classify::classify(&current, &baseline, &maps);
     // Line-identity is only the first pass: a line-shifting change can flag
     // phantom regressions/new_uncovered. Re-anchor safety keys the gate on
@@ -303,6 +307,48 @@ fn baseline_anchor_commit() -> Result<String> {
     })
 }
 
+/// Load the accepted-uncovered baseline **from the anchor commit**, not the
+/// working tree. The classifier maps baseline gap lines forward through
+/// `git diff <anchor>..worktree`, so the baseline must be in the anchor's frame.
+/// A working-tree baseline that `Mode::Fix` just *healed* but did not commit is
+/// in the WORKTREE frame; loading it here would re-apply the diff and double-shift
+/// every gap, so `validate` would contradict the `check` that produced it (#110).
+/// Loading from the anchor keeps the baseline frame == the diff's "from" frame.
+fn load_baseline_at_anchor(anchor: &str) -> Result<Baseline> {
+    load_baseline_at_anchor_in(std::path::Path::new("."), anchor)
+}
+
+/// `repo`-parameterised core (for tests). Falls back to the working-tree file
+/// only when the baseline does not exist at the anchor (never committed —
+/// bootstrap/first run), preserving the pre-#110 behavior there.
+fn load_baseline_at_anchor_in(repo: &std::path::Path, anchor: &str) -> Result<Baseline> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo);
+    // Scrub the repo-redirecting env so `git show` targets `repo`, not a hook's
+    // exported GIT_DIR (the git_at hazard — see CONTRIBUTING / xtask::lib).
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+    ] {
+        cmd.env_remove(var);
+    }
+    let out = cmd
+        .args(["show", &format!("{anchor}:{BASELINE_PATH}")])
+        .output()
+        .context("running git show <anchor>:coverage-baseline.json")?;
+    if out.status.success() {
+        Baseline::from_json(&String::from_utf8(out.stdout)?)
+    } else {
+        // Not present at the anchor (never committed) → first-run bootstrap:
+        // fall back to the working-tree file (pre-#110 behavior).
+        Baseline::load(BASELINE_PATH)
+    }
+}
+
 /// `git diff` argv mapping the baseline anchor to the report's frame — the
 /// WORKING TREE. A single commit arg (`<anchor>`, NOT `<anchor>..HEAD`) diffs the
 /// anchor against the working tree. Pinned prefixes so repo/CI diff config can't
@@ -393,6 +439,87 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    /// Run `git -C dir <args>`, scrubbed of repo-redirecting env (the git_at
+    /// hazard — a bare `git` here would corrupt the real repo under a hook).
+    fn git_in(dir: &std::path::Path, args: &[&str]) {
+        let ok = scrubbed_git(dir).args(args).status().unwrap().success();
+        assert!(ok, "git {args:?} failed");
+    }
+
+    fn scrubbed_git(dir: &std::path::Path) -> std::process::Command {
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C").arg(dir);
+        for v in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_COMMON_DIR",
+            "GIT_NAMESPACE",
+        ] {
+            cmd.env_remove(v);
+        }
+        cmd
+    }
+
+    #[test]
+    fn loads_baseline_from_anchor_commit_not_working_tree() {
+        // #110: after a Fix-mode heal writes a re-anchored (worktree-frame)
+        // baseline without committing, the next classify must NOT load that dirty
+        // working-tree baseline — it would double-shift it. load_baseline_at_anchor
+        // returns the COMMITTED baseline at the anchor, ignoring the working tree.
+        let tmp = std::env::temp_dir().join(format!("jaunder-anchortest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        git_in(&tmp, &["init", "-q"]);
+        git_in(&tmp, &["config", "user.email", "t@t"]);
+        git_in(&tmp, &["config", "user.name", "t"]);
+
+        // Commit a baseline with a gap at line 5.
+        let mut committed = Baseline::default();
+        committed.set_gaps(
+            "a.rs",
+            vec![baseline::Gap {
+                line: 5,
+                text: "x".into(),
+            }],
+        );
+        std::fs::write(tmp.join(BASELINE_PATH), committed.to_json()).unwrap();
+        git_in(&tmp, &["add", BASELINE_PATH]);
+        git_in(&tmp, &["commit", "-q", "-m", "baseline"]);
+        let anchor = String::from_utf8(
+            scrubbed_git(&tmp)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+
+        // Simulate the heal: overwrite the WORKING-TREE baseline with a different
+        // (worktree-frame) line number, uncommitted.
+        let mut healed = Baseline::default();
+        healed.set_gaps(
+            "a.rs",
+            vec![baseline::Gap {
+                line: 99,
+                text: "x".into(),
+            }],
+        );
+        std::fs::write(tmp.join(BASELINE_PATH), healed.to_json()).unwrap();
+
+        let loaded = load_baseline_at_anchor_in(&tmp, &anchor).unwrap();
+        assert_eq!(
+            loaded.gaps("a.rs"),
+            committed.gaps("a.rs"),
+            "must load the committed (anchor) baseline, not the healed working tree"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
