@@ -58,19 +58,9 @@ The repository includes git hooks in `.githooks/` that enforce code quality stan
 git config core.hooksPath .githooks
 ```
 
-**`pre-commit`** runs on every commit — fast formatting, lint, and the SQLite test suite:
+**`pre-commit`** runs the full **`cargo xtask check`** (Fix mode) on every commit — formatting + clippy + the Nix `coverage` check (the SQLite + ephemeral-PostgreSQL suites under instrumentation) — so history stays green commit-by-commit. `check` auto-fixes formatting and auto-heals the coverage baseline / CRAP manifest; those heals are idempotent on a pure line-shift (the baseline compares line-independently, the CRAP manifest ignores line attribution), so it only changes the tree on a *real* fix. When it does, the hook **fails and asks you to `git add` and re-commit** — so you consciously include the change rather than the hook silently folding it in. Bypass with `SKIP_PRE_COMMIT=1 git commit` for WIP.
 
-- `leptosfmt --check`, `cargo fmt --check`, `prettier --check end2end` — formatting
-- `cargo clippy --all-targets -- -D warnings` — linting (incl. test/bench/example targets)
-- `cargo nextest run` — unit and integration tests (SQLite)
-
-**`pre-push`** runs `cargo xtask validate --no-e2e` (the pre-push gate): the static checks (verify-only) plus the Nix `coverage` check (the SQLite + ephemeral-PostgreSQL suites under instrumentation, gating both test failures and coverage regressions). The e2e VM checks are not run here — they run in CI, or locally via `cargo xtask validate`.
-
-To skip the pre-push gate on a WIP push:
-
-```
-SKIP_PRE_PUSH=1 git push
-```
+**`pre-push`** runs `cargo xtask validate --no-e2e` (verify-only): the static checks plus the Nix `coverage` check, gating test failures and coverage regressions, and it refuses a dirty tree. The e2e VM checks are not run here — they run in CI, or locally via `cargo xtask validate`. Bypass with `SKIP_PRE_PUSH=1 git push` for WIP.
 
 ## Development workflow
 
