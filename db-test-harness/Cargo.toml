@@ -1,0 +1,23 @@
+[package]
+name = "db-test-harness"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[dependencies]
+storage.workspace = true
+common.workspace = true
+chrono = { workspace = true }
+rstest_reuse = { workspace = true }
+# This crate touches both backends directly (SqlitePool + sqlite migrate! and
+# PgConnection); declare both features so it is self-sufficient rather than
+# relying on a sibling crate's feature unification.
+sqlx = { workspace = true, features = ["postgres", "sqlite"] }
+tempfile.workspace = true
+tokio = { workspace = true }
+
+# NOT `[lints] workspace = true`: this is a library crate (not a test target),
+# so the workspace `unwrap_used/expect_used = "deny"` lints must not apply to
+# what is deliberately test-support code full of unwrap()/expect().
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
