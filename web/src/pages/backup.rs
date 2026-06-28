@@ -8,7 +8,7 @@ use leptos::prelude::*;
 #[component]
 pub fn BackupSettingsPage() -> impl IntoView {
     let update_action = ServerAction::<UpdateBackupSettings>::new();
-    let settings = Resource::new(
+    let settings = crate::server_resource(
         move || update_action.version().get(),
         |_| get_backup_settings(),
     );

@@ -8,7 +8,7 @@ use leptos::prelude::*;
 pub fn SessionsPage() -> impl IntoView {
     let revoke_action = ServerAction::<RevokeSession>::new();
     let create_action = ServerAction::<CreateAppPassword>::new();
-    let sessions = Resource::new(
+    let sessions = crate::server_resource(
         move || (revoke_action.version().get(), create_action.version().get()),
         |_| list_sessions(),
     );

@@ -8,7 +8,7 @@ use leptos::prelude::*;
 #[allow(clippy::must_use_candidate)]
 pub fn RegisterPage() -> impl IntoView {
     let register_action = ServerAction::<Register>::new();
-    let policy = Resource::new(|| (), |()| get_registration_policy());
+    let policy = crate::server_resource(|| (), |()| get_registration_policy());
     let username = RwSignal::new(String::new());
 
     view! {

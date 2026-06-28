@@ -182,7 +182,7 @@ pub fn Chip(
 #[allow(clippy::must_use_candidate)]
 #[component]
 pub fn BackupBanner() -> impl IntoView {
-    let visible = Resource::new(|| (), |()| backup_warning_visible());
+    let visible = crate::server_resource(|| (), |()| backup_warning_visible());
 
     view! {
         <Suspense fallback=|| ()>
@@ -516,7 +516,7 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
     // checkboxes, and a wasm-only Effect seeds them after hydration
     // (web-style-guide.md §9, mirroring `home.rs`).
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
-    let named = Resource::new(|| (), |()| list_my_audiences());
+    let named = crate::server_resource(|| (), |()| list_my_audiences());
     let named_audiences = RwSignal::new(Vec::<AudienceSummary>::new());
     #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
@@ -648,7 +648,7 @@ pub fn PostCreateForm(
         named: Vec::new(),
     });
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
-    let default_audience = Resource::new(|| (), |()| default_audience_selection());
+    let default_audience = crate::server_resource(|| (), |()| default_audience_selection());
     // Client-only: copying the resolved Resource into `audience` must not run
     // during SSR, where the future can resolve after the per-request reactive
     // owner is disposed (web-style-guide.md §9). SSR renders the Public
@@ -1056,8 +1056,8 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     let active_key = active.unwrap_or_default();
 
     let location = use_location();
-    let user = Resource::new(move || location.pathname.get(), |_| current_user());
-    let operator = Resource::new(
+    let user = crate::server_resource(move || location.pathname.get(), |_| current_user());
+    let operator = crate::server_resource(
         move || location.pathname.get(),
         |_| current_user_is_operator(),
     );

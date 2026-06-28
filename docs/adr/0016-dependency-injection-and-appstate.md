@@ -169,3 +169,30 @@ The wrap is guarded on `Owner::current().is_some()`: `ScopedFuture::new_untracke
 owner and lose context deterministically — strictly worse than the race. The guarantee is proven
 by the deterministic `owner_lifetime` tests in `web/src/error.rs` (the mechanism, the fix, and the
 empty-owner trap), not by the flaky e2e.
+
+## Addendum (2026-06-28): owner capture at the `Resource` layer (#124)
+
+The #89 addendum made `expect_context` reliable in a server-fn body **when an owner is current
+at the body's first poll** — true for the HTTP `/api` path (`handle_server_fns_with_context`
+establishes the owner). It is **not** true for a server fn invoked from an **SSR `Resource`
+fetcher**: by the time that future is first polled (on a tokio worker), the request/component
+owner's last strong ref is already dropped, so `server_boundary`'s guard takes the unprotected
+branch and *every* context read (storage trait objects **and** request `Parts`) resolves to
+`None` — `require_auth`'s `use_context::<Parts>()` fails before any await, so read-ordering
+cannot help. This is a known Leptos SSR + multi-thread + reactive-ownership rough edge (leptos
+issues #2562, #2341, #3729), surfaced as a hard failure by the #93 e2e zero-panic gate
+(ADR-0032).
+
+The owner is alive only at **fetcher invocation**, and an `async fn` body has no synchronous
+prologue, so the capture cannot live in the handler — it must be at the `Resource` layer.
+
+**Resolution.** A single constructor `server_resource(source, fetcher)` (`web`) wraps the
+fetcher's future in `ScopedFuture::new_untracked` at invocation — capturing the live owner and
+holding a strong ref across every poll, exactly #89's mechanism applied one layer out. It is the
+**only** sanctioned way to create a `Resource` in `web`; a static guard (clippy
+`disallowed-methods` if it binds, else a scanning test) fails the gate on any raw `Resource::new`
+in `web/src`, so the wrapper is non-optional with **zero per-handler boilerplate** — server fns
+keep `boundary!` + `expect_context` unchanged. Proven by deterministic `owner_lifetime`-style
+tests (context survives an owner strong-ref drop before first poll via `server_resource`; the raw
+constructor loses it), not by the flaky e2e. `Action::new` is assessed for the same exposure and
+given a sibling wrapper if it shares it.

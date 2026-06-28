@@ -912,11 +912,11 @@
     },
     {
       "line": 45,
-      "text": "    let audiences_res = Resource::new(version, |_| list_my_audiences());"
+      "text": "    let audiences_res = crate::server_resource(version, |_| list_my_audiences());"
     },
     {
       "line": 47,
-      "text": "    let subscribers_res = Resource::new(version, |_| list_my_subscribers());"
+      "text": "    let subscribers_res = crate::server_resource(version, |_| list_my_subscribers());"
     },
     {
       "line": 49,
@@ -1100,7 +1100,7 @@
     },
     {
       "line": 158,
-      "text": "    let members_res = Resource::new("
+      "text": "    let members_res = crate::server_resource("
     },
     {
       "line": 159,
@@ -1336,7 +1336,7 @@
     },
     {
       "line": 11,
-      "text": "    let settings = Resource::new("
+      "text": "    let settings = crate::server_resource("
     },
     {
       "line": 12,
@@ -1502,7 +1502,7 @@
     },
     {
       "line": 13,
-      "text": "    let profile = Resource::new(move || request_action.version().get(), |_| get_profile());"
+      "text": "    let profile = crate::server_resource(move || request_action.version().get(), |_| get_profile());"
     },
     {
       "line": 15,
@@ -1638,7 +1638,7 @@
     },
     {
       "line": 67,
-      "text": "    let result = Resource::new(token, verify_email);"
+      "text": "    let result = crate::server_resource(token, verify_email);"
     },
     {
       "line": 69,
@@ -2012,7 +2012,7 @@
     },
     {
       "line": 34,
-      "text": "    let usage = Resource::new("
+      "text": "    let usage = crate::server_resource("
     },
     {
       "line": 35,
@@ -2024,7 +2024,7 @@
     },
     {
       "line": 39,
-      "text": "    let media_list = Resource::new("
+      "text": "    let media_list = crate::server_resource("
     },
     {
       "line": 40,
@@ -2810,7 +2810,7 @@
     },
     {
       "line": 136,
-      "text": "    let post = Resource::new("
+      "text": "    let post = crate::server_resource("
     },
     {
       "line": 137,
@@ -3234,7 +3234,7 @@
     },
     {
       "line": 462,
-      "text": "    let preview = Resource::new("
+      "text": "    let preview = crate::server_resource("
     },
     {
       "line": 463,
@@ -3574,11 +3574,11 @@
     },
     {
       "line": 600,
-      "text": "    let post = Resource::new(post_id_param, get_post_preview);"
+      "text": "    let post = crate::server_resource(post_id_param, get_post_preview);"
     },
     {
       "line": 602,
-      "text": "    let current_audience = Resource::new(post_id_param, post_audience_selection);"
+      "text": "    let current_audience = crate::server_resource(post_id_param, post_audience_selection);"
     },
     {
       "line": 614,
@@ -4198,7 +4198,7 @@
     },
     {
       "line": 840,
-      "text": "    let drafts = Resource::new("
+      "text": "    let drafts = crate::server_resource("
     },
     {
       "line": 841,
@@ -4642,7 +4642,7 @@
     },
     {
       "line": 1011,
-      "text": "    let initial_page = Resource::new("
+      "text": "    let initial_page = crate::server_resource("
     },
     {
       "line": 1012,
@@ -5010,7 +5010,7 @@
     },
     {
       "line": 1165,
-      "text": "    let initial_page = Resource::new("
+      "text": "    let initial_page = crate::server_resource("
     },
     {
       "line": 1166,
@@ -5428,7 +5428,7 @@
     },
     {
       "line": 70,
-      "text": "    let initial = Resource::new(|| (), |()| get_default_post_format());"
+      "text": "    let initial = crate::server_resource(|| (), |()| get_default_post_format());"
     },
     {
       "line": 72,
@@ -5576,7 +5576,7 @@
     },
     {
       "line": 11,
-      "text": "    let settings = Resource::new("
+      "text": "    let settings = crate::server_resource("
     },
     {
       "line": 12,
@@ -6594,7 +6594,7 @@
     },
     {
       "line": 519,
-      "text": "    let named = Resource::new(|| (), |()| list_my_audiences());"
+      "text": "    let named = crate::server_resource(|| (), |()| list_my_audiences());"
     },
     {
       "line": 520,
@@ -6946,7 +6946,7 @@
     },
     {
       "line": 651,
-      "text": "    let default_audience = Resource::new(|| (), |()| default_audience_selection());"
+      "text": "    let default_audience = crate::server_resource(|| (), |()| default_audience_selection());"
     },
     {
       "line": 677,
