@@ -369,7 +369,7 @@ mod merge_driver_tests {
     #[test]
     fn git_at_scrubs_repo_redirecting_env() {
         // Regression guard: without scrubbing these, a git op meant for `dir`
-        // (a throwaway test repo, or the user's repo via install-merge-driver)
+        // (a throwaway test repo, or the user's repo via the merge-driver self-heal)
         // would be redirected at the hook's repo when run inside a git hook,
         // corrupting it. `get_envs()` yields `(key, None)` for a removed var.
         let cmd = git_at(std::path::Path::new("/tmp/x"));

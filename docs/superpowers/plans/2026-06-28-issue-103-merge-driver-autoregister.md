@@ -271,7 +271,7 @@ the self-heal calls."
 
 **Interfaces:** none (docs only).
 
-- [ ] **Step 1: Update the `.gitattributes` header comment**
+- [x] **Step 1: Update the `.gitattributes` header comment**
 
 Replace lines 1-4 of `.gitattributes`:
 
@@ -294,7 +294,7 @@ with:
 
 (Leave the two `merge=coverage-keepours` lines unchanged.)
 
-- [ ] **Step 2: Update `CONTRIBUTING.md:192`**
+- [x] **Step 2: Update `CONTRIBUTING.md:192`**
 
 In the sentence at line 192, replace:
 
@@ -310,7 +310,7 @@ The driver auto-registers on any `cargo xtask` run (self-healing, like `core.hoo
 
 (Leave the rest of the sentence/paragraph unchanged.)
 
-- [ ] **Step 3: Append the ADR-0029 supplement**
+- [x] **Step 3: Append the ADR-0029 supplement**
 
 At the end of `docs/adr/0029-git-enforced-verify-gate.md`, append:
 
@@ -338,12 +338,12 @@ every pull. Keep-ours already leaves a valid our-side baseline that the next pre
 justified.
 ```
 
-- [ ] **Step 4: Sanity-check the docs**
+- [x] **Step 4: Sanity-check the docs**
 
 Run: `cd /home/mdorman/src/jaunder/.claude/worktrees/issue-103-merge-driver-autoregister && git grep -n "install-merge-driver" -- ':!docs/archive' ':!docs/superpowers'`
 Expected: no matches outside the archived #86 docs and this cycle's spec/plan (which intentionally reference the removed command in historical/decision context).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add .gitattributes CONTRIBUTING.md docs/adr/0029-git-enforced-verify-gate.md

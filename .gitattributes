@@ -1,6 +1,7 @@
 # Generated coverage artifacts. Keep-ours on merge: a merge resolves to our side
 # with no conflict markers, and the coverage gate's Fix-mode heal restores the
-# authoritative content on the next `cargo xtask check`. Register the driver once
-# per clone/worktree with: cargo xtask install-merge-driver
+# authoritative content on the next `cargo xtask check`. The driver auto-registers
+# on any `cargo xtask` run (self-healing, like core.hooksPath), so a fresh clone
+# wires itself up on first gate run — no manual step.
 coverage-baseline.json merge=coverage-keepours
 crap-manifest.json merge=coverage-keepours
