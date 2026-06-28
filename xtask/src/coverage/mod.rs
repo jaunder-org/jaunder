@@ -139,6 +139,70 @@ pub fn run(out_dir: &str, mode: Mode) -> (StepResult, Option<CoverageReport>) {
     }
 }
 
+/// `cargo xtask coverage reanchor`: re-anchor `coverage-baseline.json` from an
+/// existing coverage report when the drift is a safe line-shift; on a genuine
+/// lowering, write a candidate to the side path and FAIL (non-zero) with the
+/// offending lines. Consumes an existing report — it does not rebuild coverage.
+pub fn reanchor(out_dir: &str) -> StepResult {
+    match reanchor_inner(out_dir) {
+        Ok(step) => step,
+        Err(e) => StepResult::fail("coverage-reanchor").detail(format!("{e:#}")),
+    }
+}
+
+fn reanchor_inner(out_dir: &str) -> Result<StepResult> {
+    let report_path = format!("{out_dir}/coverage-report.txt");
+    let report = std::fs::read_to_string(&report_path).map_err(|_| {
+        anyhow::anyhow!(
+            "no coverage report at {report_path} — run `cargo xtask check` or \
+             `cargo xtask validate` first to build one"
+        )
+    })?;
+    let repo_root = git_repo_root()?;
+    let current = report::parse_text_report(&report, &repo_root);
+    let (_baseline, _verdict, safety) = classify_against_anchor(&current)?;
+    let candidate = Baseline::from_files(&current);
+    match reanchor::plan_reanchor(safety, candidate) {
+        reanchor::ReanchorPlan::Reanchor { baseline } => {
+            baseline.save(BASELINE_PATH)?;
+            let n = current
+                .iter()
+                .filter(|f| f.lines.iter().any(|l| !l.covered))
+                .count();
+            Ok(StepResult::ok("coverage-reanchor").detail(format!(
+                "re-anchored {BASELINE_PATH} ({n} file(s) with gaps)"
+            )))
+        }
+        reanchor::ReanchorPlan::Refuse {
+            candidate,
+            lowering,
+        } => {
+            candidate.save(reanchor::CANDIDATE_PATH)?;
+            Ok(StepResult::fail("coverage-reanchor").detail(reanchor::refusal_report(&lowering)))
+        }
+    }
+}
+
+/// Classify the current coverage against the **anchor-commit** baseline and compute
+/// text-identity re-anchor safety — the shared core of the gate verdict and the
+/// `coverage reanchor` command. Loading the baseline at the anchor (not the working
+/// tree) keeps its frame aligned with the diff's "from" frame (#110).
+fn classify_against_anchor(
+    current: &[FileCoverage],
+) -> Result<(Baseline, CoverageVerdict, reanchor::ReanchorSafety)> {
+    let anchor = baseline_anchor_commit()?;
+    let diff = git_diff_anchor_to_worktree(&anchor)?;
+    let mut maps = diffmap::parse_unified_diff(&diff);
+    synthesize_untracked_maps(&mut maps, current, &untracked_rs_files()?);
+    let baseline = load_baseline_at_anchor(&anchor)?;
+    let verdict = classify::classify(current, &baseline, &maps);
+    // Line-identity is only the first pass: a line-shifting change can flag phantom
+    // regressions/new_uncovered. Re-anchor safety keys on uncovered-TEXT identity, so a
+    // pure move (removed-then-reappeared with the same text) is recognised as safe.
+    let safety = reanchor::reanchor_is_safe(&verdict, current, &baseline);
+    Ok((baseline, verdict, safety))
+}
+
 fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageReport>)> {
     let report_path = format!("{out_dir}/coverage-report.txt");
     let crap_path = format!("{out_dir}/crap-report.json");
@@ -166,22 +230,7 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
     let repo_root = git_repo_root()?;
     let current = report::parse_text_report(&report, &repo_root);
 
-    let anchor = baseline_anchor_commit()?;
-    let diff = git_diff_anchor_to_worktree(&anchor)?;
-    let mut maps = diffmap::parse_unified_diff(&diff);
-    synthesize_untracked_maps(&mut maps, &current, &untracked_rs_files()?);
-
-    // Load the baseline from the anchor commit (NOT the working tree) so its
-    // frame matches the diff's "from" frame even when a Fix-mode heal left an
-    // uncommitted working-tree baseline — otherwise the next classify would
-    // double-shift it and `validate` would contradict `check` (#110).
-    let baseline = load_baseline_at_anchor(&anchor)?;
-    let verdict = classify::classify(&current, &baseline, &maps);
-    // Line-identity is only the first pass: a line-shifting change can flag
-    // phantom regressions/new_uncovered. Re-anchor safety keys the gate on
-    // uncovered-TEXT identity, so a pure move (removed-then-reappeared with the
-    // same text) is recognised as safe rather than a lowering.
-    let safety = reanchor::reanchor_is_safe(&verdict, &current, &baseline);
+    let (baseline, verdict, safety) = classify_against_anchor(&current)?;
 
     let old_crap_manifest = std::fs::read_to_string(CRAP_MANIFEST_PATH).unwrap_or_default();
     let crap_regs = if old_crap_manifest.trim().is_empty() {
@@ -288,7 +337,8 @@ fn failure_report(lowering: &[reanchor::LineText], crap_regs: &[CrapRegression])
         s.push_str(
             "\n  → these lines are a real coverage loss unless the baseline is stale\
              \n    (a shift the anchor diff couldn't see, e.g. after a rebase): add a\
-             \n    test, or re-anchor only after confirming they are not a genuine loss.",
+             \n    test, or re-anchor only after confirming they are not a genuine loss.\
+             \n    run:  cargo xtask coverage reanchor",
         );
     }
     if !crap_regs.is_empty() {
@@ -700,6 +750,10 @@ mod tests {
         assert!(r.contains("a.rs:10: let x = bar()?;"), "{r}"); // text trimmed
         assert!(r.contains("b.rs::f  9.00 → 11.00"), "{r}");
         assert!(r.contains("real coverage loss"), "lowering guidance: {r}");
+        assert!(
+            r.contains("cargo xtask coverage reanchor"),
+            "recovery command: {r}"
+        );
         assert!(r.contains("CRAP: reduce"), "crap guidance: {r}");
     }
 
@@ -717,6 +771,10 @@ mod tests {
         assert!(!r.contains("coverage dropped here"), "{r}");
         assert!(!r.contains("real coverage loss"), "{r}");
         assert!(!r.contains("cargo xtask check"), "no false auto-fix: {r}");
+        assert!(
+            !r.contains("cargo xtask coverage reanchor"),
+            "reanchor is baseline-only — not for CRAP: {r}"
+        );
         assert!(r.contains("CRAP: reduce"), "{r}");
     }
 

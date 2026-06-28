@@ -113,6 +113,66 @@ pub fn reanchor_is_safe(
     }
 }
 
+/// Where a refused re-anchor writes its candidate baseline. Under the gitignored
+/// `/.xtask/`, so it never dirties the tree or gets instrumented.
+pub const CANDIDATE_PATH: &str = ".xtask/coverage-baseline.candidate.json";
+
+/// The action a `coverage reanchor` run should take, decided purely from the safety
+/// verdict. The candidate content is identical in both arms
+/// (`Baseline::from_files(current)`); only the destination and the exit status differ.
+pub enum ReanchorPlan {
+    /// Safe re-anchor — persist `baseline` to the committed `coverage-baseline.json`.
+    Reanchor { baseline: Baseline },
+    /// Genuine lowering — persist `candidate` to [`CANDIDATE_PATH`] and refuse,
+    /// surfacing the offending lines.
+    Refuse {
+        candidate: Baseline,
+        lowering: Vec<LineText>,
+    },
+}
+
+/// Decide the re-anchor action. Pure (no I/O) so it is unit-testable; the caller
+/// performs the write and sets the exit status.
+pub fn plan_reanchor(safety: ReanchorSafety, candidate: Baseline) -> ReanchorPlan {
+    if safety.safe {
+        ReanchorPlan::Reanchor {
+            baseline: candidate,
+        }
+    } else {
+        ReanchorPlan::Refuse {
+            candidate,
+            lowering: safety.lowering,
+        }
+    }
+}
+
+/// Operator-facing message for a refused re-anchor: the offending `file:line: text`
+/// plus how to inspect and (only if genuinely approved) promote the candidate. There
+/// is deliberately no flag that promotes automatically — approval is a visible diff.
+pub fn refusal_report(lowering: &[LineText]) -> String {
+    use std::fmt::Write as _;
+    const MAX: usize = 25;
+    let mut s = format!(
+        "refused: {} genuinely-uncovered line(s) would lower coverage:",
+        lowering.len()
+    );
+    for l in lowering.iter().take(MAX) {
+        let _ = write!(s, "\n    {}:{}: {}", l.file, l.line, l.text.trim());
+    }
+    if lowering.len() > MAX {
+        let _ = write!(s, "\n    … and {} more", lowering.len() - MAX);
+    }
+    let _ = write!(
+        s,
+        "\n  wrote candidate to {CANDIDATE_PATH} (NOT the committed baseline).\
+         \n  inspect:  git diff --no-index coverage-baseline.json {CANDIDATE_PATH}\
+         \n  if genuinely approved (coverage-baseline policy), promote:\
+         \n    cp {CANDIDATE_PATH} coverage-baseline.json && git add coverage-baseline.json\
+         \n  otherwise add a test — never promote a real loss."
+    );
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,5 +355,51 @@ mod tests {
         let s = reanchor_is_safe(&verdict, &current, &baseline);
         assert!(!s.safe);
         assert_eq!(s.lowering.len(), 1);
+    }
+
+    #[test]
+    fn plan_reanchors_when_safe() {
+        let safety = ReanchorSafety {
+            safe: true,
+            lowering: vec![],
+        };
+        let candidate = Baseline::from_files(&[]);
+        match plan_reanchor(safety, candidate) {
+            ReanchorPlan::Reanchor { .. } => {}
+            ReanchorPlan::Refuse { .. } => panic!("safe must re-anchor"),
+        }
+    }
+
+    #[test]
+    fn plan_refuses_and_carries_lowering_when_unsafe() {
+        let safety = ReanchorSafety {
+            safe: false,
+            lowering: vec![LineText {
+                file: "a.rs".into(),
+                line: 5,
+                text: "}".into(),
+            }],
+        };
+        let candidate = Baseline::from_files(&[]);
+        match plan_reanchor(safety, candidate) {
+            ReanchorPlan::Refuse { lowering, .. } => {
+                assert_eq!(lowering.len(), 1);
+                assert_eq!(lowering[0].line, 5);
+            }
+            ReanchorPlan::Reanchor { .. } => panic!("a lowering must refuse"),
+        }
+    }
+
+    #[test]
+    fn refusal_report_lists_lines_and_promotion_recipe() {
+        let report = refusal_report(&[LineText {
+            file: "src/x.rs".into(),
+            line: 12,
+            text: "    Ok(())".into(),
+        }]);
+        assert!(report.contains("src/x.rs:12: Ok(())"));
+        assert!(report.contains(CANDIDATE_PATH));
+        assert!(report.contains("cp "));
+        assert!(report.contains("git diff --no-index"));
     }
 }
