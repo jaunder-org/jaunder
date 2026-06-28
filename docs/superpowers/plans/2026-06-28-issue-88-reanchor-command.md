@@ -125,7 +125,7 @@ change. Includes the #88 spec and plan."
 - Consumes: `classify_against_anchor` (Task 2); `Baseline::from_files(&[FileCoverage]) -> Baseline`, `Baseline::save(&self, &str)`; `report::parse_text_report(&str, &str) -> Vec<FileCoverage>`; `git_repo_root() -> Result<String>`; `BASELINE_PATH`; `reanchor::{ReanchorSafety, LineText}`.
 - Produces: `reanchor::ReanchorPlan`; `reanchor::plan_reanchor(ReanchorSafety, Baseline) -> ReanchorPlan`; `reanchor::refusal_report(&[LineText]) -> String`; `reanchor::CANDIDATE_PATH: &str`; `coverage::reanchor(out_dir: &str) -> StepResult`; clap `CoverageCommand::Reanchor { gcroot: String }`.
 
-- [ ] **Step 1: Write the failing pure-decision tests**
+- [x] **Step 1: Write the failing pure-decision tests**
 
 In `xtask/src/coverage/reanchor.rs`, inside its existing `#[cfg(test)] mod` (reuse the `fl` fixture, `reanchor.rs:148`), add:
 
@@ -163,12 +163,12 @@ In `xtask/src/coverage/reanchor.rs`, inside its existing `#[cfg(test)] mod` (reu
     }
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml reanchor`
 Expected: FAIL — `cannot find ... plan_reanchor / ReanchorPlan / refusal_report / CANDIDATE_PATH`.
 
-- [ ] **Step 3: Implement the pure decision in `reanchor.rs`**
+- [x] **Step 3: Implement the pure decision in `reanchor.rs`**
 
 Add (after the existing `reanchor_is_safe` definition, before the test module). `Baseline` and `LineText` are already in scope in this file:
 
@@ -226,12 +226,12 @@ pub fn refusal_report(lowering: &[LineText]) -> String {
 }
 ```
 
-- [ ] **Step 4: Run the pure tests to verify they pass**
+- [x] **Step 4: Run the pure tests to verify they pass**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml reanchor`
 Expected: PASS — the three new tests plus all existing `reanchor_is_safe` tests.
 
-- [ ] **Step 5: Implement the orchestration in `mod.rs`**
+- [x] **Step 5: Implement the orchestration in `mod.rs`**
 
 In `xtask/src/coverage/mod.rs`, add (near `run`/`run_inner`):
 
@@ -277,7 +277,7 @@ fn reanchor_inner(out_dir: &str) -> Result<StepResult> {
 }
 ```
 
-- [ ] **Step 6: Wire the nested clap command in `lib.rs`**
+- [x] **Step 6: Wire the nested clap command in `lib.rs`**
 
 Add the new variant to the `Command` enum (after `AuditWasm { … }`, keeping `RegenBaseline` for now — it's removed in Task 4):
 
@@ -326,7 +326,7 @@ Add the `run` dispatch arm (after the `AuditWasm` arm):
         }
 ```
 
-- [ ] **Step 7: Add the clap parse tests in `lib.rs`**
+- [x] **Step 7: Add the clap parse tests in `lib.rs`**
 
 In the `lib.rs` `#[cfg(test)] mod cli_tests` (`lib.rs:~330`), after the `validate_*_parses` tests, add (note `CoverageCommand` is imported via the module's `use super::*;`):
 
@@ -355,7 +355,7 @@ In the `lib.rs` `#[cfg(test)] mod cli_tests` (`lib.rs:~330`), after the `validat
 
 (`cli_tests` uses `use super::*;`; if it instead imports specific names, add `CoverageCommand` to that import.)
 
-- [ ] **Step 8: Build, parse-check, and test**
+- [x] **Step 8: Build, parse-check, and test**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml`
 Expected: PASS — including the new `cli_tests` and `reanchor` tests.
@@ -363,12 +363,12 @@ Expected: PASS — including the new `cli_tests` and `reanchor` tests.
 Run: `cargo run --manifest-path xtask/Cargo.toml -- coverage reanchor --help`
 Expected: prints the reanchor help with the EXAMPLES `after_help` (confirms it's discoverable and un-hidden).
 
-- [ ] **Step 9: Per-task gate**
+- [x] **Step 9: Per-task gate**
 
 Run: `cargo xtask check --no-test`
 Expected: exit 0, no clippy warnings.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add xtask/src/coverage/reanchor.rs xtask/src/coverage/mod.rs xtask/src/lib.rs

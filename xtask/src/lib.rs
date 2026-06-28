@@ -69,6 +69,26 @@ pub enum Command {
         #[arg(long)]
         site_path: Option<String>,
     },
+    /// Coverage-baseline maintenance.
+    #[command(subcommand)]
+    Coverage(CoverageCommand),
+}
+
+/// `coverage` subcommands.
+#[derive(Subcommand)]
+pub enum CoverageCommand {
+    /// Re-anchor `coverage-baseline.json` to the current coverage report when the
+    /// drift is a safe line-shift (ADR-0030); refuse and write a candidate to
+    /// `.xtask/coverage-baseline.candidate.json` on a genuine coverage lowering.
+    /// Consumes an existing report (run `check`/`validate` first); never rebuilds.
+    #[command(after_help = "EXAMPLES:\n  \
+        cargo xtask coverage reanchor\n  \
+        cargo xtask coverage reanchor --gcroot .xtask/gcroots/coverage")]
+    Reanchor {
+        /// GC-root / out-link directory holding `coverage-report.txt`.
+        #[arg(long, default_value = ".xtask/gcroots/coverage")]
+        gcroot: String,
+    },
 }
 
 impl Cli {
@@ -78,6 +98,7 @@ impl Cli {
             Command::Validate { .. } => "validate",
             Command::RegenBaseline { .. } => "__regen-baseline",
             Command::AuditWasm { .. } => "audit-wasm",
+            Command::Coverage(CoverageCommand::Reanchor { .. }) => "coverage-reanchor",
         }
     }
 }
@@ -142,6 +163,13 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                     result.push(StepResult::fail("audit-wasm").detail(format!("{e:#}")));
                 }
             }
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::Coverage(CoverageCommand::Reanchor { gcroot }) => {
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("coverage-reanchor");
+            result.push(coverage::reanchor(&gcroot));
             finalize(&mut result, start);
             Ok(result)
         }
@@ -348,6 +376,27 @@ mod cli_tests {
         match cli.command {
             Command::Validate { allow_dirty, .. } => assert!(!allow_dirty),
             _ => panic!("expected validate"),
+        }
+    }
+
+    #[test]
+    fn coverage_reanchor_parses_with_default_gcroot() {
+        let cli = Cli::try_parse_from(["xtask", "coverage", "reanchor"]).unwrap();
+        match cli.command {
+            Command::Coverage(CoverageCommand::Reanchor { gcroot }) => {
+                assert_eq!(gcroot, ".xtask/gcroots/coverage");
+            }
+            _ => panic!("expected coverage reanchor"),
+        }
+    }
+
+    #[test]
+    fn coverage_reanchor_accepts_gcroot() {
+        let cli =
+            Cli::try_parse_from(["xtask", "coverage", "reanchor", "--gcroot", "/tmp/x"]).unwrap();
+        match cli.command {
+            Command::Coverage(CoverageCommand::Reanchor { gcroot }) => assert_eq!(gcroot, "/tmp/x"),
+            _ => panic!("expected coverage reanchor"),
         }
     }
 }

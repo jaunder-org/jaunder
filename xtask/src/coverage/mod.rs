@@ -139,6 +139,50 @@ pub fn run(out_dir: &str, mode: Mode) -> (StepResult, Option<CoverageReport>) {
     }
 }
 
+/// `cargo xtask coverage reanchor`: re-anchor `coverage-baseline.json` from an
+/// existing coverage report when the drift is a safe line-shift; on a genuine
+/// lowering, write a candidate to the side path and FAIL (non-zero) with the
+/// offending lines. Consumes an existing report — it does not rebuild coverage.
+pub fn reanchor(out_dir: &str) -> StepResult {
+    match reanchor_inner(out_dir) {
+        Ok(step) => step,
+        Err(e) => StepResult::fail("coverage-reanchor").detail(format!("{e:#}")),
+    }
+}
+
+fn reanchor_inner(out_dir: &str) -> Result<StepResult> {
+    let report_path = format!("{out_dir}/coverage-report.txt");
+    let report = std::fs::read_to_string(&report_path).map_err(|_| {
+        anyhow::anyhow!(
+            "no coverage report at {report_path} — run `cargo xtask check` or \
+             `cargo xtask validate` first to build one"
+        )
+    })?;
+    let repo_root = git_repo_root()?;
+    let current = report::parse_text_report(&report, &repo_root);
+    let (_baseline, _verdict, safety) = classify_against_anchor(&current)?;
+    let candidate = Baseline::from_files(&current);
+    match reanchor::plan_reanchor(safety, candidate) {
+        reanchor::ReanchorPlan::Reanchor { baseline } => {
+            baseline.save(BASELINE_PATH)?;
+            let n = current
+                .iter()
+                .filter(|f| f.lines.iter().any(|l| !l.covered))
+                .count();
+            Ok(StepResult::ok("coverage-reanchor").detail(format!(
+                "re-anchored {BASELINE_PATH} ({n} file(s) with gaps)"
+            )))
+        }
+        reanchor::ReanchorPlan::Refuse {
+            candidate,
+            lowering,
+        } => {
+            candidate.save(reanchor::CANDIDATE_PATH)?;
+            Ok(StepResult::fail("coverage-reanchor").detail(reanchor::refusal_report(&lowering)))
+        }
+    }
+}
+
 /// Classify the current coverage against the **anchor-commit** baseline and compute
 /// text-identity re-anchor safety — the shared core of the gate verdict and the
 /// `coverage reanchor` command. Loading the baseline at the anchor (not the working
