@@ -80,18 +80,22 @@ impl fmt::Display for Slug {
     }
 }
 
-/// Converts a title to a slug candidate by lowercasing ASCII alphanumeric
-/// characters and collapsing runs of non-alphanumeric characters into hyphens.
+/// Converts a title to a slug: NFC-normalized, Unicode-lowercased, keeping only
+/// `char::is_alphanumeric()` characters and collapsing other runs into single
+/// hyphens, truncated to [`MAX_SLUG_CHARS`].
 ///
-/// Returns `None` if the title contains no ASCII alphanumeric characters.
+/// Never fails: when nothing usable remains (emoji/symbol-only, untitled) it
+/// returns the bare fallback `"post"`, and the caller's per-author-per-day
+/// collision retry disambiguates. The result is already normalized, so feeding
+/// it back through [`Slug::from_str`] is idempotent.
 #[must_use]
-pub fn slugify_title(title: &str) -> Option<String> {
+pub fn slugify_title(title: &str) -> String {
     let mut slug = String::new();
     let mut previous_was_dash = false;
 
-    for ch in title.chars() {
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch.to_ascii_lowercase());
+    for ch in title.to_lowercase().nfc() {
+        if ch.is_alphanumeric() {
+            slug.push(ch);
             previous_was_dash = false;
         } else if !slug.is_empty() && !previous_was_dash {
             slug.push('-');
@@ -99,11 +103,20 @@ pub fn slugify_title(title: &str) -> Option<String> {
         }
     }
 
-    while slug.ends_with('-') {
-        slug.pop();
-    }
+    // Truncate to the cap, then trim a trailing '-' (present originally or exposed
+    // by truncation). `trim_end_matches` avoids an explicit pop loop.
+    let capped: String = slug
+        .trim_end_matches('-')
+        .chars()
+        .take(MAX_SLUG_CHARS)
+        .collect();
+    let capped = capped.trim_end_matches('-');
 
-    (!slug.is_empty()).then_some(slug)
+    if capped.is_empty() {
+        "post".to_owned()
+    } else {
+        capped.to_owned()
+    }
 }
 
 #[cfg(test)]
@@ -177,26 +190,38 @@ mod tests {
     }
 
     #[test]
-    fn slugify_title_lowercases_and_separates_words() {
+    fn slugify_title_preserves_unicode_lowercased() {
+        assert_eq!(slugify_title("Café"), "café");
+        assert_eq!(slugify_title("日本語"), "日本語");
+        assert_eq!(slugify_title("Москва"), "москва");
         assert_eq!(
             slugify_title("Hello, World from Rust"),
-            Some("hello-world-from-rust".to_string())
+            "hello-world-from-rust"
         );
+        assert_eq!(slugify_title("  ---Héllo!!!  "), "héllo");
+        assert_eq!(slugify_title("Rust"), "rust");
     }
 
     #[test]
-    fn slugify_title_trims_non_alphanumeric_boundaries() {
-        assert_eq!(slugify_title("  ---Hello!!!  "), Some("hello".to_string()));
+    fn slugify_title_falls_back_to_post_when_no_letters() {
+        assert_eq!(slugify_title("!!!"), "post");
+        assert_eq!(slugify_title("—"), "post");
+        assert_eq!(slugify_title("🚀🎉"), "post");
+        assert_eq!(slugify_title("   "), "post");
     }
 
     #[test]
-    fn slugify_title_rejects_titles_without_ascii_alphanumerics() {
-        assert_eq!(slugify_title("!!!"), None);
-        assert_eq!(slugify_title("—"), None);
-    }
+    fn slugify_title_truncates_to_cap_on_char_boundary() {
+        let long = "あ".repeat(200);
+        let s = slugify_title(&long);
+        assert_eq!(s.chars().count(), MAX_SLUG_CHARS);
+        assert!(s.parse::<Slug>().is_ok());
 
-    #[test]
-    fn slugify_title_single_word() {
-        assert_eq!(slugify_title("Rust"), Some("rust".to_string()));
+        // Truncation that lands on a '-' separator trims the trailing dash so the
+        // result never ends with one.
+        let with_sep = format!("{} b", "a".repeat(MAX_SLUG_CHARS - 1));
+        let s2 = slugify_title(&with_sep);
+        assert_eq!(s2, "a".repeat(MAX_SLUG_CHARS - 1));
+        assert!(!s2.ends_with('-'));
     }
 }

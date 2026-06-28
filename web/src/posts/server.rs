@@ -226,9 +226,9 @@ pub fn private_post_not_found_error(error: InternalError) -> InternalError {
 
 pub fn perform_update_error(error: PerformUpdateError) -> InternalError {
     match error {
-        PerformUpdateError::EmptyPost
-        | PerformUpdateError::NoSlugFromPost
-        | PerformUpdateError::InvalidSlug => InternalError::validation(error.to_string()),
+        PerformUpdateError::EmptyPost | PerformUpdateError::InvalidSlug => {
+            InternalError::validation(error.to_string())
+        }
         PerformUpdateError::NotFound | PerformUpdateError::Unauthorized => {
             InternalError::not_found("Post")
         }
@@ -239,9 +239,6 @@ pub fn perform_update_error(error: PerformUpdateError) -> InternalError {
 pub fn perform_creation_error(err: PerformCreationError) -> InternalError {
     match err {
         PerformCreationError::EmptyPost => InternalError::validation("post body is required"),
-        PerformCreationError::NoSlugFromPost => InternalError::validation(
-            "post must contain at least one ASCII letter or digit for its slug",
-        ),
         PerformCreationError::InvalidSlug(e) => InternalError::validation(e.to_string()),
         PerformCreationError::Exhausted(_) => {
             InternalError::server_message("unable to allocate a unique slug after 100 attempts")
@@ -264,10 +261,6 @@ mod tests {
 
         assert!(matches!(
             perform_update_error(PerformUpdateError::EmptyPost).public(),
-            WebError::Validation { .. }
-        ));
-        assert!(matches!(
-            perform_update_error(PerformUpdateError::NoSlugFromPost).public(),
             WebError::Validation { .. }
         ));
         assert!(matches!(
@@ -295,10 +288,6 @@ mod tests {
 
         assert!(matches!(
             perform_creation_error(PerformCreationError::EmptyPost).public(),
-            WebError::Validation { .. }
-        ));
-        assert!(matches!(
-            perform_creation_error(PerformCreationError::NoSlugFromPost).public(),
             WebError::Validation { .. }
         ));
         assert!(matches!(
