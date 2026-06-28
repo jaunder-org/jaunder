@@ -438,7 +438,7 @@ Replaced by the safe, discoverable \`coverage reanchor\`."
 
 **Interfaces:** no signature change; `failure_report(&[reanchor::LineText], &[CrapRegression]) -> String` gains one line in the lowering branch.
 
-- [ ] **Step 1: Update the failure-message tests first**
+- [x] **Step 1: Update the failure-message tests first**
 
 In `xtask/src/coverage/mod.rs` tests, update `failure_report_lists_lines_crap_and_recovery` (~686) to assert the command line appears when there is a lowering, and `failure_report_guidance_is_category_conditional` (~707) to assert it is **absent** for a CRAP-only failure. Add these assertions (adapt to the tests' existing local variable names for the rendered strings):
 
@@ -449,12 +449,12 @@ In `xtask/src/coverage/mod.rs` tests, update `failure_report_lists_lines_crap_an
         assert!(!crap_only.contains("cargo xtask coverage reanchor"));
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml failure_report`
 Expected: FAIL — the `cargo xtask coverage reanchor` line is not emitted yet.
 
-- [ ] **Step 3: Add the recovery command to `failure_report`**
+- [x] **Step 3: Add the recovery command to `failure_report`**
 
 In `failure_report`, extend the lowering-branch guidance (currently `mod.rs:287-293`) to end with the command. Replace that `if !lowering.is_empty() { s.push_str("…") }` block's string with:
 
@@ -469,17 +469,17 @@ In `failure_report`, extend the lowering-branch guidance (currently `mod.rs:287-
 
 (Leave the CRAP-branch guidance at `mod.rs:294-298` unchanged — it must not mention reanchor.)
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml failure_report`
 Expected: PASS.
 
-- [ ] **Step 5: Per-task gate**
+- [x] **Step 5: Per-task gate**
 
 Run: `cargo xtask check --no-test`
 Expected: exit 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/src/coverage/mod.rs

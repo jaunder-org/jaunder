@@ -337,7 +337,8 @@ fn failure_report(lowering: &[reanchor::LineText], crap_regs: &[CrapRegression])
         s.push_str(
             "\n  → these lines are a real coverage loss unless the baseline is stale\
              \n    (a shift the anchor diff couldn't see, e.g. after a rebase): add a\
-             \n    test, or re-anchor only after confirming they are not a genuine loss.",
+             \n    test, or re-anchor only after confirming they are not a genuine loss.\
+             \n    run:  cargo xtask coverage reanchor",
         );
     }
     if !crap_regs.is_empty() {
@@ -749,6 +750,10 @@ mod tests {
         assert!(r.contains("a.rs:10: let x = bar()?;"), "{r}"); // text trimmed
         assert!(r.contains("b.rs::f  9.00 → 11.00"), "{r}");
         assert!(r.contains("real coverage loss"), "lowering guidance: {r}");
+        assert!(
+            r.contains("cargo xtask coverage reanchor"),
+            "recovery command: {r}"
+        );
         assert!(r.contains("CRAP: reduce"), "crap guidance: {r}");
     }
 
@@ -766,6 +771,10 @@ mod tests {
         assert!(!r.contains("coverage dropped here"), "{r}");
         assert!(!r.contains("real coverage loss"), "{r}");
         assert!(!r.contains("cargo xtask check"), "no false auto-fix: {r}");
+        assert!(
+            !r.contains("cargo xtask coverage reanchor"),
+            "reanchor is baseline-only — not for CRAP: {r}"
+        );
         assert!(r.contains("CRAP: reduce"), "{r}");
     }
 
