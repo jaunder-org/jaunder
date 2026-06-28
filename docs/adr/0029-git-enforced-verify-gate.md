@@ -55,3 +55,24 @@ pre-commit hook that bypassed xtask (raw `leptosfmt`/`fmt`/`prettier`/`clippy`/
   flake-side contract).
 - `SKIP_PRE_COMMIT` / `SKIP_PRE_PUSH` and `--allow-dirty` remain as deliberate local
   escapes; CI is the non-bypassable authority.
+
+## Supplement (#103): merge-driver self-heal
+
+The keep-ours merge driver for the generated coverage artifacts
+(`coverage-baseline.json`, `crap-manifest.json`; `.gitattributes` →
+`merge=coverage-keepours`) now self-heals on the same path as `core.hooksPath`: every
+`cargo xtask` run calls `ensure_merge_driver_installed()`, which idempotently registers
+`merge.coverage-keepours.driver=true` in the clone's local git config when unset/wrong.
+This closes the last gap where local git config — not version-controlled — depended on
+an operator remembering a manual one-shot: a fresh clone now wires the driver on first
+gate run, and because the config is shared per-clone it covers all worktrees. The manual
+`cargo xtask install-merge-driver` subcommand is removed as redundant; the reusable
+`register_keepours()` helper remains and is the call the self-heal makes.
+
+No `post-merge` re-heal hook is added (deliberately). Re-healing the baseline/manifest to
+the merged tree requires a full Nix-instrumented `cargo xtask check` — there is no cheap
+re-heal — and a `post-merge` hook fires on every `git merge`/`git pull`, including merges
+that touch nothing coverage-related, so eager re-heal would mean a heavy coverage run after
+every pull. Keep-ours already leaves a valid our-side baseline that the next pre-commit
+`cargo xtask check` re-heals lazily; lazy re-heal is sufficient and the eager cost is not
+justified.

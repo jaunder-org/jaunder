@@ -189,7 +189,7 @@ The heal is keyed on **uncovered-text identity**, not line number: a line-shifti
 
 `crap-manifest.json` retains a per-function `line` field as a **non-authoritative jump-to hint**: it can lag the true line until the next change that actually moves a CRAP score (which refreshes every entry's line wholesale). The CRAP regression check and the manifest's rewrite trigger both ignore `line`, so a pure line-shift neither hides a regression nor churns the committed manifest.
 
-Both committed artifacts use a **keep-ours git merge driver** (`.gitattributes`) so overlapping branches do not produce conflict markers; the Fix-mode heal restores authoritative content on the next `cargo xtask check`. Register the driver once per clone/worktree with `cargo xtask install-merge-driver`.
+Both committed artifacts use a **keep-ours git merge driver** (`.gitattributes`) so overlapping branches do not produce conflict markers; the Fix-mode heal restores authoritative content on the next `cargo xtask check`. The driver auto-registers on any `cargo xtask` run (self-healing, like `core.hooksPath`), so a fresh clone wires itself up on first gate run.
 
 **Working-tree contract.** The gate reflects your *working tree*, not just committed state: the Nix coverage build instruments dirty tracked content **and** untracked, non-gitignored files. So you do **not** need to commit or stage first — line-shifting edits to tracked files are mapped from the baseline anchor to the working tree, and a new untracked `.rs` file is measured, with its uncovered lines reported as new uncovered code rather than as a regression. (The source filter that pulls untracked files into the build is a known purity rough edge, tracked in issue #37.)
 
