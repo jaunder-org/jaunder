@@ -218,12 +218,7 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
     };
 
     let step = if gate_fails {
-        let detail = format!(
-            "{} coverage lowering(s), {} CRAP regression(s)",
-            safety.lowering.len(),
-            crap_regs.len(),
-        );
-        StepResult::fail("coverage").detail(detail)
+        StepResult::fail("coverage").detail(failure_report(&safety.lowering, &crap_regs))
     } else {
         // When safe, any line-flagged regression/new_uncovered was a pure move,
         // i.e. re-anchored rather than a real loss.
@@ -242,6 +237,48 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
 
 fn count_lines(buckets: &[FileLines]) -> usize {
     buckets.iter().map(|b| b.lines.len()).sum()
+}
+
+/// Render a coverage-gate failure as a concise, actionable report: the exact
+/// `file:line: text` of each genuine lowering and `file::fn old → new` of each
+/// CRAP regression, plus what to do — so the invoker never has to diff the
+/// baseline or read the raw report by hand (#87/#88). Capped so a large failure
+/// stays one screen; the count and "… N more" make the truncation explicit.
+fn failure_report(lowering: &[reanchor::LineText], crap_regs: &[CrapRegression]) -> String {
+    use std::fmt::Write as _;
+    const MAX: usize = 25;
+    let mut s = format!(
+        "{} coverage lowering(s), {} CRAP regression(s)",
+        lowering.len(),
+        crap_regs.len(),
+    );
+    if !lowering.is_empty() {
+        s.push_str("\n  coverage dropped here:");
+        for l in lowering.iter().take(MAX) {
+            let _ = write!(s, "\n    {}:{}: {}", l.file, l.line, l.text.trim());
+        }
+        if lowering.len() > MAX {
+            let _ = write!(s, "\n    … and {} more", lowering.len() - MAX);
+        }
+    }
+    if !crap_regs.is_empty() {
+        s.push_str("\n  CRAP worsened:");
+        for c in crap_regs.iter().take(MAX) {
+            let _ = write!(
+                s,
+                "\n    {}::{}  {:.2} → {:.2}",
+                c.file, c.function, c.old, c.new
+            );
+        }
+        if crap_regs.len() > MAX {
+            let _ = write!(s, "\n    … and {} more", crap_regs.len() - MAX);
+        }
+    }
+    s.push_str(
+        "\n  → real loss: add a test or get baseline/CRAP approval.\
+         \n  → benign post-rebase/line-shift drift: `cargo xtask check` re-anchors it, then commit.",
+    );
+    s
 }
 
 /// Canonical, line- and order-independent form of a CRAP report: each entry
@@ -624,6 +661,40 @@ mod tests {
         let compact =
             r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
         assert!(pretty_json(compact).unwrap().contains('\n'));
+    }
+
+    #[test]
+    fn failure_report_lists_lines_crap_and_recovery() {
+        let lowering = vec![reanchor::LineText {
+            file: "a.rs".into(),
+            line: 10,
+            text: "    let x = bar()?;".into(),
+        }];
+        let crap = vec![CrapRegression {
+            file: "b.rs".into(),
+            function: "f".into(),
+            old: 9.0,
+            new: 11.0,
+        }];
+        let r = failure_report(&lowering, &crap);
+        assert!(r.contains("1 coverage lowering(s), 1 CRAP regression(s)"));
+        assert!(r.contains("a.rs:10: let x = bar()?;"), "{r}"); // text trimmed
+        assert!(r.contains("b.rs::f  9.00 → 11.00"), "{r}");
+        assert!(r.contains("cargo xtask check"), "recovery hint: {r}");
+    }
+
+    #[test]
+    fn failure_report_caps_long_lists() {
+        let lowering: Vec<_> = (0..30)
+            .map(|i| reanchor::LineText {
+                file: "a.rs".into(),
+                line: i,
+                text: "x".into(),
+            })
+            .collect();
+        let r = failure_report(&lowering, &[]);
+        assert!(r.contains("30 coverage lowering(s)"));
+        assert!(r.contains("… and 5 more"), "{r}"); // 30 - cap 25
     }
 
     fn safe() -> reanchor::ReanchorSafety {
