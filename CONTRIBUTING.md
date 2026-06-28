@@ -89,6 +89,8 @@ Every HTTP endpoint must have both an integration test and an end-to-end test.  
 
 For tests requiring a database, use `sqlite::memory:` and run migrations with `sqlx::migrate!("./migrations").run(&pool).await?` before creating the `AppState`.
 
+**Tests that spawn `git` must scrub the repo-redirecting `GIT_*` env.** When git runs a hook it exports `GIT_DIR`/`GIT_INDEX_FILE` (and `GIT_WORK_TREE`/`GIT_OBJECT_DIRECTORY`/`GIT_COMMON_DIR`/`GIT_NAMESPACE`), and those **override `-C <dir>`**. So a test that builds a throwaway repo with `git -C <tmpdir> …` will, when run inside the pre-commit/pre-push hooks (which invoke `cargo xtask check`/`validate`, whose host tests then run that code), be redirected at the **real** repository — corrupting HEAD, the index, and the shared worktree config. Build every git command for such a test (and any production helper it calls) through a constructor that `env_remove`s those vars — see `git_at()` in `xtask/src/lib.rs`. Read-only production queries (`rev-parse`/`log`/`diff`/`ls-files`) are safe unscrubbed since they don't mutate.
+
 ### Local checks: `cargo xtask`
 
 The driver for all checks is `cargo xtask`. The host runs only the static checks + clippy; **all tests, coverage, and e2e run in the Nix checks that match CI**. When `cargo xtask validate` is green, you may push.
