@@ -182,6 +182,60 @@ fn reanchor_inner(out_dir: &str) -> Result<StepResult> {
     }
 }
 
+/// `cargo xtask coverage refresh-crap`: refresh `crap-manifest.json` from an existing
+/// CRAP report. No regressions → rewrite the committed manifest in place (a no-op when
+/// nothing CRAP-relevant changed). Regressions → write a candidate to the side path and
+/// FAIL (non-zero), printing the offending functions and the promotion recipe. Consumes
+/// an existing report — it does not rebuild coverage.
+pub fn refresh_crap(out_dir: &str) -> StepResult {
+    match refresh_crap_inner(out_dir) {
+        Ok(step) => step,
+        Err(e) => StepResult::fail("coverage-refresh-crap").detail(format!("{e:#}")),
+    }
+}
+
+fn refresh_crap_inner(out_dir: &str) -> Result<StepResult> {
+    let crap_path = format!("{out_dir}/crap-report.json");
+    let fresh = std::fs::read_to_string(&crap_path).map_err(|_| {
+        anyhow::anyhow!(
+            "no CRAP report at {crap_path} — run `cargo xtask check` or \
+             `cargo xtask validate` first to build one"
+        )
+    })?;
+    let old_manifest = std::fs::read_to_string(crap::CRAP_MANIFEST_PATH).unwrap_or_default();
+    match crap::plan_crap_refresh(&fresh, &old_manifest)? {
+        crap::CrapRefreshPlan::Refresh {
+            manifest: Some(bytes),
+        } => {
+            std::fs::write(crap::CRAP_MANIFEST_PATH, &bytes)
+                .with_context(|| format!("writing {}", crap::CRAP_MANIFEST_PATH))?;
+            Ok(StepResult::ok("coverage-refresh-crap")
+                .detail(format!("refreshed {}", crap::CRAP_MANIFEST_PATH)))
+        }
+        crap::CrapRefreshPlan::Refresh { manifest: None } => {
+            Ok(StepResult::ok("coverage-refresh-crap").detail(format!(
+                "{} already current — no CRAP-relevant drift",
+                crap::CRAP_MANIFEST_PATH
+            )))
+        }
+        crap::CrapRefreshPlan::Refuse {
+            candidate,
+            regressions,
+        } => {
+            if let Some(parent) = std::path::Path::new(crap::CRAP_CANDIDATE_PATH).parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            std::fs::write(crap::CRAP_CANDIDATE_PATH, &candidate)
+                .with_context(|| format!("writing {}", crap::CRAP_CANDIDATE_PATH))?;
+            Ok(
+                StepResult::fail("coverage-refresh-crap")
+                    .detail(crap::refusal_report(&regressions)),
+            )
+        }
+    }
+}
+
 /// Classify the current coverage against the **anchor-commit** baseline and compute
 /// text-identity re-anchor safety — the shared core of the gate verdict and the
 /// `coverage reanchor` command. Loading the baseline at the anchor (not the working

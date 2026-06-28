@@ -153,6 +153,86 @@ pub fn pretty_manifest(s: &str) -> Result<String> {
     Ok(format!("{}\n", serde_json::to_string_pretty(&v)?))
 }
 
+/// Where a refused refresh writes its candidate manifest. Under the gitignored
+/// `/.xtask/`, so it never dirties the tree or gets instrumented (mirrors the
+/// baseline candidate in `reanchor`).
+pub const CRAP_CANDIDATE_PATH: &str = ".xtask/crap-manifest.candidate.json";
+
+/// The action a `coverage refresh-crap` run should take, decided purely from the
+/// fresh report vs. the committed manifest. No I/O — the caller writes the bytes
+/// and sets the exit status.
+#[derive(Debug, PartialEq)]
+pub enum CrapRefreshPlan {
+    /// No regressions. `manifest` is the pretty bytes to write to the committed
+    /// manifest, or `None` when there is no CRAP-relevant drift (already current).
+    Refresh { manifest: Option<String> },
+    /// A regression would raise the bar: write `candidate` to the side path and
+    /// refuse (non-zero). Promotion stays a manual `cp`.
+    Refuse {
+        candidate: String,
+        regressions: Vec<CrapRegression>,
+    },
+}
+
+/// Decide the refresh action. With no regressions, refresh in place only when a
+/// CRAP-relevant field actually changed (a pure line-shift / no change is a
+/// no-op, mirroring the Fix-mode heal's churn-avoidance). With regressions, the
+/// fresh report becomes a candidate and the run refuses.
+pub fn plan_crap_refresh(fresh_report: &str, old_manifest: &str) -> Result<CrapRefreshPlan> {
+    let regressions = if old_manifest.trim().is_empty() {
+        Vec::new()
+    } else {
+        compare(fresh_report, old_manifest)?
+    };
+    if regressions.is_empty() {
+        let new_canon = normalize_without_line(fresh_report)?;
+        let old_canon = normalize_without_line(old_manifest).unwrap_or_default();
+        let manifest = if new_canon != old_canon {
+            Some(pretty_manifest(fresh_report)?)
+        } else {
+            None
+        };
+        Ok(CrapRefreshPlan::Refresh { manifest })
+    } else {
+        Ok(CrapRefreshPlan::Refuse {
+            candidate: pretty_manifest(fresh_report)?,
+            regressions,
+        })
+    }
+}
+
+/// Operator-facing message for a refused refresh: the offending `file::fn old → new`
+/// plus how to inspect and (only if genuinely approved) promote the candidate.
+/// There is deliberately no flag that promotes automatically — approval is a
+/// visible diff (mirrors `reanchor::refusal_report`).
+pub fn refusal_report(regressions: &[CrapRegression]) -> String {
+    use std::fmt::Write as _;
+    const MAX: usize = 25;
+    let mut s = format!(
+        "refused: {} CRAP regression(s) would raise the complexity-risk bar:",
+        regressions.len()
+    );
+    for r in regressions.iter().take(MAX) {
+        let _ = write!(
+            s,
+            "\n    {}::{}  {:.2} → {:.2}",
+            r.file, r.function, r.old, r.new
+        );
+    }
+    if regressions.len() > MAX {
+        let _ = write!(s, "\n    … and {} more", regressions.len() - MAX);
+    }
+    let _ = write!(
+        s,
+        "\n  wrote candidate to {CRAP_CANDIDATE_PATH} (NOT the committed manifest).\
+         \n  inspect:  git diff --no-index {CRAP_MANIFEST_PATH} {CRAP_CANDIDATE_PATH}\
+         \n  if genuinely approved (stale drift, not a real regression), promote:\
+         \n    cp {CRAP_CANDIDATE_PATH} {CRAP_MANIFEST_PATH} && git add {CRAP_MANIFEST_PATH}\
+         \n  otherwise reduce complexity or improve coverage — never promote a real regression."
+    );
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,5 +324,72 @@ mod tests {
         let compact =
             r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
         assert!(pretty_manifest(compact).unwrap().contains('\n'));
+    }
+
+    #[test]
+    fn refresh_writes_when_crap_relevant_field_changed() {
+        // No regression key match (different function name) but a real CRAP-relevant
+        // change → Refresh carrying the pretty manifest to write.
+        let old = r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
+        let fresh =
+            r#"{"entries":[{"crate":"c","file":"a.rs","function":"g","line":1,"crap":2.0}]}"#;
+        match plan_crap_refresh(fresh, old).unwrap() {
+            CrapRefreshPlan::Refresh { manifest: Some(m) } => assert!(m.contains("\"g\"")),
+            other => panic!("expected Refresh(Some), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn refresh_is_noop_on_pure_line_shift() {
+        // Same scores, only line attribution differs → already current (no write).
+        let old = r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
+        let fresh =
+            r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":99,"crap":2.0}]}"#;
+        assert_eq!(
+            plan_crap_refresh(fresh, old).unwrap(),
+            CrapRefreshPlan::Refresh { manifest: None }
+        );
+    }
+
+    #[test]
+    fn refresh_refuses_and_carries_candidate_on_regression() {
+        match plan_crap_refresh(NEW_WORSE, OLD).unwrap() {
+            CrapRefreshPlan::Refuse {
+                candidate,
+                regressions,
+            } => {
+                assert_eq!(regressions.len(), 1);
+                assert_eq!(regressions[0].function, "f");
+                assert!(
+                    candidate.contains("\"crap\""),
+                    "candidate is the pretty fresh report"
+                );
+            }
+            other => panic!("expected Refuse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn first_run_empty_manifest_writes_initial() {
+        // Empty committed manifest (first run) → no regressions, write the fresh one.
+        match plan_crap_refresh(OLD, "").unwrap() {
+            CrapRefreshPlan::Refresh { manifest: Some(_) } => {}
+            other => panic!("expected Refresh(Some), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn refusal_report_lists_functions_and_promotion_recipe() {
+        let report = refusal_report(&[CrapRegression {
+            file: "b.rs".into(),
+            function: "f".into(),
+            old: 9.0,
+            new: 11.0,
+        }]);
+        assert!(report.contains("b.rs::f  9.00 → 11.00"), "{report}");
+        assert!(report.contains(CRAP_CANDIDATE_PATH));
+        assert!(report.contains("git diff --no-index"));
+        assert!(report.contains("cp "));
+        assert!(report.contains(CRAP_MANIFEST_PATH));
     }
 }
