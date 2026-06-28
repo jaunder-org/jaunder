@@ -399,8 +399,9 @@ fn failure_report(lowering: &[reanchor::LineText], crap_regs: &[CrapRegression])
     }
     if !crap_regs.is_empty() {
         s.push_str(
-            "\n  → CRAP: reduce the function's complexity or improve its coverage;\
-             \n    refresh crap-manifest.json (with approval) only if it is stale drift.",
+            "\n  → CRAP: reduce the function's complexity or improve its coverage; if this\
+             \n    is approved drift (stale, not a real regression), refresh for review:\
+             \n    run:  cargo xtask coverage refresh-crap",
         );
     }
     s
@@ -742,6 +743,10 @@ mod tests {
             "recovery command: {r}"
         );
         assert!(r.contains("CRAP: reduce"), "crap guidance: {r}");
+        assert!(
+            r.contains("cargo xtask coverage refresh-crap"),
+            "crap recovery command: {r}"
+        );
     }
 
     #[test]
@@ -763,6 +768,23 @@ mod tests {
             "reanchor is baseline-only — not for CRAP: {r}"
         );
         assert!(r.contains("CRAP: reduce"), "{r}");
+        // A lowering-only failure must NOT suggest refresh-crap (CRAP-only tool).
+        let lowering_only = failure_report(
+            &[reanchor::LineText {
+                file: "a.rs".into(),
+                line: 5,
+                text: "x".into(),
+            }],
+            &[],
+        );
+        assert!(
+            !lowering_only.contains("refresh-crap"),
+            "refresh-crap is CRAP-only — not for a lowering: {lowering_only}"
+        );
+        assert!(
+            lowering_only.contains("cargo xtask coverage reanchor"),
+            "{lowering_only}"
+        );
     }
 
     #[test]
