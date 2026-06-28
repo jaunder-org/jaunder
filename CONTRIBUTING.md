@@ -139,6 +139,7 @@ Jaunder uses OpenTelemetry for deep performance analysis (see [ADR-0011](docs/ad
 
 - **Run & Analyze**: Use `scripts/run-e2e-trace-analysis` to run the full VM e2e suite and immediately analyze the results.
   - Use `--cold` to run against cold caches instead of the default warmup checks.
+  - Use `--browser chromium|firefox` to restrict the run to one browser (default: both).
 
 ### Targeted Rust tests
 
@@ -226,8 +227,10 @@ Some areas have inherent host-side coverage gaps and should not be force-fitted 
 
 Additional Nix-backed checks available as packages (not run by default):
 
-- `packages.x86_64-linux.e2e-sqlite-cold` — Playwright end-to-end flow against SQLite without warmup
-- `packages.x86_64-linux.e2e-postgres-cold` — Playwright end-to-end flow against PostgreSQL without warmup
+- `packages.x86_64-linux.e2e-sqlite-chromium-cold` — Playwright end-to-end flow against SQLite on Chromium without warmup
+- `packages.x86_64-linux.e2e-sqlite-firefox-cold` — Playwright end-to-end flow against SQLite on Firefox without warmup
+- `packages.x86_64-linux.e2e-postgres-chromium-cold` — Playwright end-to-end flow against PostgreSQL on Chromium without warmup
+- `packages.x86_64-linux.e2e-postgres-firefox-cold` — Playwright end-to-end flow against PostgreSQL on Firefox without warmup
 
 All PostgreSQL integration binaries run in a **single** VM (`postgres-integration`): per-test databases isolate the tests, so they run with libtest's normal in-process parallelism rather than one VM per binary. This is much faster and far lighter on memory than the former per-binary matrix.
 
@@ -236,8 +239,8 @@ If you only need one of the VM-backed checks, you can run it directly:
 ```bash
 nix build .#checks.x86_64-linux.e2e-sqlite
 nix build .#checks.x86_64-linux.e2e-postgres
-nix build .#packages.x86_64-linux.e2e-sqlite-cold
-nix build .#packages.x86_64-linux.e2e-postgres-cold
+nix build .#packages.x86_64-linux.e2e-sqlite-firefox-cold
+nix build .#packages.x86_64-linux.e2e-postgres-firefox-cold
 nix build .#checks.x86_64-linux.postgres-integration
 ```
 

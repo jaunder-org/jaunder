@@ -356,7 +356,7 @@ Refs #129"
 **Interfaces:**
 - Consumes (from Task 1): `packages.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-cold` and `checks.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}`.
 
-- [ ] **Step 1: Add a `--browser` selector to `parseArgs`**
+- [x] **Step 1: Add a `--browser` selector to `parseArgs`**
 
 In `scripts/run-e2e-trace-analysis`, add a `browser` option (default `null` = both). Add to the `parseArgs` loop:
 
@@ -376,7 +376,7 @@ In `scripts/run-e2e-trace-analysis`, add a `browser` option (default `null` = bo
 
 Declare `let browser = null;` next to `let cold = false;`, return it in the object, and add `[--browser chromium|firefox]` to `usage()`.
 
-- [ ] **Step 2: Build the per-browser combo attrs**
+- [x] **Step 2: Build the per-browser combo attrs**
 
 Replace the `sqliteAttr`/`postgresAttr` block (~120-128) with a loop over the selected browsers and both backends, building each and collecting its trace file:
 
@@ -407,7 +407,7 @@ Then pass `...traceFiles` to the analyzer instead of `sqliteTrace, postgresTrace
 
 (Delete the now-unused `sqliteTrace`/`postgresTrace`/`sqliteOut`/`postgresOut` lines and the `for (const traceFile of [...])` existence loop they fed.)
 
-- [ ] **Step 3: Verify arg parsing + attr resolution**
+- [x] **Step 3: Verify arg parsing + attr resolution**
 
 Run: `scripts/run-e2e-trace-analysis --help`
 Expected: usage now lists `--browser`.
@@ -415,7 +415,7 @@ Run: `node -e "require('child_process')" ` is not needed; instead resolve attrs 
 Run: `nix eval .#packages.x86_64-linux.e2e-sqlite-firefox-cold.name`
 Expected: `"jaunder-e2e-sqlite-firefox-cold"` — confirms the script's constructed attr path exists.
 
-- [ ] **Step 4: Update the docs**
+- [x] **Step 4: Update the docs**
 
 In `CONTRIBUTING.md` replace the two `e2e-*-cold` package bullets (~225-226) and the two `nix build` examples (~235-236) with the 4 per-browser cold packages, and note the `--browser` flag near the `--cold` mention (~141). In `docs/observability.md` (~65-75) update the `--cold` description to say it runs the per-browser cold packages and mention `--browser`.
 

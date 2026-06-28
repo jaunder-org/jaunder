@@ -72,8 +72,9 @@ Optional filters:
 
 - `--top N` controls how many rows each section prints.
 - `--trace TRACE_ID` restricts analysis to one trace id.
-- `--cold` runs `e2e-sqlite-cold` and `e2e-postgres-cold` instead of the
-  default warmup e2e checks.
+- `--cold` runs the per-browser cold packages (`e2e-{sqlite,postgres}-{chromium,firefox}-cold`)
+  instead of the default warmup e2e checks.
+- `--browser chromium|firefox` restricts the run to one browser (default: both).
 - `--project NAME` focuses e2e analysis for one browser/project (for example
   `--project firefox` when debugging timeout pressure).
 
