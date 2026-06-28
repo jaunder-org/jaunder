@@ -441,7 +441,7 @@ Refs #129"
 **Interfaces:**
 - Consumes: `cargo xtask validate --no-e2e` (existing), `cargo xtask e2e <backend> <browser>` (Task 2).
 
-- [ ] **Step 1: Rewrite `jobs`**
+- [x] **Step 1: Rewrite `jobs`**
 
 Replace the single `validate` job with three jobs. `validate-no-e2e` keeps the existing steps but runs `cargo xtask validate --no-e2e` and uploads `validate-diagnostics`. The `e2e` matrix job runs `cargo xtask e2e <backend> <browser>` and uploads per-combo diagnostics. `e2e-gate` aggregates.
 
@@ -543,7 +543,7 @@ jobs:
           test "$result" = "success"
 ```
 
-- [ ] **Step 2: Lint the workflow**
+- [x] **Step 2: Lint the workflow**
 
 Run: `actionlint .github/workflows/ci.yml` (if available; else `nix run nixpkgs#actionlint -- .github/workflows/ci.yml`).
 Expected: no errors. If actionlint is unavailable, validate YAML parses: `nix eval --impure --expr 'builtins.fromJSON (builtins.toJSON 0)'` is not a substitute — instead confirm structure by eye against this plan.
