@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 /// Sub-epsilon CRAP deltas are float noise, not regressions.
 const EPSILON: f64 = 0.01;
 
+/// The committed CRAP baseline. An ordinary (non-dotted) tracked file.
+pub const CRAP_MANIFEST_PATH: &str = "crap-manifest.json";
+
 /// A function whose CRAP score got meaningfully worse between old and new.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CrapRegression {
@@ -113,6 +116,43 @@ pub fn compare(new_report: &str, old_manifest: &str) -> Result<Vec<CrapRegressio
     Ok(regressions)
 }
 
+/// Canonical, line- and order-independent form of a CRAP report: each entry
+/// minus its `line`, with key-sorted JSON (serde_json `Value` is a `BTreeMap`),
+/// and the entry set itself sorted. Two reports that differ only in line
+/// attribution (a pure shift) normalize equal, so a refresh does not rewrite
+/// `crap-manifest.json` unless some non-`line` field changed — the `crap` score
+/// or its `coverage`/`cyclomatic` inputs, or the set of functions (#7). The
+/// `line` field is retained in the written manifest as a non-authoritative
+/// jump-to hint that refreshes wholesale on the next such change.
+pub fn normalize_without_line(s: &str) -> Result<String> {
+    let v: serde_json::Value = serde_json::from_str(s)?;
+    let mut rows: Vec<String> = v
+        .get("entries")
+        .and_then(|e| e.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|e| {
+                    let mut e = e.clone();
+                    if let Some(o) = e.as_object_mut() {
+                        o.remove("line");
+                    }
+                    e.to_string()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    rows.sort();
+    Ok(rows.join("\n"))
+}
+
+/// Canonical (key-sorted, via `serde_json::Value`'s `BTreeMap`) but
+/// pretty-printed with a trailing newline — the on-disk form of the committed
+/// manifest, so coverage diffs stay readable.
+pub fn pretty_manifest(s: &str) -> Result<String> {
+    let v: serde_json::Value = serde_json::from_str(s)?;
+    Ok(format!("{}\n", serde_json::to_string_pretty(&v)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,5 +213,36 @@ mod tests {
         let r = compare(new, old).unwrap();
         assert_eq!(r.len(), 1, "only the second `from` regressed");
         assert_eq!((r[0].old, r[0].new), (2.0, 9.0));
+    }
+
+    #[test]
+    fn crap_normalize_ignores_line_and_formatting() {
+        // Same scores, different line attribution + key order + whitespace →
+        // equal canonical form, so the heal does not rewrite the manifest (#7).
+        let a = r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
+        let b = r#"{ "entries": [ {"crap":2.0,"function":"f","file":"a.rs","crate":"c","line":888} ] }"#;
+        assert_eq!(
+            normalize_without_line(a).unwrap(),
+            normalize_without_line(b).unwrap(),
+            "line + key order + whitespace must not affect the canonical form"
+        );
+    }
+
+    #[test]
+    fn crap_normalize_detects_a_score_change() {
+        let a = r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
+        let c = r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":9.0}]}"#;
+        assert_ne!(
+            normalize_without_line(a).unwrap(),
+            normalize_without_line(c).unwrap(),
+            "a real CRAP change must change the canonical form"
+        );
+    }
+
+    #[test]
+    fn crap_pretty_json_is_multiline() {
+        let compact =
+            r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
+        assert!(pretty_manifest(compact).unwrap().contains('\n'));
     }
 }
