@@ -84,6 +84,14 @@ impl Baseline {
         }
     }
     pub fn save(&self, path: &str) -> Result<()> {
+        // Create the parent dir when it is named but missing — the refused-reanchor
+        // candidate writes under `.xtask/`, which need not exist if the report came
+        // from a `--gcroot` outside it. A bare filename (parent `""`) needs nothing.
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
         std::fs::write(path, self.to_json())?;
         Ok(())
     }
@@ -93,6 +101,19 @@ impl Baseline {
 mod tests {
     use super::*;
     use crate::coverage::{FileCoverage, LineCov};
+
+    #[test]
+    fn save_creates_a_named_missing_parent_dir() {
+        // The refused-reanchor candidate write targets `.xtask/…`, which may not
+        // exist yet; save must create it rather than error with a raw NotFound.
+        let dir =
+            std::env::temp_dir().join(format!("jaunder-baseline-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let nested = dir.join("nested").join("coverage-baseline.candidate.json");
+        Baseline::default().save(nested.to_str().unwrap()).unwrap();
+        assert!(nested.exists(), "save must create the missing parent dir");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn from_files_collects_uncovered_lines_with_text() {
