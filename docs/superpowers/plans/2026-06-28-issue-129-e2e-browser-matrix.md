@@ -570,7 +570,7 @@ Refs #129"
 - Modify: `CLAUDE.md` (`# xtask` section, the table + invariant describing CI).
 - Modify: `flake.nix` / `xtask/src/steps/nix.rs` — any comment still saying CI runs both VM checks in one `nix build` / "via xtask validate".
 
-- [x] **Step 1: Update CLAUDE.md `# xtask` section** — the live `CLAUDE.md` is an untracked personal symlink to `AGENTS.md` (not in the worktree, not in git), so the tracked home of this prose is `CONTRIBUTING.md`. Updated the `cargo xtask validate` table row + added a CI paragraph there (referencing ADR-0033); the untracked `AGENTS.md` `# xtask` table is left for the controller to decide (surfaced as a concern).
+- [x] **Step 1: Update CLAUDE.md `# xtask` section** — the live `CLAUDE.md` is an untracked personal symlink to `AGENTS.md` (not in the worktree, not in git), so the tracked home of this prose is `CONTRIBUTING.md`. Updated the `cargo xtask validate` table row + added a CI paragraph there (referencing ADR-0034); the untracked `AGENTS.md` `# xtask` table is left for the controller to decide (surfaced as a concern).
 
 - [x] **Step 2: Fix stale comments** — sweep of `flake.nix`/`xtask/src`/`.github` for stale flow comments returned no hits (Task 1 already corrected the flake aggregate comment). Restored the dropped ci.yml rationale comments (cachix `pushFilter`, "Cache xtask host build") in both `validate-no-e2e` and `e2e` jobs.
 
@@ -583,7 +583,7 @@ Expected: only intended mentions (e.g. "local full gate") remain.
 
 ```bash
 git add CLAUDE.md flake.nix xtask/src
-git commit -m "docs: describe the fanned-out e2e CI model (ADR-0033)
+git commit -m "docs: describe the fanned-out e2e CI model (ADR-0034)
 
 Refs #129"
 ```
@@ -605,7 +605,7 @@ Handled in `jaunder-ship` / by the maintainer, not a code commit. After the PR's
 - CI `validate-no-e2e` + matrix + `e2e-gate` → Task 4. ✓
 - Diagnostics preserved via xtask (ADR-0032/#48) → Task 2 + Task 4 (uses `cargo xtask e2e`). ✓
 - Required-checks wiring → Task 6. ✓
-- ADR-0033 + CLAUDE.md → ADR already committed; CLAUDE.md Task 5. ✓
+- ADR-0034 + CLAUDE.md → ADR already committed; CLAUDE.md Task 5. ✓
 - Verification (build a combo; measure CI wall-clock) → Task 1 Step 7; CI wall-clock measured post-merge (noted in ship). ✓
 
 **Placeholder scan:** none — every code step shows the code; commands have expected output.

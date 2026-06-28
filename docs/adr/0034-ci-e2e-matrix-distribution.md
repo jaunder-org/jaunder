@@ -1,4 +1,4 @@
-# 0033. CI distributes e2e across a {backend}×{browser} matrix; `validate` stays the local full gate
+# 0034. CI distributes e2e across a {backend}×{browser} matrix; `validate` stays the local full gate
 
 * Status: accepted
 * Deciders: mdorman, Claude Opus

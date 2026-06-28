@@ -95,7 +95,7 @@ The driver for all checks is `cargo xtask`. The host runs only the static checks
 
 `check` is the inner-loop fixer: it auto-fixes formatting and (in Fix mode) auto-heals the coverage baseline when a change only removes or covers gaps. `validate` is the strict, never-mutating gate. Both commands write a machine-readable result to `.xtask/last-result.json` and a `xtask-done:` completion line to stderr.
 
-CI does **not** run `cargo xtask validate` as a single job. It runs `cargo xtask validate --no-e2e` (static + clippy + coverage) in one job, plus a `{backend}×{browser}` e2e matrix where each job runs `cargo xtask e2e <backend> <browser>` for one combo, aggregated by an `e2e-gate` job. Running every combo in parallel across runners cuts e2e wall-clock; `cargo xtask validate` remains the full local equivalent. See [ADR-0033](docs/adr/0033-ci-e2e-matrix-distribution.md).
+CI does **not** run `cargo xtask validate` as a single job. It runs `cargo xtask validate --no-e2e` (static + clippy + coverage) in one job, plus a `{backend}×{browser}` e2e matrix where each job runs `cargo xtask e2e <backend> <browser>` for one combo, aggregated by an `e2e-gate` job. Running every combo in parallel across runners cuts e2e wall-clock; `cargo xtask validate` remains the full local equivalent. See [ADR-0034](docs/adr/0034-ci-e2e-matrix-distribution.md).
 
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that contain Leptos `view!` macros.

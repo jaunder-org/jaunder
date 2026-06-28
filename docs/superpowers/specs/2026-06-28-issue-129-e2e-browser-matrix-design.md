@@ -3,7 +3,7 @@
 - **Issue:** jaunder-org/jaunder#129
 - **Date:** 2026-06-28
 - **Status:** approved (design)
-- **Related:** #130 (lower e2e VM driver timeout — independent), ADR-0033 (this work)
+- **Related:** #130 (lower e2e VM driver timeout — independent), ADR-0034 (this work)
 
 ## Problem
 
@@ -119,7 +119,7 @@ silently skippable (skipping it would leave PRs ungated).
 
 ### 5. ADR + CLAUDE.md
 
-- Write **ADR-0033** (next after 0032): *CI distributes e2e across a GitHub
+- Write **ADR-0034** (next after 0032): *CI distributes e2e across a GitHub
   Actions matrix; `cargo xtask validate` remains the full local gate, but CI no
   longer runs e2e via a single `validate` command — CI faithfulness becomes "the
   same Nix check derivations, distributed across runners," with `e2e-gate`
@@ -148,7 +148,7 @@ silently skippable (skipping it would leave PRs ungated).
 - **Billing-minutes:** 4 e2e runners instead of 1 job. Accepted — parallel, so no
   wall-clock penalty; the win is wall-clock + reporting.
 - **CI-model shift:** CI no longer == one `cargo xtask validate` command. Recorded
-  in ADR-0033 and CLAUDE.md; local `validate` remains the single full gate.
+  in ADR-0034 and CLAUDE.md; local `validate` remains the single full gate.
 - **Required-checks gap:** if the ruleset isn't updated at landing, PRs go
   ungated. Mitigated by the explicit landing halt point (§4) and the stable
   `e2e-gate` name.
