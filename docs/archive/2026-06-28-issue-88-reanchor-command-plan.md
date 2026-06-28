@@ -561,9 +561,9 @@ records the reuse of reanchor_is_safe and the deliberate no-accept-all model."
 
 ## Final gate (before ship)
 
-- [ ] Run the full CI-faithful gate from the worktree: `cargo xtask validate` (or `validate --no-e2e` per the autonomous-gate policy — the diff is xtask + docs only, no web/server/e2e surface). Expected: exit 0, `xtask-done: ... ok=true`.
-- [ ] Review the branch diff against the fork point: `git diff wt-base-issue-88..HEAD`.
-- [ ] Confirm the CRAP follow-on issue (Task 1) is filed and its number is captured.
+- [x] Run the full CI-faithful gate from the worktree: `cargo xtask validate` (or `validate --no-e2e` per the autonomous-gate policy — the diff is xtask + docs only, no web/server/e2e surface). Expected: exit 0, `xtask-done: ... ok=true`.
+- [x] Review the branch diff against the fork point: `git diff wt-base-issue-88..HEAD`.
+- [x] Confirm the CRAP follow-on issue (Task 1) is filed and its number is captured. — #131
 
 ## Self-review (plan vs. spec)
 
