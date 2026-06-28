@@ -357,8 +357,8 @@ ADR-0029 records the self-heal and the deliberate no-post-merge-hook call."
 
 ## Final gate (before ship)
 
-- [ ] Run the full CI-faithful gate from the worktree: `cargo xtask validate` (or `validate --no-e2e` per the autonomous-gate policy). Expected: exit 0, `xtask-done: ... ok=true`.
-- [ ] Review the branch diff against the fork point: `git diff wt-base-issue-103..HEAD`.
+- [x] Run the full CI-faithful gate from the worktree: `cargo xtask validate` (or `validate --no-e2e` per the autonomous-gate policy). Expected: exit 0, `xtask-done: ... ok=true`.
+- [x] Review the branch diff against the fork point: `git diff wt-base-issue-103..HEAD`.
 
 ## Self-review (plan vs. spec)
 
