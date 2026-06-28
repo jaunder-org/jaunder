@@ -549,6 +549,9 @@
         mkE2eSqliteCheck =
           {
             checkName,
+            browser,
+            traceId,
+            traceParent,
             warmupEnv ? "",
           }:
           pkgs.testers.nixosTest {
@@ -616,9 +619,9 @@
               machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
               machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")
 
-              # Run Chromium and Firefox against separate fresh databases so that
-              # state mutations in one browser's tests (e.g. password resets) do
-              # not interfere with the other browser's tests.
+              # Seed a fresh DB and run the one browser this derivation targets.
+              # Browsers run as separate derivations (one VM each) so their state
+              # mutations cannot interfere; that also lets CI fan them out.
               seed_db()
               machine.succeed(
                 "cd /tmp/e2e"
@@ -627,26 +630,11 @@
                 + "${warmupEnv}"
                 + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
                 + " JAUNDER_WEBSUB_CAPTURE_FILE=/var/lib/jaunder/websub.jsonl"
-                + " JAUNDER_E2E_TRACE_ID=11111111111111111111111111111111"
-                + " JAUNDER_E2E_TRACEPARENT=00-11111111111111111111111111111111-1111111111111111-01"
+                + " JAUNDER_E2E_TRACE_ID=${traceId}"
+                + " JAUNDER_E2E_TRACEPARENT=${traceParent}"
                 + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
                 + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-                + " --config playwright.nix.config.js --project chromium"
-              )
-
-              seed_db()
-              machine.succeed(
-                "cd /tmp/e2e"
-                + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
-                + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-                + "${warmupEnv}"
-                + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
-                + " JAUNDER_WEBSUB_CAPTURE_FILE=/var/lib/jaunder/websub.jsonl"
-                + " JAUNDER_E2E_TRACE_ID=22222222222222222222222222222222"
-                + " JAUNDER_E2E_TRACEPARENT=00-22222222222222222222222222222222-2222222222222222-01"
-                + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
-                + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-                + " --config playwright.nix.config.js --project firefox"
+                + " --config playwright.nix.config.js --project ${browser}"
               )
 
               machine.succeed("systemctl stop otel-collector.service")
@@ -660,6 +648,9 @@
         mkE2ePostgresCheck =
           {
             checkName,
+            browser,
+            traceId,
+            traceParent,
             warmupEnv ? "",
           }:
           pkgs.testers.nixosTest {
@@ -760,9 +751,9 @@
                   + " ${./scripts/seed-e2e-fixtures.sh}"
                 )
 
-              # Run Chromium and Firefox against separate fresh databases so that
-              # state mutations in one browser's tests (e.g. password resets) do
-              # not interfere with the other browser's tests.
+              # Seed a fresh DB and run the one browser this derivation targets.
+              # Browsers run as separate derivations (one VM each) so their state
+              # mutations cannot interfere; that also lets CI fan them out.
               seed_db()
               machine.succeed(
                 "cd /tmp/e2e"
@@ -771,26 +762,11 @@
                 + "${warmupEnv}"
                 + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
                 + " JAUNDER_WEBSUB_CAPTURE_FILE=/var/lib/jaunder/websub.jsonl"
-                + " JAUNDER_E2E_TRACE_ID=33333333333333333333333333333333"
-                + " JAUNDER_E2E_TRACEPARENT=00-33333333333333333333333333333333-3333333333333333-01"
+                + " JAUNDER_E2E_TRACE_ID=${traceId}"
+                + " JAUNDER_E2E_TRACEPARENT=${traceParent}"
                 + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
                 + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-                + " --config playwright.nix.config.js --project chromium"
-              )
-
-              seed_db()
-              machine.succeed(
-                "cd /tmp/e2e"
-                + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
-                + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-                + "${warmupEnv}"
-                + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
-                + " JAUNDER_WEBSUB_CAPTURE_FILE=/var/lib/jaunder/websub.jsonl"
-                + " JAUNDER_E2E_TRACE_ID=44444444444444444444444444444444"
-                + " JAUNDER_E2E_TRACEPARENT=00-44444444444444444444444444444444-4444444444444444-01"
-                + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
-                + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-                + " --config playwright.nix.config.js --project firefox"
+                + " --config playwright.nix.config.js --project ${browser}"
               )
 
               machine.succeed("systemctl stop otel-collector.service")
@@ -801,33 +777,79 @@
             '';
           };
 
+        # All e2e {backend}×{browser} combos. backend picks the VM builder;
+        # browser picks the Playwright --project; traceDigit gives each combo a
+        # distinct OTel trace id (the 1/2/3/4 mapping preserves the historical
+        # per-combo ids). Add a row here and the warm checks, the cold diagnostic
+        # packages, and the `e2e-checks` aggregate all extend automatically.
+        e2eCombos = [
+          { backend = "sqlite";   browser = "chromium"; traceDigit = "1"; }
+          { backend = "sqlite";   browser = "firefox";  traceDigit = "2"; }
+          { backend = "postgres"; browser = "chromium"; traceDigit = "3"; }
+          { backend = "postgres"; browser = "firefox";  traceDigit = "4"; }
+        ];
+
+        mkE2eCombo =
+          {
+            backend,
+            browser,
+            traceDigit,
+            nameSuffix ? "",
+            warmupEnv ? "",
+          }:
+          let
+            mk = if backend == "sqlite" then mkE2eSqliteCheck else mkE2ePostgresCheck;
+            traceId = pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 32);
+            traceParent =
+              "00-${traceId}-${pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 16)}-01";
+          in
+          mk {
+            checkName = "jaunder-e2e-${backend}-${browser}${nameSuffix}";
+            inherit browser traceId traceParent warmupEnv;
+          };
+
+        # attr name -> warm check, e.g. { "e2e-sqlite-chromium" = <drv>; ... }
+        e2eWarmChecks = pkgs.lib.listToAttrs (
+          map (c: {
+            name = "e2e-${c.backend}-${c.browser}";
+            value = mkE2eCombo (c // { warmupEnv = " JAUNDER_E2E_WARMUP=1"; });
+          }) e2eCombos
+        );
+
+        # Cold-cache variants (no warmup): same combos as the warm checks but the
+        # first navigation of each test pays the full cold WASM download + init.
+        # NOT part of the gate — built on demand by
+        # `scripts/run-e2e-trace-analysis --cold` to capture cold-cache OTel
+        # navigation traces for performance diagnostics (see docs/observability.md).
+        e2eColdPackages = pkgs.lib.listToAttrs (
+          map (c: {
+            name = "e2e-${c.backend}-${c.browser}-cold";
+            value = mkE2eCombo (c // { nameSuffix = "-cold"; });
+          }) e2eCombos
+        );
+
       in
       {
-        packages = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
-          jaunder = jaunderBin;
-          site = site;
-          devtool = devtoolBin;
+        packages = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
+          {
+            jaunder = jaunderBin;
+            site = site;
+            devtool = devtoolBin;
 
-          e2e-sqlite-cold = mkE2eSqliteCheck {
-            checkName = "jaunder-e2e-sqlite-cold";
-          };
-
-          e2e-postgres-cold = mkE2ePostgresCheck {
-            checkName = "jaunder-e2e-postgres-cold";
-          };
-
-          # The e2e aggregate: a symlinkJoin of every `e2e-*` check, exposed as
-          # `checks.e2e` and built by `cargo xtask validate`. Adding a new e2e
-          # backend check automatically joins it here. Its `jaunder-e2e*` name
-          # keeps it out of the cachix push, so building it always realizes the
-          # underlying VM checks rather than substituting a cached aggregate.
-          e2e-checks = pkgs.symlinkJoin {
-            name = "jaunder-e2e-checks";
-            paths = builtins.attrValues (
-              pkgs.lib.filterAttrs (name: _: pkgs.lib.hasPrefix "e2e-" name) self.checks.${system}
-            );
-          };
-        };
+            # The e2e aggregate: a symlinkJoin of every `e2e-*` check, exposed as
+            # `checks.e2e` and built by `cargo xtask validate`. Adding a new e2e
+            # combo automatically joins it here. Its `jaunder-e2e*` name keeps it
+            # out of the cachix push, so building it always realizes the
+            # underlying VM checks rather than substituting a cached aggregate.
+            e2e-checks = pkgs.symlinkJoin {
+              name = "jaunder-e2e-checks";
+              paths = builtins.attrValues (
+                pkgs.lib.filterAttrs (name: _: pkgs.lib.hasPrefix "e2e-" name) self.checks.${system}
+              );
+            };
+          }
+          // e2eColdPackages
+        );
 
         apps =
           pkgs.lib.optionalAttrs
@@ -844,27 +866,19 @@
             };
 
         checks =
-          pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
-            e2e-sqlite = mkE2eSqliteCheck {
-              checkName = "jaunder-e2e-sqlite";
-              warmupEnv = " JAUNDER_E2E_WARMUP=1";
-            };
-
-            e2e-postgres = mkE2ePostgresCheck {
-              checkName = "jaunder-e2e-postgres";
-              warmupEnv = " JAUNDER_E2E_WARMUP=1";
-            };
-
-            # The single e2e gate `cargo xtask validate` builds. The
-            # `e2e-checks` aggregate depends on both backend VM checks above;
-            # they are independent derivations, so the host realizes them in
-            # parallel up to its `max-jobs` (CI's install-nix-action sets
-            # `max-jobs = auto`; a plain dev box defaults to 1 and runs them
-            # serially). The aggregate's name stays under `jaunder-e2e*`, so the
-            # cachix pushFilter still excludes it — the VM runs are never
-            # substituted from a cached aggregate.
-            e2e = self.packages.${system}.e2e-checks;
-          }
+          pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
+            e2eWarmChecks
+            // {
+              # The single e2e gate `cargo xtask validate` builds. `e2e-checks`
+              # aggregates every `checks.e2e-*` combo (now 4); they are independent
+              # derivations realized in parallel up to the host `max-jobs` (CI's
+              # install-nix-action sets `max-jobs = auto`; a plain dev box defaults
+              # to 1 and runs them serially). The aggregate's name stays under
+              # `jaunder-e2e*`, so the cachix pushFilter still excludes it — the VM
+              # runs are never substituted from a cached aggregate.
+              e2e = self.packages.${system}.e2e-checks;
+            }
+          )
           // {
             clippy = craneLib.cargoClippy (
               commonArgs

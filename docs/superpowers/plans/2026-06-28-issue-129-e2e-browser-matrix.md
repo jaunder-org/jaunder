@@ -28,7 +28,7 @@
 **Interfaces:**
 - Produces (consumed by Tasks 2-4): flake check attrs `checks.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}` and package attrs `packages.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-cold`. The `checks.x86_64-linux.e2e` aggregate auto-includes all four warm checks (its `hasPrefix "e2e-"` filter already does this).
 
-- [ ] **Step 1: Add `browser`, `traceId`, `traceParent` params and collapse `mkE2eSqliteCheck` to a single run**
+- [x] **Step 1: Add `browser`, `traceId`, `traceParent` params and collapse `mkE2eSqliteCheck` to a single run**
 
 In `mkE2eSqliteCheck`, change the argument set and replace the two browser blocks (lines ~619-650) with one. New signature:
 
@@ -70,11 +70,11 @@ Replace the comment + the two `seed_db()` + `machine.succeed(...)` blocks (the c
 
 Leave the otel-collector stop, `copy_from_vm(... "otel-traces-sqlite.jsonl")`, and `${e2ePanicGate "sqlite"}` lines as-is.
 
-- [ ] **Step 2: Same collapse for `mkE2ePostgresCheck`**
+- [x] **Step 2: Same collapse for `mkE2ePostgresCheck`**
 
 Identical change to `mkE2ePostgresCheck`: add `browser, traceId, traceParent` to the args; keep the `create-pg-db` prologue and the `seed_db()` definition (TRUNCATE form); replace the two browser blocks (lines ~763-794) with the single run block above but using the postgres `seed_db()` (already in scope) and leaving `copy_from_vm(... "otel-traces-postgres.jsonl")` + `${e2ePanicGate "postgres"}`.
 
-- [ ] **Step 3: Add the combo list + generators in the top-level `let`**
+- [x] **Step 3: Add the combo list + generators in the top-level `let`**
 
 Immediately after `mkE2ePostgresCheck` (before the `in` at ~804), add:
 
@@ -131,7 +131,7 @@ Immediately after `mkE2ePostgresCheck` (before the `in` at ~804), add:
         );
 ```
 
-- [ ] **Step 4: Wire the warm checks into `checks` (replace the two named e2e checks)**
+- [x] **Step 4: Wire the warm checks into `checks` (replace the two named e2e checks)**
 
 Replace lines ~848-856 (`e2e-sqlite = …;` and `e2e-postgres = …;`) so the isLinux checks block reads:
 
@@ -151,7 +151,7 @@ Replace lines ~848-856 (`e2e-sqlite = …;` and `e2e-postgres = …;`) so the is
               # … unchanged …
 ```
 
-- [ ] **Step 5: Wire the cold packages into `packages` (replace the two `-cold` defs)**
+- [x] **Step 5: Wire the cold packages into `packages` (replace the two `-cold` defs)**
 
 Replace lines ~811-817 (`e2e-sqlite-cold = …;` and `e2e-postgres-cold = …;`) by merging `e2eColdPackages`. The `packages` block becomes:
 
@@ -175,7 +175,7 @@ Replace lines ~811-817 (`e2e-sqlite-cold = …;` and `e2e-postgres-cold = …;`)
         );
 ```
 
-- [ ] **Step 6: Verify the flake evaluates and exposes the 8 attrs**
+- [x] **Step 6: Verify the flake evaluates and exposes the 8 attrs**
 
 Run: `nix eval .#checks.x86_64-linux --apply 'cs: builtins.filter (n: builtins.match "e2e-.*" n != null) (builtins.attrNames cs)'`
 Expected: `[ "e2e-postgres-chromium" "e2e-postgres-firefox" "e2e-sqlite-chromium" "e2e-sqlite-firefox" ]`
