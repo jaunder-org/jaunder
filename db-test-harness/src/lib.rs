@@ -23,8 +23,6 @@
     clippy::items_after_statements,
     clippy::unused_async
 )]
-#![allow(dead_code)]
-#![allow(unused_macros)]
 
 use common::mailer::{MailSender, NoopMailSender};
 use sqlx::Connection;

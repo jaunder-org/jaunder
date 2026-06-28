@@ -139,3 +139,14 @@ table in `docs/README.md`.
 - Cross-crate template usage is demonstrated (in the throwaway validation) from both
   `storage` and `server`.
 - ADR-0033 added and listed in `docs/README.md`.
+
+## Implementation note (as landed)
+
+This foundation change adds `db-test-harness` as a dev-dependency of **`server` only**.
+`storage` does **not** gain the dependency here: the throwaway storage-side validation
+(a `site_config` round-trip running on both backends through `Backend::setup`) was
+**stashed as the #126 seed** rather than committed, so committing the bare `storage`
+dev-dep would have left it unused. The `storage ⇄ db-test-harness` dev-dependency cycle
+therefore materializes when #126 lands; it was build- and run-validated during #125 via
+that temporary wiring. The `rstest_reuse` cross-crate question resolved to the primary
+path (`#[export]` → `#[macro_export]`); no per-crate shim was needed.

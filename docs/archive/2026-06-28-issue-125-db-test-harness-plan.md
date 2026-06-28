@@ -8,6 +8,23 @@
 
 **Tech Stack:** Rust 2021, `sqlx` (sqlite+postgres), `rstest` 0.26, `rstest_reuse` 0.7, `tokio`, `tempfile`, `chrono`.
 
+## Status: COMPLETE — deviations from the plan as written
+
+- **Task 1 spike** resolved to the **primary path**: `rstest_reuse`'s `#[export]` makes the
+  templates `#[macro_export]`-reachable cross-crate; no per-crate shim needed. The spike
+  test and its temporary `storage` dev-deps were reverted; Task 1 committed only the crate
+  + workspace member.
+- **Task 2** gained an unplanned coverage step: the harness is a coverage-measured library
+  (unlike the test target it came from), so the env-conditional URL logic was lifted into
+  pure, unit-tested helpers (`bootstrap_url`, `splice_db_name`) and only the genuinely-dead
+  defensive arms were `// cov:ignore`-marked.
+- **Task 3** validation was **stashed as the #126 seed** (not reverted) per a mid-cycle
+  decision — so `storage` keeps no committed dependency on the crate in #125; the
+  `storage ⇄ db-test-harness` cycle lands with #126 (validated here via the stash).
+- **Final review (Opus agent)** fixes: added the `sqlite` sqlx feature so the crate is
+  self-sufficient; dropped the unused direct `rstest` dep and the carried-over
+  `dead_code`/`unused_macros` allows; corrected ADR-0033/spec dep-cycle tense.
+
 ## Global Constraints
 
 - No `Co-Authored-By` trailers in commits.
@@ -33,7 +50,7 @@ The one real unknown is whether `rstest_reuse` `#[template]`s defined in a libra
 **Interfaces:**
 - Produces: crate `db_test_harness` exporting `pub enum Backend { Sqlite, Postgres }` and templates `backends`, `sqlite_only`, `postgres_only` (each `fn(#[case] backend: Backend)`). Later tasks rely on these names.
 
-- [ ] **Step 1: Create the crate manifest**
+- [x] **Step 1: Create the crate manifest**
 
 `db-test-harness/Cargo.toml`:
 
@@ -61,7 +78,7 @@ tokio = { workspace = true }
 pedantic = { level = "warn", priority = -1 }
 ```
 
-- [ ] **Step 2: Create `src/lib.rs` with `Backend` + the three templates**
+- [x] **Step 2: Create `src/lib.rs` with `Backend` + the three templates**
 
 `db-test-harness/src/lib.rs`. NOTE: this is a **library** target compiled without `cfg(test)`, so it trips pedantic doc-lints that clippy suppresses in the test-only `helpers` module — notably `clippy::missing_panics_doc` on the moved `pub` panicking fns (`recorded_postgres_url`, `Backend::setup`, `sqlite_url`, `unique_postgres_url`, `template_postgres_url`, …). The allow block below adds `missing_panics_doc` on top of the `helpers:1-14` set. Treat `cargo xtask check --no-test` (Step 9) as the authority: if clippy reports further pedantic lints (`must_use_candidate`, `doc_markdown`), add them to this block — do NOT assume the helpers set is complete. (The `unwrap_used`/`expect_used` allows are redundant — those are restriction-group, default-allow, and this crate does not enable workspace lints — but kept for parity with `helpers`.)
 
@@ -108,7 +125,7 @@ pub fn postgres_only(#[case] backend: Backend) {}
 pub fn backends(#[case] backend: Backend) {}
 ```
 
-- [ ] **Step 3: Register the crate in the workspace**
+- [x] **Step 3: Register the crate in the workspace**
 
 Modify `Cargo.toml` `members` (currently `["common","hydrate","server","storage","web"]`) to add `"db-test-harness"`:
 
@@ -123,7 +140,7 @@ members = [
 ]
 ```
 
-- [ ] **Step 4: Add the crate as a dev-dependency of `storage`**
+- [x] **Step 4: Add the crate as a dev-dependency of `storage`**
 
 Modify `storage/Cargo.toml` `[dev-dependencies]`:
 
@@ -134,12 +151,12 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 ```
 
-- [ ] **Step 5: Verify the crate builds**
+- [x] **Step 5: Verify the crate builds**
 
 Run: `cargo build -p db-test-harness`
 Expected: PASS (`Finished`).
 
-- [ ] **Step 6: Write the throwaway cross-crate spike test (in `storage`)**
+- [x] **Step 6: Write the throwaway cross-crate spike test (in `storage`)**
 
 Append to `storage/src/lib.rs` a scratch module (deleted in Step 8):
 
@@ -158,7 +175,7 @@ mod spike_xcrate_templates {
 }
 ```
 
-- [ ] **Step 7: Run the spike and read the result**
+- [x] **Step 7: Run the spike and read the result**
 
 Run: `cargo nextest run -p storage spike_xcrate_templates`
 Expected (clean path): two cases run —
@@ -169,16 +186,16 @@ Expected (clean path): two cases run —
   - Caveat: this spike does NOT cover `server`'s path, which is `pub use db_test_harness::backends` re-exported *through* `helpers`, then `#[apply(backends)]` at the call site. Re-exporting a `rstest_reuse` `#[template]` (a name-mangled `macro_rules!`) is a distinct risk. **Task 2 Step 5 (`cargo test -p jaunder --no-run`) is the gate for the re-export path.** If it fails to resolve the re-exported template, switch `helpers` to declare its own local `#[template]`s (the per-crate-shim fallback) while still consuming the shared provisioning core from the crate.
 - **Does NOT compile** (`#[apply]` can't resolve the cross-crate template) → fall back to the **per-crate shim**: remove the `#[template]`s from `db-test-harness`; instead export a `pub fn provision_label(Backend) -> &'static str` core and have each consumer crate declare its own local `#[template]`s (a ~10-line block per crate, copied from `helpers`). Record the chosen path in the commit message. All later tasks that say "apply the crate's template" then mean "apply the consumer-local template."
 
-- [ ] **Step 8: Remove the throwaway spike test**
+- [x] **Step 8: Remove the throwaway spike test**
 
 Delete the `spike_xcrate_templates` module from `storage/src/lib.rs`. Run `git diff storage/src/lib.rs` and confirm it is empty.
 
-- [ ] **Step 9: Per-task gate**
+- [x] **Step 9: Per-task gate**
 
 Run: `cargo xtask check --no-test`
 Expected: all steps `[ ok ]`, `xtask check PASSED`.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add db-test-harness/ Cargo.toml storage/Cargo.toml
@@ -211,7 +228,7 @@ Relocate the backend/provisioning/state helpers into `db-test-harness`, leaving 
 
 **Stay-set** (remain in `helpers`): `ensure_server_fns_registered` (`172`), `test_options` (`222`), `tmp_storage_path` (`230`), the `websub_capturing` module + `CapturingWebSubClient`.
 
-- [ ] **Step 1: Add the moved items to `db-test-harness/src/lib.rs`**
+- [x] **Step 1: Add the moved items to `db-test-harness/src/lib.rs`**
 
 Paste the move-set bodies into the crate. Add the imports they require at crate top (these mirror what `helpers` imports for them):
 
@@ -236,12 +253,12 @@ Notes for the mover:
 - The `sqlx::migrate!("../storage/migrations/sqlite")` call inside `test_sqlite_state_with_pool` resolves relative to the crate manifest dir. `db-test-harness/` is at the same depth as `server/`, so the path string stays `"../storage/migrations/sqlite"` — unchanged.
 - If `cargo build -p db-test-harness` reports a missing constructor gated behind `storage`'s `test-utils` feature, add `features = ["test-utils"]` to the `storage` dep (and `common`'s, mirroring `server/Cargo.toml:63-64`). Do not add it speculatively — only if the build demands it.
 
-- [ ] **Step 2: Verify the crate builds with the moved code**
+- [x] **Step 2: Verify the crate builds with the moved code**
 
 Run: `cargo build -p db-test-harness`
 Expected: PASS.
 
-- [ ] **Step 3: Remove the moved items from `helpers` and re-export**
+- [x] **Step 3: Remove the moved items from `helpers` and re-export**
 
 In `server/tests/helpers/mod.rs`, delete every move-set item (including the `Backend` enum and the three `#[template]`s, now owned by the crate), drop the now-unused `use storage::{…}` / `use common::mailer::{…}` / `rstest`/`rstest_reuse` imports that only those items needed, and add at the top of the module:
 
@@ -256,7 +273,7 @@ pub use db_test_harness::{
 
 Keep `ensure_server_fns_registered`, `test_options`, `tmp_storage_path`, and the `websub_capturing` wiring exactly as-is.
 
-- [ ] **Step 4: Add the crate as a dev-dependency of `server`**
+- [x] **Step 4: Add the crate as a dev-dependency of `server`**
 
 Modify `server/Cargo.toml` `[dev-dependencies]`, adding:
 
@@ -264,22 +281,22 @@ Modify `server/Cargo.toml` `[dev-dependencies]`, adding:
 db-test-harness = { path = "../db-test-harness" }
 ```
 
-- [ ] **Step 5: Build the server test targets**
+- [x] **Step 5: Build the server test targets**
 
 Run: `cargo test -p jaunder --no-run`
 Expected: PASS (all test binaries link; re-export surface resolves).
 
-- [ ] **Step 6: Run the full server suite (SQLite path)**
+- [x] **Step 6: Run the full server suite (SQLite path)**
 
 Run: `cargo nextest run -p jaunder`
 Expected: same pass/skip counts as before the move; 0 failures. (Postgres cases skip locally when `JAUNDER_PG_TEST_URL` is unset — that is expected; the both-backend run happens under the coverage gate.)
 
-- [ ] **Step 7: Per-task gate**
+- [x] **Step 7: Per-task gate**
 
 Run: `cargo xtask check --no-test`
 Expected: `xtask check PASSED`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add db-test-harness/src/lib.rs server/tests/helpers/mod.rs server/Cargo.toml
@@ -296,15 +313,15 @@ Prove the foundation against real call sites in BOTH crates before declaring don
 - `storage/src/site_config.rs` (one test temporarily parametrized)
 - `server/tests/storage/storage.rs` (one test temporarily parametrized)
 
-- [ ] **Step 1: Temporarily parametrize one `storage` Tier-2 test**
+- [x] **Step 1: Temporarily parametrize one `storage` Tier-2 test**
 
 In `storage/src/site_config.rs`, take the existing `set_and_get_backup_config_round_trips` test and convert it to run on both backends via the crate — replace its `test_pool()` + `SqliteSiteConfigStorage::new` setup with `Backend::setup()` and `state.site_config`, applying `#[apply(db_test_harness::backends)]` (or the consumer-local template if Task 1 chose the shim). Use `db_test_harness::Backend`.
 
-- [ ] **Step 2: Temporarily parametrize one `server` test**
+- [x] **Step 2: Temporarily parametrize one `server` test**
 
 In `server/tests/storage/storage.rs`, pick one currently-`#[tokio::test]` SQLite-only test (e.g. `create_user_succeeds_and_get_by_username_returns_record`) and convert it to `#[apply(backends)]` + `backend.setup()` + `state.users`, as the existing `invite_and_atomic_registration_work` (`storage.rs:721`) does.
 
-- [ ] **Step 3: Run both under an ephemeral Postgres and confirm BOTH cases execute**
+- [x] **Step 3: Run both under an ephemeral Postgres and confirm BOTH cases execute**
 
 Run (`devtool` lives in the `tools/` workspace, not the root workspace, and its `pg` subcommand needs a `run --` passthrough — `tools/devtool/src/main.rs:38-46`):
 
@@ -324,7 +341,7 @@ Expected: **four** test instances run, all PASS:
 
 **Explicitly confirm the `::postgres` instances are present and did NOT skip.** If the storage `::postgres` case is absent, the "storage tests run under the ephemeral PG pass" assumption is false — STOP and report; issue #126 then needs a coverage-pass change and this finding must be recorded (do not silently proceed).
 
-- [ ] **Step 4: Revert both throwaway conversions**
+- [x] **Step 4: Revert both throwaway conversions**
 
 ```bash
 git checkout -- storage/src/site_config.rs server/tests/storage/storage.rs
@@ -337,12 +354,12 @@ Expected: clean tree (no changes from this task).
 
 ### Task 4: Final gate
 
-- [ ] **Step 1: Run the full CI-faithful gate (no e2e)**
+- [x] **Step 1: Run the full CI-faithful gate (no e2e)**
 
 Run: `cargo xtask validate --no-e2e`
 Expected: `xtask validate PASSED` — static checks, clippy, coverage all green; the server suite passes on both backends under the coverage pass.
 
-- [ ] **Step 2: Confirm clean tree and intended history**
+- [x] **Step 2: Confirm clean tree and intended history**
 
 ```bash
 git status --short

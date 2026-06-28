@@ -27,8 +27,10 @@ AppState, DbConnectOptions}` and the `JAUNDER_PG_TEST_URL` env var — nothing f
 
 ## Decision
 
-Relocate the harness into a dedicated workspace crate, **`db-test-harness`**, that is
-a `[dev-dependencies]` entry of both `storage` and `server`. It owns `Backend`,
+Relocate the harness into a dedicated workspace crate, **`db-test-harness`**, consumed
+as a `[dev-dependencies]` entry by the test crates that parametrize over both backends —
+`server` in this foundation change, and `storage` when #126 converts its tests. It owns
+`Backend`,
 `Backend::setup() -> TestEnv` (the `AppState`-level handle), the per-test SQLite/Postgres
 provisioning (tempdir; clone-from-template via `JAUNDER_PG_TEST_URL` with per-test
 drop on `Drop`), and the rstest templates.
@@ -39,18 +41,21 @@ only genuinely server-specific helpers (`ensure_server_fns_registered`, websub
 capturing). Storage-level test support is the foundation; server-level support is a
 thin layer over it.
 
-The dependency direction is `db-test-harness -> storage` (normal) and
-`storage -> db-test-harness` (**dev-dependency only**). Cargo permits this cycle
-because dev-dependencies do not participate in the normal build graph.
+The dependency direction is `db-test-harness -> storage` (normal) and, once `storage`
+consumes it (#126), `storage -> db-test-harness` (**dev-dependency only**). Cargo permits
+the resulting cycle because dev-dependencies do not participate in the normal build graph.
+This was validated during #125 against a temporary `storage` wiring (a `site_config` test
+ran on both backends through the crate), preserved as the #126 seed rather than committed.
 
 ### rstest template export
 
-`rstest_reuse` `#[template]`s expand to macros, so cross-crate export is the one
-real unknown. The decision is: export the templates from `db-test-harness` if a spike
-confirms `#[apply]` works cleanly in a consumer crate; otherwise fall back to a
-per-crate shim (re-declared/re-exported templates, or a shared `fn provision(Backend)`
-used with plain `#[rstest]`/`#[case]`). The provisioning core is shared either way;
-only the parametrization sugar may be per-crate.
+`rstest_reuse` `#[template]`s expand to macros, so cross-crate export was the one real
+unknown. **Resolved:** annotate each `#[template]` with `rstest_reuse`'s `#[export]`
+(which adds `#[macro_export]`), making the macro reachable at the crate root and
+`#[apply]`-able from other crates; consumer crates need `rstest` + `rstest_reuse` in scope
+at the apply site. A spike confirmed this end-to-end (a `storage` test ran both the
+`::sqlite` and `::postgres` cases via the crate's `backends` template), so no per-crate
+shim was needed. The provisioning core is shared regardless.
 
 ## Consequences
 
@@ -61,9 +66,10 @@ only the parametrization sugar may be per-crate.
   (server `storage.rs`), #126 (storage Tier-2 tests), #127 (rest of `server/tests`)
   consume the crate. The extraction is behavior-preserving — no committed test-body
   changes; the full server suite stays green on both backends.
-- A new dev-dependency cycle (`storage` ⇄ `db-test-harness`) exists; it is sound but
-  must be kept dev-only — the harness must never become a normal dependency of
-  `storage`, or it would pull test scaffolding into release builds.
+- The `storage` ⇄ `db-test-harness` dev-dependency cycle materializes when `storage`
+  consumes the crate (#126); it is sound (validated in #125 — see Decision) but must be
+  kept dev-only — the harness must never become a normal dependency of `storage`, or it
+  would pull test scaffolding into release builds.
 - Complements ADR-0019 (the dialects create per-backend divergence) and ADR-0021
   (SQLite transaction discipline) by making both backends' behavior testable from the
   crate that defines them.

@@ -8,9 +8,11 @@ license = "GPL-3.0-only"
 storage.workspace = true
 common.workspace = true
 chrono = { workspace = true }
-rstest = { workspace = true }
 rstest_reuse = { workspace = true }
-sqlx = { workspace = true, features = ["postgres"] }
+# This crate touches both backends directly (SqlitePool + sqlite migrate! and
+# PgConnection); declare both features so it is self-sufficient rather than
+# relying on a sibling crate's feature unification.
+sqlx = { workspace = true, features = ["postgres", "sqlite"] }
 tempfile.workspace = true
 tokio = { workspace = true }
 
