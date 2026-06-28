@@ -254,6 +254,58 @@ fn register_keepours(repo_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Whether the `coverage-keepours` merge driver needs (re)registering, given the
+/// current `merge.coverage-keepours.driver` value (`None` = unset). The driver command
+/// is the shell builtin `true`; any other value (or unset) means re-register.
+fn needs_merge_driver(current: Option<&str>) -> bool {
+    match current {
+        Some(value) => value.trim() != "true",
+        None => true,
+    }
+}
+
+/// Current `merge.coverage-keepours.driver` in `repo_dir`, or `None` when unset/blank.
+/// `git config --get` exits non-zero (empty stdout) when the key is missing, so a blank
+/// read maps to `None`. Goes through `git_at` so ambient `GIT_DIR`/etc. (exported when
+/// run inside a hook) cannot redirect the query at another repo.
+fn merge_driver_value(repo_dir: &std::path::Path) -> Option<String> {
+    let out = git_at(repo_dir)
+        .args(["config", "--get", "merge.coverage-keepours.driver"])
+        .output()
+        .ok()?;
+    let value = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+/// Ensure the keep-ours merge driver is registered in `repo_dir`; register it when
+/// unset/wrong. Returns `true` when it changed config. Mirrors [`git::ensure_hooks_path`].
+fn ensure_merge_driver(repo_dir: &std::path::Path) -> anyhow::Result<bool> {
+    if needs_merge_driver(merge_driver_value(repo_dir).as_deref()) {
+        register_keepours(repo_dir)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Self-healing merge-driver registration: register the keep-ours driver for the
+/// generated coverage artifacts if it is not already, so fresh clones wire up on first
+/// run. Git config is shared per-clone, so this also covers every worktree. Best-effort —
+/// a failure here must never block the actual command. Parallels [`ensure_hooks_installed`].
+pub fn ensure_merge_driver_installed() {
+    match ensure_merge_driver(std::path::Path::new(".")) {
+        Ok(true) => eprintln!("xtask: registered merge.coverage-keepours (keep-ours)"),
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!("xtask: warning: could not register merge.coverage-keepours: {e:#}")
+        }
+    }
+}
+
 fn install_merge_driver() -> StepResult {
     match register_keepours(std::path::Path::new(".")) {
         Ok(()) => StepResult::ok("install-merge-driver")
@@ -325,7 +377,7 @@ mod cli_tests {
 
 #[cfg(test)]
 mod merge_driver_tests {
-    use super::{git_at, register_keepours};
+    use super::{ensure_merge_driver, git_at, needs_merge_driver, register_keepours};
 
     fn git(dir: &std::path::Path, args: &[&str]) {
         let ok = git_at(dir).args(args).status().unwrap().success();
@@ -402,6 +454,41 @@ mod merge_driver_tests {
         let content = std::fs::read_to_string(tmp.join("crap-manifest.json")).unwrap();
         assert_eq!(content, "ours\n", "keep-ours must retain our side");
         assert!(!content.contains("<<<<<<<"), "no conflict markers");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn needs_merge_driver_when_unset_or_wrong() {
+        assert!(needs_merge_driver(None));
+        assert!(needs_merge_driver(Some("")));
+        assert!(needs_merge_driver(Some("false")));
+    }
+
+    #[test]
+    fn no_need_when_merge_driver_already_true() {
+        assert!(!needs_merge_driver(Some("true")));
+        assert!(!needs_merge_driver(Some(" true \n")));
+    }
+
+    #[test]
+    fn ensure_merge_driver_registers_then_is_idempotent() {
+        let tmp = std::env::temp_dir().join(format!("jaunder-ensure-md-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        git(&tmp, &["init", "-q"]);
+        // First call registers and reports a change.
+        assert!(ensure_merge_driver(&tmp).unwrap(), "first call registers");
+        assert_eq!(
+            git_stdout(&tmp, &["config", "--get", "merge.coverage-keepours.driver"]),
+            "true"
+        );
+        // Second call is a no-op (idempotent) — the value already matches.
+        assert!(
+            !ensure_merge_driver(&tmp).unwrap(),
+            "second call is a no-op"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
