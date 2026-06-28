@@ -91,11 +91,18 @@ Split the single `validate` job into:
   coverage + coverage-gate). Behavior unchanged; kept as one job (coverage is the
   long pole, splitting saves ~0 net).
 - **`e2e`** — `strategy.matrix` over `backend ∈ {sqlite, postgres} ×
-  browser ∈ {chromium, firefox}` (4 jobs), each running
-  `nix build .#checks.x86_64-linux.e2e-<backend>-<browser>` with the existing Nix
+  browser ∈ {chromium, firefox}` (4 jobs, `fail-fast: false`), each running
+  `nix develop .#ci -c cargo xtask e2e <backend> <browser>` with the existing Nix
   + `cachix/cachix-action` setup. Each job pulls `jaunderBin` + the e2e bundle
   warm from Cachix (no recompile); the e2e derivation stays `pushFilter`-excluded
   (`jaunder-coverage|jaunder-e2e`) so it always re-runs.
+
+  The matrix invokes a new `cargo xtask e2e <backend> <browser>` subcommand
+  rather than a raw `nix build`, so it reuses xtask's `build_check` wrapper
+  (`nix build -L --keep-failed`, saved `build.log`, `rescue_diagnostics` on
+  failure) and `copy_journals_between` — preserving the ADR-0032 / #48
+  diagnostic-visibility guarantees per combo instead of regressing them. Each job
+  uploads `.xtask/diagnostics/e2e-<backend>-<browser>/` as an artifact.
 - **`e2e-gate`** — a tiny aggregator job that `needs:` all 4 matrix jobs and
   succeeds iff all passed. Gives branch protection one stable required-check name
   immune to matrix-value churn.
