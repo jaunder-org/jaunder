@@ -1,6 +1,6 @@
 # CRAP-manifest refresh path (#131) — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Give a CRAP regression the same first-class recovery the coverage baseline got in #88 — a discoverable `cargo xtask coverage refresh-crap` command (candidate + refuse on a regression, refresh-in-place otherwise) and a gate failure that prints the exact command to run.
 
@@ -33,7 +33,7 @@ Behavior-preserving refactor so `crap.rs` owns all CRAP-manifest logic (the home
 - Produces: `crap::CRAP_MANIFEST_PATH: &str`, `crap::normalize_without_line(&str) -> Result<String>`, `crap::pretty_manifest(&str) -> Result<String>`.
 - Consumes: nothing new.
 
-- [ ] **Step 1: Add the three items to `crap.rs`**
+- [x] **Step 1: Add the three items to `crap.rs`**
 
 At the top of `crap.rs`, below the existing `const EPSILON` (line 16), add:
 
@@ -85,7 +85,7 @@ pub fn pretty_manifest(s: &str) -> Result<String> {
 
 Move the three tests `crap_normalize_ignores_line_and_formatting`, `crap_normalize_detects_a_score_change`, `crap_pretty_json_is_multiline` from `mod.rs` (lines 704–733) into `crap.rs`'s `#[cfg(test)] mod tests`, replacing `normalize_crap_without_line` → `normalize_without_line` and `pretty_json` → `pretty_manifest` in their bodies. (They reference only `super::*`, already in scope.)
 
-- [ ] **Step 2: Remove the originals from `mod.rs` and update references**
+- [x] **Step 2: Remove the originals from `mod.rs` and update references**
 
 In `mod.rs`: delete `const CRAP_MANIFEST_PATH` (line 89), delete `fn normalize_crap_without_line` (362–381) and `fn pretty_json` (386–389), and delete the three moved tests (704–733). Update the live references in `run_inner`:
 
@@ -93,17 +93,17 @@ In `mod.rs`: delete `const CRAP_MANIFEST_PATH` (line 89), delete `fn normalize_c
 - lines 256–257 `normalize_crap_without_line(...)` → `crap::normalize_without_line(...)`
 - lines 259–260 `std::fs::write(CRAP_MANIFEST_PATH, pretty_json(&crap_report_str)?)` → `std::fs::write(crap::CRAP_MANIFEST_PATH, crap::pretty_manifest(&crap_report_str)?)` and the `format!("writing {CRAP_MANIFEST_PATH}")` → `format!("writing {}", crap::CRAP_MANIFEST_PATH)`
 
-- [ ] **Step 3: Verify the refactor changed no behavior**
+- [x] **Step 3: Verify the refactor changed no behavior**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml coverage`
 Expected: PASS — every existing `coverage::mod` and `coverage::crap` test stays green (relocation only).
 
-- [ ] **Step 4: Lint/format gate**
+- [x] **Step 4: Lint/format gate**
 
 Run: `cargo xtask check --no-test`
 Expected: `ok` (no clippy warnings, formatting clean).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/coverage/crap.rs xtask/src/coverage/mod.rs \
@@ -133,7 +133,7 @@ The decision and the operator-facing refusal text — pure, no I/O — paralleli
   - `crap::plan_crap_refresh(fresh_report: &str, old_manifest: &str) -> Result<CrapRefreshPlan>`
   - `crap::refusal_report(regressions: &[CrapRegression]) -> String`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `crap.rs`'s `#[cfg(test)] mod tests`, add (reuses the existing `OLD`/`NEW_WORSE` consts at lines 120–123):
 
@@ -198,12 +198,12 @@ fn refusal_report_lists_functions_and_promotion_recipe() {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml coverage::crap`
 Expected: FAIL — `cannot find ... plan_crap_refresh / CrapRefreshPlan / refusal_report / CRAP_CANDIDATE_PATH`.
 
-- [ ] **Step 3: Implement the planner and report**
+- [x] **Step 3: Implement the planner and report**
 
 In `crap.rs`, above the `#[cfg(test)]` module, add:
 
@@ -285,17 +285,17 @@ pub fn refusal_report(regressions: &[CrapRegression]) -> String {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml coverage::crap`
 Expected: PASS — the five new tests plus all existing `crap` tests.
 
-- [ ] **Step 5: Lint/format gate**
+- [x] **Step 5: Lint/format gate**
 
 Run: `cargo xtask check --no-test`
 Expected: `ok`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/src/coverage/crap.rs
@@ -320,7 +320,7 @@ The thin I/O orchestration (mirror of `reanchor` / `reanchor_inner`) and the CLI
 - Consumes: `crap::{plan_crap_refresh, CrapRefreshPlan, refusal_report, CRAP_MANIFEST_PATH, CRAP_CANDIDATE_PATH}` (Tasks 1–2); `StepResult`; `anyhow::Context` (already imported in `mod.rs`).
 - Produces: `coverage::refresh_crap(out_dir: &str) -> StepResult`; clap `CoverageCommand::RefreshCrap { gcroot: String }`.
 
-- [ ] **Step 1: Write the failing CLI parse tests**
+- [x] **Step 1: Write the failing CLI parse tests**
 
 In `lib.rs`'s `#[cfg(test)] mod cli_tests`, add:
 
@@ -347,12 +347,12 @@ fn coverage_refresh_crap_accepts_gcroot() {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml coverage_refresh_crap`
 Expected: FAIL — `no variant ... RefreshCrap`.
 
-- [ ] **Step 3: Add the `RefreshCrap` clap variant**
+- [x] **Step 3: Add the `RefreshCrap` clap variant**
 
 In `lib.rs`'s `enum CoverageCommand` (after the `Reanchor` variant, ~line 83), add:
 
@@ -372,7 +372,7 @@ In `lib.rs`'s `enum CoverageCommand` (after the `Reanchor` variant, ~line 83), a
     },
 ```
 
-- [ ] **Step 4: Wire `command_name` and dispatch**
+- [x] **Step 4: Wire `command_name` and dispatch**
 
 In `command_name` (after the `Reanchor` arm, line 92), add:
 
@@ -392,7 +392,7 @@ In `run`'s match (after the `Reanchor` arm, lines 152–158), add:
         }
 ```
 
-- [ ] **Step 5: Implement `refresh_crap` in `mod.rs`**
+- [x] **Step 5: Implement `refresh_crap` in `mod.rs`**
 
 In `mod.rs`, after `reanchor_inner` (line 184), add:
 
@@ -450,7 +450,7 @@ fn refresh_crap_inner(out_dir: &str) -> Result<StepResult> {
 }
 ```
 
-- [ ] **Step 6: Run the CLI tests + smoke-check `--help`**
+- [x] **Step 6: Run the CLI tests + smoke-check `--help`**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml coverage_refresh_crap`
 Expected: PASS.
@@ -458,12 +458,12 @@ Expected: PASS.
 Run: `cargo run --manifest-path xtask/Cargo.toml -- coverage refresh-crap --help`
 Expected: prints the help with the EXAMPLES `after_help` (confirms it is discoverable).
 
-- [ ] **Step 7: Lint/format gate**
+- [x] **Step 7: Lint/format gate**
 
 Run: `cargo xtask check --no-test`
 Expected: `ok`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add xtask/src/coverage/mod.rs xtask/src/lib.rs
@@ -486,7 +486,7 @@ place when safe, refuses to a candidate on a regression. Mirrors
 **Interfaces:**
 - No signature change; `failure_report(&[reanchor::LineText], &[CrapRegression]) -> String` gains the command line in its CRAP branch.
 
-- [ ] **Step 1: Update the failing tests**
+- [x] **Step 1: Update the failing tests**
 
 In `mod.rs`'s test module, edit `failure_report_lists_lines_crap_and_recovery` (line 757) to also assert the command, replacing the `assert!(r.contains("CRAP: reduce"), ...)` line with:
 
@@ -517,12 +517,12 @@ In `failure_report_guidance_is_category_conditional` (line 760), append — afte
         assert!(lowering_only.contains("cargo xtask coverage reanchor"), "{lowering_only}");
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml failure_report`
 Expected: FAIL — the `cargo xtask coverage refresh-crap` line is not emitted yet.
 
-- [ ] **Step 3: Update the CRAP branch in `failure_report`**
+- [x] **Step 3: Update the CRAP branch in `failure_report`**
 
 In `mod.rs`, replace the CRAP guidance block (lines 344–349):
 
@@ -549,17 +549,17 @@ with:
 
 (The string contains neither `cargo xtask check` nor `cargo xtask coverage reanchor`, so the existing category-conditional assertions at lines 773/775 stay satisfied.)
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml failure_report`
 Expected: PASS — all four `failure_report` tests.
 
-- [ ] **Step 5: Lint/format gate**
+- [x] **Step 5: Lint/format gate**
 
 Run: `cargo xtask check --no-test`
 Expected: `ok`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/src/coverage/mod.rs
@@ -580,7 +580,7 @@ commands stay category-split."
 
 **Interfaces:** none (docs only).
 
-- [ ] **Step 1: Document `refresh-crap` in CONTRIBUTING.md**
+- [x] **Step 1: Document `refresh-crap` in CONTRIBUTING.md**
 
 In `CONTRIBUTING.md`, immediately after the `crap-manifest.json` `line`-field paragraph (line 192), insert a new paragraph:
 
@@ -588,7 +588,7 @@ In `CONTRIBUTING.md`, immediately after the `crap-manifest.json` `line`-field pa
 When a coverage gate fails on a **CRAP regression** (a function whose complexity-risk score worsened), run `cargo xtask coverage refresh-crap` (it consumes the same report under `.xtask/gcroots/coverage`). With no regression it refreshes `crap-manifest.json` in place — a no-op when nothing CRAP-relevant changed. With a regression it refuses, writes the would-be manifest to `.xtask/crap-manifest.candidate.json`, and prints each offending `file::fn old → new`. Accepting genuinely-stale drift is then a deliberate, reviewable step: inspect with `git diff --no-index crap-manifest.json .xtask/crap-manifest.candidate.json` and, if approved, `cp` the candidate over the committed manifest and commit it. As with the baseline, there is no flag that accepts a regression automatically — the symmetric recovery to `cargo xtask coverage reanchor` (#131).
 ```
 
-- [ ] **Step 2: Append the ADR-0030 supplement**
+- [x] **Step 2: Append the ADR-0030 supplement**
 
 At the end of `docs/adr/0030-coverage-reanchor-text-identity.md` (after line 98), append:
 
@@ -609,12 +609,12 @@ always lands as a reviewable diff. The failing coverage gate now prints
 to the lowering branch's `cargo xtask coverage reanchor`.
 ```
 
-- [ ] **Step 3: Verify the doc references are consistent**
+- [x] **Step 3: Verify the doc references are consistent**
 
 Run: `rg -n 'refresh-crap' CONTRIBUTING.md docs/adr/0030-coverage-reanchor-text-identity.md`
 Expected: both files mention `cargo xtask coverage refresh-crap`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add CONTRIBUTING.md docs/adr/0030-coverage-reanchor-text-identity.md
@@ -628,9 +628,9 @@ no accept-all, gate prints the recovery command."
 
 ## Final gate (before ship)
 
-- [ ] Run the full pre-push-style gate: `cargo xtask validate --no-e2e`
+- [x] Run the full pre-push-style gate: `cargo xtask validate --no-e2e`
   Expected: `ok` — static + clippy + xtask host tests + Nix coverage all green on the clean committed tree.
-- [ ] Confirm the tree is clean (`git status --porcelain` empty) and the worktree is on `worktree-issue-131-crap-refresh`.
+- [x] Confirm the tree is clean (`git status --porcelain` empty) and the worktree is on `worktree-issue-131-crap-refresh`.
 
 ## Self-Review (plan vs. spec)
 
