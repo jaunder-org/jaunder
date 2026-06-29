@@ -25,11 +25,11 @@ use storage::{
     create_rendered_post, open_database, open_existing_database, perform_post_update,
     update_rendered_post, AppState, AudienceError, ConfirmPasswordResetError, CreatePostError,
     CreatePostInput, CreateUserError, DbConnectOptions, FeedCacheRow, GoLivePost, InviteStorage,
-    ListByTagError, PasswordResetStorage, PostCursor, PostFormat, PostUpdate, ProfileUpdate,
-    PublishUpdate, RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteInviteStorage,
-    SqlitePasswordResetStorage, SqliteSessionStorage, SqliteSubscriptionStorage, SqliteUserStorage,
-    SubscriptionStorage, TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError,
-    UseInviteError, UsePasswordResetError, UserAuthError, UserStorage,
+    ListByTagError, PostCursor, PostFormat, PostUpdate, ProfileUpdate, PublishUpdate,
+    RegisterWithInviteError, SessionAuthError, SessionStorage, SqliteInviteStorage,
+    SqliteSessionStorage, SqliteSubscriptionStorage, SqliteUserStorage, SubscriptionStorage,
+    TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserAuthError, UserStorage,
 };
 use tempfile::TempDir;
 
@@ -1520,14 +1520,6 @@ async fn set_email_clears_previously_set_email() {
     assert!(!record.email_verified);
 }
 
-async fn password_reset_storage(base: &TempDir) -> (SqliteUserStorage, SqlitePasswordResetStorage) {
-    let pool = open_pool(base).await;
-    (
-        SqliteUserStorage::new(pool.clone()),
-        SqlitePasswordResetStorage::new(pool),
-    )
-}
-
 // --- EmailVerificationStorage integration tests ---
 
 #[apply(backends)]
@@ -1771,71 +1763,110 @@ async fn set_password_authenticate_with_old_returns_invalid_and_new_succeeds() {
 
 // --- PasswordResetStorage integration tests ---
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_password_reset_and_use_returns_user_id() {
-    let base = TempDir::new().unwrap();
-    let (users, pr) = password_reset_storage(&base).await;
+async fn create_password_reset_and_use_returns_user_id(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let raw_token = pr.create_password_reset(user_id, expires_at).await.unwrap();
+    let raw_token = state
+        .password_resets
+        .create_password_reset(user_id, expires_at)
+        .await
+        .unwrap();
 
-    let returned_user_id = pr.use_password_reset(&raw_token).await.unwrap();
+    let returned_user_id = state
+        .password_resets
+        .use_password_reset(&raw_token)
+        .await
+        .unwrap();
     assert_eq!(returned_user_id, user_id);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn use_password_reset_already_used_returns_already_used() {
-    let base = TempDir::new().unwrap();
-    let (users, pr) = password_reset_storage(&base).await;
+async fn use_password_reset_already_used_returns_already_used(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let raw_token = pr.create_password_reset(user_id, expires_at).await.unwrap();
+    let raw_token = state
+        .password_resets
+        .create_password_reset(user_id, expires_at)
+        .await
+        .unwrap();
 
-    pr.use_password_reset(&raw_token).await.unwrap();
+    state
+        .password_resets
+        .use_password_reset(&raw_token)
+        .await
+        .unwrap();
 
-    let err = pr.use_password_reset(&raw_token).await.unwrap_err();
+    let err = state
+        .password_resets
+        .use_password_reset(&raw_token)
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, UsePasswordResetError::AlreadyUsed),
         "expected AlreadyUsed, got {err:?}"
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn use_password_reset_expired_returns_expired() {
-    let base = TempDir::new().unwrap();
-    let (users, pr) = password_reset_storage(&base).await;
+async fn use_password_reset_expired_returns_expired(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let expires_at = Utc::now() - chrono::Duration::hours(1);
-    let raw_token = pr.create_password_reset(user_id, expires_at).await.unwrap();
+    let raw_token = state
+        .password_resets
+        .create_password_reset(user_id, expires_at)
+        .await
+        .unwrap();
 
-    let err = pr.use_password_reset(&raw_token).await.unwrap_err();
+    let err = state
+        .password_resets
+        .use_password_reset(&raw_token)
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, UsePasswordResetError::Expired),
         "expected Expired, got {err:?}"
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn use_password_reset_unknown_token_returns_not_found() {
-    let base = TempDir::new().unwrap();
-    let (_, pr) = password_reset_storage(&base).await;
+async fn use_password_reset_unknown_token_returns_not_found(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let err = pr.use_password_reset("not-a-real-token").await.unwrap_err();
+    let err = state
+        .password_resets
+        .use_password_reset("not-a-real-token")
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, UsePasswordResetError::NotFound),
         "expected NotFound, got {err:?}"
