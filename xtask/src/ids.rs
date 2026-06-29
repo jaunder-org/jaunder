@@ -53,6 +53,16 @@ pub fn parity_mismatch(sqlite: &[String], postgres: &[String]) -> Vec<String> {
     out
 }
 
+/// One greater than the maximum leading number across `filenames`; `0` when none
+/// have a number. Monotonic — never reuses a gap left by a deleted file.
+pub fn next_number(filenames: &[String]) -> u32 {
+    filenames
+        .iter()
+        .filter_map(|n| leading_number(n))
+        .max()
+        .map_or(0, |m| m + 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,5 +117,12 @@ mod tests {
     fn parity_mismatch_empty_when_identical() {
         let s = vec!["0001_a.sql".to_string()];
         assert!(parity_mismatch(&s, &s).is_empty());
+    }
+
+    #[test]
+    fn next_number_is_max_plus_one() {
+        let files = vec!["0001_a.sql".to_string(), "0007_b.sql".to_string()];
+        assert_eq!(next_number(&files), 8);
+        assert_eq!(next_number(&[]), 0);
     }
 }

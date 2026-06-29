@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+mod adr;
 mod audit_wasm;
 mod coverage;
 pub mod git;
@@ -105,6 +106,20 @@ pub enum Command {
         #[arg(value_enum)]
         browser: E2eBrowser,
     },
+    /// ADR maintenance.
+    #[command(subcommand)]
+    Adr(AdrCommand),
+}
+
+/// `adr` subcommands.
+#[derive(Subcommand)]
+pub enum AdrCommand {
+    /// Renumber this branch's colliding ADR to the next free number and rewrite
+    /// references. The ADR already on `origin/main` keeps its number; path-form
+    /// references are rewritten repo-wide and bare `ADR-NNNN` references in
+    /// branch-touched files. Run after rebasing onto the latest `origin/main`.
+    #[command(after_help = "EXAMPLES:\n  cargo xtask adr renumber")]
+    Renumber,
 }
 
 /// `coverage` subcommands.
@@ -146,6 +161,7 @@ impl Cli {
             Command::Coverage(CoverageCommand::Reanchor { .. }) => "coverage-reanchor",
             Command::Coverage(CoverageCommand::RefreshCrap { .. }) => "coverage-refresh-crap",
             Command::E2e { .. } => "e2e",
+            Command::Adr(AdrCommand::Renumber) => "adr-renumber",
         }
     }
 }
@@ -229,6 +245,13 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             finalize(&mut result, start);
             Ok(result)
         }
+        Command::Adr(AdrCommand::Renumber) => {
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("adr-renumber");
+            result.push(adr::renumber());
+            finalize(&mut result, start);
+            Ok(result)
+        }
     }
 }
 
@@ -246,28 +269,6 @@ pub fn ensure_hooks_installed() {
     }
 }
 
-/// A `git -C <repo_dir>` command scrubbed of the ambient env vars that redirect
-/// git at a different repository. A git hook (e.g. `.githooks/pre-push` running
-/// `cargo xtask validate`) exports `GIT_DIR`/`GIT_INDEX_FILE`; those would make
-/// `git -C <repo_dir>` operate on the HOOK's repo instead of `repo_dir`, so a
-/// command meant for `repo_dir` (or a throwaway test repo) could corrupt the
-/// surrounding worktree. Clearing them pins the target to `-C <repo_dir>`.
-fn git_at(repo_dir: &std::path::Path) -> std::process::Command {
-    let mut cmd = std::process::Command::new("git");
-    cmd.arg("-C").arg(repo_dir);
-    for var in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_COMMON_DIR",
-        "GIT_NAMESPACE",
-    ] {
-        cmd.env_remove(var);
-    }
-    cmd
-}
-
 /// Register the keep-ours merge driver in `repo_dir`'s local git config. The
 /// driver command is `true`: it exits 0 without touching `%A` (ours), so a merge
 /// of the generated coverage artifacts resolves to our side with no conflict
@@ -275,7 +276,7 @@ fn git_at(repo_dir: &std::path::Path) -> std::process::Command {
 fn register_keepours(repo_dir: &std::path::Path) -> anyhow::Result<()> {
     use anyhow::ensure;
     let cfg = |args: &[&str]| -> anyhow::Result<()> {
-        let status = git_at(repo_dir).args(args).status()?;
+        let status = git::at(repo_dir).args(args).status()?;
         ensure!(status.success(), "git {:?} failed", args);
         Ok(())
     };
@@ -300,10 +301,10 @@ fn needs_merge_driver(current: Option<&str>) -> bool {
 
 /// Current `merge.coverage-keepours.driver` in `repo_dir`, or `None` when unset/blank.
 /// `git config --get` exits non-zero (empty stdout) when the key is missing, so a blank
-/// read maps to `None`. Goes through `git_at` so ambient `GIT_DIR`/etc. (exported when
+/// read maps to `None`. Goes through `git::at` so ambient `GIT_DIR`/etc. (exported when
 /// run inside a hook) cannot redirect the query at another repo.
 fn merge_driver_value(repo_dir: &std::path::Path) -> Option<String> {
-    let out = git_at(repo_dir)
+    let out = git::at(repo_dir)
         .args(["config", "--get", "merge.coverage-keepours.driver"])
         .output()
         .ok()?;
@@ -455,11 +456,18 @@ mod cli_tests {
             _ => panic!("expected e2e"),
         }
     }
+
+    #[test]
+    fn adr_renumber_parses() {
+        let cli = Cli::try_parse_from(["xtask", "adr", "renumber"]).unwrap();
+        assert_eq!(cli.command_name(), "adr-renumber");
+    }
 }
 
 #[cfg(test)]
 mod merge_driver_tests {
-    use super::{ensure_merge_driver, git_at, needs_merge_driver, register_keepours};
+    use super::{ensure_merge_driver, needs_merge_driver, register_keepours};
+    use crate::git::at as git_at;
 
     fn git(dir: &std::path::Path, args: &[&str]) {
         let ok = git_at(dir).args(args).status().unwrap().success();
