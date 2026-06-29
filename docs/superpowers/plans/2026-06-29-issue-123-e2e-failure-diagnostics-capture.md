@@ -27,7 +27,7 @@
 **Interfaces:**
 - Produces: trace zips + screenshots under `/tmp/e2e/test-results/` for failed tests; consumed by Task 2's tarball copy.
 
-- [ ] **Step 1: Add trace/screenshot/outputDir to the `use` block**
+- [x] **Step 1: Add trace/screenshot/outputDir to the `use` block**
 
 In `nixPlaywrightConfig`, change the `use:` block from:
 
@@ -55,7 +55,7 @@ to:
             outputDir: '/tmp/e2e/test-results',
 ```
 
-- [ ] **Step 2: Confirm the flake still evaluates**
+- [x] **Step 2: Confirm the flake still evaluates**
 
 Run (from the worktree root):
 
@@ -65,7 +65,7 @@ nix eval --raw .#checks.x86_64-linux.e2e-sqlite-chromium.drvPath
 
 Expected: prints a `/nix/store/….drv` path (config is valid JS, flake evaluates).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add flake.nix
