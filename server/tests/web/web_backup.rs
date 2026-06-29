@@ -27,7 +27,7 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, backends_matrix, Backend, TestEnv};
+use crate::helpers::{backends, backends_matrix, sqlite_only, Backend, TestEnv};
 
 use crate::helpers::{ensure_server_fns_registered, test_options};
 
@@ -463,8 +463,13 @@ async fn operator_can_update_backup_settings_with_empty_destination(#[case] back
     assert_eq!(config.destination_path, None);
 }
 
+// reason: the 500-on-storage-error propagation is backend-agnostic, but the
+// fault is injected by closing the raw SQLite pool (test_sqlite_state_with_pool);
+// a backend-generic fault-injection harness is follow-up work — see #170.
+#[apply(sqlite_only)]
 #[tokio::test]
-async fn backup_warning_visible_propagates_storage_error_during_auth() {
+async fn backup_warning_visible_propagates_storage_error_during_auth(#[case] backend: Backend) {
+    let _ = backend;
     // Covers the Err(non-Unauthorized) branch: close pool after session creation
     // so authenticate() returns an Internal error (not Unauthorized).
     let base = TempDir::new().unwrap();
@@ -484,8 +489,13 @@ async fn backup_warning_visible_propagates_storage_error_during_auth() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
+// reason: the 500-on-storage-error propagation is backend-agnostic, but the
+// fault is injected by closing the raw SQLite pool (test_sqlite_state_with_pool);
+// a backend-generic fault-injection harness is follow-up work — see #170.
+#[apply(sqlite_only)]
 #[tokio::test]
-async fn current_user_is_operator_propagates_storage_error_during_auth() {
+async fn current_user_is_operator_propagates_storage_error_during_auth(#[case] backend: Backend) {
+    let _ = backend;
     // Covers the Err(non-Unauthorized) branch: close pool after session creation
     // so authenticate() returns an Internal error (not Unauthorized).
     let base = TempDir::new().unwrap();

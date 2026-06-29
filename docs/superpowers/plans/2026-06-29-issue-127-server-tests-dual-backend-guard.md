@@ -87,9 +87,9 @@ async fn cmd_init_on_fresh_dir_creates_structure_and_valid_db(#[case] backend: B
 
 - [x] **Step 5: Fast feedback** — `devtool run -- cargo xtask check --no-test`. Fix clippy/dead_code (delete any orphaned import). PASSED (exit 0); `postgres_testing_enabled` import dropped.
 
-- [ ] **Step 6: Full per-task gate** — `devtool run -- cargo xtask check`. DEFERRED to controller (runs the PG/coverage passes).
+- [x] **Step 6: Full per-task gate** — `devtool run -- cargo xtask check`. DEFERRED to controller (runs the PG/coverage passes).
 
-- [ ] **Step 7: Commit** — DEFERRED to controller.
+- [x] **Step 7: Commit** — DEFERRED to controller.
 
 ```bash
 git add server/tests/misc/commands.rs
@@ -108,7 +108,7 @@ These 17 tests are NOT simple single-axis `#[values]` tests — each combines th
 - Produces: `pub fn backends_matrix(#[values(Backend::Sqlite, Backend::Postgres)] backend: Backend) {}` (a `#[template]`), re-exported as `backends_matrix`; each of the 17 tests tagged `#[apply(backends_matrix)]`.
 - Consumed by: Task 6's guard, which MUST add `#[apply(backends_matrix)]` to its accepted set.
 
-- [ ] **Step 1: Define the template** in `storage/src/test_support.rs`, immediately after the `backends` template (~L173-178):
+- [x] **Step 1: Define the template** in `storage/src/test_support.rs`, immediately after the `backends` template (~L173-178):
 
 ```rust
 /// Dual-backend matrix template: a `#[values]`-based backend axis that composes
@@ -120,9 +120,9 @@ These 17 tests are NOT simple single-axis `#[values]` tests — each combines th
 pub fn backends_matrix(#[values(Backend::Sqlite, Backend::Postgres)] backend: Backend) {}
 ```
 
-- [ ] **Step 2: Re-export it** in `server/tests/helpers/mod.rs` — add `backends_matrix` to the `pub use storage::test_support::{ … }` list alongside `backends`.
+- [x] **Step 2: Re-export it** in `server/tests/helpers/mod.rs` — add `backends_matrix` to the `pub use storage::test_support::{ … }` list alongside `backends`.
 
-- [ ] **Step 3: Convert the 17 tests.** For each, remove the `#[values(Backend::Sqlite, Backend::Postgres)]` attribute from the `backend: Backend` parameter (leaving a plain `backend: Backend,` param) and add `#[apply(backends_matrix)]` immediately above `#[tokio::test]`. Keep the local `#[case]`/`#[rstest]` rows and the body unchanged. Before/after:
+- [x] **Step 3: Convert the 17 tests.** For each, remove the `#[values(Backend::Sqlite, Backend::Postgres)]` attribute from the `backend: Backend` parameter (leaving a plain `backend: Backend,` param) and add `#[apply(backends_matrix)]` immediately above `#[tokio::test]`. Keep the local `#[case]`/`#[rstest]` rows and the body unchanged. Before/after:
 
 ```rust
 // before
@@ -147,11 +147,11 @@ async fn endpoint_rejects_unauthenticated(
 
 (If a bare test in these files has NO `#[values(Backend…)]` arg and is single-axis, it should already be `#[apply(backends)]`; if it's bare and single-axis, it belongs to Task 3/4/5 — stop and report it.)
 
-- [ ] **Step 4: Fast feedback** — `cargo xtask check --no-test` (bare, via Bash, worktree-aware). Confirm it compiles; optionally `cargo nextest list -p jaunder --test web 2>/dev/null | rg endpoint_rejects_unauthenticated` to confirm the backend×case product is preserved.
+- [x] **Step 4: Fast feedback** — `cargo xtask check --no-test` (bare, via Bash, worktree-aware). Confirm it compiles; optionally `cargo nextest list -p jaunder --test web 2>/dev/null | rg endpoint_rejects_unauthenticated` to confirm the backend×case product is preserved.
 
-- [ ] **Step 5: Full per-task gate** — `cargo xtask check`. Expected: green; each converted test expands to backend × its local cases.
+- [x] **Step 5: Full per-task gate** — `cargo xtask check`. Expected: green; each converted test expands to backend × its local cases.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add storage/src/test_support.rs server/tests/helpers/mod.rs server/tests/web server/tests/atompub server/tests/feed server/tests/misc/media_handlers.rs
@@ -169,9 +169,9 @@ git commit -m "test(issue-127): add backends_matrix template; standardize backen
 - Consumes: `backends` template, `Backend`, `backend.setup().await` → `env.state`.
 - Produces: the test as `#[apply(backends)]`, routing through `env.state` instead of a hand-built `Sqlite*` `AppState`.
 
-- [ ] **Step 1: Read the test** (L258–end) to capture the `FailingWebSubClient`, the worker invocation, and the backoff assertions.
+- [x] **Step 1: Read the test** (L258–end) to capture the `FailingWebSubClient`, the worker invocation, and the backoff assertions.
 
-- [ ] **Step 2: Replace the preamble.** Delete the `TempDir` + `SqlitePool::connect_with` + `sqlx::migrate!` + hand-built `storage::AppState { … Sqlite*Storage … }` block, and substitute:
+- [x] **Step 2: Replace the preamble.** Delete the `TempDir` + `SqlitePool::connect_with` + `sqlx::migrate!` + hand-built `storage::AppState { … Sqlite*Storage … }` block, and substitute:
 
 ```rust
 #[apply(backends)]
@@ -186,11 +186,11 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
 
 Keep the `FailingWebSubClient` impl and every assertion identical. If the body used the raw `pool` directly (not just `state`), route that raw SQL through the dual-backend `raw_exec`/`raw_try_exec` helpers; if the body only used `state`, no further change.
 
-- [ ] **Step 3: Fast feedback** — `devtool run -- cargo xtask check --no-test`. Delete any now-orphaned `Sqlite*`/`SqlitePool`/`sqlx::migrate` imports the conversion leaves unused.
+- [x] **Step 3: Fast feedback** — `devtool run -- cargo xtask check --no-test`. Delete any now-orphaned `Sqlite*`/`SqlitePool`/`sqlx::migrate` imports the conversion leaves unused.
 
-- [ ] **Step 4: Full per-task gate** — `devtool run -- cargo xtask check`. Expected: green on both backends — this closes the feed-worker backoff PG coverage hole.
+- [x] **Step 4: Full per-task gate** — `devtool run -- cargo xtask check`. Expected: green on both backends — this closes the feed-worker backoff PG coverage hole.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/tests/feed/feed_worker.rs
@@ -208,12 +208,12 @@ git commit -m "test(issue-127): run feed-worker ping-failure backoff on both bac
 - Consumes: `postgres_only`/`sqlite_only` templates.
 - Produces: each test tagged with the correct single-backend template + a `// reason:`.
 
-- [ ] **Step 1: Read each test and confirm the intentional reason** (per the classification rule — do NOT tag on "hardcodes X"):
+- [x] **Step 1: Read each test and confirm the intentional reason** (per the classification rule — do NOT tag on "hardcodes X"):
   - `backup_interop` ×2 (`sqlite_backup_restores_into_postgres`, `postgres_backup_restores_into_sqlite`): cross-backend backup/restore exercises BOTH engines in one test → `postgres_only` (requires live PG). Reason: cross-backend backup interop, needs both engines.
   - `pg_teardown::per_test_database_is_dropped_on_teardown`: asserts Postgres per-test-database teardown → `postgres_only`. Reason: PG-specific per-test DB drop.
   - `feed_events_concurrency::claim_pending_batch_no_lock_contention`: reproduces the SQLite #18 `claim_pending_batch` lock flake (reserved-lock upgrade under `busy_timeout`) → `sqlite_only`. Reason as below. (Postgres MVCC can't exhibit it.)
 
-- [ ] **Step 2: Tag them.** Add the template + `#[case] backend: Backend` (consume with `let _ = backend;` only where the body doesn't already use it) + a `// reason:` line. For `feed_events_concurrency`, **preserve** its `#[tokio::test(flavor = "multi_thread", worker_threads = 4)]` and `#[ignore = …]` attributes; the result is:
+- [x] **Step 2: Tag them.** Add the template + `#[case] backend: Backend` (consume with `let _ = backend;` only where the body doesn't already use it) + a `// reason:` line. For `feed_events_concurrency`, **preserve** its `#[tokio::test(flavor = "multi_thread", worker_threads = 4)]` and `#[ignore = …]` attributes; the result is:
 
 ```rust
 #[apply(sqlite_only)]
@@ -229,11 +229,11 @@ async fn claim_pending_batch_no_lock_contention(#[case] backend: Backend) {
 
 (The `sqlite_only` template's case is `Backend::Sqlite`; the body may keep `Backend::Sqlite.setup()` explicitly — leave the existing body as-is and just add the attributes + `let _ = backend;`.)
 
-- [ ] **Step 3: Fast feedback** — `devtool run -- cargo xtask check --no-test`.
+- [x] **Step 3: Fast feedback** — `devtool run -- cargo xtask check --no-test`.
 
-- [ ] **Step 4: Full per-task gate** — `devtool run -- cargo xtask check`. Expected: green (the `#[ignore]`d test still compiles; the `postgres_only` tests run their PG case).
+- [x] **Step 4: Full per-task gate** — `devtool run -- cargo xtask check`. Expected: green (the `#[ignore]`d test still compiles; the `postgres_only` tests run their PG case).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/tests/misc/backup_interop.rs server/tests/misc/pg_teardown.rs server/tests/feed/feed_events_concurrency.rs
@@ -251,13 +251,13 @@ git commit -m "test(issue-127): annotate genuinely single-backend server tests w
 **Interfaces:**
 - Produces: unit-shaped non-DB tests moved OUT of `server/tests` into a `#[cfg(test)] mod tests` in the owning crate; genuine non-DB integration tests left in place with a `// guard:no-backend — <reason>` marker.
 
-- [ ] **Step 1: Read each of the 3 tests and decide relocate-vs-exempt** per the policy:
+- [x] **Step 1: Read each of the 3 tests and decide relocate-vs-exempt** per the policy:
   - If the test calls a pure function / extractor directly with no router/app wiring → **unit-shaped → relocate.**
   - If it exercises integration wiring (an axum route, the asset router) but touches no DB → **genuine non-DB integration → exempt in place.**
 
-- [ ] **Step 2a (relocate):** For each unit-shaped test, move it verbatim into a `#[cfg(test)] mod tests { … }` in the source file that owns the function it tests (adjust `use` paths from `crate::`-test-style to the in-crate module paths; the assertion body is unchanged). Delete it from `server/tests`. If a whole `server/tests/<file>.rs` becomes empty, delete the file and drop its `mod` line from the test entrypoint (e.g. `server/tests/misc.rs`).
+- [x] **Step 2a (relocate):** For each unit-shaped test, move it verbatim into a `#[cfg(test)] mod tests { … }` in the source file that owns the function it tests (adjust `use` paths from `crate::`-test-style to the in-crate module paths; the assertion body is unchanged). Delete it from `server/tests`. If a whole `server/tests/<file>.rs` becomes empty, delete the file and drop its `mod` line from the test entrypoint (e.g. `server/tests/misc.rs`).
 
-- [ ] **Step 2b (exempt):** For each genuine non-DB integration test, add the marker line in its attribute block:
+- [x] **Step 2b (exempt):** For each genuine non-DB integration test, add the marker line in its attribute block:
 
 ```rust
 // guard:no-backend — serves an embedded static asset; exercises no database.
@@ -265,11 +265,11 @@ git commit -m "test(issue-127): annotate genuinely single-backend server tests w
 async fn test_jaunder_css_served() { … }
 ```
 
-- [ ] **Step 3: Fast feedback** — `devtool run -- cargo xtask check --no-test`. Fix imports/`mod` wiring from any relocation.
+- [x] **Step 3: Fast feedback** — `devtool run -- cargo xtask check --no-test`. Fix imports/`mod` wiring from any relocation.
 
-- [ ] **Step 4: Full per-task gate** — `devtool run -- cargo xtask check`. Expected: green; relocated tests run as unit tests, exempted ones remain.
+- [x] **Step 4: Full per-task gate** — `devtool run -- cargo xtask check`. Expected: green; relocated tests run as unit tests, exempted ones remain.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A
@@ -288,7 +288,7 @@ git commit -m "test(issue-127): relocate unit-shaped non-DB tests; mark genuine 
 - Consumes: `CommandResult`/`StepResult`.
 - Produces: a guard that walks `server/tests/**/*.rs`, matches parameterized tokio forms, honors the exemption marker, tolerates attribute-block contiguity, and hard-fails on a missing root.
 
-- [ ] **Step 1: Write the failing fixture unit tests** in `test_pattern_check.rs` covering the new behaviors. Add to the existing `#[cfg(test)] mod tests`:
+- [x] **Step 1: Write the failing fixture unit tests** in `test_pattern_check.rs` covering the new behaviors. Add to the existing `#[cfg(test)] mod tests`:
 
 ```rust
 const PARAM_BARE: &str = "\
@@ -325,9 +325,9 @@ async fn good_matrix(backend: Backend, #[case] n: i32) {}
 #[test] fn backends_matrix_apply_is_clean() { assert!(violations(MATRIX_TAGGED).is_empty()); }
 ```
 
-- [ ] **Step 2: Run them, verify they fail** — `devtool run -- cargo test --manifest-path xtask/Cargo.toml test_pattern_check`. Expected: the 4 new tests FAIL (current scanner matches only exact `#[tokio::test]`, has no marker/contiguity logic).
+- [x] **Step 2: Run them, verify they fail** — `devtool run -- cargo test --manifest-path xtask/Cargo.toml test_pattern_check`. Expected: the 4 new tests FAIL (current scanner matches only exact `#[tokio::test]`, has no marker/contiguity logic).
 
-- [ ] **Step 3: Harden the scanner.** Rewrite `violations` so that: a line is a tokio test if its trimmed text is `#[tokio::test]` OR starts with `#[tokio::test(`; the attribute-block walk (up and down) steps over lines that are `#[…]` attributes OR blank OR `//`/`///` comments (stopping at the first other code line / the `fn`); the test is satisfied if the block contains an accepted `#[apply(…)]` OR a `// guard:no-backend` comment; otherwise it is a violation at the tokio line. **Extend `is_backend_apply` to also accept `#[apply(backends_matrix)]`** (the `#[values]`-based dual-backend template from Task 2 — note `#[apply(backends_matrix)]` is NOT a substring of `#[apply(backends)]`, so it must be listed explicitly):
+- [x] **Step 3: Harden the scanner.** Rewrite `violations` so that: a line is a tokio test if its trimmed text is `#[tokio::test]` OR starts with `#[tokio::test(`; the attribute-block walk (up and down) steps over lines that are `#[…]` attributes OR blank OR `//`/`///` comments (stopping at the first other code line / the `fn`); the test is satisfied if the block contains an accepted `#[apply(…)]` OR a `// guard:no-backend` comment; otherwise it is a violation at the tokio line. **Extend `is_backend_apply` to also accept `#[apply(backends_matrix)]`** (the `#[values]`-based dual-backend template from Task 2 — note `#[apply(backends_matrix)]` is NOT a substring of `#[apply(backends)]`, so it must be listed explicitly):
 
 ```rust
 fn is_backend_apply(trimmed: &str) -> bool {
@@ -373,9 +373,9 @@ fn violations(source: &str) -> Vec<usize> {
 
 (Keep the existing `is_backend_apply` helper. Note `is_attr_or_skippable` now also bounds the walk on blanks/comments — verify the existing `annotated_tokio_test_is_clean`/`bare_tokio_test_is_flagged_at_its_line`/`sync_unit_test_is_exempt` tests still pass.)
 
-- [ ] **Step 4: Run unit tests, verify they pass** — `devtool run -- cargo test --manifest-path xtask/Cargo.toml test_pattern_check`. Expected: all (old + 4 new) PASS.
+- [x] **Step 4: Run unit tests, verify they pass** — `devtool run -- cargo test --manifest-path xtask/Cargo.toml test_pattern_check`. Expected: all (old + 4 new) PASS.
 
-- [ ] **Step 5: Widen `run()` to a directory walk.** Replace the `const SCANNED: &[&str]` single-file read with a recursive walk of `server/tests`, hard-failing if the root is absent:
+- [x] **Step 5: Widen `run()` to a directory walk.** Replace the `const SCANNED: &[&str]` single-file read with a recursive walk of `server/tests`, hard-failing if the root is absent:
 
 ```rust
 const TEST_ROOT: &str = "server/tests";
@@ -413,13 +413,13 @@ pub fn run(result: &mut CommandResult) {
 }
 ```
 
-- [ ] **Step 6: Verify the guard passes against the now-clean tree** — `devtool run -- cargo xtask check --no-test`. Expected: `test-backend-pattern` is `ok` (Tasks 1–5 left zero unannotated bare/parameterized tokio tests in `server/tests`). If it fails, it prints the offending `file:line` — fix the straggler (it was missed by an earlier task) before proceeding.
+- [x] **Step 6: Verify the guard passes against the now-clean tree** — `devtool run -- cargo xtask check --no-test`. Expected: `test-backend-pattern` is `ok` (Tasks 1–5 left zero unannotated bare/parameterized tokio tests in `server/tests`). If it fails, it prints the offending `file:line` — fix the straggler (it was missed by an earlier task) before proceeding.
 
-- [ ] **Step 7: Document the convention** in `CONTRIBUTING.md`'s testing section: every DB-touching `server/tests` test carries `#[apply(backends|sqlite_only|postgres_only)]` (single-backend requires a `// reason:`); genuine non-DB integration tests carry `// guard:no-backend — <reason>`; unit-shaped tests live in `#[cfg(test)]` modules, not `server/tests`. The `test-backend-pattern` guard enforces this across `server/tests`.
+- [x] **Step 7: Document the convention** in `CONTRIBUTING.md`'s testing section: every DB-touching `server/tests` test carries `#[apply(backends|sqlite_only|postgres_only)]` (single-backend requires a `// reason:`); genuine non-DB integration tests carry `// guard:no-backend — <reason>`; unit-shaped tests live in `#[cfg(test)]` modules, not `server/tests`. The `test-backend-pattern` guard enforces this across `server/tests`.
 
-- [ ] **Step 8: Final full local gate** — `devtool run -- cargo xtask validate`. Expected: green, incl. both backends across the suite and the e2e matrix.
+- [x] **Step 8: Final full local gate** — `devtool run -- cargo xtask validate`. Expected: green, incl. both backends across the suite and the e2e matrix.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add xtask/src/steps/test_pattern_check.rs CONTRIBUTING.md
