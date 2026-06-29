@@ -23,15 +23,14 @@ use sqlx::{PgPool, SqlitePool};
 use std::sync::Arc;
 use storage::{
     create_rendered_post, open_database, open_existing_database, perform_post_update,
-    update_rendered_post, AppState, AtomicOps, AudienceError, ConfirmPasswordResetError,
-    CreatePostError, CreatePostInput, CreateUserError, DbConnectOptions, EmailVerificationStorage,
-    FeedCacheRow, GoLivePost, InviteStorage, ListByTagError, PasswordResetStorage, PostCursor,
-    PostFormat, PostUpdate, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
-    SessionAuthError, SessionStorage, SqliteAtomicOps, SqliteEmailVerificationStorage,
-    SqliteInviteStorage, SqlitePasswordResetStorage, SqliteSessionStorage,
-    SqliteSubscriptionStorage, SqliteUserStorage, SubscriptionStorage, TaggingError,
-    UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
-    UsePasswordResetError, UserAuthError, UserStorage,
+    update_rendered_post, AppState, AudienceError, ConfirmPasswordResetError, CreatePostError,
+    CreatePostInput, CreateUserError, DbConnectOptions, EmailVerificationStorage, FeedCacheRow,
+    GoLivePost, InviteStorage, ListByTagError, PasswordResetStorage, PostCursor, PostFormat,
+    PostUpdate, ProfileUpdate, PublishUpdate, RegisterWithInviteError, SessionAuthError,
+    SessionStorage, SqliteEmailVerificationStorage, SqliteInviteStorage,
+    SqlitePasswordResetStorage, SqliteSessionStorage, SqliteSubscriptionStorage, SqliteUserStorage,
+    SubscriptionStorage, TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError,
+    UseInviteError, UsePasswordResetError, UserAuthError, UserStorage,
 };
 use tempfile::TempDir;
 
@@ -1291,17 +1290,17 @@ async fn use_invite_on_already_used_code_returns_already_used() {
 
 // --- create_user_with_invite integration tests ---
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_user_with_invite_creates_user_and_marks_invite_used() {
-    let base = TempDir::new().unwrap();
-    let pool = open_pool(&base).await;
-    let invites = SqliteInviteStorage::new(pool.clone());
-    let users = SqliteUserStorage::new(pool.clone());
+async fn create_user_with_invite_creates_user_and_marks_invite_used(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let code = invites.create_invite(expires_at).await.unwrap();
+    let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    let user_id = SqliteAtomicOps::new(pool.clone())
+    let user_id = state
+        .atomic
         .create_user_with_invite(
             &username("alice"),
             &password("password123"),
@@ -1312,27 +1311,28 @@ async fn create_user_with_invite_creates_user_and_marks_invite_used() {
         .await
         .unwrap();
 
-    let record = users.get_user(user_id).await.unwrap().unwrap();
+    let record = state.users.get_user(user_id).await.unwrap().unwrap();
     assert_eq!(record.username.as_str(), "alice");
     assert_eq!(record.display_name.as_deref(), Some("Alice"));
 
     // Invite was marked used
-    let list = invites.list_invites().await.unwrap();
+    let list = state.invites.list_invites().await.unwrap();
     assert_eq!(list.len(), 1);
     assert!(list[0].used_at.is_some());
     assert_eq!(list[0].used_by, Some(user_id));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_user_with_invite_second_call_returns_already_used() {
-    let base = TempDir::new().unwrap();
-    let pool = open_pool(&base).await;
-    let invites = SqliteInviteStorage::new(pool.clone());
+async fn create_user_with_invite_second_call_returns_already_used(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let code = invites.create_invite(expires_at).await.unwrap();
+    let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    SqliteAtomicOps::new(pool.clone())
+    state
+        .atomic
         .create_user_with_invite(
             &username("alice"),
             &password("password123"),
@@ -1343,7 +1343,8 @@ async fn create_user_with_invite_second_call_returns_already_used() {
         .await
         .unwrap();
 
-    let err = SqliteAtomicOps::new(pool.clone())
+    let err = state
+        .atomic
         .create_user_with_invite(
             &username("bob"),
             &password("password123"),
@@ -1357,24 +1358,25 @@ async fn create_user_with_invite_second_call_returns_already_used() {
     assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
 
     // bob was not inserted
-    let users = SqliteUserStorage::new(pool.clone());
-    assert!(users
+    assert!(state
+        .users
         .get_user_by_username(&username("bob"))
         .await
         .unwrap()
         .is_none());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_user_with_invite_expired_returns_invite_expired() {
-    let base = TempDir::new().unwrap();
-    let pool = open_pool(&base).await;
-    let invites = SqliteInviteStorage::new(pool.clone());
+async fn create_user_with_invite_expired_returns_invite_expired(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
     let expires_at = Utc::now() - chrono::Duration::hours(1);
-    let code = invites.create_invite(expires_at).await.unwrap();
+    let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    let err = SqliteAtomicOps::new(pool.clone())
+    let err = state
+        .atomic
         .create_user_with_invite(
             &username("alice"),
             &password("password123"),
@@ -1387,20 +1389,22 @@ async fn create_user_with_invite_expired_returns_invite_expired() {
 
     assert!(matches!(err, RegisterWithInviteError::InviteExpired));
 
-    let users = SqliteUserStorage::new(pool.clone());
-    assert!(users
+    assert!(state
+        .users
         .get_user_by_username(&username("alice"))
         .await
         .unwrap()
         .is_none());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_user_with_invite_unknown_code_returns_not_found() {
-    let base = TempDir::new().unwrap();
-    let pool = open_pool(&base).await;
+async fn create_user_with_invite_unknown_code_returns_not_found(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let err = SqliteAtomicOps::new(pool.clone())
+    let err = state
+        .atomic
         .create_user_with_invite(
             &username("alice"),
             &password("password123"),
@@ -1413,31 +1417,34 @@ async fn create_user_with_invite_unknown_code_returns_not_found() {
 
     assert!(matches!(err, RegisterWithInviteError::InviteNotFound));
 
-    let users = SqliteUserStorage::new(pool.clone());
-    assert!(users
+    assert!(state
+        .users
         .get_user_by_username(&username("alice"))
         .await
         .unwrap()
         .is_none());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_user_with_invite_duplicate_username_returns_username_taken() {
-    let base = TempDir::new().unwrap();
-    let pool = open_pool(&base).await;
-    let invites = SqliteInviteStorage::new(pool.clone());
-    let users = SqliteUserStorage::new(pool.clone());
+async fn create_user_with_invite_duplicate_username_returns_username_taken(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
     // Create alice directly (without invite)
-    users
+    state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let code = invites.create_invite(expires_at).await.unwrap();
+    let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    let err = SqliteAtomicOps::new(pool.clone())
+    let err = state
+        .atomic
         .create_user_with_invite(
             &username("alice"),
             &password("other_password"),
@@ -1451,7 +1458,7 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken() {
     assert!(matches!(err, RegisterWithInviteError::UsernameTaken));
 
     // Invite was NOT marked used
-    let list = invites.list_invites().await.unwrap();
+    let list = state.invites.list_invites().await.unwrap();
     assert_eq!(list.len(), 1);
     assert!(list[0].used_at.is_none());
 }
