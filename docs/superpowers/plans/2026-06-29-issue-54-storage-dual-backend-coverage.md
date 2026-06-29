@@ -180,15 +180,15 @@ git commit -m "test(issue-54): run invite-storage lifecycle on both backends"
 - Consumes: `state.users.*`, `raw_exec`.
 - Produces: 9 dual-backend tests; reduces `user_storage`/`SqliteUserStorage` counts (delete `user_storage` only if this exhausts it — `storage_pair` may still use it, in which case delete in Task 6).
 
-- [ ] **Step 1: Read the nine current test bodies** (shared `user_storage(base)` helper).
+- [x] **Step 1: Read the nine current test bodies** (shared `user_storage(base)` helper).
 
-- [ ] **Step 2: Convert each** via the worked transform, routing through `state.users`.
+- [x] **Step 2: Convert each** via the worked transform, routing through `state.users`.
 
-- [ ] **Step 3: Fast feedback + helper cleanup** — `cargo xtask check --no-test`; delete any helper the compiler now reports unused.
+- [x] **Step 3: Fast feedback + helper cleanup** — `cargo xtask check --no-test`; delete any helper the compiler now reports unused. `user_storage` is still called by a Task-6 cluster test (now ~L1732), so it remains — nothing reported unused; no helper deleted.
 
-- [ ] **Step 4: Full per-task gate** — `cargo xtask check`. Expected: green on both backends.
+- [ ] **Step 4: Full per-task gate** — `cargo xtask check`. Deferred to controller per dispatch execution note (gate for this dispatch was `cargo xtask check --no-test` only).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit** — deferred to controller per dispatch execution note (do NOT commit).
 
 ```bash
 git add server/tests/storage/storage.rs
