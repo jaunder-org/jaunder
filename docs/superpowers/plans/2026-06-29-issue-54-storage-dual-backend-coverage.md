@@ -154,15 +154,15 @@ git commit -m "test(issue-54): run password-reset storage paths on both backends
 - Consumes: `state.invites.*`, `raw_exec`.
 - Produces: 5 dual-backend tests; likely exhausts `invite_storage_triple` helper → delete it this task.
 
-- [ ] **Step 1: Read the five current test bodies** (shared `invite_storage_triple(base)` helper).
+- [x] **Step 1: Read the five current test bodies** (shared `invite_storage_triple(base)` helper).
 
-- [ ] **Step 2: Convert each** via the worked transform, routing through `state.invites`. For expired-code setup, create with an in-the-past expiry through the same handle.
+- [x] **Step 2: Convert each** via the worked transform, routing through `state.invites`. For expired-code setup, create with an in-the-past expiry through the same handle.
 
-- [ ] **Step 3: Delete the now-orphaned `invite_storage_triple` helper.** Confirm with `cargo xtask check --no-test`.
+- [x] **Step 3: Delete the now-orphaned `invite_storage_triple` helper.** _(Also removed the now-unused `SqliteInviteStorage` and `InviteStorage` imports flagged by `-D unused-imports`; re-ran clean.)_ Confirmed with `cargo xtask check --no-test` — PASSED.
 
-- [ ] **Step 4: Full per-task gate** — `cargo xtask check`. Expected: green on both backends.
+- [ ] **Step 4: Full per-task gate** — `cargo xtask check`. _(Deferred per dispatch Execution Note: controller runs the full gate; this dispatch's gate is `cargo xtask check --no-test` only, which passed clean.)_
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit** _(Deferred per dispatch Execution Note: controller commits.)_
 
 ```bash
 git add server/tests/storage/storage.rs
