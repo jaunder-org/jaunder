@@ -26,9 +26,9 @@ use storage::{
     update_rendered_post, AppState, AudienceError, ConfirmPasswordResetError, CreatePostError,
     CreatePostInput, CreateUserError, DbConnectOptions, FeedCacheRow, GoLivePost, ListByTagError,
     PostCursor, PostFormat, PostUpdate, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
-    SessionAuthError, SqliteSubscriptionStorage, SqliteUserStorage, SubscriptionStorage,
-    TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
-    UsePasswordResetError, UserAuthError, UserStorage,
+    SessionAuthError, SqliteSubscriptionStorage, SubscriptionStorage, TaggingError,
+    UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserAuthError,
 };
 use tempfile::TempDir;
 
@@ -554,10 +554,6 @@ async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
         .is_empty());
 }
 
-async fn user_storage(base: &TempDir) -> SqliteUserStorage {
-    SqliteUserStorage::new(open_pool(base).await)
-}
-
 fn username(s: &str) -> Username {
     s.parse().unwrap()
 }
@@ -859,21 +855,35 @@ fn unsupported_url_is_rejected_at_parse_time() {
     assert!(result.is_err());
 }
 
+#[apply(postgres_only)]
 #[tokio::test]
-async fn open_database_succeeds_on_postgres_test_vm() {
+async fn open_database_succeeds_on_postgres_test_vm(#[case] backend: Backend) {
+    // Backend-specific: exercises the Postgres migration path on a fresh DB,
+    // so it opens its own `unique_postgres_url()` rather than using `env.state`.
+    let _ = backend;
     let url = unique_postgres_url().await;
     open_database(&url).await.unwrap();
 }
 
+#[apply(postgres_only)]
 #[tokio::test]
-async fn open_database_runs_postgres_migrations_on_existing_empty_db() {
+async fn open_database_runs_postgres_migrations_on_existing_empty_db(#[case] backend: Backend) {
+    // Backend-specific: exercises the Postgres migration path on a fresh DB,
+    // so it opens its own `unique_postgres_url()` rather than using `env.state`.
+    let _ = backend;
     let url = unique_postgres_url().await;
     let state = open_database(&url).await.unwrap();
     assert_eq!(state.site_config.get("missing").await.unwrap(), None);
 }
 
+#[apply(postgres_only)]
 #[tokio::test]
-async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db() {
+async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db(
+    #[case] backend: Backend,
+) {
+    // Backend-specific: exercises the Postgres migration path on a fresh DB,
+    // so it opens its own `unique_postgres_url()` rather than using `env.state`.
+    let _ = backend;
     let url = unique_postgres_url().await;
     let state = open_existing_database(&url).await.unwrap();
     assert_eq!(state.site_config.get("missing").await.unwrap(), None);
@@ -1793,10 +1803,14 @@ async fn use_email_verification_with_corrupt_stored_email_returns_internal(
 
 // --- UserStorage::set_password integration tests ---
 
+#[apply(backends)]
 #[tokio::test]
-async fn set_password_authenticate_with_old_returns_invalid_and_new_succeeds() {
-    let base = TempDir::new().unwrap();
-    let users = user_storage(&base).await;
+async fn set_password_authenticate_with_old_returns_invalid_and_new_succeeds(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let users = &state.users;
 
     let user_id = users
         .create_user(&username("alice"), &password("old_password1"), None, false)

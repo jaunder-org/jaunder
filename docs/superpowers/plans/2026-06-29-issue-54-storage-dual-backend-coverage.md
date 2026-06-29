@@ -232,7 +232,7 @@ git commit -m "test(issue-54): run session/site-config/mailer paths on both back
 - Consumes: `postgres_only` template, `env.base` for the backend URL.
 - Produces: the file's end state — every `#[tokio::test]` carries one of the three templates; `open_pool` and `open_pg_pool` (and any remaining `Sqlite*`/`Pg*` helper) deleted.
 
-- [ ] **Step 1: Enumerate remaining bare `#[tokio::test]`** in the file:
+- [x] **Step 1: Enumerate remaining bare `#[tokio::test]`** in the file:
 
 ```bash
 rg -nN '#\[tokio::test\]' server/tests/storage/storage.rs
@@ -240,15 +240,15 @@ rg -nN '#\[tokio::test\]' server/tests/storage/storage.rs
 
 For each hit, the immediately-preceding line must be an `#[apply(...)]`. List any that are not yet annotated — these are the genuinely single-backend stragglers (the PG-init/migration tests) plus anything missed in Tasks 1–6.
 
-- [ ] **Step 2: Annotate the PG-specific tests** `#[apply(postgres_only)]` with `// reason: exercises Postgres migration/open path specifically` and route their body through `backend.setup()` / `env.base` (drop the hardcoded `open_pg_pool()` preamble). If any test is truly SQLite-specific, use `#[apply(sqlite_only)]` + a `// reason:` instead. Convert any straggler caught here per its nature (agnostic → `backends`).
+- [x] **Step 2: Annotate the PG-specific tests** `#[apply(postgres_only)]` with `// reason: exercises Postgres migration/open path specifically` and route their body through `backend.setup()` / `env.base` (drop the hardcoded `open_pg_pool()` preamble). If any test is truly SQLite-specific, use `#[apply(sqlite_only)]` + a `// reason:` instead. Convert any straggler caught here per its nature (agnostic → `backends`).
 
-- [ ] **Step 3: Delete the final orphaned helpers** `open_pool`, `open_pg_pool`, and any remaining `Sqlite*`/`Pg*`-typed helper. Run `cargo xtask check --no-test`; iterate until dead_code is clean (the compiler lists every remaining orphan).
+- [x] **Step 3: Delete the orphaned helper** — only `user_storage` (last caller was the `set_password` straggler). _(CORRECTED: `open_pool`/`open_pg_pool` are NOT deleted — load-bearing for `raw_exec`/`raw_try_exec`/`lookup_names` + several converted tests. Also removed now-unused `SqliteUserStorage`/`UserStorage` imports.)_
 
-- [ ] **Step 4: Confirm zero bare `#[tokio::test]`** — re-run the Step-1 `rg`; every hit must now be preceded by an `#[apply(...)]`.
+- [x] **Step 4: Confirm zero bare `#[tokio::test]`** — re-run the Step-1 `rg`; every hit must now be preceded by an `#[apply(...)]`.
 
-- [ ] **Step 5: Full per-task gate** — `cargo xtask check`. Expected: green on both backends.
+- [x] **Step 5: Full per-task gate** (controller).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit** (controller)
 
 ```bash
 git add server/tests/storage/storage.rs
