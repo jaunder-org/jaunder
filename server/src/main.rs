@@ -85,8 +85,10 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             storage,
             bind,
             environment,
+            runtime_file,
         } => {
-            jaunder::commands::cmd_serve(&storage, bind, environment.is_prod()).await?;
+            jaunder::commands::cmd_serve(&storage, bind, environment.is_prod(), runtime_file)
+                .await?;
         }
         Commands::UserCreate {
             storage,
@@ -110,6 +112,16 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 operator,
             )
             .await?;
+        }
+        Commands::AppPasswordCreate {
+            storage,
+            username,
+            label,
+        } => {
+            let username = username
+                .parse::<Username>()
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            jaunder::commands::cmd_app_password_create(&storage, &username, &label).await?;
         }
         Commands::UserInvite {
             storage,
@@ -244,6 +256,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_app_password_create_mints_for_existing_user() {
+        let base = TempDir::new().unwrap();
+        let storage = test_storage_args(&base);
+        run(Cli {
+            command: Some(Commands::Init {
+                storage: storage.clone(),
+                skip_if_exists: false,
+            }),
+            verbose: false,
+        })
+        .await
+        .unwrap();
+        run(Cli {
+            command: Some(Commands::UserCreate {
+                storage: storage.clone(),
+                username: "alice".to_string(),
+                password: Some("password123".to_string()),
+                display_name: None,
+                operator: false,
+            }),
+            verbose: false,
+        })
+        .await
+        .unwrap();
+
+        run(Cli {
+            command: Some(Commands::AppPasswordCreate {
+                storage,
+                username: "alice".to_string(),
+                label: "ert".to_string(),
+            }),
+            verbose: false,
+        })
+        .await
+        .expect("app-password-create should succeed for an existing user");
+    }
+
+    #[tokio::test]
     async fn run_serve() {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
@@ -263,6 +313,7 @@ mod tests {
                 storage,
                 bind,
                 environment: jaunder::cli::DeploymentEnv::Dev,
+                runtime_file: None,
             }),
             verbose: false,
         };
@@ -368,6 +419,7 @@ mod tests {
                 storage,
                 bind: "127.0.0.1:0".parse().unwrap(),
                 environment: jaunder::cli::DeploymentEnv::Prod,
+                runtime_file: None,
             }),
             verbose: false,
         };
@@ -385,6 +437,7 @@ mod tests {
                 storage,
                 bind,
                 environment: jaunder::cli::DeploymentEnv::Dev,
+                runtime_file: None,
             }),
             verbose: false,
         };

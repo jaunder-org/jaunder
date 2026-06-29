@@ -14,6 +14,7 @@ pub mod mailer;
 pub mod media;
 pub mod media_manager;
 pub mod observability;
+pub mod runtime_file;
 pub mod websub;
 
 #[cfg(test)]
