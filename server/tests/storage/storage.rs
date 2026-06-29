@@ -23,15 +23,12 @@ use sqlx::{PgPool, SqlitePool};
 use std::sync::Arc;
 use storage::{
     create_rendered_post, open_database, open_existing_database, perform_post_update,
-    update_rendered_post, AppState, AtomicOps, AudienceError, ConfirmPasswordResetError,
-    CreatePostError, CreatePostInput, CreateUserError, DbConnectOptions, EmailVerificationStorage,
-    FeedCacheRow, GoLivePost, InviteStorage, ListByTagError, PasswordResetStorage, PostCursor,
-    PostFormat, PostUpdate, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
-    SessionAuthError, SessionStorage, SqliteAtomicOps, SqliteEmailVerificationStorage,
-    SqliteInviteStorage, SqlitePasswordResetStorage, SqliteSessionStorage,
-    SqliteSubscriptionStorage, SqliteUserStorage, SubscriptionStorage, TaggingError,
+    update_rendered_post, AppState, AudienceError, ConfirmPasswordResetError, CreatePostError,
+    CreatePostInput, CreateUserError, DbConnectOptions, FeedCacheRow, GoLivePost, ListByTagError,
+    PostCursor, PostFormat, PostUpdate, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
+    SessionAuthError, SqliteSubscriptionStorage, SubscriptionStorage, TaggingError,
     UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
-    UsePasswordResetError, UserAuthError, UserStorage,
+    UsePasswordResetError, UserAuthError,
 };
 use tempfile::TempDir;
 
@@ -557,39 +554,6 @@ async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
         .is_empty());
 }
 
-async fn user_storage(base: &TempDir) -> SqliteUserStorage {
-    SqliteUserStorage::new(open_pool(base).await)
-}
-
-async fn storage_pair(base: &TempDir) -> (SqliteUserStorage, SqliteSessionStorage) {
-    let pool = open_pool(base).await;
-    (
-        SqliteUserStorage::new(pool.clone()),
-        SqliteSessionStorage::new(pool),
-    )
-}
-
-async fn email_verification_storage(
-    base: &TempDir,
-) -> (SqliteUserStorage, SqliteEmailVerificationStorage) {
-    let pool = open_pool(base).await;
-    (
-        SqliteUserStorage::new(pool.clone()),
-        SqliteEmailVerificationStorage::new(pool),
-    )
-}
-
-async fn invite_storage_triple(
-    base: &TempDir,
-) -> (SqliteUserStorage, SqliteSessionStorage, SqliteInviteStorage) {
-    let pool = open_pool(base).await;
-    (
-        SqliteUserStorage::new(pool.clone()),
-        SqliteSessionStorage::new(pool.clone()),
-        SqliteInviteStorage::new(pool),
-    )
-}
-
 fn username(s: &str) -> Username {
     s.parse().unwrap()
 }
@@ -614,10 +578,11 @@ async fn site_config_set_then_get_roundtrips(#[case] backend: Backend) {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_missing_key_returns_none() {
-    let base = TempDir::new().unwrap();
-    let state = open_database(&sqlite_url(&base)).await.unwrap();
+async fn get_missing_key_returns_none(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
     assert!(state
         .site_config
@@ -627,10 +592,11 @@ async fn get_missing_key_returns_none() {
         .is_none());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn set_overwrites_existing_value() {
-    let base = TempDir::new().unwrap();
-    let state = open_database(&sqlite_url(&base)).await.unwrap();
+async fn set_overwrites_existing_value(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
     state.site_config.set("site.name", "First").await.unwrap();
     state.site_config.set("site.name", "Second").await.unwrap();
@@ -641,13 +607,19 @@ async fn set_overwrites_existing_value() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn second_open_on_migrated_database_succeeds() {
-    let base = TempDir::new().unwrap();
+async fn second_open_on_migrated_database_succeeds(#[case] backend: Backend) {
+    let env = backend.setup().await;
 
-    drop(open_database(&sqlite_url(&base)).await.unwrap());
-
-    open_database(&sqlite_url(&base)).await.unwrap();
+    // Re-open the *same* per-test database the setup just migrated, addressed by
+    // its backend URL, to prove a second `open_database` (re-running migrations)
+    // is idempotent on both backends.
+    let opts = match backend {
+        Backend::Sqlite => sqlite_url(&env.base),
+        Backend::Postgres => recorded_postgres_url(&env.base).parse().unwrap(),
+    };
+    open_database(&opts).await.unwrap();
 }
 
 #[apply(backends)]
@@ -883,21 +855,35 @@ fn unsupported_url_is_rejected_at_parse_time() {
     assert!(result.is_err());
 }
 
+#[apply(postgres_only)]
 #[tokio::test]
-async fn open_database_succeeds_on_postgres_test_vm() {
+async fn open_database_succeeds_on_postgres_test_vm(#[case] backend: Backend) {
+    // Backend-specific: exercises the Postgres migration path on a fresh DB,
+    // so it opens its own `unique_postgres_url()` rather than using `env.state`.
+    let _ = backend;
     let url = unique_postgres_url().await;
     open_database(&url).await.unwrap();
 }
 
+#[apply(postgres_only)]
 #[tokio::test]
-async fn open_database_runs_postgres_migrations_on_existing_empty_db() {
+async fn open_database_runs_postgres_migrations_on_existing_empty_db(#[case] backend: Backend) {
+    // Backend-specific: exercises the Postgres migration path on a fresh DB,
+    // so it opens its own `unique_postgres_url()` rather than using `env.state`.
+    let _ = backend;
     let url = unique_postgres_url().await;
     let state = open_database(&url).await.unwrap();
     assert_eq!(state.site_config.get("missing").await.unwrap(), None);
 }
 
+#[apply(postgres_only)]
 #[tokio::test]
-async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db() {
+async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db(
+    #[case] backend: Backend,
+) {
+    // Backend-specific: exercises the Postgres migration path on a fresh DB,
+    // so it opens its own `unique_postgres_url()` rather than using `env.state`.
+    let _ = backend;
     let url = unique_postgres_url().await;
     let state = open_existing_database(&url).await.unwrap();
     assert_eq!(state.site_config.get("missing").await.unwrap(), None);
@@ -962,12 +948,14 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
 
 // --- UserStorage integration tests ---
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_user_succeeds_and_get_by_username_returns_record() {
-    let base = TempDir::new().unwrap();
-    let users = user_storage(&base).await;
+async fn create_user_succeeds_and_get_by_username_returns_record(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(
             &username("alice"),
             &password("password123"),
@@ -977,7 +965,8 @@ async fn create_user_succeeds_and_get_by_username_returns_record() {
         .await
         .unwrap();
 
-    let record = users
+    let record = state
+        .users
         .get_user_by_username(&username("alice"))
         .await
         .unwrap()
@@ -987,50 +976,60 @@ async fn create_user_succeeds_and_get_by_username_returns_record() {
     assert_eq!(record.display_name.as_deref(), Some("Alice"));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn duplicate_username_returns_username_taken() {
-    let base = TempDir::new().unwrap();
-    let users = user_storage(&base).await;
+async fn duplicate_username_returns_username_taken(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    users
+    state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
-    let err = users
+    let err = state
+        .users
         .create_user(&username("alice"), &password("other_password"), None, false)
         .await
         .unwrap_err();
     assert!(matches!(err, CreateUserError::UsernameTaken));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn authenticate_correct_password_returns_record_and_sets_last_authenticated_at() {
-    let base = TempDir::new().unwrap();
-    let users = user_storage(&base).await;
+async fn authenticate_correct_password_returns_record_and_sets_last_authenticated_at(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    users
+    state
+        .users
         .create_user(&username("bob"), &password("secret_password"), None, false)
         .await
         .unwrap();
 
-    let record = users
+    let record = state
+        .users
         .authenticate(&username("bob"), &password("secret_password"))
         .await
         .unwrap();
     assert_eq!(record.username.as_str(), "bob");
     assert!(record.last_authenticated_at.is_some());
 
-    let fetched = users.get_user(record.user_id).await.unwrap().unwrap();
+    let fetched = state.users.get_user(record.user_id).await.unwrap().unwrap();
     assert!(fetched.last_authenticated_at.is_some());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn authenticate_wrong_password_returns_invalid_credentials() {
-    let base = TempDir::new().unwrap();
-    let users = user_storage(&base).await;
+async fn authenticate_wrong_password_returns_invalid_credentials(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    users
+    state
+        .users
         .create_user(
             &username("carol"),
             &password("correct_password"),
@@ -1040,31 +1039,36 @@ async fn authenticate_wrong_password_returns_invalid_credentials() {
         .await
         .unwrap();
 
-    let err = users
+    let err = state
+        .users
         .authenticate(&username("carol"), &password("wrong_password"))
         .await
         .unwrap_err();
     assert!(matches!(err, UserAuthError::InvalidCredentials));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn authenticate_unknown_username_returns_invalid_credentials() {
-    let base = TempDir::new().unwrap();
-    let users = user_storage(&base).await;
+async fn authenticate_unknown_username_returns_invalid_credentials(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let err = users
+    let err = state
+        .users
         .authenticate(&username("nobody"), &password("some_password"))
         .await
         .unwrap_err();
     assert!(matches!(err, UserAuthError::InvalidCredentials));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn update_profile_persists_changes() {
-    let base = TempDir::new().unwrap();
-    let users = user_storage(&base).await;
+async fn update_profile_persists_changes(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(
             &username("dave"),
             &password("passw0rd!"),
@@ -1074,7 +1078,8 @@ async fn update_profile_persists_changes() {
         .await
         .unwrap();
 
-    users
+    state
+        .users
         .update_profile(
             user_id,
             &ProfileUpdate {
@@ -1085,34 +1090,41 @@ async fn update_profile_persists_changes() {
         .await
         .unwrap();
 
-    let record = users.get_user(user_id).await.unwrap().unwrap();
+    let record = state.users.get_user(user_id).await.unwrap().unwrap();
     assert_eq!(record.display_name.as_deref(), Some("David"));
     assert_eq!(record.bio.as_deref(), Some("A bio"));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_user_unknown_id_returns_none() {
-    let base = TempDir::new().unwrap();
-    let users = user_storage(&base).await;
+async fn get_user_unknown_id_returns_none(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let record = users.get_user(999).await.unwrap();
+    let record = state.users.get_user(999).await.unwrap();
     assert!(record.is_none());
 }
 
 // --- SessionStorage integration tests ---
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_session_then_authenticate_returns_correct_record() {
-    let base = TempDir::new().unwrap();
-    let (users, sessions) = storage_pair(&base).await;
+async fn create_session_then_authenticate_returns_correct_record(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
-    let raw_token = sessions.create_session(user_id, "test").await.unwrap();
-    let record = sessions.authenticate(&raw_token).await.unwrap();
+    let raw_token = state
+        .sessions
+        .create_session(user_id, "test")
+        .await
+        .unwrap();
+    let record = state.sessions.authenticate(&raw_token).await.unwrap();
 
     assert_eq!(record.user_id, user_id);
     assert_eq!(record.username.as_str(), "alice");
@@ -1120,188 +1132,228 @@ async fn create_session_then_authenticate_returns_correct_record() {
     assert!(!record.token_hash.is_empty());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn authenticate_updates_last_used_at() {
-    let base = TempDir::new().unwrap();
-    let (users, sessions) = storage_pair(&base).await;
+async fn authenticate_updates_last_used_at(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("bob"), &password("password123"), None, false)
         .await
         .unwrap();
 
-    let raw_token = sessions
+    let raw_token = state
+        .sessions
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let first = sessions.authenticate(&raw_token).await.unwrap();
-    let second = sessions.authenticate(&raw_token).await.unwrap();
+    let first = state.sessions.authenticate(&raw_token).await.unwrap();
+    let second = state.sessions.authenticate(&raw_token).await.unwrap();
 
     assert!(second.last_used_at >= first.last_used_at);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn revoke_session_then_authenticate_returns_session_not_found() {
-    let base = TempDir::new().unwrap();
-    let (users, sessions) = storage_pair(&base).await;
+async fn revoke_session_then_authenticate_returns_session_not_found(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("carol"), &password("password123"), None, false)
         .await
         .unwrap();
 
-    let raw_token = sessions
+    let raw_token = state
+        .sessions
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let record = sessions.authenticate(&raw_token).await.unwrap();
+    let record = state.sessions.authenticate(&raw_token).await.unwrap();
 
-    sessions.revoke_session(&record.token_hash).await.unwrap();
+    state
+        .sessions
+        .revoke_session(&record.token_hash)
+        .await
+        .unwrap();
 
-    let err = sessions.authenticate(&raw_token).await.unwrap_err();
+    let err = state.sessions.authenticate(&raw_token).await.unwrap_err();
     assert!(matches!(err, SessionAuthError::SessionNotFound));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn authenticate_with_invalid_base64_token_returns_invalid_token() {
-    let base = TempDir::new().unwrap();
-    let (_, sessions) = storage_pair(&base).await;
+async fn authenticate_with_invalid_base64_token_returns_invalid_token(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let err = sessions.authenticate("not-base64!").await.unwrap_err();
+    let err = state
+        .sessions
+        .authenticate("not-base64!")
+        .await
+        .unwrap_err();
     assert!(matches!(err, SessionAuthError::InvalidToken));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_sessions_returns_only_sessions_for_given_user() {
-    let base = TempDir::new().unwrap();
-    let (users, sessions) = storage_pair(&base).await;
+async fn list_sessions_returns_only_sessions_for_given_user(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let alice_id = users
+    let alice_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
-    let bob_id = users
+    let bob_id = state
+        .users
         .create_user(&username("bob"), &password("password123"), None, false)
         .await
         .unwrap();
 
-    sessions.create_session(alice_id, "alice-1").await.unwrap();
-    sessions.create_session(alice_id, "alice-2").await.unwrap();
-    sessions.create_session(bob_id, "bob-1").await.unwrap();
+    state
+        .sessions
+        .create_session(alice_id, "alice-1")
+        .await
+        .unwrap();
+    state
+        .sessions
+        .create_session(alice_id, "alice-2")
+        .await
+        .unwrap();
+    state
+        .sessions
+        .create_session(bob_id, "bob-1")
+        .await
+        .unwrap();
 
-    let alice_sessions = sessions.list_sessions(alice_id).await.unwrap();
+    let alice_sessions = state.sessions.list_sessions(alice_id).await.unwrap();
     assert_eq!(alice_sessions.len(), 2);
     assert!(alice_sessions.iter().all(|s| s.user_id == alice_id));
 
-    let bob_sessions = sessions.list_sessions(bob_id).await.unwrap();
+    let bob_sessions = state.sessions.list_sessions(bob_id).await.unwrap();
     assert_eq!(bob_sessions.len(), 1);
     assert_eq!(bob_sessions[0].user_id, bob_id);
 }
 
 // --- InviteStorage integration tests ---
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_invite_and_list_invites_includes_it() {
-    let base = TempDir::new().unwrap();
-    let (_, _, invites) = invite_storage_triple(&base).await;
+async fn create_invite_and_list_invites_includes_it(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let code = invites.create_invite(expires_at).await.unwrap();
+    let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    let list = invites.list_invites().await.unwrap();
+    let list = state.invites.list_invites().await.unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].code, code);
     assert!(list[0].used_at.is_none());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn use_invite_with_valid_code_marks_it_used() {
-    let base = TempDir::new().unwrap();
-    let (users, _, invites) = invite_storage_triple(&base).await;
+async fn use_invite_with_valid_code_marks_it_used(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let code = invites.create_invite(expires_at).await.unwrap();
+    let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    invites.use_invite(&code, user_id).await.unwrap();
+    state.invites.use_invite(&code, user_id).await.unwrap();
 
-    let list = invites.list_invites().await.unwrap();
+    let list = state.invites.list_invites().await.unwrap();
     assert_eq!(list.len(), 1);
     assert!(list[0].used_at.is_some());
     assert_eq!(list[0].used_by, Some(user_id));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn use_invite_with_unknown_code_returns_not_found() {
-    let base = TempDir::new().unwrap();
-    let (users, _, invites) = invite_storage_triple(&base).await;
+async fn use_invite_with_unknown_code_returns_not_found(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("bob"), &password("password123"), None, false)
         .await
         .unwrap();
 
-    let err = invites
+    let err = state
+        .invites
         .use_invite("no-such-code", user_id)
         .await
         .unwrap_err();
     assert!(matches!(err, UseInviteError::NotFound));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn use_invite_with_expired_code_returns_expired() {
-    let base = TempDir::new().unwrap();
-    let (users, _, invites) = invite_storage_triple(&base).await;
+async fn use_invite_with_expired_code_returns_expired(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("carol"), &password("password123"), None, false)
         .await
         .unwrap();
 
     // expires_at in the past
     let expires_at = Utc::now() - chrono::Duration::hours(1);
-    let code = invites.create_invite(expires_at).await.unwrap();
+    let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    let err = invites.use_invite(&code, user_id).await.unwrap_err();
+    let err = state.invites.use_invite(&code, user_id).await.unwrap_err();
     assert!(matches!(err, UseInviteError::Expired));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn use_invite_on_already_used_code_returns_already_used() {
-    let base = TempDir::new().unwrap();
-    let (users, _, invites) = invite_storage_triple(&base).await;
+async fn use_invite_on_already_used_code_returns_already_used(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("dave"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let code = invites.create_invite(expires_at).await.unwrap();
+    let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    invites.use_invite(&code, user_id).await.unwrap();
+    state.invites.use_invite(&code, user_id).await.unwrap();
 
-    let err = invites.use_invite(&code, user_id).await.unwrap_err();
+    let err = state.invites.use_invite(&code, user_id).await.unwrap_err();
     assert!(matches!(err, UseInviteError::AlreadyUsed));
 }
 
 // --- create_user_with_invite integration tests ---
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_user_with_invite_creates_user_and_marks_invite_used() {
-    let base = TempDir::new().unwrap();
-    let pool = open_pool(&base).await;
-    let invites = SqliteInviteStorage::new(pool.clone());
-    let users = SqliteUserStorage::new(pool.clone());
+async fn create_user_with_invite_creates_user_and_marks_invite_used(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let code = invites.create_invite(expires_at).await.unwrap();
+    let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    let user_id = SqliteAtomicOps::new(pool.clone())
+    let user_id = state
+        .atomic
         .create_user_with_invite(
             &username("alice"),
             &password("password123"),
@@ -1312,27 +1364,28 @@ async fn create_user_with_invite_creates_user_and_marks_invite_used() {
         .await
         .unwrap();
 
-    let record = users.get_user(user_id).await.unwrap().unwrap();
+    let record = state.users.get_user(user_id).await.unwrap().unwrap();
     assert_eq!(record.username.as_str(), "alice");
     assert_eq!(record.display_name.as_deref(), Some("Alice"));
 
     // Invite was marked used
-    let list = invites.list_invites().await.unwrap();
+    let list = state.invites.list_invites().await.unwrap();
     assert_eq!(list.len(), 1);
     assert!(list[0].used_at.is_some());
     assert_eq!(list[0].used_by, Some(user_id));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_user_with_invite_second_call_returns_already_used() {
-    let base = TempDir::new().unwrap();
-    let pool = open_pool(&base).await;
-    let invites = SqliteInviteStorage::new(pool.clone());
+async fn create_user_with_invite_second_call_returns_already_used(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let code = invites.create_invite(expires_at).await.unwrap();
+    let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    SqliteAtomicOps::new(pool.clone())
+    state
+        .atomic
         .create_user_with_invite(
             &username("alice"),
             &password("password123"),
@@ -1343,7 +1396,8 @@ async fn create_user_with_invite_second_call_returns_already_used() {
         .await
         .unwrap();
 
-    let err = SqliteAtomicOps::new(pool.clone())
+    let err = state
+        .atomic
         .create_user_with_invite(
             &username("bob"),
             &password("password123"),
@@ -1357,24 +1411,25 @@ async fn create_user_with_invite_second_call_returns_already_used() {
     assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
 
     // bob was not inserted
-    let users = SqliteUserStorage::new(pool.clone());
-    assert!(users
+    assert!(state
+        .users
         .get_user_by_username(&username("bob"))
         .await
         .unwrap()
         .is_none());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_user_with_invite_expired_returns_invite_expired() {
-    let base = TempDir::new().unwrap();
-    let pool = open_pool(&base).await;
-    let invites = SqliteInviteStorage::new(pool.clone());
+async fn create_user_with_invite_expired_returns_invite_expired(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
     let expires_at = Utc::now() - chrono::Duration::hours(1);
-    let code = invites.create_invite(expires_at).await.unwrap();
+    let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    let err = SqliteAtomicOps::new(pool.clone())
+    let err = state
+        .atomic
         .create_user_with_invite(
             &username("alice"),
             &password("password123"),
@@ -1387,20 +1442,22 @@ async fn create_user_with_invite_expired_returns_invite_expired() {
 
     assert!(matches!(err, RegisterWithInviteError::InviteExpired));
 
-    let users = SqliteUserStorage::new(pool.clone());
-    assert!(users
+    assert!(state
+        .users
         .get_user_by_username(&username("alice"))
         .await
         .unwrap()
         .is_none());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_user_with_invite_unknown_code_returns_not_found() {
-    let base = TempDir::new().unwrap();
-    let pool = open_pool(&base).await;
+async fn create_user_with_invite_unknown_code_returns_not_found(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let err = SqliteAtomicOps::new(pool.clone())
+    let err = state
+        .atomic
         .create_user_with_invite(
             &username("alice"),
             &password("password123"),
@@ -1413,31 +1470,34 @@ async fn create_user_with_invite_unknown_code_returns_not_found() {
 
     assert!(matches!(err, RegisterWithInviteError::InviteNotFound));
 
-    let users = SqliteUserStorage::new(pool.clone());
-    assert!(users
+    assert!(state
+        .users
         .get_user_by_username(&username("alice"))
         .await
         .unwrap()
         .is_none());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_user_with_invite_duplicate_username_returns_username_taken() {
-    let base = TempDir::new().unwrap();
-    let pool = open_pool(&base).await;
-    let invites = SqliteInviteStorage::new(pool.clone());
-    let users = SqliteUserStorage::new(pool.clone());
+async fn create_user_with_invite_duplicate_username_returns_username_taken(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
     // Create alice directly (without invite)
-    users
+    state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let code = invites.create_invite(expires_at).await.unwrap();
+    let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    let err = SqliteAtomicOps::new(pool.clone())
+    let err = state
+        .atomic
         .create_user_with_invite(
             &username("alice"),
             &password("other_password"),
@@ -1451,19 +1511,18 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken() {
     assert!(matches!(err, RegisterWithInviteError::UsernameTaken));
 
     // Invite was NOT marked used
-    let list = invites.list_invites().await.unwrap();
+    let list = state.invites.list_invites().await.unwrap();
     assert_eq!(list.len(), 1);
     assert!(list[0].used_at.is_none());
 }
 
 // --- build_mailer tests ---
 
+#[apply(backends)]
 #[tokio::test]
-async fn build_mailer_returns_noop_when_smtp_not_configured() {
-    let base = TempDir::new().unwrap();
-    let opts = sqlite_url(&base);
-    let state = open_database(&opts).await.unwrap();
-    let mailer = jaunder::mailer::build_mailer(state.site_config.as_ref()).await;
+async fn build_mailer_returns_noop_when_smtp_not_configured(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let mailer = jaunder::mailer::build_mailer(env.state.site_config.as_ref()).await;
 
     let msg = common::mailer::EmailMessage {
         from: None,
@@ -1480,20 +1539,26 @@ async fn build_mailer_returns_noop_when_smtp_not_configured() {
 
 // --- UserStorage::set_email integration tests ---
 
+#[apply(backends)]
 #[tokio::test]
-async fn set_email_persists_and_get_user_reflects_it() {
-    let base = TempDir::new().unwrap();
-    let users = user_storage(&base).await;
+async fn set_email_persists_and_get_user_reflects_it(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let addr: email_address::EmailAddress = "alice@example.com".parse().unwrap();
-    users.set_email(user_id, Some(&addr), true).await.unwrap();
+    state
+        .users
+        .set_email(user_id, Some(&addr), true)
+        .await
+        .unwrap();
 
-    let record = users.get_user(user_id).await.unwrap().unwrap();
+    let record = state.users.get_user(user_id).await.unwrap().unwrap();
     assert_eq!(
         record
             .email
@@ -1504,112 +1569,137 @@ async fn set_email_persists_and_get_user_reflects_it() {
     assert!(record.email_verified);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn set_email_clears_previously_set_email() {
-    let base = TempDir::new().unwrap();
-    let users = user_storage(&base).await;
+async fn set_email_clears_previously_set_email(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("bob"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let addr: email_address::EmailAddress = "bob@example.com".parse().unwrap();
-    users.set_email(user_id, Some(&addr), true).await.unwrap();
+    state
+        .users
+        .set_email(user_id, Some(&addr), true)
+        .await
+        .unwrap();
 
-    users.set_email(user_id, None, false).await.unwrap();
+    state.users.set_email(user_id, None, false).await.unwrap();
 
-    let record = users.get_user(user_id).await.unwrap().unwrap();
+    let record = state.users.get_user(user_id).await.unwrap().unwrap();
     assert!(record.email.is_none());
     assert!(!record.email_verified);
 }
 
-async fn password_reset_storage(base: &TempDir) -> (SqliteUserStorage, SqlitePasswordResetStorage) {
-    let pool = open_pool(base).await;
-    (
-        SqliteUserStorage::new(pool.clone()),
-        SqlitePasswordResetStorage::new(pool),
-    )
-}
-
 // --- EmailVerificationStorage integration tests ---
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_email_verification_and_use_returns_user_id_and_email() {
-    let base = TempDir::new().unwrap();
-    let (users, ev) = email_verification_storage(&base).await;
+async fn create_email_verification_and_use_returns_user_id_and_email(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let raw_token = ev
+    let raw_token = state
+        .email_verifications
         .create_email_verification(user_id, &"alice@example.com".parse().unwrap(), expires_at)
         .await
         .unwrap();
 
-    let (returned_user_id, returned_email) = ev.use_email_verification(&raw_token).await.unwrap();
+    let (returned_user_id, returned_email) = state
+        .email_verifications
+        .use_email_verification(&raw_token)
+        .await
+        .unwrap();
 
     assert_eq!(returned_user_id, user_id);
     assert_eq!(returned_email.as_str(), "alice@example.com");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn use_email_verification_already_used_returns_already_used() {
-    let base = TempDir::new().unwrap();
-    let (users, ev) = email_verification_storage(&base).await;
+async fn use_email_verification_already_used_returns_already_used(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let raw_token = ev
+    let raw_token = state
+        .email_verifications
         .create_email_verification(user_id, &"alice@example.com".parse().unwrap(), expires_at)
         .await
         .unwrap();
 
-    ev.use_email_verification(&raw_token).await.unwrap();
+    state
+        .email_verifications
+        .use_email_verification(&raw_token)
+        .await
+        .unwrap();
 
-    let err = ev.use_email_verification(&raw_token).await.unwrap_err();
+    let err = state
+        .email_verifications
+        .use_email_verification(&raw_token)
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, UseEmailVerificationError::AlreadyUsed),
         "expected AlreadyUsed, got {err:?}"
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn use_email_verification_expired_returns_expired() {
-    let base = TempDir::new().unwrap();
-    let (users, ev) = email_verification_storage(&base).await;
+async fn use_email_verification_expired_returns_expired(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let expires_at = Utc::now() - chrono::Duration::hours(1);
-    let raw_token = ev
+    let raw_token = state
+        .email_verifications
         .create_email_verification(user_id, &"alice@example.com".parse().unwrap(), expires_at)
         .await
         .unwrap();
 
-    let err = ev.use_email_verification(&raw_token).await.unwrap_err();
+    let err = state
+        .email_verifications
+        .use_email_verification(&raw_token)
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, UseEmailVerificationError::Expired),
         "expected Expired, got {err:?}"
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn use_email_verification_unknown_token_returns_not_found() {
-    let base = TempDir::new().unwrap();
-    let (_, ev) = email_verification_storage(&base).await;
+async fn use_email_verification_unknown_token_returns_not_found(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let err = ev
+    let err = state
+        .email_verifications
         .use_email_verification("not-a-real-token")
         .await
         .unwrap_err();
@@ -1619,35 +1709,47 @@ async fn use_email_verification_unknown_token_returns_not_found() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn second_email_verification_supersedes_first() {
-    let base = TempDir::new().unwrap();
-    let (users, ev) = email_verification_storage(&base).await;
+async fn second_email_verification_supersedes_first(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let first_token = ev
+    let first_token = state
+        .email_verifications
         .create_email_verification(user_id, &"alice@example.com".parse().unwrap(), expires_at)
         .await
         .unwrap();
 
     // Create a second verification; the first should be superseded.
-    let second_token = ev
+    let second_token = state
+        .email_verifications
         .create_email_verification(user_id, &"alice2@example.com".parse().unwrap(), expires_at)
         .await
         .unwrap();
 
     // Second token works normally.
-    let (uid, email) = ev.use_email_verification(&second_token).await.unwrap();
+    let (uid, email) = state
+        .email_verifications
+        .use_email_verification(&second_token)
+        .await
+        .unwrap();
     assert_eq!(uid, user_id);
     assert_eq!(email.as_str(), "alice2@example.com");
 
     // First token is now either NotFound or Expired.
-    let err = ev.use_email_verification(&first_token).await.unwrap_err();
+    let err = state
+        .email_verifications
+        .use_email_verification(&first_token)
+        .await
+        .unwrap_err();
     assert!(
         matches!(
             err,
@@ -1657,32 +1759,42 @@ async fn second_email_verification_supersedes_first() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn use_email_verification_with_corrupt_stored_email_returns_internal() {
-    let base = TempDir::new().unwrap();
-    let pool = open_pool(&base).await;
-    let users = SqliteUserStorage::new(pool.clone());
-    let ev = SqliteEmailVerificationStorage::new(pool.clone());
+async fn use_email_verification_with_corrupt_stored_email_returns_internal(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let raw_token = ev
+    let raw_token = state
+        .email_verifications
         .create_email_verification(user_id, &"alice@example.com".parse().unwrap(), expires_at)
         .await
         .unwrap();
 
     // Corrupt the stored address out-of-band so claiming the token yields a
-    // value that no longer parses as an email.
-    sqlx::query("UPDATE email_verifications SET email = 'not-an-email'")
-        .execute(&pool)
-        .await
-        .unwrap();
+    // value that no longer parses as an email. The `email` column is plain
+    // TEXT on both backends, so the same UPDATE is portable.
+    raw_exec(
+        backend,
+        &env,
+        "UPDATE email_verifications SET email = 'not-an-email'",
+    )
+    .await;
 
-    let err = ev.use_email_verification(&raw_token).await.unwrap_err();
+    let err = state
+        .email_verifications
+        .use_email_verification(&raw_token)
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, UseEmailVerificationError::Internal(_)),
         "expected Internal for unparseable stored email, got {err:?}"
@@ -1691,10 +1803,14 @@ async fn use_email_verification_with_corrupt_stored_email_returns_internal() {
 
 // --- UserStorage::set_password integration tests ---
 
+#[apply(backends)]
 #[tokio::test]
-async fn set_password_authenticate_with_old_returns_invalid_and_new_succeeds() {
-    let base = TempDir::new().unwrap();
-    let users = user_storage(&base).await;
+async fn set_password_authenticate_with_old_returns_invalid_and_new_succeeds(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let users = &state.users;
 
     let user_id = users
         .create_user(&username("alice"), &password("old_password1"), None, false)
@@ -1726,71 +1842,110 @@ async fn set_password_authenticate_with_old_returns_invalid_and_new_succeeds() {
 
 // --- PasswordResetStorage integration tests ---
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_password_reset_and_use_returns_user_id() {
-    let base = TempDir::new().unwrap();
-    let (users, pr) = password_reset_storage(&base).await;
+async fn create_password_reset_and_use_returns_user_id(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let raw_token = pr.create_password_reset(user_id, expires_at).await.unwrap();
+    let raw_token = state
+        .password_resets
+        .create_password_reset(user_id, expires_at)
+        .await
+        .unwrap();
 
-    let returned_user_id = pr.use_password_reset(&raw_token).await.unwrap();
+    let returned_user_id = state
+        .password_resets
+        .use_password_reset(&raw_token)
+        .await
+        .unwrap();
     assert_eq!(returned_user_id, user_id);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn use_password_reset_already_used_returns_already_used() {
-    let base = TempDir::new().unwrap();
-    let (users, pr) = password_reset_storage(&base).await;
+async fn use_password_reset_already_used_returns_already_used(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let raw_token = pr.create_password_reset(user_id, expires_at).await.unwrap();
+    let raw_token = state
+        .password_resets
+        .create_password_reset(user_id, expires_at)
+        .await
+        .unwrap();
 
-    pr.use_password_reset(&raw_token).await.unwrap();
+    state
+        .password_resets
+        .use_password_reset(&raw_token)
+        .await
+        .unwrap();
 
-    let err = pr.use_password_reset(&raw_token).await.unwrap_err();
+    let err = state
+        .password_resets
+        .use_password_reset(&raw_token)
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, UsePasswordResetError::AlreadyUsed),
         "expected AlreadyUsed, got {err:?}"
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn use_password_reset_expired_returns_expired() {
-    let base = TempDir::new().unwrap();
-    let (users, pr) = password_reset_storage(&base).await;
+async fn use_password_reset_expired_returns_expired(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
     let expires_at = Utc::now() - chrono::Duration::hours(1);
-    let raw_token = pr.create_password_reset(user_id, expires_at).await.unwrap();
+    let raw_token = state
+        .password_resets
+        .create_password_reset(user_id, expires_at)
+        .await
+        .unwrap();
 
-    let err = pr.use_password_reset(&raw_token).await.unwrap_err();
+    let err = state
+        .password_resets
+        .use_password_reset(&raw_token)
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, UsePasswordResetError::Expired),
         "expected Expired, got {err:?}"
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn use_password_reset_unknown_token_returns_not_found() {
-    let base = TempDir::new().unwrap();
-    let (_, pr) = password_reset_storage(&base).await;
+async fn use_password_reset_unknown_token_returns_not_found(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let err = pr.use_password_reset("not-a-real-token").await.unwrap_err();
+    let err = state
+        .password_resets
+        .use_password_reset("not-a-real-token")
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, UsePasswordResetError::NotFound),
         "expected NotFound, got {err:?}"
