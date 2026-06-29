@@ -960,8 +960,8 @@ These deliberately wait until the tool exists on `main`:
 
 ## Possible follow-ups (file as issues if confirmed)
 
-- **CI wiring for devtool tests.** Confirm whether `cargo xtask check`/`validate`
-  exercises `tools/` tests. If not, the `run` tests run only locally — file a
-  Task to add `tools/` to the gate.
+- ~~CI wiring for devtool tests.~~ **Resolved during execution:** `cargo xtask
+  check` already runs `tools-fmt`, `tools-clippy`, and `tools-test` steps, so the
+  gate exercises devtool directly. No follow-up needed.
 - **Adopt `devtool run` in the jaunder skills** (local, untracked): point the
   dispatch/gate skills at `devtool run` so subagents use it by default.
