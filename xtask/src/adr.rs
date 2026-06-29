@@ -28,6 +28,14 @@ pub fn replace_number(filename: &str, new: u32) -> String {
 
 /// Replace every occurrence of `old_stem` with `new_stem`. The stem carries the
 /// slug (`0034-bar`), so it is unambiguous and safe to rewrite repo-wide.
+///
+/// This is a plain substring replace, which assumes ADR slugs are unique and not
+/// prefixes of one another (e.g. no `0034-bar` alongside `0034-bartender`). That
+/// holds because a collision is on the *number*, and the slugs of two
+/// same-numbered ADRs are written by different authors for different decisions —
+/// a shared prefix would be a coincidence, and even then only the over-matched
+/// reference (not the file) would be affected, which the duplicate-prefix check
+/// would still surface. Worth tightening to a boundary match if that ever bites.
 pub fn rewrite_stem(content: &str, old_stem: &str, new_stem: &str) -> String {
     content.replace(old_stem, new_stem)
 }
@@ -53,25 +61,31 @@ pub fn renumber() -> StepResult {
     }
 }
 
-/// Trimmed stdout of a git command in `repo`. A failing command errors unless
-/// `allow_failure` (e.g. `git grep` exits 1 on no match, which is not an error).
-fn git_out(repo: &Path, args: &[&str], allow_failure: bool) -> Result<String> {
+/// Trimmed stdout of a git command in `repo`. A non-zero exit is an error, except
+/// that when `allow_no_match` is set, exit code 1 is tolerated and yields empty
+/// output — that is `git grep`'s "no match" signal. Any other non-zero (notably
+/// 128 on a real grep error) still fails, so a genuine failure is never mistaken
+/// for "nothing to rewrite".
+fn git_out(repo: &Path, args: &[&str], allow_no_match: bool) -> Result<String> {
     let out = crate::git::at(repo)
         .args(args)
         .output()
         .with_context(|| format!("running git {args:?}"))?;
-    if !out.status.success() && !allow_failure {
-        anyhow::bail!(
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+    if !out.status.success() {
+        let no_match = out.status.code() == Some(1);
+        if !(allow_no_match && no_match) {
+            anyhow::bail!(
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// Non-empty lines of a git command's stdout.
-fn git_lines(repo: &Path, args: &[&str], allow_failure: bool) -> Result<Vec<String>> {
-    Ok(git_out(repo, args, allow_failure)?
+fn git_lines(repo: &Path, args: &[&str], allow_no_match: bool) -> Result<Vec<String>> {
+    Ok(git_out(repo, args, allow_no_match)?
         .lines()
         .filter(|l| !l.trim().is_empty())
         .map(str::to_string)
@@ -182,7 +196,12 @@ fn run_renumber(repo: &Path, main_ref: &str) -> Result<String> {
     if summary.is_empty() {
         Ok("no ADR collisions to resolve".to_string())
     } else {
-        Ok(summary.join("; "))
+        // The rename is staged (`git mv`); the reference rewrites are written to the
+        // worktree but left unstaged, so flag the mixed state for the caller.
+        Ok(format!(
+            "{} — review and `git add` the renamed files and rewritten references before committing",
+            summary.join("; ")
+        ))
     }
 }
 
@@ -292,6 +311,41 @@ mod tests {
         // main's pre-existing file keeps its bare ADR-0034 (NOT branch-touched).
         let contributing = std::fs::read_to_string(tmp.join("CONTRIBUTING.md")).unwrap();
         assert_eq!(contributing, "See ADR-0034 at docs/adr/0034-foo.md.\n");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn renumber_assigns_distinct_numbers_to_multiple_newcomers() {
+        // Guards the `all`-mutation loop: two newcomers colliding on the same number
+        // must each get a distinct fresh number, not the same one. `added` arrives in
+        // git's sorted order (bar before baz), so the assignment is deterministic.
+        let tmp = std::env::temp_dir().join(format!("jaunder-adr-multi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        git(&tmp, &["init", "-q", "-b", "main"]);
+        git(&tmp, &["config", "user.email", "t@t"]);
+        git(&tmp, &["config", "user.name", "t"]);
+
+        write(&tmp, "docs/adr/0034-foo.md", "# ADR-0034: Foo\n");
+        git(&tmp, &["add", "."]);
+        git(&tmp, &["commit", "-qm", "main: 0034-foo"]);
+
+        git(&tmp, &["checkout", "-q", "-b", "feature"]);
+        write(&tmp, "docs/adr/0034-bar.md", "# ADR-0034: Bar\n");
+        write(&tmp, "docs/adr/0034-baz.md", "# ADR-0034: Baz\n");
+        git(&tmp, &["add", "."]);
+        git(&tmp, &["commit", "-qm", "feature: two colliding ADRs"]);
+
+        run_renumber(&tmp, "main").unwrap();
+
+        // main's ADR untouched; both newcomers got distinct fresh numbers.
+        assert!(tmp.join("docs/adr/0034-foo.md").exists());
+        assert!(!tmp.join("docs/adr/0034-bar.md").exists());
+        assert!(!tmp.join("docs/adr/0034-baz.md").exists());
+        assert!(tmp.join("docs/adr/0035-bar.md").exists());
+        assert!(tmp.join("docs/adr/0036-baz.md").exists());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
