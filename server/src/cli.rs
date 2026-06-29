@@ -128,6 +128,11 @@ pub enum Commands {
         /// Deployment environment.
         #[arg(long, env = "JAUNDER_ENV", default_value_t = DeploymentEnv::Dev)]
         environment: DeploymentEnv,
+
+        /// Path to write the runtime-info JSON file (default
+        /// `<storage-path>/runtime.json`). Records the bound `ip`/`port`.
+        #[arg(long, env = "JAUNDER_RUNTIME_FILE")]
+        runtime_file: Option<PathBuf>,
     },
 
     /// Create a user account directly, bypassing the registration policy.
@@ -154,6 +159,22 @@ pub enum Commands {
         /// Mark the user as an operator with administrative privileges.
         #[arg(long)]
         operator: bool,
+    },
+
+    /// Mint an app password (session token) for a user and print it to stdout.
+    ///
+    /// The storage directory must already be initialized via `jaunder init`.
+    AppPasswordCreate {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// Username to mint the app password for.
+        #[arg(long)]
+        username: String,
+
+        /// Label recorded with the session (shown in the sessions UI).
+        #[arg(long, default_value = "app-password")]
+        label: String,
     },
 
     /// Generate an invite code.

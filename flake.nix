@@ -893,6 +893,32 @@
               # `jaunder-e2e*`, so the cachix pushFilter still excludes it — the VM
               # runs are never substituted from a cached aggregate.
               e2e = self.packages.${system}.e2e-checks;
+
+              # Live elisp integration suite (ADR-0035): a minimal NixOS VM with
+              # Emacs + the jaunder binary. The harness self-boots the server
+              # (no systemd service, no Playwright), so the VM only supplies the
+              # toolchain. The `e2e-` attr prefix folds it into the `e2e-checks`
+              # aggregate (realized in parallel with the combos by local
+              # `validate`); the `jaunder-e2e*` derivation name keeps it out of the
+              # cachix push, so the VM test always re-runs (never a cached green).
+              e2e-elisp-integration = pkgs.testers.nixosTest {
+                name = "jaunder-e2e-elisp-integration";
+                nodes.machine = _: {
+                  virtualisation.memorySize = 2048;
+                  environment.systemPackages = [
+                    emacsForCi
+                    jaunderBin
+                  ];
+                };
+                testScript = ''
+                  machine.start()
+                  machine.wait_for_unit("multi-user.target")
+                  machine.succeed(
+                      "JAUNDER_TEST_BINARY=${jaunderBin}/bin/jaunder "
+                      + "emacs --batch -Q -l ${emacsSrc}/scripts/run-integration-tests.el"
+                  )
+                '';
+              };
             }
           )
           // {

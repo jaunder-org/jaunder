@@ -19,8 +19,8 @@ use common::password::Password;
 use common::username::Username;
 use jaunder::cli::StorageArgs;
 use jaunder::commands::{
-    cmd_backup, cmd_create_pg_db, cmd_init, cmd_restore, cmd_serve, cmd_smtp_test, cmd_user_create,
-    cmd_user_invite, prepare_server,
+    cmd_app_password_create, cmd_backup, cmd_create_pg_db, cmd_init, cmd_restore, cmd_serve,
+    cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
 };
 use leptos::prelude::LeptosOptions;
 use sqlx::Connection;
@@ -318,7 +318,7 @@ async fn cmd_serve_fails_when_not_initialized() {
     let args = uninitialized_storage_args(&base);
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
 
-    let result = cmd_serve(&args, bind, true).await;
+    let result = cmd_serve(&args, bind, true, None).await;
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -381,7 +381,7 @@ async fn prepare_server_binds_and_builds_serving_router() {
     let bind = probe.local_addr().unwrap();
     drop(probe);
 
-    let prepared = prepare_server(&args, bind, true)
+    let prepared = prepare_server(&args, bind, true, None)
         .await
         .expect("prepare_server should succeed after init");
     assert_eq!(
@@ -403,6 +403,68 @@ async fn prepare_server_binds_and_builds_serving_router() {
         })
         .await;
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+// prepare_server writes the runtime-info file with the bound address, and the
+// guard removes it when the PreparedServer is dropped (ADR-0035).
+#[tokio::test]
+async fn prepare_server_writes_then_removes_runtime_file() {
+    let base = TempDir::new().unwrap();
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.unwrap();
+
+    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bind = probe.local_addr().unwrap();
+    drop(probe);
+
+    let rt_path = base.path().join("runtime.json");
+    let prepared = prepare_server(&args, bind, true, Some(rt_path.clone()))
+        .await
+        .expect("prepare_server should succeed after init");
+
+    assert!(
+        rt_path.exists(),
+        "prepare_server should write the runtime file"
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&rt_path).unwrap()).unwrap();
+    assert_eq!(v["port"], bind.port());
+
+    drop(prepared);
+    assert!(
+        !rt_path.exists(),
+        "dropping PreparedServer should remove the runtime file"
+    );
+}
+
+// app-password-create mints a usable token for an existing user, and errors for
+// an unknown user (covers both branches of app_password_create via the wrapper).
+#[tokio::test]
+async fn cmd_app_password_create_succeeds_for_existing_user() {
+    let base = TempDir::new().unwrap();
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.unwrap();
+    let username: Username = "alice".parse().unwrap();
+    let password: Password = "password123".parse().unwrap();
+    cmd_user_create(&args, &username, Some(password), None, false)
+        .await
+        .unwrap();
+
+    cmd_app_password_create(&args, &username, "ert")
+        .await
+        .expect("minting an app password for an existing user should succeed");
+}
+
+#[tokio::test]
+async fn cmd_app_password_create_errors_for_unknown_user() {
+    let base = TempDir::new().unwrap();
+    let args = storage_args(&base).await;
+    cmd_init(&args, false).await.unwrap();
+    let username: Username = "ghost".parse().unwrap();
+
+    assert!(cmd_app_password_create(&args, &username, "ert")
+        .await
+        .is_err());
 }
 
 #[tokio::test]

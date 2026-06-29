@@ -140,6 +140,49 @@ pub async fn cmd_user_create(
     Ok(())
 }
 
+/// Mints an app password (a labelled session token) for an existing user and
+/// returns the raw token. This is the only out-of-process minter (see ADR-0035).
+///
+/// # Errors
+///
+/// Returns an error if the user does not exist or the session cannot be created.
+pub async fn app_password_create(
+    state: &storage::AppState,
+    username: &Username,
+    label: &str,
+) -> anyhow::Result<String> {
+    let user = state
+        .users
+        .get_user_by_username(username)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .ok_or_else(|| anyhow::anyhow!("no such user '{username}'"))?;
+    let token = state
+        .sessions
+        .create_session(user.user_id, label)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(token)
+}
+
+/// CLI wrapper: opens the database, mints an app password, prints it to stdout.
+///
+/// # Errors
+///
+/// Returns an error if the database cannot be opened or minting fails.
+pub async fn cmd_app_password_create(
+    storage: &StorageArgs,
+    username: &Username,
+    label: &str,
+) -> anyhow::Result<()> {
+    let state = open_existing_database(&storage.db)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}; run `jaunder init` first"))?;
+    let token = app_password_create(&state, username, label).await?;
+    println!("{token}");
+    Ok(())
+}
+
 /// Generates a new invitation code.
 ///
 /// # Errors
@@ -311,6 +354,8 @@ pub struct PreparedServer {
     // Held only to keep the workers running for the server's lifetime.
     backup_scheduler: Option<tokio_cron_scheduler::JobScheduler>,
     feed_scheduler: tokio_cron_scheduler::JobScheduler,
+    /// Removes the runtime-info file on drop (see ADR-0035).
+    runtime_guard: crate::runtime_file::RuntimeFileGuard,
 }
 
 /// Performs all of [`cmd_serve`]'s setup — open the database (auto-initializing
@@ -330,6 +375,7 @@ pub async fn prepare_server(
     storage: &StorageArgs,
     bind: SocketAddr,
     prod: bool,
+    runtime_file: Option<std::path::PathBuf>,
 ) -> anyhow::Result<PreparedServer> {
     let db = match open_existing_database(&storage.db).await {
         Ok(db) => db,
@@ -386,12 +432,18 @@ pub async fn prepare_server(
         storage.storage_path.clone(),
     );
     let listener = tokio::net::TcpListener::bind(bind).await?;
+    // `local_addr` cannot fail on a just-bound listener; fall back to the
+    // requested `bind` rather than add a never-taken error branch.
+    let addr = listener.local_addr().unwrap_or(bind);
+    let runtime_guard =
+        crate::runtime_file::RuntimeFileGuard::for_serve(runtime_file, &storage.storage_path, addr);
 
     Ok(PreparedServer {
         listener,
         router,
         backup_scheduler,
         feed_scheduler,
+        runtime_guard,
     })
 }
 
@@ -401,7 +453,12 @@ pub async fn prepare_server(
 ///
 /// Returns an error if setup fails (see [`prepare_server`]) or the server exits
 /// with an error.
-pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> anyhow::Result<()> {
+pub async fn cmd_serve(
+    storage: &StorageArgs,
+    bind: SocketAddr,
+    prod: bool,
+    runtime_file: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
     // Telemetry is owned by `run`, which holds the TelemetryGuard across this
     // call (see `server/src/main.rs`); `cmd_serve` does not init it, matching
     // every other `cmd_*`.
@@ -410,12 +467,15 @@ pub async fn cmd_serve(storage: &StorageArgs, bind: SocketAddr, prod: bool) -> a
         router,
         backup_scheduler,
         feed_scheduler,
-    } = prepare_server(storage, bind, prod).await?;
+        runtime_guard,
+    } = prepare_server(storage, bind, prod, runtime_file).await?;
 
     tracing::info!(bind = %bind, prod, "starting HTTP server");
     // Keep the worker schedulers alive for the lifetime of the serve loop.
     let _backup_scheduler = backup_scheduler;
     let _feed_scheduler = feed_scheduler;
+    // Kept alive until the serve loop returns; removes runtime.json on drop.
+    let _runtime_guard = runtime_guard;
     axum::serve(listener, router).await?;
     Ok(())
 }
