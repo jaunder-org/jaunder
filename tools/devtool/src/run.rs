@@ -8,7 +8,7 @@ use std::fs::{self, File};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -29,6 +29,8 @@ pub struct RunResult {
     pub ok: bool,
     pub signal: Option<String>,
     pub duration_ms: u128,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timed_out: Option<bool>,
     pub stdout: Stream,
     pub stderr: Stream,
 }
@@ -106,6 +108,7 @@ fn stream_of(path: &Path) -> Stream {
 struct Capture {
     exit_code: Option<i32>,
     signal: Option<i32>,
+    timed_out: bool,
     duration_ms: u128,
 }
 
@@ -138,9 +141,33 @@ fn interpret_status(status: &std::process::ExitStatus) -> (Option<i32>, Option<i
     (status.code(), None)
 }
 
+/// Wait for the child, killing it if `secs` elapses. Returns (status, timed_out).
+fn wait_with_timeout(
+    child: &mut std::process::Child,
+    secs: u64,
+) -> Result<(std::process::ExitStatus, bool), RunError> {
+    let wait_err = |e: std::io::Error| RunError {
+        message: format!("waiting on child: {e}"),
+        kind: "spawn",
+    };
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    loop {
+        if let Some(status) = child.try_wait().map_err(wait_err)? {
+            return Ok((status, false));
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let status = child.wait().map_err(wait_err)?;
+            return Ok((status, true));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn exec_capture(
     argv: &[String],
     cwd: &Path,
+    timeout: Option<u64>,
     out_path: &Path,
     err_path: &Path,
 ) -> Result<Capture, RunError> {
@@ -154,7 +181,7 @@ fn exec_capture(
     let err_file = mk(err_path)?;
 
     let start = Instant::now();
-    let status = Command::new(&argv[0])
+    let mut child = Command::new(&argv[0])
         .args(&argv[1..])
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -164,18 +191,25 @@ fn exec_capture(
         .map_err(|e| RunError {
             message: format!("spawning {argv:?}: {e}"),
             kind: "spawn",
-        })?
-        .wait()
-        .map_err(|e| RunError {
-            message: format!("waiting on {argv:?}: {e}"),
-            kind: "spawn",
         })?;
+
+    let (status, timed_out) = match timeout {
+        None => (
+            child.wait().map_err(|e| RunError {
+                message: format!("waiting on {argv:?}: {e}"),
+                kind: "spawn",
+            })?,
+            false,
+        ),
+        Some(secs) => wait_with_timeout(&mut child, secs)?,
+    };
     let duration_ms = start.elapsed().as_millis();
 
     let (exit_code, signal) = interpret_status(&status);
     Ok(Capture {
         exit_code,
         signal,
+        timed_out,
         duration_ms,
     })
 }
@@ -214,7 +248,11 @@ pub fn validate_argv(argv: &[String]) -> Result<(), RunError> {
 /// Run `argv` in `cwd`, parking output under `.xtask/run/`, and return the result
 /// plus the process exit code the caller should exit with. No printing, no
 /// `exit` — so it is unit-testable.
-pub fn execute(argv: &[String], cwd: &Path) -> Result<(RunResult, i32), RunError> {
+pub fn execute(
+    argv: &[String],
+    cwd: &Path,
+    timeout: Option<u64>,
+) -> Result<(RunResult, i32), RunError> {
     validate_argv(argv)?;
     let dir = run_dir(cwd);
     fs::create_dir_all(&dir).map_err(|e| RunError {
@@ -225,13 +263,17 @@ pub fn execute(argv: &[String], cwd: &Path) -> Result<(RunResult, i32), RunError
     let out_path = dir.join(format!("{id}.out"));
     let err_path = dir.join(format!("{id}.err"));
 
-    let cap = exec_capture(argv, cwd, &out_path, &err_path)?;
+    let cap = exec_capture(argv, cwd, timeout, &out_path, &err_path)?;
     prune(&dir);
 
-    let process_code = match (cap.exit_code, cap.signal) {
-        (Some(code), _) => code,
-        (None, Some(sig)) => 128 + sig,
-        (None, None) => 1,
+    let process_code = if cap.timed_out {
+        124
+    } else {
+        match (cap.exit_code, cap.signal) {
+            (Some(code), _) => code,
+            (None, Some(sig)) => 128 + sig,
+            (None, None) => 1,
+        }
     };
     let result = RunResult {
         command: argv.to_vec(),
@@ -239,6 +281,7 @@ pub fn execute(argv: &[String], cwd: &Path) -> Result<(RunResult, i32), RunError
         ok: cap.exit_code == Some(0),
         signal: cap.signal.map(signal_name),
         duration_ms: cap.duration_ms,
+        timed_out: if cap.timed_out { Some(true) } else { None },
         stdout: stream_of(&out_path),
         stderr: stream_of(&err_path),
     };
@@ -247,9 +290,9 @@ pub fn execute(argv: &[String], cwd: &Path) -> Result<(RunResult, i32), RunError
 
 /// CLI entry: run the command, print the JSON result, and exit with the child's
 /// code (or 64 for a runner-level failure).
-pub fn run(argv: &[String], cwd: Option<PathBuf>) -> ! {
+pub fn run(argv: &[String], cwd: Option<PathBuf>, timeout: Option<u64>) -> ! {
     let cwd = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    match execute(argv, &cwd) {
+    match execute(argv, &cwd, timeout) {
         Ok((result, code)) => {
             println!("{}", serde_json::to_string_pretty(&result).unwrap());
             std::process::exit(code);
@@ -279,7 +322,7 @@ mod tests {
     #[test]
     fn true_succeeds_with_empty_streams() {
         let cwd = tmp();
-        let (r, code) = execute(&["true".into()], &cwd).unwrap();
+        let (r, code) = execute(&["true".into()], &cwd, None).unwrap();
         assert_eq!(r.exit_code, Some(0));
         assert!(r.ok);
         assert_eq!(code, 0);
@@ -291,7 +334,7 @@ mod tests {
     #[test]
     fn false_fails_with_exit_one() {
         let cwd = tmp();
-        let (r, code) = execute(&["false".into()], &cwd).unwrap();
+        let (r, code) = execute(&["false".into()], &cwd, None).unwrap();
         assert_eq!(r.exit_code, Some(1));
         assert!(!r.ok);
         assert_eq!(code, 1);
@@ -300,7 +343,7 @@ mod tests {
     #[test]
     fn stdout_bytes_and_lines_counted() {
         let cwd = tmp();
-        let (r, _) = execute(&["printf".into(), "a\nb\n".into()], &cwd).unwrap();
+        let (r, _) = execute(&["printf".into(), "a\nb\n".into()], &cwd, None).unwrap();
         assert_eq!(r.stdout.bytes, 4);
         assert_eq!(r.stdout.lines, 2);
         assert_eq!(r.stderr.bytes, 0);
@@ -309,7 +352,7 @@ mod tests {
     #[test]
     fn stderr_captured_separately() {
         let cwd = tmp();
-        let (r, _) = execute(&["ls".into(), "/no/such/path/xyzzy".into()], &cwd).unwrap();
+        let (r, _) = execute(&["ls".into(), "/no/such/path/xyzzy".into()], &cwd, None).unwrap();
         assert!(!r.ok);
         assert!(r.stderr.bytes > 0);
         assert_eq!(r.stdout.bytes, 0);
@@ -353,6 +396,15 @@ mod tests {
     fn refuses_empty_argv() {
         let err = validate_argv(&[]).unwrap_err();
         assert_eq!(err.kind, "usage");
+    }
+
+    #[test]
+    fn timeout_kills_and_reports() {
+        let cwd = tmp();
+        let (r, code) = execute(&["sleep".into(), "10".into()], &cwd, Some(1)).unwrap();
+        assert_eq!(r.timed_out, Some(true));
+        assert!(!r.ok);
+        assert_eq!(code, 124);
     }
 
     // Set mtime without a dependency: `File::set_modified` is stable since 1.75.

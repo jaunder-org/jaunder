@@ -34,6 +34,9 @@ struct RunArgs {
     /// Working directory for the command (defaults to the current directory).
     #[arg(long)]
     cwd: Option<std::path::PathBuf>,
+    /// Kill the command after this many seconds (default: no limit).
+    #[arg(long)]
+    timeout: Option<u64>,
     /// The program and its arguments, after `--`.
     #[arg(trailing_var_arg = true, required = true)]
     cmd: Vec<String>,
@@ -64,6 +67,6 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Coverage(CoverageCmd::Emit { out }) => coverage::emit::run(&out),
         Command::Pg(PgCmd::Run { cmd }) => pg::run_command(&cmd),
-        Command::Run(args) => run::run(&args.cmd, args.cwd),
+        Command::Run(args) => run::run(&args.cmd, args.cwd, args.timeout),
     }
 }
