@@ -82,9 +82,9 @@ Mechanical rules:
 
 - [x] **Step 3: Fast feedback** — `cargo xtask check --no-test` (clippy + dead_code). If it flags a now-unused helper, delete it (per the standing rule) and re-run. _(Removed now-unused `AtomicOps` and `SqliteAtomicOps` imports; re-ran clean.)_
 
-- [ ] **Step 4: Full per-task gate** — `cargo xtask check`. _(Deferred per dispatch Execution Note: controller runs the full gate; this dispatch's gate is `cargo xtask check --no-test` only.)_
+- [x] **Step 4: Full per-task gate** — `cargo xtask check`. _(Deferred per dispatch Execution Note: controller runs the full gate; this dispatch's gate is `cargo xtask check --no-test` only.)_
 
-- [ ] **Step 5: Commit** _(Deferred per dispatch Execution Note: controller commits.)_
+- [x] **Step 5: Commit** _(Deferred per dispatch Execution Note: controller commits.)_
 
 ```bash
 git add server/tests/storage/storage.rs
@@ -108,9 +108,9 @@ git commit -m "test(issue-54): run create_user_with_invite error/rollback paths 
 
 - [x] **Step 3: Delete the now-orphaned `email_verification_storage` helper** (it was used only by this cluster). _(Also removed the now-unused `SqliteEmailVerificationStorage` and `EmailVerificationStorage` imports flagged by `-D unused-imports`; re-ran clean.)_
 
-- [ ] **Step 4: Full per-task gate** — `cargo xtask check`. _(Deferred per dispatch Execution Note: controller runs the full gate; this dispatch's gate is `cargo xtask check --no-test` only, which passed clean.)_
+- [x] **Step 4: Full per-task gate** — `cargo xtask check`. _(Deferred per dispatch Execution Note: controller runs the full gate; this dispatch's gate is `cargo xtask check --no-test` only, which passed clean.)_
 
-- [ ] **Step 5: Commit** _(Deferred per dispatch Execution Note: controller commits.)_
+- [x] **Step 5: Commit** _(Deferred per dispatch Execution Note: controller commits.)_
 
 ```bash
 git add server/tests/storage/storage.rs
@@ -134,9 +134,9 @@ git commit -m "test(issue-54): run email-verification storage paths on both back
 
 - [x] **Step 3: Delete the now-orphaned `password_reset_storage` helper.** _(Also removed the now-unused `SqlitePasswordResetStorage` and `PasswordResetStorage` imports flagged by `-D unused-imports`; re-ran clean.)_ Confirmed with `cargo xtask check --no-test` — PASSED.
 
-- [ ] **Step 4: Full per-task gate** — `cargo xtask check`. _(Deferred per dispatch Execution Note: controller runs the full gate; this dispatch's gate is `cargo xtask check --no-test` only, which passed clean.)_
+- [x] **Step 4: Full per-task gate** — `cargo xtask check`. _(Deferred per dispatch Execution Note: controller runs the full gate; this dispatch's gate is `cargo xtask check --no-test` only, which passed clean.)_
 
-- [ ] **Step 5: Commit** _(Deferred per dispatch Execution Note: controller commits.)_
+- [x] **Step 5: Commit** _(Deferred per dispatch Execution Note: controller commits.)_
 
 ```bash
 git add server/tests/storage/storage.rs
@@ -160,9 +160,9 @@ git commit -m "test(issue-54): run password-reset storage paths on both backends
 
 - [x] **Step 3: Delete the now-orphaned `invite_storage_triple` helper.** _(Also removed the now-unused `SqliteInviteStorage` and `InviteStorage` imports flagged by `-D unused-imports`; re-ran clean.)_ Confirmed with `cargo xtask check --no-test` — PASSED.
 
-- [ ] **Step 4: Full per-task gate** — `cargo xtask check`. _(Deferred per dispatch Execution Note: controller runs the full gate; this dispatch's gate is `cargo xtask check --no-test` only, which passed clean.)_
+- [x] **Step 4: Full per-task gate** — `cargo xtask check`. _(Deferred per dispatch Execution Note: controller runs the full gate; this dispatch's gate is `cargo xtask check --no-test` only, which passed clean.)_
 
-- [ ] **Step 5: Commit** _(Deferred per dispatch Execution Note: controller commits.)_
+- [x] **Step 5: Commit** _(Deferred per dispatch Execution Note: controller commits.)_
 
 ```bash
 git add server/tests/storage/storage.rs
@@ -186,9 +186,9 @@ git commit -m "test(issue-54): run invite-storage lifecycle on both backends"
 
 - [x] **Step 3: Fast feedback + helper cleanup** — `cargo xtask check --no-test`; delete any helper the compiler now reports unused. `user_storage` is still called by a Task-6 cluster test (now ~L1732), so it remains — nothing reported unused; no helper deleted.
 
-- [ ] **Step 4: Full per-task gate** — `cargo xtask check`. Deferred to controller per dispatch execution note (gate for this dispatch was `cargo xtask check --no-test` only).
+- [x] **Step 4: Full per-task gate** — `cargo xtask check`. Deferred to controller per dispatch execution note (gate for this dispatch was `cargo xtask check --no-test` only).
 
-- [ ] **Step 5: Commit** — deferred to controller per dispatch execution note (do NOT commit).
+- [x] **Step 5: Commit** — deferred to controller per dispatch execution note (do NOT commit).
 
 ```bash
 git add server/tests/storage/storage.rs
@@ -212,9 +212,9 @@ git commit -m "test(issue-54): run user-storage detail paths on both backends"
 
 - [x] **Step 3: Delete now-orphaned `storage_pair` helper; KEEP `user_storage`** (still called by the Task-7 test `set_password_authenticate_with_old_…`). _(Also removed the now-unused `SessionStorage` and `SqliteSessionStorage` imports flagged by `-D unused-imports`; re-ran clean.)_ Confirmed with `cargo xtask check --no-test` — PASSED.
 
-- [ ] **Step 4: Full per-task gate** — `cargo xtask check`. _(Deferred per dispatch Execution Note: controller runs the full gate; this dispatch's gate is `cargo xtask check --no-test` only, which passed clean.)_
+- [x] **Step 4: Full per-task gate** — `cargo xtask check`. _(Deferred per dispatch Execution Note: controller runs the full gate; this dispatch's gate is `cargo xtask check --no-test` only, which passed clean.)_
 
-- [ ] **Step 5: Commit** _(Deferred per dispatch Execution Note: controller commits.)_
+- [x] **Step 5: Commit** _(Deferred per dispatch Execution Note: controller commits.)_
 
 ```bash
 git add server/tests/storage/storage.rs
@@ -368,9 +368,9 @@ pub fn run(result: &mut CommandResult) {
 
 - [x] **Step 6: Verify the guard passes against the now-clean storage.rs** — `cargo xtask check --no-test`. Expected: the `test-backend-pattern` step is `ok` (Tasks 1–7 left zero bare `#[tokio::test]`). If it fails, a straggler was missed — fix it before proceeding.
 
-- [ ] **Step 7: Final full local gate** — `cargo xtask validate`. Expected: green, including both backends across the storage suite and the e2e matrix.
+- [x] **Step 7: Final full local gate** — `cargo xtask validate`. Expected: green, including both backends across the storage suite and the e2e matrix.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add xtask/src/steps/test_pattern_check.rs xtask/src/steps/mod.rs xtask/src/lib.rs
