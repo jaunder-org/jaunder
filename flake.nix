@@ -440,8 +440,16 @@
             ],
             use: {
               actionTimeout: 0,
+              // Capture forensics only for failed tests, so a green run (the
+              // common case) writes nothing extra and pays negligible overhead.
+              // Recovered from the validate-diagnostics artifact on a red e2e
+              // (#123/#49). No video — the trace already carries DOM snapshots.
+              trace: 'retain-on-failure',
+              screenshot: 'only-on-failure',
               ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
             },
+            // Artifact root for traces/screenshots; copied out by the testScript.
+            outputDir: '/tmp/e2e/test-results',
             // Run spec files sequentially to avoid SQLite write contention.
             // Each browser project is already run in isolation (separate seed_db()
             // calls), so one worker is sufficient and prevents locking errors.
