@@ -3,11 +3,13 @@ use clap::{Parser, Subcommand};
 mod audit_wasm;
 mod coverage;
 pub mod git;
+mod ids;
 mod result;
 mod sh;
 mod steps {
     pub mod host_tests;
     pub mod nix;
+    pub mod sequence_check;
     pub mod static_checks;
 }
 pub use result::{CommandResult, Mode, StepResult};
@@ -155,6 +157,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("check");
             steps::static_checks::run(&sh, Mode::Fix, &mut result);
+            steps::sequence_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             if !no_test {
                 steps::nix::coverage(&mut result, Mode::Fix);
@@ -179,6 +182,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 return Ok(result);
             }
             steps::static_checks::run(&sh, Mode::Check, &mut result);
+            steps::sequence_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             steps::nix::coverage(&mut result, Mode::Check);
             if !no_e2e {
