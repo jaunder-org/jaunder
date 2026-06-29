@@ -522,8 +522,10 @@
         # One emacs for both the host verify gate (the xtask StepSpecs) and the
         # hermetic nix checks, so they cannot diverge. withPackages (vs bare
         # pkgs.emacs) is the extension point for units C/D to add elisp packages
-        # via nix; the skeleton needs only built-in libraries, so the list is empty.
-        emacsForCi = pkgs.emacs.pkgs.withPackages (epkgs: [ ]);
+        # via nix. `plz` is the AtomPub client's HTTP transport (ADR-0037) — it
+        # drives the `curl` binary, so anything running plz also needs `curl` on
+        # PATH (the e2e VM and the ci dev shell, below).
+        emacsForCi = pkgs.emacs.pkgs.withPackages (epkgs: [ epkgs.plz ]);
 
         interactiveTestingVmRunner = pkgs.writeShellApplication {
           name = "interactive-testing-vm";
@@ -952,6 +954,7 @@
                   environment.systemPackages = [
                     emacsForCi
                     jaunderBin
+                    pkgs.curl
                   ];
                 };
                 testScript = ''
@@ -1110,6 +1113,7 @@
               pkgs.cargo-leptos
               pkgs.cargo-llvm-cov
               pkgs.cargo-nextest
+              pkgs.curl
               pkgs.dart-sass
               emacsForCi
               pkgs.jq

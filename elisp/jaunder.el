@@ -15,6 +15,8 @@
 
 (require 'url-parse)
 (require 'auth-source)
+(require 'seq)
+(require 'plz)
 
 (defgroup jaunder nil
   "Emacs blogging front-end for Jaunder over AtomPub."
@@ -70,9 +72,19 @@ usernames/passwords are handled rather than raising."
 
 ;;; Seams — implemented by later units; calling them now is a programmer error.
 
-(defun jaunder--http-request (&rest _args)
-  "HTTP transport seam.  Implemented by unit C (issue #74)."
-  (error "jaunder: HTTP layer not yet implemented (unit C, issue #74)"))
+(defun jaunder--plz-response->plist (response)
+  "Convert a `plz-response' RESPONSE to a (:status :headers :body) plist.
+Header names are downcased strings so `jaunder--response-header' can look
+them up case-insensitively."
+  (list :status (plz-response-status response)
+        :headers (mapcar (lambda (h)
+                           (cons (downcase (format "%s" (car h))) (cdr h)))
+                         (plz-response-headers response))
+        :body (or (plz-response-body response) "")))
+
+(defun jaunder--response-header (response name)
+  "Return the value of header NAME (case-insensitive) in RESPONSE, or nil."
+  (cdr (assoc (downcase name) (plist-get response :headers))))
 
 (defun jaunder--auth-secret ()
   "Retrieve the app password for `jaunder-username' via auth-source.
@@ -85,6 +97,31 @@ Thin I/O wrapper over `auth-source-search' using `jaunder--auth-source-spec'."
           (secret secret)
           (t (error "jaunder: no auth-source entry for %s@%s"
                     jaunder-username jaunder-base-url)))))
+
+(defun jaunder--http-request (method url &optional body content-type)
+  "Make an authenticated METHOD request to URL via `plz', returning a plist.
+METHOD is an HTTP verb string; URL an absolute URL.  BODY (a string) and
+CONTENT-TYPE apply to write requests.  Basic-auth credentials come from
+`jaunder--auth-secret' for `jaunder-username'.  Returns the
+`jaunder--plz-response->plist' plist; HTTP error statuses (4xx/5xx) are
+reported in :status, not signalled.  A transport-level failure re-signals.
+
+`plz' drives the `curl' binary, so request construction does not depend on
+the finicky dynamic-variable handling that made `url.el' occasionally drop
+the auth header under load (ADR-0038)."
+  (let ((headers (cons (jaunder--basic-auth-header jaunder-username
+                                                   (jaunder--auth-secret))
+                       (when content-type (list (cons "Content-Type" content-type)))))
+        (verb (intern (downcase method))))
+    (condition-case err
+        (jaunder--plz-response->plist
+         (plz verb url :headers headers :body body :as 'response))
+      (plz-error
+       (let* ((pe (seq-find #'plz-error-p (cdr err)))
+              (resp (and pe (plz-error-response pe))))
+         (if resp
+             (jaunder--plz-response->plist resp)
+           (signal (car err) (cdr err))))))))
 
 (defun jaunder--org->atom (&rest _args)
   "Org->Atom mapping seam.  Implemented by unit C (issue #74)."
