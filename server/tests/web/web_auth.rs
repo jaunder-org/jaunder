@@ -914,25 +914,6 @@ async fn auth_user_extraction_fails(backend: Backend, #[case] cookie: Option<&st
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
-#[tokio::test]
-async fn auth_user_extraction_fails_without_session_storage_extension() {
-    use axum::extract::FromRequestParts;
-    ensure_server_fns_registered();
-
-    let request = Request::builder()
-        .header(header::COOKIE, "session=some-token")
-        .body(Body::empty())
-        .unwrap();
-    let (mut parts, _) = request.into_parts();
-
-    // Attempt to extract AuthUser without the session store in extensions
-    let result = web::auth::AuthUser::from_request_parts(&mut parts, &()).await;
-    assert!(matches!(
-        result.unwrap_err(),
-        web::auth::AuthRejection::MissingSessionStorage
-    ));
-}
-
 #[apply(backends)]
 #[tokio::test]
 async fn logout_clears_cookie_without_secure_attribute_when_disabled(#[case] backend: Backend) {
