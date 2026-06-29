@@ -268,7 +268,7 @@ git commit -m "test(issue-54): annotate single-backend storage tests + drop SQLi
 - Consumes: `CommandResult`, `StepResult` from `crate::result` (same imports `sequence_check.rs` uses).
 - Produces: a step named `test-backend-pattern`; a `const SCANNED: &[&str] = &["server/tests/storage/storage.rs"];` path set that #127 later widens.
 
-- [ ] **Step 1: Write the failing fixture unit tests** in `test_pattern_check.rs`. Model on `sequence_check.rs:75-112`. The pure function under test is `fn violations(path: &str, source: &str) -> Vec<usize>` (1-based line numbers of offending `#[tokio::test]`s) and `fn problems(scanned: &[(String, String)]) -> Option<String>`:
+- [x] **Step 1: Write the failing fixture unit tests** in `test_pattern_check.rs`. Model on `sequence_check.rs:75-112`. The pure function under test is `fn violations(path: &str, source: &str) -> Vec<usize>` (1-based line numbers of offending `#[tokio::test]`s) and `fn problems(scanned: &[(String, String)]) -> Option<String>`:
 
 ```rust
 #[cfg(test)]
@@ -318,9 +318,9 @@ fn pure_logic() {}
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail** — `cargo test -p xtask test_pattern_check`. Expected: FAIL (`violations`/`problems` not defined).
+- [x] **Step 2: Run the tests, verify they fail** — `cargo test -p xtask test_pattern_check`. Expected: FAIL (`violations`/`problems` not defined).
 
-- [ ] **Step 3: Implement the scanner.** Algorithm (line-based, mirroring the coverage classifier's line discipline): walk the source lines; for each line whose trimmed text is `#[tokio::test]`, inspect the contiguous block of attribute lines (trimmed text starting with `#[`) immediately **above and below** it up to the `fn`/`async fn` line; the test is a violation if that attribute block contains no `#[apply(backends)]` / `#[apply(sqlite_only)]` / `#[apply(postgres_only)]`. Record the 1-based line of the `#[tokio::test]`. Pure `#[test]` lines have no `#[tokio::test]` and are never inspected. Then:
+- [x] **Step 3: Implement the scanner.** Algorithm (line-based, mirroring the coverage classifier's line discipline): walk the source lines; for each line whose trimmed text is `#[tokio::test]`, inspect the contiguous block of attribute lines (trimmed text starting with `#[`) immediately **above and below** it up to the `fn`/`async fn` line; the test is a violation if that attribute block contains no `#[apply(backends)]` / `#[apply(sqlite_only)]` / `#[apply(postgres_only)]`. Record the 1-based line of the `#[tokio::test]`. Pure `#[test]` lines have no `#[tokio::test]` and are never inspected. Then:
 
 ```rust
 use crate::result::{CommandResult, StepResult};
@@ -362,11 +362,11 @@ pub fn run(result: &mut CommandResult) {
 }
 ```
 
-- [ ] **Step 4: Run the unit tests, verify they pass** — `cargo test -p xtask test_pattern_check`. Expected: PASS.
+- [x] **Step 4: Run the unit tests, verify they pass** — `cargo test -p xtask test_pattern_check`. Expected: PASS.
 
-- [ ] **Step 5: Register + wire the module.** Add `pub mod test_pattern_check;` to `xtask/src/steps/mod.rs`; in `xtask/src/lib.rs`, add `steps::test_pattern_check::run(&mut result);` right after each `steps::sequence_check::run(&mut result);` in the `Check` and `Validate` arms.
+- [x] **Step 5: Register + wire the module.** _(NOTE: `steps` is an inline `mod steps {}` in `xtask/src/lib.rs`, not a separate `steps/mod.rs` — registered there. xtask is its own workspace: run its tests via `--manifest-path xtask/Cargo.toml`, not `-p xtask`.)_ Add `pub mod test_pattern_check;` to `xtask/src/steps/mod.rs`; in `xtask/src/lib.rs`, add `steps::test_pattern_check::run(&mut result);` right after each `steps::sequence_check::run(&mut result);` in the `Check` and `Validate` arms.
 
-- [ ] **Step 6: Verify the guard passes against the now-clean storage.rs** — `cargo xtask check --no-test`. Expected: the `test-backend-pattern` step is `ok` (Tasks 1–7 left zero bare `#[tokio::test]`). If it fails, a straggler was missed — fix it before proceeding.
+- [x] **Step 6: Verify the guard passes against the now-clean storage.rs** — `cargo xtask check --no-test`. Expected: the `test-backend-pattern` step is `ok` (Tasks 1–7 left zero bare `#[tokio::test]`). If it fails, a straggler was missed — fix it before proceeding.
 
 - [ ] **Step 7: Final full local gate** — `cargo xtask validate`. Expected: green, including both backends across the storage suite and the e2e matrix.
 
