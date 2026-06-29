@@ -1,7 +1,12 @@
 use crate::helpers::{
-    postgres_bootstrap_url, postgres_testing_enabled, recorded_postgres_url, Backend,
+    postgres_bootstrap_url, postgres_only, postgres_testing_enabled, recorded_postgres_url, Backend,
 };
 use sqlx::Connection;
+
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
 
 /// Database name (last path segment, query stripped) from a Postgres test URL.
 fn db_name_from_url(url: &str) -> String {
@@ -31,8 +36,12 @@ async fn database_exists(db_name: &str) -> bool {
     exists
 }
 
+#[apply(postgres_only)]
+// reason: asserts Postgres per-test-database teardown (the ephemeral DB is
+// dropped when the TestEnv is gone) via pg_database — SQLite has no such cluster.
 #[tokio::test]
-async fn per_test_database_is_dropped_on_teardown() {
+async fn per_test_database_is_dropped_on_teardown(#[case] backend: Backend) {
+    let _ = backend;
     if !postgres_testing_enabled() {
         return;
     }
