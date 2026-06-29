@@ -1,31 +1,27 @@
 import { test, expect, hydrationHeavyTimeoutMs } from "./fixtures";
 import { goto, login } from "./helpers";
-import { readEmailLines, waitForNewEmail } from "./mail";
 
 // M3.10.11: Full email verification flow.
 test("email verification flow completes successfully", async ({
   page,
+  user,
+  mailbox,
 }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
 
-  await login(page, "testlogin", "testpassword123");
+  await login(page, user.username, user.password);
 
-  // Navigate to email settings and submit an address
+  // Navigate to email settings and submit this user's unique address.
   await goto(page, "/profile/email");
-
-  // Snapshot email count before submitting so we don't consume a stale email.
-  const emailsBefore = readEmailLines().length;
-
-  await page.fill('input[name="email"]', "testlogin@example.com");
+  await page.fill('input[name="email"]', user.email);
   await page.click('button[type="submit"]');
 
   await expect(page.locator('p:has-text("Check your email")')).toBeVisible({
     timeout: 10_000,
   });
 
-  // Extract the verification token from the captured mail file, waiting for the
-  // email that was sent after our form submission (not any pre-existing email).
-  const email = await waitForNewEmail(emailsBefore);
+  // Read this recipient's verification mail (recipient-scoped, parallel-safe).
+  const email = await mailbox.waitForNewEmail();
   const tokenMatch = email.body_text.match(/token=([^\s]+)/);
   expect(tokenMatch).not.toBeNull();
   const token = tokenMatch![1];
