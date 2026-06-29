@@ -25,7 +25,7 @@ The spec defers three separable concerns built *on* `runtime.json`. File them fi
 
 **Files:** none (GitHub only).
 
-- [ ] **Step 1: Create the signal-robust-removal issue**
+- [x] **Step 1: Create the signal-robust-removal issue**
 
 ```bash
 gh issue create --repo jaunder-org/jaunder --type Task --label tooling --milestone "Emacs blogging front-end" \
@@ -33,7 +33,7 @@ gh issue create --repo jaunder-org/jaunder --type Task --label tooling --milesto
   --body $'Give `jaunder serve` a graceful-shutdown hook (`axum::serve(...).with_graceful_shutdown` on SIGTERM/SIGINT) so the `runtime.json` written in #137 is reliably removed on a normal stop, not only when the serve loop returns on its own (today a signal kills the process without unwinding, so the `RuntimeFileGuard::drop` never runs and the file is left behind).\n\nFoundation: #137 (ADR-0035). Pairs with the start-up mutex follow-on.'
 ```
 
-- [ ] **Step 2: Create the start-up mutex issue**
+- [x] **Step 2: Create the start-up mutex issue**
 
 ```bash
 gh issue create --repo jaunder-org/jaunder --type Task --label tooling --milestone "Emacs blogging front-end" \
@@ -41,7 +41,7 @@ gh issue create --repo jaunder-org/jaunder --type Task --label tooling --milesto
   --body $'On `serve` startup, if `runtime.json` exists and records a *live* `pid`, refuse to start (another instance is running on this data dir); if the pid is dead, treat the file as stale, warn, and overwrite. Requires adding a `pid` field to `runtime.json` (#137 writes only `{ip,port}`). Pairs with signal-robust removal: graceful-remove (write side) + stale detection (read side) make the file a reliable "is an instance running" signal.\n\nFoundation: #137 (ADR-0035).'
 ```
 
-- [ ] **Step 3: Create the admin-control-channel issue**
+- [x] **Step 3: Create the admin-control-channel issue**
 
 ```bash
 gh issue create --repo jaunder-org/jaunder --type Task --label tooling --milestone "Emacs blogging front-end" \
@@ -49,7 +49,7 @@ gh issue create --repo jaunder-org/jaunder --type Task --label tooling --milesto
   --body $'Add a random `admin_token` field to `runtime.json` (0600) and a `jaunder shut-down` command (and any further local admin operations) authenticated by it, so e.g. systemd can stop the server cleanly. Security: the token grants local privileged control; it is gated by data-dir file permissions, the same trust boundary as the DB file.\n\nFoundation: #137 (ADR-0035).'
 ```
 
-- [ ] **Step 4: Record the issue numbers, set `blocked_by #137`, add to Project #1**
+- [x] **Step 4: Record the issue numbers, set `blocked_by #137`, add to Project #1**
 
 For each new issue number `N` (replace `137_ID` with #137\'s REST id from `gh api repos/jaunder-org/jaunder/issues/137 --jq .id`):
 
@@ -75,7 +75,7 @@ No commit (no repo changes).
 **Interfaces:**
 - Produces: `jaunder::runtime_file::RuntimeFileGuard` with `pub fn write(path: PathBuf, addr: std::net::SocketAddr) -> RuntimeFileGuard` (best-effort; removes the file on `Drop`). `PreparedServer` gains a `runtime_guard: RuntimeFileGuard` field. `prepare_server` and `cmd_serve` gain a trailing `runtime_file: Option<PathBuf>` parameter.
 
-- [ ] **Step 1: Write the failing unit tests for the writer/guard**
+- [x] **Step 1: Write the failing unit tests for the writer/guard**
 
 Create `server/src/runtime_file.rs` with only the tests first:
 
@@ -113,9 +113,9 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests; expect a compile failure** — `cargo nextest run -p jaunder runtime_file` → fails (`RuntimeFileGuard` undefined). First add `pub mod runtime_file;` to `server/src/lib.rs` next to `pub mod commands;`.
+- [x] **Step 2: Run the tests; expect a compile failure** — `cargo nextest run -p jaunder runtime_file` → fails (`RuntimeFileGuard` undefined). First add `pub mod runtime_file;` to `server/src/lib.rs` next to `pub mod commands;`.
 
-- [ ] **Step 3: Implement the writer/guard** (prepend above the test module in `server/src/runtime_file.rs`):
+- [x] **Step 3: Implement the writer/guard** (prepend above the test module in `server/src/runtime_file.rs`):
 
 ```rust
 //! The `serve` runtime-info file — a small JSON file recording the bound address
@@ -173,9 +173,9 @@ impl Drop for RuntimeFileGuard {
 }
 ```
 
-- [ ] **Step 4: Run the tests; expect PASS** — `cargo nextest run -p jaunder runtime_file`.
+- [x] **Step 4: Run the tests; expect PASS** — `cargo nextest run -p jaunder runtime_file`.
 
-- [ ] **Step 5: Add the `--runtime-file` flag to the `Serve` variant** in `server/src/cli.rs` (inside the `Serve { … }` variant, after `environment`):
+- [x] **Step 5: Add the `--runtime-file` flag to the `Serve` variant** in `server/src/cli.rs` (inside the `Serve { … }` variant, after `environment`):
 
 ```rust
         /// Path to write the runtime-info JSON file (default
@@ -184,7 +184,7 @@ impl Drop for RuntimeFileGuard {
         runtime_file: Option<std::path::PathBuf>,
 ```
 
-- [ ] **Step 6: Thread the path through `commands.rs`.** In `server/src/commands.rs`:
+- [x] **Step 6: Thread the path through `commands.rs`.** In `server/src/commands.rs`:
 
 Add the field to `PreparedServer`:
 
@@ -246,7 +246,7 @@ pub async fn cmd_serve(
 }
 ```
 
-- [ ] **Step 7: Update the `Commands::Serve` dispatch** in `server/src/main.rs`:
+- [x] **Step 7: Update the `Commands::Serve` dispatch** in `server/src/main.rs`:
 
 ```rust
         Commands::Serve { storage, bind, environment, runtime_file } => {
@@ -254,7 +254,7 @@ pub async fn cmd_serve(
         }
 ```
 
-- [ ] **Step 8: Fix the existing `prepare_server` test + assert the file.** Open `server/tests/misc/commands.rs`, find the test that calls `prepare_server(...)` (around the `prepared.listener.local_addr()` use). Update the call to pass a tempdir path and assert lifecycle. Pass `Some(rt_path.clone())` as the new 4th arg, where `rt_path` is `<the test's TempDir>/runtime.json`, and after the existing assertions add:
+- [x] **Step 8: Fix the existing `prepare_server` test + assert the file.** Open `server/tests/misc/commands.rs`, find the test that calls `prepare_server(...)` (around the `prepared.listener.local_addr()` use). Update the call to pass a tempdir path and assert lifecycle. Pass `Some(rt_path.clone())` as the new 4th arg, where `rt_path` is `<the test's TempDir>/runtime.json`, and after the existing assertions add:
 
 ```rust
     assert!(rt_path.exists(), "prepare_server should write the runtime file");
@@ -267,9 +267,9 @@ pub async fn cmd_serve(
 
 Update any other `prepare_server(` call sites (e.g. in `server/src/main.rs` tests) to pass `None`.
 
-- [ ] **Step 9: Run the suite** — `cargo nextest run -p jaunder runtime_file` and the commands test (`cargo nextest run -p jaunder -E 'test(prepare_server)'`); then `cargo xtask check --no-test`.
+- [x] **Step 9: Run the suite** — `cargo nextest run -p jaunder runtime_file` and the commands test (`cargo nextest run -p jaunder -E 'test(prepare_server)'`); then `cargo xtask check --no-test`.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add server/src/runtime_file.rs server/src/lib.rs server/src/cli.rs server/src/commands.rs server/src/main.rs server/tests/misc/commands.rs
@@ -289,7 +289,7 @@ git commit -m "feat(server): write a runtime.json with the bound ip/port on serv
 - Consumes: `state.users.get_user_by_username(&Username) -> sqlx::Result<Option<UserRecord>>` (use `record.id`), `state.sessions.create_session(user_id: i64, label: &str) -> sqlx::Result<String>`.
 - Produces: `pub async fn app_password_create(state: &storage::AppState, username: &Username, label: &str) -> anyhow::Result<String>` (returns the raw token); `pub async fn cmd_app_password_create(storage: &StorageArgs, username: &Username, label: &str) -> anyhow::Result<()>` (prints the token).
 
-- [ ] **Step 1: Write the failing unit test** (add to the `#[cfg(test)] mod tests` in `server/src/commands.rs`):
+- [x] **Step 1: Write the failing unit test** (add to the `#[cfg(test)] mod tests` in `server/src/commands.rs`):
 
 ```rust
     #[tokio::test]
@@ -313,9 +313,9 @@ git commit -m "feat(server): write a runtime.json with the bound ip/port on serv
 
 If `db_test_harness` is not already a dev-dependency of `server`, add `db-test-harness.workspace = true` under `[dev-dependencies]` in `server/Cargo.toml` (it is the shared both-backend harness, ADR-0033). Confirm `Username`/`Password` are imported in the test module (the file already uses them elsewhere; add `use common::username::Username; use common::password::Password;` to the test module if needed).
 
-- [ ] **Step 2: Run; expect failure** — `cargo nextest run -p jaunder app_password_create` → fails (`app_password_create` undefined).
+- [x] **Step 2: Run; expect failure** — `cargo nextest run -p jaunder app_password_create` → fails (`app_password_create` undefined).
 
-- [ ] **Step 3: Implement the inner fn + wrapper** (add to `server/src/commands.rs`, near `cmd_user_create`):
+- [x] **Step 3: Implement the inner fn + wrapper** (add to `server/src/commands.rs`, near `cmd_user_create`):
 
 ```rust
 /// Mints an app password (a labelled session token) for an existing user and
@@ -362,9 +362,9 @@ pub async fn cmd_app_password_create(
 
 If `UserRecord`'s id field is not named `id`, adjust `user.id` accordingly (confirm against `storage/src/users.rs`). If `storage::AppState` is not re-exported, use the path `open_existing_database` returns (`std::sync::Arc<storage::AppState>` derefs to `&storage::AppState`, so `&state` works).
 
-- [ ] **Step 4: Run; expect PASS** — `cargo nextest run -p jaunder app_password_create`.
+- [x] **Step 4: Run; expect PASS** — `cargo nextest run -p jaunder app_password_create`.
 
-- [ ] **Step 5: Add the CLI variant** to the `Commands` enum in `server/src/cli.rs`:
+- [x] **Step 5: Add the CLI variant** to the `Commands` enum in `server/src/cli.rs`:
 
 ```rust
     /// Mint an app password (session token) for a user and print it.
@@ -378,7 +378,7 @@ If `UserRecord`'s id field is not named `id`, adjust `user.id` accordingly (conf
     },
 ```
 
-- [ ] **Step 6: Add the dispatch arm** in `server/src/main.rs` (mirrors the `UserCreate` arm's `Username` parse):
+- [x] **Step 6: Add the dispatch arm** in `server/src/main.rs` (mirrors the `UserCreate` arm's `Username` parse):
 
 ```rust
         Commands::AppPasswordCreate { storage, username, label } => {
@@ -387,9 +387,9 @@ If `UserRecord`'s id field is not named `id`, adjust `user.id` accordingly (conf
         }
 ```
 
-- [ ] **Step 7: Gate** — `cargo nextest run -p jaunder app_password_create` and `cargo xtask check --no-test`.
+- [x] **Step 7: Gate** — `cargo nextest run -p jaunder app_password_create` and `cargo xtask check --no-test`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add server/src/cli.rs server/src/commands.rs server/src/main.rs server/Cargo.toml
@@ -411,9 +411,9 @@ Build the harness, prove it works with a *throwaway* pipecleaner (boot + `GET /`
 **Interfaces:**
 - Produces: macro `jaunder-test--with-live-server` (binds `jaunder-base-url`, `jaunder-username`, `jaunder-test-app-password`, and `auth-sources` for its body); the runner `run-integration-tests.el` (globs `test/*-integration.el`).
 
-- [ ] **Step 1: Build the server binary** — `cargo build -p jaunder` (so `target/debug/jaunder` carries Tasks 2–3).
+- [x] **Step 1: Build the server binary** — `cargo build -p jaunder` (so `target/debug/jaunder` carries Tasks 2–3).
 
-- [ ] **Step 2: Write the harness helper** — create `elisp/test/jaunder-integration-helper.el`:
+- [x] **Step 2: Write the harness helper** — create `elisp/test/jaunder-integration-helper.el`:
 
 ```elisp
 ;;; jaunder-integration-helper.el --- live-server harness for jaunder ERT -*- lexical-binding: t; -*-
@@ -524,7 +524,7 @@ Bound in BODY: `jaunder-base-url', `jaunder-username',
 ;;; jaunder-integration-helper.el ends here
 ```
 
-- [ ] **Step 3: Write the runner** — create `elisp/scripts/run-integration-tests.el`:
+- [x] **Step 3: Write the runner** — create `elisp/scripts/run-integration-tests.el`:
 
 ```elisp
 ;;; run-integration-tests.el --- live-server ERT runner for jaunder -*- lexical-binding: t; -*-
@@ -549,7 +549,7 @@ Bound in BODY: `jaunder-base-url', `jaunder-username',
 ;;; run-integration-tests.el ends here
 ```
 
-- [ ] **Step 4: Pipecleaner (throwaway, NOT committed).** Create `elisp/test/jaunder-pipecleaner-integration.el` with a single test that boots and reaches the server:
+- [x] **Step 4: Pipecleaner (throwaway, NOT committed).** Create `elisp/test/jaunder-pipecleaner-integration.el` with a single test that boots and reaches the server:
 
 ```elisp
 ;;; jaunder-pipecleaner-integration.el --- THROWAWAY -*- lexical-binding: t; -*-
@@ -562,16 +562,16 @@ Bound in BODY: `jaunder-base-url', `jaunder-username',
 ;;; jaunder-pipecleaner-integration.el ends here
 ```
 
-- [ ] **Step 5: Run the pipecleaner host-side; expect PASS**
+- [x] **Step 5: Run the pipecleaner host-side; expect PASS**
 
 ```bash
 JAUNDER_TEST_BINARY=target/debug/jaunder emacs --batch -Q -l elisp/scripts/run-integration-tests.el
 ```
 Expected: `Ran 1 tests, 1 results as expected`. If it hangs on readiness, inspect — the harness surfaces server stderr via the `*jaunder-server*` buffer on error paths; add a temporary `(message "%s" (with-current-buffer stderr (buffer-string)))` while debugging.
 
-- [ ] **Step 6: Delete the pipecleaner** — `rm elisp/test/jaunder-pipecleaner-integration.el`.
+- [x] **Step 6: Delete the pipecleaner** — `rm elisp/test/jaunder-pipecleaner-integration.el`.
 
-- [ ] **Step 7: Write the committed smoke test** — create `elisp/test/jaunder-smoke-integration.el`:
+- [x] **Step 7: Write the committed smoke test** — create `elisp/test/jaunder-smoke-integration.el`:
 
 ```elisp
 ;;; jaunder-smoke-integration.el --- live-server smoke tests -*- lexical-binding: t; -*-
@@ -622,18 +622,18 @@ Expected: `Ran 1 tests, 1 results as expected`. If it hangs on readiness, inspec
 ;;; jaunder-smoke-integration.el ends here
 ```
 
-- [ ] **Step 8: Run the committed smoke host-side; expect PASS**
+- [x] **Step 8: Run the committed smoke host-side; expect PASS**
 
 ```bash
 JAUNDER_TEST_BINARY=target/debug/jaunder emacs --batch -Q -l elisp/scripts/run-integration-tests.el
 ```
 Expected: `Ran 2 tests, 2 results as expected`.
 
-- [ ] **Step 9: Format + pure-gate** — `emacs --batch -Q -l elisp/scripts/format.el -f jaunder-fmt-fix` then `cargo xtask check --no-test` (runs `elisp-fmt` + the pure `ert`; confirm the pure suite is unchanged and the new files are excluded from it).
+- [x] **Step 9: Format + pure-gate** — `emacs --batch -Q -l elisp/scripts/format.el -f jaunder-fmt-fix` then `cargo xtask check --no-test` (runs `elisp-fmt` + the pure `ert`; confirm the pure suite is unchanged and the new files are excluded from it).
 
-- [ ] **Step 10: Document** — in `elisp/README.md`, add a short "Integration tests" section noting: the live suite is `elisp/scripts/run-integration-tests.el`; run it host-side with `JAUNDER_TEST_BINARY=target/debug/jaunder emacs --batch -Q -l elisp/scripts/run-integration-tests.el` after `cargo build -p jaunder`; it boots a real server per test.
+- [x] **Step 10: Document** — in `elisp/README.md`, add a short "Integration tests" section noting: the live suite is `elisp/scripts/run-integration-tests.el`; run it host-side with `JAUNDER_TEST_BINARY=target/debug/jaunder emacs --batch -Q -l elisp/scripts/run-integration-tests.el` after `cargo build -p jaunder`; it boots a real server per test.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add elisp/test/jaunder-integration-helper.el elisp/test/jaunder-smoke-integration.el elisp/scripts/run-integration-tests.el elisp/README.md
@@ -651,7 +651,7 @@ Make the smoke run hermetically in the gate. The harness self-boots, so the VM o
 - Modify: `xtask/src/steps/nix.rs` (new `elisp_integration` invocation)
 - Modify: `xtask/src/lib.rs` (call it in the e2e tier of `validate`)
 
-- [ ] **Step 1: Add the check to `flake.nix`.** Inside the `pkgs.lib.optionalAttrs pkgs.stdenv.isLinux { … }` block (next to `e2e-sqlite`), add:
+- [x] **Step 1: Add the check to `flake.nix`.** Inside the `pkgs.lib.optionalAttrs pkgs.stdenv.isLinux { … }` block (next to `e2e-sqlite`), add:
 
 ```nix
         elisp-integration = pkgs.testers.nixosTest {
@@ -676,14 +676,14 @@ Make the smoke run hermetically in the gate. The harness self-boots, so the VM o
 
 (`jaunderBin`, `emacsForCi`, and `emacsSrc` are already let-bound in `flake.nix`.)
 
-- [ ] **Step 2: Build the check directly to verify it** —
+- [x] **Step 2: Build the check directly to verify it** —
 
 ```bash
 nix build -L .#checks.x86_64-linux.elisp-integration
 ```
 Expected: the VM boots, the suite prints `Ran 2 tests, 2 results as expected`, the build succeeds.
 
-- [ ] **Step 3: Add the xtask invocation** in `xtask/src/steps/nix.rs` (mirror `e2e`):
+- [x] **Step 3: Add the xtask invocation** in `xtask/src/steps/nix.rs` (mirror `e2e`):
 
 ```rust
 /// Runs the hermetic elisp live-integration `nixosTest` check.
@@ -692,18 +692,18 @@ pub fn elisp_integration(result: &mut CommandResult) {
 }
 ```
 
-- [ ] **Step 4: Call it in the validate e2e tier.** In `xtask/src/lib.rs`, find where `validate` invokes `nix::e2e(...)` (the branch that runs only when e2e is enabled, i.e. not `--no-e2e`). Add, adjacent to that call:
+- [x] **Step 4: Call it in the validate e2e tier.** In `xtask/src/lib.rs`, find where `validate` invokes `nix::e2e(...)` (the branch that runs only when e2e is enabled, i.e. not `--no-e2e`). Add, adjacent to that call:
 
 ```rust
             nix::elisp_integration(&mut result);
 ```
 Keep it gated the same way as `nix::e2e` so it runs in full `cargo xtask validate` and CI's e2e surface, and is skipped by `validate --no-e2e` / the pre-push hook.
 
-- [ ] **Step 5: Gate the xtask change** — `cargo xtask check --no-test` (clippy + fmt for the xtask crate).
+- [x] **Step 5: Gate the xtask change** — `cargo xtask check --no-test` (clippy + fmt for the xtask crate).
 
-- [ ] **Step 6: Full validate** — `cargo xtask validate`. Expected: all static checks, coverage, e2e, and the new `nix-elisp-integration` step pass (`xtask-done: … ok=true`). Confirm via the sidecar: `jq '.steps[] | select(.name=="nix-elisp-integration")' .xtask/last-result.json`.
+- [x] **Step 6: Full validate** — `cargo xtask validate`. Expected: all static checks, coverage, e2e, and the new `nix-elisp-integration` step pass (`xtask-done: … ok=true`). Confirm via the sidecar: `jq '.steps[] | select(.name=="nix-elisp-integration")' .xtask/last-result.json`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add flake.nix xtask/src/steps/nix.rs xtask/src/lib.rs
