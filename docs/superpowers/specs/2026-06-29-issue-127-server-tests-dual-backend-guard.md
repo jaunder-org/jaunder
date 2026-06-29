@@ -51,12 +51,17 @@ changes are required** — every conversion lives in the test layer.
 
 ## Design
 
-### Part A — Convert the 20 `#[values]` tests → `#[apply(backends)]`
+### Part A — Standardize the 17 backend×matrix `#[values]` tests onto a new `#[apply(backends_matrix)]` template
 
-Each already takes `#[case] backend: Backend` (or an rstest `#[values(...)]` arg) and calls
-`backend.setup().await`. Replace the inline `#[values(Backend::Sqlite, Backend::Postgres)]` with the
-shared `#[apply(backends)]` template; bodies and assertions are unchanged. This is a syntax
-standardization (so the guard's single rule holds) — **no coverage change**.
+These 17 tests each combine the backend axis with a **local `#[case]` matrix**, so they use
+`#[values(Backend::Sqlite, Backend::Postgres)]` (rstest's cartesian-product operator) and run both
+backends already. They CANNOT use the `#[case]`-based `backends` template — rstest requires every
+`#[case]` row to supply all `#[case]` params, so the template's backend cases collide with a local
+scenario-case axis (spiked and confirmed). The fix: add **one** new `#[values]`-based template
+`backends_matrix` and standardize them onto `#[apply(backends_matrix)]`, dropping the inline
+`#[values(Backend…)]` attribute and leaving the local matrix + body unchanged. Syntax
+standardization (so the guard has one rule) — **no coverage change**. This is the sole sanctioned
+new template; the Task 6 guard's accepted set includes `#[apply(backends_matrix)]`.
 
 Plus one conversion of a different shape: `feed_worker::worker_applies_backoff_on_ping_failure`
 hand-builds a `Sqlite*`-typed `AppState` from a raw `SqlitePool` + a manual `sqlx::migrate!`.

@@ -23,7 +23,9 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
+use crate::helpers::{
+    backends, backends_matrix, ensure_server_fns_registered, test_options, Backend, TestEnv,
+};
 
 /// Sends a form-encoded POST request through a fresh router built from `state`.
 /// Returns (status, Set-Cookie header value, response body).
@@ -899,14 +901,11 @@ async fn get_registration_policy_returns_correct_value(#[case] backend: Backend)
 // Shape B — `get_profile()` requires `AuthUser`; both an invalid token and a
 // missing token must fail extraction with INTERNAL_SERVER_ERROR. Identical
 // setup + assertion; only the supplied cookie varies.
-#[rstest]
+#[apply(backends_matrix)]
 #[case::invalid_token(Some("session=invalidtoken"))]
 #[case::missing(None)]
 #[tokio::test]
-async fn auth_user_extraction_fails(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
-    #[case] cookie: Option<&str>,
-) {
+async fn auth_user_extraction_fails(backend: Backend, #[case] cookie: Option<&str>) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _, _) = post_form(Arc::clone(&state), "/api/get_profile", "", cookie, true).await;

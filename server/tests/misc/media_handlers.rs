@@ -22,7 +22,7 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, Backend, TestEnv};
+use crate::helpers::{backends, backends_matrix, Backend, TestEnv};
 
 use crate::helpers::{ensure_server_fns_registered, test_options};
 
@@ -236,16 +236,13 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
 
 // Shape B — both URIs are served by the same handler and must 404; identical
 // setup + assertion, only the request URI varies.
-#[rstest]
+#[apply(backends_matrix)]
 #[case::missing_file(
     "/media/upload/ab/cd/abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890/missing.jpg"
 )]
 #[case::invalid_source("/media/invalid/ab/cd/abcdef1234/file.jpg")]
 #[tokio::test]
-async fn serve_returns_404(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
-    #[case] uri: &str,
-) {
+async fn serve_returns_404(backend: Backend, #[case] uri: &str) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let storage = TempDir::new().unwrap();

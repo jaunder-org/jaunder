@@ -27,7 +27,7 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, Backend, TestBase, TestEnv};
+use crate::helpers::{backends, backends_matrix, Backend, TestBase, TestEnv};
 
 async fn unpublish_post_form(
     state: Arc<storage::AppState>,
@@ -335,17 +335,14 @@ async fn unauthenticated_request(
 // Shape B — `*_rejects_unauthenticated` cluster across endpoints. Identical
 // assertion (INTERNAL_SERVER_ERROR + "unauthorized"); only the endpoint (and
 // thus the request builder) varies.
-#[rstest]
+#[apply(backends_matrix)]
 #[case::create_post(UnauthEndpoint::CreatePost)]
 #[case::update_post(UnauthEndpoint::UpdatePost)]
 #[case::list_drafts(UnauthEndpoint::ListDrafts)]
 #[case::publish_post(UnauthEndpoint::PublishPost)]
 #[case::list_home_feed(UnauthEndpoint::ListHomeFeed)]
 #[tokio::test]
-async fn endpoint_rejects_unauthenticated(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
-    #[case] endpoint: UnauthEndpoint,
-) {
+async fn endpoint_rejects_unauthenticated(backend: Backend, #[case] endpoint: UnauthEndpoint) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, body) = unauthenticated_request(state, endpoint).await;
@@ -512,13 +509,13 @@ Body text",
 // Shape B — create_post rejection cluster. Identical setup (author + session)
 // and assertion structure (INTERNAL_SERVER_ERROR + body substring); only the
 // request body/format/slug_override and the expected error message vary.
-#[rstest]
+#[apply(backends_matrix)]
 #[case::empty_post("", "markdown", None, "post body is required")]
 #[case::invalid_format("body", "invalid_format", None, "post format must be")]
 #[case::invalid_slug_override("body", "markdown", Some("Not Valid"), "slug must be non-empty")]
 #[tokio::test]
 async fn create_post_rejects(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    backend: Backend,
     #[case] request_body: &str,
     #[case] format: &str,
     #[case] slug_override: Option<&str>,
@@ -1243,12 +1240,12 @@ async fn update_post_rejects_non_author(#[case] backend: Backend) {
 // a freshly created draft) and assertion structure (INTERNAL_SERVER_ERROR +
 // body substring); only the update body/format and expected message vary. The
 // initial draft body is immaterial to the assertion, so it is fixed.
-#[rstest]
+#[apply(backends_matrix)]
 #[case::empty_post("", "markdown", "post body or title is required")]
 #[case::invalid_format("body", "invalid_format", "post format must be")]
 #[tokio::test]
 async fn update_post_rejects(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    backend: Backend,
     #[case] update_body: &str,
     #[case] update_format: &str,
     #[case] expected: &str,
@@ -1834,7 +1831,7 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
 // where required) request bodies vary. An author session is always created and
 // passed — the public endpoints ignore it but still run the same cursor
 // validation, so a single setup serves every row without branching.
-#[rstest]
+#[apply(backends_matrix)]
 #[case::list_drafts(
     "/api/list_drafts",
     "cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
@@ -1857,7 +1854,7 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
 )]
 #[tokio::test]
 async fn list_rejects_invalid_cursor_inputs(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    backend: Backend,
     #[case] uri: &str,
     #[case] half_cursor_body: &str,
     #[case] bad_time_body: &str,

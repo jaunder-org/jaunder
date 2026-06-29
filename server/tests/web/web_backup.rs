@@ -27,7 +27,7 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, Backend, TestEnv};
+use crate::helpers::{backends, backends_matrix, Backend, TestEnv};
 
 use crate::helpers::{ensure_server_fns_registered, test_options};
 
@@ -266,7 +266,7 @@ async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Ba
     );
 }
 
-#[rstest]
+#[apply(backends_matrix)]
 #[case::empty_schedule(
     "destination_path=%2Fsrv%2Fbackups&schedule=+++&retention_count=5&mode=directory",
     "backup schedule must be a valid six-field cron expression"
@@ -285,7 +285,7 @@ async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Ba
 )]
 #[tokio::test]
 async fn operator_update_backup_settings_rejects_invalid_input(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    backend: Backend,
     #[case] form: &str,
     #[case] expected_error: &str,
 ) {

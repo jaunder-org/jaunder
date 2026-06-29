@@ -12,7 +12,7 @@
 
 - **Backend parity is the point.** Converted tests MUST pass on **both** backends; the Postgres case runs under the coverage pass (which sets `JAUNDER_PG_TEST_URL`). The integration suite is only ever run through the gate, which provisions PG — there is no supported no-PG run to accommodate, so just convert (drop the old `postgres_testing_enabled()` env-branch; no fallback/skip logic). This matches the 152 `#[apply(backends)]` tests #54 already landed.
 - **Per-task gate = full `cargo xtask check`** (runs clippy + the Nix coverage pass incl. PostgreSQL). Iterate with `cargo xtask check --no-test` for fast clippy/dead-code; the commit gate is the full `cargo xtask check`. Run gates via `devtool run -- cargo xtask check` (worktree-aware, honest exit). Reserve `cargo xtask validate` for the final task.
-- **Existing templates only** — `backends`, `sqlite_only`, `postgres_only` exist at `storage/src/test_support.rs:156-178`, re-exported via `server/tests/helpers/mod.rs`. Do NOT define new templates.
+- **Templates:** `backends`, `sqlite_only`, `postgres_only` exist at `storage/src/test_support.rs:156-178`, re-exported via `server/tests/helpers/mod.rs`. Task 2 adds **exactly one** new template, `backends_matrix` (a `#[values(Backend::Sqlite, Backend::Postgres)]`-based variant), because the `#[case]`-based `backends` template cannot compose with a test's own local `#[case]` axis (rstest requires every `#[case]` row to specify all `#[case]` params, so template-backend-cases collide with local scenario-cases). Spiked and confirmed (`.superpowers/sdd/task-2-spike.md`): `#[apply(backends_matrix)]` keeps the local `#[case]` matrix and yields the backend×case product. Define no other new templates.
 - **Classification rule (binding):** "currently hardcodes SQLite / branches on an env var" is NOT a reason for `sqlite_only`/single-backend. A test may be tagged single-backend ONLY if, on reading it, it asserts backend-specific behavior the other backend structurally can't exhibit — recorded in its `// reason:` comment. Otherwise convert it. (Worked example: `feed_worker` is converted, not annotated; `feed_events_concurrency` is genuinely `sqlite_only` because it reproduces the SQLite #18 lock flake.)
 - **The exemption marker for genuine non-DB integration tests:** a comment line `// guard:no-backend — <reason>` placed in the test's attribute block (immediately above the `#[tokio::test]`). The guard (Task 6) skips a bare test carrying it. Unit-shaped tests are MOVED out of `server/tests` entirely instead.
 - **`-D dead_code`**: delete any helper/import a conversion orphans; the per-task check flags it.
@@ -98,42 +98,64 @@ git commit -m "test(issue-127): run CLI command tests on both backends"
 
 ---
 
-### Task 2: Convert the 20 `#[values(Backend::…)]` tests → `#[apply(backends)]`
+### Task 2: Add the `backends_matrix` template + standardize the 17 backend×matrix `#[values]` tests onto `#[apply(backends_matrix)]`
 
-**Files (modify):** `server/tests/web/web_posts.rs` (×4), `web/web_media.rs` (×2), `web/web_backup.rs` (×1), `web/web_auth.rs` (×1 — the `auth_user_extraction_fails` test that has a Backend param), `atompub/atompub_posts.rs` (×4), `atompub/atompub_media.rs` (×1), `atompub/atompub_rsd.rs` (×1), `feed/feed_events_hook.rs` (×1), `feed/feed_handlers.rs` (×1), `misc/media_handlers.rs` (×1). (Re-census each file to find the exact bare tests; the count per file is in the spec.)
+These 17 tests are NOT simple single-axis `#[values]` tests — each combines the backend axis with a LOCAL `#[case]` (or tuple-`#[case]`) matrix, so they legitimately use `#[values(Backend::Sqlite, Backend::Postgres)]` (the cartesian-product operator) and cannot use the `#[case]`-based `backends` template. The fix (spiked, `.superpowers/sdd/task-2-spike.md`): add one `#[values]`-based template and standardize them onto it, preserving their local matrices.
+
+**Files (modify):** `storage/src/test_support.rs` (+the new template), `server/tests/helpers/mod.rs` (+re-export), then the 17 tests across `server/tests/web/web_posts.rs`, `web/web_media.rs`, `web/web_backup.rs`, `web/web_auth.rs`, `atompub/atompub_posts.rs`, `atompub/atompub_media.rs`, `atompub/atompub_rsd.rs`, `feed/feed_events_hook.rs`, `feed/feed_handlers.rs`, `misc/media_handlers.rs`. Re-census each file (`rg -nN -B6 '#\[tokio::test' …`) to find its `#[values(Backend::Sqlite, Backend::Postgres)]` tests.
 
 **Interfaces:**
-- Consumes: the `backends` template.
-- Produces: each listed test tagged `#[apply(backends)]` with its `#[values(Backend::Sqlite, Backend::Postgres)]` argument removed.
+- Produces: `pub fn backends_matrix(#[values(Backend::Sqlite, Backend::Postgres)] backend: Backend) {}` (a `#[template]`), re-exported as `backends_matrix`; each of the 17 tests tagged `#[apply(backends_matrix)]`.
+- Consumed by: Task 6's guard, which MUST add `#[apply(backends_matrix)]` to its accepted set.
 
-- [ ] **Step 1: Re-census each file** for bare `#[tokio::test]`s; confirm each uses an rstest `#[values(Backend::Sqlite, Backend::Postgres)]` (inline parameterization) — these are the convertible ones.
+- [ ] **Step 1: Define the template** in `storage/src/test_support.rs`, immediately after the `backends` template (~L173-178):
 
-- [ ] **Step 2: For each, swap `#[values]` for the template.** Replace the `#[values(Backend::Sqlite, Backend::Postgres)] backend: Backend` argument with `#[case] backend: Backend`, and add `#[apply(backends)]` immediately above `#[tokio::test]`. Body unchanged. Before/after:
+```rust
+/// Dual-backend matrix template: a `#[values]`-based backend axis that composes
+/// with a test's own local `#[case]`/`#[values]` matrix (the `#[case]`-based
+/// `backends` template cannot — its case rows collide with local case rows).
+#[template]
+#[export]
+#[rstest]
+pub fn backends_matrix(#[values(Backend::Sqlite, Backend::Postgres)] backend: Backend) {}
+```
+
+- [ ] **Step 2: Re-export it** in `server/tests/helpers/mod.rs` — add `backends_matrix` to the `pub use storage::test_support::{ … }` list alongside `backends`.
+
+- [ ] **Step 3: Convert the 17 tests.** For each, remove the `#[values(Backend::Sqlite, Backend::Postgres)]` attribute from the `backend: Backend` parameter (leaving a plain `backend: Backend,` param) and add `#[apply(backends_matrix)]` immediately above `#[tokio::test]`. Keep the local `#[case]`/`#[rstest]` rows and the body unchanged. Before/after:
 
 ```rust
 // before
+#[case::list_drafts(UnauthEndpoint::ListDrafts)]
+// … more #[case] rows …
 #[tokio::test]
 async fn endpoint_rejects_unauthenticated(
     #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    #[case] endpoint: UnauthEndpoint,
 ) { … }
 
 // after
-#[apply(backends)]
+#[apply(backends_matrix)]
+#[case::list_drafts(UnauthEndpoint::ListDrafts)]
+// … more #[case] rows …
 #[tokio::test]
-async fn endpoint_rejects_unauthenticated(#[case] backend: Backend) { … }
+async fn endpoint_rejects_unauthenticated(
+    backend: Backend,
+    #[case] endpoint: UnauthEndpoint,
+) { … }
 ```
 
-(If a file's bare test does NOT have a `#[values(Backend…)]` arg, it is misclassified — stop and report it; it belongs to Task 3/4/5, not here.)
+(If a bare test in these files has NO `#[values(Backend…)]` arg and is single-axis, it should already be `#[apply(backends)]`; if it's bare and single-axis, it belongs to Task 3/4/5 — stop and report it.)
 
-- [ ] **Step 3: Fast feedback** — `devtool run -- cargo xtask check --no-test`. Fix any now-unused `#[values]`-related import.
+- [ ] **Step 4: Fast feedback** — `cargo xtask check --no-test` (bare, via Bash, worktree-aware). Confirm it compiles; optionally `cargo nextest list -p jaunder --test web 2>/dev/null | rg endpoint_rejects_unauthenticated` to confirm the backend×case product is preserved.
 
-- [ ] **Step 4: Full per-task gate** — `devtool run -- cargo xtask check`. Expected: green; each converted test still expands to `::sqlite` + `::postgres`.
+- [ ] **Step 5: Full per-task gate** — `cargo xtask check`. Expected: green; each converted test expands to backend × its local cases.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add server/tests/web server/tests/atompub server/tests/feed server/tests/misc/media_handlers.rs
-git commit -m "test(issue-127): standardize #[values(Backend)] tests on the #[apply(backends)] template"
+git add storage/src/test_support.rs server/tests/helpers/mod.rs server/tests/web server/tests/atompub server/tests/feed server/tests/misc/media_handlers.rs
+git commit -m "test(issue-127): add backends_matrix template; standardize backend-matrix tests onto it"
 ```
 
 ---
@@ -289,18 +311,31 @@ const DOC_GAP: &str = "\
 #[tokio::test]
 async fn good_with_doc(#[case] backend: Backend) {}
 ";
+const MATRIX_TAGGED: &str = "\
+#[apply(backends_matrix)]
+#[case::a(1)]
+#[tokio::test]
+async fn good_matrix(backend: Backend, #[case] n: i32) {}
+";
 
 #[test] fn parameterized_bare_is_flagged() { assert_eq!(violations(PARAM_BARE), vec![1]); }
 #[test] fn parameterized_tagged_is_clean() { assert!(violations(PARAM_TAGGED).is_empty()); }
 #[test] fn no_backend_marker_exempts() { assert!(violations(EXEMPT).is_empty()); }
 #[test] fn doc_comment_between_template_and_test_is_clean() { assert!(violations(DOC_GAP).is_empty()); }
+#[test] fn backends_matrix_apply_is_clean() { assert!(violations(MATRIX_TAGGED).is_empty()); }
 ```
 
 - [ ] **Step 2: Run them, verify they fail** — `devtool run -- cargo test --manifest-path xtask/Cargo.toml test_pattern_check`. Expected: the 4 new tests FAIL (current scanner matches only exact `#[tokio::test]`, has no marker/contiguity logic).
 
-- [ ] **Step 3: Harden the scanner.** Rewrite `violations` so that: a line is a tokio test if its trimmed text is `#[tokio::test]` OR starts with `#[tokio::test(`; the attribute-block walk (up and down) steps over lines that are `#[…]` attributes OR blank OR `//`/`///` comments (stopping at the first other code line / the `fn`); the test is satisfied if the block contains an `#[apply(backends|sqlite_only|postgres_only)]` OR a `// guard:no-backend` comment; otherwise it is a violation at the tokio line.
+- [ ] **Step 3: Harden the scanner.** Rewrite `violations` so that: a line is a tokio test if its trimmed text is `#[tokio::test]` OR starts with `#[tokio::test(`; the attribute-block walk (up and down) steps over lines that are `#[…]` attributes OR blank OR `//`/`///` comments (stopping at the first other code line / the `fn`); the test is satisfied if the block contains an accepted `#[apply(…)]` OR a `// guard:no-backend` comment; otherwise it is a violation at the tokio line. **Extend `is_backend_apply` to also accept `#[apply(backends_matrix)]`** (the `#[values]`-based dual-backend template from Task 2 — note `#[apply(backends_matrix)]` is NOT a substring of `#[apply(backends)]`, so it must be listed explicitly):
 
 ```rust
+fn is_backend_apply(trimmed: &str) -> bool {
+    trimmed.contains("#[apply(backends)]")
+        || trimmed.contains("#[apply(backends_matrix)]")
+        || trimmed.contains("#[apply(sqlite_only)]")
+        || trimmed.contains("#[apply(postgres_only)]")
+}
 fn is_attr_or_skippable(trimmed: &str) -> bool {
     trimmed.is_empty() || trimmed.starts_with("#[") || trimmed.starts_with("//")
 }

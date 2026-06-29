@@ -177,6 +177,14 @@ pub fn postgres_only(#[case] backend: Backend) {}
 #[case::postgres(Backend::Postgres)]
 pub fn backends(#[case] backend: Backend) {}
 
+/// Dual-backend matrix template: a `#[values]`-based backend axis that composes
+/// with a test's own local `#[case]`/`#[values]` matrix (the `#[case]`-based
+/// `backends` template cannot — its case rows collide with local case rows).
+#[template]
+#[export]
+#[rstest]
+pub fn backends_matrix(#[values(Backend::Sqlite, Backend::Postgres)] backend: Backend) {}
+
 /// The `SQLite` connect options for a `test.db` under `base`.
 ///
 /// # Panics
