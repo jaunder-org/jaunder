@@ -560,6 +560,12 @@
           pkgs.testers.nixosTest {
             name = checkName;
 
+            # Cap the test-driver budget at 20 min (default is 3600 s). Healthy
+            # runs peak at ~10.6 min (slowest single-browser combo), so this is
+            # ~1.9x headroom; a boot/infra hang now fails near 20 min instead of
+            # burning the full hour. See issue #130.
+            globalTimeout = 1200;
+
             nodes.machine =
               { pkgs, ... }:
               {
@@ -665,6 +671,12 @@
           }:
           pkgs.testers.nixosTest {
             name = checkName;
+
+            # Cap the test-driver budget at 20 min (default is 3600 s). Healthy
+            # runs peak at ~10.6 min (slowest single-browser combo), so this is
+            # ~1.9x headroom; a boot/infra hang now fails near 20 min instead of
+            # burning the full hour. See issue #130.
+            globalTimeout = 1200;
 
             nodes.machine =
               { pkgs, lib, ... }:
