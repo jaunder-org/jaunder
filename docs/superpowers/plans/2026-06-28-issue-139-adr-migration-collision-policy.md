@@ -2,6 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Execution status (2026-06-28): COMPLETE.** Executed inline, committed at
+> gate-green deliverable boundaries rather than strictly per plan-task (the
+> pre-commit hook stages the whole tree, and `next_number` had no consumer until
+> the renumber tool — committing Task 1 alone would have tripped dead-code):
+> - Tasks 1–2 (ids helpers + `identifier-collisions` check) → commit `cbe4dc1`.
+> - Tasks 3–4 (`git::at`, `adr renumber` + integration test) → commit `0d420ca`.
+> - Task 5 (ADR + CONTRIBUTING) → commit `43915d4`. ADR is **0036**, not the
+>   plan's placeholder: `origin/main` was at 0033 but 0034/0035 are in flight on
+>   other branches.
+> All 105 xtask tests pass; `cargo xtask check` is green.
+
 **Goal:** Make concurrent ADR creation collision-loud (a verify-gate check) and collision-cheap (a one-command renumber tool), and make migration number/parity collisions loud, without changing the sequential naming convention.
 
 **Architecture:** Two additions to the `xtask` crate: (1) a build-free static check, run inside `cargo xtask check`/`validate`, that scans the ADR and migration directories for duplicate numeric prefixes and for sqlite/postgres parity; (2) a `cargo xtask adr renumber` subcommand that bumps the branch's newly-added ADR to the next free number and rewrites references, treating the ADR already on `origin/main` as immutable. All logic follows the crate's existing pattern: a pure, unit-tested core (`ids.rs`, pure rewrite helpers) behind a thin I/O wrapper that returns a `StepResult`.
