@@ -440,8 +440,16 @@
             ],
             use: {
               actionTimeout: 0,
+              // Capture forensics only for failed tests, so a green run (the
+              // common case) writes nothing extra and pays negligible overhead.
+              // Recovered from the validate-diagnostics artifact on a red e2e
+              // (#123/#49). No video — the trace already carries DOM snapshots.
+              trace: 'retain-on-failure',
+              screenshot: 'only-on-failure',
               ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
             },
+            // Artifact root for traces/screenshots; copied out by the testScript.
+            outputDir: '/tmp/e2e/test-results',
             // Run spec files sequentially to avoid SQLite write contention.
             // Each browser project is already run in isolation (separate seed_db()
             // calls), so one worker is sufficient and prevents locking errors.
@@ -549,6 +557,73 @@
           assert not panics, "e2e zero-panic gate (${backend}): jaunder.service logged Rust panic(s):\n" + "\n".join(panics)
         '';
 
+        # #123/#49: run Playwright capturing its exit (NOT machine.succeed, which
+        # would abort before we copy diagnostics), stream its line-reporter output
+        # to the build log, copy ALL artifacts out of the VM unconditionally, then
+        # fail the check only after the copies are safe. On success the copies land
+        # in $out; on failure they live in the --keep-failed build dir for xtask's
+        # rescue_diagnostics to recover. Shared by both backends so they can't drift.
+        e2eRunAndCapture =
+          {
+            backend,
+            browser,
+            traceId,
+            traceParent,
+            warmupEnv ? "",
+          }:
+          ''
+            pw_status, pw_out = machine.execute(
+              "cd /tmp/e2e"
+              + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
+              + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+              + "${warmupEnv}"
+              + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
+              + " JAUNDER_WEBSUB_CAPTURE_FILE=/var/lib/jaunder/websub.jsonl"
+              + " JAUNDER_E2E_TRACE_ID=${traceId}"
+              + " JAUNDER_E2E_TRACEPARENT=${traceParent}"
+              + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
+              + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
+              + " --config playwright.nix.config.js --project ${browser}"
+            )
+            # Stream the Playwright line-reporter output into the build log (-L), so
+            # the failing test + assertion are recoverable from build.log alone,
+            # even on failure and without --keep-failed.
+            print(pw_out)
+
+            # Stop otel so its trace flushes; ignore status (best-effort capture).
+            machine.execute("systemctl stop otel-collector.service")
+
+            # Copy every diagnostic UNCONDITIONALLY, each guarded so a missing file
+            # (e.g. an early crash) never aborts the remaining copies. copy_from_vm's
+            # 2nd arg is a target *dir*; "" lands the file flat under the per-backend
+            # name carried by the source.
+            def _grab(path):
+                if machine.execute("test -e " + path)[0] == 0:
+                    machine.copy_from_vm(path, "")
+
+            # OTel trace keeps its directory layout
+            # ($out/otel-traces-${backend}.jsonl/otel-traces.jsonl) that
+            # run-e2e-trace-analysis consumes on the success path: copy_from_vm's 2nd
+            # arg is the target *dir* name (cf. #152). Guarded so an early crash with
+            # no trace yet doesn't abort the remaining copies.
+            if machine.execute("test -s /var/lib/jaunder/otel-traces.jsonl")[0] == 0:
+                machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-${backend}.jsonl")
+
+            machine.execute("test -s /tmp/e2e/playwright-report.json && cp /tmp/e2e/playwright-report.json /tmp/playwright-report-${backend}.json")
+            _grab("/tmp/playwright-report-${backend}.json")
+
+            machine.execute("tar czf /tmp/playwright-artifacts-${backend}.tar.gz -C /tmp/e2e test-results 2>/dev/null || true")
+            _grab("/tmp/playwright-artifacts-${backend}.tar.gz")
+
+            machine.execute("journalctl --no-pager -o short-precise > /tmp/system-journal-${backend}.log")
+            _grab("/tmp/system-journal-${backend}.log")
+
+            ${e2ePanicGate backend}
+
+            # Fail the check now — after all artifacts are safely copied out.
+            assert pw_status == 0, "e2e Playwright failed (exit %d) for ${backend}/${browser}; see playwright-report-${backend}.json + playwright-artifacts-${backend}.tar.gz + build.log" % pw_status
+          '';
+
         mkE2eSqliteCheck =
           {
             checkName,
@@ -632,32 +707,10 @@
               # Browsers run as separate derivations (one VM each) so their state
               # mutations cannot interfere; that also lets CI fan them out.
               seed_db()
-              machine.succeed(
-                "cd /tmp/e2e"
-                + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
-                + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-                + "${warmupEnv}"
-                + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
-                + " JAUNDER_WEBSUB_CAPTURE_FILE=/var/lib/jaunder/websub.jsonl"
-                + " JAUNDER_E2E_TRACE_ID=${traceId}"
-                + " JAUNDER_E2E_TRACEPARENT=${traceParent}"
-                + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
-                + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-                + " --config playwright.nix.config.js --project ${browser}"
-              )
-
-              machine.succeed("systemctl stop otel-collector.service")
-              machine.succeed("test -s /var/lib/jaunder/otel-traces.jsonl")
-              machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-sqlite.jsonl")
-
-              # Land a flat per-backend file ($out/playwright-report-sqlite.json):
-              # copy_from_vm's 2nd arg is a target *dir*, so the source must already
-              # carry the per-backend name and the target be "" (cf. the journal).
-              machine.succeed("test -s /tmp/e2e/playwright-report.json")
-              machine.succeed("cp /tmp/e2e/playwright-report.json /tmp/playwright-report-sqlite.json")
-              machine.copy_from_vm("/tmp/playwright-report-sqlite.json", "")
-
-              ${e2ePanicGate "sqlite"}
+              ${e2eRunAndCapture {
+                backend = "sqlite";
+                inherit browser traceId traceParent warmupEnv;
+              }}
             '';
           };
 
@@ -777,31 +830,10 @@
               # Browsers run as separate derivations (one VM each) so their state
               # mutations cannot interfere; that also lets CI fan them out.
               seed_db()
-              machine.succeed(
-                "cd /tmp/e2e"
-                + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
-                + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-                + "${warmupEnv}"
-                + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
-                + " JAUNDER_WEBSUB_CAPTURE_FILE=/var/lib/jaunder/websub.jsonl"
-                + " JAUNDER_E2E_TRACE_ID=${traceId}"
-                + " JAUNDER_E2E_TRACEPARENT=${traceParent}"
-                + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
-                + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-                + " --config playwright.nix.config.js --project ${browser}"
-              )
-
-              machine.succeed("systemctl stop otel-collector.service")
-              machine.succeed("test -s /var/lib/jaunder/otel-traces.jsonl")
-              machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-postgres.jsonl")
-
-              # Land a flat per-backend file ($out/playwright-report-postgres.json);
-              # see the sqlite combo for why the source is renamed and target is "".
-              machine.succeed("test -s /tmp/e2e/playwright-report.json")
-              machine.succeed("cp /tmp/e2e/playwright-report.json /tmp/playwright-report-postgres.json")
-              machine.copy_from_vm("/tmp/playwright-report-postgres.json", "")
-
-              ${e2ePanicGate "postgres"}
+              ${e2eRunAndCapture {
+                backend = "postgres";
+                inherit browser traceId traceParent warmupEnv;
+              }}
             '';
           };
 

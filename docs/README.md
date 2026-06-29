@@ -62,6 +62,7 @@ convention). All are currently `accepted`.
 | [0034](adr/0034-ci-e2e-matrix-distribution.md) | CI E2E {backend}×{browser} Matrix Distribution | accepted |
 | [0035](adr/0035-elisp-live-integration-harness.md) | Live Integration Testing of the Emacs Client via a Self-Booting Harness | accepted |
 | [0036](adr/0036-identifier-collision-policy.md) | Identifier-Collision Policy for ADRs and Migrations | accepted |
+| [0037](adr/0037-e2e-failure-diagnostics-capture.md) | e2e VM Diagnostics Captured Before Failure and Recovered from the Kept outPath | accepted |
 
 ## Archive
 

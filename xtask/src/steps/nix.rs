@@ -118,15 +118,21 @@ fn copy_e2e_journals() {
     );
 }
 
-/// Copy e2e diagnostic files — server journals (`jaunder-journal-*.log`), OTEL
-/// traces (`otel-traces-*.jsonl`), and the Playwright per-test JSON report
-/// (`playwright-report-*.json`) — from `src_dir` into `dest_dir` (created if
-/// needed). Returns the count copied. Pure path logic so it is unit-testable.
+/// Copy e2e diagnostic files — the app journal (`jaunder-journal-*.log`), the full
+/// system journal (`system-journal-*.log`), OTEL traces (`otel-traces-*.jsonl`),
+/// the Playwright per-test JSON report (`playwright-report-*.json`), and the
+/// Playwright trace/screenshot tarball (`playwright-artifacts-*.tar.gz`) — from
+/// `src_dir` into `dest_dir` (created if needed). The system journal and tarball
+/// are the #123/#49 failure-path additions. Serves both the success path (from the
+/// out-link) and the failure path (from the kept outPath). Returns the count
+/// copied. Pure path logic so it is unit-testable.
 fn copy_e2e_diagnostics_between(src_dir: &std::path::Path, dest_dir: &std::path::Path) -> usize {
     let wanted = |name: &str| {
         (name.starts_with("jaunder-journal-") && name.ends_with(".log"))
+            || (name.starts_with("system-journal-") && name.ends_with(".log"))
             || (name.starts_with("otel-traces-") && name.ends_with(".jsonl"))
             || (name.starts_with("playwright-report-") && name.ends_with(".json"))
+            || (name.starts_with("playwright-artifacts-") && name.ends_with(".tar.gz"))
     };
     let Ok(entries) = std::fs::read_dir(src_dir) else {
         return 0;
@@ -266,6 +272,24 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
     }
 }
 
+/// The check's evaluated output store path. On a failed build `--keep-failed`
+/// leaves this path on disk, world-readable, even though it is unregistered — so
+/// the e2e diagnostics the VM copied into `$out` are recoverable from it (#123/#49).
+/// `None` if the eval fails (e.g. an eval-time error unrelated to the build).
+fn eval_out_path(check: &str) -> Option<String> {
+    let installable = format!(".#checks.{SYSTEM}.{check}.outPath");
+    let out = Command::new("nix")
+        .args(["eval", "--raw", "--accept-flake-config", &installable])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(out.stdout).ok()?;
+    let path = path.trim();
+    (!path.is_empty()).then(|| path.to_owned())
+}
+
 /// On a failed `nix build`, best-effort copy any diagnostics bundle from the
 /// retained (`--keep-failed`) build dir to `.xtask/diagnostics/<check>/`, so a
 /// catastrophic in-sandbox failure still leaves first-hand data for inspection
@@ -273,6 +297,14 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
 fn rescue_diagnostics(check: &str) {
     let dest = format!(".xtask/diagnostics/{check}");
     let _ = std::fs::create_dir_all(&dest);
+    // #123/#49: a failed e2e VM check leaves its $out store path on disk
+    // (--keep-failed, world-readable) though unregistered. Its deterministic path
+    // is the evaluated outPath; recover the copied-out diagnostics from it, reusing
+    // the success-path copier (which handles the otel directory layout). A no-op for
+    // non-e2e checks — their outPath carries no matching files.
+    if let Some(out_path) = eval_out_path(check) {
+        copy_e2e_diagnostics_between(std::path::Path::new(&out_path), std::path::Path::new(&dest));
+    }
     // Resolve the kept-build-dir glob in Rust and copy with explicit `cp` args
     // (no `bash -c`) so the check name can never inject into a shell command.
     // The `emit-out/diagnostics` is_dir guard skips false prefix matches (e.g. a
@@ -389,6 +421,10 @@ mod tests {
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("jaunder-journal-sqlite.log"), b"j").unwrap();
         std::fs::write(src.join("playwright-report-sqlite.json"), b"p").unwrap();
+        // #123/#49 failure-path artifacts: the trace/screenshot tarball and the
+        // full system journal, copied out of the VM before the check is failed.
+        std::fs::write(src.join("playwright-artifacts-sqlite.tar.gz"), b"a").unwrap();
+        std::fs::write(src.join("system-journal-sqlite.log"), b"s").unwrap();
         std::fs::write(src.join("unrelated.txt"), b"x").unwrap();
         // OTEL traces arrive as a directory (the load-bearing
         // `otel-traces-<backend>.jsonl/otel-traces.jsonl` layout), not a flat file.
@@ -403,11 +439,13 @@ mod tests {
         let n = super::copy_e2e_diagnostics_between(&src, &dest);
 
         assert_eq!(
-            n, 3,
-            "journal + otel dir + playwright report are copied; unrelated is not"
+            n, 5,
+            "journal + otel dir + playwright report + artifacts tarball + system journal are copied; unrelated is not"
         );
         assert!(dest.join("jaunder-journal-sqlite.log").exists());
         assert!(dest.join("playwright-report-sqlite.json").exists());
+        assert!(dest.join("playwright-artifacts-sqlite.tar.gz").exists());
+        assert!(dest.join("system-journal-sqlite.log").exists());
         assert!(dest
             .join("otel-traces-sqlite.jsonl")
             .join("otel-traces.jsonl")
