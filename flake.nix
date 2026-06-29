@@ -1103,6 +1103,9 @@
               pkgs.cargo-generate
               pkgs.cargo-mutants
               pkgs.sqlx-cli
+              # `devtool run -- <cmd>` etc. on the interactive PATH. Already built
+              # for the coverage sandbox; here it serves humans/agents directly.
+              devtoolBin
             ];
             shellEnv = {
               RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";

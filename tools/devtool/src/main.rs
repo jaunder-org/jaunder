@@ -10,7 +10,7 @@ mod pg;
 mod run;
 
 #[derive(Parser)]
-#[command(name = "devtool", about = "Jaunder in-sandbox dev tooling")]
+#[command(name = "devtool", about = "Jaunder in-sandbox dev tooling", version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
