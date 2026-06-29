@@ -102,15 +102,15 @@ git commit -m "test(issue-54): run create_user_with_invite error/rollback paths 
 - Consumes: `state.email_verifications.*`, `state.users.*`, `raw_exec`/`raw_try_exec`.
 - Produces: 6 dual-backend (or `sqlite_only`-annotated, see note) tests; likely exhausts `email_verification_storage` helper → delete it this task.
 
-- [ ] **Step 1: Read the six current test bodies** (note the `email_verification_storage(base)` helper they share).
+- [x] **Step 1: Read the six current test bodies** (note the `email_verification_storage(base)` helper they share).
 
-- [ ] **Step 2: Convert each** via the worked transform. For `use_email_verification_with_corrupt_stored_email_returns_internal`, corrupt the stored row with `raw_exec(backend, &env, "UPDATE … SET … ")` using portable SQL. **If** the corruption cannot be expressed portably, annotate just that one test `#[apply(sqlite_only)]` with `// reason: corrupts stored ciphertext via SQLite-specific bytes` and note it in the commit message.
+- [x] **Step 2: Convert each** via the worked transform. The corrupt-data test was expressed portably: the `email` column is plain `TEXT` on both backends (sqlite/postgres migration `0006`), so `raw_exec(backend, &env, "UPDATE email_verifications SET email = 'not-an-email'")` works on both — no `sqlite_only` annotation needed.
 
-- [ ] **Step 3: Delete the now-orphaned `email_verification_storage` helper** (it was used only by this cluster). Confirm with `cargo xtask check --no-test` — dead_code must be clean.
+- [x] **Step 3: Delete the now-orphaned `email_verification_storage` helper** (it was used only by this cluster). _(Also removed the now-unused `SqliteEmailVerificationStorage` and `EmailVerificationStorage` imports flagged by `-D unused-imports`; re-ran clean.)_
 
-- [ ] **Step 4: Full per-task gate** — `cargo xtask check`. Expected: green on both backends.
+- [ ] **Step 4: Full per-task gate** — `cargo xtask check`. _(Deferred per dispatch Execution Note: controller runs the full gate; this dispatch's gate is `cargo xtask check --no-test` only, which passed clean.)_
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit** _(Deferred per dispatch Execution Note: controller commits.)_
 
 ```bash
 git add server/tests/storage/storage.rs
