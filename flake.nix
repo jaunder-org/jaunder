@@ -434,7 +434,10 @@
             testDir: './tests',
             timeout: 30 * 1000,
             expect: { timeout: 5000 },
-            reporter: 'line',
+            reporter: [
+              ['line'],
+              ['json', { outputFile: '/tmp/e2e/playwright-report.json' }],
+            ],
             use: {
               actionTimeout: 0,
               ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
@@ -641,6 +644,13 @@
               machine.succeed("test -s /var/lib/jaunder/otel-traces.jsonl")
               machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-sqlite.jsonl")
 
+              # Land a flat per-backend file ($out/playwright-report-sqlite.json):
+              # copy_from_vm's 2nd arg is a target *dir*, so the source must already
+              # carry the per-backend name and the target be "" (cf. the journal).
+              machine.succeed("test -s /tmp/e2e/playwright-report.json")
+              machine.succeed("cp /tmp/e2e/playwright-report.json /tmp/playwright-report-sqlite.json")
+              machine.copy_from_vm("/tmp/playwright-report-sqlite.json", "")
+
               ${e2ePanicGate "sqlite"}
             '';
           };
@@ -772,6 +782,12 @@
               machine.succeed("systemctl stop otel-collector.service")
               machine.succeed("test -s /var/lib/jaunder/otel-traces.jsonl")
               machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-postgres.jsonl")
+
+              # Land a flat per-backend file ($out/playwright-report-postgres.json);
+              # see the sqlite combo for why the source is renamed and target is "".
+              machine.succeed("test -s /tmp/e2e/playwright-report.json")
+              machine.succeed("cp /tmp/e2e/playwright-report.json /tmp/playwright-report-postgres.json")
+              machine.copy_from_vm("/tmp/playwright-report-postgres.json", "")
 
               ${e2ePanicGate "postgres"}
             '';

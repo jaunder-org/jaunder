@@ -88,24 +88,32 @@ pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
     let check = format!("e2e-{backend}-{browser}");
     let step_name = format!("nix-{check}");
     result.push(build_check(&step_name, &check));
-    copy_journals_between(
+    copy_e2e_diagnostics_between(
         std::path::Path::new(&format!(".xtask/gcroots/{check}")),
         std::path::Path::new(&format!(".xtask/diagnostics/{check}")),
     );
 }
 
-/// Copy the realized e2e check's `jaunder-journal-*.log` files into the canonical
-/// diagnostics dir. Best-effort; silent on a missing out-link (e.g. a failed build).
+/// Copy the realized e2e check's diagnostic files — server journals, OTEL traces,
+/// and the Playwright report — into the canonical diagnostics dir. Best-effort;
+/// silent on a missing out-link (e.g. a failed build).
 fn copy_e2e_journals() {
-    copy_journals_between(
+    copy_e2e_diagnostics_between(
         std::path::Path::new(".xtask/gcroots/e2e"),
         std::path::Path::new(".xtask/diagnostics/e2e"),
     );
 }
 
-/// Copy every `jaunder-journal-*.log` from `src_dir` into `dest_dir` (created if
+/// Copy e2e diagnostic files — server journals (`jaunder-journal-*.log`), OTEL
+/// traces (`otel-traces-*.jsonl`), and the Playwright per-test JSON report
+/// (`playwright-report-*.json`) — from `src_dir` into `dest_dir` (created if
 /// needed). Returns the count copied. Pure path logic so it is unit-testable.
-fn copy_journals_between(src_dir: &std::path::Path, dest_dir: &std::path::Path) -> usize {
+fn copy_e2e_diagnostics_between(src_dir: &std::path::Path, dest_dir: &std::path::Path) -> usize {
+    let wanted = |name: &str| {
+        (name.starts_with("jaunder-journal-") && name.ends_with(".log"))
+            || (name.starts_with("otel-traces-") && name.ends_with(".jsonl"))
+            || (name.starts_with("playwright-report-") && name.ends_with(".json"))
+    };
     let Ok(entries) = std::fs::read_dir(src_dir) else {
         return 0;
     };
@@ -114,14 +122,41 @@ fn copy_journals_between(src_dir: &std::path::Path, dest_dir: &std::path::Path) 
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        if name.starts_with("jaunder-journal-")
-            && name.ends_with(".log")
-            && std::fs::copy(entry.path(), dest_dir.join(name)).is_ok()
-        {
+        if !wanted(name) {
+            continue;
+        }
+        let from = entry.path();
+        let to = dest_dir.join(name);
+        // OTEL traces arrive as a directory (`otel-traces-<backend>.jsonl/otel-traces.jsonl`,
+        // an intentional layout the trace-analysis tooling depends on); journals and the
+        // Playwright report are flat files. Handle both.
+        let ok = if from.is_dir() {
+            copy_tree(&from, &to).is_ok()
+        } else {
+            std::fs::copy(&from, &to).is_ok()
+        };
+        if ok {
             copied += 1;
         }
     }
     copied
+}
+
+/// Recursively copy the directory tree at `from` to `to` (creating `to` and any
+/// parents). Pure std I/O so it stays unit-testable; used for the OTEL trace
+/// directory artifact.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let dst = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &dst)?;
+        } else {
+            std::fs::copy(entry.path(), dst)?;
+        }
+    }
+    Ok(())
 }
 
 /// A `Write` that fans every write out to two inner writers, **best-effort**: a
@@ -333,19 +368,37 @@ mod tests {
     }
 
     #[test]
-    fn copy_journals_between_copies_only_journal_logs() {
+    fn copy_e2e_diagnostics_between_copies_journal_otel_and_playwright() {
         let tmp = std::env::temp_dir().join(format!("xtask-j-{}", std::process::id()));
         let src = tmp.join("src");
         let dest = tmp.join("dest");
         std::fs::create_dir_all(&src).unwrap();
-        std::fs::write(src.join("jaunder-journal-sqlite.log"), b"ok").unwrap();
-        std::fs::write(src.join("otel-traces-sqlite.jsonl"), b"no").unwrap();
+        std::fs::write(src.join("jaunder-journal-sqlite.log"), b"j").unwrap();
+        std::fs::write(src.join("playwright-report-sqlite.json"), b"p").unwrap();
+        std::fs::write(src.join("unrelated.txt"), b"x").unwrap();
+        // OTEL traces arrive as a directory (the load-bearing
+        // `otel-traces-<backend>.jsonl/otel-traces.jsonl` layout), not a flat file.
+        std::fs::create_dir_all(src.join("otel-traces-sqlite.jsonl")).unwrap();
+        std::fs::write(
+            src.join("otel-traces-sqlite.jsonl")
+                .join("otel-traces.jsonl"),
+            b"o",
+        )
+        .unwrap();
 
-        let n = super::copy_journals_between(&src, &dest);
+        let n = super::copy_e2e_diagnostics_between(&src, &dest);
 
-        assert_eq!(n, 1, "only the jaunder-journal-*.log file should be copied");
+        assert_eq!(
+            n, 3,
+            "journal + otel dir + playwright report are copied; unrelated is not"
+        );
         assert!(dest.join("jaunder-journal-sqlite.log").exists());
-        assert!(!dest.join("otel-traces-sqlite.jsonl").exists());
+        assert!(dest.join("playwright-report-sqlite.json").exists());
+        assert!(dest
+            .join("otel-traces-sqlite.jsonl")
+            .join("otel-traces.jsonl")
+            .exists());
+        assert!(!dest.join("unrelated.txt").exists());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

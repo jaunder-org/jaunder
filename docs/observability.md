@@ -32,6 +32,20 @@ E2E tracing currently has two complementary layers:
 Both layers use the same trace context (`JAUNDER_E2E_TRACEPARENT`) so browser
 and backend spans are correlated in a single trace.
 
+## Per-test timing report
+
+Each e2e VM check also runs Playwright's `json` reporter and copies the result
+out as a flat artifact (alongside the OTEL traces above):
+
+- `playwright-report-sqlite.json` / `playwright-report-postgres.json`
+
+It records every test's title, project (browser), status, retries, and duration.
+This is the primary source for per-test timing comparisons across browsers (e.g.
+the Firefox-vs-Chromium analysis in #152). On the `cargo xtask e2e <backend>
+<browser>` path it lands per combo at
+`.xtask/diagnostics/e2e-<backend>-<browser>/playwright-report-<backend>.json`
+and is uploaded as the `e2e-diagnostics-<backend>-<browser>` CI artifact.
+
 ## Analysis
 
 Use `scripts/analyze-otel-traces` on one or more artifact files, for example:
