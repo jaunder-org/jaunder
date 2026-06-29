@@ -58,21 +58,40 @@ fn sentinel_detail(status: &coverage::status::CoverageStatus) -> String {
     }
 }
 
-/// The e2e gate: build the `e2e` aggregate check, which depends on both
-/// backend VM checks. They are independent derivations, so the host realizes
-/// them in parallel up to its `max-jobs` — CI's install-nix-action sets
-/// `max-jobs = auto`; a plain dev box defaults to 1 and runs them serially.
-/// The "run both backends in parallel" intent is declared in the flake (the
-/// `e2e-checks` aggregate), not here. `postgres-integration` is deliberately
-/// not dispatched — its tests already run under the coverage check.
+/// The e2e gate: build the `e2e` aggregate check, which joins all four
+/// {sqlite,postgres}×{chromium,firefox} combo VM checks. They are independent
+/// derivations, so the host realizes them in parallel up to its `max-jobs` —
+/// CI's install-nix-action sets `max-jobs = auto`; a plain dev box defaults to 1
+/// and runs them serially. The fan-out intent is declared in the flake (the
+/// `e2e-checks` aggregate / `e2eCombos`), not here. This aggregate path is the
+/// full LOCAL `validate` equivalent; CI instead fans the combos across runners
+/// via `cargo xtask e2e` (see `e2e_combo`). `postgres-integration` is
+/// deliberately not dispatched — its tests already run under the coverage check.
 pub fn e2e(result: &mut CommandResult) {
     let step = build_check("nix-e2e", "e2e");
-    // #93: surface the per-backend server journals in the one canonical, always-
-    // uploaded diagnostics dir, regardless of cache-hit/pass/fail. Best-effort: a
-    // failed e2e derivation produces no out-link, but its panic is already in
-    // build.log (the `-L` stream + the gate's assertion message).
+    // #93: surface the server journals in the one canonical, always-uploaded
+    // diagnostics dir, regardless of cache-hit/pass/fail. The aggregate
+    // symlinkJoin collapses same-named outputs, so this captures one journal per
+    // BACKEND (the two browser combos emit the same `jaunder-journal-<backend>.log`),
+    // not per combo; per-combo fidelity is on the `cargo xtask e2e` path. Best-
+    // effort: a failed e2e derivation produces no out-link, but its panic is
+    // already in build.log (the `-L` stream + the gate's assertion message).
     copy_e2e_journals();
     result.push(step);
+}
+
+/// Build a single e2e {backend}×{browser} combo check via `build_check` (so the
+/// `nix build -L --keep-failed` log + `rescue_diagnostics` failure bundle land in
+/// `.xtask/diagnostics/e2e-<backend>-<browser>/`), then copy that combo's journal
+/// into the canonical diagnostics dir. Used by CI's e2e matrix.
+pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
+    let check = format!("e2e-{backend}-{browser}");
+    let step_name = format!("nix-{check}");
+    result.push(build_check(&step_name, &check));
+    copy_journals_between(
+        std::path::Path::new(&format!(".xtask/gcroots/{check}")),
+        std::path::Path::new(&format!(".xtask/diagnostics/{check}")),
+    );
 }
 
 /// Copy the realized e2e check's `jaunder-journal-*.log` files into the canonical

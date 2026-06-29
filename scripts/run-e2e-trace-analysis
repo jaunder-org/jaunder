@@ -10,19 +10,21 @@ function usage() {
     console.log(`Run e2e VM checks and analyze OTEL traces.
 
 Usage:
-  scripts/run-e2e-trace-analysis [--top N] [--trace TRACE_ID] [--cold]
+  scripts/run-e2e-trace-analysis [--top N] [--trace TRACE_ID] [--cold] [--browser chromium|firefox]
 
 Examples:
   scripts/run-e2e-trace-analysis
   scripts/run-e2e-trace-analysis --top 40
   scripts/run-e2e-trace-analysis --trace 11111111111111111111111111111111
-  scripts/run-e2e-trace-analysis --cold`);
+  scripts/run-e2e-trace-analysis --cold
+  scripts/run-e2e-trace-analysis --browser firefox`);
 }
 
 function parseArgs(argv) {
     let top = 25;
     let traceId = "";
     let cold = false;
+    let browser = null;
 
     for (let i = 0; i < argv.length; i += 1) {
         const arg = argv[i];
@@ -50,6 +52,17 @@ function parseArgs(argv) {
             cold = true;
             continue;
         }
+        if (arg === "--browser") {
+            i += 1;
+            if (i >= argv.length) {
+                throw new Error("--browser requires a value");
+            }
+            if (argv[i] !== "chromium" && argv[i] !== "firefox") {
+                throw new Error("--browser must be chromium or firefox");
+            }
+            browser = argv[i];
+            continue;
+        }
         if (arg === "--help" || arg === "-h") {
             usage();
             process.exit(0);
@@ -57,7 +70,7 @@ function parseArgs(argv) {
         throw new Error(`unknown argument: ${arg}`);
     }
 
-    return { top, traceId, cold };
+    return { top, traceId, cold, browser };
 }
 
 function runAndCapture(command, args) {
@@ -117,30 +130,24 @@ function main() {
         process.exit(1);
     }
 
-    const sqliteAttr = parsed.cold
-        ? "packages.x86_64-linux.e2e-sqlite-cold"
-        : "checks.x86_64-linux.e2e-sqlite";
-    const postgresAttr = parsed.cold
-        ? "packages.x86_64-linux.e2e-postgres-cold"
-        : "checks.x86_64-linux.e2e-postgres";
+    const browsers = parsed.browser ? [parsed.browser] : ["chromium", "firefox"];
+    const ns = parsed.cold ? "packages" : "checks";
+    const suffix = parsed.cold ? "-cold" : "";
 
-    const sqliteOut = buildCheck(sqliteAttr);
-    const postgresOut = buildCheck(postgresAttr);
-
-    const sqliteTrace = path.join(
-        sqliteOut,
-        "otel-traces-sqlite.jsonl",
-        "otel-traces.jsonl",
-    );
-    const postgresTrace = path.join(
-        postgresOut,
-        "otel-traces-postgres.jsonl",
-        "otel-traces.jsonl",
-    );
-
-    for (const traceFile of [sqliteTrace, postgresTrace]) {
-        if (!fs.existsSync(traceFile)) {
-            throw new Error(`trace file not found: ${traceFile}`);
+    const traceFiles = [];
+    for (const backend of ["sqlite", "postgres"]) {
+        for (const browser of browsers) {
+            const attr = `${ns}.x86_64-linux.e2e-${backend}-${browser}${suffix}`;
+            const out = buildCheck(attr);
+            const traceFile = path.join(
+                out,
+                `otel-traces-${backend}.jsonl`,
+                "otel-traces.jsonl",
+            );
+            if (!fs.existsSync(traceFile)) {
+                throw new Error(`trace file not found: ${traceFile}`);
+            }
+            traceFiles.push(traceFile);
         }
     }
 
@@ -150,7 +157,7 @@ function main() {
     if (parsed.traceId) {
         analyzerArgs.push("--trace", parsed.traceId);
     }
-    analyzerArgs.push(sqliteTrace, postgresTrace);
+    analyzerArgs.push(...traceFiles);
 
     const result = spawnSync(analyzer, analyzerArgs, {
         stdio: "inherit",
