@@ -4,14 +4,15 @@ use leptos::prelude::LeptosOptions;
 use std::sync::OnceLock;
 
 // The both-backend test harness — `Backend`, `TestEnv`, per-test DB provisioning,
-// and the `backends`/`sqlite_only`/`postgres_only` rstest templates — lives in the
-// shared `db-test-harness` crate (ADR-0033) so `storage` tests can use it too.
+// and the `backends`/`sqlite_only`/`postgres_only` rstest templates — lives in
+// `storage::test_support` (gated by storage's `test-support` feature; ADR-0033) so
+// `storage`'s own tests can use it from the same crate instance.
 // Re-exported here so existing `use crate::helpers::…` sites keep working unchanged.
 // `helpers` is compiled into every test binary and each uses a different subset,
 // so the union re-export reads as unused in some — same as `CapturingWebSubClient`
 // below.
 #[allow(unused_imports)]
-pub use db_test_harness::{
+pub use storage::test_support::{
     backends, nonexistent_postgres_url, noop_mailer, postgres_bootstrap_url, postgres_only,
     postgres_test_authority, postgres_testing_enabled, recorded_postgres_url, seed_posts,
     sqlite_only, sqlite_url, template_postgres_url, test_sqlite_state_with_pool,

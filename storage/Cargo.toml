@@ -24,13 +24,21 @@ tar.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true }
 tracing.workspace = true
+# Optional deps for the `test_support` module, pulled in by the `test-support`
+# feature (so external test crates like `server` get them); also dev-deps below
+# so `storage`'s own `cfg(test)` build has them without enabling the feature.
+tempfile = { workspace = true, optional = true }
+rstest_reuse = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+rstest.workspace = true
+rstest_reuse.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
 test-utils = []
+test-support = ["dep:tempfile", "dep:rstest_reuse"]
 
 [lints]
 workspace = true

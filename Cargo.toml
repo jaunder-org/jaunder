@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
   "common",
-  "db-test-harness",
   "hydrate",
   "server",
   "storage",
