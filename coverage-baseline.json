@@ -71,119 +71,119 @@
   ],
   "server/src/cli.rs": [
     {
-      "line": 240,
+      "line": 261,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 253,
+      "line": 274,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 263,
+      "line": 284,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 275,
+      "line": 296,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 287,
+      "line": 308,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 300,
+      "line": 321,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 310,
+      "line": 331,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 322,
+      "line": 343,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 334,
+      "line": 355,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 344,
+      "line": 365,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 354,
+      "line": 375,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 366,
+      "line": 387,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 377,
+      "line": 398,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 386,
+      "line": 407,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 399,
+      "line": 420,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 409,
+      "line": 430,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 419,
+      "line": 440,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 434,
+      "line": 455,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 446,
+      "line": 467,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 470,
+      "line": 491,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 490,
+      "line": 511,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 500,
+      "line": 521,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 519,
+      "line": 540,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 529,
+      "line": 550,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 541,
+      "line": 562,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 560,
+      "line": 581,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 571,
+      "line": 592,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 587,
+      "line": 608,
       "text": "            panic!(\"wrong variant\");"
     },
     {
-      "line": 598,
+      "line": 619,
       "text": "            panic!(\"wrong variant\");"
     }
   ],
@@ -217,27 +217,27 @@
       "text": "        p1.parse::<Password>().map_err(|e| anyhow::anyhow!(\"{e}\"))?"
     },
     {
-      "line": 340,
+      "line": 386,
       "text": "                storage_path = %storage.storage_path.display(),"
     },
     {
-      "line": 343,
+      "line": 389,
       "text": "                storage.storage_path.display(),"
     },
     {
-      "line": 347,
+      "line": 393,
       "text": "            open_existing_database(&storage.db)"
     },
     {
-      "line": 348,
+      "line": 394,
       "text": "                .await"
     },
     {
-      "line": 349,
+      "line": 395,
       "text": "                .map_err(|e| anyhow::anyhow!(\"{e}; auto-init failed\"))?"
     },
     {
-      "line": 420,
+      "line": 480,
       "text": "    Ok(())"
     }
   ],
@@ -457,51 +457,51 @@
   ],
   "server/src/lib.rs": [
     {
-      "line": 71,
+      "line": 72,
       "text": "                let state = server_fn_state.clone();"
     },
     {
-      "line": 72,
+      "line": 73,
       "text": "                let mailer = server_fn_mailer.clone();"
     },
     {
-      "line": 73,
+      "line": 74,
       "text": "                leptos_axum::handle_server_fns_with_context("
     },
     {
-      "line": 74,
+      "line": 75,
       "text": "                    move || {"
     },
     {
-      "line": 75,
+      "line": 76,
       "text": "                        crate::context::provide_app_state_contexts(&state);"
     },
     {
-      "line": 76,
+      "line": 77,
       "text": "                        crate::context::provide_mailer_context(&mailer);"
     },
     {
-      "line": 77,
+      "line": 78,
       "text": "                        provide_context(web::auth::CookieSettings {"
     },
     {
-      "line": 78,
+      "line": 79,
       "text": "                            secure: secure_cookies,"
     },
     {
-      "line": 79,
+      "line": 80,
       "text": "                        });"
     },
     {
-      "line": 80,
+      "line": 81,
       "text": "                    },"
     },
     {
-      "line": 81,
+      "line": 82,
       "text": "                    req,"
     },
     {
-      "line": 83,
+      "line": 84,
       "text": "            }),"
     }
   ],
@@ -599,35 +599,35 @@
       "text": "                unreachable!()"
     },
     {
-      "line": 124,
+      "line": 136,
       "text": "            storage,"
     },
     {
-      "line": 125,
+      "line": 137,
       "text": "            mode,"
     },
     {
-      "line": 126,
+      "line": 138,
       "text": "            path,"
     },
     {
-      "line": 128,
+      "line": 140,
       "text": "            jaunder::commands::cmd_backup(&storage, mode.into(), path).await?;"
     },
     {
-      "line": 130,
+      "line": 142,
       "text": "        Commands::Restore { storage, path } => {"
     },
     {
-      "line": 131,
+      "line": 143,
       "text": "            jaunder::commands::cmd_restore(&storage, &path).await?;"
     },
     {
-      "line": 275,
+      "line": 326,
       "text": "        });"
     },
     {
-      "line": 394,
+      "line": 447,
       "text": "        });"
     }
   ],
