@@ -249,7 +249,7 @@ DONE — **key finding:** with `--keep-failed`, nix keeps the failed derivation'
 - Consumes: the failed check's deterministic outPath (`nix eval --raw .#checks.<system>.<check>.outPath`), kept world-readable by `--keep-failed`.
 - Produces: e2e artifacts in `.xtask/diagnostics/<check>/` on a failed build, via the existing `copy_e2e_diagnostics_between` (which already handles the otel directory).
 
-- [ ] **Step 1: Extend the existing unit test to cover the two new artifact types**
+- [x] **Step 1: Extend the existing unit test to cover the two new artifact types**
 
 In `copy_e2e_diagnostics_between_copies_journal_otel_and_playwright`, also write a `playwright-artifacts-<backend>.tar.gz` and a `system-journal-<backend>.log` into the fixture `src`, and assert both are copied to `dest`:
 
@@ -262,15 +262,15 @@ In `copy_e2e_diagnostics_between_copies_journal_otel_and_playwright`, also write
         assert!(dest.join("system-journal-sqlite.log").exists());
 ```
 
-- [ ] **Step 2: Run the test, verify it fails**
+- [x] **Step 2: Run the test, verify it fails**
 
 ```bash
 cargo nextest run -p xtask copy_e2e_diagnostics_between_copies_journal_otel_and_playwright
 ```
 
-Expected: FAIL (the two new files are not yet matched by `wanted()`).
+Expected: FAIL (the two new files are not yet matched by `wanted()`). (Ran via `--manifest-path xtask/Cargo.toml` — xtask is a separate workspace. Got left:3 right:5.)
 
-- [ ] **Step 3: Extend `wanted()`, add `eval_out_path`, and wire the failure rescue**
+- [x] **Step 3: Extend `wanted()`, add `eval_out_path`, and wire the failure rescue**
 
 Add the two patterns to `copy_e2e_diagnostics_between`'s `wanted` closure:
 
@@ -318,7 +318,7 @@ Then, in `rescue_diagnostics`, after the existing `emit-out/diagnostics` loop, r
     }
 ```
 
-- [ ] **Step 4: Run the test, verify it passes**
+- [x] **Step 4: Run the test, verify it passes**
 
 ```bash
 cargo nextest run -p xtask copy_e2e_diagnostics_between_copies_journal_otel_and_playwright
@@ -326,7 +326,7 @@ cargo nextest run -p xtask copy_e2e_diagnostics_between_copies_journal_otel_and_
 
 Expected: PASS.
 
-- [ ] **Step 5: Verify the rescue end-to-end against the live kept outPath**
+- [x] **Step 5: Verify the rescue end-to-end against the live kept outPath**
 
 The Task-3 failing run's outPath is still on disk. Confirm the implemented rescue actually recovers the artifacts from it (no second 10-min e2e run needed):
 
@@ -338,7 +338,7 @@ ls -1 "$OUT"
 
 Expected: `$OUT` lists `jaunder-journal-sqlite.log`, `system-journal-sqlite.log`, `playwright-report-sqlite.json`, `playwright-artifacts-sqlite.tar.gz`, `otel-traces-sqlite.jsonl/` — i.e. exactly what `copy_e2e_diagnostics_between` (with the extended `wanted`) will copy into `.xtask/diagnostics/<check>/`. (The `build_check` failure arm calls this on a real red run; the wiring is a single added call verified by reading.)
 
-- [ ] **Step 6: Remove the throwaway spec, unstage it, run static checks**
+- [x] **Step 6: Remove the throwaway spec, unstage it, run static checks**
 
 ```bash
 git rm -f --cached end2end/tests/zzz-force-fail.spec.ts 2>/dev/null || true
@@ -354,6 +354,8 @@ Expected: clippy + fmt green; the temp spec is gone and unstaged.
 git add xtask/src/steps/nix.rs
 git commit -m "test(e2e): recover e2e VM diagnostics from the kept outPath on failure (#123, #49)"
 ```
+<!-- done -->
+
 
 ---
 
