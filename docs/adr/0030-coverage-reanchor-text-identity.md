@@ -96,3 +96,17 @@ Accepting an approved lowering is a manual `cp` of the candidate, so it always l
 as a reviewable diff under the coverage-baseline policy. The failing coverage gate
 prints `cargo xtask coverage reanchor` as the recovery for a lowering; the symmetric
 CRAP-manifest refresh path is tracked separately (the #88 CRAP follow-on, #131).
+
+## Supplement (#131) — the symmetric CRAP refresh path
+
+The #88 supplement noted "the symmetric CRAP-manifest refresh path is tracked
+separately (#131)". It lands as `cargo xtask coverage refresh-crap`, mirroring the
+baseline `reanchor` model exactly: a no-regression refresh rewrites
+`crap-manifest.json` in place (a no-op on a pure line-shift, keyed on the same
+line-independent canonical form the Fix-mode heal uses); a CRAP **regression** is
+refused (non-zero exit) with the would-be manifest written to
+`.xtask/crap-manifest.candidate.json` — never the committed file. There is **no
+accept-all path**; promoting approved drift is a manual `cp` of the candidate, so it
+always lands as a reviewable diff. The failing coverage gate now prints
+`cargo xtask coverage refresh-crap` as the CRAP recovery, the category-split companion
+to the lowering branch's `cargo xtask coverage reanchor`.

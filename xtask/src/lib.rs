@@ -81,6 +81,19 @@ pub enum CoverageCommand {
         #[arg(long, default_value = ".xtask/gcroots/coverage")]
         gcroot: String,
     },
+    /// Refresh `crap-manifest.json` from the current CRAP report. With no
+    /// regressions it rewrites the committed manifest in place (a no-op when no
+    /// CRAP-relevant field changed); on a regression it refuses and writes a
+    /// candidate to `.xtask/crap-manifest.candidate.json` for a deliberate `cp`.
+    /// Consumes an existing report (run `check`/`validate` first); never rebuilds.
+    #[command(after_help = "EXAMPLES:\n  \
+        cargo xtask coverage refresh-crap\n  \
+        cargo xtask coverage refresh-crap --gcroot .xtask/gcroots/coverage")]
+    RefreshCrap {
+        /// GC-root / out-link directory holding `crap-report.json`.
+        #[arg(long, default_value = ".xtask/gcroots/coverage")]
+        gcroot: String,
+    },
 }
 
 impl Cli {
@@ -90,6 +103,7 @@ impl Cli {
             Command::Validate { .. } => "validate",
             Command::AuditWasm { .. } => "audit-wasm",
             Command::Coverage(CoverageCommand::Reanchor { .. }) => "coverage-reanchor",
+            Command::Coverage(CoverageCommand::RefreshCrap { .. }) => "coverage-refresh-crap",
         }
     }
 }
@@ -153,6 +167,13 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("coverage-reanchor");
             result.push(coverage::reanchor(&gcroot));
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::Coverage(CoverageCommand::RefreshCrap { gcroot }) => {
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("coverage-refresh-crap");
+            result.push(coverage::refresh_crap(&gcroot));
             finalize(&mut result, start);
             Ok(result)
         }
@@ -345,6 +366,29 @@ mod cli_tests {
         match cli.command {
             Command::Coverage(CoverageCommand::Reanchor { gcroot }) => assert_eq!(gcroot, "/tmp/x"),
             _ => panic!("expected coverage reanchor"),
+        }
+    }
+
+    #[test]
+    fn coverage_refresh_crap_parses_with_default_gcroot() {
+        let cli = Cli::try_parse_from(["xtask", "coverage", "refresh-crap"]).unwrap();
+        match cli.command {
+            Command::Coverage(CoverageCommand::RefreshCrap { gcroot }) => {
+                assert_eq!(gcroot, ".xtask/gcroots/coverage");
+            }
+            _ => panic!("expected coverage refresh-crap"),
+        }
+    }
+
+    #[test]
+    fn coverage_refresh_crap_accepts_gcroot() {
+        let cli = Cli::try_parse_from(["xtask", "coverage", "refresh-crap", "--gcroot", "/tmp/x"])
+            .unwrap();
+        match cli.command {
+            Command::Coverage(CoverageCommand::RefreshCrap { gcroot }) => {
+                assert_eq!(gcroot, "/tmp/x")
+            }
+            _ => panic!("expected coverage refresh-crap"),
         }
     }
 }

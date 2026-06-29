@@ -86,7 +86,6 @@ pub struct CoverageReport {
 }
 
 const BASELINE_PATH: &str = "coverage-baseline.json";
-const CRAP_MANIFEST_PATH: &str = "crap-manifest.json";
 
 /// Decide whether to heal the accepted-uncovered baseline, returning the
 /// (possibly) new baseline to persist and the `healed` flag.
@@ -183,6 +182,60 @@ fn reanchor_inner(out_dir: &str) -> Result<StepResult> {
     }
 }
 
+/// `cargo xtask coverage refresh-crap`: refresh `crap-manifest.json` from an existing
+/// CRAP report. No regressions → rewrite the committed manifest in place (a no-op when
+/// nothing CRAP-relevant changed). Regressions → write a candidate to the side path and
+/// FAIL (non-zero), printing the offending functions and the promotion recipe. Consumes
+/// an existing report — it does not rebuild coverage.
+pub fn refresh_crap(out_dir: &str) -> StepResult {
+    match refresh_crap_inner(out_dir) {
+        Ok(step) => step,
+        Err(e) => StepResult::fail("coverage-refresh-crap").detail(format!("{e:#}")),
+    }
+}
+
+fn refresh_crap_inner(out_dir: &str) -> Result<StepResult> {
+    let crap_path = format!("{out_dir}/crap-report.json");
+    let fresh = std::fs::read_to_string(&crap_path).map_err(|_| {
+        anyhow::anyhow!(
+            "no CRAP report at {crap_path} — run `cargo xtask check` or \
+             `cargo xtask validate` first to build one"
+        )
+    })?;
+    let old_manifest = std::fs::read_to_string(crap::CRAP_MANIFEST_PATH).unwrap_or_default();
+    match crap::plan_crap_refresh(&fresh, &old_manifest)? {
+        crap::CrapRefreshPlan::Refresh {
+            manifest: Some(bytes),
+        } => {
+            std::fs::write(crap::CRAP_MANIFEST_PATH, &bytes)
+                .with_context(|| format!("writing {}", crap::CRAP_MANIFEST_PATH))?;
+            Ok(StepResult::ok("coverage-refresh-crap")
+                .detail(format!("refreshed {}", crap::CRAP_MANIFEST_PATH)))
+        }
+        crap::CrapRefreshPlan::Refresh { manifest: None } => {
+            Ok(StepResult::ok("coverage-refresh-crap").detail(format!(
+                "{} already current — no CRAP-relevant drift",
+                crap::CRAP_MANIFEST_PATH
+            )))
+        }
+        crap::CrapRefreshPlan::Refuse {
+            candidate,
+            regressions,
+        } => {
+            if let Some(parent) = std::path::Path::new(crap::CRAP_CANDIDATE_PATH).parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            std::fs::write(crap::CRAP_CANDIDATE_PATH, &candidate)
+                .with_context(|| format!("writing {}", crap::CRAP_CANDIDATE_PATH))?;
+            Ok(
+                StepResult::fail("coverage-refresh-crap")
+                    .detail(crap::refusal_report(&regressions)),
+            )
+        }
+    }
+}
+
 /// Classify the current coverage against the **anchor-commit** baseline and compute
 /// text-identity re-anchor safety — the shared core of the gate verdict and the
 /// `coverage reanchor` command. Loading the baseline at the anchor (not the working
@@ -232,7 +285,7 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
 
     let (baseline, verdict, safety) = classify_against_anchor(&current)?;
 
-    let old_crap_manifest = std::fs::read_to_string(CRAP_MANIFEST_PATH).unwrap_or_default();
+    let old_crap_manifest = std::fs::read_to_string(crap::CRAP_MANIFEST_PATH).unwrap_or_default();
     let crap_regs = if old_crap_manifest.trim().is_empty() {
         Vec::new()
     } else {
@@ -253,11 +306,14 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
         // full pretty manifest (WITH line, the labelled hint) only when a
         // CRAP-relevant field actually changed. Writing pretty keeps coverage
         // diffs human-readable (a one-line blob makes them unreadable).
-        let new_canon = normalize_crap_without_line(&crap_report_str)?;
-        let old_canon = normalize_crap_without_line(&old_crap_manifest).unwrap_or_default();
+        let new_canon = crap::normalize_without_line(&crap_report_str)?;
+        let old_canon = crap::normalize_without_line(&old_crap_manifest).unwrap_or_default();
         if new_canon != old_canon {
-            std::fs::write(CRAP_MANIFEST_PATH, pretty_json(&crap_report_str)?)
-                .with_context(|| format!("writing {CRAP_MANIFEST_PATH}"))?;
+            std::fs::write(
+                crap::CRAP_MANIFEST_PATH,
+                crap::pretty_manifest(&crap_report_str)?,
+            )
+            .with_context(|| format!("writing {}", crap::CRAP_MANIFEST_PATH))?;
             healed = true;
         }
     }
@@ -343,49 +399,12 @@ fn failure_report(lowering: &[reanchor::LineText], crap_regs: &[CrapRegression])
     }
     if !crap_regs.is_empty() {
         s.push_str(
-            "\n  → CRAP: reduce the function's complexity or improve its coverage;\
-             \n    refresh crap-manifest.json (with approval) only if it is stale drift.",
+            "\n  → CRAP: reduce the function's complexity or improve its coverage; if this\
+             \n    is approved drift (stale, not a real regression), refresh for review:\
+             \n    run:  cargo xtask coverage refresh-crap",
         );
     }
     s
-}
-
-/// Canonical, line- and order-independent form of a CRAP report: each entry
-/// minus its `line`, with key-sorted JSON (serde_json `Value` is a `BTreeMap`),
-/// and the entry set itself sorted. Two reports that differ only in line
-/// attribution (a pure shift) normalize equal, so the Fix-mode heal does not
-/// rewrite `crap-manifest.json` unless some non-`line` field changed — i.e. the
-/// `crap` score or its `coverage`/`cyclomatic` inputs, or the set of functions
-/// (#7). The `line` field is retained in the written manifest as a
-/// non-authoritative jump-to hint that refreshes wholesale on the next such
-/// change.
-fn normalize_crap_without_line(s: &str) -> Result<String> {
-    let v: serde_json::Value = serde_json::from_str(s)?;
-    let mut rows: Vec<String> = v
-        .get("entries")
-        .and_then(|e| e.as_array())
-        .map(|arr| {
-            arr.iter()
-                .map(|e| {
-                    let mut e = e.clone();
-                    if let Some(o) = e.as_object_mut() {
-                        o.remove("line");
-                    }
-                    e.to_string()
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    rows.sort();
-    Ok(rows.join("\n"))
-}
-
-/// Canonical (key-sorted, via `serde_json::Value`'s `BTreeMap`) but
-/// pretty-printed with a trailing newline — the on-disk form of the committed
-/// manifest, so coverage diffs stay readable.
-fn pretty_json(s: &str) -> Result<String> {
-    let v: serde_json::Value = serde_json::from_str(s)?;
-    Ok(format!("{}\n", serde_json::to_string_pretty(&v)?))
 }
 
 fn git_repo_root() -> Result<String> {
@@ -702,37 +721,6 @@ mod tests {
     }
 
     #[test]
-    fn crap_normalize_ignores_line_and_formatting() {
-        // Same scores, different line attribution + key order + whitespace →
-        // equal canonical form, so the heal does not rewrite the manifest (#7).
-        let a = r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
-        let b = r#"{ "entries": [ {"crap":2.0,"function":"f","file":"a.rs","crate":"c","line":888} ] }"#;
-        assert_eq!(
-            normalize_crap_without_line(a).unwrap(),
-            normalize_crap_without_line(b).unwrap(),
-            "line + key order + whitespace must not affect the canonical form"
-        );
-    }
-
-    #[test]
-    fn crap_normalize_detects_a_score_change() {
-        let a = r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
-        let c = r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":9.0}]}"#;
-        assert_ne!(
-            normalize_crap_without_line(a).unwrap(),
-            normalize_crap_without_line(c).unwrap(),
-            "a real CRAP change must change the canonical form"
-        );
-    }
-
-    #[test]
-    fn crap_pretty_json_is_multiline() {
-        let compact =
-            r#"{"entries":[{"crate":"c","file":"a.rs","function":"f","line":1,"crap":2.0}]}"#;
-        assert!(pretty_json(compact).unwrap().contains('\n'));
-    }
-
-    #[test]
     fn failure_report_lists_lines_crap_and_recovery() {
         let lowering = vec![reanchor::LineText {
             file: "a.rs".into(),
@@ -755,6 +743,10 @@ mod tests {
             "recovery command: {r}"
         );
         assert!(r.contains("CRAP: reduce"), "crap guidance: {r}");
+        assert!(
+            r.contains("cargo xtask coverage refresh-crap"),
+            "crap recovery command: {r}"
+        );
     }
 
     #[test]
@@ -776,6 +768,23 @@ mod tests {
             "reanchor is baseline-only — not for CRAP: {r}"
         );
         assert!(r.contains("CRAP: reduce"), "{r}");
+        // A lowering-only failure must NOT suggest refresh-crap (CRAP-only tool).
+        let lowering_only = failure_report(
+            &[reanchor::LineText {
+                file: "a.rs".into(),
+                line: 5,
+                text: "x".into(),
+            }],
+            &[],
+        );
+        assert!(
+            !lowering_only.contains("refresh-crap"),
+            "refresh-crap is CRAP-only — not for a lowering: {lowering_only}"
+        );
+        assert!(
+            lowering_only.contains("cargo xtask coverage reanchor"),
+            "{lowering_only}"
+        );
     }
 
     #[test]
