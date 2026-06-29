@@ -72,6 +72,10 @@ git config core.hooksPath .githooks
 - Address all `clippy` lints **by fixing the code**, not by silencing them. Adding a lint suppression — `#[allow(...)]` or `#[expect(...)]`, whether a `clippy::` lint or a rustc lint — requires **explicit user approval** before it lands; do not introduce one to make the gate pass on your own initiative (this is the actionable form of the "never suppress … linting without explicit approval" rule under Testing).
 - Unless explicitly instructed otherwise, request review before committing.
 
+### Adding an ADR
+
+ADRs are `docs/adr/NNNN-slug.md` with a sequential number, indexed in the table in `docs/README.md`. The `identifier-collisions` step of `cargo xtask check`/`validate` fails if two ADRs — or two migrations, per backend — share a number, or if the sqlite/postgres migration sets diverge. Because two differently-named files (`0099-foo.md` / `0099-bar.md`) merge with no git conflict, this check is what makes a concurrent-branch collision **loud** instead of silent (ADR-0036). If another branch took "your" number, the check goes red after you rebase onto `main`; run `cargo xtask adr renumber` to bump your new ADR to the next free number and rewrite its references automatically (the ADR already on `origin/main` keeps its number). Migrations use the same sequential convention and detection check but are renumbered by hand on the rare occasion it is needed.
+
 ## Testing
 
 There are several testing layers in this repository. Use the smallest one that matches the change first, then move up to the broader checks before pushing.  Never remove functionality to pass tests, and never bypass or suppress testing, coverage, or linting without explicit approval.
@@ -80,7 +84,7 @@ Every HTTP endpoint must have both an integration test and an end-to-end test.  
 
 For tests requiring a database, use `sqlite::memory:` and run migrations with `sqlx::migrate!("./migrations").run(&pool).await?` before creating the `AppState`.
 
-**Tests that spawn `git` must scrub the repo-redirecting `GIT_*` env.** When git runs a hook it exports `GIT_DIR`/`GIT_INDEX_FILE` (and `GIT_WORK_TREE`/`GIT_OBJECT_DIRECTORY`/`GIT_COMMON_DIR`/`GIT_NAMESPACE`), and those **override `-C <dir>`**. So a test that builds a throwaway repo with `git -C <tmpdir> …` will, when run inside the pre-commit/pre-push hooks (which invoke `cargo xtask check`/`validate`, whose host tests then run that code), be redirected at the **real** repository — corrupting HEAD, the index, and the shared worktree config. Build every git command for such a test (and any production helper it calls) through a constructor that `env_remove`s those vars — see `git_at()` in `xtask/src/lib.rs`. Read-only production queries (`rev-parse`/`log`/`diff`/`ls-files`) are safe unscrubbed since they don't mutate.
+**Tests that spawn `git` must scrub the repo-redirecting `GIT_*` env.** When git runs a hook it exports `GIT_DIR`/`GIT_INDEX_FILE` (and `GIT_WORK_TREE`/`GIT_OBJECT_DIRECTORY`/`GIT_COMMON_DIR`/`GIT_NAMESPACE`), and those **override `-C <dir>`**. So a test that builds a throwaway repo with `git -C <tmpdir> …` will, when run inside the pre-commit/pre-push hooks (which invoke `cargo xtask check`/`validate`, whose host tests then run that code), be redirected at the **real** repository — corrupting HEAD, the index, and the shared worktree config. Build every git command for such a test (and any production helper it calls) through a constructor that `env_remove`s those vars — see `git::at()` in `xtask/src/git.rs`. Read-only production queries (`rev-parse`/`log`/`diff`/`ls-files`) are safe unscrubbed since they don't mutate.
 
 ### Local checks: `cargo xtask`
 

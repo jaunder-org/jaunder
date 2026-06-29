@@ -1,12 +1,35 @@
 //! Git helpers for the verify gate: working-tree cleanliness (the `validate`
 //! backstop) and self-healing `core.hooksPath` installation.
 
+use std::path::Path;
+use std::process::Command;
+
 use anyhow::{Context, Result};
 use xshell::{cmd, Shell};
 
 /// Repo-relative hooks directory the gate routes git to. Relative (not absolute)
 /// so each worktree resolves to its own `.githooks` checkout.
 pub const HOOKS_PATH: &str = ".githooks";
+
+/// A `git -C <dir>` command scrubbed of the ambient env vars that redirect git at
+/// a different repository. A git hook (e.g. `.githooks/pre-push`) exports
+/// `GIT_DIR`/`GIT_INDEX_FILE`; those would make `git -C <dir>` operate on the
+/// hook's repo instead of `dir`. Clearing them pins the target to `-C <dir>`.
+pub fn at(dir: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(dir);
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd
+}
 
 /// True when `git status --porcelain` output denotes a dirty tree. Porcelain lists
 /// staged + unstaged tracked changes AND untracked non-gitignored files (`??`), and
