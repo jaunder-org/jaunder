@@ -10,7 +10,7 @@
 
 (require 'jaunder)
 (require 'json)
-(require 'url)
+(require 'plz)
 (require 'auth-source)
 (require 'subr-x)
 
@@ -60,10 +60,28 @@ token) and surfaced only on a non-zero exit."
       (error "jaunder-test: timed out waiting for %s" what)))
 
 (defun jaunder-test--http-reachable-p (url)
-  "Return non-nil if a GET of URL yields any HTTP response."
-  (ignore-errors
-    (let ((buf (url-retrieve-synchronously url t t 5)))
-      (when buf (kill-buffer buf) t))))
+  "Return non-nil if a GET of URL yields any HTTP response (any status)."
+  (condition-case nil
+      (progn (plz 'get url :as 'response :connect-timeout 5) t)
+    ;; An HTTP error status still means the server answered = reachable.
+    (plz-http-error t)
+    ;; A curl/connection error means it is not up yet.
+    (error nil)))
+
+(defun jaunder-test--authed-200-p (url user password)
+  "Return non-nil if an authenticated GET of URL returns HTTP 200.
+Uses `plz' (curl) — the same transport as `jaunder--http-request' — so the
+readiness gate never rides `url.el', whose load-bearing auth-header handling
+is exactly what this suite exists to avoid (ADR-0038)."
+  (condition-case nil
+      (eq 200 (plz-response-status
+               (plz 'get url
+                    :headers (list (jaunder--basic-auth-header user password))
+                    :as 'response
+                    :connect-timeout 5)))
+    ;; A non-200 status (plz signals on 4xx/5xx) or a connection error both
+    ;; mean "not ready yet" — the caller retries.
+    (error nil)))
 
 (defmacro jaunder-test--with-live-server (&rest body)
   "Boot a jaunder server in a tempdir, provision creds, then run BODY.
@@ -106,6 +124,17 @@ Bound in BODY: `jaunder-base-url', `jaunder-username',
                (jaunder-test--wait
                 (lambda () (jaunder-test--http-reachable-p (concat jaunder-base-url "/")))
                 "server readiness")
+               ;; Auth readiness: an unauthed GET / can succeed before the
+               ;; just-provisioned session is reliably usable by the serving
+               ;; connection, so the first authed request can race to a 401.
+               ;; Wait until an authed request actually returns 200.
+               (jaunder-test--wait
+                (lambda ()
+                  (jaunder-test--authed-200-p
+                   (jaunder--build-url jaunder-base-url "atompub"
+                                       jaunder-username "posts")
+                   jaunder-username jaunder-test-app-password))
+                "auth readiness")
                (with-temp-file authinfo
                  (insert (format "machine %s login %s password %s\n"
                                  (car addr) jaunder-username jaunder-test-app-password)))

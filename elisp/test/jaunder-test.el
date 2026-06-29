@@ -51,4 +51,31 @@
                             :host)
                  "blog.example.com")))
 
+(ert-deftest jaunder-plz-response->plist-maps-status-headers-body ()
+  (let ((r (jaunder--plz-response->plist
+            (make-plz-response
+             :status 200
+             :headers '((content-type . "application/atom+xml")
+                        (etag . "\"v1\"")
+                        (location . "/atompub/alice/posts/42"))
+             :body "<feed/>"))))
+    (should (eq (plist-get r :status) 200))
+    (should (equal (jaunder--response-header r "ETag") "\"v1\""))
+    (should (equal (jaunder--response-header r "content-type") "application/atom+xml"))
+    (should (equal (jaunder--response-header r "location") "/atompub/alice/posts/42"))
+    (should (equal (plist-get r :body) "<feed/>"))))
+
+(ert-deftest jaunder-plz-response->plist-nil-body-is-empty-string ()
+  (let ((r (jaunder--plz-response->plist
+            (make-plz-response :status 201 :headers nil :body nil))))
+    (should (eq (plist-get r :status) 201))
+    (should (equal (plist-get r :body) ""))))
+
+(ert-deftest jaunder-response-header-is-case-insensitive-and-missing-nil ()
+  (let ((r (jaunder--plz-response->plist
+            (make-plz-response :status 200 :headers '((x-a . "1")) :body ""))))
+    (should (equal (jaunder--response-header r "x-a") "1"))
+    (should (equal (jaunder--response-header r "X-A") "1"))
+    (should (null (jaunder--response-header r "x-missing")))))
+
 ;;; jaunder-test.el ends here
