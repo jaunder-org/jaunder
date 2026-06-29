@@ -23,9 +23,11 @@
 ### Task 1: Identity fixtures — `user`, `mailbox`, `verifiedUser`
 
 **Files:**
+
 - Modify: `end2end/tests/fixtures.ts` (add imports, types, and three fixtures to the existing `base.extend<...>` call at lines ~190-741; re-export unchanged)
 
 **Interfaces:**
+
 - Consumes: `register(page, firstNavTimeoutMs): Promise<string>`, `login(page, username, password, firstNavTimeoutMs?)`, `goto(page, path, opts?)` from `./helpers`; `readEmailLines(): string[]`, `CapturedEmail { to: string[]; from: string|null; subject: string; body_text: string }` from `./mail`; `hydrationHeavyFirstNavigationTimeoutMs(testInfo, ms)` (already defined in this file).
 - Produces:
   - `type TestUser = { username: string; password: string; email: string }`
@@ -34,7 +36,7 @@
 
 **Why out-of-band:** `register()` auto-logs-in the page it runs on. Tests that exercise the **login form** or **password reset** need an account they are **not** currently logged into, so `user`/`verifiedUser` provision the account in a throwaway `browser` context and leave the test's own `page` untouched (logged out).
 
-- [ ] **Step 1: Add the helper imports**
+- [x] **Step 1: Add the helper imports**
 
 At the top of `fixtures.ts`, the existing import block pulls `expect`, `test as base`, and types from `@playwright/test`. Add two import lines after the `./otel` import (around line 23):
 
@@ -45,7 +47,7 @@ import { readEmailLines, type CapturedEmail } from "./mail";
 
 (No circular import: `helpers.ts` imports only `./actions` + `./hydration`; `mail.ts` imports only `fs`. Neither imports `./fixtures`.)
 
-- [ ] **Step 2: Add the exported types**
+- [x] **Step 2: Add the exported types**
 
 Just above the `const test = base.extend<...>` declaration (around line 190), add:
 
@@ -63,7 +65,7 @@ export type Mailbox = {
 };
 ```
 
-- [ ] **Step 3: Widen the `base.extend` generic and add the three fixtures**
+- [x] **Step 3: Widen the `base.extend` generic and add the three fixtures**
 
 Change the generic on the existing extend call from `base.extend<{ _autoPerfSpan: void }>(` to:
 
@@ -151,18 +153,17 @@ Then, **inside** the `extend({ ... })` object literal (alongside `_autoPerfSpan`
 
 (The trailing re-export `export { expect, test };` at the end of the file stays unchanged.)
 
-- [ ] **Step 4: Format and typecheck**
+- [x] **Step 4: Format and typecheck**
 
-Run (from the worktree root):
+> **Gate note (decided during execution):** `tsc --noEmit` is **not** the project gate — nothing in CI/the commit hook runs a type-checker, and HEAD already has 14 latent `tsc` errors in pre-existing `_autoPerfSpan` code. The real gate is **prettier** (enforced by the commit hook). Per-task gate going forward is **prettier only**; the tsc gap is filed as **#169**. My fixtures add **zero** new tsc errors (14 → 14).
 
 ```bash
 prettier -w end2end/tests/fixtures.ts
-( cd end2end && npm ci && npx tsc --noEmit )
 ```
 
 Expected: prettier rewrites cleanly; `tsc --noEmit` exits 0 (no type errors). `npm ci` is a one-time install of the `end2end` dev deps (Playwright + typescript); it is needed for `tsc` and is cached for later tasks.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add end2end/tests/fixtures.ts
@@ -176,14 +177,16 @@ git commit -m "test(e2e): add per-test identity fixtures (user/mailbox/verifiedU
 ### Task 2: Migrate `email.spec.ts` to `user` + `mailbox`
 
 **Files:**
+
 - Modify: `end2end/tests/email.spec.ts:6-40` (the "email verification flow completes successfully" test)
 
 **Interfaces:**
+
 - Consumes: `user`, `mailbox` fixtures (Task 1).
 
 The second test ("invalid token shows error", lines 42-49) needs **no change** — it touches no account or mail.
 
-- [ ] **Step 1: Rewrite the verification-flow test to self-provision its user**
+- [x] **Step 1: Rewrite the verification-flow test to self-provision its user**
 
 Replace lines 1-40 (imports + first test) with:
 
@@ -228,7 +231,7 @@ test("email verification flow completes successfully", async ({
 
 Note: the old `import { readEmailLines, waitForNewEmail } from "./mail";` line is dropped (the mailbox fixture replaces it). The `login`/`goto` import stays; `readEmailLines`/`waitForNewEmail` are no longer referenced in this file.
 
-- [ ] **Step 2: Format and typecheck**
+- [x] **Step 2: Format and typecheck**
 
 ```bash
 prettier -w end2end/tests/email.spec.ts
@@ -237,7 +240,7 @@ prettier -w end2end/tests/email.spec.ts
 
 Expected: clean; exit 0.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add end2end/tests/email.spec.ts
@@ -249,14 +252,16 @@ git commit -m "test(e2e): self-provision the email-verification user via fixture
 ### Task 3: Migrate `password_reset.spec.ts` to `verifiedUser`/`user` + `mailbox`
 
 **Files:**
+
 - Modify: `end2end/tests/password_reset.spec.ts` (tests at lines 6-56 and 71-81)
 
 **Interfaces:**
+
 - Consumes: `verifiedUser`, `user`, `mailbox` fixtures (Task 1).
 
 The "invalid token" test (lines 58-68) needs **no change**.
 
-- [ ] **Step 1: Rewrite the imports**
+- [x] **Step 1: Rewrite the imports**
 
 Replace line 3 (`import { readEmailLines, waitForNewEmail } from "./mail";`) — delete it. Keep line 1-2:
 
@@ -265,7 +270,7 @@ import { test, expect, hydrationHeavyTimeoutMs } from "./fixtures";
 import { goto, click, waitForSelector, waitForHydration } from "./helpers";
 ```
 
-- [ ] **Step 2: Rewrite the "password reset flow completes successfully" test**
+- [x] **Step 2: Rewrite the "password reset flow completes successfully" test**
 
 Replace lines 6-56 with a version that uses a self-provisioned verified user and reads its own reset mail. The old password is `verifiedUser.password` (`"testpassword123"`); the new password stays `"resetpassword789"`:
 
@@ -321,7 +326,7 @@ test("password reset flow completes successfully", async ({
 });
 ```
 
-- [ ] **Step 3: Rewrite the "no verified email" test to use a fresh unverified `user`**
+- [x] **Step 3: Rewrite the "no verified email" test to use a fresh unverified `user`**
 
 Replace lines 71-81 (the `testnoemail` test). A freshly-registered `user` has no verified email by definition, so it exercises the same "contact operator" path:
 
@@ -342,7 +347,7 @@ test("forgot-password for user without verified email shows contact operator err
 });
 ```
 
-- [ ] **Step 4: Format and typecheck**
+- [x] **Step 4: Format and typecheck**
 
 ```bash
 prettier -w end2end/tests/password_reset.spec.ts
@@ -351,7 +356,7 @@ prettier -w end2end/tests/password_reset.spec.ts
 
 Expected: clean; exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add end2end/tests/password_reset.spec.ts
@@ -363,14 +368,16 @@ git commit -m "test(e2e): self-provision password-reset users via fixtures (#61)
 ### Task 4: Migrate `auth.spec.ts` seeded-account usages to `user`
 
 **Files:**
+
 - Modify: `end2end/tests/auth.spec.ts` (tests at lines 49-71, 85-99, 101-117)
 
 **Interfaces:**
+
 - Consumes: `user` fixture (Task 1), `login` from `./helpers`.
 
 Three tests reference `testlogin`. The other tests (register-form, wrong-password, signed-out sidebar, `register()`-based footer) are already unique-per-test and need **no change**.
 
-- [ ] **Step 1: Rewrite "login with valid credentials succeeds" (lines 49-71)**
+- [x] **Step 1: Rewrite "login with valid credentials succeeds" (lines 49-71)**
 
 This test exercises the **login form**, so it needs a registered-but-logged-out account — exactly `user`. Replace lines 49-71 with:
 
@@ -403,7 +410,7 @@ test("login with valid credentials succeeds", async ({
 });
 ```
 
-- [ ] **Step 2: Rewrite "logout page logs out" (lines 85-99)**
+- [x] **Step 2: Rewrite "logout page logs out" (lines 85-99)**
 
 Replace lines 85-99 with a version that logs in as `user` then logs out:
 
@@ -425,7 +432,7 @@ test("logout page logs out", async ({ page, user }, testInfo) => {
 });
 ```
 
-- [ ] **Step 3: Rewrite "sidebar reverts to signed-out state after logout" (lines 101-117)**
+- [x] **Step 3: Rewrite "sidebar reverts to signed-out state after logout" (lines 101-117)**
 
 Replace lines 101-117 with:
 
@@ -451,7 +458,7 @@ test("sidebar reverts to signed-out state after logout", async ({
 });
 ```
 
-- [ ] **Step 4: Format and typecheck**
+- [x] **Step 4: Format and typecheck**
 
 ```bash
 prettier -w end2end/tests/auth.spec.ts
@@ -460,7 +467,7 @@ prettier -w end2end/tests/auth.spec.ts
 
 Expected: clean; exit 0. (`login`, `BASE_URL`, `createPerfProbe` are already imported in this file.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add end2end/tests/auth.spec.ts
@@ -472,63 +479,65 @@ git commit -m "test(e2e): replace seeded testlogin with per-test user in auth sp
 ### Task 5: Own-scope the `posts.spec.ts` guest local-timeline assertion
 
 **Files:**
+
 - Modify: `end2end/tests/posts.spec.ts:349-397` (the "home page shows local timeline for unauthenticated users" test)
 
 **Interfaces:**
+
 - Consumes: existing `register`, `createPublishedPostViaApi`, `perf` helpers in this file.
 
 **Why only this one test:** every other `posts.spec` test already mints a unique user via `register()` and asserts against its own posts (the authenticated home-feed test at lines 399-448 is already own-scoped — the feed shows only the user's own posts). Only the **guest/anonymous local timeline** reads the global feed and asserts an exact `toHaveCount(TIMELINE_PAGE_SIZE)`, which a concurrent publisher can perturb. The `.j-topbar h1 === "jaunder.local"` title assertions (here and `example.spec.ts:9`) stay valid because `admin-site` — the only title mutator — runs in the serial project (Task 6) and never overlaps.
 
-- [ ] **Step 1: Replace the exact-count assertions with own-scoped / lower-bound checks**
+- [x] **Step 1: Replace the exact-count assertions with own-scoped / lower-bound checks**
 
 In the test at lines 349-397, replace the assertion block (current lines 380-391):
 
 ```ts
-  await expect(guestPage.locator(".j-topbar h1")).toHaveText("jaunder.local");
-  await expect(guestPage.locator("article.j-post")).toHaveCount(
-    TIMELINE_PAGE_SIZE,
-  );
+await expect(guestPage.locator(".j-topbar h1")).toHaveText("jaunder.local");
+await expect(guestPage.locator("article.j-post")).toHaveCount(
+  TIMELINE_PAGE_SIZE,
+);
 
-  await click(guestPage, 'button:has-text("Load more")');
-  perf.mark("load_more_clicked");
-  await expect
-    .poll(async () => guestPage.locator("article.j-post").count(), {
-      timeout: 10_000,
-    })
-    .toBeGreaterThan(TIMELINE_PAGE_SIZE);
+await click(guestPage, 'button:has-text("Load more")');
+perf.mark("load_more_clicked");
+await expect
+  .poll(async () => guestPage.locator("article.j-post").count(), {
+    timeout: 10_000,
+  })
+  .toBeGreaterThan(TIMELINE_PAGE_SIZE);
 ```
 
 with:
 
 ```ts
-  // Site title is still the seeded value: admin-site (the only mutator) runs in
-  // the serial Playwright project and never overlaps this test.
-  await expect(guestPage.locator(".j-topbar h1")).toHaveText("jaunder.local");
+// Site title is still the seeded value: admin-site (the only mutator) runs in
+// the serial Playwright project and never overlaps this test.
+await expect(guestPage.locator(".j-topbar h1")).toHaveText("jaunder.local");
 
-  // Own-scoped: with workers>1 other tests publish into the same global local
-  // timeline, so assert a full first page exists rather than an exact count.
-  // This test alone seeds 2 * LOCAL_TIMELINE_AUTHOR_COUNT (52) posts, so a full
-  // page is guaranteed regardless of concurrent publishers.
-  await expect
-    .poll(async () => guestPage.locator("article.j-post").count(), {
-      timeout: 10_000,
-    })
-    .toBeGreaterThanOrEqual(TIMELINE_PAGE_SIZE);
-  const firstPageCount = await guestPage.locator("article.j-post").count();
+// Own-scoped: with workers>1 other tests publish into the same global local
+// timeline, so assert a full first page exists rather than an exact count.
+// This test alone seeds 2 * LOCAL_TIMELINE_AUTHOR_COUNT (52) posts, so a full
+// page is guaranteed regardless of concurrent publishers.
+await expect
+  .poll(async () => guestPage.locator("article.j-post").count(), {
+    timeout: 10_000,
+  })
+  .toBeGreaterThanOrEqual(TIMELINE_PAGE_SIZE);
+const firstPageCount = await guestPage.locator("article.j-post").count();
 
-  // Pagination works: "Load more" grows the rendered set.
-  await click(guestPage, 'button:has-text("Load more")');
-  perf.mark("load_more_clicked");
-  await expect
-    .poll(async () => guestPage.locator("article.j-post").count(), {
-      timeout: 10_000,
-    })
-    .toBeGreaterThan(firstPageCount);
+// Pagination works: "Load more" grows the rendered set.
+await click(guestPage, 'button:has-text("Load more")');
+perf.mark("load_more_clicked");
+await expect
+  .poll(async () => guestPage.locator("article.j-post").count(), {
+    timeout: 10_000,
+  })
+  .toBeGreaterThan(firstPageCount);
 ```
 
 (The exact `toHaveCount(TIMELINE_PAGE_SIZE)` becomes `toBeGreaterThanOrEqual` per the spec; the load-more check now compares against the actual first-page count instead of the constant, so it stays correct even if the server returns a partial first page under load.)
 
-- [ ] **Step 2: Format and typecheck**
+- [x] **Step 2: Format and typecheck**
 
 ```bash
 prettier -w end2end/tests/posts.spec.ts
@@ -537,7 +546,7 @@ prettier -w end2end/tests/posts.spec.ts
 
 Expected: clean; exit 0.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add end2end/tests/posts.spec.ts
@@ -549,16 +558,18 @@ git commit -m "test(e2e): own-scope the guest local-timeline assertion for paral
 ### Task 6: Gate config — parallel + serial projects, VM capacity
 
 **Files:**
+
 - Modify: `flake.nix:430-479` (`nixPlaywrightConfig`: comment, `workers`, `projects`)
 - Modify: `flake.nix:586` (`e2eRunAndCapture`: add the serial project to the Playwright invocation)
 - Modify: `flake.nix:649` (`mkE2eSqliteCheck` `virtualisation` block: add cores, raise memory)
 - Modify: `flake.nix:739` (`mkE2ePostgresCheck` `virtualisation` block: add cores, raise memory)
 
 **Interfaces:**
+
 - Consumes: `admin-site.spec.ts` (routed by `testMatch`/`testIgnore`, no spec edit).
 - Produces: per-browser project pair `${browser}` (parallel) + `${browser}-serial` (admin-site only).
 
-- [ ] **Step 1: Rewrite the `nixPlaywrightConfig` comment + `workers` + `projects`**
+- [x] **Step 1: Rewrite the `nixPlaywrightConfig` comment + `workers` + `projects`**
 
 Replace the block from line 453 (`// Run spec files sequentially...`) through the end of the `projects: [...]` array (line 477) with:
 
@@ -625,7 +636,7 @@ Replace the block from line 453 (`// Run spec files sequentially...`) through th
 
 (`workers: 4` is global; `fullyParallel` is set per-project — `true` on the parallel projects, `false` on the serial ones so `admin-site`'s two tests run sequentially within their single file.)
 
-- [ ] **Step 2: Pass both the parallel and serial project to the VM Playwright run**
+- [x] **Step 2: Pass both the parallel and serial project to the VM Playwright run**
 
 In `e2eRunAndCapture` (line 586), change:
 
@@ -641,7 +652,7 @@ to:
 
 (With both selected, Playwright runs the parallel `${browser}` project across 4 workers, then — because `${browser}-serial` `dependencies` on `${browser}` — runs `admin-site` in a non-overlapping serial phase.)
 
-- [ ] **Step 3: Raise SQLite-VM capacity**
+- [x] **Step 3: Raise SQLite-VM capacity**
 
 In `mkE2eSqliteCheck` (line 649), replace:
 
@@ -658,7 +669,7 @@ with:
                 virtualisation.memorySize = 4096;
 ```
 
-- [ ] **Step 4: Raise Postgres-VM capacity**
+- [x] **Step 4: Raise Postgres-VM capacity**
 
 In `mkE2ePostgresCheck` (line 739), make the identical replacement:
 
@@ -669,7 +680,7 @@ In `mkE2ePostgresCheck` (line 739), make the identical replacement:
                 virtualisation.memorySize = 4096;
 ```
 
-- [ ] **Step 5: Validate the flake evaluates**
+- [x] **Step 5: Validate the flake evaluates**
 
 ```bash
 nix flake check --no-build 2>&1 | tail -n 20 || true
@@ -678,7 +689,7 @@ nix eval --raw .#checks.x86_64-linux.e2e-sqlite-chromium.drvPath
 
 Expected: the flake parses (no Nix syntax/eval errors); the `nix eval` prints a `/nix/store/...drv` path (the changed config + VM settings produce a valid derivation). A non-empty drvPath confirms evaluation succeeded.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add flake.nix
@@ -690,12 +701,13 @@ git commit -m "ci(e2e): run Playwright with workers=4 + serial admin-site projec
 ### Task 7: ADR 0038 + docs/README.md row
 
 **Files:**
+
 - Create: `docs/adr/0038-e2e-parallelism-via-per-test-identity-fixtures.md`
 - Modify: `docs/README.md` (append a row to the ADR table)
 
 **Interfaces:** none (documentation).
 
-- [ ] **Step 1: Write the ADR**
+- [x] **Step 1: Write the ADR**
 
 Create `docs/adr/0038-e2e-parallelism-via-per-test-identity-fixtures.md` with:
 
@@ -744,14 +756,14 @@ VM capacity is raised to 4 cores / 4 GB so the 4 workers each get a vCPU.
 - New specs follow the fixture-first pattern; a spec is added to the parallel
   project by default. Quarantine in a `-serial` project is reserved for genuine
   global-singleton mutation.
-- Reaching *full* isolation later means only de-globalizing `admin-site` (moving
+- Reaching _full_ isolation later means only de-globalizing `admin-site` (moving
   the title/base_url assertions out of `example`/`posts`, or restore-after) —
   every other spec is already isolated.
 - The local `end2end/playwright.config.ts` is intentionally left diverging;
   deduping the two configs is #153.
 ```
 
-- [ ] **Step 2: Add the ADR table row in `docs/README.md`**
+- [x] **Step 2: Add the ADR table row in `docs/README.md`**
 
 Read the ADR table (rows for 0000–0037) and append, immediately after the `0037` row, following the exact column format of the existing rows:
 
@@ -761,7 +773,7 @@ Read the ADR table (rows for 0000–0037) and append, immediately after the `003
 
 (Match the surrounding rows' column count and link style exactly — read an adjacent row first and mirror it.)
 
-- [ ] **Step 3: Format and commit**
+- [x] **Step 3: Format and commit**
 
 ```bash
 prettier -w docs/README.md docs/adr/0038-e2e-parallelism-via-per-test-identity-fixtures.md
@@ -779,7 +791,7 @@ git commit -m "docs(adr): record e2e parallelism via per-test identity fixtures 
 
 - [ ] **Step 1: Postgres-first single-combo run (logical isolation, no lock concerns)**
 
-Postgres is immune to SQLite write contention, so it isolates *logical* races. Run the chromium Postgres combo first:
+Postgres is immune to SQLite write contention, so it isolates _logical_ races. Run the chromium Postgres combo first:
 
 ```bash
 cargo xtask validate 2>&1 | tail -n 40
@@ -832,6 +844,7 @@ Summarize for the ship hand-off: Postgres-first result, SQLite result, the 3× r
 ## Self-Review
 
 **Spec coverage:**
+
 - Spec §1 (fixture foundation: `user`/`mailbox` recipient-scoped/`verifiedUser`) → **Task 1**. ✓ (mailbox is FIFO per-recipient via cursor; `user`/`verifiedUser` out-of-band to keep the test page logged out — a refinement the spec implies via "self-provision".)
 - Spec §2 migrations: atompub/feeds/media/visibility/static-assets/unicode-slug/example → **no task needed** (already import from `./fixtures` and use `register()`; the spec's import-swap premise was stale). auth → **Task 4**; email → **Task 2**; password_reset → **Task 3**; posts own-scoping → **Task 5**. ✓
 - Spec §3 (serial admin-site project, per-browser, `dependencies`, VM passes both projects) → **Task 6** steps 1-2. ✓ (admin-site keeps seeded `testoperator` — operator privilege can't be self-served; quarantine is by config.)
@@ -846,6 +859,7 @@ Summarize for the ship hand-off: Postgres-first result, SQLite result, the 3× r
 **Type consistency:** `TestUser`/`Mailbox` defined in Task 1 are the exact types destructured in Tasks 2-5 (`user`, `mailbox`, `verifiedUser`). `user.password === "testpassword123"` matches `register()`'s hardcoded password. `mailbox.waitForNewEmail()` signature matches every call site. Project names `${browser}` / `${browser}-serial` in Task 6 step 2 match the `name:` fields in step 1.
 
 **Deviations from spec (intentional, grounded in the actual code):**
+
 1. The 6 "already-isolated" specs + `example` need **no edits** (they already use `./fixtures` + `register()`), so the spec's import-swap tasks collapse to zero work.
 2. `admin-site` keeps its seeded `testoperator` and gets **no code change** — only config routing.
 3. `user`/`verifiedUser` provision **out-of-band** (throwaway context) so login-form and password-reset tests start logged out — necessary because `register()` auto-logs-in.
