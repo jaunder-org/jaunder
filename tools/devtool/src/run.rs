@@ -156,10 +156,42 @@ fn exec_capture(
     })
 }
 
+const REFUSED_SHELLS: &[&str] = &["bash", "sh", "zsh", "fish", "dash", "ash", "eval"];
+
+/// Refuse argv that re-opens a shell or the `nix develop` wrapper — the whole
+/// point of the runner is that there is no shell, so allowlisting
+/// `devtool run *` stays narrower than `bash *`. Everything else runs.
+/// `env VAR=x cmd` is deliberately allowed (a per-command env idiom, not a
+/// shell); `xargs` is allowed (neutered here by the `/dev/null` stdin).
+pub fn validate_argv(argv: &[String]) -> Result<(), RunError> {
+    let first = argv.first().ok_or_else(|| RunError {
+        message: "no command given after `--`".into(),
+        kind: "usage",
+    })?;
+    let base = Path::new(first)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(first);
+    if REFUSED_SHELLS.contains(&base) {
+        return Err(RunError {
+            message: format!("refusing to run a shell (`{base}`); invoke the program directly"),
+            kind: "shell_refused",
+        });
+    }
+    if base == "nix" && argv.get(1).map(String::as_str) == Some("develop") {
+        return Err(RunError {
+            message: "refusing `nix develop`; the toolchain is already on PATH via direnv".into(),
+            kind: "shell_refused",
+        });
+    }
+    Ok(())
+}
+
 /// Run `argv` in `cwd`, parking output under `.xtask/run/`, and return the result
 /// plus the process exit code the caller should exit with. No printing, no
 /// `exit` — so it is unit-testable.
 pub fn execute(argv: &[String], cwd: &Path) -> Result<(RunResult, i32), RunError> {
+    validate_argv(argv)?;
     let dir = run_dir(cwd);
     fs::create_dir_all(&dir).map_err(|e| RunError {
         message: format!("creating {}: {e}", dir.display()),
@@ -256,5 +288,45 @@ mod tests {
         assert!(!r.ok);
         assert!(r.stderr.bytes > 0);
         assert_eq!(r.stdout.bytes, 0);
+    }
+
+    #[test]
+    fn accepts_normal_programs() {
+        for ok in [
+            vec!["cargo".to_string(), "build".into()],
+            vec!["git".into(), "status".into()],
+            vec!["gh".into(), "pr".into(), "view".into()],
+            vec!["rg".into(), "foo".into()],
+            vec!["nix".into(), "build".into()],
+            vec!["emacs".into(), "--batch".into()],
+            vec!["prettier".into(), "--check".into()],
+            vec!["/usr/bin/printf".into(), "x".into()],
+        ] {
+            assert!(validate_argv(&ok).is_ok(), "{ok:?} should be accepted");
+        }
+    }
+
+    #[test]
+    fn refuses_shells_and_nix_develop() {
+        for bad in [
+            vec!["bash".to_string(), "-c".into(), "echo hi".into()],
+            vec!["sh".into()],
+            vec!["zsh".into()],
+            vec!["fish".into()],
+            vec!["dash".into()],
+            vec!["ash".into()],
+            vec!["eval".into()],
+            vec!["/bin/bash".into(), "-c".into(), "x".into()],
+            vec!["nix".into(), "develop".into(), "-c".into(), "cargo".into()],
+        ] {
+            let err = validate_argv(&bad).unwrap_err();
+            assert_eq!(err.kind, "shell_refused", "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn refuses_empty_argv() {
+        let err = validate_argv(&[]).unwrap_err();
+        assert_eq!(err.kind, "usage");
     }
 }
