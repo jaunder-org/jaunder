@@ -25,6 +25,12 @@ mod subscriptions;
 mod user_config;
 mod users;
 
+// Both-backend test harness (ADR-0033): available to `storage`'s own tests via
+// `cfg(test)` and to external test crates (`server`) via the `test-support`
+// feature.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 pub use app_state::*;
 pub use atomic::*;
 pub use audiences::*;

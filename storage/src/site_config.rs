@@ -310,33 +310,26 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::SiteConfigStorage;
-    use crate::sqlite::SqliteSiteConfigStorage;
+    use crate::test_support::{backends, Backend};
     use common::backup::{BackupConfig, BackupMode, BackupSchedule};
     use common::feed::FeedsConfig;
-    use sqlx::SqlitePool;
+    use rstest::*;
+    use rstest_reuse::*;
 
-    async fn test_pool() -> SqlitePool {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!("./migrations/sqlite")
-            .run(&pool)
-            .await
-            .unwrap();
-        pool
-    }
-
+    #[apply(backends)]
     #[tokio::test]
-    async fn get_backup_config_returns_defaults_when_unconfigured() {
-        let pool = test_pool().await;
-        let storage = SqliteSiteConfigStorage::new(pool);
+    async fn get_backup_config_returns_defaults_when_unconfigured(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         let config = storage.get_backup_config().await.unwrap();
         assert_eq!(config, BackupConfig::default());
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn set_and_get_backup_config_round_trips() {
-        let pool = test_pool().await;
-        let storage = SqliteSiteConfigStorage::new(pool);
+    async fn set_and_get_backup_config_round_trips(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         let config = BackupConfig {
             destination_path: Some("/srv/backups".to_owned()),
             schedule: BackupSchedule::parse("0 30 2 * * *").unwrap(),
@@ -347,20 +340,22 @@ mod tests {
         assert_eq!(storage.get_backup_config().await.unwrap(), config);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn get_feeds_config_returns_defaults_when_unconfigured() {
-        let pool = test_pool().await;
-        let storage = SqliteSiteConfigStorage::new(pool);
+    async fn get_feeds_config_returns_defaults_when_unconfigured(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         let config = storage.get_feeds_config().await.unwrap();
         assert_eq!(config.min_items, super::DEFAULT_FEEDS_MIN_ITEMS);
         assert_eq!(config.min_days, super::DEFAULT_FEEDS_MIN_DAYS);
         assert_eq!(config.websub_hub_url, None);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn set_and_get_feeds_config_round_trips() {
-        let pool = test_pool().await;
-        let storage = SqliteSiteConfigStorage::new(pool);
+    async fn set_and_get_feeds_config_round_trips(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         let config = FeedsConfig {
             min_items: 42,
             min_days: 7,
@@ -374,10 +369,11 @@ mod tests {
         assert!(!format!("{config:?}").is_empty());
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn get_backup_config_ignores_invalid_stored_values() {
-        let pool = test_pool().await;
-        let storage = SqliteSiteConfigStorage::new(pool);
+    async fn get_backup_config_ignores_invalid_stored_values(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         storage.set("backup.schedule", "not a cron").await.unwrap();
         storage
             .set("backup.retention_count", "daily")
@@ -388,25 +384,31 @@ mod tests {
         assert_eq!(config, BackupConfig::default());
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn feeds_min_items_returns_default_when_unset() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn feeds_min_items_returns_default_when_unset(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         assert_eq!(
             storage.get_feeds_min_items().await.unwrap(),
             super::DEFAULT_FEEDS_MIN_ITEMS
         );
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn feeds_min_items_returns_override_value() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn feeds_min_items_returns_override_value(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         storage.set(super::FEEDS_MIN_ITEMS_KEY, "50").await.unwrap();
         assert_eq!(storage.get_feeds_min_items().await.unwrap(), 50);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn feeds_min_items_falls_back_when_invalid() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn feeds_min_items_falls_back_when_invalid(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         storage
             .set(super::FEEDS_MIN_ITEMS_KEY, "not a number")
             .await
@@ -417,31 +419,39 @@ mod tests {
         );
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn feeds_min_days_returns_default_when_unset() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn feeds_min_days_returns_default_when_unset(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         assert_eq!(
             storage.get_feeds_min_days().await.unwrap(),
             super::DEFAULT_FEEDS_MIN_DAYS
         );
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn feeds_min_days_returns_override_value() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn feeds_min_days_returns_override_value(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         storage.set(super::FEEDS_MIN_DAYS_KEY, "60").await.unwrap();
         assert_eq!(storage.get_feeds_min_days().await.unwrap(), 60);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn feeds_websub_hub_url_returns_none_when_unset() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn feeds_websub_hub_url_returns_none_when_unset(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         assert!(storage.get_feeds_websub_hub_url().await.unwrap().is_none());
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn feeds_websub_hub_url_returns_some_when_set() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn feeds_websub_hub_url_returns_some_when_set(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         storage
             .set(super::FEEDS_WEBSUB_HUB_URL_KEY, "https://hub.example.com/")
             .await
@@ -452,9 +462,11 @@ mod tests {
         );
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn feeds_websub_hub_url_treats_empty_as_none() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn feeds_websub_hub_url_treats_empty_as_none(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         storage
             .set(super::FEEDS_WEBSUB_HUB_URL_KEY, "")
             .await
@@ -462,26 +474,34 @@ mod tests {
         assert!(storage.get_feeds_websub_hub_url().await.unwrap().is_none());
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn identity_returns_defaults_when_unset() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn identity_returns_defaults_when_unset(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         let identity = storage.get_identity().await.expect("get_identity");
         assert_eq!(identity.title, common::site::DEFAULT_SITE_TITLE);
         assert_eq!(identity.base_url, None);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn identity_returns_override_when_title_set() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn identity_returns_override_when_title_set(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         storage.set(super::SITE_TITLE_KEY, "My Blog").await.unwrap();
         let identity = storage.get_identity().await.expect("get_identity");
         assert_eq!(identity.title, "My Blog");
         assert_eq!(identity.base_url, None);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn identity_returns_some_base_url_when_set_with_trailing_slash_stripped() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn identity_returns_some_base_url_when_set_with_trailing_slash_stripped(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         storage
             .set(super::SITE_BASE_URL_KEY, "https://example.com/")
             .await
@@ -491,25 +511,31 @@ mod tests {
         assert_eq!(identity.base_url.as_deref(), Some("https://example.com"));
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn identity_treats_empty_title_as_unset() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn identity_treats_empty_title_as_unset(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         storage.set(super::SITE_TITLE_KEY, "   ").await.unwrap();
         let identity = storage.get_identity().await.expect("get_identity");
         assert_eq!(identity.title, common::site::DEFAULT_SITE_TITLE);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn identity_treats_empty_base_url_as_none() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn identity_treats_empty_base_url_as_none(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         storage.set(super::SITE_BASE_URL_KEY, "").await.unwrap();
         let identity = storage.get_identity().await.expect("get_identity");
         assert_eq!(identity.base_url, None);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn set_identity_round_trips_via_get_identity() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn set_identity_round_trips_via_get_identity(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         let original = common::site::SiteIdentity {
             title: "Test Site".to_string(),
             base_url: Some("https://test.example.com".to_string()),
@@ -519,27 +545,32 @@ mod tests {
         assert_eq!(retrieved, original);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn get_backup_config_treats_empty_destination_as_none() {
-        let pool = test_pool().await;
-        let storage = SqliteSiteConfigStorage::new(pool);
+    async fn get_backup_config_treats_empty_destination_as_none(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         storage.set("backup.destination_path", "").await.unwrap();
         let config = storage.get_backup_config().await.unwrap();
         assert_eq!(config.destination_path, None);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn default_audience_returns_public_when_unset() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn default_audience_returns_public_when_unset(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         assert_eq!(
             storage.get_default_audience().await.unwrap(),
             common::visibility::AudienceTarget::Public
         );
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn default_audience_returns_private_when_set() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn default_audience_returns_private_when_set(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         storage
             .set_default_audience(&common::visibility::AudienceTarget::Private)
             .await
@@ -550,9 +581,11 @@ mod tests {
         );
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn default_audience_returns_subscribers_when_set() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn default_audience_returns_subscribers_when_set(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         storage
             .set_default_audience(&common::visibility::AudienceTarget::Subscribers)
             .await
@@ -563,11 +596,13 @@ mod tests {
         );
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn set_default_audience_collapses_named_to_public() {
+    async fn set_default_audience_collapses_named_to_public(#[case] backend: Backend) {
         // A `Named` audience has no instance-wide form; the setter stores it as
         // `public` and the getter reads it back as `Public`.
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         storage
             .set_default_audience(&common::visibility::AudienceTarget::Named(7))
             .await
@@ -585,9 +620,11 @@ mod tests {
         );
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn default_audience_falls_back_to_public_when_garbage() {
-        let storage = SqliteSiteConfigStorage::new(test_pool().await);
+    async fn default_audience_falls_back_to_public_when_garbage(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
         storage
             .set(super::POSTS_DEFAULT_AUDIENCE_KEY, "named")
             .await

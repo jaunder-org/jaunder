@@ -140,120 +140,60 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sqlite::SqliteUserConfigStorage;
+    use crate::test_support::{backends, seed_user, Backend};
+    use rstest::*;
+    use rstest_reuse::*;
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn get_default_post_format_unset_returns_html() {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!("../storage/migrations/sqlite")
-            .run(&pool)
-            .await
-            .unwrap();
-
-        // Create a test user
-        sqlx::query(
-            "INSERT INTO users (username, password_hash, created_at, is_operator) VALUES (?, ?, ?, ?)",
-        )
-        .bind("testuser")
-        .bind("hash")
-        .bind(chrono::Utc::now())
-        .bind(false)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let config = SqliteUserConfigStorage::new(pool);
-        let result = get_default_post_format(&config, 1).await.unwrap();
+    async fn get_default_post_format_unset_returns_html(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let config = &*env.state.user_config;
+        let result = get_default_post_format(config, user_id).await.unwrap();
         assert_eq!(result, PostFormat::Html);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn set_and_get_default_post_format_markdown() {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!("../storage/migrations/sqlite")
-            .run(&pool)
+    async fn set_and_get_default_post_format_markdown(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let config = &*env.state.user_config;
+        set_default_post_format(config, user_id, PostFormat::Markdown)
             .await
             .unwrap();
-
-        // Create a test user
-        sqlx::query(
-            "INSERT INTO users (username, password_hash, created_at, is_operator) VALUES (?, ?, ?, ?)",
-        )
-        .bind("testuser")
-        .bind("hash")
-        .bind(chrono::Utc::now())
-        .bind(false)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let config = SqliteUserConfigStorage::new(pool);
-        set_default_post_format(&config, 1, PostFormat::Markdown)
-            .await
-            .unwrap();
-        let result = get_default_post_format(&config, 1).await.unwrap();
+        let result = get_default_post_format(config, user_id).await.unwrap();
         assert_eq!(result, PostFormat::Markdown);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn set_and_get_default_post_format_org() {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!("../storage/migrations/sqlite")
-            .run(&pool)
+    async fn set_and_get_default_post_format_org(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let config = &*env.state.user_config;
+        set_default_post_format(config, user_id, PostFormat::Org)
             .await
             .unwrap();
-
-        // Create a test user
-        sqlx::query(
-            "INSERT INTO users (username, password_hash, created_at, is_operator) VALUES (?, ?, ?, ?)",
-        )
-        .bind("testuser")
-        .bind("hash")
-        .bind(chrono::Utc::now())
-        .bind(false)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let config = SqliteUserConfigStorage::new(pool);
-        set_default_post_format(&config, 1, PostFormat::Org)
-            .await
-            .unwrap();
-        let result = get_default_post_format(&config, 1).await.unwrap();
+        let result = get_default_post_format(config, user_id).await.unwrap();
         assert_eq!(result, PostFormat::Org);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn get_default_post_format_invalid_string_returns_html() {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!("../storage/migrations/sqlite")
-            .run(&pool)
+    async fn get_default_post_format_invalid_string_returns_html(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let config = &*env.state.user_config;
+
+        // Store a garbage value through the storage handle.
+        config
+            .set(user_id, DEFAULT_POST_FORMAT_KEY, "garbage")
             .await
             .unwrap();
 
-        // Create a test user
-        sqlx::query(
-            "INSERT INTO users (username, password_hash, created_at, is_operator) VALUES (?, ?, ?, ?)",
-        )
-        .bind("testuser")
-        .bind("hash")
-        .bind(chrono::Utc::now())
-        .bind(false)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        // Manually insert garbage value
-        sqlx::query("INSERT INTO user_config (user_id, key, value) VALUES (?, ?, ?)")
-            .bind(1)
-            .bind(DEFAULT_POST_FORMAT_KEY)
-            .bind("garbage")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        let config = SqliteUserConfigStorage::new(pool);
-        let result = get_default_post_format(&config, 1).await.unwrap();
+        let result = get_default_post_format(config, user_id).await.unwrap();
         assert_eq!(result, PostFormat::Html);
     }
 }

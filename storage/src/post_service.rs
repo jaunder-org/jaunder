@@ -380,32 +380,22 @@ pub async fn perform_post_creation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{backends, seed_user, Backend};
+    use rstest::*;
+    use rstest_reuse::*;
 
     // -- perform_post_creation tests --
 
-    async fn setup_test_db() -> (sqlx::SqlitePool, crate::SqlitePostStorage) {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!("./migrations/sqlite")
-            .run(&pool)
-            .await
-            .unwrap();
-
-        sqlx::query("INSERT INTO users (user_id, username, password_hash, created_at) VALUES (1, 'testuser', 'some_hash', '2026-05-20T12:00:00Z')")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        let storage = crate::SqlitePostStorage::new(pool.clone());
-        (pool, storage)
-    }
-
+    #[apply(backends)]
     #[tokio::test]
-    async fn test_perform_post_creation_success() {
-        let (_pool, storage) = setup_test_db().await;
+    async fn test_perform_post_creation_success(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let storage = &*env.state.posts;
         let record = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "Hello, world!".to_owned(),
                 title: None,
                 format: PostFormat::Markdown,
@@ -419,22 +409,25 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(record.user_id, 1);
+        assert_eq!(record.user_id, user_id);
         assert_eq!(record.slug.as_str(), "hello-world");
         assert_eq!(record.body, "Hello, world!");
         assert_eq!(record.format, PostFormat::Markdown);
         assert!(record.rendered_html.contains("<p>Hello, world!</p>"));
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn test_perform_post_creation_uses_explicit_title() {
-        let (_pool, storage) = setup_test_db().await;
+    async fn test_perform_post_creation_uses_explicit_title(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let storage = &*env.state.posts;
         // The body has no heading, so any title must come from the explicit arg,
         // which also seeds the slug.
         let record = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "Body without a heading.".to_owned(),
                 title: Some("Explicit Title"),
                 format: PostFormat::Markdown,
@@ -452,13 +445,16 @@ mod tests {
         assert_eq!(record.slug.as_str(), "explicit-title");
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn test_perform_post_creation_slug_override() {
-        let (_pool, storage) = setup_test_db().await;
+    async fn test_perform_post_creation_slug_override(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let storage = &*env.state.posts;
         let record = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "Hello, world!".to_owned(),
                 title: None,
                 format: PostFormat::Markdown,
@@ -475,13 +471,16 @@ mod tests {
         assert_eq!(record.slug.as_str(), "my-custom-slug");
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn test_perform_post_creation_invalid_slug_override() {
-        let (_pool, storage) = setup_test_db().await;
+    async fn test_perform_post_creation_invalid_slug_override(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let storage = &*env.state.posts;
         let err = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "Hello, world!".to_owned(),
                 title: None,
                 format: PostFormat::Markdown,
@@ -498,13 +497,16 @@ mod tests {
         assert!(matches!(err, PerformCreationError::InvalidSlug(_)));
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn test_perform_post_creation_empty_body() {
-        let (_pool, storage) = setup_test_db().await;
+    async fn test_perform_post_creation_empty_body(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let storage = &*env.state.posts;
         let err = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "   ".to_owned(),
                 title: None,
                 format: PostFormat::Markdown,
@@ -521,13 +523,18 @@ mod tests {
         assert!(matches!(err, PerformCreationError::EmptyPost));
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn test_perform_post_creation_symbol_only_title_falls_back_to_post() {
-        let (_pool, storage) = setup_test_db().await;
+    async fn test_perform_post_creation_symbol_only_title_falls_back_to_post(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let storage = &*env.state.posts;
         let record = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "!!!".to_owned(),
                 title: None,
                 format: PostFormat::Markdown,
@@ -546,13 +553,16 @@ mod tests {
         assert_eq!(record.slug.as_str(), "post");
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn test_perform_post_creation_unicode_title_preserves_slug() {
-        let (_pool, storage) = setup_test_db().await;
+    async fn test_perform_post_creation_unicode_title_preserves_slug(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let storage = &*env.state.posts;
         let record = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "# 日本語\n\nbody".to_owned(),
                 title: None,
                 format: PostFormat::Markdown,
@@ -591,14 +601,17 @@ mod tests {
         assert_eq!(candidate_slug("hello", 0), "hello");
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn test_perform_post_creation_slug_conflict_retries() {
-        let (_pool, storage) = setup_test_db().await;
+    async fn test_perform_post_creation_slug_conflict_retries(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let storage = &*env.state.posts;
 
         let r1 = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "Hello, world!".to_owned(),
                 title: None,
                 format: PostFormat::Markdown,
@@ -613,9 +626,9 @@ mod tests {
         .unwrap();
 
         let r2 = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "Hello, world!".to_owned(),
                 title: None,
                 format: PostFormat::Markdown,
@@ -630,9 +643,9 @@ mod tests {
         .unwrap();
 
         let r3 = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "Hello, world!".to_owned(),
                 title: None,
                 format: PostFormat::Markdown,
@@ -651,14 +664,17 @@ mod tests {
         assert_eq!(r3.slug.as_str(), "hello-world-3");
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn test_perform_post_creation_slug_exhaustion() {
-        let (_pool, storage) = setup_test_db().await;
+    async fn test_perform_post_creation_slug_exhaustion(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let storage = &*env.state.posts;
 
         let r1 = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "Hello, world!".to_owned(),
                 title: None,
                 format: PostFormat::Markdown,
@@ -673,9 +689,9 @@ mod tests {
         .unwrap();
 
         let r2 = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "Hello, world!".to_owned(),
                 title: None,
                 format: PostFormat::Markdown,
@@ -693,9 +709,9 @@ mod tests {
         assert_eq!(r2.slug.as_str(), "hello-world-2");
 
         let err = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "Hello, world!".to_owned(),
                 title: None,
                 format: PostFormat::Markdown,
@@ -712,15 +728,18 @@ mod tests {
         assert!(matches!(err, PerformCreationError::Exhausted(2)));
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn test_perform_post_creation_canonicalizes_org_body() {
-        let (_pool, storage) = setup_test_db().await;
+    async fn test_perform_post_creation_canonicalizes_org_body(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let storage = &*env.state.posts;
         // Title is derived from the original body's #+TITLE:, then the stored body is
         // canonicalized: the #+TITLE: line is stripped while #+FOO: and content stay.
         let record = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "#+TITLE: Hi\n#+FOO: x\n\nHello".to_owned(),
                 title: None,
                 format: PostFormat::Org,
@@ -744,15 +763,18 @@ mod tests {
         assert!(record.body.contains("Hello"), "body: {:?}", record.body);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn test_perform_post_update_canonicalizes_org_body() {
-        let (_pool, storage) = setup_test_db().await;
+    async fn test_perform_post_update_canonicalizes_org_body(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let storage = &*env.state.posts;
         // Canonicalization runs on the update path too: a re-saved Org body has its
         // #+TITLE: stripped while an unrecognized #+FOO: and the content survive.
         let created = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "#+TITLE: First\n\noriginal".to_owned(),
                 title: None,
                 format: PostFormat::Org,
@@ -767,10 +789,10 @@ mod tests {
         .unwrap();
 
         let record = perform_post_update(
-            &storage,
+            storage,
             PostUpdate {
                 post_id: created.post_id,
-                editor_user_id: 1,
+                editor_user_id: user_id,
                 body: "#+TITLE: Second\n#+FOO: keep\n\nupdated".to_owned(),
                 title: None,
                 format: PostFormat::Org,
@@ -797,15 +819,20 @@ mod tests {
         assert!(record.body.contains("updated"), "body: {:?}", record.body);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn test_perform_post_creation_markdown_body_is_not_canonicalized() {
-        let (_pool, storage) = setup_test_db().await;
+    async fn test_perform_post_creation_markdown_body_is_not_canonicalized(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let storage = &*env.state.posts;
         // Canonicalization is Org-only: a Markdown body with a leading `# H1` is
         // stored verbatim (the `# H1` is not stripped).
         let record = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "# H1\n\nBody text".to_owned(),
                 title: None,
                 format: PostFormat::Markdown,
@@ -822,16 +849,19 @@ mod tests {
         assert_eq!(record.body, "# H1\n\nBody text");
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn test_perform_post_creation_org_title_rendered_once() {
-        let (_pool, storage) = setup_test_db().await;
+    async fn test_perform_post_creation_org_title_rendered_once(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let storage = &*env.state.posts;
         // Double-title regression: the title text from the #+TITLE: line must not
         // survive into the stored body (hence rendered_html), so the page chrome's
         // title is the only place it appears. record.title still carries it.
         let record = perform_post_creation(
-            &storage,
+            storage,
             PostCreation {
-                user_id: 1,
+                user_id,
                 body: "#+TITLE: Distinct Headline\n\nParagraph body".to_owned(),
                 title: None,
                 format: PostFormat::Org,

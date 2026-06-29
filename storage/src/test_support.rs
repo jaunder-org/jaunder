@@ -1,27 +1,30 @@
-//! Shared both-backend test harness: the `Backend` enum, per-test database
-//! provisioning (`SQLite` tempdir; Postgres clone-from-template via
-//! `JAUNDER_PG_TEST_URL`), the `AppState`-level `TestEnv`, and the
-//! `backends`/`sqlite_only`/`postgres_only` rstest templates. Consumed as a
-//! dev-dependency by `storage` and `server` so both can parametrize tests over
-//! `SQLite` and Postgres from one mechanism.
+//! Both-backend test harness for the `storage` crate's own tests and `server`'s
+//! integration tests: the `Backend` enum, per-test database provisioning
+//! (`SQLite` tempdir; Postgres clone-from-template via `JAUNDER_PG_TEST_URL`), the
+//! `AppState`-level `TestEnv`, and the `backends`/`sqlite_only`/`postgres_only`
+//! rstest templates. Lives in `storage` (gated by the `test-support` feature) so
+//! `storage`'s in-file tests use it from the same crate instance — avoiding the
+//! two-`storage`-instances problem a separate crate would create (see ADR-0033).
+//! `server` reaches it via `storage`'s `test-support` feature.
 
-// This crate is deliberately unwrap/expect-heavy test scaffolding, so the
-// workspace's `unwrap_used`/`expect_used = deny` lints don't apply; everything
-// else clippy-pedantic flags is fixed in place rather than allowed.
+// Deliberately unwrap/expect-heavy test scaffolding, so the workspace's
+// `unwrap_used`/`expect_used = deny` lints are allowed off for this module
+// (an inner `#![allow]` overrides the crate-level deny); everything else
+// clippy-pedantic flags is fixed in place rather than allowed.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use common::mailer::{MailSender, NoopMailSender};
-use sqlx::Connection;
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
-};
-use storage::{
+use crate::{
     open_database, open_existing_database, AppState, DbConnectOptions, SqliteAtomicOps,
     SqliteAudienceStorage, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
     SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage,
     SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
     SqliteUserConfigStorage, SqliteUserStorage,
+};
+use common::mailer::{MailSender, NoopMailSender};
+use sqlx::Connection;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
 };
 use tempfile::TempDir;
 
@@ -164,8 +167,9 @@ pub fn postgres_only(#[case] backend: Backend) {}
 
 // `#[export]` adds `#[macro_export]` to the generated template macro so it is
 // reachable at this crate's root and `#[apply]`-able from *other* crates
-// (`storage` tests, `server` tests). Without it the macro is `pub(crate)` and a
-// cross-crate `use db_test_harness::backends` fails with "private macro".
+// (`server`'s test crate, via the `storage::test_support` re-export). Without it
+// the macro is `pub(crate)` and a cross-crate `use storage::test_support::backends`
+// fails with "private macro".
 #[template]
 #[export]
 #[rstest]
@@ -552,13 +556,13 @@ pub async fn seed_posts(
         } else {
             None
         };
-        let id = storage::create_rendered_post(
+        let id = crate::create_rendered_post(
             &*state.posts,
             user_id,
             None,
             format!("seed-{i}").parse().expect("valid slug"),
             format!("# Post {i}\n\nbody"),
-            storage::PostFormat::Markdown,
+            crate::PostFormat::Markdown,
             published_at,
             None,
             vec![common::visibility::AudienceTarget::Public],
@@ -570,9 +574,35 @@ pub async fn seed_posts(
     ids
 }
 
+/// Creates a throwaway user and returns its id, for tests that need a user to
+/// exist before exercising a per-user handle (replaces raw `INSERT INTO users`).
+///
+/// # Panics
+///
+/// If the username/password fail to parse or the user cannot be created.
+pub async fn seed_user(state: &Arc<AppState>) -> i64 {
+    state
+        .users
+        .create_user(
+            &"testuser".parse().expect("valid username"),
+            &"password123".parse().expect("valid password"),
+            None,
+            false,
+        )
+        .await
+        .expect("seed user should be created")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{bootstrap_url, splice_db_name};
+    use super::{bootstrap_url, seed_user, splice_db_name, Backend};
+
+    #[tokio::test]
+    async fn seed_user_creates_a_user() {
+        let env = Backend::Sqlite.setup().await;
+        let id = seed_user(&env.state).await;
+        assert!(id > 0);
+    }
 
     #[test]
     fn bootstrap_url_prefers_explicit_when_set() {

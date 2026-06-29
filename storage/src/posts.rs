@@ -1837,6 +1837,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{backends, seed_user, Backend};
+    use rstest::*;
+    use rstest_reuse::*;
 
     #[test]
     fn audience_target_from_row_maps_every_kind() {
@@ -1990,32 +1993,14 @@ mod tests {
         assert_eq!(post.permalink(), "/~author/2026/04/12/hello-world");
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn create_post_persists_summary() {
-        use crate::sqlite::SqlitePostStorage;
-        use chrono::Utc;
-
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!("../storage/migrations/sqlite")
-            .run(&pool)
-            .await
-            .unwrap();
-
-        // Create a test user
-        sqlx::query(
-            "INSERT INTO users (username, password_hash, created_at, is_operator) VALUES (?, ?, ?, ?)",
-        )
-        .bind("testuser")
-        .bind("hash")
-        .bind(Utc::now())
-        .bind(false)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let posts = SqlitePostStorage::new(pool);
+    async fn create_post_persists_summary(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let posts = &*env.state.posts;
         let input = CreatePostInput {
-            user_id: 1,
+            user_id,
             title: Some("Test Title".into()),
             slug: "test-slug".parse().unwrap(),
             body: "Test body".into(),
