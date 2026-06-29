@@ -514,21 +514,8 @@ Body text",
 // request body/format/slug_override and the expected error message vary.
 #[rstest]
 #[case::empty_post("", "markdown", None, "post body is required")]
-#[case::no_slug_source(
-    "+++",
-    "markdown",
-    None,
-    "post must contain at least one ASCII letter or digit for its slug"
-)]
 #[case::invalid_format("body", "invalid_format", None, "post format must be")]
 #[case::invalid_slug_override("body", "markdown", Some("Not Valid"), "slug must be non-empty")]
-// Heading with only em-dashes passes the empty check but cannot produce a slug
-#[case::title_without_ascii_slug(
-    "# ———\n\nbody",
-    "markdown",
-    None,
-    "post must contain at least one ASCII letter or digit for its slug"
-)]
 #[tokio::test]
 async fn create_post_rejects(
     #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
@@ -1259,12 +1246,6 @@ async fn update_post_rejects_non_author(#[case] backend: Backend) {
 #[rstest]
 #[case::empty_post("", "markdown", "post body or title is required")]
 #[case::invalid_format("body", "invalid_format", "post format must be")]
-// Heading with only em-dashes passes the empty check but cannot produce a slug
-#[case::title_without_ascii_slug(
-    "# ———\n\nbody",
-    "markdown",
-    "post must contain at least one ASCII letter or digit for its slug"
-)]
 #[tokio::test]
 async fn update_post_rejects(
     #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,

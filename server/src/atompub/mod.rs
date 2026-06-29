@@ -201,7 +201,7 @@ impl From<storage::PerformCreationError> for HandlerError {
     fn from(err: storage::PerformCreationError) -> Self {
         use storage::PerformCreationError as E;
         match &err {
-            E::EmptyPost | E::NoSlugFromPost | E::InvalidSlug(_) => HandlerError::BadRequest,
+            E::EmptyPost | E::InvalidSlug(_) => HandlerError::BadRequest,
             // Exhausted/CreatedNotFound/Storage are all internal failures.
             _ => {
                 log_internal(&err);
@@ -215,7 +215,7 @@ impl From<storage::PerformUpdateError> for HandlerError {
     fn from(err: storage::PerformUpdateError) -> Self {
         use storage::PerformUpdateError as E;
         match &err {
-            E::EmptyPost | E::NoSlugFromPost | E::InvalidSlug => HandlerError::BadRequest,
+            E::EmptyPost | E::InvalidSlug => HandlerError::BadRequest,
             E::NotFound | E::Unauthorized => HandlerError::NotFound,
             E::Storage(_) => {
                 log_internal(&err);
@@ -383,10 +383,6 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
-            status(PerformCreationError::NoSlugFromPost.into()),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
             status(PerformCreationError::InvalidSlug(common::slug::InvalidSlug).into()),
             StatusCode::BAD_REQUEST
         );
@@ -404,10 +400,6 @@ mod tests {
     fn update_error_maps_each_class() {
         assert_eq!(
             status(PerformUpdateError::EmptyPost.into()),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            status(PerformUpdateError::NoSlugFromPost.into()),
             StatusCode::BAD_REQUEST
         );
         assert_eq!(

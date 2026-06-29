@@ -94,8 +94,6 @@ pub async fn update_rendered_post(
 pub enum PerformUpdateError {
     #[error("post body or title is required")]
     EmptyPost,
-    #[error("post must contain at least one ASCII letter or digit for its slug")]
-    NoSlugFromPost,
     #[error("invalid slug")]
     InvalidSlug,
     #[error("post not found")]
@@ -205,13 +203,11 @@ pub async fn perform_post_update(
 
     let slug = match slug_override.and_then(common::text::non_empty) {
         Some(raw) => raw
-            .to_ascii_lowercase()
             .parse::<Slug>()
             .map_err(|_| PerformUpdateError::InvalidSlug)?,
         None => slugify_title(&metadata.slug_seed)
-            .ok_or(PerformUpdateError::NoSlugFromPost)?
             .parse::<Slug>()
-            .map_err(|_| PerformUpdateError::NoSlugFromPost)?,
+            .map_err(|_| PerformUpdateError::InvalidSlug)?,
     };
 
     let rendered_html = render(&body, &format);
@@ -242,8 +238,6 @@ pub async fn perform_post_update(
 pub enum PerformCreationError {
     #[error("post body is required")]
     EmptyPost,
-    #[error("post must contain at least one ASCII letter or digit for its slug")]
-    NoSlugFromPost,
     #[error(transparent)]
     InvalidSlug(#[from] InvalidSlug),
     #[error("unable to allocate a unique slug after {0} attempts")]
@@ -258,10 +252,14 @@ pub enum PerformCreationError {
 #[must_use]
 pub fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
     if attempt == 0 {
-        slug_seed.to_owned()
-    } else {
-        format!("{slug_seed}-{}", attempt + 1)
+        return slug_seed.to_owned(); // already ≤ MAX_SLUG_CHARS from slugify_title
     }
+    // Keep the suffixed candidate within the slug length cap: a seed already at
+    // the cap plus "-{n}" would otherwise exceed it and be rejected by from_str.
+    let suffix = format!("-{}", attempt + 1);
+    let max_base = common::slug::MAX_SLUG_CHARS.saturating_sub(suffix.chars().count());
+    let base: String = slug_seed.chars().take(max_base).collect();
+    format!("{}{suffix}", base.trim_end_matches('-'))
 }
 
 /// Raw, front-end-supplied inputs to [`perform_post_creation`].
@@ -326,11 +324,10 @@ pub async fn perform_post_creation(
 
     let slug_seed = match slug_override.and_then(common::text::non_empty) {
         Some(raw) => raw
-            .to_ascii_lowercase()
             .parse::<Slug>()
             .map_err(PerformCreationError::InvalidSlug)?
             .to_string(),
-        None => slugify_title(&metadata.slug_seed).ok_or(PerformCreationError::NoSlugFromPost)?,
+        None => slugify_title(&metadata.slug_seed),
     };
 
     for attempt in 0..max_attempts {
@@ -525,9 +522,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_perform_post_creation_no_slug_from_body() {
+    async fn test_perform_post_creation_symbol_only_title_falls_back_to_post() {
         let (_pool, storage) = setup_test_db().await;
-        let err = perform_post_creation(
+        let record = perform_post_creation(
             &storage,
             PostCreation {
                 user_id: 1,
@@ -542,9 +539,56 @@ mod tests {
             },
         )
         .await
-        .unwrap_err();
+        .unwrap();
 
-        assert!(matches!(err, PerformCreationError::NoSlugFromPost));
+        // Never hard-fails: a title with no usable characters lands on the
+        // synthetic `post` fallback rather than NoSlugFromPost.
+        assert_eq!(record.slug.as_str(), "post");
+    }
+
+    #[tokio::test]
+    async fn test_perform_post_creation_unicode_title_preserves_slug() {
+        let (_pool, storage) = setup_test_db().await;
+        let record = perform_post_creation(
+            &storage,
+            PostCreation {
+                user_id: 1,
+                body: "# 日本語\n\nbody".to_owned(),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(record.slug.as_str(), "日本語");
+    }
+
+    #[test]
+    fn candidate_slug_keeps_suffix_within_cap() {
+        use common::slug::{Slug, MAX_SLUG_CHARS};
+        // A seed already at the cap: the naive "{seed}-2" would be 82 chars and
+        // be rejected by from_str; candidate_slug truncates the base to fit.
+        let seed: String = "a".repeat(MAX_SLUG_CHARS);
+        let c = candidate_slug(&seed, 1);
+        assert!(c.chars().count() <= MAX_SLUG_CHARS);
+        assert!(c.ends_with("-2"));
+        assert!(c.parse::<Slug>().is_ok());
+
+        // Truncation that would land on a '-' trims it so no "--" boundary forms.
+        let seed2 = format!("{}-{}", "a".repeat(77), "b".repeat(20));
+        let c2 = candidate_slug(&seed2, 1);
+        assert!(c2.chars().count() <= MAX_SLUG_CHARS);
+        assert!(!c2.contains("--"));
+        assert!(c2.parse::<Slug>().is_ok());
+
+        // attempt 0 returns the seed unchanged.
+        assert_eq!(candidate_slug("hello", 0), "hello");
     }
 
     #[tokio::test]
@@ -821,16 +865,10 @@ mod tests {
         let debug = format!("{err:?}");
         assert!(debug.contains("EmptyPost"));
 
-        let err = PerformCreationError::NoSlugFromPost;
-        assert_eq!(
-            err.to_string(),
-            "post must contain at least one ASCII letter or digit for its slug"
-        );
-
         let err = PerformCreationError::InvalidSlug(InvalidSlug);
         assert_eq!(
             err.to_string(),
-            "slug must be non-empty and match [a-z0-9][a-z0-9-]*"
+            "slug must be non-empty, at most 80 characters, and contain only Unicode letters/digits and '-'"
         );
 
         let err = PerformCreationError::Exhausted(10);
@@ -859,12 +897,6 @@ mod tests {
     fn perform_update_error_empty_title_display() {
         let err = PerformUpdateError::EmptyPost;
         assert_eq!(err.to_string(), "post body or title is required");
-    }
-
-    #[test]
-    fn perform_update_error_no_slug_from_title_display() {
-        let err = PerformUpdateError::NoSlugFromPost;
-        assert!(err.to_string().contains("ASCII"));
     }
 
     #[test]

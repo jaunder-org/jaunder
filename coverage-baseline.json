@@ -731,11 +731,11 @@
   ],
   "storage/src/post_service.rs": [
     {
-      "line": 370,
+      "line": 367,
       "text": "            Err(CreatePostError::Internal(e)) => {"
     },
     {
-      "line": 371,
+      "line": 368,
       "text": "                return Err(PerformCreationError::Storage(e));"
     }
   ],
