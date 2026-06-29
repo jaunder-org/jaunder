@@ -26,9 +26,9 @@ use storage::{
     update_rendered_post, AppState, AudienceError, ConfirmPasswordResetError, CreatePostError,
     CreatePostInput, CreateUserError, DbConnectOptions, FeedCacheRow, GoLivePost, ListByTagError,
     PostCursor, PostFormat, PostUpdate, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
-    SessionAuthError, SessionStorage, SqliteSessionStorage, SqliteSubscriptionStorage,
-    SqliteUserStorage, SubscriptionStorage, TaggingError, UpdatePostError, UpdatePostInput,
-    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError, UserStorage,
+    SessionAuthError, SqliteSubscriptionStorage, SqliteUserStorage, SubscriptionStorage,
+    TaggingError, UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserAuthError, UserStorage,
 };
 use tempfile::TempDir;
 
@@ -558,14 +558,6 @@ async fn user_storage(base: &TempDir) -> SqliteUserStorage {
     SqliteUserStorage::new(open_pool(base).await)
 }
 
-async fn storage_pair(base: &TempDir) -> (SqliteUserStorage, SqliteSessionStorage) {
-    let pool = open_pool(base).await;
-    (
-        SqliteUserStorage::new(pool.clone()),
-        SqliteSessionStorage::new(pool),
-    )
-}
-
 fn username(s: &str) -> Username {
     s.parse().unwrap()
 }
@@ -590,10 +582,11 @@ async fn site_config_set_then_get_roundtrips(#[case] backend: Backend) {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn get_missing_key_returns_none() {
-    let base = TempDir::new().unwrap();
-    let state = open_database(&sqlite_url(&base)).await.unwrap();
+async fn get_missing_key_returns_none(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
     assert!(state
         .site_config
@@ -603,10 +596,11 @@ async fn get_missing_key_returns_none() {
         .is_none());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn set_overwrites_existing_value() {
-    let base = TempDir::new().unwrap();
-    let state = open_database(&sqlite_url(&base)).await.unwrap();
+async fn set_overwrites_existing_value(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
     state.site_config.set("site.name", "First").await.unwrap();
     state.site_config.set("site.name", "Second").await.unwrap();
@@ -617,13 +611,19 @@ async fn set_overwrites_existing_value() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn second_open_on_migrated_database_succeeds() {
-    let base = TempDir::new().unwrap();
+async fn second_open_on_migrated_database_succeeds(#[case] backend: Backend) {
+    let env = backend.setup().await;
 
-    drop(open_database(&sqlite_url(&base)).await.unwrap());
-
-    open_database(&sqlite_url(&base)).await.unwrap();
+    // Re-open the *same* per-test database the setup just migrated, addressed by
+    // its backend URL, to prove a second `open_database` (re-running migrations)
+    // is idempotent on both backends.
+    let opts = match backend {
+        Backend::Sqlite => sqlite_url(&env.base),
+        Backend::Postgres => recorded_postgres_url(&env.base).parse().unwrap(),
+    };
+    open_database(&opts).await.unwrap();
 }
 
 #[apply(backends)]
@@ -1097,18 +1097,24 @@ async fn get_user_unknown_id_returns_none(#[case] backend: Backend) {
 
 // --- SessionStorage integration tests ---
 
+#[apply(backends)]
 #[tokio::test]
-async fn create_session_then_authenticate_returns_correct_record() {
-    let base = TempDir::new().unwrap();
-    let (users, sessions) = storage_pair(&base).await;
+async fn create_session_then_authenticate_returns_correct_record(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
 
-    let raw_token = sessions.create_session(user_id, "test").await.unwrap();
-    let record = sessions.authenticate(&raw_token).await.unwrap();
+    let raw_token = state
+        .sessions
+        .create_session(user_id, "test")
+        .await
+        .unwrap();
+    let record = state.sessions.authenticate(&raw_token).await.unwrap();
 
     assert_eq!(record.user_id, user_id);
     assert_eq!(record.username.as_str(), "alice");
@@ -1116,80 +1122,110 @@ async fn create_session_then_authenticate_returns_correct_record() {
     assert!(!record.token_hash.is_empty());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn authenticate_updates_last_used_at() {
-    let base = TempDir::new().unwrap();
-    let (users, sessions) = storage_pair(&base).await;
+async fn authenticate_updates_last_used_at(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("bob"), &password("password123"), None, false)
         .await
         .unwrap();
 
-    let raw_token = sessions
+    let raw_token = state
+        .sessions
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let first = sessions.authenticate(&raw_token).await.unwrap();
-    let second = sessions.authenticate(&raw_token).await.unwrap();
+    let first = state.sessions.authenticate(&raw_token).await.unwrap();
+    let second = state.sessions.authenticate(&raw_token).await.unwrap();
 
     assert!(second.last_used_at >= first.last_used_at);
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn revoke_session_then_authenticate_returns_session_not_found() {
-    let base = TempDir::new().unwrap();
-    let (users, sessions) = storage_pair(&base).await;
+async fn revoke_session_then_authenticate_returns_session_not_found(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let user_id = users
+    let user_id = state
+        .users
         .create_user(&username("carol"), &password("password123"), None, false)
         .await
         .unwrap();
 
-    let raw_token = sessions
+    let raw_token = state
+        .sessions
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let record = sessions.authenticate(&raw_token).await.unwrap();
+    let record = state.sessions.authenticate(&raw_token).await.unwrap();
 
-    sessions.revoke_session(&record.token_hash).await.unwrap();
+    state
+        .sessions
+        .revoke_session(&record.token_hash)
+        .await
+        .unwrap();
 
-    let err = sessions.authenticate(&raw_token).await.unwrap_err();
+    let err = state.sessions.authenticate(&raw_token).await.unwrap_err();
     assert!(matches!(err, SessionAuthError::SessionNotFound));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn authenticate_with_invalid_base64_token_returns_invalid_token() {
-    let base = TempDir::new().unwrap();
-    let (_, sessions) = storage_pair(&base).await;
+async fn authenticate_with_invalid_base64_token_returns_invalid_token(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let err = sessions.authenticate("not-base64!").await.unwrap_err();
+    let err = state
+        .sessions
+        .authenticate("not-base64!")
+        .await
+        .unwrap_err();
     assert!(matches!(err, SessionAuthError::InvalidToken));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn list_sessions_returns_only_sessions_for_given_user() {
-    let base = TempDir::new().unwrap();
-    let (users, sessions) = storage_pair(&base).await;
+async fn list_sessions_returns_only_sessions_for_given_user(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
 
-    let alice_id = users
+    let alice_id = state
+        .users
         .create_user(&username("alice"), &password("password123"), None, false)
         .await
         .unwrap();
-    let bob_id = users
+    let bob_id = state
+        .users
         .create_user(&username("bob"), &password("password123"), None, false)
         .await
         .unwrap();
 
-    sessions.create_session(alice_id, "alice-1").await.unwrap();
-    sessions.create_session(alice_id, "alice-2").await.unwrap();
-    sessions.create_session(bob_id, "bob-1").await.unwrap();
+    state
+        .sessions
+        .create_session(alice_id, "alice-1")
+        .await
+        .unwrap();
+    state
+        .sessions
+        .create_session(alice_id, "alice-2")
+        .await
+        .unwrap();
+    state
+        .sessions
+        .create_session(bob_id, "bob-1")
+        .await
+        .unwrap();
 
-    let alice_sessions = sessions.list_sessions(alice_id).await.unwrap();
+    let alice_sessions = state.sessions.list_sessions(alice_id).await.unwrap();
     assert_eq!(alice_sessions.len(), 2);
     assert!(alice_sessions.iter().all(|s| s.user_id == alice_id));
 
-    let bob_sessions = sessions.list_sessions(bob_id).await.unwrap();
+    let bob_sessions = state.sessions.list_sessions(bob_id).await.unwrap();
     assert_eq!(bob_sessions.len(), 1);
     assert_eq!(bob_sessions[0].user_id, bob_id);
 }
@@ -1472,12 +1508,11 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
 
 // --- build_mailer tests ---
 
+#[apply(backends)]
 #[tokio::test]
-async fn build_mailer_returns_noop_when_smtp_not_configured() {
-    let base = TempDir::new().unwrap();
-    let opts = sqlite_url(&base);
-    let state = open_database(&opts).await.unwrap();
-    let mailer = jaunder::mailer::build_mailer(state.site_config.as_ref()).await;
+async fn build_mailer_returns_noop_when_smtp_not_configured(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let mailer = jaunder::mailer::build_mailer(env.state.site_config.as_ref()).await;
 
     let msg = common::mailer::EmailMessage {
         from: None,

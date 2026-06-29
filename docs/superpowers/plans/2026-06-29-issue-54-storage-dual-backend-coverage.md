@@ -206,15 +206,15 @@ git commit -m "test(issue-54): run user-storage detail paths on both backends"
 - Consumes: `state.sessions.*`, `state.users.*`, `state.site_config.*`, `jaunder::mailer::build_mailer(state.site_config.as_ref())`.
 - Produces: 7 dual-backend tests; exhausts `storage_pair` and `user_storage` (if not already gone) → delete this task. For `build_mailer`, the body becomes `let env = backend.setup().await; let mailer = jaunder::mailer::build_mailer(env.state.site_config.as_ref()).await; …` — same assertion.
 
-- [ ] **Step 1: Read the seven current test bodies.** Note `second_open_on_migrated_database_succeeds` re-opens the SAME database; express via `backend.setup()` then a second `open_*` on `env.base` (per `Backend::setup` plumbing). If a second open needs the backend URL, get it from `env.base` rather than a hardcoded SQLite path.
+- [x] **Step 1: Read the seven current test bodies.** Per CORRECTED SCOPE this is 9 tests (3 SiteConfig + 5 SessionStorage + 1 mailer). `second_open_on_migrated_database_succeeds` re-opens the SAME database; expressed via `backend.setup()` then a second `open_database` against the backend URL — `sqlite_url(&env.base)` for SQLite, `recorded_postgres_url(&env.base).parse()` for Postgres (not a hardcoded SQLite path).
 
-- [ ] **Step 2: Convert each** via the worked transform. `build_mailer` routes through `env.state.site_config`.
+- [x] **Step 2: Convert each** via the worked transform, routing through `state.site_config`/`state.users`/`state.sessions`. `build_mailer` routes through `env.state.site_config`.
 
-- [ ] **Step 3: Delete now-orphaned `storage_pair` and `user_storage` helpers.** Confirm with `cargo xtask check --no-test` — dead_code clean.
+- [x] **Step 3: Delete now-orphaned `storage_pair` helper; KEEP `user_storage`** (still called by the Task-7 test `set_password_authenticate_with_old_…`). _(Also removed the now-unused `SessionStorage` and `SqliteSessionStorage` imports flagged by `-D unused-imports`; re-ran clean.)_ Confirmed with `cargo xtask check --no-test` — PASSED.
 
-- [ ] **Step 4: Full per-task gate** — `cargo xtask check`. Expected: green on both backends.
+- [ ] **Step 4: Full per-task gate** — `cargo xtask check`. _(Deferred per dispatch Execution Note: controller runs the full gate; this dispatch's gate is `cargo xtask check --no-test` only, which passed clean.)_
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit** _(Deferred per dispatch Execution Note: controller commits.)_
 
 ```bash
 git add server/tests/storage/storage.rs
