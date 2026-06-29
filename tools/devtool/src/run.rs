@@ -13,6 +13,7 @@ use std::time::Instant;
 use serde::Serialize;
 
 const RUN_DIR: &str = ".xtask/run";
+const RUN_HISTORY_LIMIT: usize = 50;
 
 #[derive(Serialize)]
 pub struct Stream {
@@ -49,6 +50,29 @@ fn alloc_id() -> String {
         .map(|d| d.as_millis())
         .unwrap_or(0);
     format!("{millis}-{}", std::process::id())
+}
+
+/// Keep only the newest `RUN_HISTORY_LIMIT` files in `dir`; best-effort, so a
+/// race or a stat error never fails an otherwise-successful run. Called after the
+/// new files are written — they are newest, so they are never pruned.
+fn prune(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let modified = e.metadata().ok()?.modified().ok()?;
+            Some((modified, e.path()))
+        })
+        .collect();
+    if files.len() <= RUN_HISTORY_LIMIT {
+        return;
+    }
+    files.sort_by_key(|f| std::cmp::Reverse(f.0)); // newest first
+    for (_, path) in files.into_iter().skip(RUN_HISTORY_LIMIT) {
+        let _ = fs::remove_file(path);
+    }
 }
 
 /// Count `\n` bytes (wc -l semantics) by streaming, so a huge output file never
@@ -202,6 +226,7 @@ pub fn execute(argv: &[String], cwd: &Path) -> Result<(RunResult, i32), RunError
     let err_path = dir.join(format!("{id}.err"));
 
     let cap = exec_capture(argv, cwd, &out_path, &err_path)?;
+    prune(&dir);
 
     let process_code = match (cap.exit_code, cap.signal) {
         (Some(code), _) => code,
@@ -328,5 +353,35 @@ mod tests {
     fn refuses_empty_argv() {
         let err = validate_argv(&[]).unwrap_err();
         assert_eq!(err.kind, "usage");
+    }
+
+    // Set mtime without a dependency: `File::set_modified` is stable since 1.75.
+    fn set_mtime(p: &Path, t: std::time::SystemTime) {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(p)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    }
+
+    #[test]
+    fn prune_keeps_newest_limit() {
+        let dir = tmp();
+        for i in 0..(RUN_HISTORY_LIMIT + 10) {
+            let p = dir.join(format!("{i:04}.out"));
+            std::fs::write(&p, b"x").unwrap();
+            let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(i as u64);
+            set_mtime(&p, t);
+        }
+        prune(&dir);
+        let remaining = std::fs::read_dir(&dir).unwrap().count();
+        assert_eq!(remaining, RUN_HISTORY_LIMIT);
+        assert!(!dir.join("0000.out").exists(), "oldest should be pruned");
+        assert!(
+            dir.join(format!("{:04}.out", RUN_HISTORY_LIMIT + 9))
+                .exists(),
+            "newest should remain"
+        );
     }
 }
