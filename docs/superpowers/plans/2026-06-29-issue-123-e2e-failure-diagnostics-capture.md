@@ -188,7 +188,7 @@ nix eval --raw .#checks.x86_64-linux.e2e-postgres-firefox.drvPath
 
 Expected: both print `.drv` paths (the Python testScript is assembled correctly; Nix string interpolation resolves).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add flake.nix
@@ -348,7 +348,7 @@ cargo xtask check --no-test
 
 Expected: clippy + fmt green; the temp spec is gone and unstaged.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add xtask/src/steps/nix.rs
@@ -368,7 +368,7 @@ git commit -m "test(e2e): recover e2e VM diagnostics from the kept outPath on fa
 **Interfaces:**
 - Consumes: nothing. Produces: the recorded convention.
 
-- [ ] **Step 1: Determine the next ADR number**
+- [x] **Step 1: Determine the next ADR number**
 
 ```bash
 ls docs/adr/ | rg '^[0-9]{4}-' | sort | tail -1
@@ -376,22 +376,22 @@ ls docs/adr/ | rg '^[0-9]{4}-' | sort | tail -1
 
 Use the next integer (the current highest is 0035 per the elisp-integration ADR; confirm and use 0036 unless a higher one landed).
 
-- [ ] **Step 2: Write the ADR**
+- [x] **Step 2: Write the ADR**
 
 Create `docs/adr/0036-e2e-failure-diagnostics-capture.md` documenting: the problem (no artifacts on a failed VM check), the decision (capture-before-assert in the testScript + `--keep-failed` rescue in xtask, streamed `line` reporter for build.log recoverability), and consequences (future e2e checks follow this; healthy runs unaffected via `retain-on-failure`). Status `accepted`.
 
-- [ ] **Step 3: Add the ADR table row to `docs/README.md`**
+- [x] **Step 3: Add the ADR table row to `docs/README.md`**
 
 Add a row `| 0036 | E2E failure-diagnostics capture | accepted |` (match the table's exact column format).
 
-- [ ] **Step 4: Commit the docs**
+- [x] **Step 4: Commit the docs**
 
 ```bash
 git add docs/adr/0036-e2e-failure-diagnostics-capture.md docs/README.md
 git commit -m "docs(adr): record the e2e failure-diagnostics capture convention (#123, #49)"
 ```
 
-- [ ] **Step 5: Full gate on a clean tree**
+- [x] **Step 5: Full gate on a clean tree**
 
 ```bash
 cargo xtask validate
