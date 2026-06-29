@@ -109,6 +109,10 @@ pub enum Command {
     /// ADR maintenance.
     #[command(subcommand)]
     Adr(AdrCommand),
+    /// Build the hermetic elisp live-integration VM check (ADR-0035) through the
+    /// same diagnostic-preserving wrapper. For CI's parallel `elisp-integration`
+    /// job; local `validate` realizes it via the `e2e` aggregate. Host only.
+    ElispIntegration,
 }
 
 /// `adr` subcommands.
@@ -162,6 +166,7 @@ impl Cli {
             Command::Coverage(CoverageCommand::RefreshCrap { .. }) => "coverage-refresh-crap",
             Command::E2e { .. } => "e2e",
             Command::Adr(AdrCommand::Renumber) => "adr-renumber",
+            Command::ElispIntegration => "elisp-integration",
         }
     }
 }
@@ -202,6 +207,9 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::host_tests::run(&sh, &mut result);
             steps::nix::coverage(&mut result, Mode::Check);
             if !no_e2e {
+                // `e2e` builds the `e2e-checks` aggregate, which now includes the
+                // `e2e-elisp-integration` check — so it runs in parallel with the
+                // browser combos; no separate step needed (ADR-0035).
                 steps::nix::e2e(&mut result);
             }
             finalize(&mut result, start);
@@ -249,6 +257,13 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("adr-renumber");
             result.push(adr::renumber());
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::ElispIntegration => {
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("elisp-integration");
+            steps::nix::elisp_integration(&mut result);
             finalize(&mut result, start);
             Ok(result)
         }

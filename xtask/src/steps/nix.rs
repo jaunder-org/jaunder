@@ -94,6 +94,20 @@ pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
     );
 }
 
+/// Runs the hermetic elisp live-integration `nixosTest` check (ADR-0035): a NixOS
+/// VM with Emacs + the jaunder binary, where the harness self-boots the server.
+/// The `e2e-elisp-integration` check also joins the `e2e-checks` aggregate, so
+/// local `validate` realizes it in parallel via `e2e`; this dedicated builder is
+/// the per-job CI path (`cargo xtask elisp-integration`), mirroring `e2e_combo`.
+pub fn elisp_integration(result: &mut CommandResult) {
+    let check = "e2e-elisp-integration";
+    result.push(build_check("nix-elisp-integration", check));
+    copy_e2e_diagnostics_between(
+        std::path::Path::new(&format!(".xtask/gcroots/{check}")),
+        std::path::Path::new(&format!(".xtask/diagnostics/{check}")),
+    );
+}
+
 /// Copy the realized e2e check's diagnostic files — server journals, OTEL traces,
 /// and the Playwright report — into the canonical diagnostics dir. Best-effort;
 /// silent on a missing out-link (e.g. a failed build).
