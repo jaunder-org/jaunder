@@ -162,11 +162,11 @@ async fn the_test(#[case] backend: Backend) {
 }
 ```
 
-- [ ] **Step 1: `storage/src/site_config.rs` (25 tests → both backends).** All via `&*env.state.site_config`; delete `test_pool`, `use crate::sqlite::SqliteSiteConfigStorage;`, `use sqlx::SqlitePool;`, and `use super::SiteConfigStorage;` (the `&dyn` calls don't need the trait import once concrete-type construction is gone — drop it only if clippy flags it unused).
-- [ ] **Step 2: `storage/src/auth.rs` (4).** `&*env.state.site_config`; `load_registration_policy(store)` (no `&`). Delete `in_memory_store` + `use crate::SqliteSiteConfigStorage;`.
-- [ ] **Step 3: `storage/src/user_config.rs` (4).** `seed_user(&env.state)` for the id; `&*env.state.user_config`. Delete `use crate::sqlite::SqliteUserConfigStorage;`.
-- [ ] **Step 4: `storage/src/post_service.rs` (12).** `seed_user` + `&*env.state.posts`. `perform_post_creation`/`perform_post_update` take `(&dyn PostStorage, PostCreation<'_>/PostUpdate<'_>)` — substitute the seeded id into the struct's `user_id`/`editor_user_id` fields; pass `storage` (drop the `&`). Delete `setup_test_db`.
-- [ ] **Step 5: `storage/src/posts.rs` (1).** `create_post_persists_summary`: `seed_user` + `&*env.state.posts`.
+- [x] **Step 1: `storage/src/site_config.rs` (25 tests → both backends).** All via `&*env.state.site_config`; delete `test_pool`, `use crate::sqlite::SqliteSiteConfigStorage;`, `use sqlx::SqlitePool;`, and `use super::SiteConfigStorage;` (the `&dyn` calls don't need the trait import once concrete-type construction is gone — drop it only if clippy flags it unused).
+- [x] **Step 2: `storage/src/auth.rs` (4).** `&*env.state.site_config`; `load_registration_policy(store)` (no `&`). Delete `in_memory_store` + `use crate::SqliteSiteConfigStorage;`.
+- [x] **Step 3: `storage/src/user_config.rs` (4).** `seed_user(&env.state)` for the id; `&*env.state.user_config`. Delete `use crate::sqlite::SqliteUserConfigStorage;`.
+- [x] **Step 4: `storage/src/post_service.rs` (12).** `seed_user` + `&*env.state.posts`. `perform_post_creation`/`perform_post_update` take `(&dyn PostStorage, PostCreation<'_>/PostUpdate<'_>)` — substitute the seeded id into the struct's `user_id`/`editor_user_id` fields; pass `storage` (drop the `&`). Delete `setup_test_db`.
+- [x] **Step 5: `storage/src/posts.rs` (1).** `create_post_persists_summary`: `seed_user` + `&*env.state.posts`.
 - [ ] **Step 6: Verify both backends, gate, commit (one commit for the conversion).**
 
 ```bash

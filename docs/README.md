@@ -58,7 +58,7 @@ convention). All are currently `accepted`.
 | [0030](adr/0030-coverage-reanchor-text-identity.md) | Coverage Re-Anchor by Text Identity | accepted |
 | [0031](adr/0031-elisp-separately-tested-subproject.md) | Elisp as a Separately-Tested Subproject | accepted |
 | [0032](adr/0032-e2e-zero-panic-gate.md) | E2E Zero-Panic Gate and Visible-by-Default Server Log | accepted |
-| [0033](adr/0033-shared-db-test-harness-crate.md) | Shared `db-test-harness` Crate for Both-Backend Test Parametrization | accepted |
+| [0033](adr/0033-shared-db-test-harness-crate.md) | In-`storage` `test_support` Module for Both-Backend Test Parametrization | accepted |
 | [0034](adr/0034-ci-e2e-matrix-distribution.md) | CI E2E {backend}×{browser} Matrix Distribution | accepted |
 
 ## Archive

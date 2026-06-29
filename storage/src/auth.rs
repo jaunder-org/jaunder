@@ -102,7 +102,9 @@ pub fn hash_token(raw_token: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SqliteSiteConfigStorage;
+    use crate::test_support::{backends, Backend};
+    use rstest::*;
+    use rstest_reuse::*;
 
     // --- FromStr / Display ---
 
@@ -151,56 +153,55 @@ mod tests {
 
     // --- load_registration_policy ---
 
-    async fn in_memory_store() -> SqliteSiteConfigStorage {
-        let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
-        sqlx::migrate!("./migrations/sqlite")
-            .run(&pool)
-            .await
-            .unwrap();
-        SqliteSiteConfigStorage::new(pool)
-    }
-
+    #[apply(backends)]
     #[tokio::test]
-    async fn absent_key_returns_closed() {
-        let store = in_memory_store().await;
+    async fn absent_key_returns_closed(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
         assert_eq!(
-            load_registration_policy(&store).await,
+            load_registration_policy(store).await,
             RegistrationPolicy::Closed
         );
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn key_set_to_open_returns_open() {
-        let store = in_memory_store().await;
+    async fn key_set_to_open_returns_open(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
         store.set("site.registration_policy", "open").await.unwrap();
         assert_eq!(
-            load_registration_policy(&store).await,
+            load_registration_policy(store).await,
             RegistrationPolicy::Open
         );
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn key_set_to_invite_only_returns_invite_only() {
-        let store = in_memory_store().await;
+    async fn key_set_to_invite_only_returns_invite_only(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
         store
             .set("site.registration_policy", "invite_only")
             .await
             .unwrap();
         assert_eq!(
-            load_registration_policy(&store).await,
+            load_registration_policy(store).await,
             RegistrationPolicy::InviteOnly
         );
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn invalid_value_in_db_returns_closed() {
-        let store = in_memory_store().await;
+    async fn invalid_value_in_db_returns_closed(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
         store
             .set("site.registration_policy", "garbage")
             .await
             .unwrap();
         assert_eq!(
-            load_registration_policy(&store).await,
+            load_registration_policy(store).await,
             RegistrationPolicy::Closed
         );
     }

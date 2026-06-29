@@ -209,24 +209,6 @@
       "line": 210
     },
     {
-      "coverage": 100.0,
-      "crap": 12.0,
-      "crate": "storage",
-      "cyclomatic": 12.0,
-      "file": "storage/src/sqlite/backup.rs",
-      "function": "export_database",
-      "line": 17
-    },
-    {
-      "coverage": 100.0,
-      "crap": 12.0,
-      "crate": "storage",
-      "cyclomatic": 12.0,
-      "file": "storage/src/sqlite/mod.rs",
-      "function": "SqliteAtomicOps::confirm_password_reset",
-      "line": 244
-    },
-    {
       "coverage": 0.0,
       "crap": 12.0,
       "crate": "web",
@@ -243,6 +225,24 @@
       "file": "web/src/pages/ui.rs",
       "function": "local_datetime_to_utc_rfc3339",
       "line": 324
+    },
+    {
+      "coverage": 100.0,
+      "crap": 12.0,
+      "crate": "storage",
+      "cyclomatic": 12.0,
+      "file": "storage/src/sqlite/backup.rs",
+      "function": "export_database",
+      "line": 17
+    },
+    {
+      "coverage": 100.0,
+      "crap": 12.0,
+      "crate": "storage",
+      "cyclomatic": 12.0,
+      "file": "storage/src/sqlite/mod.rs",
+      "function": "SqliteAtomicOps::confirm_password_reset",
+      "line": 244
     },
     {
       "coverage": 86.95652173913044,
@@ -319,20 +319,20 @@
     {
       "coverage": 100.0,
       "crap": 10.0,
-      "crate": "storage",
-      "cyclomatic": 10.0,
-      "file": "storage/src/backup.rs",
-      "function": "order_by_clause",
-      "line": 243
-    },
-    {
-      "coverage": 100.0,
-      "crap": 10.0,
       "crate": "web",
       "cyclomatic": 10.0,
       "file": "web/src/pages/upload.rs",
       "function": "upload_file",
       "line": 143
+    },
+    {
+      "coverage": 100.0,
+      "crap": 10.0,
+      "crate": "storage",
+      "cyclomatic": 10.0,
+      "file": "storage/src/backup.rs",
+      "function": "order_by_clause",
+      "line": 243
     },
     {
       "coverage": 100.0,
@@ -436,6 +436,15 @@
     {
       "coverage": 100.0,
       "crap": 8.0,
+      "crate": "web",
+      "cyclomatic": 8.0,
+      "file": "web/src/error.rs",
+      "function": "ErrorKind::as_metric_str",
+      "line": 94
+    },
+    {
+      "coverage": 100.0,
+      "crap": 8.0,
       "crate": "storage",
       "cyclomatic": 8.0,
       "file": "storage/src/backup.rs",
@@ -468,15 +477,6 @@
       "file": "storage/src/postgres/backup.rs",
       "function": "export_table",
       "line": 231
-    },
-    {
-      "coverage": 100.0,
-      "crap": 8.0,
-      "crate": "web",
-      "cyclomatic": 8.0,
-      "file": "web/src/error.rs",
-      "function": "ErrorKind::as_metric_str",
-      "line": 94
     },
     {
       "coverage": 100.0,
@@ -535,6 +535,24 @@
     {
       "coverage": 100.0,
       "crap": 7.0,
+      "crate": "web",
+      "cyclomatic": 7.0,
+      "file": "web/src/error.rs",
+      "function": "kind_class_for",
+      "line": 342
+    },
+    {
+      "coverage": 100.0,
+      "crap": 7.0,
+      "crate": "web",
+      "cyclomatic": 7.0,
+      "file": "web/src/auth/server.rs",
+      "function": "auth_rejection_error",
+      "line": 114
+    },
+    {
+      "coverage": 100.0,
+      "crap": 7.0,
       "crate": "storage",
       "cyclomatic": 7.0,
       "file": "storage/src/backup.rs",
@@ -585,24 +603,6 @@
       "file": "storage/src/posts.rs",
       "function": "PostStore::create_post",
       "line": 597
-    },
-    {
-      "coverage": 100.0,
-      "crap": 7.0,
-      "crate": "web",
-      "cyclomatic": 7.0,
-      "file": "web/src/error.rs",
-      "function": "kind_class_for",
-      "line": 342
-    },
-    {
-      "coverage": 100.0,
-      "crap": 7.0,
-      "crate": "web",
-      "cyclomatic": 7.0,
-      "file": "web/src/auth/server.rs",
-      "function": "auth_rejection_error",
-      "line": 114
     },
     {
       "coverage": 100.0,
@@ -704,6 +704,78 @@
       "line": 310
     },
     {
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "web",
+      "cyclomatic": 2.0,
+      "file": "web/src/pages/ui.rs",
+      "function": "TagList",
+      "line": 29
+    },
+    {
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "web",
+      "cyclomatic": 2.0,
+      "file": "web/src/pages/ui.rs",
+      "function": "Chip",
+      "line": 165
+    },
+    {
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "web",
+      "cyclomatic": 2.0,
+      "file": "web/src/pages/ui.rs",
+      "function": "PostCreateForm",
+      "line": 624
+    },
+    {
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "web",
+      "cyclomatic": 6.0,
+      "file": "web/src/auth/server.rs",
+      "function": "AuthUser::from_request_parts",
+      "line": 61
+    },
+    {
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "web",
+      "cyclomatic": 6.0,
+      "file": "web/src/auth/server.rs",
+      "function": "register_invite_error",
+      "line": 285
+    },
+    {
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "web",
+      "cyclomatic": 6.0,
+      "file": "web/src/posts/server.rs",
+      "function": "apply_post_tag_diff",
+      "line": 69
+    },
+    {
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "web",
+      "cyclomatic": 6.0,
+      "file": "web/src/posts/server.rs",
+      "function": "perform_creation_error",
+      "line": 239
+    },
+    {
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "web",
+      "cyclomatic": 6.0,
+      "file": "web/src/posts/mod.rs",
+      "function": "targets_to_audience_selection",
+      "line": 122
+    },
+    {
       "coverage": 100.0,
       "crap": 6.0,
       "crate": "storage",
@@ -783,78 +855,6 @@
       "file": "storage/src/posts.rs",
       "function": "PostStore::feed_urls_needing_catchup",
       "line": 1398
-    },
-    {
-      "coverage": 0.0,
-      "crap": 6.0,
-      "crate": "web",
-      "cyclomatic": 2.0,
-      "file": "web/src/pages/ui.rs",
-      "function": "TagList",
-      "line": 29
-    },
-    {
-      "coverage": 0.0,
-      "crap": 6.0,
-      "crate": "web",
-      "cyclomatic": 2.0,
-      "file": "web/src/pages/ui.rs",
-      "function": "Chip",
-      "line": 165
-    },
-    {
-      "coverage": 0.0,
-      "crap": 6.0,
-      "crate": "web",
-      "cyclomatic": 2.0,
-      "file": "web/src/pages/ui.rs",
-      "function": "PostCreateForm",
-      "line": 624
-    },
-    {
-      "coverage": 100.0,
-      "crap": 6.0,
-      "crate": "web",
-      "cyclomatic": 6.0,
-      "file": "web/src/auth/server.rs",
-      "function": "AuthUser::from_request_parts",
-      "line": 61
-    },
-    {
-      "coverage": 100.0,
-      "crap": 6.0,
-      "crate": "web",
-      "cyclomatic": 6.0,
-      "file": "web/src/auth/server.rs",
-      "function": "register_invite_error",
-      "line": 285
-    },
-    {
-      "coverage": 100.0,
-      "crap": 6.0,
-      "crate": "web",
-      "cyclomatic": 6.0,
-      "file": "web/src/posts/server.rs",
-      "function": "apply_post_tag_diff",
-      "line": 69
-    },
-    {
-      "coverage": 100.0,
-      "crap": 6.0,
-      "crate": "web",
-      "cyclomatic": 6.0,
-      "file": "web/src/posts/server.rs",
-      "function": "perform_creation_error",
-      "line": 239
-    },
-    {
-      "coverage": 100.0,
-      "crap": 6.0,
-      "crate": "web",
-      "cyclomatic": 6.0,
-      "file": "web/src/posts/mod.rs",
-      "function": "targets_to_audience_selection",
-      "line": 122
     },
     {
       "coverage": 100.0,
@@ -1008,6 +1008,69 @@
       "file": "common/src/atompub/entry.rs",
       "function": "render_feed",
       "line": 543
+    },
+    {
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "web",
+      "cyclomatic": 5.0,
+      "file": "web/src/pages/ui.rs",
+      "function": "is_valid_tag_slug",
+      "line": 1220
+    },
+    {
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "web",
+      "cyclomatic": 5.0,
+      "file": "web/src/error.rs",
+      "function": "ErrorClass::as_metric_str",
+      "line": 139
+    },
+    {
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "web",
+      "cyclomatic": 5.0,
+      "file": "web/src/subscriptions/mod.rs",
+      "function": "resolve_author",
+      "line": 30
+    },
+    {
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "web",
+      "cyclomatic": 5.0,
+      "file": "web/src/feed_discovery.rs",
+      "function": "surface_label",
+      "line": 58
+    },
+    {
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "web",
+      "cyclomatic": 5.0,
+      "file": "web/src/auth/server.rs",
+      "function": "resolve_credential",
+      "line": 154
+    },
+    {
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "web",
+      "cyclomatic": 5.0,
+      "file": "web/src/auth/server.rs",
+      "function": "parse_basic_auth",
+      "line": 210
+    },
+    {
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "web",
+      "cyclomatic": 5.0,
+      "file": "web/src/posts/server.rs",
+      "function": "parse_post_cursor",
+      "line": 137
     },
     {
       "coverage": 100.0,
@@ -1219,69 +1282,6 @@
     {
       "coverage": 100.0,
       "crap": 5.0,
-      "crate": "web",
-      "cyclomatic": 5.0,
-      "file": "web/src/pages/ui.rs",
-      "function": "is_valid_tag_slug",
-      "line": 1220
-    },
-    {
-      "coverage": 100.0,
-      "crap": 5.0,
-      "crate": "web",
-      "cyclomatic": 5.0,
-      "file": "web/src/error.rs",
-      "function": "ErrorClass::as_metric_str",
-      "line": 139
-    },
-    {
-      "coverage": 100.0,
-      "crap": 5.0,
-      "crate": "web",
-      "cyclomatic": 5.0,
-      "file": "web/src/subscriptions/mod.rs",
-      "function": "resolve_author",
-      "line": 30
-    },
-    {
-      "coverage": 100.0,
-      "crap": 5.0,
-      "crate": "web",
-      "cyclomatic": 5.0,
-      "file": "web/src/feed_discovery.rs",
-      "function": "surface_label",
-      "line": 58
-    },
-    {
-      "coverage": 100.0,
-      "crap": 5.0,
-      "crate": "web",
-      "cyclomatic": 5.0,
-      "file": "web/src/auth/server.rs",
-      "function": "resolve_credential",
-      "line": 154
-    },
-    {
-      "coverage": 100.0,
-      "crap": 5.0,
-      "crate": "web",
-      "cyclomatic": 5.0,
-      "file": "web/src/auth/server.rs",
-      "function": "parse_basic_auth",
-      "line": 210
-    },
-    {
-      "coverage": 100.0,
-      "crap": 5.0,
-      "crate": "web",
-      "cyclomatic": 5.0,
-      "file": "web/src/posts/server.rs",
-      "function": "parse_post_cursor",
-      "line": 137
-    },
-    {
-      "coverage": 100.0,
-      "crap": 5.0,
       "crate": "jaunder",
       "cyclomatic": 5.0,
       "file": "server/src/feed/handlers.rs",
@@ -1381,11 +1381,11 @@
     {
       "coverage": 77.77777777777779,
       "crap": 4.175582990397805,
-      "crate": "db-test-harness",
+      "crate": "storage",
       "cyclomatic": 4.0,
-      "file": "db-test-harness/src/lib.rs",
+      "file": "storage/src/test_support.rs",
       "function": "report_drop_outcome",
-      "line": 334
+      "line": 338
     },
     {
       "coverage": 83.33333333333334,
@@ -1494,6 +1494,105 @@
       "file": "common/src/atompub/service.rs",
       "function": "write_collection",
       "line": 80
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "web",
+      "cyclomatic": 4.0,
+      "file": "web/src/pages/media.rs",
+      "function": "format_bytes",
+      "line": 10
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "web",
+      "cyclomatic": 4.0,
+      "file": "web/src/error.rs",
+      "function": "ErrorClass::log_level",
+      "line": 128
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "web",
+      "cyclomatic": 4.0,
+      "file": "web/src/error.rs",
+      "function": "server_boundary",
+      "line": 424
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "web",
+      "cyclomatic": 4.0,
+      "file": "web/src/error.rs",
+      "function": "log_boundary_failure",
+      "line": 468
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "web",
+      "cyclomatic": 4.0,
+      "file": "web/src/auth/server.rs",
+      "function": "set_session_cookie",
+      "line": 226
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "web",
+      "cyclomatic": 4.0,
+      "file": "web/src/auth/server.rs",
+      "function": "clear_session_cookie",
+      "line": 244
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "web",
+      "cyclomatic": 4.0,
+      "file": "web/src/auth/server.rs",
+      "function": "classify_current_user",
+      "line": 268
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "web",
+      "cyclomatic": 4.0,
+      "file": "web/src/auth/server.rs",
+      "function": "session_outcome",
+      "line": 307
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "web",
+      "cyclomatic": 4.0,
+      "file": "web/src/posts/server.rs",
+      "function": "list_by_tag_rows",
+      "line": 54
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "web",
+      "cyclomatic": 4.0,
+      "file": "web/src/posts/server.rs",
+      "function": "perform_update_error",
+      "line": 227
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "web",
+      "cyclomatic": 4.0,
+      "file": "web/src/posts/mod.rs",
+      "function": "audience_selection_to_targets",
+      "line": 82
     },
     {
       "coverage": 100.0,
@@ -1669,105 +1768,6 @@
     {
       "coverage": 100.0,
       "crap": 4.0,
-      "crate": "web",
-      "cyclomatic": 4.0,
-      "file": "web/src/pages/media.rs",
-      "function": "format_bytes",
-      "line": 10
-    },
-    {
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "web",
-      "cyclomatic": 4.0,
-      "file": "web/src/error.rs",
-      "function": "ErrorClass::log_level",
-      "line": 128
-    },
-    {
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "web",
-      "cyclomatic": 4.0,
-      "file": "web/src/error.rs",
-      "function": "server_boundary",
-      "line": 424
-    },
-    {
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "web",
-      "cyclomatic": 4.0,
-      "file": "web/src/error.rs",
-      "function": "log_boundary_failure",
-      "line": 468
-    },
-    {
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "web",
-      "cyclomatic": 4.0,
-      "file": "web/src/auth/server.rs",
-      "function": "set_session_cookie",
-      "line": 226
-    },
-    {
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "web",
-      "cyclomatic": 4.0,
-      "file": "web/src/auth/server.rs",
-      "function": "clear_session_cookie",
-      "line": 244
-    },
-    {
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "web",
-      "cyclomatic": 4.0,
-      "file": "web/src/auth/server.rs",
-      "function": "classify_current_user",
-      "line": 268
-    },
-    {
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "web",
-      "cyclomatic": 4.0,
-      "file": "web/src/auth/server.rs",
-      "function": "session_outcome",
-      "line": 307
-    },
-    {
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "web",
-      "cyclomatic": 4.0,
-      "file": "web/src/posts/server.rs",
-      "function": "list_by_tag_rows",
-      "line": 54
-    },
-    {
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "web",
-      "cyclomatic": 4.0,
-      "file": "web/src/posts/server.rs",
-      "function": "perform_update_error",
-      "line": 227
-    },
-    {
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "web",
-      "cyclomatic": 4.0,
-      "file": "web/src/posts/mod.rs",
-      "function": "audience_selection_to_targets",
-      "line": 82
-    },
-    {
-      "coverage": 100.0,
-      "crap": 4.0,
       "crate": "jaunder",
       "cyclomatic": 4.0,
       "file": "server/src/backup.rs",
@@ -1876,11 +1876,11 @@
     {
       "coverage": 94.44444444444444,
       "crap": 3.001543209876543,
-      "crate": "db-test-harness",
+      "crate": "storage",
       "cyclomatic": 3.0,
-      "file": "db-test-harness/src/lib.rs",
+      "file": "storage/src/test_support.rs",
       "function": "Backend::setup",
-      "line": 124
+      "line": 127
     },
     {
       "coverage": 100.0,
@@ -1948,20 +1948,110 @@
     {
       "coverage": 100.0,
       "crap": 3.0,
-      "crate": "db-test-harness",
+      "crate": "web",
       "cyclomatic": 3.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "splice_db_name",
-      "line": 257
+      "file": "web/src/viewer.rs",
+      "function": "account_viewer",
+      "line": 72
     },
     {
       "coverage": 100.0,
       "crap": 3.0,
-      "crate": "db-test-harness",
+      "crate": "web",
       "cyclomatic": 3.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "seed_posts",
-      "line": 542
+      "file": "web/src/viewer.rs",
+      "function": "viewer_user_id",
+      "line": 87
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
+      "file": "web/src/viewer.rs",
+      "function": "local_channel_id",
+      "line": 101
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
+      "file": "web/src/feed_events.rs",
+      "function": "enqueue_feed_events",
+      "line": 29
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
+      "file": "web/src/pages/ui.rs",
+      "function": "format_post_time",
+      "line": 303
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
+      "file": "web/src/audiences/mod.rs",
+      "function": "assert_owns_audience",
+      "line": 66
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
+      "file": "web/src/error.rs",
+      "function": "render_operator_message",
+      "line": 358
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
+      "file": "web/src/auth/server.rs",
+      "function": "AuthRejection::into_response",
+      "line": 38
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
+      "file": "web/src/auth/server.rs",
+      "function": "verify_basic_username",
+      "line": 196
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
+      "file": "web/src/auth/server.rs",
+      "function": "register_open_error",
+      "line": 276
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
+      "file": "web/src/auth/server.rs",
+      "function": "login_outcome",
+      "line": 320
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
+      "file": "web/src/auth/server.rs",
+      "function": "login_error",
+      "line": 329
     },
     {
       "coverage": 100.0,
@@ -2202,6 +2292,24 @@
       "crap": 3.0,
       "crate": "storage",
       "cyclomatic": 3.0,
+      "file": "storage/src/test_support.rs",
+      "function": "splice_db_name",
+      "line": 261
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "storage",
+      "cyclomatic": 3.0,
+      "file": "storage/src/test_support.rs",
+      "function": "seed_posts",
+      "line": 546
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "storage",
+      "cyclomatic": 3.0,
       "file": "storage/src/helpers.rs",
       "function": "build_user_record",
       "line": 32
@@ -2304,114 +2412,6 @@
       "file": "storage/src/posts.rs",
       "function": "resolution_where",
       "line": 1460
-    },
-    {
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "web",
-      "cyclomatic": 3.0,
-      "file": "web/src/viewer.rs",
-      "function": "account_viewer",
-      "line": 72
-    },
-    {
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "web",
-      "cyclomatic": 3.0,
-      "file": "web/src/viewer.rs",
-      "function": "viewer_user_id",
-      "line": 87
-    },
-    {
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "web",
-      "cyclomatic": 3.0,
-      "file": "web/src/viewer.rs",
-      "function": "local_channel_id",
-      "line": 101
-    },
-    {
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "web",
-      "cyclomatic": 3.0,
-      "file": "web/src/feed_events.rs",
-      "function": "enqueue_feed_events",
-      "line": 29
-    },
-    {
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "web",
-      "cyclomatic": 3.0,
-      "file": "web/src/pages/ui.rs",
-      "function": "format_post_time",
-      "line": 303
-    },
-    {
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "web",
-      "cyclomatic": 3.0,
-      "file": "web/src/audiences/mod.rs",
-      "function": "assert_owns_audience",
-      "line": 66
-    },
-    {
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "web",
-      "cyclomatic": 3.0,
-      "file": "web/src/error.rs",
-      "function": "render_operator_message",
-      "line": 358
-    },
-    {
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "web",
-      "cyclomatic": 3.0,
-      "file": "web/src/auth/server.rs",
-      "function": "AuthRejection::into_response",
-      "line": 38
-    },
-    {
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "web",
-      "cyclomatic": 3.0,
-      "file": "web/src/auth/server.rs",
-      "function": "verify_basic_username",
-      "line": 196
-    },
-    {
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "web",
-      "cyclomatic": 3.0,
-      "file": "web/src/auth/server.rs",
-      "function": "register_open_error",
-      "line": 276
-    },
-    {
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "web",
-      "cyclomatic": 3.0,
-      "file": "web/src/auth/server.rs",
-      "function": "login_outcome",
-      "line": 320
-    },
-    {
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "web",
-      "cyclomatic": 3.0,
-      "file": "web/src/auth/server.rs",
-      "function": "login_error",
-      "line": 329
     },
     {
       "coverage": 100.0,
@@ -2560,11 +2560,11 @@
     {
       "coverage": 97.5609756097561,
       "crap": 2.0000580374631824,
-      "crate": "db-test-harness",
+      "crate": "storage",
       "cyclomatic": 2.0,
-      "file": "db-test-harness/src/lib.rs",
+      "file": "storage/src/test_support.rs",
       "function": "ensure_template_db",
-      "line": 404
+      "line": 408
     },
     {
       "coverage": 100.0,
@@ -2655,555 +2655,6 @@
       "file": "common/src/atompub/categories.rs",
       "function": "render_categories_document",
       "line": 20
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 2.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "TestBase::drop",
-      "line": 86
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/backup.rs",
-      "function": "validate_manifest",
-      "line": 287
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/backup.rs",
-      "function": "ensure_schema_version",
-      "line": 298
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/backup.rs",
-      "function": "ensure_absent",
-      "line": 362
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/backup.rs",
-      "function": "TemporaryBackupDirectory::in_temp",
-      "line": 389
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/user_config.rs",
-      "function": "get_default_post_format",
-      "line": 36
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/user_config.rs",
-      "function": "UserConfigStore::get",
-      "line": 95
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/user_config.rs",
-      "function": "UserConfigStore::set",
-      "line": 112
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/user_config.rs",
-      "function": "UserConfigStore::delete",
-      "line": 130
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/sqlite/backup.rs",
-      "function": "columns",
-      "line": 211
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/sqlite/backup.rs",
-      "function": "schema_version",
-      "line": 275
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/sqlite/media.rs",
-      "function": "Sqlite::get_user_upload_usage",
-      "line": 11
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/sqlite/feed_events.rs",
-      "function": "Sqlite::claim_pending_batch",
-      "line": 27
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/media.rs",
-      "function": "MediaStore::get_media",
-      "line": 245
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/media.rs",
-      "function": "MediaStore::find_by_hash",
-      "line": 342
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/feed_events.rs",
-      "function": "FeedEventStore::enqueue",
-      "line": 155
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/feed_events.rs",
-      "function": "FeedEventStore::mark_regenerated",
-      "line": 185
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/feed_events.rs",
-      "function": "FeedEventStore::mark_pinged",
-      "line": 197
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/feed_events.rs",
-      "function": "FeedEventStore::mark_failed",
-      "line": 209
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/feed_events.rs",
-      "function": "FeedEventStore::mark_exhausted",
-      "line": 226
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/audiences.rs",
-      "function": "AudienceStore::list_audiences",
-      "line": 196
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/audiences.rs",
-      "function": "AudienceStore::add_member",
-      "line": 211
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/audiences.rs",
-      "function": "AudienceStore::remove_member",
-      "line": 226
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/audiences.rs",
-      "function": "AudienceStore::list_members",
-      "line": 235
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/post_service.rs",
-      "function": "candidate_slug",
-      "line": 253
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/site_config.rs",
-      "function": "SiteConfigStore::get",
-      "line": 290
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/site_config.rs",
-      "function": "SiteConfigStore::set",
-      "line": 298
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/subscriptions.rs",
-      "function": "SubscriptionStore::subscribe",
-      "line": 125
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/subscriptions.rs",
-      "function": "SubscriptionStore::unsubscribe",
-      "line": 150
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/subscriptions.rs",
-      "function": "SubscriptionStore::is_subscriber",
-      "line": 165
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/subscriptions.rs",
-      "function": "SubscriptionStore::list_subscribers",
-      "line": 186
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/users.rs",
-      "function": "UserStore::update_profile",
-      "line": 356
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/users.rs",
-      "function": "UserStore::set_email",
-      "line": 366
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/sessions.rs",
-      "function": "SessionStore::revoke_session",
-      "line": 174
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/sessions.rs",
-      "function": "SessionStore::list_sessions",
-      "line": 182
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/feed_cache.rs",
-      "function": "FeedCacheStore::get",
-      "line": 79
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/feed_cache.rs",
-      "function": "FeedCacheStore::upsert",
-      "line": 95
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/feed_cache.rs",
-      "function": "FeedCacheStore::delete",
-      "line": 122
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/auth.rs",
-      "function": "hash_token",
-      "line": 92
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/helpers.rs",
-      "function": "build_session_record",
-      "line": 68
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/helpers.rs",
-      "function": "parse_post_tags_json",
-      "line": 140
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/helpers.rs",
-      "function": "media_record_from_row",
-      "line": 285
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/helpers.rs",
-      "function": "generate_hashed_token",
-      "line": 306
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/invites.rs",
-      "function": "InviteStore::create_invite",
-      "line": 87
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/invites.rs",
-      "function": "InviteStore::list_invites",
-      "line": 144
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/postgres/backup.rs",
-      "function": "insert_sql",
-      "line": 147
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/postgres/backup.rs",
-      "function": "columns",
-      "line": 208
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/postgres/backup.rs",
-      "function": "schema_version",
-      "line": 264
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/postgres/media.rs",
-      "function": "Postgres::get_user_upload_usage",
-      "line": 11
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/postgres/feed_events.rs",
-      "function": "Postgres::claim_pending_batch",
-      "line": 14
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/postgres/feed_events.rs",
-      "function": "Postgres::mark_regenerated",
-      "line": 60
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/postgres/feed_events.rs",
-      "function": "Postgres::mark_pinged",
-      "line": 70
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/postgres/feed_events.rs",
-      "function": "Postgres::mark_failed",
-      "line": 80
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/postgres/feed_events.rs",
-      "function": "Postgres::mark_exhausted",
-      "line": 100
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/postgres/mod.rs",
-      "function": "postgres_password_from_env",
-      "line": 235
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/posts.rs",
-      "function": "PostStore::get_post_audiences",
-      "line": 670
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/posts.rs",
-      "function": "PostStore::soft_delete_post",
-      "line": 752
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/posts.rs",
-      "function": "PostStore::unpublish_post",
-      "line": 767
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/posts.rs",
-      "function": "PostStore::get_tags_for_post",
-      "line": 1058
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/posts.rs",
-      "function": "PostStore::list_published_in_window",
-      "line": 1329
-    },
-    {
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "storage",
-      "cyclomatic": 2.0,
-      "file": "storage/src/posts.rs",
-      "function": "PostStore::list_posts_gone_live_between",
-      "line": 1354
     },
     {
       "coverage": 0.0,
@@ -3528,6 +2979,555 @@
       "file": "web/src/posts/server.rs",
       "function": "set_not_found_status",
       "line": 205
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/backup.rs",
+      "function": "validate_manifest",
+      "line": 287
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/backup.rs",
+      "function": "ensure_schema_version",
+      "line": 298
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/backup.rs",
+      "function": "ensure_absent",
+      "line": 362
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/backup.rs",
+      "function": "TemporaryBackupDirectory::in_temp",
+      "line": 389
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/user_config.rs",
+      "function": "get_default_post_format",
+      "line": 36
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/user_config.rs",
+      "function": "UserConfigStore::get",
+      "line": 95
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/user_config.rs",
+      "function": "UserConfigStore::set",
+      "line": 112
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/user_config.rs",
+      "function": "UserConfigStore::delete",
+      "line": 130
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/sqlite/backup.rs",
+      "function": "columns",
+      "line": 211
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/sqlite/backup.rs",
+      "function": "schema_version",
+      "line": 275
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/sqlite/media.rs",
+      "function": "Sqlite::get_user_upload_usage",
+      "line": 11
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/sqlite/feed_events.rs",
+      "function": "Sqlite::claim_pending_batch",
+      "line": 27
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/media.rs",
+      "function": "MediaStore::get_media",
+      "line": 245
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/media.rs",
+      "function": "MediaStore::find_by_hash",
+      "line": 342
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/feed_events.rs",
+      "function": "FeedEventStore::enqueue",
+      "line": 155
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/feed_events.rs",
+      "function": "FeedEventStore::mark_regenerated",
+      "line": 185
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/feed_events.rs",
+      "function": "FeedEventStore::mark_pinged",
+      "line": 197
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/feed_events.rs",
+      "function": "FeedEventStore::mark_failed",
+      "line": 209
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/feed_events.rs",
+      "function": "FeedEventStore::mark_exhausted",
+      "line": 226
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/audiences.rs",
+      "function": "AudienceStore::list_audiences",
+      "line": 196
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/audiences.rs",
+      "function": "AudienceStore::add_member",
+      "line": 211
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/audiences.rs",
+      "function": "AudienceStore::remove_member",
+      "line": 226
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/audiences.rs",
+      "function": "AudienceStore::list_members",
+      "line": 235
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/post_service.rs",
+      "function": "candidate_slug",
+      "line": 253
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/site_config.rs",
+      "function": "SiteConfigStore::get",
+      "line": 290
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/site_config.rs",
+      "function": "SiteConfigStore::set",
+      "line": 298
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/subscriptions.rs",
+      "function": "SubscriptionStore::subscribe",
+      "line": 125
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/subscriptions.rs",
+      "function": "SubscriptionStore::unsubscribe",
+      "line": 150
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/subscriptions.rs",
+      "function": "SubscriptionStore::is_subscriber",
+      "line": 165
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/subscriptions.rs",
+      "function": "SubscriptionStore::list_subscribers",
+      "line": 186
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/users.rs",
+      "function": "UserStore::update_profile",
+      "line": 356
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/users.rs",
+      "function": "UserStore::set_email",
+      "line": 366
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/sessions.rs",
+      "function": "SessionStore::revoke_session",
+      "line": 174
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/sessions.rs",
+      "function": "SessionStore::list_sessions",
+      "line": 182
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/test_support.rs",
+      "function": "TestBase::drop",
+      "line": 89
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/feed_cache.rs",
+      "function": "FeedCacheStore::get",
+      "line": 79
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/feed_cache.rs",
+      "function": "FeedCacheStore::upsert",
+      "line": 95
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/feed_cache.rs",
+      "function": "FeedCacheStore::delete",
+      "line": 122
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/auth.rs",
+      "function": "hash_token",
+      "line": 92
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/helpers.rs",
+      "function": "build_session_record",
+      "line": 68
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/helpers.rs",
+      "function": "parse_post_tags_json",
+      "line": 140
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/helpers.rs",
+      "function": "media_record_from_row",
+      "line": 285
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/helpers.rs",
+      "function": "generate_hashed_token",
+      "line": 306
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/invites.rs",
+      "function": "InviteStore::create_invite",
+      "line": 87
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/invites.rs",
+      "function": "InviteStore::list_invites",
+      "line": 144
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/postgres/backup.rs",
+      "function": "insert_sql",
+      "line": 147
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/postgres/backup.rs",
+      "function": "columns",
+      "line": 208
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/postgres/backup.rs",
+      "function": "schema_version",
+      "line": 264
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/postgres/media.rs",
+      "function": "Postgres::get_user_upload_usage",
+      "line": 11
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/postgres/feed_events.rs",
+      "function": "Postgres::claim_pending_batch",
+      "line": 14
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/postgres/feed_events.rs",
+      "function": "Postgres::mark_regenerated",
+      "line": 60
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/postgres/feed_events.rs",
+      "function": "Postgres::mark_pinged",
+      "line": 70
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/postgres/feed_events.rs",
+      "function": "Postgres::mark_failed",
+      "line": 80
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/postgres/feed_events.rs",
+      "function": "Postgres::mark_exhausted",
+      "line": 100
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/postgres/mod.rs",
+      "function": "postgres_password_from_env",
+      "line": 235
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/posts.rs",
+      "function": "PostStore::get_post_audiences",
+      "line": 670
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/posts.rs",
+      "function": "PostStore::soft_delete_post",
+      "line": 752
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/posts.rs",
+      "function": "PostStore::unpublish_post",
+      "line": 767
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/posts.rs",
+      "function": "PostStore::get_tags_for_post",
+      "line": 1058
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/posts.rs",
+      "function": "PostStore::list_published_in_window",
+      "line": 1329
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/posts.rs",
+      "function": "PostStore::list_posts_gone_live_between",
+      "line": 1354
     },
     {
       "coverage": 100.0,
@@ -3865,11 +3865,11 @@
     {
       "coverage": 92.0,
       "crap": 1.000512,
-      "crate": "db-test-harness",
+      "crate": "storage",
       "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
+      "file": "storage/src/test_support.rs",
       "function": "drop_test_database",
-      "line": 299
+      "line": 303
     },
     {
       "coverage": 94.33962264150944,
@@ -3892,20 +3892,20 @@
     {
       "coverage": 94.73684210526316,
       "crap": 1.0001457938474996,
-      "crate": "db-test-harness",
+      "crate": "storage",
       "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
+      "file": "storage/src/test_support.rs",
       "function": "unique_postgres_url",
-      "line": 364
+      "line": 368
     },
     {
       "coverage": 94.73684210526316,
       "crap": 1.0001457938474996,
-      "crate": "db-test-harness",
+      "crate": "storage",
       "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
+      "file": "storage/src/test_support.rs",
       "function": "template_postgres_url",
-      "line": 462
+      "line": 466
     },
     {
       "coverage": 95.23809523809524,
@@ -4626,726 +4626,6 @@
       "file": "common/src/atompub/mod.rs",
       "function": "AtomPubError::from",
       "line": 56
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "TestBase::sqlite",
-      "line": 62
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "TestBase::postgres",
-      "line": 69
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "TestBase::deref",
-      "line": 80
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "recorded_postgres_url",
-      "line": 110
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "sqlite_only",
-      "line": 157
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "postgres_only",
-      "line": 163
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "backends",
-      "line": 174
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "sqlite_url",
-      "line": 182
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "postgres_url",
-      "line": 188
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "postgres_testing_enabled",
-      "line": 194
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "postgres_bootstrap_url",
-      "line": 202
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "bootstrap_url",
-      "line": 213
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "postgres_url_string",
-      "line": 220
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "postgres_url_authority",
-      "line": 225
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "postgres_test_authority",
-      "line": 242
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "quote_postgres_identifier",
-      "line": 246
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "postgres_url_with_db_name",
-      "line": 250
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "unique_postgres_db_name",
-      "line": 270
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "nonexistent_postgres_url",
-      "line": 352
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "noop_mailer",
-      "line": 488
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "db-test-harness",
-      "cyclomatic": 1.0,
-      "file": "db-test-harness/src/lib.rs",
-      "function": "test_sqlite_state_with_pool",
-      "line": 498
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/backup.rs",
-      "function": "build_manifest",
-      "line": 227
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/backup.rs",
-      "function": "TemporaryBackupDirectory::path",
-      "line": 398
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/backup.rs",
-      "function": "TemporaryBackupDirectory::drop",
-      "line": 404
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/user_config.rs",
-      "function": "set_default_post_format",
-      "line": 52
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/user_config.rs",
-      "function": "UserConfigStore::new",
-      "line": 73
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/password.rs",
-      "function": "PasswordResetStore::new",
-      "line": 63
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/sqlite/backup.rs",
-      "function": "insert_sql",
-      "line": 157
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/sqlite/backup.rs",
-      "function": "json_select",
-      "line": 247
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/sqlite/backup.rs",
-      "function": "is_bool_column",
-      "line": 271
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/sqlite/backup.rs",
-      "function": "quote_identifier",
-      "line": 305
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/sqlite/backup.rs",
-      "function": "quote_literal",
-      "line": 309
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/sqlite/feed_events.rs",
-      "function": "placeholders",
-      "line": 21
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/sqlite/mod.rs",
-      "function": "make_app_state",
-      "line": 62
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/sqlite/mod.rs",
-      "function": "SqliteAtomicOps::new",
-      "line": 142
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/sqlite/mod.rs",
-      "function": "sqlite_pool",
-      "line": 311
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/media.rs",
-      "function": "MediaSource::fmt",
-      "line": 31
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/media.rs",
-      "function": "MediaStore::new",
-      "line": 190
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/media.rs",
-      "function": "MediaStore::delete_media",
-      "line": 318
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/media.rs",
-      "function": "MediaStore::get_user_upload_usage",
-      "line": 333
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/feed_events.rs",
-      "function": "FeedEventStore::new",
-      "line": 136
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/feed_events.rs",
-      "function": "FeedEventStore::claim_pending_batch",
-      "line": 169
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/db.rs",
-      "function": "sql_slow_query_threshold",
-      "line": 93
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/audiences.rs",
-      "function": "AudienceError::from",
-      "line": 40
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/audiences.rs",
-      "function": "AudienceStore::new",
-      "line": 126
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/post_service.rs",
-      "function": "create_rendered_post",
-      "line": 28
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/post_service.rs",
-      "function": "update_rendered_post",
-      "line": 60
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/site_config.rs",
-      "function": "SiteConfigStore::new",
-      "line": 276
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/subscriptions.rs",
-      "function": "SubscriptionStore::new",
-      "line": 109
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/subscriptions.rs",
-      "function": "SubscriptionStore::local_channel_id",
-      "line": 208
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/users.rs",
-      "function": "UserStore::new",
-      "line": 151
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/sessions.rs",
-      "function": "SessionStore::new",
-      "line": 110
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/feed_cache.rs",
-      "function": "row_from_tuple",
-      "line": 38
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/feed_cache.rs",
-      "function": "FeedCacheStore::new",
-      "line": 59
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/auth.rs",
-      "function": "load_registration_policy",
-      "line": 61
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/auth.rs",
-      "function": "generate_token",
-      "line": 78
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/email.rs",
-      "function": "EmailVerificationStore::new",
-      "line": 71
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/helpers.rs",
-      "function": "build_invite_record",
-      "line": 93
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/helpers.rs",
-      "function": "user_record_from_row",
-      "line": 222
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/helpers.rs",
-      "function": "session_record_from_row",
-      "line": 228
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/helpers.rs",
-      "function": "invite_record_from_row",
-      "line": 248
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/helpers.rs",
-      "function": "post_record_from_row",
-      "line": 270
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/helpers.rs",
-      "function": "dummy_password_hash",
-      "line": 378
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/invites.rs",
-      "function": "InviteStore::new",
-      "line": 70
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/postgres/backup.rs",
-      "function": "json_select",
-      "line": 251
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/postgres/backup.rs",
-      "function": "quote_identifier",
-      "line": 300
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/postgres/bootstrap.rs",
-      "function": "quote_postgres_identifier",
-      "line": 91
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/postgres/bootstrap.rs",
-      "function": "quote_postgres_literal",
-      "line": 99
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/postgres/bootstrap.rs",
-      "function": "pg_error_code_matches",
-      "line": 106
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/postgres/sessions.rs",
-      "function": "Postgres::touch_and_load",
-      "line": 12
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/postgres/mod.rs",
-      "function": "PostgresAtomicOps::new",
-      "line": 69
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/postgres/mod.rs",
-      "function": "make_postgres_app_state",
-      "line": 213
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/posts.rs",
-      "function": "PostRecord::permalink",
-      "line": 60
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/posts.rs",
-      "function": "PostRecord::fallback_summary_label",
-      "line": 74
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/posts.rs",
-      "function": "post_tag_diff",
-      "line": 246
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/posts.rs",
-      "function": "PostStore::new",
-      "line": 565
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/posts.rs",
-      "function": "PostStore::update_post",
-      "line": 738
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/posts.rs",
-      "function": "PostStore::tag_post",
-      "line": 1040
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/posts.rs",
-      "function": "PostStore::untag_post",
-      "line": 1049
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/posts.rs",
-      "function": "ResolutionBinds::bind_onto",
-      "line": 1516
     },
     {
       "coverage": 100.0,
@@ -6228,6 +5508,735 @@
       "file": "web/src/posts/mod.rs",
       "function": "unpublish_post",
       "line": 698
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/backup.rs",
+      "function": "build_manifest",
+      "line": 227
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/backup.rs",
+      "function": "TemporaryBackupDirectory::path",
+      "line": 398
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/backup.rs",
+      "function": "TemporaryBackupDirectory::drop",
+      "line": 404
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/user_config.rs",
+      "function": "set_default_post_format",
+      "line": 52
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/user_config.rs",
+      "function": "UserConfigStore::new",
+      "line": 73
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/password.rs",
+      "function": "PasswordResetStore::new",
+      "line": 63
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/sqlite/backup.rs",
+      "function": "insert_sql",
+      "line": 157
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/sqlite/backup.rs",
+      "function": "json_select",
+      "line": 247
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/sqlite/backup.rs",
+      "function": "is_bool_column",
+      "line": 271
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/sqlite/backup.rs",
+      "function": "quote_identifier",
+      "line": 305
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/sqlite/backup.rs",
+      "function": "quote_literal",
+      "line": 309
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/sqlite/feed_events.rs",
+      "function": "placeholders",
+      "line": 21
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/sqlite/mod.rs",
+      "function": "make_app_state",
+      "line": 62
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/sqlite/mod.rs",
+      "function": "SqliteAtomicOps::new",
+      "line": 142
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/sqlite/mod.rs",
+      "function": "sqlite_pool",
+      "line": 311
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/media.rs",
+      "function": "MediaSource::fmt",
+      "line": 31
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/media.rs",
+      "function": "MediaStore::new",
+      "line": 190
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/media.rs",
+      "function": "MediaStore::delete_media",
+      "line": 318
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/media.rs",
+      "function": "MediaStore::get_user_upload_usage",
+      "line": 333
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/feed_events.rs",
+      "function": "FeedEventStore::new",
+      "line": 136
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/feed_events.rs",
+      "function": "FeedEventStore::claim_pending_batch",
+      "line": 169
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/db.rs",
+      "function": "sql_slow_query_threshold",
+      "line": 93
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/audiences.rs",
+      "function": "AudienceError::from",
+      "line": 40
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/audiences.rs",
+      "function": "AudienceStore::new",
+      "line": 126
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/post_service.rs",
+      "function": "create_rendered_post",
+      "line": 28
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/post_service.rs",
+      "function": "update_rendered_post",
+      "line": 60
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/site_config.rs",
+      "function": "SiteConfigStore::new",
+      "line": 276
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/subscriptions.rs",
+      "function": "SubscriptionStore::new",
+      "line": 109
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/subscriptions.rs",
+      "function": "SubscriptionStore::local_channel_id",
+      "line": 208
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/users.rs",
+      "function": "UserStore::new",
+      "line": 151
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/sessions.rs",
+      "function": "SessionStore::new",
+      "line": 110
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "TestBase::sqlite",
+      "line": 65
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "TestBase::postgres",
+      "line": 72
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "TestBase::deref",
+      "line": 83
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "recorded_postgres_url",
+      "line": 113
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "sqlite_only",
+      "line": 160
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "postgres_only",
+      "line": 166
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "backends",
+      "line": 178
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "sqlite_url",
+      "line": 186
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "postgres_url",
+      "line": 192
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "postgres_testing_enabled",
+      "line": 198
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "postgres_bootstrap_url",
+      "line": 206
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "bootstrap_url",
+      "line": 217
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "postgres_url_string",
+      "line": 224
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "postgres_url_authority",
+      "line": 229
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "postgres_test_authority",
+      "line": 246
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "quote_postgres_identifier",
+      "line": 250
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "postgres_url_with_db_name",
+      "line": 254
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "unique_postgres_db_name",
+      "line": 274
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "nonexistent_postgres_url",
+      "line": 356
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "noop_mailer",
+      "line": 492
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "test_sqlite_state_with_pool",
+      "line": 502
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "seed_user",
+      "line": 583
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/feed_cache.rs",
+      "function": "row_from_tuple",
+      "line": 38
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/feed_cache.rs",
+      "function": "FeedCacheStore::new",
+      "line": 59
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/auth.rs",
+      "function": "load_registration_policy",
+      "line": 61
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/auth.rs",
+      "function": "generate_token",
+      "line": 78
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/email.rs",
+      "function": "EmailVerificationStore::new",
+      "line": 71
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/helpers.rs",
+      "function": "build_invite_record",
+      "line": 93
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/helpers.rs",
+      "function": "user_record_from_row",
+      "line": 222
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/helpers.rs",
+      "function": "session_record_from_row",
+      "line": 228
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/helpers.rs",
+      "function": "invite_record_from_row",
+      "line": 248
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/helpers.rs",
+      "function": "post_record_from_row",
+      "line": 270
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/helpers.rs",
+      "function": "dummy_password_hash",
+      "line": 378
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/invites.rs",
+      "function": "InviteStore::new",
+      "line": 70
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/postgres/backup.rs",
+      "function": "json_select",
+      "line": 251
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/postgres/backup.rs",
+      "function": "quote_identifier",
+      "line": 300
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/postgres/bootstrap.rs",
+      "function": "quote_postgres_identifier",
+      "line": 91
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/postgres/bootstrap.rs",
+      "function": "quote_postgres_literal",
+      "line": 99
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/postgres/bootstrap.rs",
+      "function": "pg_error_code_matches",
+      "line": 106
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/postgres/sessions.rs",
+      "function": "Postgres::touch_and_load",
+      "line": 12
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/postgres/mod.rs",
+      "function": "PostgresAtomicOps::new",
+      "line": 69
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/postgres/mod.rs",
+      "function": "make_postgres_app_state",
+      "line": 213
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/posts.rs",
+      "function": "PostRecord::permalink",
+      "line": 60
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/posts.rs",
+      "function": "PostRecord::fallback_summary_label",
+      "line": 74
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/posts.rs",
+      "function": "post_tag_diff",
+      "line": 246
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/posts.rs",
+      "function": "PostStore::new",
+      "line": 565
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/posts.rs",
+      "function": "PostStore::update_post",
+      "line": 738
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/posts.rs",
+      "function": "PostStore::tag_post",
+      "line": 1040
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/posts.rs",
+      "function": "PostStore::untag_post",
+      "line": 1049
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/posts.rs",
+      "function": "ResolutionBinds::bind_onto",
+      "line": 1516
     },
     {
       "coverage": 100.0,

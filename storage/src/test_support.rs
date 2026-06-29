@@ -167,8 +167,9 @@ pub fn postgres_only(#[case] backend: Backend) {}
 
 // `#[export]` adds `#[macro_export]` to the generated template macro so it is
 // reachable at this crate's root and `#[apply]`-able from *other* crates
-// (`storage` tests, `server` tests). Without it the macro is `pub(crate)` and a
-// cross-crate `use db_test_harness::backends` fails with "private macro".
+// (`server`'s test crate, via the `storage::test_support` re-export). Without it
+// the macro is `pub(crate)` and a cross-crate `use storage::test_support::backends`
+// fails with "private macro".
 #[template]
 #[export]
 #[rstest]
