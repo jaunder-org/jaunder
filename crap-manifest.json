@@ -2,10 +2,10 @@
   "$schema": "https://raw.githubusercontent.com/minikin/cargo-crap/main/schemas/report-v1.json",
   "entries": [
     {
-      "coverage": 80.7017543859649,
-      "crap": 25.478554804987233,
+      "coverage": 83.33333333333334,
+      "crap": 27.893518518518512,
       "crate": "jaunder",
-      "cyclomatic": 22.0,
+      "cyclomatic": 25.0,
       "file": "server/src/main.rs",
       "function": "run",
       "line": 33
@@ -308,13 +308,13 @@
       "line": 478
     },
     {
-      "coverage": 90.74074074074076,
-      "crap": 10.079383224102015,
+      "coverage": 91.52542372881356,
+      "crap": 10.06086308726793,
       "crate": "jaunder",
       "cyclomatic": 10.0,
       "file": "server/src/commands.rs",
       "function": "prepare_server",
-      "line": 329
+      "line": 374
     },
     {
       "coverage": 100.0,
@@ -395,7 +395,7 @@
       "cyclomatic": 9.0,
       "file": "server/src/commands.rs",
       "function": "directory_has_entries",
-      "line": 286
+      "line": 329
     },
     {
       "coverage": 80.0,
@@ -629,7 +629,7 @@
       "cyclomatic": 7.0,
       "file": "server/src/commands.rs",
       "function": "cmd_smtp_test",
-      "line": 171
+      "line": 214
     },
     {
       "coverage": 100.0,
@@ -1322,7 +1322,7 @@
       "cyclomatic": 5.0,
       "file": "server/src/commands.rs",
       "function": "ensure_restore_target_empty",
-      "line": 271
+      "line": 314
     },
     {
       "coverage": 100.0,
@@ -1798,7 +1798,7 @@
       "crate": "jaunder",
       "cyclomatic": 4.0,
       "file": "server/src/commands.rs",
-      "function": "cmd_user_invite",
+      "function": "app_password_create",
       "line": 149
     },
     {
@@ -1807,8 +1807,17 @@
       "crate": "jaunder",
       "cyclomatic": 4.0,
       "file": "server/src/commands.rs",
+      "function": "cmd_user_invite",
+      "line": 192
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "jaunder",
+      "cyclomatic": 4.0,
+      "file": "server/src/commands.rs",
       "function": "cmd_restore",
-      "line": 239
+      "line": 282
     },
     {
       "coverage": 100.0,
@@ -1865,15 +1874,6 @@
       "line": 208
     },
     {
-      "coverage": 91.66666666666666,
-      "crap": 3.0052083333333335,
-      "crate": "jaunder",
-      "cyclomatic": 3.0,
-      "file": "server/src/commands.rs",
-      "function": "cmd_serve",
-      "line": 404
-    },
-    {
       "coverage": 94.44444444444444,
       "crap": 3.001543209876543,
       "crate": "storage",
@@ -1881,6 +1881,15 @@
       "file": "storage/src/test_support.rs",
       "function": "Backend::setup",
       "line": 127
+    },
+    {
+      "coverage": 94.73684210526316,
+      "crap": 3.0013121446274966,
+      "crate": "jaunder",
+      "cyclomatic": 3.0,
+      "file": "server/src/commands.rs",
+      "function": "cmd_serve",
+      "line": 456
     },
     {
       "coverage": 100.0,
@@ -2445,6 +2454,15 @@
       "crap": 3.0,
       "crate": "jaunder",
       "cyclomatic": 3.0,
+      "file": "server/src/runtime_file.rs",
+      "function": "RuntimeFileGuard::write",
+      "line": 39
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "jaunder",
+      "cyclomatic": 3.0,
       "file": "server/src/websub/http.rs",
       "function": "HttpWebSubClient::send_publish",
       "line": 37
@@ -2473,8 +2491,17 @@
       "crate": "jaunder",
       "cyclomatic": 3.0,
       "file": "server/src/commands.rs",
+      "function": "cmd_app_password_create",
+      "line": 173
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "jaunder",
+      "cyclomatic": 3.0,
+      "file": "server/src/commands.rs",
       "function": "default_backup_path",
-      "line": 262
+      "line": 305
     },
     {
       "coverage": 100.0,
@@ -3588,6 +3615,24 @@
       "crap": 2.0,
       "crate": "jaunder",
       "cyclomatic": 2.0,
+      "file": "server/src/runtime_file.rs",
+      "function": "write_atomic",
+      "line": 14
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "jaunder",
+      "cyclomatic": 2.0,
+      "file": "server/src/runtime_file.rs",
+      "function": "RuntimeFileGuard::drop",
+      "line": 64
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "jaunder",
+      "cyclomatic": 2.0,
       "file": "server/src/websub/mod.rs",
       "function": "default_client_from_env",
       "line": 34
@@ -3662,7 +3707,7 @@
       "cyclomatic": 2.0,
       "file": "server/src/commands.rs",
       "function": "cmd_backup",
-      "line": 211
+      "line": 254
     },
     {
       "coverage": 100.0,
@@ -3842,7 +3887,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/lib.rs",
       "function": "create_router",
-      "line": 33
+      "line": 34
     },
     {
       "coverage": 88.63636363636364,
@@ -6300,6 +6345,15 @@
       "file": "server/src/media.rs",
       "function": "serve_internal_error",
       "line": 313
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "jaunder",
+      "cyclomatic": 1.0,
+      "file": "server/src/runtime_file.rs",
+      "function": "RuntimeFileGuard::for_serve",
+      "line": 53
     },
     {
       "coverage": 100.0,
