@@ -56,11 +56,11 @@ The load-bearing change, applied to **both** backends and factored into one shar
 
 On **success**, the copied files land in `$out` (and the trace tarball is near-empty — `retain-on-failure`). On **failure**, the final assert discards `$out`, but the copies already executed and live in the `--keep-failed` build dir for layer 3 to rescue.
 
-### 3. xtask `rescue_diagnostics` extension (xtask/src/steps/nix.rs)
+### 3. xtask failure-path rescue from the kept outPath (xtask/src/steps/nix.rs)
 
-Extend `rescue_diagnostics` (today: copies only `emit-out/diagnostics` for coverage) to also, for e2e checks, copy the e2e artifacts from the kept `/tmp/nix-build-jaunder-<check>-*` build dir into `.xtask/diagnostics/<check>/`. Reuses the established "failed derivation → no `$out` → pull from kept build dir" pattern already in this file. The path-selection logic is pure and unit-tested (mirrors the existing `copy_e2e_diagnostics_between` test).
+**Empirically resolved (verification run, 2026-06-29):** with `--keep-failed`, nix keeps the failed derivation's **output store path** on disk, and it is **world-readable** (mode 755/644, owned by the nixbld user). The path is deterministic — `nix eval --raw .#checks.<system>.<check>.outPath` returns exactly the kept path — and it contains all five artifacts the testScript copied, including the `otel-traces-<backend>.jsonl/` **directory** layout. (The `/tmp/nix-build-jaunder-*` build dir, by contrast, is nixbld-owned and *not* readable, and its location is configurable — so reading the outPath is both simpler and more robust.)
 
-**One empirical unknown:** the exact in-build-dir path where `copy_from_vm` output lands on a *failed* build. The verification run (below) resolves it; the rescue glob is then wired to that path. This is the only part not determinable by code reading alone.
+So on a failed build, `build_check` computes the outPath via `nix eval` and feeds it to the **existing** `copy_e2e_diagnostics_between(src, dest)`, which already copies `jaunder-journal-*.log`, `otel-traces-*.jsonl` (dir via `copy_tree`), and `playwright-report-*.json`. Extend its `wanted()` predicate to also match `playwright-artifacts-*.tar.gz` and `system-journal-*.log`. One copier serves both the success path (from the `.xtask/gcroots/<check>` out-link) and the failure path (from the eval'd outPath); the predicate change is pure and unit-tested.
 
 ## Testing & verification
 

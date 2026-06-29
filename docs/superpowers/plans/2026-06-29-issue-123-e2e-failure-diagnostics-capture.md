@@ -83,7 +83,7 @@ git commit -m "test(e2e): record Playwright trace+screenshots on failure (#49)"
 - Consumes: `e2ePanicGate` (existing, unchanged); the Playwright `outputDir` from Task 1.
 - Produces: per-backend flat artifact files copied to the driver out-dir (`$out` on success; the `--keep-failed` build dir on failure) — consumed by Task 4's rescue. The build log gains the streamed `line` reporter output.
 
-- [ ] **Step 1: Define the `e2eRunAndCapture` helper**
+- [x] **Step 1: Define the `e2eRunAndCapture` helper**
 
 Immediately after the `e2ePanicGate` binding (after flake.nix ~line 550), add a helper that emits the full run-capture-copy-assert tail. It takes the per-combo env the two checks currently inline:
 
@@ -153,7 +153,7 @@ Immediately after the `e2ePanicGate` binding (after flake.nix ~line 550), add a 
 
 Note: the OTel artifact name changes from a directory copy (`otel-traces-<backend>.jsonl` as the `copy_from_vm` *target* dir, the old layout) to a **flat file** `otel-traces-<backend>.jsonl`. The trace-analysis tooling reads `otel-traces-<backend>.jsonl` — keep verifying it still resolves in Task 3's run (the file content is identical; only the success-path copy mechanism changes). If the tooling requires the directory layout, fall back to the old `copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-${backend}.jsonl")` form inside `_grab` semantics.
 
-- [ ] **Step 2: Replace the sqlite tail with the helper call**
+- [x] **Step 2: Replace the sqlite tail with the helper call**
 
 In `mkE2eSqliteCheck`'s `testScript`, replace lines ~629–654 (from `machine.succeed("cd /tmp/e2e"` … through `${e2ePanicGate "sqlite"}`) with:
 
@@ -167,7 +167,7 @@ In `mkE2eSqliteCheck`'s `testScript`, replace lines ~629–654 (from `machine.su
 
 (The `seed_db()` line already precedes this region — keep it; replace only the run+copy+gate tail.)
 
-- [ ] **Step 3: Replace the postgres tail with the helper call**
+- [x] **Step 3: Replace the postgres tail with the helper call**
 
 In `mkE2ePostgresCheck`'s `testScript`, replace lines ~780–804 (the `machine.succeed("cd /tmp/e2e"` … `${e2ePanicGate "postgres"}` tail) with:
 
@@ -179,7 +179,7 @@ In `mkE2ePostgresCheck`'s `testScript`, replace lines ~780–804 (the `machine.s
               }}
 ```
 
-- [ ] **Step 4: Confirm both checks still evaluate**
+- [x] **Step 4: Confirm both checks still evaluate**
 
 ```bash
 nix eval --raw .#checks.x86_64-linux.e2e-sqlite-chromium.drvPath
@@ -194,6 +194,8 @@ Expected: both print `.drv` paths (the Python testScript is assembled correctly;
 git add flake.nix
 git commit -m "test(e2e): copy all VM diagnostics before failing the check (#49)"
 ```
+<!-- done -->
+
 
 ---
 
@@ -207,7 +209,7 @@ This task runs ONE real failing e2e combo to (a) prove the in-VM capture works, 
 **Interfaces:**
 - Produces: the kept-dir artifact path/layout (recorded in this task's notes), consumed by Task 4.
 
-- [ ] **Step 1: Add a throwaway always-failing spec**
+- [x] **Step 1: Add a throwaway always-failing spec**
 
 Create `end2end/tests/zzz-force-fail.spec.ts`:
 
@@ -222,191 +224,140 @@ test('force fail to exercise failure-path capture', async ({ page }) => {
 });
 ```
 
-- [ ] **Step 2: Run one real e2e combo and let it fail**
+- [x] **Step 2: Run one real e2e combo and let it fail**
 
 ```bash
 cargo xtask e2e sqlite chromium
 ```
 
-Expected: the combo FAILS (the forced spec). Confirm:
-- the step result names `build.log`;
-- `rg -n "force fail to exercise|zzz-force-fail|expect.*toBe" .xtask/diagnostics/e2e-sqlite-chromium/build.log` finds the failing test + assertion (proves the streamed `line` reporter reached the log).
+DONE (2026-06-29): combo FAILED on the forced spec. `build.log` carried the full Playwright `line` output (every test, the failures with assertion + error-context + `trace.zip` paths) and the final `AssertionError: e2e Playwright failed (exit 1) … see playwright-report-sqlite.json + playwright-artifacts-sqlite.tar.gz` — proving the streamed reporter reaches the log. All five artifacts were copied unconditionally before the abort.
 
-- [ ] **Step 3: Record the kept-dir artifact layout**
+- [x] **Step 3: Record where the artifacts land on failure**
 
-```bash
-find /tmp -maxdepth 4 -path '*nix-build-jaunder-e2e-sqlite-chromium*' \( -name 'playwright-report-*.json' -o -name 'playwright-artifacts-*.tar.gz' -o -name 'system-journal-*.log' -o -name 'jaunder-journal-*.log' -o -name 'otel-traces-*.jsonl' \) 2>/dev/null
-```
-
-Expected: lists the copied artifacts inside the retained build dir. **Record the common ancestor path pattern** — Task 4 globs the kept `/tmp/nix-build-jaunder-<check>-*` tree by these filenames, so the exact depth does not need hardcoding, but confirm the files are present somewhere under that prefix. If NOTHING is found, the in-VM copies did not run before the abort — revisit Task 2 Step 1 (the `assert` must be last) before proceeding.
+DONE — **key finding:** with `--keep-failed`, nix keeps the failed derivation's **output store path**, and it is **world-readable**. `nix eval --raw .#checks.x86_64-linux.e2e-sqlite-chromium.outPath` returns exactly that kept path (`/nix/store/…-vm-test-run-jaunder-e2e-sqlite-chromium`), which contains `jaunder-journal-sqlite.log`, `system-journal-sqlite.log`, `playwright-report-sqlite.json`, `playwright-artifacts-sqlite.tar.gz` (6 MB), and `otel-traces-sqlite.jsonl/` (directory). The `/tmp/nix-build-jaunder-*` build dir is nixbld-owned and NOT readable, so reading the **outPath** is both simpler and more robust. Task 4 is revised to this approach.
 
 ---
 
-### Task 4: Extend `rescue_diagnostics` to recover e2e artifacts + unit test
+### Task 4: Recover failure artifacts from the kept outPath + unit test
 
 **Files:**
-- Modify: `xtask/src/steps/nix.rs` — `rescue_diagnostics` (~line 273) and the artifact-name predicate.
-- Test: `xtask/src/steps/nix.rs` `#[cfg(test)]` mod (alongside `copy_e2e_diagnostics_between_copies_journal_otel_and_playwright`, ~line 385).
+- Modify: `xtask/src/steps/nix.rs` — `copy_e2e_diagnostics_between`'s `wanted()` predicate (~line 126); add an `eval_out_path` helper; call the copier from `rescue_diagnostics` (~line 273) with the eval'd outPath.
+- Test: `xtask/src/steps/nix.rs` `#[cfg(test)]` mod — extend `copy_e2e_diagnostics_between_copies_journal_otel_and_playwright` (~line 385) to cover the two new artifact types.
 - Delete (throwaway from Task 3): `end2end/tests/zzz-force-fail.spec.ts`.
 
 **Interfaces:**
-- Consumes: the kept `/tmp/nix-build-jaunder-<check>-*` build dir (Task 3's layout).
-- Produces: e2e artifacts in `.xtask/diagnostics/<check>/` on a failed build.
+- Consumes: the failed check's deterministic outPath (`nix eval --raw .#checks.<system>.<check>.outPath`), kept world-readable by `--keep-failed`.
+- Produces: e2e artifacts in `.xtask/diagnostics/<check>/` on a failed build, via the existing `copy_e2e_diagnostics_between` (which already handles the otel directory).
 
-- [ ] **Step 1: Write the failing unit test**
+- [ ] **Step 1: Extend the existing unit test to cover the two new artifact types**
 
-Add to the test module. The new helper `rescue_e2e_artifacts(kept_dir, dest)` recursively copies files whose names match the e2e artifact patterns. Test it over a fixture tree:
+In `copy_e2e_diagnostics_between_copies_journal_otel_and_playwright`, also write a `playwright-artifacts-<backend>.tar.gz` and a `system-journal-<backend>.log` into the fixture `src`, and assert both are copied to `dest`:
 
 ```rust
-    #[test]
-    fn rescue_e2e_artifacts_copies_named_files_recursively() {
-        let tmp = tempfile::tempdir().unwrap();
-        let kept = tmp.path().join("nix-build-jaunder-e2e-sqlite-chromium-1/deep/out");
-        std::fs::create_dir_all(&kept).unwrap();
-        std::fs::write(kept.join("playwright-report-sqlite.json"), b"r").unwrap();
-        std::fs::write(kept.join("playwright-artifacts-sqlite.tar.gz"), b"t").unwrap();
-        std::fs::write(kept.join("system-journal-sqlite.log"), b"s").unwrap();
-        std::fs::write(kept.join("unrelated.txt"), b"x").unwrap();
-
-        let dest = tmp.path().join("diag");
-        let n = super::rescue_e2e_artifacts(
-            tmp.path().join("nix-build-jaunder-e2e-sqlite-chromium-1").as_path(),
-            &dest,
-        );
-
-        assert_eq!(n, 3);
-        assert!(dest.join("playwright-report-sqlite.json").exists());
+        std::fs::write(src.join("playwright-artifacts-sqlite.tar.gz"), b"a").unwrap();
+        std::fs::write(src.join("system-journal-sqlite.log"), b"s").unwrap();
+```
+```rust
         assert!(dest.join("playwright-artifacts-sqlite.tar.gz").exists());
         assert!(dest.join("system-journal-sqlite.log").exists());
-        assert!(!dest.join("unrelated.txt").exists());
-    }
 ```
 
 - [ ] **Step 2: Run the test, verify it fails**
 
 ```bash
-cargo nextest run -p xtask rescue_e2e_artifacts_copies_named_files_recursively
+cargo nextest run -p xtask copy_e2e_diagnostics_between_copies_journal_otel_and_playwright
 ```
 
-Expected: FAIL (`rescue_e2e_artifacts` not defined).
+Expected: FAIL (the two new files are not yet matched by `wanted()`).
 
-- [ ] **Step 3: Implement `rescue_e2e_artifacts` and wire it into `rescue_diagnostics`**
+- [ ] **Step 3: Extend `wanted()`, add `eval_out_path`, and wire the failure rescue**
 
-Add the recursive name-matched copy and an e2e-artifact predicate, and call it from `rescue_diagnostics` for any kept `nix-build-jaunder-<check>-*` dir (it is a no-op when no matching files exist, so it is safe for the coverage check too):
+Add the two patterns to `copy_e2e_diagnostics_between`'s `wanted` closure:
 
 ```rust
-/// True for the flat e2e diagnostic artifacts the testScript copies out of the VM
-/// (Playwright report, the trace/screenshot tarball, the system + app journals,
-/// and the OTEL trace). Distinct from `copy_e2e_diagnostics_between`'s success-path
-/// predicate because the failure path also carries the `.tar.gz` and system journal.
-fn is_e2e_artifact(name: &str) -> bool {
-    (name.starts_with("playwright-report-") && name.ends_with(".json"))
-        || (name.starts_with("playwright-artifacts-") && name.ends_with(".tar.gz"))
-        || (name.starts_with("system-journal-") && name.ends_with(".log"))
-        || (name.starts_with("jaunder-journal-") && name.ends_with(".log"))
-        || (name.starts_with("otel-traces-") && name.ends_with(".jsonl"))
-}
+    let wanted = |name: &str| {
+        (name.starts_with("jaunder-journal-") && name.ends_with(".log"))
+            || (name.starts_with("system-journal-") && name.ends_with(".log"))
+            || (name.starts_with("otel-traces-") && name.ends_with(".jsonl"))
+            || (name.starts_with("playwright-report-") && name.ends_with(".json"))
+            || (name.starts_with("playwright-artifacts-") && name.ends_with(".tar.gz"))
+    };
+```
 
-/// Recursively copy every `is_e2e_artifact` file under `kept_dir` (a retained
-/// `--keep-failed` build dir) flat into `dest_dir`. A failed `nixosTest` produces
-/// no `$out`, so this is the only way to recover the in-VM `copy_from_vm` output.
-/// Returns the count copied. Pure std I/O so it is unit-testable.
-fn rescue_e2e_artifacts(kept_dir: &std::path::Path, dest_dir: &std::path::Path) -> usize {
-    let mut copied = 0;
-    let mut stack = vec![kept_dir.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(ft) = entry.file_type() else { continue };
-            if ft.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else { continue };
-            if !is_e2e_artifact(name) {
-                continue;
-            }
-            let _ = std::fs::create_dir_all(dest_dir);
-            if std::fs::copy(&path, dest_dir.join(name)).is_ok() {
-                copied += 1;
-            }
-        }
+Add a helper that evaluates the check's deterministic output path (the `--keep-failed` store path on a failed build):
+
+```rust
+/// The check's evaluated output store path. On a failed build `--keep-failed`
+/// leaves this path on disk, world-readable, even though it is unregistered — so
+/// the e2e diagnostics the VM copied into `$out` are recoverable from it (#123/#49).
+/// `None` if the eval fails (e.g. an eval-time error unrelated to the build).
+fn eval_out_path(check: &str) -> Option<String> {
+    let installable = format!(".#checks.{SYSTEM}.{check}.outPath");
+    let out = Command::new("nix")
+        .args(["eval", "--raw", "--accept-flake-config", &installable])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
     }
-    copied
+    let path = String::from_utf8(out.stdout).ok()?;
+    let path = path.trim();
+    (!path.is_empty()).then(|| path.to_owned())
 }
 ```
 
-Then, in `rescue_diagnostics`, after the existing `emit-out/diagnostics` block, also rescue e2e artifacts from the same kept dir (`entry.path()` is the `nix-build-jaunder-<check>-*` dir already in scope):
+Then, in `rescue_diagnostics`, after the existing `emit-out/diagnostics` loop, recover the e2e artifacts from the kept outPath (a no-op for non-e2e checks — their outPath has no matching files):
 
 ```rust
-        // #123/#49: a failed e2e VM check leaves its copied-out diagnostics in the
-        // kept build dir (no $out). Recover them by name, recursively.
-        let _ = rescue_e2e_artifacts(&entry.path(), std::path::Path::new(&dest));
+    // #123/#49: a failed e2e VM check leaves its $out store path on disk
+    // (--keep-failed, world-readable) though unregistered. Its deterministic path
+    // is the evaluated outPath; recover the copied-out diagnostics from it, reusing
+    // the success-path copier (which handles the otel directory layout).
+    if let Some(out_path) = eval_out_path(check) {
+        copy_e2e_diagnostics_between(std::path::Path::new(&out_path), std::path::Path::new(&dest));
+    }
 ```
 
 - [ ] **Step 4: Run the test, verify it passes**
 
 ```bash
-cargo nextest run -p xtask rescue_e2e_artifacts_copies_named_files_recursively
+cargo nextest run -p xtask copy_e2e_diagnostics_between_copies_journal_otel_and_playwright
 ```
 
 Expected: PASS.
 
-- [ ] **Step 5: Remove the throwaway spec and run static checks**
+- [ ] **Step 5: Verify the rescue end-to-end against the live kept outPath**
+
+The Task-3 failing run's outPath is still on disk. Confirm the implemented rescue actually recovers the artifacts from it (no second 10-min e2e run needed):
 
 ```bash
-git rm -f end2end/tests/zzz-force-fail.spec.ts 2>/dev/null || rm -f end2end/tests/zzz-force-fail.spec.ts
+rm -rf /tmp/rescue-check && mkdir -p /tmp/rescue-check
+OUT=$(nix eval --raw .#checks.x86_64-linux.e2e-sqlite-chromium.outPath 2>/dev/null)
+ls -1 "$OUT"
+```
+
+Expected: `$OUT` lists `jaunder-journal-sqlite.log`, `system-journal-sqlite.log`, `playwright-report-sqlite.json`, `playwright-artifacts-sqlite.tar.gz`, `otel-traces-sqlite.jsonl/` — i.e. exactly what `copy_e2e_diagnostics_between` (with the extended `wanted`) will copy into `.xtask/diagnostics/<check>/`. (The `build_check` failure arm calls this on a real red run; the wiring is a single added call verified by reading.)
+
+- [ ] **Step 6: Remove the throwaway spec, unstage it, run static checks**
+
+```bash
+git rm -f --cached end2end/tests/zzz-force-fail.spec.ts 2>/dev/null || true
+rm -f end2end/tests/zzz-force-fail.spec.ts
 cargo xtask check --no-test
 ```
 
-Expected: clippy + fmt green; the temp spec is gone.
+Expected: clippy + fmt green; the temp spec is gone and unstaged.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add xtask/src/steps/nix.rs
-git commit -m "test(e2e): rescue e2e VM diagnostics from the keep-failed dir on failure (#123, #49)"
+git commit -m "test(e2e): recover e2e VM diagnostics from the kept outPath on failure (#123, #49)"
 ```
 
 ---
 
-### Task 5: Confirm end-to-end recovery into `.xtask/diagnostics`
-
-Re-exercise the failure path with the rescue now implemented, confirming artifacts reach the canonical diagnostics dir. Reuses Task 3's mechanism (re-add the temp spec transiently — do NOT commit it).
-
-**Files:**
-- Temporarily re-create then delete: `end2end/tests/zzz-force-fail.spec.ts` (same content as Task 3 Step 1).
-
-- [ ] **Step 1: Re-add the temp failing spec and run the combo**
-
-```bash
-cargo xtask e2e sqlite chromium
-```
-
-(Re-create `end2end/tests/zzz-force-fail.spec.ts` first if Task 4 removed it.) Expected: combo FAILS.
-
-- [ ] **Step 2: Confirm the rescued artifacts**
-
-```bash
-ls -1 .xtask/diagnostics/e2e-sqlite-chromium/
-```
-
-Expected: contains `playwright-report-sqlite.json`, `playwright-artifacts-sqlite.tar.gz`, `system-journal-sqlite.log`, `jaunder-journal-sqlite.log`, `otel-traces-sqlite.jsonl`, and `build.log` (with the failing test). If an artifact is missing, reconcile its name between Task 2's copy and Task 4's `is_e2e_artifact`.
-
-- [ ] **Step 3: Remove the temp spec (final)**
-
-```bash
-rm -f end2end/tests/zzz-force-fail.spec.ts
-git status --porcelain   # expect: no zzz-force-fail entry; tree clean
-```
-
----
-
-### Task 6: ADR + docs, then the full gate
+### Task 5: ADR + docs, then the full gate
 
 **Files:**
 - Create: `docs/adr/00NN-e2e-failure-diagnostics-capture.md` (NN = next after the current highest).
