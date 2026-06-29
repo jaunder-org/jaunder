@@ -196,3 +196,29 @@ keep `boundary!` + `expect_context` unchanged. Proven by deterministic `owner_li
 tests (context survives an owner strong-ref drop before first poll via `server_resource`; the raw
 constructor loses it), not by the flaky e2e. `Action::new` is assessed for the same exposure and
 given a sibling wrapper if it shares it.
+
+## Addendum (2026-06-28): ancestor-owner contexts across an SSR `await` (#138)
+
+The #124 addendum captured the **resource's own (leaf) owner** and held it strong across every
+poll. That keeps alive contexts stored *in that leaf owner* — but the storage trait objects are
+provided once at the SSR root by `provide_app_state_contexts` (`leptos_routes_with_context`), an
+**ancestor** of every component/resource owner. `expect_context` resolves a value by walking the
+owner ancestry; `reactive_graph` links a child to its parent with a **weak** ref. So when the SSR
+runtime drops the root/ancestor owner while a server fn is suspended at an `.await`, the ancestor's
+`OwnerInner` (and its context map) is freed even though the leaf is held — and a **post-await**
+`expect_context::<Arc<dyn …Storage>>()` panics. This is why the authenticated `Sidebar`/
+`BackupBanner` server fns (`backup/mod.rs`) panicked under page-render SSR while the ~75 sibling
+sites that read storage **before** their first await did not: a pre-await read copies the `Arc` out
+while the ancestry is still alive.
+
+**Resolution.** `server_boundary` now holds the **full owner ancestry** strong for the future's
+lifetime: at entry it walks `Owner::current()` to the root via `Owner::parent()` (which upgrades the
+weak parent link to a strong `Owner`) and keeps the resulting handles alive alongside the
+`ScopedFuture`. With the whole ancestry pinned, every post-await reactive-context read resolves —
+**independent of read ordering**, so server-fn bodies need no read-before-await discipline and keep
+`boundary!` + `expect_context` unchanged (**zero per-handler boilerplate**). This *eliminates* the
+post-await-read failure class structurally rather than policing it with a lint. Proven by
+deterministic `owner_lifetime` tests (`server_boundary_keeps_ancestor_context_alive_across_await` is
+red before the fix, green after; `post_await_read_loses_ancestor_context_when_parent_owner_dropped`
+characterizes the underlying leaf-only loss) and by the #93 e2e zero-panic gate (ADR-0032) on
+authenticated `/` and `/posts/new`.

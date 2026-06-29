@@ -1691,7 +1691,7 @@
       "cyclomatic": 4.0,
       "file": "web/src/error.rs",
       "function": "server_boundary",
-      "line": 405
+      "line": 424
     },
     {
       "coverage": 100.0,
@@ -1700,7 +1700,7 @@
       "cyclomatic": 4.0,
       "file": "web/src/error.rs",
       "function": "log_boundary_failure",
-      "line": 439
+      "line": 468
     },
     {
       "coverage": 100.0,
@@ -3492,6 +3492,15 @@
       "file": "web/src/pages/posts.rs",
       "function": "UserTagPage",
       "line": 1148
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "web",
+      "cyclomatic": 2.0,
+      "file": "web/src/error.rs",
+      "function": "owner_ancestry_strong",
+      "line": 406
     },
     {
       "coverage": 100.0,

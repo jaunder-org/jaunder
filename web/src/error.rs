@@ -396,6 +396,25 @@ where
     leptos::prelude::Resource::new(source, move |s| scoped_fetcher_future(fetcher(s)))
 }
 
+/// Collects strong [`Owner`](leptos::reactive::owner::Owner) handles for every
+/// ancestor of `owner` (parent, grandparent, … up to the root). `Owner::parent()`
+/// upgrades the internally-*weak* parent link to a strong ref, so holding the
+/// returned vec keeps each ancestor's context map alive. Used by
+/// [`server_boundary`] to preserve contexts provided in an ancestor owner across
+/// an SSR await (#138).
+#[cfg(feature = "ssr")]
+fn owner_ancestry_strong(
+    owner: &leptos::reactive::owner::Owner,
+) -> Vec<leptos::reactive::owner::Owner> {
+    let mut ancestry = Vec::new();
+    let mut next = owner.parent();
+    while let Some(parent) = next {
+        next = parent.parent();
+        ancestry.push(parent);
+    }
+    ancestry
+}
+
 /// Awaits the given future, converting any `InternalError` to its public `WebError` form.
 ///
 /// # Errors
@@ -416,7 +435,17 @@ pub async fn server_boundary<T>(
     // wrapping with no owner would capture an empty owner and lose context
     // deterministically; the guard instead falls back to a plain await (today's behavior).
     // See ADR-0016 addendum.
-    let outcome = if leptos::reactive::owner::Owner::current().is_some() {
+    // #138: `ScopedFuture` re-applies and holds a strong ref to the *current*
+    // (leaf) owner only. But the storage contexts are provided in an *ancestor*
+    // owner — the SSR root (`provide_app_state_contexts`) — which the SSR runtime
+    // can drop while this future is suspended. `expect_context` walks the owner
+    // ancestry, so once an ancestor's last strong ref is gone its context map is
+    // freed and a post-await read panics. Hold the full ancestry strong for the
+    // future's lifetime so post-await reactive-context reads always resolve,
+    // regardless of read-before/after-await ordering. See the `owner_lifetime`
+    // tests and the ADR-0016 #138 addendum.
+    let outcome = if let Some(owner) = leptos::reactive::owner::Owner::current() {
+        let _ancestry = owner_ancestry_strong(&owner);
         leptos::reactive::computed::ScopedFuture::new_untracked(future).await
     } else {
         future.await
@@ -1108,6 +1137,86 @@ mod owner_lifetime {
             result,
             Ok(Some(Marker(7))),
             "server_boundary must keep context alive across the await"
+        );
+    }
+
+    /// #138: the storage contexts (`UserStorage`/`SiteConfigStorage`) are provided in
+    /// an *ancestor* owner (the root `provide_app_state_contexts`), while
+    /// `scoped_fetcher_future`/`server_boundary` hold a strong ref only to the
+    /// *captured child* owner (the resource's own owner). A post-await `use_context`
+    /// walks the ancestry; if the ancestor's strong ref is dropped during the SSR
+    /// await, the walk fails — reproducing the backup-fn panic. A pre-await read
+    /// resolves before the drop, which is why the ~75 pre-await sites do not panic.
+    #[test]
+    fn post_await_read_loses_ancestor_context_when_parent_owner_dropped() {
+        let parent = Owner::new();
+        parent.set();
+        provide_context(Marker(7)); // provided in the ANCESTOR (like the root provide)
+
+        let child = Owner::new(); // parent = current = `parent`
+        child.set(); // resource's own owner is the captured one
+
+        // Build the fetcher future exactly as `server_resource` does: it captures the
+        // currently-set owner (`child`) via `Owner::current().unwrap_or_default()`.
+        let mut fut = Box::pin(crate::error::scoped_fetcher_future(async {
+            let pre = use_context::<Marker>();
+            YieldOnce(false).await;
+            let post = use_context::<Marker>();
+            (pre, post)
+        }));
+
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(step(fut.as_mut().poll(&mut cx)).is_none()); // first poll: reads `pre`, suspends
+        drop(parent); // SSR drops the ancestor while the resource future is suspended
+        drop(child); // only `ScopedFuture`'s captured strong ref keeps the child alive
+
+        let (pre, post) =
+            step(fut.as_mut().poll(&mut cx)).expect("future did not complete on second poll");
+        assert_eq!(
+            pre,
+            Some(Marker(7)),
+            "ancestor context resolvable before the drop"
+        );
+        assert_eq!(
+            post, None,
+            "#138: post-await read loses ancestor context once the ancestor owner is dropped"
+        );
+    }
+
+    /// #138 fix: `server_boundary` must keep context that lives in an *ancestor*
+    /// owner alive across the await — not just the current (leaf) owner. The
+    /// storage contexts are provided at the SSR root (`provide_app_state_contexts`),
+    /// an ancestor of each resource's own owner; the SSR runtime can drop that
+    /// ancestor while a server fn is suspended. Holding the full ancestry strong
+    /// (via `Owner::parent()`) for the future's lifetime makes any post-await
+    /// reactive-context read safe, so no per-fn read-before-await discipline is
+    /// required. Red before the fix (only the leaf is held), green after.
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn server_boundary_keeps_ancestor_context_alive_across_await() {
+        let root = Owner::new();
+        root.set();
+        provide_context(Marker(7)); // provided in the ANCESTOR (the SSR root)
+
+        let leaf = Owner::new(); // resource's own owner; parent = root
+        leaf.set();
+
+        let mut fut = Box::pin(crate::error::server_boundary("spike_test", async {
+            let _pre = use_context::<Marker>();
+            YieldOnce(false).await;
+            Ok::<Option<Marker>, crate::error::InternalError>(use_context::<Marker>())
+        }));
+
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(step(fut.as_mut().poll(&mut cx)).is_none());
+        drop(root); // SSR drops the ancestor while the future is suspended
+        drop(leaf);
+        let result =
+            step(fut.as_mut().poll(&mut cx)).expect("server_boundary future did not complete");
+        assert_eq!(
+            result,
+            Ok(Some(Marker(7))),
+            "server_boundary must keep ancestor context alive across the await"
         );
     }
 }
