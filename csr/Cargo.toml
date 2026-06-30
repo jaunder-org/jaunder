@@ -1,0 +1,20 @@
+[package]
+name = "csr"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+web = { path = "../web", default-features = false, features = ["csr"] }
+leptos = { workspace = true, features = [ "csr" ] }
+
+console_error_panic_hook.workspace = true
+console_log.workspace = true
+log.workspace = true
+wasm-bindgen.workspace = true
+
+[lints]
+workspace = true

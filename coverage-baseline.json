@@ -5,6 +5,32 @@
       "text": "            None => Ok(String::new()),"
     }
   ],
+  "csr/src/lib.rs": [
+    {
+      "line": 20,
+      "text": "pub fn main() {"
+    },
+    {
+      "line": 22,
+      "text": "    _ = console_log::init_with_level(log::Level::Debug);"
+    },
+    {
+      "line": 23,
+      "text": "    console_error_panic_hook::set_once();"
+    },
+    {
+      "line": 24,
+      "text": "    leptos::mount::mount_to_body(App);"
+    },
+    {
+      "line": 25,
+      "text": "    mark_ready();"
+    },
+    {
+      "line": 26,
+      "text": "}"
+    }
+  ],
   "hydrate/src/lib.rs": [
     {
       "line": 163,

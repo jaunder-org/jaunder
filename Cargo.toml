@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "common",
+  "csr",
   "hydrate",
   "server",
   "storage",
