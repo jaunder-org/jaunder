@@ -56,7 +56,10 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 function randomHex(byteLength: number): string {
-  return bytesToHex(randomBytes(byteLength));
+  // randomBytes() returns a node Buffer (Buffer<ArrayBufferLike>), which TS 5.9 +
+  // modern @types/node no longer accept where a Uint8Array<ArrayBuffer> is expected.
+  // Copy into a plain Uint8Array so bytesToHex's signature stays DOM-agnostic.
+  return bytesToHex(Uint8Array.from(randomBytes(byteLength)));
 }
 
 function parseTraceParent(traceParent: string): TraceContext | null {
