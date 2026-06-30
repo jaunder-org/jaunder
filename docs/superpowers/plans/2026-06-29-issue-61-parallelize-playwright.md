@@ -1,5 +1,12 @@
 # Parallelize the Playwright e2e suite (#61) — Implementation Plan
 
+> **OUTCOME (2026-06-30): partially executed.** Tasks 1–5 + 7 (the per-test
+> identity fixtures, spec migrations, own-scoped feed assertion, and ADR) landed
+> as **parallel-safe prep**. Task 6 (the `workers > 1` flip + serial project + VM
+> bump) and Task 8 (validation) were **reverted/deferred**: enabling concurrent
+> SSR exposed reactive-disposal panics that no available fix resolves — tracked as
+> **#173**, which now blocks #61. The gate stays `workers: 1`. See ADR-0038.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Run the Nix-VM Playwright e2e suite with `workers > 1` by making every spec parallel-safe through per-test identity fixtures, with the one global-singleton spec (`admin-site`) quarantined in a serial Playwright project.
