@@ -57,6 +57,12 @@ urlencoding.workspace = true
 percent-encoding.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
+[features]
+# Spike #177: build the server without the leptos reactive page render. `web/ssr`
+# stays on (the #[server] fn bodies must exist server-side); only the page-route
+# rendering is swapped for a static CSR shell in create_router.
+csr = []
+
 [dev-dependencies]
 axum = { workspace = true }
 base64 = { workspace = true }

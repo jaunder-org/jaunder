@@ -81,7 +81,7 @@ the CSR e2e path landed here.)
 - Produces: a `csr` crate building to `csr.wasm` (cdylib) whose `#[wasm_bindgen(start)]`
   entry mounts `App` and sets `document.body[data-hydrated]`.
 
-- [ ] **Step 1: Add the `csr` feature to `web/Cargo.toml`.** After the `hydrate` line
+- [x] **Step 1: Add the `csr` feature to `web/Cargo.toml`.** After the `hydrate` line
   (web/Cargo.toml:65), add:
 
 ```toml
@@ -111,7 +111,7 @@ ssr = [
 ]
 ```
 
-- [ ] **Step 2: Add `csr` to the workspace members.** In root `Cargo.toml` (lines 3-9),
+- [x] **Step 2: Add `csr` to the workspace members.** In root `Cargo.toml` (lines 3-9),
   add `"csr",`:
 
 ```toml
@@ -125,7 +125,7 @@ members = [
 ]
 ```
 
-- [ ] **Step 3: Create `csr/Cargo.toml`** (mirrors `hydrate/Cargo.toml`, swapping the
+- [x] **Step 3: Create `csr/Cargo.toml`** (mirrors `hydrate/Cargo.toml`, swapping the
   client feature):
 
 ```toml
@@ -151,7 +151,7 @@ wasm-bindgen.workspace = true
 workspace = true
 ```
 
-- [ ] **Step 4: Create `csr/src/lib.rs`.** Mount `App` client-side; reuse the existing
+- [x] **Step 4: Create `csr/src/lib.rs`.** Mount `App` client-side; reuse the existing
   `data-hydrated` body marker (so the e2e `waitForHydration` helper works unchanged —
   see Task 5):
 
@@ -184,7 +184,7 @@ pub fn main() {
 }
 ```
 
-- [ ] **Step 5: Verify the CSR wasm compiles.**
+- [x] **Step 5: Verify the CSR wasm compiles.**
 
 Run: `cargo build -p csr --target wasm32-unknown-unknown --release`
 Expected: builds clean. If `leptos/csr` alone leaves `leptos_router`/`leptos_meta`
@@ -194,12 +194,12 @@ run client-side without an `ssr` flag, so a failure here means a genuinely missi
 not a feature toggle; investigate the exact error before adding anything). The hydrate
 precedent (`leptos/hydrate` only) predicts `leptos/csr` alone suffices.
 
-- [ ] **Step 6: Verify the default build is untouched.**
+- [x] **Step 6: Verify the default build is untouched.**
 
 Run: `cargo xtask check --no-test`
 Expected: green (the new crate compiles for the host too; default SSR build unaffected).
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add csr/ web/Cargo.toml Cargo.toml Cargo.lock
@@ -223,7 +223,7 @@ git commit -m "feat(web): add leptos-CSR mount crate + web csr feature (spike #1
   `/api/{*fn_name}` server-fn route and all raw HTTP routes (feed, media, atompub, style)
   are unchanged.
 
-- [ ] **Step 1: Add the `csr` feature to `server/Cargo.toml`.** After line 58, add:
+- [x] **Step 1: Add the `csr` feature to `server/Cargo.toml`.** After line 58, add:
 
 ```toml
 [features]
@@ -233,7 +233,7 @@ git commit -m "feat(web): add leptos-CSR mount crate + web csr feature (spike #1
 csr = []
 ```
 
-- [ ] **Step 2: cfg-gate the SSR-only imports in `server/src/lib.rs`.** Replace lines
+- [x] **Step 2: cfg-gate the SSR-only imports in `server/src/lib.rs`.** Replace lines
   27-29:
 
 ```rust
@@ -256,7 +256,7 @@ use leptos_axum::{generate_route_list, LeptosRoutes};
 use web::{shell, App};
 ```
 
-- [ ] **Step 3: cfg-gate `generate_route_list` and the render-route block.** In
+- [x] **Step 3: cfg-gate `generate_route_list` and the render-route block.** In
   `create_router`, the `let routes = generate_route_list(App);` line (server/src/lib.rs:41)
   becomes:
 
@@ -265,7 +265,7 @@ use web::{shell, App};
     let routes = generate_route_list(App);
 ```
 
-- [ ] **Step 4: Branch the page-render wiring.** Replace the `.leptos_routes_with_context(
+- [x] **Step 4: Branch the page-render wiring.** Replace the `.leptos_routes_with_context(
   ... ).fallback(leptos_axum::file_and_error_handler(shell))` chain (server/src/lib.rs:102-117)
   so the `app` builder splits the render tail by feature. Concretely, end the common
   builder at the feed routes (keep `.route("/~{username}/tags/{tag}/feed.{ext}", ...)` as
@@ -311,7 +311,7 @@ use web::{shell, App};
   **after** this block, applied to the now-feature-selected `app`. (The `.layer` calls and
   return are common to both branches — leave them where they are, operating on `app`.)
 
-- [ ] **Step 5: Create `csr/index.html`** — the static CSR shell. Mirrors `web::shell`'s
+- [x] **Step 5: Create `csr/index.html`** — the static CSR shell. Mirrors `web::shell`'s
   head (same stylesheets, served from `/style` embedded assets) but with an empty body +
   a module boot script; `#[wasm_bindgen(start)]` runs `main()` on `init()`:
 
@@ -333,20 +333,20 @@ use web::{shell, App};
 </html>
 ```
 
-- [ ] **Step 6: Verify the CSR server compiles.**
+- [x] **Step 6: Verify the CSR server compiles.**
 
 Run: `cargo build -p jaunder --features csr`
 Expected: builds clean. Common compile snags to expect and fix in place: an unused-import
 warning (the `#[cfg]`-gated imports cover this) or an unused-variable on `state`/`mailer`
 (the `let _ = (...)` covers this). `unwrap`/`expect` are denied — none introduced here.
 
-- [ ] **Step 7: Verify the default SSR build + gate are untouched.**
+- [x] **Step 7: Verify the default SSR build + gate are untouched.**
 
 Run: `cargo xtask check --no-test`
 Expected: green. (The default build compiles `create_router` with the `not(csr)` branch,
 identical to today.)
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ```bash
 git add server/Cargo.toml server/src/lib.rs csr/index.html
