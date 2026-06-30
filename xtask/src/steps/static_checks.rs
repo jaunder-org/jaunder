@@ -90,6 +90,15 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
             program: "prettier",
             args: prettier_args,
         },
+        // tsc — type-check end2end/ (verify-only; tsc has no autofix, so the args are
+        // identical in both modes, unlike the formatters above). The compiler comes from
+        // the devShell (pkgs.typescript) and the type-dep closure from the shellHook-
+        // provisioned end2end/node_modules.
+        StepSpec {
+            name: "tsc",
+            program: "tsc",
+            args: vec!["--noEmit", "-p", "end2end/tsconfig.json"],
+        },
         StepSpec {
             name: "elisp-fmt",
             program: "emacs",
@@ -250,11 +259,23 @@ mod tests {
     }
 
     #[test]
+    fn tsc_typechecks_in_both_modes() {
+        // Verify-only: tsc has no autofix, so the args are identical in both modes.
+        for mode in [Mode::Check, Mode::Fix] {
+            let s = specs(mode);
+            let tsc = find(&s, "tsc");
+            assert_eq!(tsc.program, "tsc");
+            assert_eq!(tsc.args, ["--noEmit", "-p", "end2end/tsconfig.json"]);
+        }
+    }
+
+    #[test]
     fn step_order_is_locked() {
         let expected = [
             "fmt",
             "leptosfmt",
             "prettier",
+            "tsc",
             "elisp-fmt",
             "ert",
             "cargo-deny",
