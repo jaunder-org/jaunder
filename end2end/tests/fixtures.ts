@@ -643,7 +643,7 @@ const test = base.extend<{
         .sort((left, right) => right.durationMs - left.durationMs)
         .slice(0, 30);
       const navigationSummary: NavigationSummary[] = navigations
-        .map((navigation) => {
+        .map((navigation): NavigationSummary => {
           const endMs =
             navigation.hydratedMs ??
             navigation.loadMs ??
@@ -772,39 +772,49 @@ const test = base.extend<{
         ),
       );
       const navigationEvents = topNavigations.map((navigation) =>
-        makeEvent("navigation.lifecycle", endMs, [
-          otlpAttribute("navigation.id", navigation.id),
-          otlpAttribute("url.full", navigation.url),
-          otlpAttribute("navigation.cache_warmth", navigation.cacheWarmth),
-          otlpAttribute("duration_ms", navigation.totalMs),
-          otlpAttribute("navigation.request_ms", navigation.requestMs),
-          otlpAttribute(
-            "navigation.commit_to_domcontentloaded_ms",
-            navigation.commitToDomContentLoadedMs,
+        makeEvent(
+          "navigation.lifecycle",
+          endMs,
+          [
+            otlpAttribute("navigation.id", navigation.id),
+            otlpAttribute("url.full", navigation.url),
+            otlpAttribute("navigation.cache_warmth", navigation.cacheWarmth),
+            otlpAttribute("duration_ms", navigation.totalMs),
+            otlpAttribute("navigation.request_ms", navigation.requestMs),
+            otlpAttribute(
+              "navigation.commit_to_domcontentloaded_ms",
+              navigation.commitToDomContentLoadedMs,
+            ),
+            otlpAttribute(
+              "navigation.commit_to_hydration_ms",
+              navigation.commitToHydrationMs,
+            ),
+            otlpAttribute(
+              "navigation.domcontentloaded_to_load_ms",
+              navigation.domContentLoadedToLoadMs,
+            ),
+            otlpAttribute(
+              "navigation.load_to_hydration_ms",
+              navigation.loadToHydrationMs,
+            ),
+            otlpAttribute("navigation.wasm_init_ms", navigation.wasmInitMs),
+            otlpAttribute(
+              "navigation.leptos_hydrate_ms",
+              navigation.leptosHydrateMs,
+            ),
+            otlpAttribute(
+              "navigation.post_hydrate_effects_ms",
+              navigation.postHydrateEffectsMs,
+            ),
+            otlpAttribute(
+              "navigation.request_failed",
+              navigation.requestFailed,
+            ),
+          ].filter(
+            (attribute): attribute is NonNullable<typeof attribute> =>
+              attribute !== null,
           ),
-          otlpAttribute(
-            "navigation.commit_to_hydration_ms",
-            navigation.commitToHydrationMs,
-          ),
-          otlpAttribute(
-            "navigation.domcontentloaded_to_load_ms",
-            navigation.domContentLoadedToLoadMs,
-          ),
-          otlpAttribute(
-            "navigation.load_to_hydration_ms",
-            navigation.loadToHydrationMs,
-          ),
-          otlpAttribute("navigation.wasm_init_ms", navigation.wasmInitMs),
-          otlpAttribute(
-            "navigation.leptos_hydrate_ms",
-            navigation.leptosHydrateMs,
-          ),
-          otlpAttribute(
-            "navigation.post_hydrate_effects_ms",
-            navigation.postHydrateEffectsMs,
-          ),
-          otlpAttribute("navigation.request_failed", navigation.requestFailed),
-        ]),
+        ),
       );
 
       const span = buildSpan({
