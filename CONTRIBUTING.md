@@ -303,6 +303,28 @@ nix build .#checks.x86_64-linux.postgres-integration
 - New storage-backed tests must either cover both backends or state explicitly why one backend is intentionally deferred.
 - Backend-specific optimizations are allowed, but user-visible behavior differences must be documented explicitly up front.
 
+### The `test-backend-pattern` guard (enforced across `server/tests`)
+
+The `cargo xtask check`/`validate` static pass runs a `test-backend-pattern` guard that scans
+every file under `server/tests/` and fails if a `#[tokio::test]` (including parameterized
+`#[tokio::test(flavor = …)]` forms) is not declared backend-explicit. Every DB-touching
+integration test must carry exactly one of:
+
+- `#[apply(backends)]` — dual-backend, single-axis (the test takes `#[case] backend: Backend`).
+- `#[apply(backends_matrix)]` — dual-backend for a test that ALSO has its own local `#[case]`
+  matrix (the `#[values]`-based template; the test takes a plain `backend: Backend`). Use this when
+  `#[apply(backends)]` would collide with local `#[case]` rows.
+- `#[apply(sqlite_only)]` / `#[apply(postgres_only)]` — a deliberately single-backend test. It
+  MUST carry a `// reason:` comment stating the backend-specific behavior the other backend can't
+  exhibit (e.g. a SQLite lock-flake reproduction, a Postgres-only `pg_database` teardown). "It
+  currently hardcodes SQLite" is NOT a valid reason — convert such a test instead.
+
+A genuinely **non-DB** integration test (exercises real router/middleware wiring but touches no
+database) is exempt via a `// guard:no-backend — <reason>` comment immediately above its
+`#[tokio::test]`. A test that is really a **unit test** (a pure function/extractor, no router or DB)
+belongs in a `#[cfg(test)] mod tests` in the owning crate, not in `server/tests`. Pure synchronous
+`#[test]` unit tests are never flagged.
+
 ## NixOS integration
 
 - The shared NixOS module is `nixosModules.jaunder`.

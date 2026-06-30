@@ -26,7 +26,7 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, Backend, TestEnv};
+use crate::helpers::{backends, backends_matrix, Backend, TestEnv};
 
 use crate::helpers::{ensure_server_fns_registered, test_options};
 
@@ -108,13 +108,13 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
 // Shape B — every media server-fn refuses an unauthenticated request the same
 // way (Leptos server fn → INTERNAL_SERVER_ERROR + "unauthorized"); only the
 // endpoint and request body vary.
-#[rstest]
+#[apply(backends_matrix)]
 #[case::media_usage("/api/media_usage", "")]
 #[case::list_my_media("/api/list_my_media", "")]
 #[case::delete_media("/api/delete_media", "sha256=deadbeef&filename=test.png&source=upload")]
 #[tokio::test]
 async fn media_endpoint_rejects_unauthenticated_request(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    backend: Backend,
     #[case] uri: &str,
     #[case] body: &str,
 ) {
@@ -420,14 +420,11 @@ async fn media_serve_get(state: Arc<storage::AppState>, uri: &str) -> StatusCode
 // `short_hash`: a 1-byte hash historically panicked because the prefix check
 // (`hash.starts_with(p1)`) passes and the slice runs off the end of the string.
 // `non_hex`: 64 characters but not lowercase hex — not a canonical content hash.
-#[rstest]
+#[apply(backends_matrix)]
 #[case::short_hash("/media/upload/a/a/a/file.txt".to_owned())]
 #[case::non_hex(format!("/media/upload/zz/zz/{}/file.txt", "z".repeat(64)))]
 #[tokio::test]
-async fn serve_handler_rejects_malformed_hash(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
-    #[case] uri: String,
-) {
+async fn serve_handler_rejects_malformed_hash(backend: Backend, #[case] uri: String) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let status = media_serve_get(state, &uri).await;

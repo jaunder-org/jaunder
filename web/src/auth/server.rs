@@ -643,4 +643,26 @@ mod tests {
             matches!(result, Err(e) if matches!(e.public(), crate::error::WebError::Storage { .. }))
         );
     }
+
+    // Pure extractor unit test: with a session cookie but no SessionStorage in the
+    // request extensions, `AuthUser` extraction rejects with MissingSessionStorage.
+    // Touches no router and no database.
+    #[tokio::test]
+    async fn auth_user_extraction_fails_without_session_storage_extension() {
+        use axum::body::Body;
+        use axum::http::{header, Request};
+
+        let request = Request::builder()
+            .header(header::COOKIE, "session=some-token")
+            .body(Body::empty())
+            .unwrap();
+        let (mut parts, _) = request.into_parts();
+
+        // Attempt to extract AuthUser without the session store in extensions
+        let result = AuthUser::from_request_parts(&mut parts, &()).await;
+        assert!(matches!(
+            result.unwrap_err(),
+            AuthRejection::MissingSessionStorage
+        ));
+    }
 }

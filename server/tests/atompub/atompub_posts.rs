@@ -24,7 +24,8 @@ use rstest_reuse;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    backends, ensure_server_fns_registered, noop_mailer, test_options, Backend, TestEnv,
+    backends, backends_matrix, ensure_server_fns_registered, noop_mailer, test_options, Backend,
+    TestEnv,
 };
 
 async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
@@ -404,7 +405,7 @@ async fn seed_alice(state: &Arc<storage::AppState>) -> (i64, String) {
 // collection with a cursor query string, and assert the resulting status. They
 // differ only in whether a post is seeded, the cursor query, and the expected
 // status.
-#[rstest]
+#[apply(backends_matrix)]
 #[case::valid_cursor(
     true,
     "updated_before=2099-01-01T00:00:00Z&id_before=999999",
@@ -417,7 +418,7 @@ async fn seed_alice(state: &Arc<storage::AppState>) -> (i64, String) {
 )]
 #[tokio::test]
 async fn collection_cursor_validation(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    backend: Backend,
     #[case] seed_post: bool,
     #[case] query: &str,
     #[case] expected: StatusCode,
@@ -555,16 +556,13 @@ impl ForbiddenRequest {
 // Shape B — the `*_forbids_other_user` cluster (collection/member/create/update).
 // Each seeds `alice`, then `alice` (authenticated) directs the corresponding
 // request at `bob`'s resource and must get FORBIDDEN.
-#[rstest]
+#[apply(backends_matrix)]
 #[case::collection(ForbiddenRequest::Collection)]
 #[case::member(ForbiddenRequest::Member)]
 #[case::create(ForbiddenRequest::Create)]
 #[case::update(ForbiddenRequest::Update)]
 #[tokio::test]
-async fn forbids_other_user(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
-    #[case] request: ForbiddenRequest,
-) {
+async fn forbids_other_user(backend: Backend, #[case] request: ForbiddenRequest) {
     let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base).await;
@@ -702,12 +700,12 @@ async fn create_html_entry_is_stored_as_html(#[case] backend: Backend) {
 // `type` media type stores the matching format, and the round-tripped member
 // echoes the same media type. `text/org`→Org, `text/markdown`→Markdown. The
 // account default format is irrelevant here: the explicit media type wins.
-#[rstest]
+#[apply(backends_matrix)]
 #[case::org("text/org", "* Org heading\nbody")]
 #[case::markdown("text/markdown", "# Markdown heading\nbody")]
 #[tokio::test]
 async fn create_format_media_type_round_trips(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    backend: Backend,
     #[case] content_type: &str,
     #[case] content: &str,
 ) {
@@ -989,14 +987,11 @@ enum EmptyEntryOp {
 // entry with neither title nor content and must fail with BAD_REQUEST
 // (EmptyPost); create POSTs to the collection, update PUTs to a pre-existing
 // post.
-#[rstest]
+#[apply(backends_matrix)]
 #[case::create(EmptyEntryOp::Create)]
 #[case::update(EmptyEntryOp::Update)]
 #[tokio::test]
-async fn empty_entry_returns_400(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
-    #[case] op: EmptyEntryOp,
-) {
+async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
     let TestEnv { state, base } = backend.setup().await;
     let (user_id, token) = seed_alice(&state).await;
 

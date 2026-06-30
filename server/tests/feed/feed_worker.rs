@@ -18,7 +18,6 @@ use common::slug::Slug;
 use common::username::Username;
 use jaunder::feed::worker::FeedWorker;
 use storage::{CreatePostInput, FeedCacheRow, PostFormat};
-use tempfile::TempDir;
 
 use rstest::*;
 #[allow(clippy::single_component_path_imports)]
@@ -255,21 +254,13 @@ async fn worker_applies_backoff_on_regen_failure(#[case] backend: Backend) {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn worker_applies_backoff_on_ping_failure() {
-    let base = TempDir::new().expect("temp dir");
-    let pool = sqlx::SqlitePool::connect_with(
-        format!("sqlite:{}", base.path().join("test.db").display())
-            .parse::<sqlx::sqlite::SqliteConnectOptions>()
-            .unwrap()
-            .create_if_missing(true),
-    )
-    .await
-    .unwrap();
-    sqlx::migrate!("../storage/migrations/sqlite")
-        .run(&pool)
-        .await
-        .unwrap();
+async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
+    // WebSub ping-failure backoff is backend-agnostic: run it on both backends
+    // via the shared setup instead of the hand-built SQLite-only AppState this
+    // test used to construct (which left Postgres uncovered).
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     struct FailingWebSubClient;
     #[async_trait::async_trait]
@@ -282,30 +273,6 @@ async fn worker_applies_backoff_on_ping_failure() {
             Err(jaunder::websub::WebSubError::HubRefused { status: 503 })
         }
     }
-
-    let state = std::sync::Arc::new(storage::AppState {
-        site_config: std::sync::Arc::new(storage::SqliteSiteConfigStorage::new(pool.clone())),
-        users: std::sync::Arc::new(storage::SqliteUserStorage::new(pool.clone())),
-        sessions: std::sync::Arc::new(storage::SqliteSessionStorage::new(pool.clone())),
-        invites: std::sync::Arc::new(storage::SqliteInviteStorage::new(pool.clone())),
-        atomic: std::sync::Arc::new(storage::SqliteAtomicOps::new(pool.clone())),
-        email_verifications: std::sync::Arc::new(storage::SqliteEmailVerificationStorage::new(
-            pool.clone(),
-        )),
-        password_resets: std::sync::Arc::new(storage::SqlitePasswordResetStorage::new(
-            pool.clone(),
-        )),
-        posts: std::sync::Arc::new(storage::SqlitePostStorage::new(pool.clone())),
-        subscriptions: std::sync::Arc::new(storage::SqliteSubscriptionStorage::new(
-            pool.clone(),
-            std::sync::Arc::new(common::visibility::OpenSubscriptionPolicy),
-        )),
-        audiences: std::sync::Arc::new(storage::SqliteAudienceStorage::new(pool.clone())),
-        media: std::sync::Arc::new(storage::SqliteMediaStorage::new(pool.clone())),
-        user_config: std::sync::Arc::new(storage::SqliteUserConfigStorage::new(pool.clone())),
-        feed_cache: std::sync::Arc::new(storage::SqliteFeedCacheStorage::new(pool.clone())),
-        feed_events: std::sync::Arc::new(storage::SqliteFeedEventStorage::new(pool)),
-    });
 
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");

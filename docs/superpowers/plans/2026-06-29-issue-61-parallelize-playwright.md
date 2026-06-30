@@ -5,7 +5,7 @@
 > as **parallel-safe prep**. Task 6 (the `workers > 1` flip + serial project + VM
 > bump) and Task 8 (validation) were **reverted/deferred**: enabling concurrent
 > SSR exposed reactive-disposal panics that no available fix resolves — tracked as
-> **#173**, which now blocks #61. The gate stays `workers: 1`. See ADR-0038.
+> **#173**, which now blocks #61. The gate stays `workers: 1`. See ADR-0039.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

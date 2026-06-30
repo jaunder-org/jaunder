@@ -28,27 +28,30 @@ use storage::{open_database, open_existing_database, BackupMode, CreatePostInput
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
 use crate::helpers::{
-    nonexistent_postgres_url, postgres_bootstrap_url, postgres_test_authority,
-    postgres_testing_enabled, sqlite_url, unique_postgres_url,
+    backends, nonexistent_postgres_url, postgres_bootstrap_url, postgres_only,
+    postgres_test_authority, sqlite_url, unique_postgres_url, Backend,
 };
 
-async fn storage_args(base: &TempDir) -> StorageArgs {
+async fn storage_args(backend: Backend, base: &TempDir) -> StorageArgs {
     let storage_path = base.path().join("storage");
-    let db = if postgres_testing_enabled() {
-        unique_postgres_url().await
-    } else {
-        sqlite_url(base)
+    let db = match backend {
+        Backend::Sqlite => sqlite_url(base),
+        Backend::Postgres => unique_postgres_url().await,
     };
     StorageArgs { storage_path, db }
 }
 
-fn uninitialized_storage_args(base: &TempDir) -> StorageArgs {
+fn uninitialized_storage_args(backend: Backend, base: &TempDir) -> StorageArgs {
     let storage_path = base.path().join("storage");
-    let db = if postgres_testing_enabled() {
-        nonexistent_postgres_url()
-    } else {
-        sqlite_url(base)
+    let db = match backend {
+        Backend::Sqlite => sqlite_url(base),
+        Backend::Postgres => nonexistent_postgres_url(),
     };
     StorageArgs { storage_path, db }
 }
@@ -140,10 +143,11 @@ async fn assert_backup_fixture_restored(args: &StorageArgs, post_id: i64) {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_init_on_fresh_dir_creates_structure_and_valid_db() {
+async fn cmd_init_on_fresh_dir_creates_structure_and_valid_db(#[case] backend: Backend) {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
 
     cmd_init(&args, false).await.unwrap();
 
@@ -153,29 +157,32 @@ async fn cmd_init_on_fresh_dir_creates_structure_and_valid_db() {
     open_database(&args.db).await.unwrap();
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_init_second_time_returns_error() {
+async fn cmd_init_second_time_returns_error(#[case] backend: Backend) {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
 
     cmd_init(&args, false).await.unwrap();
     let result = cmd_init(&args, false).await;
     assert!(result.is_err());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_init_skip_if_exists_succeeds_on_already_initialized() {
+async fn cmd_init_skip_if_exists_succeeds_on_already_initialized(#[case] backend: Backend) {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
 
     cmd_init(&args, false).await.unwrap();
     cmd_init(&args, true).await.unwrap();
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_init_fails_on_invalid_path() {
+async fn cmd_init_fails_on_invalid_path(#[case] backend: Backend) {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     // A storage path under a non-existent parent makes directory creation fail.
     let args = StorageArgs {
         storage_path: base.path().join("nonexistent").join("storage"),
@@ -186,8 +193,11 @@ async fn cmd_init_fails_on_invalid_path() {
     assert!(result.is_err());
 }
 
+#[apply(postgres_only)]
 #[tokio::test]
-async fn cmd_create_pg_db_rejects_non_postgres_urls() {
+async fn cmd_create_pg_db_rejects_non_postgres_urls(#[case] backend: Backend) {
+    // reason: provisions a Postgres role/database (needs PG admin/bootstrap); intrinsically Postgres.
+    let _ = backend;
     let err = cmd_create_pg_db(
         "sqlite:/tmp/bootstrap.db",
         "postgres://jaunder@localhost/jaunder",
@@ -198,8 +208,11 @@ async fn cmd_create_pg_db_rejects_non_postgres_urls() {
     assert!(err.to_string().contains("PostgreSQL URL"));
 }
 
+#[apply(postgres_only)]
 #[tokio::test]
-async fn cmd_create_pg_db_provisions_role_and_database() {
+async fn cmd_create_pg_db_provisions_role_and_database(#[case] backend: Backend) {
+    // reason: provisions a Postgres role/database (needs PG admin/bootstrap); intrinsically Postgres.
+    let _ = backend;
     let suffix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -263,8 +276,11 @@ async fn cmd_create_pg_db_provisions_role_and_database() {
         .unwrap();
 }
 
+#[apply(postgres_only)]
 #[tokio::test]
-async fn cmd_create_pg_db_fails_if_role_already_exists() {
+async fn cmd_create_pg_db_fails_if_role_already_exists(#[case] backend: Backend) {
+    // reason: provisions a Postgres role/database (needs PG admin/bootstrap); intrinsically Postgres.
+    let _ = backend;
     let suffix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -312,10 +328,11 @@ async fn cmd_create_pg_db_fails_if_role_already_exists() {
 
 // M1.5.4: cmd_serve fails with an appropriate error when the storage path has
 // not been initialized.
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_serve_fails_when_not_initialized() {
+async fn cmd_serve_fails_when_not_initialized(#[case] backend: Backend) {
     let base = TempDir::new().unwrap();
-    let args = uninitialized_storage_args(&base);
+    let args = uninitialized_storage_args(backend, &base);
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
 
     let result = cmd_serve(&args, bind, true, None).await;
@@ -329,10 +346,11 @@ async fn cmd_serve_fails_when_not_initialized() {
 
 // M1.5.5: after cmd_init, the server responds to a simple health-check request.
 // Uses open_existing_database (the path cmd_serve takes) to build the router.
+#[apply(backends)]
 #[tokio::test]
-async fn after_init_server_responds_to_health_check() {
+async fn after_init_server_responds_to_health_check(#[case] backend: Backend) {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
 
     cmd_init(&args, false).await.unwrap();
 
@@ -369,10 +387,11 @@ async fn after_init_server_responds_to_health_check() {
 // setup via `prepare_server` directly rather than spawning cmd_serve and
 // aborting it mid-flight (whose async-region coverage was nondeterministic —
 // jaunder-uox1).
+#[apply(backends)]
 #[tokio::test]
-async fn prepare_server_binds_and_builds_serving_router() {
+async fn prepare_server_binds_and_builds_serving_router(#[case] backend: Backend) {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.unwrap();
 
     // Pre-bind port 0 for a free port, then release it so prepare_server can
@@ -407,10 +426,11 @@ async fn prepare_server_binds_and_builds_serving_router() {
 
 // prepare_server writes the runtime-info file with the bound address, and the
 // guard removes it when the PreparedServer is dropped (ADR-0035).
+#[apply(backends)]
 #[tokio::test]
-async fn prepare_server_writes_then_removes_runtime_file() {
+async fn prepare_server_writes_then_removes_runtime_file(#[case] backend: Backend) {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.unwrap();
 
     let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -439,10 +459,11 @@ async fn prepare_server_writes_then_removes_runtime_file() {
 
 // app-password-create mints a usable token for an existing user, and errors for
 // an unknown user (covers both branches of app_password_create via the wrapper).
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_app_password_create_succeeds_for_existing_user() {
+async fn cmd_app_password_create_succeeds_for_existing_user(#[case] backend: Backend) {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.unwrap();
     let username: Username = "alice".parse().unwrap();
     let password: Password = "password123".parse().unwrap();
@@ -455,10 +476,11 @@ async fn cmd_app_password_create_succeeds_for_existing_user() {
         .expect("minting an app password for an existing user should succeed");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_app_password_create_errors_for_unknown_user() {
+async fn cmd_app_password_create_errors_for_unknown_user(#[case] backend: Backend) {
     let base = TempDir::new().unwrap();
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.unwrap();
     let username: Username = "ghost".parse().unwrap();
 
@@ -467,10 +489,11 @@ async fn cmd_app_password_create_errors_for_unknown_user() {
         .is_err());
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_user_create_creates_retrievable_user() {
+async fn cmd_user_create_creates_retrievable_user(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
     let username: Username = "alice".parse().expect("valid username");
@@ -490,10 +513,11 @@ async fn cmd_user_create_creates_retrievable_user() {
 }
 
 // M6.1.7: creating a user with --operator sets is_operator to true.
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_user_create_with_operator_flag_sets_is_operator() {
+async fn cmd_user_create_with_operator_flag_sets_is_operator(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
     let username: Username = "admin".parse().expect("valid username");
@@ -515,10 +539,11 @@ async fn cmd_user_create_with_operator_flag_sets_is_operator() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_user_invite_creates_retrievable_invite() {
+async fn cmd_user_invite_creates_retrievable_invite(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
     cmd_user_invite(&args, Some(48)).await.expect("user invite");
@@ -528,10 +553,11 @@ async fn cmd_user_invite_creates_retrievable_invite() {
     assert_eq!(invites.len(), 1, "exactly one invite should exist");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_user_invite_default_expires_in() {
+async fn cmd_user_invite_default_expires_in(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
     cmd_user_invite(&args, None).await.expect("user invite");
@@ -541,10 +567,11 @@ async fn cmd_user_invite_default_expires_in() {
     assert_eq!(invites.len(), 1, "exactly one invite should exist");
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_user_invite_too_large_expires_in_returns_error() {
+async fn cmd_user_invite_too_large_expires_in_returns_error(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
     // u64::MAX is definitely too large for i64
@@ -554,10 +581,11 @@ async fn cmd_user_invite_too_large_expires_in_returns_error() {
 }
 
 // M6.3.2: backup command writes a directory-mode backup.
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_backup_writes_directory_backup() {
+async fn cmd_backup_writes_directory_backup(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
     let username: Username = "backupuser".parse().expect("valid username");
@@ -584,10 +612,11 @@ async fn cmd_backup_writes_directory_backup() {
 }
 
 // M6.3.2: backup command defaults to storage/backups.
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_backup_without_path_writes_under_storage_backups() {
+async fn cmd_backup_without_path_writes_under_storage_backups(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
     let written_path = cmd_backup(&args, BackupMode::Directory, None)
@@ -599,10 +628,11 @@ async fn cmd_backup_without_path_writes_under_storage_backups() {
 }
 
 // M6.3.3: restore refuses missing backup paths before checking target state.
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_restore_refuses_missing_backup_path() {
+async fn cmd_restore_refuses_missing_backup_path(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
     let err = cmd_restore(&args, &base.path().join("missing"))
@@ -613,10 +643,11 @@ async fn cmd_restore_refuses_missing_backup_path() {
 }
 
 // M6.3.3: restore refuses to run if the target database is populated.
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_restore_refuses_populated_database() {
+async fn cmd_restore_refuses_populated_database(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
     let username: Username = "restoreuser".parse().expect("valid username");
@@ -635,10 +666,11 @@ async fn cmd_restore_refuses_populated_database() {
 }
 
 // M6.3.3: restore refuses to run if the media directory contains files.
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_restore_refuses_nonempty_media_directory() {
+async fn cmd_restore_refuses_nonempty_media_directory(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
     std::fs::write(args.storage_path.join("media").join("file.txt"), "media").expect("write media");
@@ -653,10 +685,11 @@ async fn cmd_restore_refuses_nonempty_media_directory() {
 }
 
 // M6.3.3: an empty target passes safety checks and validates the backup layout.
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_restore_empty_target_rejects_invalid_backup() {
+async fn cmd_restore_empty_target_rejects_invalid_backup(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
     let backup_path = base.path().join("backup");
@@ -669,10 +702,11 @@ async fn cmd_restore_empty_target_rejects_invalid_backup() {
 }
 
 // M6.6.1: backup/restore round-trips database records and media.
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_restore_restores_directory_backup() {
+async fn cmd_restore_restores_directory_backup(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let source_args = storage_args(&base).await;
+    let source_args = storage_args(backend, &base).await;
     cmd_init(&source_args, false).await.expect("init source");
     let post_id = populate_backup_fixture(&source_args).await;
 
@@ -686,7 +720,7 @@ async fn cmd_restore_restores_directory_backup() {
     .expect("backup");
 
     let target_base = TempDir::new().expect("target temp dir");
-    let target_args = storage_args(&target_base).await;
+    let target_args = storage_args(backend, &target_base).await;
     cmd_init(&target_args, false).await.expect("init target");
     cmd_restore(&target_args, &backup_path)
         .await
@@ -695,10 +729,11 @@ async fn cmd_restore_restores_directory_backup() {
     assert_backup_fixture_restored(&target_args, post_id).await;
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_smtp_test_fails_when_not_initialized() {
+async fn cmd_smtp_test_fails_when_not_initialized(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let args = uninitialized_storage_args(&base);
+    let args = uninitialized_storage_args(backend, &base);
 
     let result = cmd_smtp_test(&args, "alice@example.com").await;
     assert!(result.is_err());
@@ -709,10 +744,11 @@ async fn cmd_smtp_test_fails_when_not_initialized() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_smtp_test_fails_when_smtp_not_configured() {
+async fn cmd_smtp_test_fails_when_smtp_not_configured(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
     let result = cmd_smtp_test(&args, "alice@example.com").await;
@@ -724,8 +760,9 @@ async fn cmd_smtp_test_fails_when_smtp_not_configured() {
     );
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_smtp_test_succeeds_with_mock_server() {
+async fn cmd_smtp_test_succeeds_with_mock_server(#[case] backend: Backend) {
     let server = maik::MockServer::builder()
         .no_verify_credentials()
         .assert_after_n_emails(1)
@@ -733,7 +770,7 @@ async fn cmd_smtp_test_succeeds_with_mock_server() {
     server.start();
 
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
     let state = open_existing_database(&args.db).await.expect("open db");
@@ -776,10 +813,11 @@ async fn cmd_smtp_test_succeeds_with_mock_server() {
     assert!(server.assert(assertion));
 }
 
+#[apply(backends)]
 #[tokio::test]
-async fn cmd_smtp_test_fails_on_invalid_to_address() {
+async fn cmd_smtp_test_fails_on_invalid_to_address(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let args = storage_args(&base).await;
+    let args = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
     // Configure SMTP so we get past the "not configured" check.
