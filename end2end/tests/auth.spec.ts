@@ -46,14 +46,17 @@ test("login page shows form", async ({ page }, testInfo) => {
   await expect(page.locator('input[name="password"]')).toBeVisible();
 });
 
-test("login with valid credentials succeeds", async ({ page }, testInfo) => {
+test("login with valid credentials succeeds", async ({
+  page,
+  user,
+}, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
   const perf = createPerfProbe(testInfo, "auth_login_success");
 
   await goto(page, "/login");
 
-  await page.fill('input[name="username"]', "testlogin");
-  await page.fill('input[name="password"]', "testpassword123");
+  await page.fill('input[name="username"]', user.username);
+  await page.fill('input[name="password"]', user.password);
   perf.mark("credentials_filled");
   await click(page, 'button[type="submit"]');
   perf.mark("submit_clicked");
@@ -64,7 +67,7 @@ test("login with valid credentials succeeds", async ({ page }, testInfo) => {
   perf.mark("logout_link_visible");
   await waitForHydration(page);
 
-  await expect(page.locator(".j-sb-foot")).toContainText("testlogin");
+  await expect(page.locator(".j-sb-foot")).toContainText(user.username);
   await expect(page.locator(".j-sidebar")).toBeVisible();
   perf.mark("assertions_complete");
   await perf.log();
@@ -82,9 +85,9 @@ test("login with wrong password shows error", async ({ page }, testInfo) => {
   await expect(page.locator(".error")).toBeVisible();
 });
 
-test("logout page logs out", async ({ page }, testInfo) => {
+test("logout page logs out", async ({ page, user }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 12_000));
-  await login(page, "testlogin", "testpassword123");
+  await login(page, user.username, user.password);
 
   // Use the rendered logout link to avoid Firefox navigation abort races.
   await click(page, "a[href='/logout']");
@@ -94,24 +97,26 @@ test("logout page logs out", async ({ page }, testInfo) => {
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
   await waitForHydration(page);
   // Footer shows neither username nor sign-in link after logout.
-  await expect(page.locator(".j-sb-foot")).not.toContainText("testlogin");
+  await expect(page.locator(".j-sb-foot")).not.toContainText(user.username);
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
 });
 
 test("sidebar reverts to signed-out state after logout", async ({
   page,
+  user,
 }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
-  await login(page, "testlogin", "testpassword123");
-  // a[href='/logout'] only renders when auth Suspense resolves, confirming testlogin is shown.
-  await expect(page.locator(".j-sb-foot")).toContainText("testlogin");
+  await login(page, user.username, user.password);
+  // a[href='/logout'] only renders when auth Suspense resolves, confirming the
+  // user is shown.
+  await expect(page.locator(".j-sb-foot")).toContainText(user.username);
 
   // Click the sidebar "Sign out" link and confirm the sidebar switches back.
   await click(page, "a[href='/logout']");
   // Logout is a server-side 302 redirect (not location.replace), so waitForURL is reliable.
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
   await waitForHydration(page);
-  await expect(page.locator(".j-sb-foot")).not.toContainText("testlogin");
+  await expect(page.locator(".j-sb-foot")).not.toContainText(user.username);
   // Footer no longer shows a Sign-in link — it renders nothing when unauthenticated.
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
 });

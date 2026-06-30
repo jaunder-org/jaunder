@@ -1,20 +1,21 @@
 import { test, expect, hydrationHeavyTimeoutMs } from "./fixtures";
 import { goto, click, waitForSelector, waitForHydration } from "./helpers";
-import { readEmailLines, waitForNewEmail } from "./mail";
 
 // M3.11.13: Full password reset flow.
 test("password reset flow completes successfully", async ({
   page,
+  verifiedUser,
+  mailbox,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
+  // Larger budget than the old seeded-account flow: `verifiedUser` self-
+  // provisions a verified account out-of-band (register → login → set-email →
+  // verify) before this body's forgot → reset → login-twice flow — roughly
+  // double the page ops of the original pre-seeded test.
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
 
-  // Snapshot email count before submitting so we can detect the new email even
-  // if prior tests (e.g. email verification) have already written to the file.
-  const emailsBefore = readEmailLines().length;
-
-  // Request a password reset on /forgot-password
+  // Request a password reset for this test's own verified user.
   await goto(page, "/forgot-password");
-  await page.fill('input[name="username"]', "testlogin");
+  await page.fill('input[name="username"]', verifiedUser.username);
   await click(page, 'button[type="submit"]');
 
   // Page should show a neutral confirmation (not confirm whether user exists).
@@ -22,9 +23,8 @@ test("password reset flow completes successfully", async ({
     timeout: 10_000,
   });
 
-  // Extract the reset token from the captured mail file, waiting for the email
-  // that was sent after our form submission (not any pre-existing email).
-  const email = await waitForNewEmail(emailsBefore);
+  // Read this recipient's reset mail (recipient-scoped, parallel-safe).
+  const email = await mailbox.waitForNewEmail();
   const tokenMatch = email.body_text.match(/token=([^\s]+)/);
   expect(tokenMatch).not.toBeNull();
   const token = tokenMatch![1];
@@ -37,17 +37,17 @@ test("password reset flow completes successfully", async ({
   // persisted before testing the old credential below.
   await page.waitForURL("**/login");
 
-  // Login with the old password should fail
+  // Login with the OLD password should fail
   await goto(page, "/login");
-  await page.fill('input[name="username"]', "testlogin");
-  await page.fill('input[name="password"]', "testpassword123");
+  await page.fill('input[name="username"]', verifiedUser.username);
+  await page.fill('input[name="password"]', verifiedUser.password);
   await click(page, 'button[type="submit"]');
   await expect(page.locator(".error")).toBeVisible({ timeout: 10_000 });
 
   // Login with new password should succeed from the same hydrated login page.
   await page.fill('input[name="username"]', "");
   await page.fill('input[name="password"]', "");
-  await page.fill('input[name="username"]', "testlogin");
+  await page.fill('input[name="username"]', verifiedUser.username);
   await page.fill('input[name="password"]', "resetpassword789");
   await click(page, 'button[type="submit"]');
   await waitForSelector(page, "a[href='/logout']", { timeout: 10_000 });
@@ -67,14 +67,16 @@ test("visiting reset-password with invalid token shows error", async ({
   await expect(page.locator(".error")).toBeVisible();
 });
 
-// M3.11.15: /forgot-password for a user with no verified email shows the "contact operator" error.
+// M3.11.15: /forgot-password for a user with no verified email shows the
+// "contact operator" error.
 test("forgot-password for user without verified email shows contact operator error", async ({
   page,
+  user,
 }, testInfo) => {
   test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 12_000));
   await goto(page, "/forgot-password");
-  // "testnoemail" user should exist but have no verified email
-  await page.fill('input[name="username"]', "testnoemail");
+  // A freshly-registered user exists but has no verified email.
+  await page.fill('input[name="username"]', user.username);
   await click(page, 'button[type="submit"]');
   await waitForSelector(page, ".error");
   await expect(page.locator(".error")).toBeVisible();

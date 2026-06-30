@@ -377,18 +377,29 @@ test("home page shows local timeline for unauthenticated users", async ({
   const guestPage = await guestContext.newPage();
   await goto(guestPage, "/", { timeout: firstNavigationTimeoutMs });
 
+  // Site title is still the seeded value: admin-site (the only mutator) runs in
+  // the serial Playwright project and never overlaps this test.
   await expect(guestPage.locator(".j-topbar h1")).toHaveText("jaunder.local");
-  await expect(guestPage.locator("article.j-post")).toHaveCount(
-    TIMELINE_PAGE_SIZE,
-  );
 
+  // Own-scoped: with workers>1 other tests publish into the same global local
+  // timeline, so assert a full first page exists rather than an exact count.
+  // This test alone seeds 2 * LOCAL_TIMELINE_AUTHOR_COUNT (52) posts, so a full
+  // page is guaranteed regardless of concurrent publishers.
+  await expect
+    .poll(async () => guestPage.locator("article.j-post").count(), {
+      timeout: 10_000,
+    })
+    .toBeGreaterThanOrEqual(TIMELINE_PAGE_SIZE);
+  const firstPageCount = await guestPage.locator("article.j-post").count();
+
+  // Pagination works: "Load more" grows the rendered set.
   await click(guestPage, 'button:has-text("Load more")');
   perf.mark("load_more_clicked");
   await expect
     .poll(async () => guestPage.locator("article.j-post").count(), {
       timeout: 10_000,
     })
-    .toBeGreaterThan(TIMELINE_PAGE_SIZE);
+    .toBeGreaterThan(firstPageCount);
   perf.mark("assertions_complete");
   await perf.log();
 

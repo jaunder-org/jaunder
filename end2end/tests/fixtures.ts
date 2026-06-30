@@ -21,6 +21,8 @@ import {
   otlpAttribute,
   traceContextFromEnvironment,
 } from "./otel";
+import { goto, login, register } from "./helpers";
+import { readEmailLines, type CapturedEmail } from "./mail";
 
 type RequestRecord = {
   method: string;
@@ -187,7 +189,93 @@ export function hydrationHeavyFirstNavigationTimeoutMs(
   return Math.ceil(chromiumBudgetMs * hydrationHeavyFirstNavigationScale);
 }
 
-const test = base.extend<{ _autoPerfSpan: void }>({
+/** A uniquely-named account provisioned per test. `password` is the literal
+ *  `register()` password; `email` is the deterministic unique address this
+ *  account uses when it sets/verifies email. */
+export type TestUser = { username: string; password: string; email: string };
+
+/** A recipient-scoped mail waiter bound to one `TestUser.email`. Each call
+ *  returns that recipient's next unseen message (FIFO), so parallel tests
+ *  never consume each other's mail. */
+export type Mailbox = {
+  waitForNewEmail(timeoutMs?: number): Promise<CapturedEmail>;
+};
+
+const test = base.extend<{
+  _autoPerfSpan: void;
+  user: TestUser;
+  mailbox: Mailbox;
+  verifiedUser: TestUser;
+}>({
+  // A uniquely-named account, registered in a throwaway context so the test's
+  // own `page` stays logged out. Lazy: only provisioned for tests that
+  // destructure `user`.
+  user: async ({ browser }, use, testInfo) => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const username = await register(
+      page,
+      hydrationHeavyFirstNavigationTimeoutMs(testInfo, 15_000),
+    );
+    await context.close();
+    await use({
+      username,
+      password: "testpassword123",
+      email: `${username}@example.com`,
+    });
+  },
+
+  // Recipient-scoped mail waiter. Filters mail.jsonl by `user.email` and tracks
+  // a per-mailbox cursor so each call returns this recipient's next message.
+  mailbox: async ({ user }, use) => {
+    const matching = () =>
+      readEmailLines()
+        .map((line) => JSON.parse(line) as CapturedEmail)
+        .filter((mail) => mail.to.includes(user.email));
+    // Seed the cursor at any pre-existing matching mail (there should be none,
+    // since the address is unique to this test).
+    let cursor = matching().length;
+    const waitForNewEmail = async (
+      timeoutMs = 5_000,
+    ): Promise<CapturedEmail> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const mails = matching();
+        if (mails.length > cursor) {
+          const next = mails[cursor];
+          cursor += 1;
+          return next;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error(`timed out waiting for email to ${user.email}`);
+    };
+    await use({ waitForNewEmail });
+  },
+
+  // `user` plus the email set-and-verify flow, driven through `mailbox`, all
+  // out-of-band so the test's `page` stays logged out. Yields the same
+  // credentials; the account now has a verified email.
+  verifiedUser: async ({ browser, user, mailbox }, use, testInfo) => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const firstNav = hydrationHeavyFirstNavigationTimeoutMs(testInfo, 15_000);
+    await login(page, user.username, user.password, firstNav);
+    await goto(page, "/profile/email");
+    await page.fill('input[name="email"]', user.email);
+    await page.click('button[type="submit"]');
+    await expect(page.locator('p:has-text("Check your email")')).toBeVisible({
+      timeout: 10_000,
+    });
+    const mail = await mailbox.waitForNewEmail();
+    const tokenMatch = mail.body_text.match(/token=([^\s]+)/);
+    if (!tokenMatch) throw new Error("no verification token in captured email");
+    await goto(page, `/verify-email?token=${tokenMatch[1]}`);
+    await expect(page.locator('p:has-text("verified")')).toBeVisible();
+    await context.close();
+    await use(user);
+  },
+
   _autoPerfSpan: [
     async ({ page }, use, testInfo) => {
       // Optional experiment mode: warm the same browser context before tracing starts.

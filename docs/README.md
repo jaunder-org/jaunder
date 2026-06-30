@@ -64,6 +64,7 @@ convention). All are currently `accepted`.
 | [0036](adr/0036-identifier-collision-policy.md) | Identifier-Collision Policy for ADRs and Migrations | accepted |
 | [0037](adr/0037-e2e-failure-diagnostics-capture.md) | e2e VM Diagnostics Captured Before Failure and Recovered from the Kept outPath | accepted |
 | [0038](adr/0038-emacs-http-transport-plz-not-url-el.md) | The Emacs AtomPub Transport Uses `plz` (curl), Not `url.el` | accepted |
+| [0039](adr/0039-e2e-parallelism-via-per-test-identity-fixtures.md) | Per-test identity fixtures for parallel-safe e2e specs (parallelism deferred to #173) | accepted |
 
 ## Archive
 
