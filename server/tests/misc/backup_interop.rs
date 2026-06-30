@@ -16,7 +16,12 @@ use jaunder::commands::{cmd_backup, cmd_init, cmd_restore};
 use storage::{open_existing_database, BackupMode, CreatePostInput, PostFormat};
 use tempfile::TempDir;
 
-use crate::helpers::{postgres_testing_enabled, unique_postgres_url};
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+use crate::helpers::{postgres_only, postgres_testing_enabled, unique_postgres_url, Backend};
 
 fn sqlite_storage_args(base: &TempDir, name: &str) -> StorageArgs {
     StorageArgs {
@@ -124,8 +129,12 @@ async fn assert_backup_fixture_restored(args: &StorageArgs, post_id: i64) {
     );
 }
 
+#[apply(postgres_only)]
+// reason: cross-backend backup interop exercises BOTH engines in one test
+// (SQLite source restored into Postgres target), so it needs a live Postgres.
 #[tokio::test]
-async fn sqlite_backup_restores_into_postgres() {
+async fn sqlite_backup_restores_into_postgres(#[case] backend: Backend) {
+    let _ = backend;
     if !postgres_testing_enabled() {
         return;
     }
@@ -157,8 +166,12 @@ async fn sqlite_backup_restores_into_postgres() {
     assert_backup_fixture_restored(&target_args, post_id).await;
 }
 
+#[apply(postgres_only)]
+// reason: cross-backend backup interop exercises BOTH engines in one test
+// (Postgres source restored into SQLite target), so it needs a live Postgres.
 #[tokio::test]
-async fn postgres_backup_restores_into_sqlite() {
+async fn postgres_backup_restores_into_sqlite(#[case] backend: Backend) {
+    let _ = backend;
     if !postgres_testing_enabled() {
         return;
     }

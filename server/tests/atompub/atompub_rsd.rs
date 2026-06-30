@@ -22,7 +22,9 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use crate::helpers::{ensure_server_fns_registered, noop_mailer, test_options, Backend, TestEnv};
+use crate::helpers::{
+    backends_matrix, ensure_server_fns_registered, noop_mailer, test_options, Backend, TestEnv,
+};
 
 // SPIKE (jaunder Task 1):
 // - Shape A below (`rsd_document_advertises_service_url`) confirms cross-module
@@ -32,9 +34,11 @@ use crate::helpers::{ensure_server_fns_registered, noop_mailer, test_options, Ba
 //   a `#[template]` expands to a name-mangled `macro_rules!` brought into scope by
 //   the plain `use`, and `#[apply]` resolves it by bare name.
 // - Shape B below (`user_page_includes_rsd_autodiscovery_link`) confirms the
-//   backend×value matrix: `#[rstest]` + `#[values(Backend::Sqlite, Backend::Postgres)]
-//   backend` as the first param, then named `#[case]` rows. Attribute ordering:
-//   `#[rstest]` first, then the `#[case::name(..)]` rows, then `#[tokio::test]`.
+//   backend×value matrix: the backend axis is supplied by the
+//   `#[apply(backends_matrix)]` template (a `#[values]`-based dual-backend
+//   template, issue #127) and composes with the test's own named `#[case]`
+//   rows. Attribute ordering: `#[apply(backends_matrix)]` first, then the
+//   `#[case::name(..)]` rows, then `#[tokio::test]`.
 //   It generates rows × 2 cases (2 rows × 2 backends = 4).
 use crate::helpers::backends;
 
@@ -98,15 +102,16 @@ async fn rsd_document_advertises_service_url(#[case] backend: Backend) {
     assert!(body.contains("https://example.test/~alice"), "{body}");
 }
 
-// Shape B — backend×value matrix. Backend axis is `#[values]` (because
-// `#[apply]`'s injected `#[case]` can't coexist with value `#[case]` rows); the
-// value axis is named `#[case]`s. 2 rows × 2 backends = 4 cases.
-#[rstest]
+// Shape B — backend×value matrix. The backend axis comes from the
+// `#[apply(backends_matrix)]` template (a `#[values]`-based axis, because a
+// `#[case]`-based axis can't coexist with the value `#[case]` rows); the value
+// axis is the named `#[case]`s. 2 rows × 2 backends = 4 cases.
+#[apply(backends_matrix)]
 #[case::edituri_rel("rel=\"EditURI\"")]
 #[case::rsd_href("/~alice/rsd.xml")]
 #[tokio::test]
 async fn user_page_includes_rsd_autodiscovery_link(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    backend: Backend,
     #[case] expected_fragment: &str,
 ) {
     let TestEnv { state, base } = backend.setup().await;

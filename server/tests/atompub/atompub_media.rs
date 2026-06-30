@@ -23,7 +23,7 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, Backend, TestEnv};
+use crate::helpers::{backends, backends_matrix, Backend, TestEnv};
 
 use crate::helpers::{ensure_server_fns_registered, noop_mailer, test_options};
 
@@ -350,14 +350,11 @@ async fn upload_rejects_empty_slug(#[case] backend: Backend) {
 // Shape B — accessing another user's media member is forbidden regardless of
 // method. Identical setup (alice authenticated, bob's resource) + assertion;
 // only the HTTP method varies.
-#[rstest]
+#[apply(backends_matrix)]
 #[case::get("GET")]
 #[case::delete("DELETE")]
 #[tokio::test]
-async fn member_forbids_other_user(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
-    #[case] method: &str,
-) {
+async fn member_forbids_other_user(backend: Backend, #[case] method: &str) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let token = seed_alice(&state).await;
     let storage = TempDir::new().unwrap();

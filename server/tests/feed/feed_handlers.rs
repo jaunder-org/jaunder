@@ -27,7 +27,9 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
+use crate::helpers::{
+    backends, backends_matrix, ensure_server_fns_registered, test_options, Backend, TestEnv,
+};
 use storage::CreatePostInput;
 use storage::PostFormat;
 
@@ -300,16 +302,13 @@ async fn handler_if_modified_since_returns_304_when_unchanged(#[case] backend: B
 // validators reject: an unknown extension, a tag with a leading hyphen, a
 // username with a dot, or a user-tag whose tag segment is invalid. The handler
 // must 404 rather than construct an invalid surface.
-#[rstest]
+#[apply(backends_matrix)]
 #[case::unknown_extension("/~alice/feed.xml")]
 #[case::invalid_tag("/tags/-rust/feed.rss")]
 #[case::invalid_username("/~al.ice/feed.rss")]
 #[case::invalid_user_tag("/~alice/tags/-rust/feed.rss")]
 #[tokio::test]
-async fn handler_rejects_invalid_request_with_404(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
-    #[case] uri: &str,
-) {
+async fn handler_rejects_invalid_request_with_404(backend: Backend, #[case] uri: &str) {
     let TestEnv { state, base } = backend.setup().await;
     let app = make_app(state, &base).await;
 

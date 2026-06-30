@@ -12,12 +12,21 @@
 
 use std::sync::Arc;
 
-use crate::helpers::Backend;
+use crate::helpers::{sqlite_only, Backend};
 use chrono::Duration;
 
+use rstest::*;
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+use rstest_reuse::*;
+
+#[apply(sqlite_only)]
+// reason: reproduces the SQLite-specific issue #18 claim_pending_batch lock flake
+// (reserved-lock upgrade under busy_timeout); Postgres MVCC cannot exhibit it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "timing-based #18 reproduction; run manually with --ignored"]
-async fn claim_pending_batch_no_lock_contention() {
+async fn claim_pending_batch_no_lock_contention(#[case] backend: Backend) {
+    let _ = backend; // sqlite_only template supplies Backend::Sqlite
     let env = Backend::Sqlite.setup().await;
     let feed_events = env.state.feed_events.clone();
 

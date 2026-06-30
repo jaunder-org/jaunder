@@ -44,6 +44,8 @@ async fn get_asset(uri: &str) -> (StatusCode, Option<String>) {
     (status, content_type)
 }
 
+// guard:no-backend — drives the real asset router via create_router/oneshot to
+// serve an embedded static asset; exercises no database.
 #[tokio::test]
 async fn test_jaunder_css_served() {
     let (status, content_type) = get_asset("/style/jaunder.css").await;
@@ -55,6 +57,8 @@ async fn test_jaunder_css_served() {
     );
 }
 
+// guard:no-backend — drives the real asset router via create_router/oneshot to
+// serve an embedded static asset; exercises no database.
 #[tokio::test]
 async fn test_jaunder_themes_css_served() {
     let (status, content_type) = get_asset("/style/jaunder-themes.css").await;

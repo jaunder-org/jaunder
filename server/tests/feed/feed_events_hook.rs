@@ -24,7 +24,9 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
+use crate::helpers::{
+    backends, backends_matrix, ensure_server_fns_registered, test_options, Backend, TestEnv,
+};
 
 async fn post_json(
     state: Arc<storage::AppState>,
@@ -68,12 +70,12 @@ fn create_session_cookie(token: &str) -> String {
 // Creating a published post enqueues the Site and User feeds (3 formats each =
 // 6 rows), plus 2 rows per tag (SiteTag + UserTag) × 3 formats. With no tags
 // that's 6 rows; with two tags it's 6 + 2×2×3 = 18 rows.
-#[rstest]
+#[apply(backends_matrix)]
 #[case::no_tags(None::<Vec<String>>, 6)]
 #[case::two_tags(Some(vec!["rust".to_string(), "web".to_string()]), 18)]
 #[tokio::test]
 async fn create_published_post_enqueues_expected_feeds(
-    #[values(Backend::Sqlite, Backend::Postgres)] backend: Backend,
+    backend: Backend,
     #[case] tags: Option<Vec<String>>,
     #[case] expected_rows: usize,
 ) {

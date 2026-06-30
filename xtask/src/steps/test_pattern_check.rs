@@ -1,66 +1,82 @@
-//! The `test-backend-pattern` static check: scans the storage integration test
-//! file(s) for any `#[tokio::test]` that is not tagged with one of the
-//! backend-selecting rstest templates (`#[apply(backends)]` /
-//! `#[apply(sqlite_only)]` / `#[apply(postgres_only)]`).
+//! The `test-backend-pattern` static check: scans every Rust file under
+//! `server/tests/` for any `#[tokio::test]` (including parameterized
+//! `#[tokio::test(...)]` forms) that is not declared backend-explicit.
 //!
-//! Every async storage test must declare its backend coverage explicitly so a
-//! new SQLite-only test cannot silently reintroduce the Postgres coverage hole
-//! that issue #54 closed. Pure synchronous `#[test]` unit tests have no
-//! `#[tokio::test]` attribute and are therefore never flagged. The scanned-path
-//! set is deliberately a constant so #127 can widen it suite-wide and #135 can
-//! add the storage crate without touching the scanning logic.
+//! A test is backend-explicit when its attribute block carries one of the
+//! backend-selecting rstest templates — `#[apply(backends)]`,
+//! `#[apply(backends_matrix)]` (the `#[values]`-based variant for tests with a
+//! local `#[case]` matrix), `#[apply(sqlite_only)]`, or
+//! `#[apply(postgres_only)]`. A genuinely non-DB integration test instead
+//! carries a `// guard:no-backend — <reason>` marker and is exempt. Pure
+//! synchronous `#[test]` unit tests have no `#[tokio::test]` attribute and are
+//! never flagged.
+//!
+//! This guard (introduced in #54 for `storage.rs`) is widened here (#127) to
+//! the whole `server/tests` tree; #135 reuses the same scanner for the storage
+//! crate.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::result::{CommandResult, StepResult};
 
-/// Files this guard polices. #54 scopes it to the storage integration suite;
-/// later issues extend this list.
-const SCANNED: &[&str] = &["server/tests/storage/storage.rs"];
+/// Root directory this guard polices, scanned recursively for `.rs` files.
+const TEST_ROOT: &str = "server/tests";
 
-/// True when a source line is one of the three accepted backend-template
-/// applications. Matched on the trimmed line so indentation is irrelevant.
+/// True when a trimmed line applies one of the accepted backend templates.
+/// `backends_matrix` is listed explicitly — it is NOT a substring of
+/// `#[apply(backends)]`.
 fn is_backend_apply(trimmed: &str) -> bool {
     trimmed.contains("#[apply(backends)]")
+        || trimmed.contains("#[apply(backends_matrix)]")
         || trimmed.contains("#[apply(sqlite_only)]")
         || trimmed.contains("#[apply(postgres_only)]")
 }
 
-/// 1-based line numbers of every `#[tokio::test]` in `source` that lacks a
-/// backend template. A test's attributes form a contiguous block of `#[...]`
-/// lines around the `#[tokio::test]` line; the template may sit either above it
-/// (the convention) or below, so the block is scanned in both directions until
-/// the first non-attribute line. Pure given the source, so it is unit-tested
-/// directly.
+/// True for the bare `#[tokio::test]` and any parameterized
+/// `#[tokio::test(flavor = …)]` form.
+fn is_tokio_test(trimmed: &str) -> bool {
+    trimmed == "#[tokio::test]" || trimmed.starts_with("#[tokio::test(")
+}
+
+/// True when a line in the attribute block satisfies the guard: an accepted
+/// backend template, or the non-DB exemption marker.
+fn is_exempt_or_tagged(trimmed: &str) -> bool {
+    is_backend_apply(trimmed) || trimmed.starts_with("// guard:no-backend")
+}
+
+/// Bounds the upward attribute-cluster scan: a blank line (rustfmt always
+/// separates items with one) or a bare `}` ending the previous item.
+fn is_cluster_boundary(trimmed: &str) -> bool {
+    trimmed.is_empty() || trimmed == "}"
+}
+
+/// 1-based line numbers of every tokio test in `source` whose attribute cluster
+/// carries neither a backend template nor the `// guard:no-backend` marker.
+///
+/// The cluster is the run of lines immediately above the `#[tokio::test…]` line
+/// up to the preceding blank line / `}` boundary. Scanning to the blank boundary
+/// (rather than requiring every line to start with `#[`) is what lets a
+/// **multi-line** attribute — `#[case::x(\n  "arg",\n  "arg",\n)]`, whose
+/// continuation lines and closing `)]` are not `#[`-prefixed — and an
+/// interleaved doc-comment / two-line `// guard:no-backend` marker stay inside
+/// the cluster. Pure given the source, so it is unit-tested directly.
 fn violations(source: &str) -> Vec<usize> {
     let lines: Vec<&str> = source.lines().collect();
     let mut out = Vec::new();
     for (i, line) in lines.iter().enumerate() {
-        if line.trim() != "#[tokio::test]" {
+        if !is_tokio_test(line.trim()) {
             continue;
         }
-        let mut tagged = false;
-        // Walk upward across the contiguous attribute block.
+        let mut ok = false;
         let mut j = i;
-        while j > 0 && lines[j - 1].trim().starts_with("#[") {
+        while j > 0 && !is_cluster_boundary(lines[j - 1].trim()) {
             j -= 1;
-            if is_backend_apply(lines[j].trim()) {
-                tagged = true;
+            if is_exempt_or_tagged(lines[j].trim()) {
+                ok = true;
                 break;
             }
         }
-        // Walk downward across the contiguous attribute block.
-        if !tagged {
-            let mut k = i + 1;
-            while k < lines.len() && lines[k].trim().starts_with("#[") {
-                if is_backend_apply(lines[k].trim()) {
-                    tagged = true;
-                    break;
-                }
-                k += 1;
-            }
-        }
-        if !tagged {
+        if !ok {
             out.push(i + 1);
         }
     }
@@ -68,7 +84,7 @@ fn violations(source: &str) -> Vec<usize> {
 }
 
 /// The failure detail for all offending tests across the scanned files, or
-/// `None` when every `#[tokio::test]` is tagged. Pure given the
+/// `None` when every tokio test is tagged/exempt. Pure given the
 /// `(path, source)` pairs, so it is unit-tested directly.
 pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     let mut lines = Vec::new();
@@ -81,28 +97,51 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     }
     if !lines.is_empty() {
         lines.push(
-            "  recovery: tag the test #[apply(backends|sqlite_only|postgres_only)] \
-             (a deliberately single-backend test must carry a // reason: comment)"
+            "  recovery: tag the test #[apply(backends|backends_matrix|sqlite_only|postgres_only)] \
+             (a deliberately single-backend test must carry a // reason: comment; a genuinely \
+             non-DB integration test may carry a // guard:no-backend — <reason> marker instead)"
                 .to_string(),
         );
     }
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
-/// Read the scanned files and push the result step. A missing scanned file is
-/// skipped (no-op) rather than erroring, matching the other static checks.
+/// Collect every `.rs` file under `dir`, recursively.
+fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            rust_files(&path, out)?;
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Scan every Rust file under `server/tests` and push the result step. A missing
+/// test root is a hard failure (not a silent pass), so a moved/renamed tree can
+/// never quietly disable the guard.
 pub fn run(result: &mut CommandResult) {
-    let scanned: Vec<(String, String)> = SCANNED
-        .iter()
-        .filter_map(|p| {
-            std::fs::read_to_string(Path::new(p))
-                .ok()
-                .map(|s| ((*p).to_string(), s))
-        })
-        .collect();
-    let step = match problems(&scanned) {
-        None => StepResult::ok("test-backend-pattern"),
-        Some(detail) => StepResult::fail("test-backend-pattern").detail(detail),
+    let mut files = Vec::new();
+    let step = match rust_files(Path::new(TEST_ROOT), &mut files) {
+        Err(e) => {
+            StepResult::fail("test-backend-pattern").detail(format!("cannot scan {TEST_ROOT}: {e}"))
+        }
+        Ok(()) => {
+            let scanned: Vec<(String, String)> = files
+                .iter()
+                .filter_map(|p| {
+                    std::fs::read_to_string(p)
+                        .ok()
+                        .map(|s| (p.display().to_string(), s))
+                })
+                .collect();
+            match problems(&scanned) {
+                None => StepResult::ok("test-backend-pattern"),
+                Some(detail) => StepResult::fail("test-backend-pattern").detail(detail),
+            }
+        }
     };
     result.push(step);
 }
@@ -129,6 +168,45 @@ fn pure_logic() {}
 #[tokio::test]
 async fn pg(#[case] backend: Backend) {}
 ";
+    const PARAM_BARE: &str = "\
+#[tokio::test(flavor = \"multi_thread\")]
+async fn bad_param() {}
+";
+    const PARAM_TAGGED: &str = "\
+#[apply(sqlite_only)]
+#[tokio::test(flavor = \"multi_thread\")]
+async fn good_param(#[case] backend: Backend) {}
+";
+    const EXEMPT: &str = "\
+// guard:no-backend — drives the asset router; no DB.
+// (a second comment line of reason)
+#[tokio::test]
+async fn no_db() {}
+";
+    const DOC_GAP: &str = "\
+#[apply(backends)]
+/// doc comment between the template and the test
+#[tokio::test]
+async fn good_with_doc(#[case] backend: Backend) {}
+";
+    const MATRIX_TAGGED: &str = "\
+#[apply(backends_matrix)]
+#[case::a(1)]
+#[tokio::test]
+async fn good_matrix(backend: Backend, #[case] n: i32) {}
+";
+    // A multi-line `#[case(...)]` whose continuation lines / closing `)]` are not
+    // `#[`-prefixed — the case that exposed the contiguity bug: the `#[apply]` is
+    // separated from `#[tokio::test]` by these non-attribute-prefixed lines.
+    const MATRIX_MULTILINE_CASE: &str = "\
+#[apply(backends_matrix)]
+#[case::x(
+    \"arg-one\",
+    \"arg-two\"
+)]
+#[tokio::test]
+async fn good_multiline(backend: Backend, #[case] a: &str, #[case] b: &str) {}
+";
 
     #[test]
     fn annotated_tokio_test_is_clean() {
@@ -151,10 +229,40 @@ async fn pg(#[case] backend: Backend) {}
     }
 
     #[test]
+    fn parameterized_bare_is_flagged() {
+        assert_eq!(violations(PARAM_BARE), vec![1]);
+    }
+
+    #[test]
+    fn parameterized_tagged_is_clean() {
+        assert!(violations(PARAM_TAGGED).is_empty());
+    }
+
+    #[test]
+    fn no_backend_marker_exempts() {
+        assert!(violations(EXEMPT).is_empty());
+    }
+
+    #[test]
+    fn doc_comment_between_template_and_test_is_clean() {
+        assert!(violations(DOC_GAP).is_empty());
+    }
+
+    #[test]
+    fn backends_matrix_apply_is_clean() {
+        assert!(violations(MATRIX_TAGGED).is_empty());
+    }
+
+    #[test]
+    fn multiline_case_attribute_does_not_break_the_cluster() {
+        assert!(violations(MATRIX_MULTILINE_CASE).is_empty());
+    }
+
+    #[test]
     fn problem_detail_names_file_line_and_recovery() {
         let detail = problems(&[("storage.rs".to_string(), BARE.to_string())]).expect("a problem");
         assert!(detail.contains("storage.rs:1"));
-        assert!(detail.contains("#[apply(backends|sqlite_only|postgres_only)]"));
+        assert!(detail.contains("#[apply(backends|backends_matrix|sqlite_only|postgres_only)]"));
     }
 
     #[test]
