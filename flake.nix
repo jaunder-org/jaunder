@@ -450,35 +450,13 @@
             },
             // Artifact root for traces/screenshots; copied out by the testScript.
             outputDir: '/tmp/e2e/test-results',
-            // Run with multiple workers: the suite is parallel-safe via per-test
-            // identity fixtures (unique accounts + recipient-scoped mailboxes,
-            // see end2end/tests/fixtures.ts). The lone global-singleton spec,
-            // admin-site, mutates site.title/base_url and is quarantined in a
-            // per-browser serial project that runs in its own phase (project
-            // `dependencies`) so it never overlaps the title-asserting specs.
-            // SQLite write contention is handled by BEGIN IMMEDIATE (#51/#52/#53).
-            workers: 4,
+            // Run spec files sequentially to avoid SQLite write contention.
+            // Each browser project is already run in isolation (separate seed_db()
+            // calls), so one worker is sufficient and prevents locking errors.
+            workers: 1,
             projects: [
               {
                 name: 'chromium',
-                testIgnore: /admin-site\.spec\.ts/,
-                fullyParallel: true,
-                use: {
-                  ...devices['Desktop Chrome'],
-                  launchOptions: {
-                    args: [
-                      '--no-sandbox',
-                      '--disable-gpu',
-                      '--disable-dev-shm-usage',
-                    ],
-                  },
-                },
-              },
-              {
-                name: 'chromium-serial',
-                testMatch: /admin-site\.spec\.ts/,
-                fullyParallel: false,
-                dependencies: ['chromium'],
                 use: {
                   ...devices['Desktop Chrome'],
                   launchOptions: {
@@ -492,17 +470,6 @@
               },
               {
                 name: 'firefox',
-                testIgnore: /admin-site\.spec\.ts/,
-                fullyParallel: true,
-                use: {
-                  ...devices['Desktop Firefox'],
-                },
-              },
-              {
-                name: 'firefox-serial',
-                testMatch: /admin-site\.spec\.ts/,
-                fullyParallel: false,
-                dependencies: ['firefox'],
                 use: {
                   ...devices['Desktop Firefox'],
                 },
@@ -616,7 +583,7 @@
               + " JAUNDER_E2E_TRACEPARENT=${traceParent}"
               + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
               + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-              + " --config playwright.nix.config.js --project ${browser} --project ${browser}-serial"
+              + " --config playwright.nix.config.js --project ${browser}"
             )
             # Stream the Playwright line-reporter output into the build log (-L), so
             # the failing test + assertion are recoverable from build.log alone,
@@ -679,10 +646,7 @@
               {
                 imports = [ self.nixosModules.jaunder ];
 
-                # 4 cores + 4 GB so Playwright's 4 workers each get a vCPU and
-                # 4 concurrent browser contexts don't thrash 2 GB (#61).
-                virtualisation.cores = 4;
-                virtualisation.memorySize = 4096;
+                virtualisation.memorySize = 2048;
                 environment.systemPackages = [
                   pkgs.sqlite
                   pkgs.opentelemetry-collector-contrib
@@ -772,10 +736,7 @@
               {
                 imports = [ self.nixosModules.jaunder ];
 
-                # 4 cores + 4 GB so Playwright's 4 workers each get a vCPU and
-                # 4 concurrent browser contexts don't thrash 2 GB (#61).
-                virtualisation.cores = 4;
-                virtualisation.memorySize = 4096;
+                virtualisation.memorySize = 2048;
                 environment.systemPackages = [
                   pkgs.postgresql_16
                   pkgs.opentelemetry-collector-contrib
