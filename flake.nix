@@ -1125,6 +1125,7 @@
               pkgs.postgresql_16
               pkgs.prettier
               pkgs.sqlite
+              pkgs.typescript
               wasm-bindgen-cli
             ]
             ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
@@ -1150,8 +1151,21 @@
               shellHook = ''
                 export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
 
-                # Symlink Nix-provided Playwright into node_modules to avoid instance conflict
-                # and provide IDE support without redundant disk usage.
+                # Provision end2end/node_modules from the nix e2ePackage closure so the
+                # devShell `tsc` (pkgs.typescript) can type-check end2end/ offline:
+                # @types/node + undici-types + typescript all resolve. Then re-pin
+                # @playwright/test to the nix-matched Playwright (browser-driver parity +
+                # IDE support, as before) instead of e2ePackage's npm copy.
+                #
+                # rm -rf before each ln keeps this idempotent on shell re-entry: @playwright
+                # below becomes a real dir, which a bare `ln -sfn .../*` could not overwrite.
+                mkdir -p end2end/node_modules
+                for dep in ${e2ePackage}/node_modules/*; do
+                  target="end2end/node_modules/$(basename "$dep")"
+                  rm -rf "$target"
+                  ln -sfn "$dep" "$target"
+                done
+                rm -rf end2end/node_modules/@playwright
                 mkdir -p end2end/node_modules/@playwright
                 ln -sfn ${pkgs.playwright-test}/lib/node_modules/@playwright/test end2end/node_modules/@playwright/test
               '';
