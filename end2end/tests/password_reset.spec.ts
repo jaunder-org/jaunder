@@ -7,7 +7,11 @@ test("password reset flow completes successfully", async ({
   verifiedUser,
   mailbox,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
+  // Larger budget than the old seeded-account flow: `verifiedUser` self-
+  // provisions a verified account out-of-band (register → login → set-email →
+  // verify) before this body's forgot → reset → login-twice flow — roughly
+  // double the page ops of the original pre-seeded test.
+  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
 
   // Request a password reset for this test's own verified user.
   await goto(page, "/forgot-password");
