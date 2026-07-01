@@ -423,6 +423,68 @@
           cp -r ${./public}/. $out/
         '';
 
+        # --- leptos-CSR spike (#177) --------------------------------------------
+        # A parallel build of the client-side-render variant, alongside (never
+        # replacing) the SSR/hydrate build above. Mirrors hydrateWasm/wasmBundle/
+        # jaunderBin/site, swapping the `csr` crate + `--features csr` server. Used
+        # only by the CSR e2e check; the default build/CI are untouched.
+        csrWasm = craneLib.buildPackage (
+          commonArgs
+          // {
+            cargoArtifacts = craneLib.buildDepsOnly (
+              commonArgs
+              // {
+                CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+                cargoExtraArgs = "-p csr";
+                doCheck = false;
+              }
+            );
+            CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+            cargoExtraArgs = "-p csr";
+            doCheck = false;
+            installPhaseCommand = ''
+              mkdir -p $out/lib
+              cp target/wasm32-unknown-unknown/release/csr.wasm $out/lib/
+            '';
+          }
+        );
+
+        csrWasmBundle =
+          pkgs.runCommand "jaunder-csr-wasm-bundle"
+            {
+              nativeBuildInputs = [
+                wasm-bindgen-cli
+                pkgs.gnused
+              ];
+            }
+            ''
+              mkdir -p $out
+              wasm-bindgen \
+                --target web \
+                --out-dir $out \
+                ${csrWasm}/lib/csr.wasm
+              # Rename to the "jaunder" output-name the CSR shell's <script> imports.
+              mv $out/csr.js $out/jaunder.js
+              mv $out/csr_bg.wasm $out/jaunder_bg.wasm
+              sed -i 's/csr_bg\.wasm/jaunder_bg.wasm/g' $out/jaunder.js
+            '';
+
+        jaunderBinCsr = craneLib.buildPackage (
+          commonArgs
+          // {
+            inherit cargoArtifacts;
+            cargoExtraArgs = "-p jaunder --features csr";
+            doCheck = false;
+          }
+        );
+
+        csrSite = pkgs.runCommand "jaunder-csr-site" { } ''
+          mkdir -p $out/pkg
+          cp -r ${csrWasmBundle}/. $out/pkg/
+          cp -r ${./public}/. $out/
+          cp ${./csr/index.html} $out/index.html
+        '';
+
         # Playwright config for the Nix VM environment.
         # Chromium needs --no-sandbox (runs as root) and GPU/shm disabled.
         # WebKit (WPE) is excluded: WPEWebProcess crashes with SIGABRT in
@@ -454,6 +516,60 @@
             // Each browser project is already run in isolation (separate seed_db()
             // calls), so one worker is sufficient and prevents locking errors.
             workers: 1,
+            projects: [
+              {
+                name: 'chromium',
+                use: {
+                  ...devices['Desktop Chrome'],
+                  launchOptions: {
+                    args: [
+                      '--no-sandbox',
+                      '--disable-gpu',
+                      '--disable-dev-shm-usage',
+                    ],
+                  },
+                },
+              },
+              {
+                name: 'firefox',
+                use: {
+                  ...devices['Desktop Firefox'],
+                },
+              },
+            ],
+          });
+        '';
+
+        # leptos-CSR spike (#177): the CSR e2e's Playwright config. A copy of
+        # nixPlaywrightConfig kept SEPARATE so the concurrency flip (workers:4 +
+        # fullyParallel, the #173 reproduction recipe) lives only on the CSR path
+        # and never touches the default SSR e2e. Task 4 keeps workers:1 to isolate
+        # "do the specs pass under CSR" from "does concurrency panic"; Task 5 flips
+        # it to workers:4 + fullyParallel for the campaign.
+        csrPlaywrightConfig = pkgs.writeText "playwright.csr.config.js" ''
+          const { defineConfig, devices } = require('@playwright/test');
+          const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
+          module.exports = defineConfig({
+            testDir: './tests',
+            timeout: 30 * 1000,
+            expect: { timeout: 5000 },
+            reporter: [
+              ['line'],
+              ['json', { outputFile: '/tmp/e2e/playwright-report.json' }],
+            ],
+            use: {
+              actionTimeout: 0,
+              trace: 'retain-on-failure',
+              screenshot: 'only-on-failure',
+              ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
+            },
+            outputDir: '/tmp/e2e/test-results',
+            // The #173 reproduction recipe: 4 concurrent workers + fullyParallel
+            // maximize overlapping requests. Under SSR this panicked ~12% of runs
+            // (reactive_graph disposal); CSR has no server-side reactive render, so
+            // the spike campaign confirms zero panics. Needs the 4-vCPU/6 GB VM.
+            fullyParallel: true,
+            workers: 4,
             projects: [
               {
                 name: 'chromium',
@@ -723,6 +839,16 @@
             traceId,
             traceParent,
             warmupEnv ? "",
+            # leptos-CSR spike (#177): these default to the SSR build/config, so
+            # the existing e2e-postgres-* calls are byte-identical. The CSR check
+            # passes jaunderBinCsr/csrSite/csrPlaywrightConfig + a bigger VM. The
+            # binary/site overrides below are mkIf-guarded on `jaunderPkg !=
+            # jaunderBin`, so the default derivation is untouched (no override added).
+            jaunderPkg ? jaunderBin,
+            sitePkg ? site,
+            playwrightConfig ? nixPlaywrightConfig,
+            vmMemory ? 2048,
+            vmCores ? null,
           }:
           pkgs.testers.nixosTest {
             name = checkName;
@@ -738,7 +864,24 @@
               {
                 imports = [ self.nixosModules.jaunder ];
 
-                virtualisation.memorySize = 2048;
+                virtualisation.memorySize = vmMemory;
+                # Default (null) leaves the nixosTest core count alone; the CSR
+                # campaign sets 4 (workers:4 needs the cores — 1 vCPU gives false
+                # hydration-timeouts, per #173 handoff).
+                virtualisation.cores = lib.mkIf (vmCores != null) vmCores;
+                # CSR only: point the jaunder service at the CSR binary + site.
+                # mkIf-guarded so the default (jaunderPkg == jaunderBin) adds
+                # nothing and the existing derivations stay byte-identical.
+                systemd.services.jaunder.preStart = lib.mkIf (jaunderPkg != jaunderBin) (
+                  lib.mkForce ''
+                    mkdir -p target
+                    ln -sfn ${sitePkg} target/site
+                    ${jaunderPkg}/bin/jaunder init --db "$JAUNDER_DB" --skip-if-exists
+                  ''
+                );
+                systemd.services.jaunder.serviceConfig.ExecStart = lib.mkIf (
+                  jaunderPkg != jaunderBin
+                ) (lib.mkForce "${jaunderPkg}/bin/jaunder serve");
                 environment.systemPackages = [
                   pkgs.postgresql_16
                   pkgs.opentelemetry-collector-contrib
@@ -787,7 +930,7 @@
 
               # Exercise create-pg-db
               machine.succeed(
-                "${jaunderBin}/bin/jaunder create-pg-db"
+                "${jaunderPkg}/bin/jaunder create-pg-db"
                 + " --bootstrap-db postgres://postgres@127.0.0.1/postgres"
                 + " --app-db postgres://jaunder@127.0.0.1/jaunder"
                 + " --app-role-password testpassword"
@@ -799,7 +942,7 @@
               machine.wait_for_open_port(3000, timeout=30)
 
               machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
-              machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")
+              machine.succeed("cp ${playwrightConfig} /tmp/e2e/playwright.nix.config.js")
 
               def seed_db():
                 # Dynamic TRUNCATE of every public-schema table avoids
@@ -822,7 +965,7 @@
                 machine.succeed("sudo -u postgres psql -d jaunder -c \"INSERT INTO site_config (key, value) VALUES ('feeds.websub_hub_url', 'https://hub.test.local/')\"")
                 machine.succeed(
                   "cd /var/lib/jaunder"
-                  + " && JAUNDER_BIN=${jaunderBin}/bin/jaunder"
+                  + " && JAUNDER_BIN=${jaunderPkg}/bin/jaunder"
                   + " JAUNDER_DB=postgres://jaunder:testpassword@127.0.0.1/jaunder"
                   + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
                   + " ${./scripts/seed-e2e-fixtures.sh}"
@@ -898,6 +1041,11 @@
             site = site;
             devtool = devtoolBin;
 
+            # leptos-CSR spike (#177): the CSR server + site, for standalone
+            # `nix build .#csr-server` / `.#csr-site` verification and the CSR e2e.
+            csr-server = jaunderBinCsr;
+            csr-site = csrSite;
+
             # The e2e aggregate: a symlinkJoin of every `e2e-*` check, exposed as
             # `checks.e2e` and built by `cargo xtask validate`. Adding a new e2e
             # combo automatically joins it here. Its `jaunder-e2e*` name keeps it
@@ -939,6 +1087,31 @@
               # `jaunder-e2e*`, so the cachix pushFilter still excludes it — the VM
               # runs are never substituted from a cached aggregate.
               e2e = self.packages.${system}.e2e-checks;
+
+              # leptos-CSR spike (#177): the CSR e2e gate. postgres+chromium is the
+              # #173 reproduction recipe (postgres latency widens the concurrency
+              # window; chromium is the most sensitive). The `csr-` name (NOT `e2e-`)
+              # deliberately keeps it OUT of the `e2e-checks` aggregate / default
+              # gate — it is built on demand by the campaign
+              # (`nix build .#checks.<sys>.csr-e2e-postgres-chromium --rebuild`),
+              # never by `cargo xtask validate`. Trace digit 5 (1-4 are the SSR combos).
+              csr-e2e-postgres-chromium =
+                let
+                  traceId = pkgs.lib.concatStrings (pkgs.lib.genList (_: "5") 32);
+                  traceParent =
+                    "00-${traceId}-${pkgs.lib.concatStrings (pkgs.lib.genList (_: "5") 16)}-01";
+                in
+                mkE2ePostgresCheck {
+                  checkName = "csr-e2e-postgres-chromium";
+                  browser = "chromium";
+                  inherit traceId traceParent;
+                  warmupEnv = " JAUNDER_E2E_WARMUP=1";
+                  jaunderPkg = jaunderBinCsr;
+                  sitePkg = csrSite;
+                  playwrightConfig = csrPlaywrightConfig;
+                  vmMemory = 6144;
+                  vmCores = 4;
+                };
 
               # Live elisp integration suite (ADR-0035): a minimal NixOS VM with
               # Emacs + the jaunder binary. The harness self-boots the server

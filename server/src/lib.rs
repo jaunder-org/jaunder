@@ -25,7 +25,9 @@ use std::{path::PathBuf, sync::Arc};
 use axum::Router;
 use axum_embed::ServeEmbed;
 use leptos::prelude::*;
+#[cfg(not(feature = "csr"))]
 use leptos_axum::{generate_route_list, LeptosRoutes};
+#[cfg(not(feature = "csr"))]
 use web::{shell, App};
 
 use crate::assets::StaticAssets;
@@ -38,6 +40,7 @@ pub fn create_router(
     secure_cookies: bool,
     storage_path: PathBuf,
 ) -> Router {
+    #[cfg(not(feature = "csr"))]
     let routes = generate_route_list(App);
     // Per-trait extensions for the raw axum HTTP handlers (feed, atompub,
     // media). The whole `AppState` is never layered as an `Extension`; each
@@ -98,7 +101,11 @@ pub fn create_router(
         .route(
             "/~{username}/tags/{tag}/feed.{ext}",
             axum::routing::get(crate::feed::handlers::feed_user_tag),
-        )
+        );
+
+    // --- SSR (default): the leptos reactive page render. The #173 panic home. ---
+    #[cfg(not(feature = "csr"))]
+    let app = app
         .leptos_routes_with_context(
             &leptos_options,
             routes,
@@ -114,7 +121,26 @@ pub fn create_router(
                 move || shell(leptos_options.clone())
             },
         )
-        .fallback(leptos_axum::file_and_error_handler(shell))
+        .fallback(leptos_axum::file_and_error_handler(shell));
+
+    // --- CSR (spike #177): no reactive render. Serve the static SPA shell + site
+    //     assets (pkg/*) instead. The /api server fns and the raw HTTP routes
+    //     (feed, media, atompub, style) above are untouched, so server fns remain
+    //     the data API; only the page render leaves the request path. ---
+    #[cfg(feature = "csr")]
+    let app = {
+        use tower_http::services::{ServeDir, ServeFile};
+        // `state`/`leptos_mailer` feed the SSR render's context closure above; under
+        // csr there is no such closure (server fns get their own contexts via the
+        // /api route). Touch them so the unused-variable lint stays quiet without
+        // changing the shared function signature.
+        let _ = (&state, &leptos_mailer, secure_cookies);
+        let site_root = leptos_options.site_root.to_string();
+        let index_html = format!("{site_root}/index.html");
+        app.fallback_service(ServeDir::new(&site_root).fallback(ServeFile::new(index_html)))
+    };
+
+    let app = app
         .layer(axum::Extension(storage_path_ext))
         .layer(axum::Extension(posts_ext))
         .layer(axum::Extension(user_config_ext))

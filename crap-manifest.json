@@ -2686,11 +2686,11 @@
     {
       "coverage": 0.0,
       "crap": 2.0,
-      "crate": "hydrate",
+      "crate": "csr",
       "cyclomatic": 1.0,
-      "file": "hydrate/src/lib.rs",
-      "function": "hydrate",
-      "line": 163
+      "file": "csr/src/lib.rs",
+      "function": "main",
+      "line": 20
     },
     {
       "coverage": 0.0,
@@ -3557,6 +3557,15 @@
       "line": 1354
     },
     {
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "hydrate",
+      "cyclomatic": 1.0,
+      "file": "hydrate/src/lib.rs",
+      "function": "hydrate",
+      "line": 163
+    },
+    {
       "coverage": 100.0,
       "crap": 2.0,
       "crate": "jaunder",
@@ -3881,13 +3890,13 @@
       "line": 9
     },
     {
-      "coverage": 83.78378378378379,
-      "crap": 1.0042643081357472,
+      "coverage": 84.21052631578947,
+      "crap": 1.00393643388249,
       "crate": "jaunder",
       "cyclomatic": 1.0,
       "file": "server/src/lib.rs",
       "function": "create_router",
-      "line": 34
+      "line": 36
     },
     {
       "coverage": 88.63636363636364,
