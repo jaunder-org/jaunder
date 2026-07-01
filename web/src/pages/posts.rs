@@ -108,9 +108,32 @@ pub fn CreatePostPage() -> impl IntoView {
     }
 }
 
+/// First-paint view for [`PostPage`]'s `Suspense`: the projector-seeded content
+/// (flash-free) when the server painted this permalink, or a spinner while the
+/// reactive fetch runs (client-side navigation, no seed).
+fn permalink_first_paint(seed_post: Option<crate::posts::PostResponse>) -> AnyView {
+    match seed_post {
+        Some(post) => {
+            let html = crate::render::render_body(&crate::render::PageSeed::Permalink(post));
+            view! { <div inner_html=html></div> }.into_any()
+        }
+        None => view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any(),
+    }
+}
+
 #[allow(clippy::must_use_candidate)]
 #[component]
 pub fn PostPage() -> impl IntoView {
+    // Public projector seed (#178/#179): the content the server painted for this
+    // permalink. Adopted as the `Suspense` fallback below so first paint shows
+    // real content (flash-free) instead of a spinner. The reactive fetch still
+    // runs and takes over — restoring the author's edit/delete affordances when
+    // the viewer owns the post — so this *enhances* rather than *replaces*.
+    let seed_post = match use_context::<Option<crate::render::PageSeed>>().flatten() {
+        Some(crate::render::PageSeed::Permalink(post)) => Some(post),
+        _ => None,
+    };
+
     let params = use_params_map();
 
     let post_data = move || {
@@ -166,9 +189,9 @@ pub fn PostPage() -> impl IntoView {
     view! {
         <div class="j-scroll">
             <div class="j-page">
-                <Suspense fallback=|| {
-                    view! { <p class="j-loading">"Loading\u{2026}"</p> }
-                }>
+                <Suspense fallback=move || permalink_first_paint(
+                    seed_post.clone(),
+                )>
                     {move || Suspend::new(async move {
                         match post.await {
                             Ok(fetched) => {
@@ -209,6 +232,7 @@ pub fn PostPage() -> impl IntoView {
             </div>
         </div>
     }
+    .into_any()
 }
 
 #[allow(clippy::too_many_lines)]

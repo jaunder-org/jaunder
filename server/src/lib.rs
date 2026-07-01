@@ -14,6 +14,7 @@ pub mod mailer;
 pub mod media;
 pub mod media_manager;
 pub mod observability;
+pub mod projector;
 pub mod runtime_file;
 pub mod websub;
 
@@ -137,6 +138,14 @@ pub fn create_router(
         let _ = (&state, &leptos_mailer, secure_cookies);
         let site_root = leptos_options.site_root.to_string();
         let index_html = format!("{site_root}/index.html");
+        // Non-reactive HTML for the public discoverability routes, ahead of the
+        // static-SPA fallback (#178). Everything else — and any public URL with
+        // no anonymous-public content — falls through to the SPA shell, which
+        // boots the CSR client; the projector serves that same shell itself for
+        // the routes it owns, so drafts / client 404s / authed affordances keep
+        // working.
+        let shell = std::fs::read_to_string(&index_html).unwrap_or_default();
+        let app = crate::projector::register(app, crate::projector::Shell(shell.into()));
         app.fallback_service(ServeDir::new(&site_root).fallback(ServeFile::new(index_html)))
     };
 

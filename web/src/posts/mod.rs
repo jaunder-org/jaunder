@@ -13,8 +13,13 @@ pub use listing::*;
 #[cfg(feature = "ssr")]
 use server::{
     apply_post_tag_diff, find_draft_by_permalink_for_user, not_found_error, parse_post_cursor,
-    perform_creation_error, perform_update_error, post_response, private_post_not_found_error,
+    perform_creation_error, perform_update_error, private_post_not_found_error,
 };
+// Re-exported for the `server` crate's public projector, which fetches the same
+// public data and maps records the same way (one query, no drift). These stay
+// in scope for the `#[server]` fns below via the `pub use`.
+#[cfg(feature = "ssr")]
+pub use server::{fetch_post_record, post_response};
 
 use crate::error::WebResult;
 use crate::tags::TagSummary;
@@ -26,7 +31,7 @@ use {
     crate::error::InternalError,
     crate::feed_events::enqueue_feed_events,
     crate::viewer::viewer_identity,
-    chrono::{DateTime, NaiveDate, Utc},
+    chrono::{DateTime, Utc},
     common::{slug::Slug, tag::Tag, username::Username},
     std::{collections::BTreeSet, sync::Arc},
     storage::{
@@ -319,22 +324,17 @@ pub async fn get_post(
             .parse::<Slug>()
             .map_err(|e| InternalError::validation(e.to_string()))?;
 
-        NaiveDate::from_ymd_opt(year, month, day)
-            .ok_or_else(|| InternalError::validation("Invalid permalink"))?;
-
         let viewer = viewer_identity().await;
-        if let Some(post) = posts
-            .get_post_by_permalink(
-                &username_parsed,
-                year,
-                month,
-                day,
-                &slug_parsed,
-                &viewer,
-                chrono::Utc::now(),
-            )
-            .await
-            .map_err(InternalError::storage)?
+        if let Some(post) = fetch_post_record(
+            posts.as_ref(),
+            &viewer,
+            &username_parsed,
+            year,
+            month,
+            day,
+            &slug_parsed,
+        )
+        .await?
         {
             let is_author = require_auth()
                 .await
