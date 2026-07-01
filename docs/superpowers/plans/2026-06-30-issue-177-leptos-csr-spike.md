@@ -596,7 +596,7 @@ git commit -m "test(e2e): CSR e2e at workers:4 + fullyParallel (spike #177)"
 - Create (scratchpad, **NOT committed**): a campaign loop script.
 - Create: `docs/issue-177-csr-spike-findings.md`
 
-- [ ] **Step 1: Write the campaign loop** to
+- [x] **Step 1: Write the campaign loop** to
   `/tmp/claude-1000/-home-mdorman-src-jaunder/9e2d69ce-26ee-43e5-b391-00b10401ef73/scratchpad/csr-campaign.sh`.
   It loops ~30×: each iteration runs
   `nix build .#checks.x86_64-linux.e2e-csr-postgres-chromium --rebuild -L --keep-failed`
@@ -628,14 +628,16 @@ done
 echo "TOTAL: PASS=$pass PANIC=$panic OTHER=$other first_fail=${first_fail:-none}"
 ```
 
-- [ ] **Step 2: Run the campaign** (long-running — use the Bash tool's background mode;
+- [x] **Step 2: Run the campaign.** RESULT: **30/30 PASS, 0 PANIC, 0 OTHER** (+3 clean
+  bring-up runs = 33 total). Every run 66/66 tests, zero `already been disposed`, zero
+  `panicked at`. Classified by log content (--rebuild exit code is unreliable).
   ~30 VM boots).
 
 Run: `bash <scratchpad>/csr-campaign.sh 30`
 Expected: `PANIC=0`. (`OTHER` failures are infra flakes — VM boot, OOM, timeout — not the
 #173 class; investigate any, re-run if infra, but they don't fail the gate. Document them.)
 
-- [ ] **Step 3: Write `docs/issue-177-csr-spike-findings.md`** recording: the exact run
+- [x] **Step 3: Write `docs/issue-177-csr-spike-findings.md`** recording: the exact run
   count, the PASS/PANIC/OTHER tally, the verdict (**GO** if PANIC=0, **NO-GO** otherwise),
   the recipe used (postgres+chromium, workers:4, fullyParallel, cores=4/6144,
   `nix build --rebuild`), and — if NO-GO — the exact panic site + run index (this would
@@ -643,7 +645,7 @@ Expected: `PANIC=0`. (`OTHER` failures are infra flakes — VM boot, OOM, timeou
   decision toward Dioxus per the issue). Reference the #173 baseline (~12%, first panic
   ~run 7) for contrast.
 
-- [ ] **Step 4: Commit the findings doc.**
+- [x] **Step 4: Commit the findings doc.**
 
 ```bash
 git add docs/issue-177-csr-spike-findings.md
