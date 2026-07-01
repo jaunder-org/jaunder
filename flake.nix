@@ -564,7 +564,12 @@
               ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
             },
             outputDir: '/tmp/e2e/test-results',
-            workers: 1,
+            // The #173 reproduction recipe: 4 concurrent workers + fullyParallel
+            // maximize overlapping requests. Under SSR this panicked ~12% of runs
+            // (reactive_graph disposal); CSR has no server-side reactive render, so
+            // the spike campaign confirms zero panics. Needs the 4-vCPU/6 GB VM.
+            fullyParallel: true,
+            workers: 4,
             projects: [
               {
                 name: 'chromium',

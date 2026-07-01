@@ -565,18 +565,23 @@ git commit -m "test(e2e): CSR e2e check green at workers:1 (spike #177)"
 **Files:**
 - Modify: `flake.nix` (`csrPlaywrightConfig` only)
 
-- [ ] **Step 1: Set concurrency** in `csrPlaywrightConfig`: change `workers: 1` to
+- [x] **Step 1: Set concurrency** in `csrPlaywrightConfig`: change `workers: 1` to
   `workers: 4` and add `fullyParallel: true` to the `defineConfig({...})` object. Leave
   `nixPlaywrightConfig` (the SSR one) at `workers: 1`.
 
-- [ ] **Step 2: Verify a single concurrent run passes (bypassing the nix cache).**
+- [x] **Step 2: Verify a single concurrent run passes.** RESULT: `workers:4` +
+  `fullyParallel` — 66 tests passed (1.7m), zero panics. Confirmed twice (fresh build
+  + a `--rebuild` re-run, both 66/66 clean). NOTE for the campaign: `--rebuild`
+  re-executes the VM but always exits non-zero with a cosmetic "may not be
+  deterministic" output-diff error (journal timestamps), so the campaign classifies
+  by log content (`already been disposed` → PANIC; `N passed (` → PASS), NOT exit code.
 
 Run: `nix build .#checks.x86_64-linux.e2e-csr-postgres-chromium --rebuild -L --keep-failed`
 Expected: green (no `already been disposed`, no other panic). If it OOMs or times out,
 confirm the node has `cores=4`/`memorySize=6144` (Task 4 Step 3). A genuine
 `already been disposed` panic here is a **NO-GO signal** — stop and escalate (see Task 6).
 
-- [ ] **Step 3: Commit.**
+- [x] **Step 3: Commit.**
 
 ```bash
 git add flake.nix
