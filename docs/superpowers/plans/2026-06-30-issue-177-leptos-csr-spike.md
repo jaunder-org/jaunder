@@ -366,12 +366,12 @@ git commit -m "feat(server): csr feature serves static SPA shell, no reactive re
 - Produces: `csrWasm`, `csrWasmBundle`, `jaunderBinCsr`, `csrSite` let-bindings; flake
   `packages.<system>.{csr-server,csr-site}` for standalone `nix build` verification.
 
-- [ ] **Step 1: Read the exact surrounding bindings first.** Read `flake.nix` lines
+- [x] **Step 1: Read the exact surrounding bindings first.** Read `flake.nix` lines
   290-425 to confirm the `let`-scope where `hydrateWasm`/`wasmBundle`/`jaunderBin`/`site`
   live, and that `commonArgs`/`cargoArtifacts` are in scope. Add the new bindings in the
   same scope, immediately after `site` (flake.nix:424).
 
-- [ ] **Step 2: Add the four CSR derivations** after the `site` binding:
+- [x] **Step 2: Add the four CSR derivations** after the `site` binding:
 
 ```nix
 csrWasm = craneLib.buildPackage (
@@ -432,7 +432,7 @@ csrSite = pkgs.runCommand "jaunder-csr-site" { } ''
 '';
 ```
 
-- [ ] **Step 3: Expose them as flake packages** for standalone verification. Find the
+- [x] **Step 3: Expose them as flake packages** for standalone verification. Find the
   `packages` attrset in the flake's per-system outputs (search `packages =` /
   `packages.default`) and add:
 
@@ -441,18 +441,18 @@ csr-server = jaunderBinCsr;
 csr-site = csrSite;
 ```
 
-- [ ] **Step 4: Verify the CSR site builds.**
+- [x] **Step 4: Verify the CSR site builds.**
 
 Run: `nix build .#csr-site -L`
 Expected: builds; `ls -R ./result` shows `pkg/jaunder.js`, `pkg/jaunder_bg.wasm`,
 `index.html`, and the public assets.
 
-- [ ] **Step 5: Verify the CSR server builds.**
+- [x] **Step 5: Verify the CSR server builds.**
 
 Run: `nix build .#csr-server -L`
 Expected: builds `result/bin/jaunder`.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add flake.nix

@@ -423,6 +423,68 @@
           cp -r ${./public}/. $out/
         '';
 
+        # --- leptos-CSR spike (#177) --------------------------------------------
+        # A parallel build of the client-side-render variant, alongside (never
+        # replacing) the SSR/hydrate build above. Mirrors hydrateWasm/wasmBundle/
+        # jaunderBin/site, swapping the `csr` crate + `--features csr` server. Used
+        # only by the CSR e2e check; the default build/CI are untouched.
+        csrWasm = craneLib.buildPackage (
+          commonArgs
+          // {
+            cargoArtifacts = craneLib.buildDepsOnly (
+              commonArgs
+              // {
+                CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+                cargoExtraArgs = "-p csr";
+                doCheck = false;
+              }
+            );
+            CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+            cargoExtraArgs = "-p csr";
+            doCheck = false;
+            installPhaseCommand = ''
+              mkdir -p $out/lib
+              cp target/wasm32-unknown-unknown/release/csr.wasm $out/lib/
+            '';
+          }
+        );
+
+        csrWasmBundle =
+          pkgs.runCommand "jaunder-csr-wasm-bundle"
+            {
+              nativeBuildInputs = [
+                wasm-bindgen-cli
+                pkgs.gnused
+              ];
+            }
+            ''
+              mkdir -p $out
+              wasm-bindgen \
+                --target web \
+                --out-dir $out \
+                ${csrWasm}/lib/csr.wasm
+              # Rename to the "jaunder" output-name the CSR shell's <script> imports.
+              mv $out/csr.js $out/jaunder.js
+              mv $out/csr_bg.wasm $out/jaunder_bg.wasm
+              sed -i 's/csr_bg\.wasm/jaunder_bg.wasm/g' $out/jaunder.js
+            '';
+
+        jaunderBinCsr = craneLib.buildPackage (
+          commonArgs
+          // {
+            inherit cargoArtifacts;
+            cargoExtraArgs = "-p jaunder --features csr";
+            doCheck = false;
+          }
+        );
+
+        csrSite = pkgs.runCommand "jaunder-csr-site" { } ''
+          mkdir -p $out/pkg
+          cp -r ${csrWasmBundle}/. $out/pkg/
+          cp -r ${./public}/. $out/
+          cp ${./csr/index.html} $out/index.html
+        '';
+
         # Playwright config for the Nix VM environment.
         # Chromium needs --no-sandbox (runs as root) and GPU/shm disabled.
         # WebKit (WPE) is excluded: WPEWebProcess crashes with SIGABRT in
@@ -897,6 +959,11 @@
             jaunder = jaunderBin;
             site = site;
             devtool = devtoolBin;
+
+            # leptos-CSR spike (#177): the CSR server + site, for standalone
+            # `nix build .#csr-server` / `.#csr-site` verification and the CSR e2e.
+            csr-server = jaunderBinCsr;
+            csr-site = csrSite;
 
             # The e2e aggregate: a symlinkJoin of every `e2e-*` check, exposed as
             # `checks.e2e` and built by `cargo xtask validate`. Adding a new e2e
