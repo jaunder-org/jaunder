@@ -29,8 +29,11 @@ use axum::{
 use common::visibility::ViewerIdentity;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use storage::PostStorage;
-use web::posts::{fetch_local_timeline, fetch_post_record, fetch_user_posts, post_response};
+use storage::{PostStorage, UserStorage};
+use web::posts::{
+    fetch_local_timeline, fetch_post_record, fetch_posts_by_tag, fetch_user_posts,
+    fetch_user_posts_by_tag, post_response,
+};
 use web::render::{render_body, render_head, PageSeed};
 
 /// The static SPA shell (`index.html`) the projector falls back to when a public
@@ -54,6 +57,8 @@ where
         .route("/", get(site_timeline))
         .route("/~{username}", get(profile))
         .route("/~{username}/{year}/{month}/{day}/{slug}", get(permalink))
+        .route("/tags/{tag}", get(site_tag))
+        .route("/~{username}/tags/{tag}", get(user_tag))
         .layer(Extension(shell))
 }
 
@@ -209,6 +214,63 @@ async fn profile(
     {
         Ok(page) => cacheable(&headers, &PageSeed::Profile { username, page }),
         // An unparseable username is never public content — let the client route it.
+        Err(_) => shell_response(&shell),
+    }
+}
+
+async fn site_tag(
+    Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(shell): Extension<Shell>,
+    headers: HeaderMap,
+    Path(tag): Path<String>,
+) -> Response {
+    // Match `SiteTagPage`'s lowercasing so the projected heading and the client
+    // render coincide.
+    let tag = tag.to_lowercase();
+    match fetch_posts_by_tag(
+        posts.as_ref(),
+        &ViewerIdentity::Anonymous,
+        &tag,
+        None,
+        None,
+        Some(50),
+    )
+    .await
+    {
+        Ok(page) => cacheable(&headers, &PageSeed::SiteTag { tag, page }),
+        // An unparseable tag is never public content — let the client route it.
+        Err(_) => shell_response(&shell),
+    }
+}
+
+async fn user_tag(
+    Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(users): Extension<Arc<dyn UserStorage>>,
+    Extension(shell): Extension<Shell>,
+    headers: HeaderMap,
+    Path((username, tag)): Path<(String, String)>,
+) -> Response {
+    let tag = tag.to_lowercase();
+    match fetch_user_posts_by_tag(
+        posts.as_ref(),
+        users.as_ref(),
+        &ViewerIdentity::Anonymous,
+        &username,
+        &tag,
+        None,
+        Some(50),
+    )
+    .await
+    {
+        Ok(page) => cacheable(
+            &headers,
+            &PageSeed::UserTag {
+                username,
+                tag,
+                page,
+            },
+        ),
+        // Unparseable username/tag, or an unknown user — let the client route it.
         Err(_) => shell_response(&shell),
     }
 }

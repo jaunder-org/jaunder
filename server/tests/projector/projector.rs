@@ -43,7 +43,36 @@ const TEST_SHELL: &str = "<!DOCTYPE html><!--test-shell--><html><body></body></h
 /// no full `create_router`.
 fn projector_app(state: &Arc<storage::AppState>) -> Router {
     let shell = jaunder::projector::Shell(TEST_SHELL.into());
-    jaunder::projector::register(Router::new(), shell).layer(Extension(state.posts.clone()))
+    jaunder::projector::register(Router::new(), shell)
+        .layer(Extension(state.posts.clone()))
+        .layer(Extension(state.users.clone()))
+}
+
+/// Seed a published, `rust`-tagged post for `alice`.
+async fn seed_tagged_post(state: &Arc<storage::AppState>) {
+    let username: Username = "alice".parse().unwrap();
+    let password: Password = "password123".parse().unwrap();
+    let user_id = state
+        .users
+        .create_user(&username, &password, None, false)
+        .await
+        .unwrap();
+    let post_id = state
+        .posts
+        .create_post(&CreatePostInput {
+            user_id,
+            title: Some("Tagged Post".to_string()),
+            slug: "tagged".parse::<Slug>().unwrap(),
+            body: "b".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>tag body</p>".to_string(),
+            published_at: Some(Utc::now()),
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        })
+        .await
+        .unwrap();
+    state.posts.tag_post(post_id, "rust").await.unwrap();
 }
 
 /// Seed a published post for `alice` and return the permalink components.
@@ -274,6 +303,77 @@ async fn profile_invalid_username_serves_shell(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let resp = projector_app(&state)
         .oneshot(get("/~in.valid"))
+        .await
+        .expect("request");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "unparseable username → shell"
+    );
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(String::from_utf8_lossy(&body).contains("test-shell"));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn site_tag_projects_tagged_posts(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    seed_tagged_post(&state).await;
+    let resp = projector_app(&state)
+        .oneshot(get("/tags/rust"))
+        .await
+        .expect("request");
+    assert_eq!(resp.status(), StatusCode::OK, "site tag → 200");
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("#rust"), "tag heading: {html}");
+    assert!(html.contains("Tagged Post"), "tagged post present");
+    assert!(html.contains(r#"id="jaunder-seed""#), "data blob present");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn user_tag_projects_tagged_posts(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    seed_tagged_post(&state).await;
+    let resp = projector_app(&state)
+        .oneshot(get("/~alice/tags/rust"))
+        .await
+        .expect("request");
+    assert_eq!(resp.status(), StatusCode::OK, "user tag → 200");
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("Tagged Post"), "tagged post present: {html}");
+    assert!(html.contains(r#"id="jaunder-seed""#), "data blob present");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn site_tag_invalid_serves_shell(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let resp = projector_app(&state)
+        .oneshot(get("/tags/-rust"))
+        .await
+        .expect("request");
+    assert_eq!(resp.status(), StatusCode::OK, "unparseable tag → shell");
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(String::from_utf8_lossy(&body).contains("test-shell"));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn user_tag_invalid_serves_shell(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let resp = projector_app(&state)
+        .oneshot(get("/~in.valid/tags/rust"))
         .await
         .expect("request");
     assert_eq!(
