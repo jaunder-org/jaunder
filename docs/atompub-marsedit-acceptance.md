@@ -16,9 +16,10 @@ covers real-client behaviour that the suite cannot.
 
 ## Connect
 
-- [ ] In MarsEdit, add a blog using the user's page URL (`https://host/~username`).
-      MarsEdit should discover the endpoint via the `<link rel="EditURI">` RSD
-      autodiscovery tag → `/~username/rsd.xml` → the AtomPub service document.
+- [ ] In MarsEdit, add a blog using the user's page URL
+      (`https://host/~username`). MarsEdit should discover the endpoint via the
+      `<link rel="EditURI">` RSD autodiscovery tag → `/~username/rsd.xml` → the
+      AtomPub service document.
 - [ ] If autodiscovery fails, set the API endpoint manually to
       `https://host/atompub/service` (System API: **Atom**).
 - [ ] Authenticate with the **username** and the **app password** (not the
@@ -40,15 +41,16 @@ covers real-client behaviour that the suite cannot.
       default post format) sent as `type="text"`; confirm it is stored in that
       format and renders correctly.
 - [ ] Save as **draft** (MarsEdit "Draft" / `app:draft`); it is NOT publicly
-      visible and has no public permalink. Toggling draft→published publishes it.
+      visible and has no public permalink. Toggling draft→published publishes
+      it.
 
 ## Edit
 
 - [ ] Edit an existing post's body; the change is reflected on the site.
 - [ ] A **title-only** edit preserves the source format (does not convert a
-      Markdown post to HTML). *(Open question from ADR-0015 — verify here; if
+      Markdown post to HTML). _(Open question from ADR-0015 — verify here; if
       MarsEdit re-sends `type="text"` HTML on a title edit, confirm the
-      last-write-wins behaviour is acceptable.)*
+      last-write-wins behaviour is acceptable.)_
 - [ ] Concurrent-edit protection: editing a post that changed server-side since
       MarsEdit loaded it is rejected (`412 Precondition Failed` via `If-Match`).
 
@@ -57,8 +59,8 @@ covers real-client behaviour that the suite cannot.
 - [ ] Existing tags appear as category suggestions (from the service document's
       `app:categories`).
 - [ ] Adding categories to a post creates tags; removing them untags.
-- [ ] An invalid category term (spaces, uppercase, etc.) is silently skipped, not
-      rejected.
+- [ ] An invalid category term (spaces, uppercase, etc.) is silently skipped,
+      not rejected.
 
 ## Media
 

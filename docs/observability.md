@@ -41,8 +41,8 @@ out as a flat artifact (alongside the OTEL traces above):
 
 It records every test's title, project (browser), status, retries, and duration.
 This is the primary source for per-test timing comparisons across browsers (e.g.
-the Firefox-vs-Chromium analysis in #152). On the `cargo xtask e2e <backend>
-<browser>` path it lands per combo at
+the Firefox-vs-Chromium analysis in #152). On the
+`cargo xtask e2e <backend> <browser>` path it lands per combo at
 `.xtask/diagnostics/e2e-<backend>-<browser>/playwright-report-<backend>.json`
 and is uploaded as the `e2e-diagnostics-<backend>-<browser>` CI artifact.
 
@@ -76,7 +76,8 @@ To run both e2e VM checks and immediately analyze the produced traces, use:
 scripts/run-e2e-trace-analysis --top 25
 ```
 
-For cold-cache diagnostics (without `JAUNDER_E2E_WARMUP=1` in the VM checks), use:
+For cold-cache diagnostics (without `JAUNDER_E2E_WARMUP=1` in the VM checks),
+use:
 
 ```bash
 scripts/run-e2e-trace-analysis --cold --top 25
@@ -86,8 +87,9 @@ Optional filters:
 
 - `--top N` controls how many rows each section prints.
 - `--trace TRACE_ID` restricts analysis to one trace id.
-- `--cold` runs the per-browser cold packages (`e2e-{sqlite,postgres}-{chromium,firefox}-cold`)
-  instead of the default warmup e2e checks.
+- `--cold` runs the per-browser cold packages
+  (`e2e-{sqlite,postgres}-{chromium,firefox}-cold`) instead of the default
+  warmup e2e checks.
 - `--browser chromium|firefox` restricts the run to one browser (default: both).
 - `--project NAME` focuses e2e analysis for one browser/project (for example
   `--project firefox` when debugging timeout pressure).
@@ -102,8 +104,8 @@ For first document navigation in a test (typically the coldest path), use
 `hydrationHeavyFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)`.
 
 This applies a project-aware multiplier derived from observed p90 hydration
-latency so Firefox/WebKit runs get realistic budgets without increasing
-Chromium timeouts unnecessarily.
+latency so Firefox/WebKit runs get realistic budgets without increasing Chromium
+timeouts unnecessarily.
 
 For diagnostics, you can optionally warm each Playwright test page context
 before instrumentation starts:
@@ -138,4 +140,5 @@ This reports raw, gzip, and brotli sizes for:
 Useful options:
 
 - `--json` for machine-readable output
-- `--site-path /nix/store/...-jaunder-site` to reuse a previously built site output
+- `--site-path /nix/store/...-jaunder-site` to reuse a previously built site
+  output
