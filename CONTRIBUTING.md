@@ -185,7 +185,9 @@ job. Running every combo in parallel across runners cuts e2e wall-clock;
 - `cargo fmt --check` checks Rust formatting.
 - `leptosfmt -x .direnv -x .git -x target --check '**/*.rs'` checks files that
   contain Leptos `view!` macros.
-- `prettier --check end2end` checks Playwright and other frontend test assets.
+- `prettier --check end2end '**/*.md'` checks Playwright/frontend test assets
+  and all tracked Markdown (`proseWrap: always`; scoped by `.prettierignore`,
+  which excludes `docs/archive/`).
 - `elisp-fmt` and `ert` run the elisp subproject's formatter and ERT suite under
   `emacs --batch` (see the Elisp subproject section below).
 - `cargo clippy --all-targets -- -D warnings` checks the whole workspace,

@@ -166,7 +166,7 @@ One pure-reformat commit, reviewable as such.
 
 **Files:** every tracked, non-ignored `*.md` (reformatted in place).
 
-- [ ] **Step 1: Run prettier over the tree**
+- [x] **Step 1: Run prettier over the tree**
 
 ```bash
 nix develop -c prettier --write "**/*.md"
@@ -175,7 +175,7 @@ nix develop -c prettier --write "**/*.md"
 Expected: prettier reports the reformatted files (the ~80 living docs;
 `docs/archive/`, `.claude/`, `target/` skipped per `.prettierignore`).
 
-- [ ] **Step 2: Confirm the diff is pure reformat**
+- [x] **Step 2: Confirm the diff is pure reformat**
 
 ```bash
 git diff --stat
@@ -185,7 +185,7 @@ Expected: only `*.md` files changed; changes are `_`-emphasis + `always` reflow.
 Spot-check one file with `git diff -- README.md` to confirm no content edits,
 only wrapping/emphasis.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 The md gate is not wired yet (Task 4), so the pre-commit hook checks `end2end`
 only and passes. `.md` is now coverage-denied (Task 2), so the reformat does not
@@ -215,7 +215,7 @@ it.
 - Consumes: the `.prettierrc.json` / `.prettierignore` from Task 2 (prettier
   auto-discovers them).
 
-- [ ] **Step 1: Widen the prettier StepSpec args**
+- [x] **Step 1: Widen the prettier StepSpec args**
 
 In `xtask/src/steps/static_checks.rs`, replace the `prettier_args` block:
 
@@ -228,7 +228,7 @@ In `xtask/src/steps/static_checks.rs`, replace the `prettier_args` block:
     };
 ```
 
-- [ ] **Step 2: Update CONTRIBUTING.md**
+- [x] **Step 2: Update CONTRIBUTING.md**
 
 `CONTRIBUTING.md:106` currently:
 
@@ -242,7 +242,7 @@ Replace with:
 - `prettier --check end2end '**/*.md'` checks Playwright/frontend test assets and all tracked Markdown (`proseWrap: always`; scoped by `.prettierignore`, which excludes `docs/archive/`).
 ```
 
-- [ ] **Step 3: Positive check — gate passes on the clean tree**
+- [x] **Step 3: Positive check — gate passes on the clean tree**
 
 Run (in the worktree):
 
@@ -253,7 +253,7 @@ cargo xtask check --no-test
 Expected: green — `prettier` step now covers `**/*.md` and the tree is already
 formatted (Task 3), so `-w` produces no changes.
 
-- [ ] **Step 4: Negative check — gate fails on misformatted markdown**
+- [x] **Step 4: Negative check — gate fails on misformatted markdown**
 
 Introduce a deliberate violation, confirm the gate catches it, then revert:
 
@@ -271,7 +271,7 @@ Revert:
 git checkout -- README.md
 ```
 
-- [ ] **Step 5: Full pre-push gate**
+- [x] **Step 5: Full pre-push gate**
 
 ```bash
 cargo xtask validate --no-e2e
@@ -279,7 +279,7 @@ cargo xtask validate --no-e2e
 
 Expected: green (static checks incl. the widened prettier + coverage).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/src/steps/static_checks.rs CONTRIBUTING.md
