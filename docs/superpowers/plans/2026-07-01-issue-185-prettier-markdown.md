@@ -26,7 +26,7 @@ No code. Capture the separable concern up front so it can be picked up independe
 
 **Files:** none (GitHub issue).
 
-- [ ] **Step 1: Create the issue**
+- [x] **Step 1: Create the issue** (filed as #188)
 
 Use the `jaunder-issues` skill conventions. Title and body:
 
@@ -45,7 +45,7 @@ gh issue create --repo jaunder-org/jaunder \
 
 Then add it to project #1 (Status defaults to no-status; set Todo) per `jaunder-issues`.
 
-- [ ] **Step 2: Record the new issue number**
+- [x] **Step 2: Record the new issue number** (#188)
 
 Note the issue number in the PR description later (referenced as "spun out of #185").
 
@@ -63,7 +63,7 @@ Establish the config so the flag-day write uses `proseWrap: always`, and decoupl
 **Interfaces:**
 - Produces: a repo-root prettier config that Task 3's `prettier --write` and Task 4's StepSpec both discover automatically.
 
-- [ ] **Step 1: Write `.prettierrc.json`**
+- [x] **Step 1: Write `.prettierrc.json`**
 
 ```json
 {
@@ -71,7 +71,7 @@ Establish the config so the flag-day write uses `proseWrap: always`, and decoupl
 }
 ```
 
-- [ ] **Step 2: Write `.prettierignore`**
+- [x] **Step 2: Write `.prettierignore`**
 
 ```
 docs/archive/
@@ -81,7 +81,7 @@ result-*
 .claude/
 ```
 
-- [ ] **Step 3: Add `.md` to the coverage source denylist**
+- [x] **Step 3: Add `.md` to the coverage source denylist**
 
 In `flake.nix`, the coverage derivation's `cleanSourceWith` filter (~line 1177):
 
@@ -98,7 +98,7 @@ In `flake.nix`, the coverage derivation's `cleanSourceWith` filter (~line 1177):
 
 (Add the final `&& !(pkgs.lib.hasSuffix ".md" path)` line.)
 
-- [ ] **Step 4: Sanity-check config discovery**
+- [x] **Step 4: Sanity-check config discovery**
 
 Run:
 
@@ -108,7 +108,7 @@ nix develop -c prettier --check .prettierrc.json
 
 Expected: PASS (the config file is itself valid, prettier-clean JSON). This also confirms `prettier` is on PATH via the devShell.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 The pre-commit hook runs `check --no-test` + `validate --no-e2e --allow-dirty`. The existing prettier StepSpec still checks `end2end` only (no tracked `end2end/*.md`), so the config addition is gate-neutral here. The flake.nix change triggers one coverage rebuild (expected).
 
