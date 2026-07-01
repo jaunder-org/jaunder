@@ -18,9 +18,10 @@ extern "C" {
 
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn main() {
-    use web::App;
     _ = console_log::init_with_level(log::Level::Debug);
     console_error_panic_hook::set_once();
-    leptos::mount::mount_to_body(App);
+    // Boots the App, adopting the public projector's data blob when present
+    // (#178/#179). See `web::mount_csr`.
+    web::mount_csr();
     mark_ready();
 }

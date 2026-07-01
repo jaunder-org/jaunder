@@ -64,3 +64,44 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
         </html>
     }
 }
+
+/// Boot the CSR client (#179). Adopts the public projector's data blob (#178):
+/// reads `#jaunder-seed`, drops the projector-painted `#app` container, and
+/// mounts [`App`] with the seed in context so the public pages render their
+/// first paint from it (no reactive fetch) via the same `render` fn the
+/// projector used — coincident, flash-free. On the static SPA shell (no blob,
+/// no `#app`) the seed is `None` and this is an ordinary `mount_to_body`.
+#[cfg(feature = "csr")]
+pub fn mount_csr() {
+    // Browser-only: the CSR client only ever runs in wasm, so the DOM adoption +
+    // mount live behind `target_arch = "wasm32"`. On the host build (coverage /
+    // tests) this is a no-op — which is also why it stays out of the coverage
+    // report, like the rest of `web`'s wasm-only code.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let seed = read_dom_seed();
+        if let Some(el) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id("app"))
+        {
+            // App re-renders the identical content from `seed`, so removing the
+            // server-painted copy avoids a duplicate paint without a visible
+            // flash (the removal and remount happen in one synchronous task).
+            el.remove();
+        }
+        leptos::mount::mount_to_body(move || {
+            provide_context(seed.clone());
+            view! { <App /> }
+        });
+    }
+}
+
+/// Read and deserialize the projector's `#jaunder-seed` JSON blob, if present.
+#[cfg(all(feature = "csr", target_arch = "wasm32"))]
+fn read_dom_seed() -> Option<render::PageSeed> {
+    let json = web_sys::window()?
+        .document()?
+        .get_element_by_id("jaunder-seed")?
+        .text_content()?;
+    serde_json::from_str(&json).ok()
+}
