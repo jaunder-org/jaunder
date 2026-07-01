@@ -475,19 +475,25 @@ git commit -m "build(nix): csr wasm/server/site derivations + packages (spike #1
 - Produces: `checks.<system>.e2e-csr-postgres-chromium` — a nixosTest booting the CSR
   server (postgres backend) and running the Playwright suite at `workers:1`.
 
-- [ ] **Step 1: Read the exact e2e machinery first.** Read `flake.nix` around the
+- [x] **Step 1: Read the exact e2e machinery first.** Read `flake.nix` around the
   `nixosTest` definition and `mkE2eCombo`/`e2eCombos`/`e2eWarmChecks` (the extraction
   pointed at ~629-717 and ~847-879; read the full `mkE2eCombo` body and the `nixPlaywrightConfig`
   / VM-node config it uses). Identify exactly how `mkE2eCombo` selects backend and wires
   the jaunder systemd service (it imports `self.nixosModules.jaunder`, which hardcodes
   `${jaunderBin}` + `${site}`).
 
-- [ ] **Step 2: Add a CSR playwright config** beside `nixPlaywrightConfig` (flake.nix:430).
+- [x] **Step 2: Add a CSR playwright config** beside `nixPlaywrightConfig` (flake.nix:430).
   Start at `workers:1` (same as today) so this task isolates "do the specs pass under CSR"
   from "does concurrency panic." Copy `nixPlaywrightConfig` verbatim and rename the binding
   to `csrPlaywrightConfig` (identical body for now; Task 5 flips its `workers`/`fullyParallel`).
 
-- [ ] **Step 3: Add `mkCsrE2eCombo`** mirroring `mkE2eCombo`, overriding the jaunder
+- [x] **Step 3 (refined): parametrize `mkE2ePostgresCheck`** instead of a separate
+  `mkCsrE2eCombo` — added `jaunderPkg`/`sitePkg`/`playwrightConfig`/`vmMemory`/`vmCores`
+  args defaulting to the SSR values, with the binary/site/ExecStart overrides
+  `lib.mkIf (jaunderPkg != jaunderBin)`-guarded. Verified the default
+  `e2e-postgres-chromium` drvPath is byte-identical (stash-compare), so the existing
+  checks are provably untouched — cleaner and safer than duplicating the builder.
+  Original text: Add `mkCsrE2eCombo` mirroring `mkE2eCombo`, overriding the jaunder
   service to the CSR binary + site and using `csrPlaywrightConfig`. The override (applied
   in the test's `nodes.machine` config, alongside the existing `imports = [
   self.nixosModules.jaunder ]`):
@@ -507,7 +513,7 @@ systemd.services.jaunder.serviceConfig.ExecStart =
   `csrPlaywrightConfig` to `/tmp/e2e/playwright.nix.config.js` instead of
   `nixPlaywrightConfig`. Keep `e2ePanicGate "postgres"`.
 
-- [ ] **Step 4: Register the check.** Add a single CSR combo (postgres+chromium) to the
+- [x] **Step 4: Register the check.** Add a single CSR combo (postgres+chromium) to the
   generated checks:
 
 ```nix
@@ -522,7 +528,10 @@ e2e-csr-postgres-chromium = mkCsrE2eCombo {
   (Merge this into the same `checks` attrset that holds `e2eWarmChecks`; pick an unused
   `traceDigit`.)
 
-- [ ] **Step 5: Build the CSR e2e check and triage fallout.**
+- [x] **Step 5: Build the CSR e2e check and triage fallout.** RESULT: green on the
+  first run — **all 66 tests passed (2.9m), zero panics, NO spec edits required.** The
+  reused `data-hydrated` marker + Playwright's auto-waiting handled content-after-mount
+  cleanly; no spec asserted pre-mount server-painted content in a way that raced.
 
 Run: `nix build .#checks.x86_64-linux.e2e-csr-postgres-chromium -L --keep-failed`
 Expected (first run): may fail on specs that assert content present *before* JS
@@ -533,14 +542,16 @@ if a spec genuinely tests no-JS/SEO server-painted HTML — mark it `test.skip` 
 with a comment referencing #178 (the projector restores server-painted content; out of
 scope for the spike). Re-run until the CSR check is **green at `workers:1`**.
 
-- [ ] **Step 6: Verify the default SSR e2e is untouched.**
+- [x] **Step 6: Verify the default SSR e2e is untouched.** Proven two ways: zero
+  `end2end/` edits (`git diff end2end/` empty) AND the default `e2e-postgres-chromium`
+  drvPath is byte-identical with/without the flake edits (stash-compare).
 
 Run: `git diff main...HEAD -- end2end/ | rg -n 'data-hydrated|waitForHydration'`
 Expected: any spec edits are additive waits / CSR-scoped skips; the existing
 `e2e-{backend}-{browser}` checks and `nixPlaywrightConfig` are unchanged. Optionally
 sanity-run one default combo: `nix build .#checks.x86_64-linux.e2e-postgres-chromium -L`.
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add flake.nix end2end/
