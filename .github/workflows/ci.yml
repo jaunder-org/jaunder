@@ -41,7 +41,7 @@ jobs:
         run: nix develop .#ci --accept-flake-config -c cargo xtask validate --no-e2e
       - name: Upload coverage diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: validate-diagnostics
           path: |
@@ -92,7 +92,7 @@ jobs:
         run: nix develop .#ci --accept-flake-config -c cargo xtask e2e ${{ matrix.backend }} ${{ matrix.browser }}
       - name: Upload e2e diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-diagnostics-${{ matrix.backend }}-${{ matrix.browser }}
           path: |
@@ -132,7 +132,7 @@ jobs:
         run: nix develop .#ci --accept-flake-config -c cargo xtask elisp-integration
       - name: Upload elisp-integration diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-diagnostics-elisp-integration
           path: |
