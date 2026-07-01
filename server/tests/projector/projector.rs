@@ -386,3 +386,65 @@ async fn user_tag_invalid_serves_shell(#[case] backend: Backend) {
         .unwrap();
     assert!(String::from_utf8_lossy(&body).contains("test-shell"));
 }
+
+#[apply(backends)]
+#[tokio::test]
+async fn projected_bytes_ignore_request_auth(#[case] backend: Backend) {
+    // Cacheability invariant: the projector never branches on the viewer, so a
+    // request carrying a session cookie yields byte-identical output to an
+    // anonymous one — one cacheable response for every visitor.
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let (u, y, m, d, slug) = seed_published_post(&state).await;
+    let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
+    let anon = axum::body::to_bytes(
+        projector_app(&state)
+            .oneshot(get(&uri))
+            .await
+            .unwrap()
+            .into_body(),
+        usize::MAX,
+    )
+    .await
+    .unwrap();
+    let with_cookie = Request::builder()
+        .method("GET")
+        .uri(&uri)
+        .header(header::COOKIE, "session=whatever")
+        .body(Body::empty())
+        .unwrap();
+    let authed = axum::body::to_bytes(
+        projector_app(&state)
+            .oneshot(with_cookie)
+            .await
+            .unwrap()
+            .into_body(),
+        usize::MAX,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        anon, authed,
+        "projector output must not vary with request auth"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn projected_response_is_publicly_cacheable(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let (u, y, m, d, slug) = seed_published_post(&state).await;
+    let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
+    let resp = projector_app(&state)
+        .oneshot(get(&uri))
+        .await
+        .expect("request");
+    let cache_control = resp
+        .headers()
+        .get(header::CACHE_CONTROL)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        cache_control.contains("public"),
+        "projected response must be publicly cacheable, got: {cache_control}"
+    );
+}
