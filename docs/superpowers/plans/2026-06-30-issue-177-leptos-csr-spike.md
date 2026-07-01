@@ -660,11 +660,11 @@ git commit -m "docs(#177): leptos-CSR spike findings (campaign result + verdict)
 - Create: `docs/adr/0040-web-rendering-leptos-csr.md` (confirm the number)
 - Modify: `docs/README.md` (ADR table)
 
-- [ ] **Step 1: Confirm the next ADR number.** Run
+- [x] **Step 1: Confirm the next ADR number.** → 0040 (highest existing is 0039). Run
   `ls docs/adr/ | sort | tail -3` — take highest + 1 (expected `0040`; memory references
   ADR-0039). Use that number in the filename and table.
 
-- [ ] **Step 2: Write the ADR.** Title: "Web rendering: leptos-CSR (drop concurrent
+- [x] **Step 2: Write the ADR.** Title: "Web rendering: leptos-CSR (drop concurrent
   reactive SSR)". Status `accepted`. Content: the #173 forcing function (concurrent-SSR
   reactive-disposal, upstream NOT_PLANNED), the decision (CSR-only for the web leg,
   narrowing ADR-0002 from "anything" to a Rust client framework → leptos-CSR), the
@@ -673,10 +673,12 @@ git commit -m "docs(#177): leptos-CSR spike findings (campaign result + verdict)
   the public projector + render-coincidence land in #178). Keep it tight; this records the
   decision, the findings doc holds the data.
 
-- [ ] **Step 3: Add the ADR row** to the table in `docs/README.md` (number, title,
+- [x] **Step 3: Add the ADR row** to the table in `docs/README.md` (number, title,
   `accepted`), matching the existing table format.
 
-- [ ] **Step 4: Final gate.** Run the full pre-push-equivalent gate to confirm the default
+- [x] **Step 4: Final gate.** Satisfied by the pre-commit hook on the Step-5 commit
+  (`check` + `validate --no-e2e --allow-dirty`); a standalone `validate --no-e2e` refuses
+  the dirty tree. Run the full pre-push-equivalent gate to confirm the default
   build + coverage are green (the CSR scaffolding is feature-gated, so coverage/CRAP
   baselines should be unaffected; if a `.ts` spec edit busted the coverage cache, reanchor
   per the repo's coverage workflow).
@@ -684,7 +686,7 @@ git commit -m "docs(#177): leptos-CSR spike findings (campaign result + verdict)
 Run: `cargo xtask validate --no-e2e`
 Expected: green.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add docs/adr/0040-web-rendering-leptos-csr.md docs/README.md
