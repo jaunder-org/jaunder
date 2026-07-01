@@ -1068,6 +1068,23 @@ pub fn SiteTagPage() -> impl IntoView {
     let error = RwSignal::new(None::<String>);
     let initial_loaded = RwSignal::new(false);
 
+    // Public projector seed (#178/#179): adopt the seeded posts for a matching
+    // tag so first paint shows content (guarded so a client-side nav to a
+    // different tag ignores the initial URL's seed); the reactive fetch still runs.
+    if let Some(crate::render::PageSeed::SiteTag {
+        tag: seed_tag,
+        page,
+    }) = use_context::<Option<crate::render::PageSeed>>().flatten()
+    {
+        if seed_tag == tag.get_untracked() {
+            next_cursor_created_at.set(page.next_cursor_created_at);
+            next_cursor_post_id.set(page.next_cursor_post_id);
+            has_more.set(page.has_more);
+            timeline.set(page.posts);
+            initial_loaded.set(true);
+        }
+    }
+
     let load_more_action = ServerAction::<ListPostsByTag>::new();
 
     #[cfg(target_arch = "wasm32")]
@@ -1224,6 +1241,23 @@ pub fn UserTagPage() -> impl IntoView {
     let has_more = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
     let initial_loaded = RwSignal::new(false);
+
+    // Public projector seed (#178/#179): adopt the seeded posts for a matching
+    // username+tag so first paint shows content; the reactive fetch still runs.
+    if let Some(crate::render::PageSeed::UserTag {
+        username: seed_user,
+        tag: seed_tag,
+        page,
+    }) = use_context::<Option<crate::render::PageSeed>>().flatten()
+    {
+        if seed_user == username.get_untracked() && seed_tag == tag.get_untracked() {
+            next_cursor_created_at.set(page.next_cursor_created_at);
+            next_cursor_post_id.set(page.next_cursor_post_id);
+            has_more.set(page.has_more);
+            timeline.set(page.posts);
+            initial_loaded.set(true);
+        }
+    }
 
     let load_more_action = ServerAction::<ListUserPostsByTag>::new();
 

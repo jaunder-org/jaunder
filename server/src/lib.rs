@@ -49,6 +49,9 @@ pub fn create_router(
     // Leptos `#[server]` functions are wired separately via per-trait contexts
     // in `provide_app_state_contexts`.
     let posts_ext = state.posts.clone();
+    // The projector's user-tag route resolves a username to a user id via the
+    // user store (see `crate::projector`).
+    let users_ext = state.users.clone();
     let user_config_ext = state.user_config.clone();
     let site_config_ext = state.site_config.clone();
     let media_ext = state.media.clone();
@@ -152,6 +155,7 @@ pub fn create_router(
     let app = app
         .layer(axum::Extension(storage_path_ext))
         .layer(axum::Extension(posts_ext))
+        .layer(axum::Extension(users_ext))
         .layer(axum::Extension(user_config_ext))
         .layer(axum::Extension(site_config_ext))
         .layer(axum::Extension(media_ext))

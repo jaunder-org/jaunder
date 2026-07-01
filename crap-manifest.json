@@ -20,6 +20,15 @@
       "line": 276
     },
     {
+      "coverage": 0.0,
+      "crap": 20.0,
+      "crate": "web",
+      "cyclomatic": 4.0,
+      "file": "web/src/pages/posts.rs",
+      "function": "UserTagPage",
+      "line": 1208
+    },
+    {
       "coverage": 66.66666666666666,
       "crap": 17.333333333333343,
       "crate": "storage",
@@ -243,6 +252,15 @@
       "file": "web/src/pages/posts.rs",
       "function": "PostPage",
       "line": 126
+    },
+    {
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
+      "file": "web/src/pages/posts.rs",
+      "function": "SiteTagPage",
+      "line": 1046
     },
     {
       "coverage": 100.0,
@@ -693,6 +711,15 @@
       "file": "storage/src/postgres/bootstrap.rs",
       "function": "create_postgres_database_and_role",
       "line": 38
+    },
+    {
+      "coverage": 97.2972972972973,
+      "crap": 6.000710718022624,
+      "crate": "web",
+      "cyclomatic": 6.0,
+      "file": "web/src/posts/listing.rs",
+      "function": "fetch_user_posts_by_tag",
+      "line": 271
     },
     {
       "coverage": 100.0,
@@ -1496,6 +1523,15 @@
       "line": 7
     },
     {
+      "coverage": 96.29629629629628,
+      "crap": 4.000812884214804,
+      "crate": "web",
+      "cyclomatic": 4.0,
+      "file": "web/src/posts/listing.rs",
+      "function": "fetch_posts_by_tag",
+      "line": 235
+    },
+    {
       "coverage": 100.0,
       "crap": 4.0,
       "crate": "common",
@@ -1862,7 +1898,7 @@
       "cyclomatic": 4.0,
       "file": "server/src/projector/mod.rs",
       "function": "cacheable",
-      "line": 87
+      "line": 92
     },
     {
       "coverage": 100.0,
@@ -1871,7 +1907,7 @@
       "cyclomatic": 4.0,
       "file": "server/src/projector/mod.rs",
       "function": "permalink_response",
-      "line": 149
+      "line": 154
     },
     {
       "coverage": 100.0,
@@ -2573,7 +2609,7 @@
       "cyclomatic": 3.0,
       "file": "server/src/projector/mod.rs",
       "function": "timeline_response",
-      "line": 183
+      "line": 188
     },
     {
       "coverage": 100.0,
@@ -2582,7 +2618,25 @@
       "cyclomatic": 3.0,
       "file": "server/src/projector/mod.rs",
       "function": "profile",
-      "line": 194
+      "line": 199
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "jaunder",
+      "cyclomatic": 3.0,
+      "file": "server/src/projector/mod.rs",
+      "function": "site_tag",
+      "line": 221
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "jaunder",
+      "cyclomatic": 3.0,
+      "file": "server/src/projector/mod.rs",
+      "function": "user_tag",
+      "line": 246
     },
     {
       "coverage": 100.0,
@@ -3096,24 +3150,6 @@
       "file": "web/src/pages/posts.rs",
       "function": "render_delete_result",
       "line": 1027
-    },
-    {
-      "coverage": 0.0,
-      "crap": 2.0,
-      "crate": "web",
-      "cyclomatic": 1.0,
-      "file": "web/src/pages/posts.rs",
-      "function": "SiteTagPage",
-      "line": 1046
-    },
-    {
-      "coverage": 0.0,
-      "crap": 2.0,
-      "crate": "web",
-      "cyclomatic": 1.0,
-      "file": "web/src/pages/posts.rs",
-      "function": "UserTagPage",
-      "line": 1191
     },
     {
       "coverage": 100.0,
@@ -4025,8 +4061,8 @@
       "line": 9
     },
     {
-      "coverage": 84.21052631578947,
-      "crap": 1.00393643388249,
+      "coverage": 84.61538461538461,
+      "crap": 1.003641329085116,
       "crate": "jaunder",
       "cyclomatic": 1.0,
       "file": "server/src/lib.rs",
@@ -4113,24 +4149,6 @@
       "file": "web/src/audiences/mod.rs",
       "function": "list_my_subscribers",
       "line": 155
-    },
-    {
-      "coverage": 97.5609756097561,
-      "crap": 1.0000145093657955,
-      "crate": "web",
-      "cyclomatic": 1.0,
-      "file": "web/src/posts/listing.rs",
-      "function": "list_posts_by_tag",
-      "line": 229
-    },
-    {
-      "coverage": 98.1132075471698,
-      "crap": 1.0000067169542644,
-      "crate": "web",
-      "cyclomatic": 1.0,
-      "file": "web/src/posts/listing.rs",
-      "function": "list_user_posts_by_tag",
-      "line": 281
     },
     {
       "coverage": 100.0,
@@ -5577,6 +5595,24 @@
       "crap": 1.0,
       "crate": "web",
       "cyclomatic": 1.0,
+      "file": "web/src/posts/listing.rs",
+      "function": "list_posts_by_tag",
+      "line": 311
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web",
+      "cyclomatic": 1.0,
+      "file": "web/src/posts/listing.rs",
+      "function": "list_user_posts_by_tag",
+      "line": 334
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web",
+      "cyclomatic": 1.0,
       "file": "web/src/posts/server.rs",
       "function": "post_tags_to_summaries",
       "line": 47
@@ -6506,7 +6542,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/projector/mod.rs",
       "function": "register",
-      "line": 49
+      "line": 52
     },
     {
       "coverage": 100.0,
@@ -6515,7 +6551,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/projector/mod.rs",
       "function": "document",
-      "line": 63
+      "line": 68
     },
     {
       "coverage": 100.0,
@@ -6524,7 +6560,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/projector/mod.rs",
       "function": "shell_response",
-      "line": 114
+      "line": 119
     },
     {
       "coverage": 100.0,
@@ -6533,7 +6569,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/projector/mod.rs",
       "function": "permalink",
-      "line": 122
+      "line": 127
     },
     {
       "coverage": 100.0,
@@ -6542,7 +6578,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/projector/mod.rs",
       "function": "site_timeline",
-      "line": 164
+      "line": 169
     },
     {
       "coverage": 100.0,
