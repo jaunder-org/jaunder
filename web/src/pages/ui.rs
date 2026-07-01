@@ -10,19 +10,17 @@ use crate::tags::TagSummary;
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 
-/// Linking context for a [`TagList`] rendering.
-///
-/// `SiteWide` links each chip to `/tags/:slug` only. `ForUser` adds a small
-/// "· here" link next to each chip pointing at `/~:username/tags/:slug`, so
-/// per-user tag listings stay one click away from any user-rooted page.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TagContext {
-    SiteWide,
-    ForUser(String),
-}
+/// Linking context for a post's footer tag chips — re-exported from the pure
+/// `render` layer (`SiteWide` / `ForUser`) so the reactive components and the
+/// projector share one type. See [`crate::render::TagCtx`]. Anonymous posts get
+/// their chips from the pure [`crate::render::render_tag_list`] (byte-coincident
+/// with the projector, injected via `inner_html`); the authored post view — which
+/// the projector never renders — uses the reactive [`TagList`] below.
+pub use crate::render::TagCtx as TagContext;
 
-/// Renders a post's tags as clickable chips for use inside a post-display
-/// footer. See [`TagContext`] for the linking behavior.
+/// Renders a post's tags as clickable chips for the reactive authored post view
+/// (kept markup-equivalent to [`crate::render::render_tag_list`], the anonymous /
+/// projector path). See [`TagContext`] for the linking behavior.
 #[allow(clippy::needless_pass_by_value)]
 #[allow(clippy::must_use_candidate)]
 #[component]
@@ -109,31 +107,11 @@ pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoVie
 
 // ─── 3.2 Avatar ───────────────────────────────────────────────
 
-/// Derives `(initials, hue)` from a display name.
-/// `initials`: first character of each of the first two whitespace-separated words, uppercased.
-/// `hue`: sum of all char codes mod 360.
-#[allow(clippy::cast_precision_loss)]
-#[allow(clippy::cast_possible_truncation)]
-#[allow(clippy::cast_sign_loss)]
-#[must_use]
-pub fn avatar_parts(name: &str) -> (String, u32) {
-    let initials: String = name
-        .split_whitespace()
-        .take(2)
-        .filter_map(|word| word.chars().next())
-        .map(|c| c.to_ascii_uppercase())
-        .collect();
-
-    let hue: u32 = name.chars().fold(0u32, |acc, c| acc + c as u32) % 360;
-
-    (initials, hue)
-}
-
 #[allow(clippy::needless_pass_by_value)]
 #[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
-    let (initials, hue) = avatar_parts(&name);
+    let (initials, hue) = crate::render::avatar_parts(&name);
     #[allow(clippy::cast_precision_loss)]
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::cast_sign_loss)]
@@ -298,21 +276,6 @@ pub fn ComposerFields(
     }
 }
 
-/// Formats an RFC-3339 timestamp as `"YYYY-MM-DD HH:MM"`.
-/// Falls back to the raw string if the input contains no `T` separator.
-pub(crate) fn format_post_time(ts: &str) -> String {
-    // RFC-3339: "YYYY-MM-DDTHH:MM:SS+HH:MM" or "YYYY-MM-DDTHH:MM:SSZ"
-    // Return "YYYY-MM-DD HH:MM"; fall back to the raw string if malformed.
-    if let Some(t_pos) = ts.find('T') {
-        let date = &ts[..t_pos];
-        let rest = &ts[t_pos + 1..];
-        let time = if rest.len() >= 5 { &rest[..5] } else { rest };
-        format!("{date} {time}")
-    } else {
-        ts.to_owned()
-    }
-}
-
 /// Converts a `datetime-local` input value — a naive local wall-clock such as
 /// "2026-07-01T13:30" — into a UTC RFC3339 instant string for the server.
 /// Returns `None` for an empty/whitespace input (i.e. publish-now).
@@ -354,54 +317,87 @@ pub fn PostDisplay(
     tag_context: TagContext,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
-    let time_label = format_post_time(&post.published_at);
     let is_author = post.is_author;
-    let post_tags = post.tags.clone();
-
-    view! {
-        <article class="j-post">
-            <Avatar name=post.username.clone() size=38 />
-            <div style="min-width:0;display:flex;gap:8px;align-items:flex-start">
-                <div style="flex:1;min-width:0">
-                    <header class="j-post-head">
-                        <span class="j-post-name">{post.username.clone()}</span>
-                        <span class="j-post-handle">"@"{post.username.clone()}</span>
-                        {(!is_author)
-                            .then(|| {
-                                view! {
-                                    <>
-                                        <span class="j-spacer"></span>
-                                        <span class="j-post-time">{time_label}</span>
-                                    </>
-                                }
-                            })}
-                    </header>
-                    {post
-                        .title
-                        .clone()
-                        .map(|title| {
-                            if post.permalink.is_empty() {
-                                view! { <div class="j-post-title">{title}</div> }.into_any()
-                            } else {
-                                view! {
-                                    <div class="j-post-title">
-                                        <a href=post.permalink.clone()>{title}</a>
-                                    </div>
-                                }
-                                    .into_any()
-                            }
-                        })}
-                    {banner.map(|b| view! { <p class="draft-banner">{b}</p> })}
-                    {post.summary.clone().map(|s| view! { <p class="j-post-summary">{s}</p> })}
-                    <div class="j-post-body" inner_html=post.rendered_html.clone()></div>
-                    <footer class="j-post-foot">
-                        <TagList tags=post_tags context=tag_context />
-                        <span class="j-spacer"></span>
-                    </footer>
-                </div>
-                {children.map(|c| c())}
-            </div>
-        </article>
+    let time_label = crate::render::format_post_time(&post.published_at);
+    match children {
+        // Anonymous / no-action layout: the WHOLE article inner is produced by the
+        // pure `render` layer — the SAME code the public projector server-renders
+        // (#179) — and injected via `inner_html`, so a seeded first paint and this
+        // reactive re-render are byte-identical (flash-free). "Share the pure fn,
+        // not the component" (ADR-0041 §4). The projector only ever renders this
+        // anonymous view, so this is the only path that must coincide.
+        None => {
+            let view = crate::render::PostView {
+                username: &post.username,
+                title: post.title.as_deref(),
+                banner: banner.as_deref(),
+                summary: post.summary.as_deref(),
+                rendered_html: &post.rendered_html,
+                time: &time_label,
+                permalink: &post.permalink,
+                tags: &post.tags,
+                tag_ctx: &tag_context,
+                is_author,
+            };
+            let inner = crate::render::render_post_inner(&view);
+            view! { <article class="j-post" inner_html=inner></article> }.into_any()
+        }
+        // Authored layout (own posts, with the action column). The projector never
+        // renders this — it's anonymous-only — so it has no coincidence requirement
+        // and stays ordinary client-reactive markup (proven; kept from before the
+        // render unification, which regressed the authenticated home-feed re-render).
+        Some(children) => {
+            let post_tags = post.tags.clone();
+            view! {
+                <article class="j-post">
+                    <Avatar name=post.username.clone() size=38 />
+                    <div style="min-width:0;display:flex;gap:8px;align-items:flex-start">
+                        <div style="flex:1;min-width:0">
+                            <header class="j-post-head">
+                                <span class="j-post-name">{post.username.clone()}</span>
+                                <span class="j-post-handle">"@"{post.username.clone()}</span>
+                                {(!is_author)
+                                    .then(|| {
+                                        view! {
+                                            <>
+                                                <span class="j-spacer"></span>
+                                                <span class="j-post-time">{time_label}</span>
+                                            </>
+                                        }
+                                    })}
+                            </header>
+                            {post
+                                .title
+                                .clone()
+                                .map(|title| {
+                                    if post.permalink.is_empty() {
+                                        view! { <div class="j-post-title">{title}</div> }.into_any()
+                                    } else {
+                                        view! {
+                                            <div class="j-post-title">
+                                                <a href=post.permalink.clone()>{title}</a>
+                                            </div>
+                                        }
+                                            .into_any()
+                                    }
+                                })}
+                            {banner.map(|b| view! { <p class="draft-banner">{b}</p> })}
+                            {post
+                                .summary
+                                .clone()
+                                .map(|s| view! { <p class="j-post-summary">{s}</p> })}
+                            <div class="j-post-body" inner_html=post.rendered_html.clone()></div>
+                            <footer class="j-post-foot">
+                                <TagList tags=post_tags context=tag_context />
+                                <span class="j-spacer"></span>
+                            </footer>
+                        </div>
+                        {children()}
+                    </div>
+                </article>
+            }
+            .into_any()
+        }
     }
 }
 
@@ -418,7 +414,7 @@ pub fn PostCard(
 ) -> impl IntoView {
     let is_author = post.is_author;
     let post_id = post.post_id;
-    let time_label = format_post_time(&post.published_at);
+    let time_label = crate::render::format_post_time(&post.published_at);
     let permalink = post.permalink.clone();
     let edit_url = format!("/posts/{post_id}/edit");
     let delete_action = ServerAction::<DeletePost>::new();
@@ -1469,7 +1465,8 @@ pub fn TagInput(
 
 #[cfg(test)]
 mod tests {
-    use super::{avatar_parts, format_post_time, is_valid_tag_slug, normalize_tag_token};
+    use super::{is_valid_tag_slug, normalize_tag_token};
+    use crate::render::{avatar_parts, format_post_time};
 
     #[test]
     fn avatar_parts_single_word() {
