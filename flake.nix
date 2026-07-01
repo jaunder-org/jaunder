@@ -1321,26 +1321,20 @@
               RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
               PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
               PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+              # Store paths for end2end/provision-node-modules.sh. Exported as env
+              # vars (rather than baked into the shellHook) so they survive `cd`
+              # into a worktree — that is what lets xtask's tsc-deps step re-run the
+              # provisioning script there, where the shellHook never fired.
+              E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
+              E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
               shellHook = ''
                 export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
 
-                # Provision end2end/node_modules from the nix e2ePackage closure so the
-                # devShell `tsc` (pkgs.typescript) can type-check end2end/ offline:
-                # @types/node + undici-types + typescript all resolve. Then re-pin
-                # @playwright/test to the nix-matched Playwright (browser-driver parity +
-                # IDE support, as before) instead of e2ePackage's npm copy.
-                #
-                # rm -rf before each ln keeps this idempotent on shell re-entry: @playwright
-                # below becomes a real dir, which a bare `ln -sfn .../*` could not overwrite.
-                mkdir -p end2end/node_modules
-                for dep in ${e2ePackage}/node_modules/*; do
-                  target="end2end/node_modules/$(basename "$dep")"
-                  rm -rf "$target"
-                  ln -sfn "$dep" "$target"
-                done
-                rm -rf end2end/node_modules/@playwright
-                mkdir -p end2end/node_modules/@playwright
-                ln -sfn ${pkgs.playwright-test}/lib/node_modules/@playwright/test end2end/node_modules/@playwright/test
+                # Provision end2end/node_modules (the tsc type-dep closure) so the
+                # devShell `tsc` and IDEs can type-check end2end/ offline in this
+                # checkout. The same script also runs as xtask's tsc-deps gate step,
+                # so worktrees self-heal there; see its header for the full rationale.
+                bash end2end/provision-node-modules.sh
               '';
             };
           in
