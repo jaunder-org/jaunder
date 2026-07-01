@@ -30,10 +30,11 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
         ],
         Mode::Fix => vec!["-x", ".direnv", "-x", ".git", "-x", "target", "**/*.rs"],
     };
-    // prettier — scripts/verify: prettier --check end2end
+    // prettier — end2end/ frontend assets + all tracked Markdown (**/*.md,
+    // scoped by .prettierignore); proseWrap: always from .prettierrc.json.
     let prettier_args = match mode {
-        Mode::Check => vec!["--check", "end2end"],
-        Mode::Fix => vec!["-w", "end2end"],
+        Mode::Check => vec!["--check", "end2end", "**/*.md"],
+        Mode::Fix => vec!["-w", "end2end", "**/*.md"],
     };
     // elisp-fmt — emacs-batch indentation; prettier cannot format Emacs Lisp, so
     // the elisp subproject is formatted with built-in emacs-lisp-mode indentation.

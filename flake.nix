@@ -1180,7 +1180,8 @@
                     && !(pkgs.lib.hasInfix "/tools/" path)
                     && !(pkgs.lib.hasInfix "/docs/" path)
                     && !(pkgs.lib.hasInfix "/.github/" path)
-                    && !(pkgs.lib.hasInfix "/elisp/" path);
+                    && !(pkgs.lib.hasInfix "/elisp/" path)
+                    && !(pkgs.lib.hasSuffix ".md" path);
                 };
                 inherit cargoArtifacts;
                 pname = "jaunder-coverage";
