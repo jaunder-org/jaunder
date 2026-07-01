@@ -445,6 +445,15 @@
     {
       "coverage": 100.0,
       "crap": 8.0,
+      "crate": "web",
+      "cyclomatic": 8.0,
+      "file": "web/src/render/mod.rs",
+      "function": "escape_html",
+      "line": 47
+    },
+    {
+      "coverage": 100.0,
+      "crap": 8.0,
       "crate": "storage",
       "cyclomatic": 8.0,
       "file": "storage/src/backup.rs",
@@ -729,6 +738,24 @@
       "file": "web/src/pages/ui.rs",
       "function": "PostCreateForm",
       "line": 624
+    },
+    {
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "web",
+      "cyclomatic": 6.0,
+      "file": "web/src/render/mod.rs",
+      "function": "render_head",
+      "line": 66
+    },
+    {
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "web",
+      "cyclomatic": 6.0,
+      "file": "web/src/render/mod.rs",
+      "function": "render_body",
+      "line": 99
     },
     {
       "coverage": 100.0,
@@ -2016,6 +2043,24 @@
       "file": "web/src/error.rs",
       "function": "render_operator_message",
       "line": 358
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
+      "file": "web/src/render/mod.rs",
+      "function": "timeline",
+      "line": 170
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
+      "file": "web/src/render/mod.rs",
+      "function": "tag_list",
+      "line": 196
     },
     {
       "coverage": 100.0,
@@ -4787,7 +4832,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/lib.rs",
       "function": "shell",
-      "line": 47
+      "line": 48
     },
     {
       "coverage": 100.0,
@@ -5238,6 +5283,15 @@
       "file": "web/src/tags/mod.rs",
       "function": "list_tags",
       "line": 37
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web",
+      "cyclomatic": 1.0,
+      "file": "web/src/render/mod.rs",
+      "function": "post_article",
+      "line": 128
     },
     {
       "coverage": 100.0,
