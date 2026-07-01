@@ -35,6 +35,10 @@ The AtomPub discovery document (`app:service`) that advertises a user's availabl
 The public, unauthenticated Atom/RSS/JSON feed (M8) consumed by arbitrary feed readers. Always serialized as rendered HTML. Distinct from an AtomPub **Collection**, which is authenticated and editor-facing.
 _Avoid_: calling this "the feed" without qualification when an AtomPub Collection is also in play.
 
+**`feed_*` scope**:
+The `feed_*` identifier family — `feed_url`, `feed_cache`, `feed_events` (and the planned inbound `source_feeds`) — refers **only** to syndication feeds (RSS, Atom, JSON Feed). "Feed" is not a synonym for a publication, a followed source in general, or an inbound reading timeline; ActivityPub actors and AT records are **not** "feeds."
+_Avoid_: treating `feed_url` as a universal publication/source identity — identity is per-entity.
+
 ## Relationships
 
 - A **User** owns one publishing **Collection** of **Posts**.
@@ -45,4 +49,4 @@ _Avoid_: calling this "the feed" without qualification when an AtomPub Collectio
 ## Flagged ambiguities
 
 - "Entry" is overloaded: in AtomPub it is the XML wire object; in casual use it can mean a Post. Resolved: **Post** = the stored domain object; **Entry/Member** = its AtomPub serialization.
-- "Feed" is overloaded: the public **Syndication Feed** (HTML, for readers) and the AtomPub **Collection** feed (native source, for editing) are different documents with different audiences. They are deliberately separate serializers, not one shared path.
+- "Feed" is overloaded: the public **Syndication Feed** (HTML, for readers) and the AtomPub **Collection** feed (native source, for editing) are different documents with different audiences. They are deliberately separate serializers, not one shared path. A **third sense to avoid**: the inbound/normalized *reading timeline* is also loosely called a "feed," but it is not a syndication feed and carries no `feed_*` naming — `feed_*` is syndication-only (RSS/Atom/JSON).
