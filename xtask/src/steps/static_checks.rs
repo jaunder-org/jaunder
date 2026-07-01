@@ -90,10 +90,24 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
             program: "prettier",
             args: prettier_args,
         },
+        // tsc-deps — provision end2end/node_modules (the tsc type-dep closure)
+        // before the tsc step. It is gitignored and only ever created by the
+        // devShell shellHook, relative to the nix-develop cwd — so a worktree
+        // running the gate without re-entering the shell has none, and tsc cannot
+        // resolve @playwright/test or @types/node. This shared script (also run by
+        // the shellHook) symlinks the nix store closure into <cwd>/end2end/
+        // node_modules, so the gate self-heals in any worktree. Runs in both modes;
+        // idempotent and only touches gitignored symlinks, so it does not violate
+        // the "Check mode never mutates tracked source" invariant.
+        StepSpec {
+            name: "tsc-deps",
+            program: "bash",
+            args: vec!["end2end/provision-node-modules.sh"],
+        },
         // tsc — type-check end2end/ (verify-only; tsc has no autofix, so the args are
         // identical in both modes, unlike the formatters above). The compiler comes from
-        // the devShell (pkgs.typescript) and the type-dep closure from the shellHook-
-        // provisioned end2end/node_modules.
+        // the devShell (pkgs.typescript) and the type-dep closure from the tsc-deps step
+        // above (end2end/node_modules).
         StepSpec {
             name: "tsc",
             program: "tsc",
@@ -259,6 +273,23 @@ mod tests {
     }
 
     #[test]
+    fn tsc_deps_provisions_before_tsc_in_both_modes() {
+        // The tsc-deps step runs the shared provisioning script (idempotent, both
+        // modes) and must precede tsc so end2end/node_modules exists before the
+        // type-check resolves @playwright/test.
+        for mode in [Mode::Check, Mode::Fix] {
+            let s = specs(mode);
+            let deps = find(&s, "tsc-deps");
+            assert_eq!(deps.program, "bash");
+            assert_eq!(deps.args, ["end2end/provision-node-modules.sh"]);
+            let names: Vec<&str> = s.iter().map(|spec| spec.name).collect();
+            let deps_at = names.iter().position(|n| *n == "tsc-deps").unwrap();
+            let tsc_at = names.iter().position(|n| *n == "tsc").unwrap();
+            assert!(deps_at < tsc_at, "tsc-deps must run before tsc");
+        }
+    }
+
+    #[test]
     fn tsc_typechecks_in_both_modes() {
         // Verify-only: tsc has no autofix, so the args are identical in both modes.
         for mode in [Mode::Check, Mode::Fix] {
@@ -275,6 +306,7 @@ mod tests {
             "fmt",
             "leptosfmt",
             "prettier",
+            "tsc-deps",
             "tsc",
             "elisp-fmt",
             "ert",
