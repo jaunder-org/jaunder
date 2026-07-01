@@ -339,6 +339,25 @@ pub fn UserTimelinePage() -> impl IntoView {
     let error = RwSignal::new(None::<String>);
     let initial_loaded = RwSignal::new(false);
 
+    // Public projector seed (#178/#179): if the server painted this profile,
+    // adopt its posts as the initial state so first paint shows content (no
+    // Loading flash). Guarded on the username so a client-side navigation to a
+    // *different* profile ignores the initial URL's seed; the reactive fetch
+    // still runs and takes over.
+    if let Some(crate::render::PageSeed::Profile {
+        username: seed_user,
+        page,
+    }) = use_context::<Option<crate::render::PageSeed>>().flatten()
+    {
+        if seed_user == username.get_untracked() {
+            next_cursor_created_at.set(page.next_cursor_created_at);
+            next_cursor_post_id.set(page.next_cursor_post_id);
+            has_more.set(page.has_more);
+            timeline.set(page.posts);
+            initial_loaded.set(true);
+        }
+    }
+
     let load_more_action = ServerAction::<ListUserPosts>::new();
 
     // Client-only: `Effect::new_isomorphic` would race with SSR reactive-owner

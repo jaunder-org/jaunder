@@ -30,7 +30,7 @@ use common::visibility::ViewerIdentity;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use storage::PostStorage;
-use web::posts::{fetch_post_record, post_response};
+use web::posts::{fetch_local_timeline, fetch_post_record, fetch_user_posts, post_response};
 use web::render::{render_body, render_head, PageSeed};
 
 /// The static SPA shell (`index.html`) the projector falls back to when a public
@@ -51,6 +51,8 @@ where
     S: Clone + Send + Sync + 'static,
 {
     router
+        .route("/", get(site_timeline))
+        .route("/~{username}", get(profile))
         .route("/~{username}/{year}/{month}/{day}/{slug}", get(permalink))
         .layer(Extension(shell))
 }
@@ -159,6 +161,58 @@ fn permalink_response(
     }
 }
 
+async fn site_timeline(
+    Extension(posts): Extension<Arc<dyn PostStorage>>,
+    headers: HeaderMap,
+) -> Response {
+    let result = fetch_local_timeline(
+        posts.as_ref(),
+        &ViewerIdentity::Anonymous,
+        None,
+        None,
+        Some(50),
+    )
+    .await;
+    timeline_response(result, &headers, PageSeed::SiteTimeline)
+}
+
+/// Map a timeline query result to a projected response, or a 500 on storage
+/// error. Split from the handler so the error arm — otherwise reachable only
+/// under a live DB failure — stays unit-testable; `into_seed` wraps the page in
+/// its route's [`PageSeed`] variant.
+fn timeline_response(
+    result: web::error::InternalResult<web::posts::TimelinePage>,
+    headers: &HeaderMap,
+    into_seed: impl FnOnce(web::posts::TimelinePage) -> PageSeed,
+) -> Response {
+    match result {
+        Ok(page) => cacheable(headers, &into_seed(page)),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn profile(
+    Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(shell): Extension<Shell>,
+    headers: HeaderMap,
+    Path(username): Path<String>,
+) -> Response {
+    match fetch_user_posts(
+        posts.as_ref(),
+        &ViewerIdentity::Anonymous,
+        &username,
+        None,
+        None,
+        Some(50),
+    )
+    .await
+    {
+        Ok(page) => cacheable(&headers, &PageSeed::Profile { username, page }),
+        // An unparseable username is never public content — let the client route it.
+        Err(_) => shell_response(&shell),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{permalink_response, Shell};
@@ -180,5 +234,16 @@ mod tests {
         let shell = Shell("shell".into());
         let resp = permalink_response(Ok(None), &HeaderMap::new(), &shell);
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn timeline_storage_error_maps_to_500() {
+        use super::{timeline_response, PageSeed};
+        let resp = timeline_response(
+            Err(web::error::InternalError::validation("boom")),
+            &HeaderMap::new(),
+            PageSeed::SiteTimeline,
+        );
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

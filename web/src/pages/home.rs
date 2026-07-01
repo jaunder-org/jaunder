@@ -32,6 +32,20 @@ pub fn HomePage() -> impl IntoView {
     let loading_more = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
 
+    // Public projector seed (#178/#179): `/` is served as the anonymous site
+    // timeline. Adopt it as the initial state (Local mode) so first paint shows
+    // content; the reactive fetch still runs and, for an authenticated owner,
+    // switches to their home feed.
+    if let Some(crate::render::PageSeed::SiteTimeline(page)) =
+        leptos::prelude::use_context::<Option<crate::render::PageSeed>>().flatten()
+    {
+        timeline_mode.set(Some(TimelineMode::Local));
+        next_cursor_created_at.set(page.next_cursor_created_at);
+        next_cursor_post_id.set(page.next_cursor_post_id);
+        has_more.set(page.has_more);
+        timeline.set(page.posts);
+    }
+
     let refresh_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| refresh_version.update(|v| *v += 1));
 
