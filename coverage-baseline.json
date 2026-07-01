@@ -483,51 +483,51 @@
   ],
   "server/src/lib.rs": [
     {
-      "line": 72,
+      "line": 75,
       "text": "                let state = server_fn_state.clone();"
     },
     {
-      "line": 73,
+      "line": 76,
       "text": "                let mailer = server_fn_mailer.clone();"
     },
     {
-      "line": 74,
+      "line": 77,
       "text": "                leptos_axum::handle_server_fns_with_context("
     },
     {
-      "line": 75,
+      "line": 78,
       "text": "                    move || {"
     },
     {
-      "line": 76,
+      "line": 79,
       "text": "                        crate::context::provide_app_state_contexts(&state);"
     },
     {
-      "line": 77,
+      "line": 80,
       "text": "                        crate::context::provide_mailer_context(&mailer);"
     },
     {
-      "line": 78,
+      "line": 81,
       "text": "                        provide_context(web::auth::CookieSettings {"
     },
     {
-      "line": 79,
+      "line": 82,
       "text": "                            secure: secure_cookies,"
     },
     {
-      "line": 80,
+      "line": 83,
       "text": "                        });"
     },
     {
-      "line": 81,
+      "line": 84,
       "text": "                    },"
     },
     {
-      "line": 82,
+      "line": 85,
       "text": "                    req,"
     },
     {
-      "line": 84,
+      "line": 87,
       "text": "            }),"
     }
   ],
