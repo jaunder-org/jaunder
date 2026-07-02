@@ -473,7 +473,7 @@ reconcile (and for the operator-only admin links, which the marker doesn't
 carry). On host (non-wasm) `marker::read` is absent, so the initial state is
 `None` (anon) — fine, the sidebar is wasm-only chrome.
 
-- [ ] **Step 1: Write a failing e2e-adjacent unit** — the pure marker match is
+- [x] **Step 1: Write a failing e2e-adjacent unit** — the pure marker match is
       already covered (Task 2). The sidebar is wasm-reactive (out of host
       coverage), so its correctness is pinned by the e2e in Task 9. Here, add a
       host-compilable guard that the authed sidebar's username source is the
@@ -483,7 +483,7 @@ carry). On host (non-wasm) `marker::read` is absent, so the initial state is
       task's gate is compile + clippy + the Task 9 e2e. Skip a bespoke unit test
       here.
 
-- [ ] **Step 2: Restructure `Sidebar`** so the initial authed/anon choice is
+- [x] **Step 2: Restructure `Sidebar`** so the initial authed/anon choice is
       synchronous from the marker. Replace the `<Suspense>`-gated body with a
       signal seeded from the marker and reconciled by the resource:
 
@@ -539,13 +539,13 @@ so both the initial render and the reconciled render share it. Keep the existing
 markup verbatim (brand, search, nav, sources, footer avatar) — only its inputs
 change from awaited values to the params.
 
-- [ ] **Step 3: Verify compile + clippy.**
+- [x] **Step 3: Verify compile + clippy.**
 
 Run: `cargo xtask check --no-test` Expected: clean. Watch for `Effect`/signal
 `Send`+ownership issues typical of leptos closures; clone
 `active_key`/`anon_html` into each closure as the original did.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add web/src/pages/ui.rs

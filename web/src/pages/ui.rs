@@ -1,4 +1,7 @@
 use crate::audiences::{list_my_audiences, AudienceSummary};
+// `current_user` is the sidebar's background reconcile (#181), used only in the
+// wasm-only correction Effect — gate the import so the host build sees no unused.
+#[cfg(target_arch = "wasm32")]
 use crate::auth::current_user;
 use crate::backup::{backup_warning_visible, current_user_is_operator};
 use crate::pages::upload::MediaPanel;
@@ -1034,122 +1037,154 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     let active_key = active.unwrap_or_default();
 
     let location = use_location();
-    let user = crate::server_resource(move || location.pathname.get(), |_| current_user());
     let operator = crate::server_resource(
         move || location.pathname.get(),
         |_| current_user_is_operator(),
     );
 
-    // The anonymous sidebar is fully static, so it is produced by the pure
-    // `render::render_sidebar` — the SAME code the projector server-renders — and
-    // injected via `inner_html`, so a seeded first paint and the reactive
-    // re-render coincide (flash-free). Authed users get the reactive build below
-    // (extra nav, footer avatar) once `current_user` resolves; that authed delta
-    // is #181 territory and needs no coincidence. `display:contents` keeps the
-    // host wrapper out of the aside's layout.
-    let anon_html = crate::render::render_sidebar(&active_key);
-    let anon_fallback = anon_html.clone();
+    // Synchronous boot source (#181, ADR-0043): the auth marker decides authed vs.
+    // anon at mount, so there is NO async <Suspense> swap on first paint. The
+    // anonymous sidebar is the pure `render::render_sidebar` (the SAME code the
+    // projector server-renders) injected via `inner_html`, so a seeded first paint
+    // and the reactive re-render coincide (flash-free). `display:contents` keeps
+    // the host wrapper out of the aside's layout.
+    let owner = RwSignal::new(marker_username_on_boot());
 
+    // Background reconcile / correctness backstop (D3): confirm the marker against
+    // the real session and correct a stale one without gating first paint — a dead
+    // session clears the marker (toward anon, the safe direction); a live session
+    // with a missing marker sets it. wasm-only: the marker lives in localStorage.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let reconcile = crate::server_resource(move || location.pathname.get(), |_| current_user());
+        Effect::new(move |_| {
+            if let Some(res) = reconcile.get() {
+                match res {
+                    Ok(Some(u)) => {
+                        crate::auth::marker::set(&u);
+                        if owner.get_untracked().as_deref() != Some(u.as_str()) {
+                            owner.set(Some(u));
+                        }
+                    }
+                    Ok(None) => {
+                        crate::auth::marker::clear();
+                        if owner.get_untracked().is_some() {
+                            owner.set(None);
+                        }
+                    }
+                    Err(_) => {}
+                }
+            }
+        });
+    }
+
+    let anon_html = crate::render::render_sidebar(&active_key);
     view! {
         <aside class="j-sidebar">
-            <Suspense fallback=move || {
-                let anon_fallback = anon_fallback.clone();
-                view! { <div style="display:contents" inner_html=anon_fallback></div> }
-            }>
-                {
-                    let active_key = active_key.clone();
-                    let anon_html = anon_html.clone();
-                    move || {
-                        let active_key = active_key.clone();
-                        let anon_html = anon_html.clone();
-                        Suspend::new(async move {
-                            let Ok(Some(username)) = user.await else {
-                                return view! {
-                                    <div style="display:contents" inner_html=anon_html></div>
-                                }
-                                    .into_any();
-                            };
-                            let is_operator = matches!(operator.await, Ok(true));
-                            view! {
-                                <div style="display:contents">
-                                    <a
-                                        class="j-brand"
-                                        href="/"
-                                        style="text-decoration:none;color:inherit"
-                                    >
-                                        <div class="j-brand-mark">"j"</div>
-                                        <div class="j-brand-text">"Jaunder"</div>
-                                    </a>
-                                    <div class="j-search">
-                                        <Icon path=Icons::SEARCH size=14 />
-                                        <span>"Search"</span>
-                                        <span class="j-kbd">"⌘K"</span>
-                                    </div>
-                                    <nav class="j-nav">
-                                        {crate::render::NAV_ITEMS
-                                            .iter()
-                                            .filter(|&&(_, _, _, href, _)| href.is_some())
-                                            .map(|&(key, label, icon_path, href, _)| {
-                                                let is_active = key == active_key.as_str();
-                                                view! {
-                                                    <SidebarNavItem
-                                                        label=label
-                                                        icon_path=icon_path
-                                                        active=is_active
-                                                        href=href
-                                                    />
-                                                }
-                                            })
-                                            .collect::<Vec<_>>()}
-                                        {if is_operator {
-                                            view! {
-                                                <SidebarNavItem
-                                                    label="Configure Backups"
-                                                    icon_path=Icons::SHIELD
-                                                    active=active_key == "admin-backups"
-                                                    href=Some("/admin/backups")
-                                                />
-                                                <SidebarNavItem
-                                                    label="Site Settings"
-                                                    icon_path=Icons::SHIELD
-                                                    active=active_key == "admin-site"
-                                                    href=Some("/admin/site")
-                                                />
-                                            }
-                                                .into_any()
-                                        } else {
-                                            ().into_any()
-                                        }}
-                                    </nav>
-                                    <div>
-                                        <div class="j-sb-head">
-                                            <span>"Sources"</span>
-                                            <span class="j-sb-add">"+"</span>
-                                        </div>
-                                        {crate::render::SIDEBAR_SOURCES
-                                            .iter()
-                                            .map(|&(proto, name, sub)| {
-                                                view! { <SidebarSource proto=proto name=name sub=sub /> }
-                                            })
-                                            .collect::<Vec<_>>()}
-                                    </div>
-                                    <div class="j-sb-foot">
-                                        <Avatar name=username.clone() size=28 />
-                                        <div style="font-size:13px;flex:1;min-width:0">
-                                            <div style="font-weight:500">{username}</div>
-                                        </div>
-                                        <a href="/logout" style="font-size:11px;color:var(--muted)">
-                                            "Sign out"
-                                        </a>
-                                    </div>
-                                </div>
-                            }
-                                .into_any()
-                        })
-                    }
+            {move || match owner.get() {
+                None => {
+                    view! { <div style="display:contents" inner_html=anon_html.clone()></div> }
+                        .into_any()
                 }
-            </Suspense>
+                Some(username) => {
+                    authed_sidebar(&active_key, &username, matches!(operator.get(), Some(Ok(true))))
+                        .into_any()
+                }
+            }}
         </aside>
+    }
+}
+
+/// Boot-time marker read: `Some(username)` in the browser when the auth marker is
+/// set, `None` on the host build (the sidebar only ever renders in wasm). Lets the
+/// sidebar pick authed vs. anon synchronously at mount (#181), no async gate.
+fn marker_username_on_boot() -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::auth::marker::read()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        None
+    }
+}
+
+/// The authenticated sidebar chrome (brand, search, nav + operator admin links,
+/// sources, footer avatar). Shared by the marker-seeded initial render and the
+/// reconciled render (#181) so both are byte-for-byte the same authed markup —
+/// only its inputs change from awaited values to these params.
+fn authed_sidebar(active_key: &str, username: &str, is_operator: bool) -> impl IntoView {
+    let active_key = active_key.to_string();
+    let username = username.to_string();
+    view! {
+        <div style="display:contents">
+            <a class="j-brand" href="/" style="text-decoration:none;color:inherit">
+                <div class="j-brand-mark">"j"</div>
+                <div class="j-brand-text">"Jaunder"</div>
+            </a>
+            <div class="j-search">
+                <Icon path=Icons::SEARCH size=14 />
+                <span>"Search"</span>
+                <span class="j-kbd">"⌘K"</span>
+            </div>
+            <nav class="j-nav">
+                {crate::render::NAV_ITEMS
+                    .iter()
+                    .filter(|&&(_, _, _, href, _)| href.is_some())
+                    .map(|&(key, label, icon_path, href, _)| {
+                        let is_active = key == active_key.as_str();
+                        view! {
+                            <SidebarNavItem
+                                label=label
+                                icon_path=icon_path
+                                active=is_active
+                                href=href
+                            />
+                        }
+                    })
+                    .collect::<Vec<_>>()}
+                {if is_operator {
+                    view! {
+                        <SidebarNavItem
+                            label="Configure Backups"
+                            icon_path=Icons::SHIELD
+                            active=active_key == "admin-backups"
+                            href=Some("/admin/backups")
+                        />
+                        <SidebarNavItem
+                            label="Site Settings"
+                            icon_path=Icons::SHIELD
+                            active=active_key == "admin-site"
+                            href=Some("/admin/site")
+                        />
+                    }
+                        .into_any()
+                } else {
+                    ().into_any()
+                }}
+            </nav>
+            <div>
+                <div class="j-sb-head">
+                    <span>"Sources"</span>
+                    <span class="j-sb-add">"+"</span>
+                </div>
+                {crate::render::SIDEBAR_SOURCES
+                    .iter()
+                    .map(|&(proto, name, sub)| {
+                        view! { <SidebarSource proto=proto name=name sub=sub /> }
+                    })
+                    .collect::<Vec<_>>()}
+            </div>
+            <div class="j-sb-foot">
+                <Avatar name=username.clone() size=28 />
+                <div style="font-size:13px;flex:1;min-width:0">
+                    <div style="font-weight:500">{username}</div>
+                </div>
+                <a href="/logout" style="font-size:11px;color:var(--muted)">
+                    "Sign out"
+                </a>
+            </div>
+        </div>
     }
 }
 
