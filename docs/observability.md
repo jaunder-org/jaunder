@@ -188,6 +188,28 @@ chromium once applied. (An asymmetric firefox=4/chromium=2 config was considered
 browsers per VM — but uniform-4 was chosen for config simplicity.) Expected gate
 ≈ 3.5m (firefox-bound), down from ~10m+ (~65%).
 
+## #155 — flip status: READY, deferred behind #210
+
+The full workers=4 flip was verified across all four combos on 4-core / 6 GB
+VMs: `postgres-chromium` 66/66 (1.6m), `postgres-firefox` 66/66 (2.7m),
+`sqlite-firefox` 66/66 (2.9m) — **3 of 4 rock-solid**, Firefox (the long pole)
+stable at workers=4 on both backends. The lone failure was `sqlite-chromium` on
+`posts.spec.ts:349`, a **pre-existing known-flaky heavy test** that
+intermittently times out under 4-worker CPU contention (sqlite's
+write-serialization makes it the tightest combo). It is a timeout on marginal
+fixture setup, not a race or a regression.
+
+Rather than paper over it with retries or more timeout inflation, the root cause
+is being fixed in **#210** (batch-seed the heavy timeline tests instead of
+sequential `api.create_post` calls — see `storage::test_support::seed_posts` for
+the pattern). **#155 is therefore paused, blocked on #210.** All enabling
+infrastructure has landed at the current `workers=1` default (env-driven worker
+count, worker-aware per-test budgets, the admin-site serial quarantine, VM-size
+params, spike-scaffolding cleanup); once #210 makes the heavy test reliable,
+flip the `nixPlaywrightConfig` default to 4 + size the `e2eWarmChecks` VMs (6 GB
+/ 4 cores) and re-verify — and revisit whether the worker-contention timeout
+headroom can shrink.
+
 ## Timeout Budgeting
 
 E2E tests that are hydration-heavy should use

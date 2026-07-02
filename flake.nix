@@ -509,9 +509,15 @@
         nixPlaywrightConfig = pkgs.writeText "playwright.nix.config.js" ''
           const { defineConfig, devices } = require('@playwright/test');
           const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
-          // Worker count is env-driven (default 1) so the #155 probes can raise it
-          // without a config fork. fullyParallel follows: >1 worker only helps if
-          // spec files are allowed to interleave.
+          // Worker count is env-driven. The workers=4 flip (#155) is READY — all
+          // enabling infra is in place (worker-aware per-test budgets in
+          // fixtures.ts, admin-site serial quarantine below, VM sizing) and 3 of 4
+          // combos run 66/66 green at workers=4 — but it is DEFERRED behind #210:
+          // sqlite+chromium intermittently times out on the pre-existing flaky
+          // heavy test posts.spec.ts:349, which #210 fixes at the root (batch-seed
+          // instead of sequential api.create_post). Once #210 lands, flip this
+          // default to 4 + size the VMs (see docs/observability.md #155 AC3) and
+          // re-verify. Override now with JAUNDER_E2E_WORKERS.
           const workers = parseInt(process.env.JAUNDER_E2E_WORKERS || '1', 10);
           module.exports = defineConfig({
             testDir: './tests',
@@ -533,11 +539,11 @@
             },
             // Artifact root for traces/screenshots; copied out by the testScript.
             outputDir: '/tmp/e2e/test-results',
-            // Default: one worker (spec files run sequentially). Historically
-            // justified by SQLite write contention, though the pool runs WAL + a
-            // 5s busy_timeout and BEGIN IMMEDIATE (ADR-0039), so contention is a
-            // hypothesis the #155 probes test rather than a proven blocker.
-            // JAUNDER_E2E_WORKERS overrides this for probing / a future flip.
+            // SQLite write contention was the historical reason for workers:1,
+            // but the pool runs WAL + 5s busy_timeout + BEGIN IMMEDIATE
+            // (ADR-0039) and the #155 probes measured ZERO SQLITE_BUSY at 4
+            // concurrent workers — the real limit was CPU oversubscription,
+            // handled by worker-aware per-test budgets (fixtures.ts).
             workers: workers,
             fullyParallel: workers > 1,
             // admin-site mutates the site.title/base_url global singletons, so
@@ -589,60 +595,6 @@
                 testMatch: /admin-site\.spec\.ts/,
                 fullyParallel: false,
                 dependencies: ['firefox'],
-                use: {
-                  ...devices['Desktop Firefox'],
-                },
-              },
-            ],
-          });
-        '';
-
-        # leptos-CSR spike (#177): the CSR e2e's Playwright config. A copy of
-        # nixPlaywrightConfig kept SEPARATE so the concurrency flip (workers:4 +
-        # fullyParallel, the #173 reproduction recipe) lives only on the CSR path
-        # and never touches the default SSR e2e. Task 4 keeps workers:1 to isolate
-        # "do the specs pass under CSR" from "does concurrency panic"; Task 5 flips
-        # it to workers:4 + fullyParallel for the campaign.
-        csrPlaywrightConfig = pkgs.writeText "playwright.csr.config.js" ''
-          const { defineConfig, devices } = require('@playwright/test');
-          const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
-          module.exports = defineConfig({
-            testDir: './tests',
-            timeout: 30 * 1000,
-            expect: { timeout: 5000 },
-            reporter: [
-              ['line'],
-              ['json', { outputFile: '/tmp/e2e/playwright-report.json' }],
-            ],
-            use: {
-              actionTimeout: 0,
-              trace: 'retain-on-failure',
-              screenshot: 'only-on-failure',
-              ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
-            },
-            outputDir: '/tmp/e2e/test-results',
-            // The #173 reproduction recipe: 4 concurrent workers + fullyParallel
-            // maximize overlapping requests. Under SSR this panicked ~12% of runs
-            // (reactive_graph disposal); CSR has no server-side reactive render, so
-            // the spike campaign confirms zero panics. Needs the 4-vCPU/6 GB VM.
-            fullyParallel: true,
-            workers: 4,
-            projects: [
-              {
-                name: 'chromium',
-                use: {
-                  ...devices['Desktop Chrome'],
-                  launchOptions: {
-                    args: [
-                      '--no-sandbox',
-                      '--disable-gpu',
-                      '--disable-dev-shm-usage',
-                    ],
-                  },
-                },
-              },
-              {
-                name: 'firefox',
                 use: {
                   ...devices['Desktop Firefox'],
                 },
@@ -912,14 +864,6 @@
             traceId,
             traceParent,
             warmupEnv ? "",
-            # leptos-CSR spike (#177): these default to the SSR build/config, so
-            # the existing e2e-postgres-* calls are byte-identical. The CSR check
-            # passes jaunderBinCsr/csrSite/csrPlaywrightConfig + a bigger VM. The
-            # binary/site overrides below are mkIf-guarded on `jaunderPkg !=
-            # jaunderBin`, so the default derivation is untouched (no override added).
-            jaunderPkg ? jaunderBin,
-            sitePkg ? site,
-            playwrightConfig ? nixPlaywrightConfig,
             vmMemory ? 2048,
             vmCores ? null,
           }:
@@ -938,23 +882,10 @@
                 imports = [ self.nixosModules.jaunder ];
 
                 virtualisation.memorySize = vmMemory;
-                # Default (null) leaves the nixosTest core count alone; the CSR
-                # campaign sets 4 (workers:4 needs the cores — 1 vCPU gives false
-                # hydration-timeouts, per #173 handoff).
+                # Default (null) leaves the nixosTest core count alone; the #155
+                # workers=4 flip sets 4 (workers>1 needs the cores; 1 vCPU
+                # timeshares and starves the client render).
                 virtualisation.cores = lib.mkIf (vmCores != null) vmCores;
-                # CSR only: point the jaunder service at the CSR binary + site.
-                # mkIf-guarded so the default (jaunderPkg == jaunderBin) adds
-                # nothing and the existing derivations stay byte-identical.
-                systemd.services.jaunder.preStart = lib.mkIf (jaunderPkg != jaunderBin) (
-                  lib.mkForce ''
-                    mkdir -p target
-                    ln -sfn ${sitePkg} target/site
-                    ${jaunderPkg}/bin/jaunder init --db "$JAUNDER_DB" --skip-if-exists
-                  ''
-                );
-                systemd.services.jaunder.serviceConfig.ExecStart = lib.mkIf (
-                  jaunderPkg != jaunderBin
-                ) (lib.mkForce "${jaunderPkg}/bin/jaunder serve");
                 environment.systemPackages = [
                   pkgs.postgresql_16
                   pkgs.opentelemetry-collector-contrib
@@ -1004,7 +935,7 @@
 
               # Exercise create-pg-db
               machine.succeed(
-                "${jaunderPkg}/bin/jaunder create-pg-db"
+                "${jaunderBin}/bin/jaunder create-pg-db"
                 + " --bootstrap-db postgres://postgres@127.0.0.1/postgres"
                 + " --app-db postgres://jaunder@127.0.0.1/jaunder"
                 + " --app-role-password testpassword"
@@ -1016,7 +947,7 @@
               machine.wait_for_open_port(3000, timeout=30)
 
               machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
-              machine.succeed("cp ${playwrightConfig} /tmp/e2e/playwright.nix.config.js")
+              machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")
 
               def seed_db():
                 # Dynamic TRUNCATE of every public-schema table avoids
@@ -1098,6 +1029,10 @@
           };
 
         # attr name -> warm check, e.g. { "e2e-sqlite-chromium" = <drv>; ... }
+        # NOTE (#155): when the workers=4 flip lands (deferred behind #210, see
+        # nixPlaywrightConfig), add `vmMemory = 6144; vmCores = 4;` here — 4 vCPU
+        # matches the CI ubuntu-latest runner and 6 GB clears the 4-worker Firefox
+        # OOM a 2 GB VM hit (#61). At workers=1 the default 2 GB / 1 core suffices.
         e2eWarmChecks = pkgs.lib.listToAttrs (
           map (c: {
             name = "e2e-${c.backend}-${c.browser}";
@@ -1116,43 +1051,6 @@
             value = mkE2eCombo (c // { nameSuffix = "-cold"; });
           }) e2eCombos
         );
-
-        # TEMP (#155 Task 3 worker-safety probes — removed in Task 5). Both run at
-        # JAUNDER_E2E_WORKERS=4 with WARMUP=1 (matching the real gate's request
-        # rate) on a 4-core / 6 GB VM (the #177 spike's proven size for 4 workers).
-        # Attr keys are `probe-*` (not `e2e-*`) so they stay OUT of the `e2e-checks`
-        # gate aggregate; the derivation name is still `jaunder-e2e-*-w4`, so the
-        # cachix pushFilter excludes them (the VM always re-runs).
-        #  - probe-sqlite-chromium-w4: contention worst case — the fastest browser
-        #    maximises SQLite write-overlap. Clean here ⟹ firefox safe a fortiori.
-        #  - probe-postgres-firefox-w4: OOM worst case — memory-heavy firefox workers.
-        # Round-1 probes established: at 4 workers / 4 cores, postgres+firefox is
-        # 66/66 clean (no OOM) and sqlite+chromium hit ZERO SQLITE_BUSY — so neither
-        # OOM nor SQLite contention is the blocker. The only failures were 2 heavy
-        # chromium timeline tests timing out under CPU oversubscription (4 workers +
-        # server on 4 cores; firefox survives only because its 2.2x timeout scale
-        # absorbs the slowdown). Round-2 pins the fix:
-        #  - probe-sqlite-chromium-w4c6: 4 workers + 6 cores — does CPU headroom
-        #    clear the chromium timeouts (keeping the best wall-clock)?
-        #  - probe-sqlite-chromium-w2:   2 workers / 4 cores — conservative fallback.
-        # TEMP (#155 — removed in Task 5). Iteration target for the worker-contention
-        # timeout fix: chromium at workers=4 on a CI-representative 4-core VM. At this
-        # config chromium fails 2 heavy timeline tests (posts.spec.ts:349, :305) on
-        # timeout under CPU oversubscription; the fix (worker-aware per-test budgets)
-        # is developed against this until it is 66/66 green, then the real combos flip
-        # to workers=4 (Task 5) and this probe is removed. (Contention/OOM already
-        # refuted — see docs/observability.md #155 AC3.)
-        e2eProbeChecks = {
-          "probe-sqlite-chromium-w4" = mkE2eCombo {
-            backend = "sqlite";
-            browser = "chromium";
-            traceDigit = "1";
-            nameSuffix = "-w4";
-            vmMemory = 6144;
-            vmCores = 4;
-            warmupEnv = " JAUNDER_E2E_WARMUP=1 JAUNDER_E2E_WORKERS=4";
-          };
-        };
 
       in
       {
@@ -1198,7 +1096,6 @@
         checks =
           pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
             e2eWarmChecks
-            // e2eProbeChecks
             // {
               # The single e2e gate `cargo xtask validate` builds. `e2e-checks`
               # aggregates every `checks.e2e-*` combo (now 4); they are independent
