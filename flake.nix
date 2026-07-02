@@ -1174,6 +1174,11 @@
               pkgs.runCommand "ert-check"
                 {
                   nativeBuildInputs = [ emacsForCi ];
+                  # The pure ERT suite exercises timezone→UTC conversion and IANA
+                  # zone-name validation, which need a zone database; a bare
+                  # runCommand sandbox has none, so name lookups would silently
+                  # fall back to UTC. Point the C library / Emacs at tzdata (#160).
+                  TZDIR = "${pkgs.tzdata}/share/zoneinfo";
                 }
                 ''
                   emacs --batch -Q -l ${emacsSrc}/scripts/run-tests.el
@@ -1238,6 +1243,13 @@
               RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
               PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
               PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+              # The host `ert` step (run via `nix develop .#ci -c cargo xtask …`)
+              # computes timezone->UTC from IANA zone names, which need a zone
+              # database for `encode-time` to resolve. A clean CI runner has none
+              # in this shell, so provide it deterministically rather than relying
+              # on the host system's own TZDIR (which masked this locally). Mirrors
+              # the ert-check derivation's TZDIR (#160).
+              TZDIR = "${pkgs.tzdata}/share/zoneinfo";
               # Store paths for end2end/provision-node-modules.sh. Exported as env
               # vars (rather than baked into the shellHook) so they survive `cd`
               # into a worktree — that is what lets xtask's tsc-deps step re-run the
