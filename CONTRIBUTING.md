@@ -114,6 +114,10 @@ they run in CI, or locally via `cargo xtask validate`. Bypass with
 
 ### Adding an ADR
 
+Start from [`docs/adr/template.md`](docs/adr/template.md): copy it to
+`docs/adr/0000-<slug>.md` — always `0000`, never a hand-picked number — and let
+`cargo xtask adr renumber` assign the real one (see collisions, below).
+
 ADRs are `docs/adr/NNNN-slug.md` with a canonical `# ADR-NNNN: <title>` heading
 and a single-token `- Status: <token>` line (one of
 proposed/accepted/superseded/deprecated/rejected). They are indexed in the table
