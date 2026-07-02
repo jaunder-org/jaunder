@@ -26,10 +26,6 @@ use std::{path::PathBuf, sync::Arc};
 use axum::Router;
 use axum_embed::ServeEmbed;
 use leptos::prelude::*;
-#[cfg(not(feature = "csr"))]
-use leptos_axum::{generate_route_list, LeptosRoutes};
-#[cfg(not(feature = "csr"))]
-use web::{shell, App};
 
 use crate::assets::StaticAssets;
 use ::storage::AppState;
@@ -41,8 +37,6 @@ pub fn create_router(
     secure_cookies: bool,
     storage_path: PathBuf,
 ) -> Router {
-    #[cfg(not(feature = "csr"))]
-    let routes = generate_route_list(App);
     // Per-trait extensions for the raw axum HTTP handlers (feed, atompub,
     // media). The whole `AppState` is never layered as an `Extension`; each
     // handler receives only the storage traits it declares (ADR-0016). The
@@ -64,9 +58,8 @@ pub fn create_router(
     // bearer token, so the raw HTTP handlers and the Leptos request `Parts`
     // need the session store reachable as a request extension.
     let sessions_ext = state.sessions.clone();
-    let server_fn_state = state.clone();
-    let server_fn_mailer = mailer.clone();
-    let leptos_mailer = mailer;
+    let server_fn_state = state;
+    let server_fn_mailer = mailer;
     let serve_assets = ServeEmbed::<StaticAssets>::new();
     let storage_path_ext = Arc::new(storage_path);
     let app = Router::new()
@@ -107,38 +100,13 @@ pub fn create_router(
             axum::routing::get(crate::feed::handlers::feed_user_tag),
         );
 
-    // --- SSR (default): the leptos reactive page render. The #173 panic home. ---
-    #[cfg(not(feature = "csr"))]
-    let app = app
-        .leptos_routes_with_context(
-            &leptos_options,
-            routes,
-            move || {
-                crate::context::provide_app_state_contexts(&state);
-                crate::context::provide_mailer_context(&leptos_mailer);
-                provide_context(web::auth::CookieSettings {
-                    secure: secure_cookies,
-                });
-            },
-            {
-                let leptos_options = leptos_options.clone();
-                move || shell(leptos_options.clone())
-            },
-        )
-        .fallback(leptos_axum::file_and_error_handler(shell));
-
-    // --- CSR (spike #177): no reactive render. Serve the static SPA shell + site
-    //     assets (pkg/*) instead. The /api server fns and the raw HTTP routes
-    //     (feed, media, atompub, style) above are untouched, so server fns remain
-    //     the data API; only the page render leaves the request path. ---
-    #[cfg(feature = "csr")]
+    // --- The page path: no reactive render (#180, closes #173). Serve the static
+    //     SPA shell + site assets (pkg/*) plus the public projector's cacheable
+    //     anonymous HTML. The /api server fns and the raw HTTP routes (feed, media,
+    //     atompub, style) above are untouched, so server fns remain the data API;
+    //     only the page render leaves the request path. ---
     let app = {
         use tower_http::services::{ServeDir, ServeFile};
-        // `state`/`leptos_mailer` feed the SSR render's context closure above; under
-        // csr there is no such closure (server fns get their own contexts via the
-        // /api route). Touch them so the unused-variable lint stays quiet without
-        // changing the shared function signature.
-        let _ = (&state, &leptos_mailer, secure_cookies);
         let site_root = leptos_options.site_root.to_string();
         let index_html = format!("{site_root}/index.html");
         // Non-reactive HTML for the public discoverability routes, ahead of the
@@ -221,257 +189,6 @@ mod tests {
                     .await
                     .unwrap();
                 assert_eq!(response.status(), StatusCode::OK);
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn profile_route_returns_ok() {
-        let local = tokio::task::LocalSet::new();
-        local
-            .run_until(async {
-                ensure_server_fns_registered();
-                let app = create_router(
-                    test_options(),
-                    test_state().await,
-                    test_mailer(),
-                    true,
-                    test_storage_path(),
-                );
-                let response = app
-                    .oneshot(
-                        Request::builder()
-                            .uri("/profile")
-                            .body(Body::empty())
-                            .expect("failed to build request"),
-                    )
-                    .await
-                    .expect("failed to get response");
-                assert_eq!(response.status(), StatusCode::OK);
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn sessions_route_returns_ok() {
-        let local = tokio::task::LocalSet::new();
-        local
-            .run_until(async {
-                ensure_server_fns_registered();
-                let app = create_router(
-                    test_options(),
-                    test_state().await,
-                    test_mailer(),
-                    true,
-                    test_storage_path(),
-                );
-                let response = app
-                    .oneshot(
-                        Request::builder()
-                            .uri("/sessions")
-                            .body(Body::empty())
-                            .expect("failed to build request"),
-                    )
-                    .await
-                    .expect("failed to get response");
-                assert_eq!(response.status(), StatusCode::OK);
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn create_post_route_returns_ok() {
-        let local = tokio::task::LocalSet::new();
-        local
-            .run_until(async {
-                ensure_server_fns_registered();
-                let app = create_router(
-                    test_options(),
-                    test_state().await,
-                    test_mailer(),
-                    true,
-                    test_storage_path(),
-                );
-                let response = app
-                    .oneshot(
-                        Request::builder()
-                            .uri("/posts/new")
-                            .body(Body::empty())
-                            .expect("failed to build request"),
-                    )
-                    .await
-                    .expect("failed to get response");
-                assert_eq!(response.status(), StatusCode::OK);
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn register_route_returns_ok() {
-        let local = tokio::task::LocalSet::new();
-        local
-            .run_until(async {
-                ensure_server_fns_registered();
-                let app = create_router(
-                    test_options(),
-                    test_state().await,
-                    test_mailer(),
-                    true,
-                    test_storage_path(),
-                );
-                let response = app
-                    .oneshot(
-                        Request::builder()
-                            .uri("/register")
-                            .body(Body::empty())
-                            .expect("failed to build request"),
-                    )
-                    .await
-                    .expect("failed to get response");
-                assert_eq!(response.status(), StatusCode::OK);
-                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-                    .await
-                    .unwrap();
-                let html = String::from_utf8(body.to_vec()).unwrap();
-                assert!(html.contains("Register"), "body: {html}");
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn login_route_returns_ok() {
-        let local = tokio::task::LocalSet::new();
-        local
-            .run_until(async {
-                ensure_server_fns_registered();
-                let app = create_router(
-                    test_options(),
-                    test_state().await,
-                    test_mailer(),
-                    true,
-                    test_storage_path(),
-                );
-                let response = app
-                    .oneshot(
-                        Request::builder()
-                            .uri("/login")
-                            .body(Body::empty())
-                            .expect("failed to build request"),
-                    )
-                    .await
-                    .expect("failed to get response");
-                assert_eq!(response.status(), StatusCode::OK);
-                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-                    .await
-                    .unwrap();
-                let html = String::from_utf8(body.to_vec()).unwrap();
-                assert!(html.contains("Login"), "body: {html}");
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn logout_route_returns_ok() {
-        ensure_server_fns_registered();
-        let local = tokio::task::LocalSet::new();
-        local
-            .run_until(async {
-                let app = create_router(
-                    test_options(),
-                    test_state().await,
-                    test_mailer(),
-                    true,
-                    test_storage_path(),
-                );
-                let response = app
-                    .oneshot(
-                        Request::builder()
-                            .uri("/logout")
-                            .body(Body::empty())
-                            .expect("failed to build request"),
-                    )
-                    .await
-                    .expect("failed to get response");
-                assert_eq!(response.status(), StatusCode::OK);
-                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-                    .await
-                    .unwrap();
-                let html = String::from_utf8(body.to_vec()).unwrap();
-                assert!(html.contains("Logging out"), "body: {html}");
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn register_route_with_invite_only_policy_returns_ok() {
-        let local = tokio::task::LocalSet::new();
-        local
-            .run_until(async {
-                ensure_server_fns_registered();
-                let state = test_state().await;
-                state
-                    .site_config
-                    .set("site.registration_policy", "invite_only")
-                    .await
-                    .unwrap();
-                let app = create_router(
-                    test_options(),
-                    state,
-                    test_mailer(),
-                    true,
-                    test_storage_path(),
-                );
-                let response = app
-                    .oneshot(
-                        Request::builder()
-                            .uri("/register")
-                            .body(Body::empty())
-                            .expect("failed to build request"),
-                    )
-                    .await
-                    .expect("failed to get response");
-                assert_eq!(response.status(), StatusCode::OK);
-                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-                    .await
-                    .unwrap();
-                let html = String::from_utf8(body.to_vec()).unwrap();
-                assert!(html.contains("Invite code"), "body: {html}");
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn invites_route_returns_not_found_when_policy_is_closed() {
-        let local = tokio::task::LocalSet::new();
-        local
-            .run_until(async {
-                ensure_server_fns_registered();
-                let app = create_router(
-                    test_options(),
-                    test_state().await,
-                    test_mailer(),
-                    true,
-                    test_storage_path(),
-                );
-                let response = app
-                    .oneshot(
-                        Request::builder()
-                            .uri("/invites")
-                            .body(Body::empty())
-                            .expect("failed to build request"),
-                    )
-                    .await
-                    .expect("failed to get response");
-                let status = response.status();
-                assert!(
-                    status == StatusCode::OK || status == StatusCode::NOT_FOUND,
-                    "expected 200 or 404, got {status}"
-                );
-                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-                    .await
-                    .expect("failed to read body");
-                let html = String::from_utf8(body.to_vec()).expect("body is not valid UTF-8");
-                assert!(html.contains("Page not found."), "body: {html}");
             })
             .await;
     }

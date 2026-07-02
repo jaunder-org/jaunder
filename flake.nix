@@ -302,27 +302,6 @@
           }
         );
 
-        hydrateWasm = craneLib.buildPackage (
-          commonArgs
-          // {
-            cargoArtifacts = craneLib.buildDepsOnly (
-              commonArgs
-              // {
-                CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
-                cargoExtraArgs = "-p hydrate";
-                doCheck = false;
-              }
-            );
-            CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
-            cargoExtraArgs = "-p hydrate";
-            doCheck = false;
-            installPhaseCommand = ''
-              mkdir -p $out/lib
-              cp target/wasm32-unknown-unknown/release/hydrate.wasm $out/lib/
-            '';
-          }
-        );
-
         # The in-sandbox dev tool (tools/ workspace: devtool + its coverage
         # path-dep), built as its OWN crane package with deps vendored from
         # tools/Cargo.lock. The offline coverage sandbox runs it from PATH
@@ -397,37 +376,20 @@
           };
         });
 
-        wasmBundle =
-          pkgs.runCommand "jaunder-wasm-bundle"
-            {
-              nativeBuildInputs = [
-                wasm-bindgen-cli
-                pkgs.gnused
-              ];
-            }
-            ''
-              mkdir -p $out
-              wasm-bindgen \
-                --target web \
-                --out-dir $out \
-                ${hydrateWasm}/lib/hydrate.wasm
-              # Rename to match output-name = "jaunder" expected by the Leptos SSR HTML
-              mv $out/hydrate.js $out/jaunder.js
-              mv $out/hydrate_bg.wasm $out/jaunder_bg.wasm
-              sed -i 's/hydrate_bg\.wasm/jaunder_bg.wasm/g' $out/jaunder.js
-            '';
-
+        # The site the server serves: the CSR client's wasm bundle + public assets
+        # + the CSR SPA shell (`csr/index.html`). CSR is the only client (#180); the
+        # projector serves this same `index.html` as its SPA fallback.
         site = pkgs.runCommand "jaunder-site" { } ''
           mkdir -p $out/pkg
-          cp -r ${wasmBundle}/. $out/pkg/
+          cp -r ${csrWasmBundle}/. $out/pkg/
           cp -r ${./public}/. $out/
+          cp ${./csr/index.html} $out/index.html
         '';
 
-        # --- leptos-CSR spike (#177) --------------------------------------------
-        # A parallel build of the client-side-render variant, alongside (never
-        # replacing) the SSR/hydrate build above. Mirrors hydrateWasm/wasmBundle/
-        # jaunderBin/site, swapping the `csr` crate + `--features csr` server. Used
-        # only by the CSR e2e check; the default build/CI are untouched.
+        # --- leptos-CSR client (#177/#180) --------------------------------------
+        # The client-side-render wasm binary — the only client (#180 removed the
+        # reactive SSR render). `csrWasmBundle` runs wasm-bindgen over it; `site`
+        # (above) bundles it with the public assets + the CSR SPA shell.
         csrWasm = craneLib.buildPackage (
           commonArgs
           // {
@@ -468,22 +430,6 @@
               mv $out/csr_bg.wasm $out/jaunder_bg.wasm
               sed -i 's/csr_bg\.wasm/jaunder_bg.wasm/g' $out/jaunder.js
             '';
-
-        jaunderBinCsr = craneLib.buildPackage (
-          commonArgs
-          // {
-            inherit cargoArtifacts;
-            cargoExtraArgs = "-p jaunder --features csr";
-            doCheck = false;
-          }
-        );
-
-        csrSite = pkgs.runCommand "jaunder-csr-site" { } ''
-          mkdir -p $out/pkg
-          cp -r ${csrWasmBundle}/. $out/pkg/
-          cp -r ${./public}/. $out/
-          cp ${./csr/index.html} $out/index.html
-        '';
 
         # Playwright config for the Nix VM environment.
         # Chromium needs --no-sandbox (runs as root) and GPU/shm disabled.
@@ -1041,11 +987,6 @@
             site = site;
             devtool = devtoolBin;
 
-            # leptos-CSR spike (#177): the CSR server + site, for standalone
-            # `nix build .#csr-server` / `.#csr-site` verification and the CSR e2e.
-            csr-server = jaunderBinCsr;
-            csr-site = csrSite;
-
             # The e2e aggregate: a symlinkJoin of every `e2e-*` check, exposed as
             # `checks.e2e` and built by `cargo xtask validate`. Adding a new e2e
             # combo automatically joins it here. Its `jaunder-e2e*` name keeps it
@@ -1087,31 +1028,6 @@
               # `jaunder-e2e*`, so the cachix pushFilter still excludes it — the VM
               # runs are never substituted from a cached aggregate.
               e2e = self.packages.${system}.e2e-checks;
-
-              # leptos-CSR spike (#177): the CSR e2e gate. postgres+chromium is the
-              # #173 reproduction recipe (postgres latency widens the concurrency
-              # window; chromium is the most sensitive). The `csr-` name (NOT `e2e-`)
-              # deliberately keeps it OUT of the `e2e-checks` aggregate / default
-              # gate — it is built on demand by the campaign
-              # (`nix build .#checks.<sys>.csr-e2e-postgres-chromium --rebuild`),
-              # never by `cargo xtask validate`. Trace digit 5 (1-4 are the SSR combos).
-              csr-e2e-postgres-chromium =
-                let
-                  traceId = pkgs.lib.concatStrings (pkgs.lib.genList (_: "5") 32);
-                  traceParent =
-                    "00-${traceId}-${pkgs.lib.concatStrings (pkgs.lib.genList (_: "5") 16)}-01";
-                in
-                mkE2ePostgresCheck {
-                  checkName = "csr-e2e-postgres-chromium";
-                  browser = "chromium";
-                  inherit traceId traceParent;
-                  warmupEnv = " JAUNDER_E2E_WARMUP=1";
-                  jaunderPkg = jaunderBinCsr;
-                  sitePkg = csrSite;
-                  playwrightConfig = csrPlaywrightConfig;
-                  vmMemory = 6144;
-                  vmCores = 4;
-                };
 
               # Live elisp integration suite (ADR-0035): a minimal NixOS VM with
               # Emacs + the jaunder binary. The harness self-boots the server

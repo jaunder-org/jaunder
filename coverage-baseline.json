@@ -31,64 +31,6 @@
       "text": "}"
     }
   ],
-  "hydrate/src/lib.rs": [
-    {
-      "line": 163,
-      "text": "pub fn hydrate() {"
-    },
-    {
-      "line": 165,
-      "text": "    mark_phase_start(\"wasm_init\");"
-    },
-    {
-      "line": 166,
-      "text": "    _ = console_log::init_with_level(log::Level::Debug);"
-    },
-    {
-      "line": 167,
-      "text": "    console_error_panic_hook::set_once();"
-    },
-    {
-      "line": 168,
-      "text": "    mark_phase_end(\"wasm_init\");"
-    },
-    {
-      "line": 170,
-      "text": "    install_fetch_timing();"
-    },
-    {
-      "line": 171,
-      "text": "    mark_hydration_start();"
-    },
-    {
-      "line": 172,
-      "text": "    mark_phase_start(\"leptos_hydrate\");"
-    },
-    {
-      "line": 173,
-      "text": "    leptos::mount::hydrate_body(App);"
-    },
-    {
-      "line": 174,
-      "text": "    mark_phase_end(\"leptos_hydrate\");"
-    },
-    {
-      "line": 178,
-      "text": "    mark_phase_start(\"post_hydrate_effects\");"
-    },
-    {
-      "line": 179,
-      "text": "    mark_hydrated();"
-    },
-    {
-      "line": 180,
-      "text": "    mark_phase_end(\"post_hydrate_effects\");"
-    },
-    {
-      "line": 181,
-      "text": "}"
-    }
-  ],
   "server/src/assets.rs": [
     {
       "line": 3,
@@ -481,56 +423,6 @@
       "text": "        )?;"
     }
   ],
-  "server/src/lib.rs": [
-    {
-      "line": 79,
-      "text": "                let state = server_fn_state.clone();"
-    },
-    {
-      "line": 80,
-      "text": "                let mailer = server_fn_mailer.clone();"
-    },
-    {
-      "line": 81,
-      "text": "                leptos_axum::handle_server_fns_with_context("
-    },
-    {
-      "line": 82,
-      "text": "                    move || {"
-    },
-    {
-      "line": 83,
-      "text": "                        crate::context::provide_app_state_contexts(&state);"
-    },
-    {
-      "line": 84,
-      "text": "                        crate::context::provide_mailer_context(&mailer);"
-    },
-    {
-      "line": 85,
-      "text": "                        provide_context(web::auth::CookieSettings {"
-    },
-    {
-      "line": 86,
-      "text": "                            secure: secure_cookies,"
-    },
-    {
-      "line": 87,
-      "text": "                        });"
-    },
-    {
-      "line": 88,
-      "text": "                    },"
-    },
-    {
-      "line": 89,
-      "text": "                    req,"
-    },
-    {
-      "line": 91,
-      "text": "            }),"
-    }
-  ],
   "server/src/mailer/file.rs": [
     {
       "line": 32,
@@ -875,13 +767,149 @@
       "text": "        return Err(InternalError::unauthorized(\"user does not exist\"));"
     }
   ],
+  "web/src/error.rs": [
+    {
+      "line": 386,
+      "text": "pub fn server_resource<T, S, Fut>("
+    },
+    {
+      "line": 387,
+      "text": "    source: impl Fn() -> S + Send + Sync + 'static,"
+    },
+    {
+      "line": 388,
+      "text": "    fetcher: impl Fn(S) -> Fut + Send + Sync + 'static,"
+    },
+    {
+      "line": 389,
+      "text": ") -> leptos::prelude::Resource<T>"
+    },
+    {
+      "line": 390,
+      "text": "where"
+    },
+    {
+      "line": 391,
+      "text": "    T: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,"
+    },
+    {
+      "line": 392,
+      "text": "    S: PartialEq + Clone + Send + Sync + 'static,"
+    },
+    {
+      "line": 393,
+      "text": "    Fut: std::future::Future<Output = T> + Send + 'static,"
+    },
+    {
+      "line": 396,
+      "text": "    leptos::prelude::Resource::new(source, move |s| scoped_fetcher_future(fetcher(s)))"
+    },
+    {
+      "line": 397,
+      "text": "}"
+    }
+  ],
+  "web/src/feed_discovery.rs": [
+    {
+      "line": 10,
+      "text": "pub fn FeedDiscovery(surface: FeedSurface) -> impl IntoView {"
+    },
+    {
+      "line": 11,
+      "text": "    let label = surface_label(&surface);"
+    },
+    {
+      "line": 13,
+      "text": "    view! {"
+    },
+    {
+      "line": 15,
+      "text": "            rel=\"alternate\""
+    },
+    {
+      "line": 16,
+      "text": "            type_=\"application/rss+xml\""
+    },
+    {
+      "line": 17,
+      "text": "            title=format!(\"{label} (RSS)\")"
+    },
+    {
+      "line": 18,
+      "text": "            href=canonicalize(&surface, FeedFormat::Rss)"
+    },
+    {
+      "line": 21,
+      "text": "            rel=\"alternate\""
+    },
+    {
+      "line": 22,
+      "text": "            type_=\"application/atom+xml\""
+    },
+    {
+      "line": 23,
+      "text": "            title=format!(\"{label} (Atom)\")"
+    },
+    {
+      "line": 24,
+      "text": "            href=canonicalize(&surface, FeedFormat::Atom)"
+    },
+    {
+      "line": 27,
+      "text": "            rel=\"alternate\""
+    },
+    {
+      "line": 28,
+      "text": "            type_=\"application/feed+json\""
+    },
+    {
+      "line": 29,
+      "text": "            title=format!(\"{label} (JSON Feed)\")"
+    },
+    {
+      "line": 30,
+      "text": "            href=canonicalize(&surface, FeedFormat::Json)"
+    },
+    {
+      "line": 33,
+      "text": "}"
+    },
+    {
+      "line": 41,
+      "text": "pub fn RsdDiscovery(username: String) -> impl IntoView {"
+    },
+    {
+      "line": 42,
+      "text": "    view! {"
+    },
+    {
+      "line": 44,
+      "text": "            rel=\"EditURI\""
+    },
+    {
+      "line": 45,
+      "text": "            type_=\"application/rsd+xml\""
+    },
+    {
+      "line": 46,
+      "text": "            title=\"AtomPub (RSD)\""
+    },
+    {
+      "line": 47,
+      "text": "            href=rsd_href(&username)"
+    },
+    {
+      "line": 50,
+      "text": "}"
+    }
+  ],
   "web/src/lib.rs": [
     {
-      "line": 75,
+      "line": 56,
       "text": "pub fn mount_csr() {"
     },
     {
-      "line": 97,
+      "line": 78,
       "text": "}"
     }
   ],
@@ -1309,6 +1337,70 @@
   ],
   "web/src/pages/auth.rs": [
     {
+      "line": 9,
+      "text": "pub fn RegisterPage() -> impl IntoView {"
+    },
+    {
+      "line": 10,
+      "text": "    let register_action = ServerAction::<Register>::new();"
+    },
+    {
+      "line": 11,
+      "text": "    let policy = crate::server_resource(|| (), |()| get_registration_policy());"
+    },
+    {
+      "line": 12,
+      "text": "    let username = RwSignal::new(String::new());"
+    },
+    {
+      "line": 14,
+      "text": "    view! {"
+    },
+    {
+      "line": 15,
+      "text": "        <Topbar title=\"Register\".to_string() sub=\"Create your account\".to_string() />"
+    },
+    {
+      "line": 16,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 17,
+      "text": "            <div class=\"j-page-narrow\">"
+    },
+    {
+      "line": 18,
+      "text": "                <Suspense fallback=|| {"
+    },
+    {
+      "line": 19,
+      "text": "                    view! { <p class=\"j-loading\">\"Loading\\u{2026}\"</p> }"
+    },
+    {
+      "line": 20,
+      "text": "                }>"
+    },
+    {
+      "line": 21,
+      "text": "                    {move || Suspend::new(async move {"
+    },
+    {
+      "line": 22,
+      "text": "                        let p = policy.await;"
+    },
+    {
+      "line": 23,
+      "text": "                        let is_invite_only = p.as_deref() == Ok(\"invite_only\");"
+    },
+    {
+      "line": 24,
+      "text": "                        view! {"
+    },
+    {
+      "line": 25,
+      "text": "                            <ActionForm action=register_action attr:class=\"j-card\">"
+    },
+    {
       "line": 38,
       "text": "                                            on:input=move |ev| {"
     },
@@ -1319,6 +1411,98 @@
     {
       "line": 40,
       "text": "                                            }"
+    },
+    {
+      "line": 53,
+      "text": "                                        .then(|| {"
+    },
+    {
+      "line": 54,
+      "text": "                                            view! {"
+    },
+    {
+      "line": 55,
+      "text": "                                                <label class=\"j-form-field\">"
+    },
+    {
+      "line": 64,
+      "text": "                                        })}"
+    },
+    {
+      "line": 72,
+      "text": "                        }"
+    },
+    {
+      "line": 73,
+      "text": "                    })}"
+    },
+    {
+      "line": 75,
+      "text": "                {move || {"
+    },
+    {
+      "line": 76,
+      "text": "                    register_action"
+    },
+    {
+      "line": 77,
+      "text": "                        .value()"
+    },
+    {
+      "line": 78,
+      "text": "                        .get()"
+    },
+    {
+      "line": 79,
+      "text": "                        .and_then(|r: Result<String, WebError>| r.err())"
+    },
+    {
+      "line": 80,
+      "text": "                        .map(|e| view! { <p class=\"error\">{e.to_string()}</p> })"
+    },
+    {
+      "line": 81,
+      "text": "                }}"
+    },
+    {
+      "line": 84,
+      "text": "    }"
+    },
+    {
+      "line": 85,
+      "text": "}"
+    },
+    {
+      "line": 90,
+      "text": "pub fn LoginPage() -> impl IntoView {"
+    },
+    {
+      "line": 91,
+      "text": "    let login_action = ServerAction::<Login>::new();"
+    },
+    {
+      "line": 92,
+      "text": "    let username = RwSignal::new(String::new());"
+    },
+    {
+      "line": 94,
+      "text": "    view! {"
+    },
+    {
+      "line": 95,
+      "text": "        <Topbar title=\"Login\".to_string() sub=\"Sign in to your account\".to_string() />"
+    },
+    {
+      "line": 96,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 97,
+      "text": "            <div class=\"j-page-narrow\">"
+    },
+    {
+      "line": 98,
+      "text": "                <ActionForm action=login_action attr:class=\"j-card\">"
     },
     {
       "line": 111,
@@ -1333,6 +1517,26 @@
       "text": "                                }"
     },
     {
+      "line": 132,
+      "text": "                {move || {"
+    },
+    {
+      "line": 133,
+      "text": "                    login_action"
+    },
+    {
+      "line": 134,
+      "text": "                        .value()"
+    },
+    {
+      "line": 135,
+      "text": "                        .get()"
+    },
+    {
+      "line": 136,
+      "text": "                        .map(|r: Result<String, WebError>| match r {"
+    },
+    {
       "line": 138,
       "text": "                                view! { <p class=\"j-loading\">\"Logging in\\u{2026}\"</p> }.into_any()"
     },
@@ -1343,6 +1547,62 @@
     {
       "line": 141,
       "text": "                        })"
+    },
+    {
+      "line": 142,
+      "text": "                }}"
+    },
+    {
+      "line": 145,
+      "text": "    }"
+    },
+    {
+      "line": 146,
+      "text": "}"
+    },
+    {
+      "line": 151,
+      "text": "pub fn LogoutPage() -> impl IntoView {"
+    },
+    {
+      "line": 152,
+      "text": "    let logout_action = ServerAction::<Logout>::new();"
+    },
+    {
+      "line": 159,
+      "text": "    view! {"
+    },
+    {
+      "line": 160,
+      "text": "        <Topbar title=\"Logout\".to_string() />"
+    },
+    {
+      "line": 161,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 162,
+      "text": "            <div class=\"j-page\">"
+    },
+    {
+      "line": 164,
+      "text": "                {move || {"
+    },
+    {
+      "line": 165,
+      "text": "                    logout_action"
+    },
+    {
+      "line": 166,
+      "text": "                        .value()"
+    },
+    {
+      "line": 167,
+      "text": "                        .get()"
+    },
+    {
+      "line": 168,
+      "text": "                        .map(|r: Result<(), WebError>| {"
     },
     {
       "line": 169,
@@ -1359,6 +1619,14 @@
     {
       "line": 173,
       "text": "                        })"
+    },
+    {
+      "line": 174,
+      "text": "                }}"
+    },
+    {
+      "line": 178,
+      "text": "}"
     }
   ],
   "web/src/pages/backup.rs": [
@@ -1743,8 +2011,44 @@
   ],
   "web/src/pages/home.rs": [
     {
+      "line": 24,
+      "text": "pub fn HomePage() -> impl IntoView {"
+    },
+    {
+      "line": 25,
+      "text": "    let timeline_mode = RwSignal::new(None::<TimelineMode>);"
+    },
+    {
+      "line": 26,
+      "text": "    let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());"
+    },
+    {
+      "line": 28,
+      "text": "    let next_cursor_created_at = RwSignal::new(None::<String>);"
+    },
+    {
+      "line": 30,
+      "text": "    let next_cursor_post_id = RwSignal::new(None::<i64>);"
+    },
+    {
+      "line": 31,
+      "text": "    let has_more = RwSignal::new(false);"
+    },
+    {
+      "line": 32,
+      "text": "    let loading_more = RwSignal::new(false);"
+    },
+    {
+      "line": 33,
+      "text": "    let error = RwSignal::new(None::<String>);"
+    },
+    {
       "line": 39,
       "text": "    if let Some(crate::render::PageSeed::SiteTimeline(page)) ="
+    },
+    {
+      "line": 40,
+      "text": "        leptos::prelude::use_context::<Option<crate::render::PageSeed>>().flatten()"
     },
     {
       "line": 41,
@@ -1771,8 +2075,68 @@
       "text": "        timeline.set(page.posts);"
     },
     {
+      "line": 47,
+      "text": "    }"
+    },
+    {
+      "line": 49,
+      "text": "    let refresh_version = RwSignal::new(0u32);"
+    },
+    {
+      "line": 50,
+      "text": "    let on_mutate = Callback::new(move |()| refresh_version.update(|v| *v += 1));"
+    },
+    {
+      "line": 53,
+      "text": "    let initial_page = crate::server_resource("
+    },
+    {
+      "line": 54,
+      "text": "        move || refresh_version.get(),"
+    },
+    {
+      "line": 55,
+      "text": "        |_| async move {"
+    },
+    {
+      "line": 56,
+      "text": "            match current_user().await {"
+    },
+    {
+      "line": 57,
+      "text": "                Ok(Some(username)) => list_home_feed(None, None, Some(50))"
+    },
+    {
+      "line": 58,
+      "text": "                    .await"
+    },
+    {
+      "line": 59,
+      "text": "                    .map(|page| (TimelineMode::Feed(username), page)),"
+    },
+    {
+      "line": 60,
+      "text": "                Ok(None) => list_local_timeline(None, None, Some(50))"
+    },
+    {
+      "line": 61,
+      "text": "                    .await"
+    },
+    {
+      "line": 62,
+      "text": "                    .map(|page| (TimelineMode::Local, page)),"
+    },
+    {
       "line": 63,
       "text": "                Err(e) => Err(e),"
+    },
+    {
+      "line": 65,
+      "text": "        },"
+    },
+    {
+      "line": 105,
+      "text": "    let on_load_more = move |_| {"
     },
     {
       "line": 107,
@@ -1781,6 +2145,30 @@
     {
       "line": 152,
       "text": "    };"
+    },
+    {
+      "line": 154,
+      "text": "    let read_error = move || read_signal!(error);"
+    },
+    {
+      "line": 155,
+      "text": "    let read_timeline_mode = move || read_signal!(timeline_mode);"
+    },
+    {
+      "line": 156,
+      "text": "    let read_timeline_rows = move || read_signal!(timeline);"
+    },
+    {
+      "line": 157,
+      "text": "    let read_has_more = move || read_signal!(has_more);"
+    },
+    {
+      "line": 158,
+      "text": "    let read_loading_more = move || read_signal!(loading_more);"
+    },
+    {
+      "line": 161,
+      "text": "    let load_more_btn = move || {"
     },
     {
       "line": 162,
@@ -1807,8 +2195,48 @@
       "text": "    };"
     },
     {
+      "line": 171,
+      "text": "    view! {"
+    },
+    {
+      "line": 172,
+      "text": "        <FeedDiscovery surface=FeedSurface::Site />"
+    },
+    {
+      "line": 173,
+      "text": "        {move || {"
+    },
+    {
+      "line": 174,
+      "text": "            if let Some(err) = read_error() {"
+    },
+    {
       "line": 175,
       "text": "                return view! { <p class=\"error\">{err}</p> }.into_any();"
+    },
+    {
+      "line": 176,
+      "text": "            }"
+    },
+    {
+      "line": 177,
+      "text": "            match read_timeline_mode() {"
+    },
+    {
+      "line": 182,
+      "text": "                    view! {"
+    },
+    {
+      "line": 183,
+      "text": "                        <Topbar title=\"Home\".to_string() />"
+    },
+    {
+      "line": 184,
+      "text": "                        <p class=\"j-loading\">\"Loading timeline\\u{2026}\"</p>"
+    },
+    {
+      "line": 186,
+      "text": "                        .into_any()"
     },
     {
       "line": 188,
@@ -1957,9 +2385,93 @@
     {
       "line": 252,
       "text": "                        .into_any()"
+    },
+    {
+      "line": 255,
+      "text": "        }}"
+    },
+    {
+      "line": 257,
+      "text": "}"
     }
   ],
   "web/src/pages/invites.rs": [
+    {
+      "line": 11,
+      "text": "pub fn InvitesPage() -> impl IntoView {"
+    },
+    {
+      "line": 12,
+      "text": "    let create_action = ServerAction::<CreateInvite>::new();"
+    },
+    {
+      "line": 13,
+      "text": "    let policy = crate::server_resource(|| (), |()| get_registration_policy());"
+    },
+    {
+      "line": 14,
+      "text": "    let invites = crate::server_resource(move || create_action.version().get(), |_| list_invites());"
+    },
+    {
+      "line": 16,
+      "text": "    view! {"
+    },
+    {
+      "line": 17,
+      "text": "        <Topbar title=\"Invites\".to_string() sub=\"Manage codes\".to_string() />"
+    },
+    {
+      "line": 18,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 19,
+      "text": "            <div class=\"j-page\">"
+    },
+    {
+      "line": 20,
+      "text": "                <Suspense fallback=|| {"
+    },
+    {
+      "line": 21,
+      "text": "                    view! { <p class=\"j-loading\">\"Loading\\u{2026}\"</p> }"
+    },
+    {
+      "line": 22,
+      "text": "                }>"
+    },
+    {
+      "line": 23,
+      "text": "                    {move || Suspend::new(async move {"
+    },
+    {
+      "line": 24,
+      "text": "                        let policy_str = policy.await.unwrap_or_default();"
+    },
+    {
+      "line": 25,
+      "text": "                        if policy_str != \"invite_only\" {"
+    },
+    {
+      "line": 30,
+      "text": "                                if let Some(opts) = use_context::<ResponseOptions>() {"
+    },
+    {
+      "line": 31,
+      "text": "                                    opts.set_status(axum::http::StatusCode::NOT_FOUND);"
+    },
+    {
+      "line": 32,
+      "text": "                                }"
+    },
+    {
+      "line": 35,
+      "text": "                            view! { <p>\"Page not found.\"</p> }"
+    },
+    {
+      "line": 36,
+      "text": "                                .into_any();"
+    },
     {
       "line": 37,
       "text": "                        }"
@@ -2059,6 +2571,18 @@
     {
       "line": 76,
       "text": "                            Err(e) => view! { <p class=\"error\">{e.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 78,
+      "text": "                    })}"
+    },
+    {
+      "line": 82,
+      "text": "    }"
+    },
+    {
+      "line": 83,
+      "text": "}"
     }
   ],
   "web/src/pages/media.rs": [
@@ -2477,8 +3001,76 @@
   ],
   "web/src/pages/mod.rs": [
     {
+      "line": 50,
+      "text": "fn AppShell() -> impl IntoView {"
+    },
+    {
+      "line": 51,
+      "text": "    let theme = use_context::<RwSignal<String>>()"
+    },
+    {
+      "line": 52,
+      "text": "        .unwrap_or_else(|| RwSignal::new(DEFAULT_THEME.to_string()));"
+    },
+    {
+      "line": 53,
+      "text": "    view! {"
+    },
+    {
+      "line": 54,
+      "text": "        <div class=\"j-root\" attr:data-theme=move || theme.get()>"
+    },
+    {
+      "line": 55,
+      "text": "            <div class=\"j-shell\">"
+    },
+    {
+      "line": 57,
+      "text": "                <div class=\"j-main-region\">"
+    },
+    {
+      "line": 59,
+      "text": "                    <main class=\"j-main\">"
+    },
+    {
+      "line": 70,
+      "text": "pub fn App() -> impl IntoView {"
+    },
+    {
+      "line": 72,
+      "text": "    provide_meta_context();"
+    },
+    {
+      "line": 90,
+      "text": "    let theme = RwSignal::new(DEFAULT_THEME.to_string());"
+    },
+    {
+      "line": 104,
+      "text": "    provide_context(theme);"
+    },
+    {
+      "line": 118,
+      "text": "    view! {"
+    },
+    {
+      "line": 119,
+      "text": "        <Stylesheet id=\"leptos\" href=\"/pkg/jaunder.css\" />"
+    },
+    {
+      "line": 122,
+      "text": "        <Title text=\"Jaunder\" />"
+    },
+    {
       "line": 125,
       "text": "            <Routes fallback=|| \"Page not found.\".into_view()>"
+    },
+    {
+      "line": 188,
+      "text": "    }"
+    },
+    {
+      "line": 189,
+      "text": "}"
     }
   ],
   "web/src/pages/password_reset.rs": [
@@ -2645,6 +3237,46 @@
   ],
   "web/src/pages/posts.rs": [
     {
+      "line": 29,
+      "text": "pub fn CreatePostPage() -> impl IntoView {"
+    },
+    {
+      "line": 30,
+      "text": "    let current_user = crate::server_resource(|| (), |()| current_user());"
+    },
+    {
+      "line": 31,
+      "text": "    let last_result: RwSignal<Option<CreatePostResult>> = RwSignal::new(None);"
+    },
+    {
+      "line": 33,
+      "text": "    view! {"
+    },
+    {
+      "line": 34,
+      "text": "        <Topbar title=\"New post\".to_string() sub=\"Long-form\".to_string() />"
+    },
+    {
+      "line": 35,
+      "text": "        <Suspense fallback=|| {"
+    },
+    {
+      "line": 36,
+      "text": "            view! { <p class=\"j-loading\">\"Loading\\u{2026}\"</p> }"
+    },
+    {
+      "line": 37,
+      "text": "        }>"
+    },
+    {
+      "line": 38,
+      "text": "            {move || Suspend::new(async move {"
+    },
+    {
+      "line": 39,
+      "text": "                match current_user.await {"
+    },
+    {
       "line": 41,
       "text": "                        view! {"
     },
@@ -2785,8 +3417,32 @@
       "text": "                            .into_any()"
     },
     {
+      "line": 92,
+      "text": "                        view! {"
+    },
+    {
+      "line": 93,
+      "text": "                            <div style=\"padding:32px\">"
+    },
+    {
+      "line": 102,
+      "text": "                            .into_any()"
+    },
+    {
       "line": 104,
       "text": "                    Err(err) => view! { <p class=\"error\">{err.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 106,
+      "text": "            })}"
+    },
+    {
+      "line": 108,
+      "text": "    }"
+    },
+    {
+      "line": 109,
+      "text": "}"
     },
     {
       "line": 114,
@@ -3105,8 +3761,108 @@
       "text": "}"
     },
     {
+      "line": 249,
+      "text": "fn SubscribeButton(username: String) -> impl IntoView {"
+    },
+    {
+      "line": 250,
+      "text": "    let subscribe = ServerAction::<SubscribeTo>::new();"
+    },
+    {
+      "line": 251,
+      "text": "    let unsubscribe = ServerAction::<UnsubscribeFrom>::new();"
+    },
+    {
+      "line": 254,
+      "text": "    let username_for_state = username.clone();"
+    },
+    {
+      "line": 255,
+      "text": "    let state = crate::server_resource("
+    },
+    {
+      "line": 256,
+      "text": "        move || (subscribe.version().get(), unsubscribe.version().get()),"
+    },
+    {
+      "line": 257,
+      "text": "        move |_| {"
+    },
+    {
+      "line": 258,
+      "text": "            let username = username_for_state.clone();"
+    },
+    {
+      "line": 259,
+      "text": "            async move {"
+    },
+    {
+      "line": 260,
+      "text": "                let viewer = current_user().await.ok().flatten();"
+    },
+    {
+      "line": 261,
+      "text": "                let subscribed = is_subscribed_to(username.clone()).await.unwrap_or(false);"
+    },
+    {
+      "line": 262,
+      "text": "                (viewer, subscribed)"
+    },
+    {
+      "line": 263,
+      "text": "            }"
+    },
+    {
+      "line": 264,
+      "text": "        },"
+    },
+    {
+      "line": 267,
+      "text": "    let profile_username = username;"
+    },
+    {
+      "line": 269,
+      "text": "    view! {"
+    },
+    {
+      "line": 270,
+      "text": "        <Suspense fallback=|| ()>"
+    },
+    {
+      "line": 271,
+      "text": "            {move || {"
+    },
+    {
+      "line": 272,
+      "text": "                let username = profile_username.clone();"
+    },
+    {
+      "line": 273,
+      "text": "                Suspend::new(async move {"
+    },
+    {
+      "line": 274,
+      "text": "                    let (viewer, subscribed) = state.await;"
+    },
+    {
+      "line": 275,
+      "text": "                    let show = match &viewer {"
+    },
+    {
       "line": 276,
       "text": "                        Some(name) => *name != username,"
+    },
+    {
+      "line": 277,
+      "text": "                        None => false,"
+    },
+    {
+      "line": 279,
+      "text": "                    if !show {"
+    },
+    {
+      "line": 280,
+      "text": "                        return ().into_any();"
     },
     {
       "line": 281,
@@ -3153,8 +3909,124 @@
       "text": "                            .into_any()"
     },
     {
+      "line": 304,
+      "text": "                })"
+    },
+    {
+      "line": 305,
+      "text": "            }}"
+    },
+    {
+      "line": 307,
+      "text": "    }"
+    },
+    {
+      "line": 312,
+      "text": "pub fn UserTimelinePage() -> impl IntoView {"
+    },
+    {
+      "line": 313,
+      "text": "    let params = use_params_map();"
+    },
+    {
+      "line": 314,
+      "text": "    let username = Memo::new(move |_| {"
+    },
+    {
+      "line": 315,
+      "text": "        params"
+    },
+    {
+      "line": 316,
+      "text": "            .get()"
+    },
+    {
+      "line": 317,
+      "text": "            .get(\"username\")"
+    },
+    {
+      "line": 318,
+      "text": "            .unwrap_or_default()"
+    },
+    {
+      "line": 319,
+      "text": "            .strip_prefix('~')"
+    },
+    {
+      "line": 320,
+      "text": "            .unwrap_or_default()"
+    },
+    {
+      "line": 321,
+      "text": "            .to_string()"
+    },
+    {
+      "line": 322,
+      "text": "    });"
+    },
+    {
+      "line": 324,
+      "text": "    let mutate_version = RwSignal::new(0u32);"
+    },
+    {
+      "line": 325,
+      "text": "    let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));"
+    },
+    {
+      "line": 328,
+      "text": "    let initial_page = crate::server_resource("
+    },
+    {
+      "line": 329,
+      "text": "        move || (username.get(), mutate_version.get()),"
+    },
+    {
+      "line": 330,
+      "text": "        |(username, _)| async move {"
+    },
+    {
+      "line": 331,
+      "text": "            if username.is_empty() {"
+    },
+    {
       "line": 332,
       "text": "                return Err(WebError::validation(\"Invalid username\"));"
+    },
+    {
+      "line": 333,
+      "text": "            }"
+    },
+    {
+      "line": 334,
+      "text": "            list_user_posts(username, None, None, Some(50)).await"
+    },
+    {
+      "line": 335,
+      "text": "        },"
+    },
+    {
+      "line": 338,
+      "text": "    let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());"
+    },
+    {
+      "line": 339,
+      "text": "    let next_cursor_created_at = RwSignal::new(None::<String>);"
+    },
+    {
+      "line": 340,
+      "text": "    let next_cursor_post_id = RwSignal::new(None::<i64>);"
+    },
+    {
+      "line": 341,
+      "text": "    let has_more = RwSignal::new(false);"
+    },
+    {
+      "line": 342,
+      "text": "    let error = RwSignal::new(None::<String>);"
+    },
+    {
+      "line": 343,
+      "text": "    let initial_loaded = RwSignal::new(false);"
     },
     {
       "line": 351,
@@ -3163,6 +4035,10 @@
     {
       "line": 352,
       "text": "        page,"
+    },
+    {
+      "line": 353,
+      "text": "    }) = use_context::<Option<crate::render::PageSeed>>().flatten()"
     },
     {
       "line": 355,
@@ -3191,6 +4067,18 @@
     {
       "line": 361,
       "text": "        }"
+    },
+    {
+      "line": 362,
+      "text": "    }"
+    },
+    {
+      "line": 364,
+      "text": "    let load_more_action = ServerAction::<ListUserPosts>::new();"
+    },
+    {
+      "line": 410,
+      "text": "    let on_load_more = move |_| {"
     },
     {
       "line": 411,
@@ -3237,8 +4125,132 @@
       "text": "    };"
     },
     {
+      "line": 423,
+      "text": "    let display_username = move || read_signal!(username);"
+    },
+    {
+      "line": 424,
+      "text": "    let read_error = move || read_signal!(error);"
+    },
+    {
+      "line": 425,
+      "text": "    let read_initial_loaded = move || read_signal!(initial_loaded);"
+    },
+    {
+      "line": 426,
+      "text": "    let read_timeline = move || read_signal!(timeline);"
+    },
+    {
+      "line": 427,
+      "text": "    let read_has_more = move || read_signal!(has_more);"
+    },
+    {
+      "line": 428,
+      "text": "    let read_pending = move || read_signal!(load_more_action.pending());"
+    },
+    {
+      "line": 430,
+      "text": "    view! {"
+    },
+    {
+      "line": 431,
+      "text": "        {move || {"
+    },
+    {
+      "line": 432,
+      "text": "            view! {"
+    },
+    {
+      "line": 433,
+      "text": "                {username"
+    },
+    {
+      "line": 434,
+      "text": "                    .get()"
+    },
+    {
+      "line": 435,
+      "text": "                    .parse::<Username>()"
+    },
+    {
+      "line": 436,
+      "text": "                    .ok()"
+    },
+    {
+      "line": 437,
+      "text": "                    .map(|username| {"
+    },
+    {
+      "line": 438,
+      "text": "                        view! { <FeedDiscovery surface=FeedSurface::User { username } /> }"
+    },
+    {
+      "line": 439,
+      "text": "                    })}"
+    },
+    {
+      "line": 440,
+      "text": "                <RsdDiscovery username=username.get() />"
+    },
+    {
+      "line": 442,
+      "text": "        }}"
+    },
+    {
+      "line": 444,
+      "text": "            title=move || format!(\"Posts by {}\", display_username())"
+    },
+    {
+      "line": 445,
+      "text": "            sub=\"User timeline\".to_string()"
+    },
+    {
+      "line": 447,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 448,
+      "text": "            <div class=\"j-page\">"
+    },
+    {
+      "line": 449,
+      "text": "                {move || {"
+    },
+    {
+      "line": 450,
+      "text": "                    let username = username.get();"
+    },
+    {
+      "line": 451,
+      "text": "                    (!username.is_empty()).then(|| view! { <SubscribeButton username=username /> })"
+    },
+    {
+      "line": 452,
+      "text": "                }}"
+    },
+    {
+      "line": 453,
+      "text": "                {move || {"
+    },
+    {
+      "line": 454,
+      "text": "                    if let Some(err) = read_error() {"
+    },
+    {
       "line": 455,
       "text": "                        return view! { <p class=\"error\">{err}</p> }.into_any();"
+    },
+    {
+      "line": 456,
+      "text": "                    }"
+    },
+    {
+      "line": 457,
+      "text": "                    if !read_initial_loaded() {"
+    },
+    {
+      "line": 458,
+      "text": "                        return view! { <p class=\"j-loading\">\"Loading\\u{2026}\"</p> }.into_any();"
     },
     {
       "line": 459,
@@ -3355,6 +4367,14 @@
     {
       "line": 494,
       "text": "                        .into_any()"
+    },
+    {
+      "line": 495,
+      "text": "                }}"
+    },
+    {
+      "line": 499,
+      "text": "}"
     },
     {
       "line": 503,
@@ -5627,6 +6647,54 @@
   ],
   "web/src/pages/profile.rs": [
     {
+      "line": 9,
+      "text": "pub fn ProfilePage() -> impl IntoView {"
+    },
+    {
+      "line": 10,
+      "text": "    let update_action = ServerAction::<UpdateProfile>::new();"
+    },
+    {
+      "line": 11,
+      "text": "    let profile = crate::server_resource(move || update_action.version().get(), |_| get_profile());"
+    },
+    {
+      "line": 13,
+      "text": "    view! {"
+    },
+    {
+      "line": 14,
+      "text": "        <Topbar title=\"Profile\".to_string() sub=\"Your details\".to_string() />"
+    },
+    {
+      "line": 15,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 16,
+      "text": "            <div class=\"j-page\">"
+    },
+    {
+      "line": 17,
+      "text": "                <Suspense fallback=|| {"
+    },
+    {
+      "line": 18,
+      "text": "                    view! { <p class=\"j-loading\">\"Loading\\u{2026}\"</p> }"
+    },
+    {
+      "line": 19,
+      "text": "                }>"
+    },
+    {
+      "line": 20,
+      "text": "                    {move || Suspend::new(async move {"
+    },
+    {
+      "line": 21,
+      "text": "                        match profile.await {"
+    },
+    {
       "line": 22,
       "text": "                            Ok(data) => {"
     },
@@ -5649,6 +6717,50 @@
     {
       "line": 47,
       "text": "                                    .into_any()"
+    },
+    {
+      "line": 49,
+      "text": "                            Err(e) => view! { <p class=\"error\">{e.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 51,
+      "text": "                    })}"
+    },
+    {
+      "line": 53,
+      "text": "                {move || {"
+    },
+    {
+      "line": 54,
+      "text": "                    update_action"
+    },
+    {
+      "line": 55,
+      "text": "                        .value()"
+    },
+    {
+      "line": 56,
+      "text": "                        .get()"
+    },
+    {
+      "line": 57,
+      "text": "                        .and_then(|r: Result<(), WebError>| r.err())"
+    },
+    {
+      "line": 58,
+      "text": "                        .map(|e| view! { <p class=\"error\">{e.to_string()}</p> })"
+    },
+    {
+      "line": 59,
+      "text": "                }}"
+    },
+    {
+      "line": 62,
+      "text": "    }"
+    },
+    {
+      "line": 63,
+      "text": "}"
     },
     {
       "line": 68,
@@ -5701,6 +6813,74 @@
   ],
   "web/src/pages/sessions.rs": [
     {
+      "line": 8,
+      "text": "pub fn SessionsPage() -> impl IntoView {"
+    },
+    {
+      "line": 9,
+      "text": "    let revoke_action = ServerAction::<RevokeSession>::new();"
+    },
+    {
+      "line": 10,
+      "text": "    let create_action = ServerAction::<CreateAppPassword>::new();"
+    },
+    {
+      "line": 11,
+      "text": "    let sessions = crate::server_resource("
+    },
+    {
+      "line": 12,
+      "text": "        move || (revoke_action.version().get(), create_action.version().get()),"
+    },
+    {
+      "line": 13,
+      "text": "        |_| list_sessions(),"
+    },
+    {
+      "line": 16,
+      "text": "    view! {"
+    },
+    {
+      "line": 17,
+      "text": "        <Topbar title=\"Sessions\".to_string() sub=\"Active sessions\".to_string() />"
+    },
+    {
+      "line": 18,
+      "text": "        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 19,
+      "text": "            <div class=\"j-page\">"
+    },
+    {
+      "line": 20,
+      "text": "                <section class=\"j-app-passwords\">"
+    },
+    {
+      "line": 25,
+      "text": "                    <ActionForm action=create_action>"
+    },
+    {
+      "line": 36,
+      "text": "                    {move || {"
+    },
+    {
+      "line": 37,
+      "text": "                        create_action"
+    },
+    {
+      "line": 38,
+      "text": "                            .value()"
+    },
+    {
+      "line": 39,
+      "text": "                            .get()"
+    },
+    {
+      "line": 40,
+      "text": "                            .map(|result| match result {"
+    },
+    {
       "line": 41,
       "text": "                                Ok(pw) => {"
     },
@@ -5727,6 +6907,30 @@
     {
       "line": 53,
       "text": "                            })"
+    },
+    {
+      "line": 54,
+      "text": "                    }}"
+    },
+    {
+      "line": 56,
+      "text": "                <Suspense fallback=|| {"
+    },
+    {
+      "line": 57,
+      "text": "                    view! { <p class=\"j-loading\">\"Loading\\u{2026}\"</p> }"
+    },
+    {
+      "line": 58,
+      "text": "                }>"
+    },
+    {
+      "line": 59,
+      "text": "                    {move || Suspend::new(async move {"
+    },
+    {
+      "line": 60,
+      "text": "                        match sessions.await {"
     },
     {
       "line": 61,
@@ -5795,6 +6999,22 @@
     {
       "line": 85,
       "text": "                                    .into_any()"
+    },
+    {
+      "line": 87,
+      "text": "                            Err(e) => view! { <p class=\"error\">{e.to_string()}</p> }.into_any(),"
+    },
+    {
+      "line": 89,
+      "text": "                    })}"
+    },
+    {
+      "line": 93,
+      "text": "    }"
+    },
+    {
+      "line": 94,
+      "text": "}"
     }
   ],
   "web/src/pages/site.rs": [
@@ -6081,6 +7301,70 @@
       "text": "}"
     },
     {
+      "line": 72,
+      "text": "pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoView {"
+    },
+    {
+      "line": 73,
+      "text": "    view! {"
+    },
+    {
+      "line": 74,
+      "text": "        <svg"
+    },
+    {
+      "line": 75,
+      "text": "            class=\"j-icon\""
+    },
+    {
+      "line": 76,
+      "text": "            width=size"
+    },
+    {
+      "line": 77,
+      "text": "            height=size"
+    },
+    {
+      "line": 85,
+      "text": "            <path d=path />"
+    },
+    {
+      "line": 88,
+      "text": "}"
+    },
+    {
+      "line": 95,
+      "text": "pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {"
+    },
+    {
+      "line": 96,
+      "text": "    let (initials, hue) = crate::render::avatar_parts(&name);"
+    },
+    {
+      "line": 100,
+      "text": "    let font_size = (size as f32 * 0.36).round() as u32;"
+    },
+    {
+      "line": 101,
+      "text": "    let style = format!("
+    },
+    {
+      "line": 104,
+      "text": "    view! {"
+    },
+    {
+      "line": 105,
+      "text": "        <div class=\"j-av\" style=style>"
+    },
+    {
+      "line": 106,
+      "text": "            {initials}"
+    },
+    {
+      "line": 109,
+      "text": "}"
+    },
+    {
       "line": 116,
       "text": "pub fn Dot(proto: String) -> impl IntoView {"
     },
@@ -6145,6 +7429,30 @@
       "text": "}"
     },
     {
+      "line": 144,
+      "text": "pub fn BackupBanner() -> impl IntoView {"
+    },
+    {
+      "line": 145,
+      "text": "    let visible = crate::server_resource(|| (), |()| backup_warning_visible());"
+    },
+    {
+      "line": 147,
+      "text": "    view! {"
+    },
+    {
+      "line": 148,
+      "text": "        <Suspense fallback=|| ()>"
+    },
+    {
+      "line": 149,
+      "text": "            {move || Suspend::new(async move {"
+    },
+    {
+      "line": 150,
+      "text": "                match visible.await {"
+    },
+    {
       "line": 152,
       "text": "                        view! {"
     },
@@ -6155,6 +7463,82 @@
     {
       "line": 161,
       "text": "                            .into_any()"
+    },
+    {
+      "line": 163,
+      "text": "                    _ => ().into_any(),"
+    },
+    {
+      "line": 165,
+      "text": "            })}"
+    },
+    {
+      "line": 167,
+      "text": "    }"
+    },
+    {
+      "line": 168,
+      "text": "}"
+    },
+    {
+      "line": 172,
+      "text": "pub fn Topbar("
+    },
+    {
+      "line": 173,
+      "text": "    #[prop(into)] title: Signal<String>,"
+    },
+    {
+      "line": 174,
+      "text": "    #[prop(optional, into)] sub: Option<Signal<String>>,"
+    },
+    {
+      "line": 175,
+      "text": "    #[prop(optional)] children: Option<Children>,"
+    },
+    {
+      "line": 176,
+      "text": ") -> impl IntoView {"
+    },
+    {
+      "line": 177,
+      "text": "    view! {"
+    },
+    {
+      "line": 178,
+      "text": "        <div class=\"j-topbar\">"
+    },
+    {
+      "line": 179,
+      "text": "            <div>"
+    },
+    {
+      "line": 180,
+      "text": "                <h1>{move || title.get()}</h1>"
+    },
+    {
+      "line": 181,
+      "text": "                {sub"
+    },
+    {
+      "line": 182,
+      "text": "                    .map(|s| {"
+    },
+    {
+      "line": 183,
+      "text": "                        view! { <div class=\"j-sub\">{move || s.get()}</div> }"
+    },
+    {
+      "line": 184,
+      "text": "                    })}"
+    },
+    {
+      "line": 186,
+      "text": "            <div class=\"j-topbar-right\">{children.map(|c| c())}</div>"
+    },
+    {
+      "line": 189,
+      "text": "}"
     },
     {
       "line": 201,
@@ -8137,12 +9521,256 @@
       "text": "}"
     },
     {
+      "line": 992,
+      "text": ") -> impl IntoView {"
+    },
+    {
+      "line": 993,
+      "text": "    let class = if active {"
+    },
+    {
       "line": 994,
       "text": "        \"j-nav-item is-active\""
     },
     {
+      "line": 996,
+      "text": "        \"j-nav-item\""
+    },
+    {
+      "line": 998,
+      "text": "    let inner = view! {"
+    },
+    {
+      "line": 999,
+      "text": "        <Icon path=icon_path size=16 />"
+    },
+    {
+      "line": 1000,
+      "text": "        <span>{label}</span>"
+    },
+    {
+      "line": 1002,
+      "text": "    match href {"
+    },
+    {
+      "line": 1003,
+      "text": "        Some(href) => view! {"
+    },
+    {
+      "line": 1004,
+      "text": "            <a class=class href=href>"
+    },
+    {
+      "line": 1005,
+      "text": "                {inner}"
+    },
+    {
+      "line": 1008,
+      "text": "        .into_any(),"
+    },
+    {
       "line": 1009,
       "text": "        None => view! { <div class=class>{inner}</div> }.into_any(),"
+    },
+    {
+      "line": 1015,
+      "text": "fn SidebarSource(proto: &'static str, name: &'static str, sub: &'static str) -> impl IntoView {"
+    },
+    {
+      "line": 1016,
+      "text": "    let dot_style = format!(\"width:8px;height:8px;border-radius:4px;background:var(--c-{proto})\");"
+    },
+    {
+      "line": 1017,
+      "text": "    view! {"
+    },
+    {
+      "line": 1018,
+      "text": "        <div class=\"j-source\">"
+    },
+    {
+      "line": 1019,
+      "text": "            <span class=\"j-dot\" style=dot_style></span>"
+    },
+    {
+      "line": 1020,
+      "text": "            <div style=\"flex:1;min-width:0\">"
+    },
+    {
+      "line": 1021,
+      "text": "                <div class=\"j-source-name\">{name}</div>"
+    },
+    {
+      "line": 1022,
+      "text": "                <div class=\"j-source-sub\">{sub}</div>"
+    },
+    {
+      "line": 1033,
+      "text": "pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {"
+    },
+    {
+      "line": 1034,
+      "text": "    let active_key = active.unwrap_or_default();"
+    },
+    {
+      "line": 1036,
+      "text": "    let location = use_location();"
+    },
+    {
+      "line": 1037,
+      "text": "    let user = crate::server_resource(move || location.pathname.get(), |_| current_user());"
+    },
+    {
+      "line": 1038,
+      "text": "    let operator = crate::server_resource("
+    },
+    {
+      "line": 1039,
+      "text": "        move || location.pathname.get(),"
+    },
+    {
+      "line": 1040,
+      "text": "        |_| current_user_is_operator(),"
+    },
+    {
+      "line": 1050,
+      "text": "    let anon_html = crate::render::render_sidebar(&active_key);"
+    },
+    {
+      "line": 1051,
+      "text": "    let anon_fallback = anon_html.clone();"
+    },
+    {
+      "line": 1053,
+      "text": "    view! {"
+    },
+    {
+      "line": 1054,
+      "text": "        <aside class=\"j-sidebar\">"
+    },
+    {
+      "line": 1055,
+      "text": "            <Suspense fallback=move || {"
+    },
+    {
+      "line": 1056,
+      "text": "                let anon_fallback = anon_fallback.clone();"
+    },
+    {
+      "line": 1057,
+      "text": "                view! { <div style=\"display:contents\" inner_html=anon_fallback></div> }"
+    },
+    {
+      "line": 1058,
+      "text": "            }>"
+    },
+    {
+      "line": 1062,
+      "text": "                    move || {"
+    },
+    {
+      "line": 1063,
+      "text": "                        let active_key = active_key.clone();"
+    },
+    {
+      "line": 1064,
+      "text": "                        let anon_html = anon_html.clone();"
+    },
+    {
+      "line": 1065,
+      "text": "                        Suspend::new(async move {"
+    },
+    {
+      "line": 1066,
+      "text": "                            let Ok(Some(username)) = user.await else {"
+    },
+    {
+      "line": 1067,
+      "text": "                                return view! {"
+    },
+    {
+      "line": 1068,
+      "text": "                                    <div style=\"display:contents\" inner_html=anon_html></div>"
+    },
+    {
+      "line": 1070,
+      "text": "                                    .into_any();"
+    },
+    {
+      "line": 1072,
+      "text": "                            let is_operator = matches!(operator.await, Ok(true));"
+    },
+    {
+      "line": 1073,
+      "text": "                            view! {"
+    },
+    {
+      "line": 1074,
+      "text": "                                <div style=\"display:contents\">"
+    },
+    {
+      "line": 1083,
+      "text": "                                    <div class=\"j-search\">"
+    },
+    {
+      "line": 1084,
+      "text": "                                        <Icon path=Icons::SEARCH size=14 />"
+    },
+    {
+      "line": 1088,
+      "text": "                                    <nav class=\"j-nav\">"
+    },
+    {
+      "line": 1089,
+      "text": "                                        {crate::render::NAV_ITEMS"
+    },
+    {
+      "line": 1090,
+      "text": "                                            .iter()"
+    },
+    {
+      "line": 1091,
+      "text": "                                            .filter(|&&(_, _, _, href, _)| href.is_some())"
+    },
+    {
+      "line": 1092,
+      "text": "                                            .map(|&(key, label, icon_path, href, _)| {"
+    },
+    {
+      "line": 1093,
+      "text": "                                                let is_active = key == active_key.as_str();"
+    },
+    {
+      "line": 1094,
+      "text": "                                                view! {"
+    },
+    {
+      "line": 1096,
+      "text": "                                                        label=label"
+    },
+    {
+      "line": 1097,
+      "text": "                                                        icon_path=icon_path"
+    },
+    {
+      "line": 1098,
+      "text": "                                                        active=is_active"
+    },
+    {
+      "line": 1099,
+      "text": "                                                        href=href"
+    },
+    {
+      "line": 1102,
+      "text": "                                            })"
+    },
+    {
+      "line": 1103,
+      "text": "                                            .collect::<Vec<_>>()}"
+    },
+    {
+      "line": 1104,
+      "text": "                                        {if is_operator {"
     },
     {
       "line": 1105,
@@ -8183,6 +9811,74 @@
     {
       "line": 1119,
       "text": "                                                .into_any()"
+    },
+    {
+      "line": 1121,
+      "text": "                                            ().into_any()"
+    },
+    {
+      "line": 1124,
+      "text": "                                    <div>"
+    },
+    {
+      "line": 1129,
+      "text": "                                        {crate::render::SIDEBAR_SOURCES"
+    },
+    {
+      "line": 1130,
+      "text": "                                            .iter()"
+    },
+    {
+      "line": 1131,
+      "text": "                                            .map(|&(proto, name, sub)| {"
+    },
+    {
+      "line": 1132,
+      "text": "                                                view! { <SidebarSource proto=proto name=name sub=sub /> }"
+    },
+    {
+      "line": 1133,
+      "text": "                                            })"
+    },
+    {
+      "line": 1134,
+      "text": "                                            .collect::<Vec<_>>()}"
+    },
+    {
+      "line": 1136,
+      "text": "                                    <div class=\"j-sb-foot\">"
+    },
+    {
+      "line": 1137,
+      "text": "                                        <Avatar name=username.clone() size=28 />"
+    },
+    {
+      "line": 1138,
+      "text": "                                        <div style=\"font-size:13px;flex:1;min-width:0\">"
+    },
+    {
+      "line": 1139,
+      "text": "                                            <div style=\"font-weight:500\">{username}</div>"
+    },
+    {
+      "line": 1147,
+      "text": "                                .into_any()"
+    },
+    {
+      "line": 1148,
+      "text": "                        })"
+    },
+    {
+      "line": 1149,
+      "text": "                    }"
+    },
+    {
+      "line": 1153,
+      "text": "    }"
+    },
+    {
+      "line": 1154,
+      "text": "}"
     },
     {
       "line": 1194,
