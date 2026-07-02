@@ -179,8 +179,7 @@ dependencies = [
 [[package]]
 name = "atom_syndication"
 version = "0.12.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39d8b8ef99e33deb2a51504888222225797f48bace2f0cab01975746a39c05bb"
+source = "git+https://github.com/jaunder-org/atom.git?rev=2462e3798295047ba35078b9634bcd129e887ffe#2462e3798295047ba35078b9634bcd129e887ffe"
 dependencies = [
  "chrono",
  "derive_builder",
@@ -2892,9 +2891,9 @@ checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
 
 [[package]]
 name = "quick-xml"
-version = "0.39.4"
+version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdcc8dd4e2f670d309a5f0e83fe36dfdc05af317008fea29144da1a2ac858e5e"
+checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
 dependencies = [
  "encoding_rs",
  "memchr",
@@ -3284,8 +3283,7 @@ dependencies = [
 [[package]]
 name = "rss"
 version = "2.0.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0e38781082c53bdde56e6081698c06831f69a27eac2593ed6b6cb2511424ad5"
+source = "git+https://github.com/jaunder-org/rss.git?rev=60b2a81445160af85ab94a23774c74e6616decfe#60b2a81445160af85ab94a23774c74e6616decfe"
 dependencies = [
  "atom_syndication",
  "derive_builder",

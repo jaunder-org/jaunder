@@ -1,5 +1,22 @@
 {
   "nodes": {
+    "atom-fork": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1782999572,
+        "narHash": "sha256-PeE/fOPz/0LCFCYI3rHPCgtS86vanJFqogzm3by7lxM=",
+        "owner": "jaunder-org",
+        "repo": "atom",
+        "rev": "2462e3798295047ba35078b9634bcd129e887ffe",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jaunder-org",
+        "repo": "atom",
+        "rev": "2462e3798295047ba35078b9634bcd129e887ffe",
+        "type": "github"
+      }
+    },
     "crane": {
       "locked": {
         "lastModified": 1774313767,
@@ -72,10 +89,29 @@
     },
     "root": {
       "inputs": {
+        "atom-fork": "atom-fork",
         "crane": "crane",
         "fenix": "fenix",
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "rss-fork": "rss-fork"
+      }
+    },
+    "rss-fork": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1783001295,
+        "narHash": "sha256-qBLw6kxLIvYUTajS6vrCEENVABASPsvyOZguRxzbQ0Y=",
+        "owner": "jaunder-org",
+        "repo": "rss",
+        "rev": "60b2a81445160af85ab94a23774c74e6616decfe",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jaunder-org",
+        "repo": "rss",
+        "rev": "60b2a81445160af85ab94a23774c74e6616decfe",
+        "type": "github"
       }
     },
     "rust-analyzer-src": {
