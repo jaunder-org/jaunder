@@ -114,8 +114,11 @@ pub fn CreatePostPage() -> impl IntoView {
 fn permalink_first_paint(seed_post: Option<crate::posts::PostResponse>) -> AnyView {
     match seed_post {
         Some(post) => {
-            let html = crate::render::render_body(&crate::render::PageSeed::Permalink(post));
-            view! { <div inner_html=html></div> }.into_any()
+            // Just the article — this fallback sits inside the reactive PostPage's
+            // own `j-scroll`/`j-page`. `display:contents` keeps the host wrapper out
+            // of the layout so it coincides with the projector's permalink page.
+            let html = crate::render::permalink_article(&post);
+            view! { <div style="display:contents" inner_html=html></div> }.into_any()
         }
         None => view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any(),
     }

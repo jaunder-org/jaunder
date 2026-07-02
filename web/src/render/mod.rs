@@ -18,6 +18,11 @@ use crate::tags::TagSummary;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 
+/// The default theme applied to `<div class="j-root" data-theme=…>`. Lives here
+/// (the shell-rendering layer) so the projector's server-painted shell and the
+/// reactive `AppShell` share one value; re-exported from `pages` for the client.
+pub const DEFAULT_THEME: &str = "studio";
+
 /// The initial data a public page is rendered from — serialized into the
 /// projector's `#jaunder-seed` blob and adopted by the CSR client on boot.
 ///
@@ -153,44 +158,167 @@ pub fn render_head(seed: &PageSeed) -> String {
     )
 }
 
-/// The `<div id="app">` inner HTML: the semantic, crawlable page content.
+/// The full anonymous `#app` shell the projector serves: the exact `j-root`
+/// layout the reactive `App`/`AppShell` produces for an anonymous viewer (the
+/// sidebar, the main region, and the per-route `<main>` content), so removing
+/// `#app` and mounting the CSR app on boot causes no reflow. The authed extras
+/// (footer avatar, authed nav, action columns) layer on top reactively once
+/// `current_user` resolves (that is #181, and needs no coincidence).
+/// `BackupBanner` renders nothing for an anonymous viewer, so it is omitted here.
 #[must_use]
-pub fn render_body(seed: &PageSeed) -> String {
-    match seed {
-        PageSeed::Permalink(post) => {
-            let ctx = TagCtx::ForUser(post.username.clone());
-            render_post_article(&PostView {
-                username: &post.username,
-                title: post.title.as_deref(),
-                banner: None,
-                summary: post.summary.as_deref(),
-                rendered_html: &post.rendered_html,
-                time: &format_post_time(post.published_at.as_deref().unwrap_or(&post.created_at)),
-                permalink: post.permalink.as_deref().unwrap_or_default(),
-                tags: &post.tags,
-                tag_ctx: &ctx,
-                is_author: false,
-            })
-        }
-        PageSeed::SiteTimeline(page) => timeline("Jaunder", &page.posts, &TagCtx::SiteWide),
-        PageSeed::Profile { username, page } => timeline(
-            &format!("Posts by {username}"),
-            &page.posts,
-            &TagCtx::ForUser(username.clone()),
+pub fn render_shell(seed: &PageSeed) -> String {
+    format!(
+        concat!(
+            "<div class=\"j-root\" data-theme=\"{theme}\"><div class=\"j-shell\">",
+            "<aside class=\"j-sidebar\">{sidebar}</aside>",
+            "<div class=\"j-main-region\"><main class=\"j-main\">{body}</main></div></div></div>",
         ),
-        PageSeed::SiteTag { tag, page } => {
-            timeline(&format!("#{tag}"), &page.posts, &TagCtx::SiteWide)
+        theme = DEFAULT_THEME,
+        sidebar = render_sidebar(""),
+        body = render_body(seed),
+    )
+}
+
+/// The `<main class="j-main">` inner content for a route — mirrors each reactive
+/// page's markup (Topbar + wrappers + posts + load-more) so the seeded first paint
+/// coincides. Split from [`render_shell`] so the permalink Suspense fallback can
+/// reuse just [`permalink_article`].
+pub(crate) fn render_body(seed: &PageSeed) -> String {
+    match seed {
+        // Permalink: no Topbar; a single article inside `j-scroll`/`j-page`.
+        PageSeed::Permalink(post) => format!(
+            "<div class=\"j-scroll\"><div class=\"j-page\">{}</div></div>",
+            permalink_article(post),
+        ),
+        // Home (anonymous "Local" mode): Topbar + hero + a bare `j-scroll` of posts.
+        PageSeed::SiteTimeline(page) => {
+            let topbar = render_topbar(
+                "jaunder.local",
+                Some("Read-only \u{00b7} posts originating on this instance"),
+                "<a href=\"/login\" class=\"j-btn\">Sign in</a>\
+                 <a href=\"/register\" class=\"j-btn is-primary\">Register</a>",
+            );
+            let scroll = if page.posts.is_empty() {
+                "<p>No posts yet.</p>".to_string()
+            } else {
+                format!(
+                    "{}{}",
+                    render_posts(&page.posts, &TagCtx::SiteWide),
+                    render_load_more(page.has_more),
+                )
+            };
+            format!(
+                "{topbar}{hero}<div class=\"j-scroll\">{scroll}</div>",
+                hero = render_hero(),
+            )
         }
+        PageSeed::Profile { username, page } => render_timeline_page(
+            &render_topbar(&format!("Posts by {username}"), Some("User timeline"), ""),
+            &page.posts,
+            page.has_more,
+            &TagCtx::ForUser(username.clone()),
+            "No posts yet.",
+        ),
+        PageSeed::SiteTag { tag, page } => render_timeline_page(
+            &render_topbar(&format!("#{tag}"), Some("Posts on this instance"), ""),
+            &page.posts,
+            page.has_more,
+            &TagCtx::SiteWide,
+            "No posts with this tag yet.",
+        ),
         PageSeed::UserTag {
             username,
             tag,
             page,
-        } => timeline(
-            &format!("#{tag} by {username}"),
+        } => render_timeline_page(
+            &render_topbar(
+                &format!("#{tag}"),
+                Some(&format!("Posts by ~{username}")),
+                "",
+            ),
             &page.posts,
+            page.has_more,
             &TagCtx::ForUser(username.clone()),
+            "No posts with this tag yet.",
         ),
     }
+}
+
+/// One permalink post as an `<article>`. Shared by the projector's permalink page
+/// and the reactive `PostPage`'s Suspense fallback so they coincide.
+#[must_use]
+pub(crate) fn permalink_article(post: &PostResponse) -> String {
+    let ctx = TagCtx::ForUser(post.username.clone());
+    render_post_article(&PostView {
+        username: &post.username,
+        title: post.title.as_deref(),
+        banner: None,
+        summary: post.summary.as_deref(),
+        rendered_html: &post.rendered_html,
+        time: &format_post_time(post.published_at.as_deref().unwrap_or(&post.created_at)),
+        permalink: post.permalink.as_deref().unwrap_or_default(),
+        tags: &post.tags,
+        tag_ctx: &ctx,
+        is_author: false,
+    })
+}
+
+/// The `<div class="j-topbar">` bar, mirroring the reactive `pages::ui::Topbar`.
+/// `right` is trusted HTML for the `j-topbar-right` slot (e.g. the home Sign-in /
+/// Register buttons); `title`/`sub` are escaped.
+#[must_use]
+fn render_topbar(title: &str, sub: Option<&str>, right: &str) -> String {
+    let sub_html = sub.map_or_else(String::new, |s| {
+        format!("<div class=\"j-sub\">{}</div>", escape_html(s))
+    });
+    format!(
+        "<div class=\"j-topbar\"><div><h1>{title}</h1>{sub_html}</div><div class=\"j-topbar-right\">{right}</div></div>",
+        title = escape_html(title),
+    )
+}
+
+/// The home page hero block (constant copy), mirroring `home.rs`.
+#[must_use]
+fn render_hero() -> String {
+    "<div class=\"j-hero\"><h1>One timeline. Every protocol.</h1><p>Jaunder is a self-hosted \
+     social client that reads from ActivityPub, AT Protocol, RSS, Atom, and JSON Feed \u{2014} and \
+     publishes back out to the ones you choose. Below: what\u{2019}s been posted from this \
+     instance.</p></div>"
+        .to_string()
+}
+
+/// The non-functional "Load more" button the projector paints so the reactive
+/// button (which replaces it on boot) doesn't reflow. Rendered only when there is
+/// a next page, matching the reactive `has_more` guard.
+#[must_use]
+fn render_load_more(has_more: bool) -> String {
+    if has_more {
+        "<button>Load more</button>".to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Concatenated `<article>`s for a list of timeline posts (anonymous, so no action
+/// column), each coincident with the reactive `PostCard`/`PostDisplay` output.
+#[must_use]
+fn render_posts(posts: &[TimelinePostSummary], tag_ctx: &TagCtx) -> String {
+    let mut out = String::new();
+    for post in posts {
+        out.push_str(&render_post_article(&PostView {
+            username: &post.username,
+            title: post.title.as_deref(),
+            banner: None,
+            summary: post.summary.as_deref(),
+            rendered_html: &post.rendered_html,
+            time: &format_post_time(&post.published_at),
+            permalink: &post.permalink,
+            tags: &post.tags,
+            tag_ctx,
+            is_author: false,
+        }));
+    }
+    out
 }
 
 /// The fields needed to render one post, borrowed from a `PostResponse` or a
@@ -292,35 +420,28 @@ pub(crate) fn render_post_content(view: &PostView) -> String {
     )
 }
 
-/// A list of post summaries as a timeline page (heading + `<article>`s). The
-/// full-shell assembly (#180) replaces the bare heading with the reactive
-/// `Topbar`; for now this keeps the existing content-only structure.
-fn timeline(heading: &str, posts: &[TimelinePostSummary], tag_ctx: &TagCtx) -> String {
-    let mut out = format!(
-        "<h1 class=\"j-timeline-title\">{}</h1>",
-        escape_html(heading)
-    );
-    if posts.is_empty() {
-        out.push_str("<p class=\"j-empty\">No posts yet.</p>");
-        return out;
-    }
-    out.push_str("<div class=\"j-timeline\">");
-    for post in posts {
-        out.push_str(&render_post_article(&PostView {
-            username: &post.username,
-            title: post.title.as_deref(),
-            banner: None,
-            summary: post.summary.as_deref(),
-            rendered_html: &post.rendered_html,
-            time: &format_post_time(&post.published_at),
-            permalink: &post.permalink,
-            tags: &post.tags,
-            tag_ctx,
-            is_author: false,
-        }));
-    }
-    out.push_str("</div>");
-    out
+/// A profile / tag timeline page's `<main>` content: the given `topbar`, then
+/// `j-scroll` > `j-page` holding either the empty placeholder or a `<div>` of
+/// posts followed by the load-more button — mirroring `UserTimelinePage` /
+/// `SiteTagPage` / `UserTagPage` (the anonymous `SubscribeButton` renders nothing).
+#[must_use]
+fn render_timeline_page(
+    topbar: &str,
+    posts: &[TimelinePostSummary],
+    has_more: bool,
+    tag_ctx: &TagCtx,
+    empty_text: &str,
+) -> String {
+    let inner = if posts.is_empty() {
+        format!("<p>{}</p>", escape_html(empty_text))
+    } else {
+        format!(
+            "<div>{}</div>{}",
+            render_posts(posts, tag_ctx),
+            render_load_more(has_more),
+        )
+    };
+    format!("{topbar}<div class=\"j-scroll\"><div class=\"j-page\">{inner}</div></div>")
 }
 
 /// The footer tag chips: a `<span class="j-tag-list">` of `<span class="j-tag-cell">`
@@ -622,7 +743,13 @@ mod tests {
             tag: "rust".into(),
             page: one_post_page(),
         });
-        assert!(site.contains("#rust"), "{site}");
+        // Tag pages render the Topbar (h1 + sub), then j-scroll > j-page > posts.
+        assert!(site.contains("<h1>#rust</h1>"), "{site}");
+        assert!(site.contains("Posts on this instance"), "{site}");
+        assert!(
+            site.contains("<div class=\"j-scroll\"><div class=\"j-page\">"),
+            "{site}"
+        );
         assert!(site.contains("First"), "expected post rendered: {site}");
 
         let user = render_body(&PageSeed::UserTag {
@@ -630,7 +757,104 @@ mod tests {
             tag: "rust".into(),
             page: one_post_page(),
         });
-        assert!(user.contains("#rust by bob"), "{user}");
+        assert!(user.contains("<h1>#rust</h1>"), "{user}");
+        assert!(user.contains("Posts by ~bob"), "{user}");
+    }
+
+    #[test]
+    fn shell_wraps_body_in_j_root_with_sidebar_and_main() {
+        let html = render_shell(&PageSeed::SiteTimeline(one_post_page()));
+        assert!(
+            html.starts_with(
+                "<div class=\"j-root\" data-theme=\"studio\"><div class=\"j-shell\">\
+                 <aside class=\"j-sidebar\">"
+            ),
+            "{html}"
+        );
+        // Sidebar inner is present, then the main region.
+        assert!(html.contains("j-brand-text"), "{html}");
+        assert!(
+            html.contains("</aside><div class=\"j-main-region\"><main class=\"j-main\">"),
+            "{html}"
+        );
+        assert!(html.ends_with("</main></div></div></div>"), "{html}");
+    }
+
+    #[test]
+    fn home_local_body_has_topbar_hero_signin_and_posts() {
+        let html = render_body(&PageSeed::SiteTimeline(one_post_page()));
+        assert!(html.contains("<h1>jaunder.local</h1>"), "{html}");
+        assert!(
+            html.contains("<a href=\"/login\" class=\"j-btn\">Sign in</a>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<a href=\"/register\" class=\"j-btn is-primary\">Register</a>"),
+            "{html}"
+        );
+        assert!(html.contains("<div class=\"j-hero\">"), "{html}");
+        // Posts sit directly in j-scroll for the home page (no inner j-page wrapper).
+        assert!(
+            html.contains("<div class=\"j-scroll\"><article class=\"j-post\">"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn load_more_button_rendered_only_when_has_more() {
+        let mut page = one_post_page();
+        page.has_more = true;
+        let with = render_body(&PageSeed::SiteTimeline(page));
+        assert!(with.contains("<button>Load more</button>"), "{with}");
+
+        let without = render_body(&PageSeed::SiteTimeline(one_post_page()));
+        assert!(!without.contains("Load more"), "{without}");
+    }
+
+    #[test]
+    fn topbar_without_sub_omits_the_sub_div() {
+        let html = render_topbar("Title", None, "");
+        assert!(html.contains("<h1>Title</h1>"), "{html}");
+        assert!(!html.contains("j-sub"), "{html}");
+        assert!(
+            html.contains("<div class=\"j-topbar-right\"></div>"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn timeline_page_empty_states_differ_by_route() {
+        let empty = TimelinePage {
+            posts: vec![],
+            next_cursor_created_at: None,
+            next_cursor_post_id: None,
+            has_more: false,
+        };
+        let profile = render_body(&PageSeed::Profile {
+            username: "bob".into(),
+            page: empty.clone(),
+        });
+        assert!(profile.contains("<p>No posts yet.</p>"), "{profile}");
+        let tag = render_body(&PageSeed::SiteTag {
+            tag: "rust".into(),
+            page: empty,
+        });
+        assert!(tag.contains("<p>No posts with this tag yet.</p>"), "{tag}");
+    }
+
+    #[test]
+    fn permalink_body_has_no_topbar_and_wraps_article_in_page() {
+        let html = render_body(&PageSeed::Permalink(sample_post()));
+        assert!(
+            !html.contains("j-topbar"),
+            "permalink has no topbar: {html}"
+        );
+        assert!(
+            html.starts_with(
+                "<div class=\"j-scroll\"><div class=\"j-page\"><article class=\"j-post\">"
+            ),
+            "{html}"
+        );
     }
 
     #[test]
