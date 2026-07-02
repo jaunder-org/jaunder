@@ -91,8 +91,57 @@ Optional filters:
   (`e2e-{sqlite,postgres}-{chromium,firefox}-cold`) instead of the default
   warmup e2e checks.
 - `--browser chromium|firefox` restricts the run to one browser (default: both).
-- `--project NAME` focuses e2e analysis for one browser/project (for example
-  `--project firefox` when debugging timeout pressure).
+  Use this (not `--project`) to focus one browser, e.g. when debugging Firefox
+  timeout pressure: `scripts/run-e2e-trace-analysis --browser firefox`.
+
+(`--project NAME` is a flag of the underlying `scripts/analyze-otel-traces`, not
+of `run-e2e-trace-analysis`.)
+
+## #155 — post-CSR Firefox e2e tax (findings, 2026-07-02)
+
+Re-measurement of the #152 Firefox-vs-Chromium tax on the **leptos-CSR** build
+(post-#180; no SSR, no hydration reconciliation). Method: the four warm
+`e2e-{sqlite,postgres}-{chromium,firefox}` checks, per-test durations paired
+from `playwright-report-<backend>.json`, attribution from
+`scripts/analyze-otel-traces`.
+
+**The tax barely moved after the CSR cutover.** Median per-test Firefox/Chromium
+ratio:
+
+| backend  | median ratio | mean | tests ≥1.4× | suite total (ff / ch)   |
+| -------- | ------------ | ---- | ----------- | ----------------------- |
+| sqlite   | **1.83×**    | 1.80 | 61/66       | 585.8s / 336.8s (1.74×) |
+| postgres | **1.69×**    | 1.69 | 62/66       | 623.5s / 376.0s (1.66×) |
+
+Compare #152's SSR-era median **1.90×**. Removing hydration did **not** collapse
+the gap — strong evidence the cost was never hydration-specific but ongoing
+WASM/JS execution + rendering, which CSR still runs in Firefox.
+
+**The delta is uniform and client-side, not server-side.** Distribution peaks in
+the 1.7–2.2× bucket (45/66 sqlite) with only 1–4 tests <1.4× — uniform, not a
+few hot tests. Attribution (sqlite chromium vs firefox traces):
+
+- `e2e.test` avg: firefox 6813ms vs chromium 3802ms (1.79×), with **identical**
+  avg actions (13.78) and firefox making **fewer** requests (31 vs 37) — so it
+  is not doing more server work.
+- The delta lives in **`navigation.commit_to_hydration`** (post-CSR this phase
+  measures commit → CSR mount-ready, _not_ hydration): firefox 1123ms vs
+  chromium 559ms = **2.01×**. The `wait.hydration` action (the mount-ready wait)
+  is the single largest action bucket (655ms avg × 302 = 198s).
+- Server-side phases are browser-invariant and small: `navigation.request` ~88ms
+  avg; API fetches (`/api/current_user` 27ms, etc.) are browser-independent.
+
+**Verdict (AC2): the per-test Firefox tax is irreducible at the per-test level**
+— inherent SpiderMonkey-vs-V8 WASM-execution cost, uniform across the suite,
+with no hot test to optimize and no hydration left to remove. Therefore **worker
+parallelism is the only lever on Firefox e2e wall-clock** (see #182, folded into
+#155); per-test tuning is not pursued.
+
+**Per-browser floor (for the Task-6 timeout reconciliation):** at workers:1,
+firefox `e2e.test` avg 6.8s / max 21.2s, chromium avg 3.8s / max 11.9s; measured
+ratio ~1.7–1.83× vs the current `hydrationHeavyTimeoutScale = 2.2` — the scale
+is in the right ballpark (a modest trim, not removal), but the `hydrationHeavy*`
+naming is a misnomer post-CSR (the phase is CSR mount, not hydration).
 
 ## Timeout Budgeting
 
