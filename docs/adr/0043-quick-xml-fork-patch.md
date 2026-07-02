@@ -1,7 +1,8 @@
-# ADR-0043 — quick-xml advisory: fork + git-patch bridge (RUSTSEC-2026-0194/0195)
+# ADR-0043: quick-xml advisory: fork + git-patch bridge (RUSTSEC-2026-0194/0195)
 
-**Status:** accepted **Date:** 2026-07-02 **Issue:**
-[#193](https://github.com/jaunder-org/jaunder/issues/193)
+- Status: accepted
+- Date: 2026-07-02
+- Issue: [#193](https://github.com/jaunder-org/jaunder/issues/193)
 
 ## Context
 
