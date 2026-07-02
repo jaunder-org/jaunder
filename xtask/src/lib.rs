@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 mod adr;
+mod adr_readme;
 mod audit_wasm;
 mod coverage;
 pub mod git;
@@ -125,6 +126,12 @@ pub enum AdrCommand {
     /// branch-touched files. Run after rebasing onto the latest `origin/main`.
     #[command(after_help = "EXAMPLES:\n  cargo xtask adr renumber")]
     Renumber,
+    /// Regenerate the ADR index table in `docs/README.md` from `docs/adr/`: the
+    /// number, link target, and status cells. Hand-curated titles are preserved
+    /// (a new row seeds its title from the ADR heading). Idempotent; touches only
+    /// the marked table block. The `adr-readme-parity` gate fails on drift.
+    #[command(after_help = "EXAMPLES:\n  cargo xtask adr sync-readme")]
+    SyncReadme,
 }
 
 /// `coverage` subcommands.
@@ -167,6 +174,7 @@ impl Cli {
             Command::Coverage(CoverageCommand::RefreshCrap { .. }) => "coverage-refresh-crap",
             Command::E2e { .. } => "e2e",
             Command::Adr(AdrCommand::Renumber) => "adr-renumber",
+            Command::Adr(AdrCommand::SyncReadme) => "adr-sync-readme",
             Command::ElispIntegration => "elisp-integration",
         }
     }
@@ -260,6 +268,13 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("adr-renumber");
             result.push(adr::renumber());
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::Adr(AdrCommand::SyncReadme) => {
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("adr-sync-readme");
+            result.push(adr_readme::sync_readme());
             finalize(&mut result, start);
             Ok(result)
         }
@@ -479,6 +494,12 @@ mod cli_tests {
     fn adr_renumber_parses() {
         let cli = Cli::try_parse_from(["xtask", "adr", "renumber"]).unwrap();
         assert_eq!(cli.command_name(), "adr-renumber");
+    }
+
+    #[test]
+    fn adr_sync_readme_parses() {
+        let cli = Cli::try_parse_from(["xtask", "adr", "sync-readme"]).unwrap();
+        assert_eq!(cli.command_name(), "adr-sync-readme");
     }
 }
 

@@ -1,0 +1,372 @@
+//! Generate the ADR index table in `docs/README.md` as a projection of
+//! `docs/adr/`. Only the mechanical cells — number, link target, status — are
+//! generated; the title cell is hand-curated and preserved (seeded from the ADR
+//! heading when a row is first created). The table lives between HTML-comment
+//! markers so only that block is ever rewritten.
+//!
+//! This core is shared by `adr sync-readme` (the writer, here), `adr renumber`
+//! (which regenerates the table after a collision bump), and the read-only
+//! parity gate. No behavior lives in more than one place.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+use anyhow::{Context, Result};
+
+use crate::ids;
+use crate::result::StepResult;
+
+pub const README: &str = "docs/README.md";
+pub const ADR_DIR: &str = "docs/adr";
+pub const BEGIN: &str = "<!-- adr-table:begin -->";
+pub const END: &str = "<!-- adr-table:end -->";
+
+/// An ADR file projected to its table-relevant fields. `title` is the heading
+/// text with the `ADR-NNNN:` / `NNNN.` prefix stripped (used only to seed a new
+/// row); `status` is the single status token.
+pub struct AdrEntry {
+    pub num: u32,
+    pub filename: String,
+    pub title: String,
+    pub status: String,
+}
+
+/// A parsed committed table row. Cells are trimmed (padding-proof).
+pub struct TableRow {
+    pub num: u32,
+    pub target: String,
+    pub title: String,
+    pub status: String,
+}
+
+/// The title text of a `# ADR-NNNN: Title` (or legacy `# NNNN. Title`) heading,
+/// prefix stripped. Falls back to the whole heading when it matches neither form.
+fn heading_title(content: &str) -> String {
+    let line = content.lines().find(|l| l.starts_with("# ")).unwrap_or("");
+    let after = line.trim_start_matches("# ").trim();
+    if let Some((lhs, title)) = after.split_once(": ") {
+        if lhs.starts_with("ADR-") && lhs[4..].chars().all(|c| c.is_ascii_digit()) {
+            return title.trim().to_string();
+        }
+    }
+    if let Some((lhs, title)) = after.split_once(". ") {
+        if !lhs.is_empty() && lhs.chars().all(|c| c.is_ascii_digit()) {
+            return title.trim().to_string();
+        }
+    }
+    after.to_string()
+}
+
+/// The single status token from a `- Status: <token>` line (leniently, also a
+/// bare `Status:` line), or `""` when none is found.
+fn status_token(content: &str) -> String {
+    let line = content
+        .lines()
+        .map(str::trim_start)
+        .find(|l| l.starts_with("- Status:") || l.starts_with("Status:"))
+        .unwrap_or("");
+    line.trim_start_matches("- Status:")
+        .trim_start_matches("Status:")
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Parse one committed table row `| [NNNN](adr/slug.md) | Title | status |`.
+/// `None` for the header, the separator, and any non-row line.
+fn parse_row(line: &str) -> Option<TableRow> {
+    let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+    // A table row is bounded by pipes, so the split yields empty first/last cells
+    // around exactly three inner cells.
+    if cells.len() != 5 || !cells[0].is_empty() || !cells[4].is_empty() {
+        return None;
+    }
+    let (link, title, status) = (cells[1], cells[2], cells[3]);
+    let link = link.strip_prefix('[')?;
+    let close = link.find(']')?;
+    let num: u32 = link[..close].parse().ok()?;
+    let paren = link[close..].strip_prefix("](")?;
+    let target = paren.strip_suffix(')')?.to_string();
+    Some(TableRow {
+        num,
+        target,
+        title: title.to_string(),
+        status: status.to_string(),
+    })
+}
+
+/// Parse the ADR files under `repo/docs/adr`, sorted ascending by number.
+pub fn parse_adr_dir(repo: &Path) -> Result<Vec<AdrEntry>> {
+    let dir = repo.join(ADR_DIR);
+    let mut entries = Vec::new();
+    for ent in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+        let ent = ent?;
+        if !ent.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let filename = ent.file_name().to_string_lossy().into_owned();
+        if !filename.ends_with(".md") {
+            continue;
+        }
+        let Some(num) = ids::leading_number(&filename) else {
+            continue;
+        };
+        let content = std::fs::read_to_string(ent.path())
+            .with_context(|| format!("reading {}", ent.path().display()))?;
+        entries.push(AdrEntry {
+            num,
+            filename,
+            title: heading_title(&content),
+            status: status_token(&content),
+        });
+    }
+    entries.sort_by_key(|e| e.num);
+    Ok(entries)
+}
+
+/// Parse the committed table rows out of the block text between the markers.
+pub fn parse_table_block(block: &str) -> Vec<TableRow> {
+    block.lines().filter_map(parse_row).collect()
+}
+
+/// The generated table block: header + separator + one row per ADR entry
+/// (ascending), reusing an existing row's title when present, else seeding the
+/// title from the ADR heading. Single-space padded — prettier owns alignment.
+pub fn render_block(entries: &[AdrEntry], existing: &[TableRow]) -> String {
+    let title_by_num: BTreeMap<u32, &str> =
+        existing.iter().map(|r| (r.num, r.title.as_str())).collect();
+    let mut sorted: Vec<&AdrEntry> = entries.iter().collect();
+    sorted.sort_by_key(|e| e.num);
+
+    let mut out = String::from("| #   | Title | Status |\n| --- | ----- | ------ |\n");
+    for e in sorted {
+        let title = title_by_num
+            .get(&e.num)
+            .copied()
+            .unwrap_or(e.title.as_str());
+        out.push_str(&format!(
+            "| [{:04}](adr/{}) | {} | {} |\n",
+            e.num, e.filename, title, e.status
+        ));
+    }
+    out.trim_end().to_string()
+}
+
+/// Replace the text strictly between the markers with `new_block`. Errors when a
+/// marker is missing or out of order.
+pub fn splice_block(readme: &str, new_block: &str) -> Result<String> {
+    let begin = readme
+        .find(BEGIN)
+        .with_context(|| format!("{README} is missing the `{BEGIN}` marker"))?;
+    let end = readme
+        .find(END)
+        .with_context(|| format!("{README} is missing the `{END}` marker"))?;
+    anyhow::ensure!(begin < end, "{README} adr-table markers are out of order");
+    let after_begin = begin + BEGIN.len();
+    Ok(format!(
+        "{}\n\n{}\n\n{}",
+        &readme[..after_begin],
+        new_block,
+        &readme[end..]
+    ))
+}
+
+/// The block text between the markers (for reading existing titles).
+fn extract_block(readme: &str) -> Result<String> {
+    let begin = readme
+        .find(BEGIN)
+        .with_context(|| format!("{README} is missing the `{BEGIN}` marker"))?
+        + BEGIN.len();
+    let end = readme
+        .find(END)
+        .with_context(|| format!("{README} is missing the `{END}` marker"))?;
+    anyhow::ensure!(begin <= end, "{README} adr-table markers are out of order");
+    Ok(readme[begin..end].to_string())
+}
+
+/// A row's mechanical + preserved-title tuple, for a semantic idempotence check.
+type Cells = (u32, String, String, String);
+
+fn desired_cells(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<Cells> {
+    let title_by_num: BTreeMap<u32, &str> =
+        existing.iter().map(|r| (r.num, r.title.as_str())).collect();
+    let mut sorted: Vec<&AdrEntry> = entries.iter().collect();
+    sorted.sort_by_key(|e| e.num);
+    sorted
+        .into_iter()
+        .map(|e| {
+            let title = title_by_num
+                .get(&e.num)
+                .copied()
+                .unwrap_or(e.title.as_str())
+                .to_string();
+            (
+                e.num,
+                format!("adr/{}", e.filename),
+                title,
+                e.status.clone(),
+            )
+        })
+        .collect()
+}
+
+fn current_cells(existing: &[TableRow]) -> Vec<Cells> {
+    existing
+        .iter()
+        .map(|r| (r.num, r.target.clone(), r.title.clone(), r.status.clone()))
+        .collect()
+}
+
+/// Regenerate the ADR table in `repo/docs/README.md` from `repo/docs/adr`.
+/// A no-op (no write) when the table already matches semantically, so it is
+/// idempotent regardless of prettier's column padding. Returns a human summary.
+pub fn sync_readme_at(repo: &Path) -> Result<String> {
+    let readme_path = repo.join(README);
+    let readme = std::fs::read_to_string(&readme_path)
+        .with_context(|| format!("reading {}", readme_path.display()))?;
+    let entries = parse_adr_dir(repo)?;
+    let existing = parse_table_block(&extract_block(&readme)?);
+
+    let desired = desired_cells(&entries, &existing);
+    if desired == current_cells(&existing) {
+        return Ok(format!("{} rows, already in sync", entries.len()));
+    }
+
+    let updated = splice_block(&readme, &render_block(&entries, &existing))?;
+    std::fs::write(&readme_path, &updated)
+        .with_context(|| format!("writing {}", readme_path.display()))?;
+
+    let existing_nums: BTreeSet<u32> = existing.iter().map(|r| r.num).collect();
+    let entry_nums: BTreeSet<u32> = entries.iter().map(|e| e.num).collect();
+    let added = entry_nums.difference(&existing_nums).count();
+    let removed = existing_nums.difference(&entry_nums).count();
+    Ok(format!(
+        "{} rows ({added} added, {removed} removed)",
+        entries.len()
+    ))
+}
+
+/// Entry point for `cargo xtask adr sync-readme`.
+pub fn sync_readme() -> StepResult {
+    match sync_readme_at(Path::new(".")) {
+        Ok(summary) => StepResult::ok("adr-sync-readme").detail(summary),
+        Err(e) => StepResult::fail("adr-sync-readme").detail(format!("{e:#}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(num: u32, file: &str, title: &str, status: &str) -> AdrEntry {
+        AdrEntry {
+            num,
+            filename: file.into(),
+            title: title.into(),
+            status: status.into(),
+        }
+    }
+
+    #[test]
+    fn heading_title_strips_canonical_and_legacy_prefixes() {
+        assert_eq!(
+            heading_title("# ADR-0021: SQLite discipline: avoid deferred txns\n"),
+            "SQLite discipline: avoid deferred txns"
+        );
+        assert_eq!(
+            heading_title("# 0030. Coverage re-anchor by text identity\n"),
+            "Coverage re-anchor by text identity"
+        );
+    }
+
+    #[test]
+    fn status_token_reads_list_and_bare_forms() {
+        assert_eq!(
+            status_token("# T\n\n- Status: accepted\n- Note: x\n"),
+            "accepted"
+        );
+        assert_eq!(status_token("# T\n\nStatus: superseded\n"), "superseded");
+        assert_eq!(status_token("# T\n\nno status here\n"), "");
+    }
+
+    #[test]
+    fn parse_row_trims_padded_cells_and_skips_non_rows() {
+        let r = parse_row("| [0007](adr/0007-auth-mechanisms.md)   | Dual-Path Auth | accepted |")
+            .expect("a row");
+        assert_eq!(r.num, 7);
+        assert_eq!(r.target, "adr/0007-auth-mechanisms.md");
+        assert_eq!(r.title, "Dual-Path Auth");
+        assert_eq!(r.status, "accepted");
+        assert!(parse_row("| # | Title | Status |").is_none());
+        assert!(parse_row("| --- | --- | --- |").is_none());
+        assert!(parse_row("plain text").is_none());
+    }
+
+    #[test]
+    fn render_block_preserves_existing_title_and_seeds_new_from_heading() {
+        let entries = vec![
+            entry(1, "0001-a.md", "Heading One", "accepted"),
+            entry(2, "0002-b.md", "Heading Two", "accepted"),
+        ];
+        let existing = vec![TableRow {
+            num: 1,
+            target: "adr/0001-a.md".into(),
+            title: "Curated One".into(),
+            status: "accepted".into(),
+        }];
+        let block = render_block(&entries, &existing);
+        // Existing row keeps its curated title; the new row seeds from the heading.
+        assert!(block.contains("| [0001](adr/0001-a.md) | Curated One | accepted |"));
+        assert!(block.contains("| [0002](adr/0002-b.md) | Heading Two | accepted |"));
+    }
+
+    #[test]
+    fn render_block_drops_orphans_and_sorts_ascending() {
+        let entries = vec![
+            entry(3, "0003-c.md", "Three", "accepted"),
+            entry(1, "0001-a.md", "One", "accepted"),
+        ];
+        // An existing row for a now-deleted ADR 2 must not survive.
+        let existing = vec![TableRow {
+            num: 2,
+            target: "adr/0002-b.md".into(),
+            title: "Two".into(),
+            status: "accepted".into(),
+        }];
+        let block = render_block(&entries, &existing);
+        let one = block.find("0001-a.md").unwrap();
+        let three = block.find("0003-c.md").unwrap();
+        assert!(one < three, "ascending order");
+        assert!(!block.contains("0002-b.md"), "orphan dropped");
+    }
+
+    #[test]
+    fn splice_block_replaces_only_between_markers() {
+        let readme = format!("intro\n\n{BEGIN}\n\nOLD TABLE\n\n{END}\n\noutro\n");
+        let out = splice_block(&readme, "NEW TABLE").unwrap();
+        assert!(out.contains("intro\n"));
+        assert!(out.contains("outro\n"));
+        assert!(out.contains(&format!("{BEGIN}\n\nNEW TABLE\n\n{END}")));
+        assert!(!out.contains("OLD TABLE"));
+    }
+
+    #[test]
+    fn splice_block_errors_on_missing_marker() {
+        let err = splice_block("no markers here", "x").unwrap_err();
+        assert!(format!("{err:#}").contains("marker"));
+    }
+
+    #[test]
+    fn desired_matches_current_when_in_sync() {
+        let entries = vec![entry(1, "0001-a.md", "Heading", "accepted")];
+        let existing = vec![TableRow {
+            num: 1,
+            target: "adr/0001-a.md".into(),
+            title: "Curated".into(),
+            status: "accepted".into(),
+        }];
+        // The preserved title is the curated one, so desired == current: a no-op.
+        assert_eq!(desired_cells(&entries, &existing), current_cells(&existing));
+    }
+}
