@@ -58,3 +58,31 @@ untouched and removed later at #180.
   the shared `fetch_*` seam.
 - Amends ADR-0002 (Frontend Framework): the web surface is now a non-reactive public
   projector + a leptos-CSR client, not isomorphic SSR.
+
+## Addendum (#179 flash-free shell + #180 cutover, 2026-07-01)
+
+The projector/CSR path landed behind the `csr` feature alongside the SSR/hydrate
+default; #180 made it the **only** path.
+
+- **Flash-free extended from the post to the whole anonymous shell.** The initial
+  increment made the projector's post markup coincide with the reactive `PostDisplay`;
+  it was completed so the projector serves the **entire** anonymous `j-root` layout
+  (sidebar + main region + per-route topbar/hero/wrappers/posts) that the reactive
+  `App` produces for an anonymous viewer, so removing `#app` and mounting the CSR
+  client on boot causes no reflow. Technique: "share the pure fn, not the component" —
+  the reactive `PostDisplay`/`Sidebar` render their anonymous DOM via `inner_html` of
+  the **same** pure `render` fns the projector uses, so coincidence holds by
+  construction. **Only anonymous paths get this**; authed/author UI (own-post action
+  columns, authed sidebar footer/nav) stays ordinary client-reactive (the projector
+  never renders it) — full authed-flash handling is #181. `render_head` gained the
+  feed + RSD autodiscovery `<link>`s the reactive components used to inject via SSR.
+- **#180 removed the reactive SSR render (closes #173).** `create_router`'s projector
+  arm is now unconditional; the `leptos_axum` `leptos_routes_with_context` /
+  `generate_route_list` / `file_and_error_handler(shell)` arm, `web::shell()`, the
+  `hydrate` crate + `web/hydrate` feature, and `server`'s `csr` feature are gone.
+  `flake.nix` builds only the CSR client (`site`), and the standard
+  `{backend}×{browser}` e2e matrix now exercises the CSR build (the manual
+  `csr-e2e-postgres-chromium` check is retired). KEPT: `handle_server_fns_with_context`
+  (the `/api` data API), `leptos/ssr` (server-fn impls), `server_boundary`/`server_resource`.
+- The `web` feature still named `ssr` (it now means "the server-side data-API build,
+  no page render"); a cosmetic rename to `server` is a deferred follow-up.
