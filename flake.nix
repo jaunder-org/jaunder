@@ -509,6 +509,10 @@
         nixPlaywrightConfig = pkgs.writeText "playwright.nix.config.js" ''
           const { defineConfig, devices } = require('@playwright/test');
           const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
+          // Worker count is env-driven (default 1) so the #155 probes can raise it
+          // without a config fork. fullyParallel follows: >1 worker only helps if
+          // spec files are allowed to interleave.
+          const workers = parseInt(process.env.JAUNDER_E2E_WORKERS || '1', 10);
           module.exports = defineConfig({
             testDir: './tests',
             timeout: 30 * 1000,
@@ -529,10 +533,13 @@
             },
             // Artifact root for traces/screenshots; copied out by the testScript.
             outputDir: '/tmp/e2e/test-results',
-            // Run spec files sequentially to avoid SQLite write contention.
-            // Each browser project is already run in isolation (separate seed_db()
-            // calls), so one worker is sufficient and prevents locking errors.
-            workers: 1,
+            // Default: one worker (spec files run sequentially). Historically
+            // justified by SQLite write contention, though the pool runs WAL + a
+            // 5s busy_timeout and BEGIN IMMEDIATE (ADR-0039), so contention is a
+            // hypothesis the #155 probes test rather than a proven blocker.
+            // JAUNDER_E2E_WORKERS overrides this for probing / a future flip.
+            workers: workers,
+            fullyParallel: workers > 1,
             projects: [
               {
                 name: 'chromium',
@@ -771,6 +778,8 @@
             traceId,
             traceParent,
             warmupEnv ? "",
+            vmMemory ? 2048,
+            vmCores ? null,
           }:
           pkgs.testers.nixosTest {
             name = checkName;
@@ -782,11 +791,16 @@
             globalTimeout = 1200;
 
             nodes.machine =
-              { pkgs, ... }:
+              { pkgs, lib, ... }:
               {
                 imports = [ self.nixosModules.jaunder ];
 
-                virtualisation.memorySize = 2048;
+                virtualisation.memorySize = vmMemory;
+                # Default (null) leaves the nixosTest core count alone; the #155
+                # worker probes set >1 so concurrent workers get real parallelism
+                # (a 1-vCPU VM would timeshare them, under-stressing SQLite
+                # write contention — the very thing the probe measures).
+                virtualisation.cores = lib.mkIf (vmCores != null) vmCores;
                 environment.systemPackages = [
                   pkgs.sqlite
                   pkgs.opentelemetry-collector-contrib
@@ -1028,6 +1042,8 @@
             traceDigit,
             nameSuffix ? "",
             warmupEnv ? "",
+            vmMemory ? 2048,
+            vmCores ? null,
           }:
           let
             mk = if backend == "sqlite" then mkE2eSqliteCheck else mkE2ePostgresCheck;
@@ -1037,7 +1053,14 @@
           in
           mk {
             checkName = "jaunder-e2e-${backend}-${browser}${nameSuffix}";
-            inherit browser traceId traceParent warmupEnv;
+            inherit
+              browser
+              traceId
+              traceParent
+              warmupEnv
+              vmMemory
+              vmCores
+              ;
           };
 
         # attr name -> warm check, e.g. { "e2e-sqlite-chromium" = <drv>; ... }
@@ -1059,6 +1082,43 @@
             value = mkE2eCombo (c // { nameSuffix = "-cold"; });
           }) e2eCombos
         );
+
+        # TEMP (#155 Task 3 worker-safety probes — removed in Task 5). Both run at
+        # JAUNDER_E2E_WORKERS=4 with WARMUP=1 (matching the real gate's request
+        # rate) on a 4-core / 6 GB VM (the #177 spike's proven size for 4 workers).
+        # Attr keys are `probe-*` (not `e2e-*`) so they stay OUT of the `e2e-checks`
+        # gate aggregate; the derivation name is still `jaunder-e2e-*-w4`, so the
+        # cachix pushFilter excludes them (the VM always re-runs).
+        #  - probe-sqlite-chromium-w4: contention worst case — the fastest browser
+        #    maximises SQLite write-overlap. Clean here ⟹ firefox safe a fortiori.
+        #  - probe-postgres-firefox-w4: OOM worst case — memory-heavy firefox workers.
+        # Round-1 probes established: at 4 workers / 4 cores, postgres+firefox is
+        # 66/66 clean (no OOM) and sqlite+chromium hit ZERO SQLITE_BUSY — so neither
+        # OOM nor SQLite contention is the blocker. The only failures were 2 heavy
+        # chromium timeline tests timing out under CPU oversubscription (4 workers +
+        # server on 4 cores; firefox survives only because its 2.2x timeout scale
+        # absorbs the slowdown). Round-2 pins the fix:
+        #  - probe-sqlite-chromium-w4c6: 4 workers + 6 cores — does CPU headroom
+        #    clear the chromium timeouts (keeping the best wall-clock)?
+        #  - probe-sqlite-chromium-w2:   2 workers / 4 cores — conservative fallback.
+        # TEMP (#155 — removed in Task 5). Iteration target for the worker-contention
+        # timeout fix: chromium at workers=4 on a CI-representative 4-core VM. At this
+        # config chromium fails 2 heavy timeline tests (posts.spec.ts:349, :305) on
+        # timeout under CPU oversubscription; the fix (worker-aware per-test budgets)
+        # is developed against this until it is 66/66 green, then the real combos flip
+        # to workers=4 (Task 5) and this probe is removed. (Contention/OOM already
+        # refuted — see docs/observability.md #155 AC3.)
+        e2eProbeChecks = {
+          "probe-sqlite-chromium-w4" = mkE2eCombo {
+            backend = "sqlite";
+            browser = "chromium";
+            traceDigit = "1";
+            nameSuffix = "-w4";
+            vmMemory = 6144;
+            vmCores = 4;
+            warmupEnv = " JAUNDER_E2E_WARMUP=1 JAUNDER_E2E_WORKERS=4";
+          };
+        };
 
       in
       {
@@ -1104,6 +1164,7 @@
         checks =
           pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
             e2eWarmChecks
+            // e2eProbeChecks
             // {
               # The single e2e gate `cargo xtask validate` builds. `e2e-checks`
               # aggregates every `checks.e2e-*` combo (now 4); they are independent

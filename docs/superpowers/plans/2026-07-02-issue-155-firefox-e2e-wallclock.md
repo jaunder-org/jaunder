@@ -161,7 +161,8 @@ becomes an added iterate task), or (b) the residual is uniform inherent
 SpiderMonkey-vs-V8 WASM cost → documented irreducible. State the per-browser
 per-test floor (p50/p90) for Task 6.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.** _Committed in `c9c0bc9` (bundled with spec+plan
+      scaffolding)._
 
 ```bash
 git add docs/observability.md
@@ -187,7 +188,7 @@ Ends with an explicit **GO/NO-GO** for the flip.
 - Consumes: the CSR build (default derivation).
 - Produces: the **max safe worker count** `N` (or NO-GO), consumed by Task 4/5.
 
-- [ ] **Step 1: Parametrize the worker count in `nixPlaywrightConfig` (default 1
+- [x] **Step 1: Parametrize the worker count in `nixPlaywrightConfig` (default 1
       — no behavior change yet).**
 
 In `flake.nix` `nixPlaywrightConfig`, replace the hard-coded `workers: 1,` with
@@ -207,15 +208,17 @@ and in the `defineConfig({...})` body:
 Leave the default at 1 so every existing check is byte-for-byte equivalent
 (`JAUNDER_E2E_WORKERS` unset → `workers=1`, `fullyParallel:false`).
 
-- [ ] **Step 2: Verify the default is unchanged.** (Heavy — background.)
+- [x] **Step 2: Verify the default is unchanged.** (Heavy — background.)
+      _`e2e-sqlite-chromium` 66/66 green (6.6m) — parametrization inert at
+      default._
 
 Run: `cargo xtask e2e sqlite chromium` Expected: green, 66/66, identical to
 before (proves the parametrization is inert at the default).
 
-- [ ] **Step 3: Add temporary probe combos** using the existing
-      `warmupEnv`/`nameSuffix` passthrough. In the `e2eWarmChecks` construction,
-      add probe variants (contention worst-case = SQLite+Chromium; OOM
-      worst-case = Firefox), e.g.:
+- [x] **Step 3: Add temporary probe combos** using the existing
+      `warmupEnv`/`nameSuffix` passthrough. _Two refinements vs the sketch
+      below: (a) attr keys are
+      `probe-_`not`e2e-_`, so they stay OUT of the `e2e-checks`    gate aggregate (derivation name still`jaunder-e2e-_-w4`→ excluded from     cachix push); (b) had to add`vmMemory`/`vmCores`params to`mkE2eSqliteCheck`    (it hard-coded 2048MB, no cores) and thread them through`mkE2eCombo`, so the     contention probe runs on a 4-core/6GB VM — on 1 vCPU the workers would     timeshare and under-stress SQLite locking. Both probes: `vmMemory=6144`,     `vmCores=4`.\*
 
 ```nix
         # TEMP (#155 Task 3 probes — removed in Task 5):
@@ -239,8 +242,10 @@ into the `checks` attrset so `nix build` can reach them. (If Firefox needs the
 bigger VM to avoid OOM, bump `mkE2ePostgresCheck`'s
 `virtualisation.memorySize`/`cores` for the probe — see Step 5.)
 
-- [ ] **Step 4: Run the contention probe (SQLite + Chromium, workers=4).**
-      (Background.)
+- [x] **Step 4: Run the contention probe (SQLite + Chromium, workers=4).**
+      (Background.) _Refuted — ZERO `SQLITE_BUSY`/lock errors at 4 workers.
+      WAL + busy_timeout absorbs concurrent writes. The failures were timeouts,
+      not locks._
 
 Run: `nix build .#checks.<system>.e2e-sqlite-chromium-w4 -L --rebuild` Expected:
 read the build log for `SQLITE_BUSY` / `database is locked` / test failures.
@@ -248,8 +253,10 @@ WAL + 5s `busy_timeout` (`storage/src/sqlite/mod.rs`) should serialize writes
 without error. Record pass/fail. (Also spot-check workers=2 if 4 is
 inconclusive.)
 
-- [ ] **Step 5: Run the OOM probe (Firefox, workers=4), sizing the VM.**
-      (Background.)
+- [x] **Step 5: Run the OOM probe (Firefox, workers=4), sizing the VM.**
+      (Background.) _Refuted — postgres+firefox 66/66 clean at 4 workers on
+      6GB/4-core (3.5m). No OOM. Firefox tolerates workers=4 (its 2.2× timeout
+      scale absorbs the CPU contention)._
 
 Run: `nix build .#checks.<system>.e2e-postgres-firefox-w4 -L --rebuild`
 Expected: watch for OOM-kills / VM death vs a clean 66/66. Milestone-8 note: 4
@@ -257,7 +264,12 @@ Firefox workers on a 4 GB VM OOM'd → if it OOMs, raise the probe VM to ≥6 GB
 ≥4 vCPU and rerun; record the smallest VM size that runs N Firefox workers
 cleanly.
 
-- [ ] **Step 6: Record the AC3 answer + GO/NO-GO in `docs/observability.md`.**
+- [x] **Step 6: Record the AC3 answer + GO/NO-GO in `docs/observability.md`.**
+      _GO — uniform `workers=4` (user's choice). Contention + OOM refuted;
+      blocker is heavy-test timeout headroom under CPU oversubscription (Part C
+      prerequisite). **REORDER:** the timeout headroom (Task 6) now precedes the
+      flip (Task 5) — the workers=4 flip isn't green until the heavy chromium
+      tests get worker-aware budgets._
 
 Record: contention outcome (SQLite+Chromium at workers 2/4), OOM outcome +
 required VM size (Firefox at workers 2/4), and the **chosen max safe `N`**.

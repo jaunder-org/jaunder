@@ -143,6 +143,51 @@ ratio ~1.7–1.83× vs the current `hydrationHeavyTimeoutScale = 2.2` — the sc
 is in the right ballpark (a modest trim, not removal), but the `hydrationHeavy*`
 naming is a misnomer post-CSR (the phase is CSR mount, not hydration).
 
+## #155 — worker-parallelism safety probes (AC3, 2026-07-02)
+
+Probed `JAUNDER_E2E_WORKERS>1` on CSR (env-driven worker count threaded through
+`nixPlaywrightConfig`), each failure mode at its worst case. **CI
+`ubuntu-latest` is ~4 vCPU, so the CI-representative probes cap
+`virtualisation.cores` at 4** (a 6-core guest oversubscribes a 4-core runner).
+Results (sqlite+chromium unless noted):
+
+| config                         | cores | result                         | wall-clock |
+| ------------------------------ | ----- | ------------------------------ | ---------- |
+| workers=1 (today)              | 1     | 66/66                          | 6.6m       |
+| workers=2                      | 4     | **66/66 green**                | 2.0m       |
+| workers=3                      | 4     | 1 failed (`posts.spec.ts:349`) | 1.7m       |
+| workers=4                      | 4     | 2 failed (`:349`, `:305`)      | 2.0m       |
+| workers=4                      | 6     | 1 failed (`:349`)              | 1.4m       |
+| workers=4 postgres+**firefox** | 4     | **66/66 green**                | 3.5m       |
+
+**Both fears refuted:**
+
+- **SQLite write contention — refuted.** 4 concurrent workers hammering SQLite
+  writes produced **zero** `SQLITE_BUSY` / `database is locked` (WAL + 5s
+  `busy_timeout` + `BEGIN IMMEDIATE` absorb it). The `workers:1` comment's
+  premise was never tested and is wrong.
+- **Firefox OOM — refuted.** Firefox 66/66 clean at 4 workers on a 6 GB VM (the
+  4 GB OOM in #61's notes was a smaller VM).
+
+**The real limit is CPU oversubscription, not the DB.** Above workers=2, the
+same one or two heavy timeline tests (`posts.spec.ts:349` "local timeline for
+unauthenticated users" — a known CSR heavy-test flake — and `:305` "per-user
+timeline pagination") exceed their per-test timeout: they create many posts then
+render a paginated timeline, and under N-worker CPU contention the client WASM
+render slows past the budget. Firefox _passes_ at workers=4 only because its
+2.2× timeout scale already absorbs the slowdown; chromium at 1.0× has no
+headroom.
+
+**Decision (AC3): GO, uniform `workers=4`.** SQLite contention and OOM are both
+non-issues; the flip is safe. The blocker is a timeout-headroom problem, fixed
+by making the per-test budget worker-contention-aware for all browsers (Part C)
+so the heavy chromium tests survive 4-worker load — chromium is ~1.8× _faster_
+per test than firefox, so firefox's proven 2.2× headroom is more than enough for
+chromium once applied. (An asymmetric firefox=4/chromium=2 config was considered
+— it reaches the same ~3.5m gate with no test changes since the matrix isolates
+browsers per VM — but uniform-4 was chosen for config simplicity.) Expected gate
+≈ 3.5m (firefox-bound), down from ~10m+ (~65%).
+
 ## Timeout Budgeting
 
 E2E tests that are hydration-heavy should use
