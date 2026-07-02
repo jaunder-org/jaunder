@@ -71,6 +71,7 @@ convention). All are currently `accepted`.
 | [0041](adr/0041-public-projector-and-csr-client.md)                | Public projector and CSR client (SSR the data, not the components)                         | accepted |
 | [0042](adr/0042-emacs-org-atom-mapping-struct-seam.md)             | Emacs org→atom mapping: struct seam, `dom-print` serialization, Emacs 29.1 floor           | accepted |
 | [0043](adr/0043-quick-xml-fork-patch.md)                           | quick-xml advisory: fork + git-patch bridge (RUSTSEC-2026-0194/0195)                       | accepted |
+| [0044](adr/0044-authenticated-owner-flash-free-enhancement.md)     | Authenticated-owner flash-free enhancement (pre-paint marker + additive decoration)        | accepted |
 
 <!-- adr-table:end -->
 

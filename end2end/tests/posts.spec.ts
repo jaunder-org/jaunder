@@ -407,7 +407,7 @@ test("home page shows local timeline for unauthenticated users", async ({
   await secondContext.close();
 });
 
-test("home page shows authenticated home feed with pagination", async ({
+test("cockpit /app shows the authenticated home feed with pagination", async ({
   page,
   browser,
 }, testInfo) => {
@@ -434,7 +434,7 @@ test("home page shows authenticated home feed with pagination", async ({
     }
   });
 
-  await goto(page, "/", { timeout: firstNavigationTimeoutMs });
+  await goto(page, "/app", { timeout: firstNavigationTimeoutMs });
 
   await expect(page.locator(".j-topbar h1")).toHaveText("Home");
   await expect(page.locator("article.j-post")).toHaveCount(TIMELINE_PAGE_SIZE);
@@ -514,8 +514,8 @@ test("inline composer: published post appears in timeline without page reload", 
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
 
-  // Home page must already show the feed with the composer.
-  await goto(page, "/");
+  // The /app cockpit must already show the feed with the composer.
+  await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
   const initialCount = await page.locator("article.j-post").count();
@@ -538,7 +538,7 @@ test("inline composer: plain body publishes titleless note", async ({
     page,
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
-  await goto(page, "/");
+  await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
   await page.fill('.j-composer textarea[name="body"]', "Titleless inline note");
@@ -558,7 +558,7 @@ test("inline composer: markdown heading becomes article title", async ({
     page,
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
-  await goto(page, "/");
+  await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
   await page.fill(
@@ -583,7 +583,7 @@ test("inline composer: publish flash is a link to the post permalink", async ({
     page,
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
-  await goto(page, "/");
+  await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
   await page.fill('.j-composer textarea[name="body"]', "Flash link test");
@@ -605,7 +605,7 @@ test("inline composer: draft flash is a link to the draft preview URL", async ({
     page,
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
-  await goto(page, "/");
+  await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
   await page.fill('.j-composer textarea[name="body"]', "Draft flash link test");
@@ -626,7 +626,7 @@ test("inline composer: flash clears when user starts typing", async ({
     page,
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
-  await goto(page, "/");
+  await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
   await page.fill('.j-composer textarea[name="body"]', "Flash clear test");
@@ -646,7 +646,7 @@ test("inline composer: format toggle switches active button", async ({
     page,
     hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
   );
-  await goto(page, "/");
+  await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
   // Markdown is active by default.

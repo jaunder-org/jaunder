@@ -1,4 +1,7 @@
 use crate::audiences::{list_my_audiences, AudienceSummary};
+// `current_user` is the sidebar's background reconcile (#181), used only in the
+// wasm-only correction Effect — gate the import so the host build sees no unused.
+#[cfg(target_arch = "wasm32")]
 use crate::auth::current_user;
 use crate::backup::{backup_warning_visible, current_user_is_operator};
 use crate::pages::upload::MediaPanel;
@@ -299,8 +302,22 @@ pub fn PostDisplay(
     tag_context: TagContext,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
-    let is_author = post.is_author;
     let time_label = crate::render::format_post_time(&post.published_at);
+    // Built once and shared by both arms so the authored content column is the SAME
+    // pure, viewer-independent render the projector paints (#181, ADR-0044 D4) — no
+    // hand-rebuilt markup and no is_author-driven content change that could diverge
+    // and reintroduce a flash. The action column is layered on additively.
+    let view = crate::render::PostView {
+        username: &post.username,
+        title: post.title.as_deref(),
+        banner: banner.as_deref(),
+        summary: post.summary.as_deref(),
+        rendered_html: &post.rendered_html,
+        time: &time_label,
+        permalink: &post.permalink,
+        tags: &post.tags,
+        tag_ctx: &tag_context,
+    };
     match children {
         // Anonymous / no-action layout: the WHOLE article inner is produced by the
         // pure `render` layer — the SAME code the public projector server-renders
@@ -309,77 +326,45 @@ pub fn PostDisplay(
         // not the component" (ADR-0041 §4). The projector only ever renders this
         // anonymous view, so this is the only path that must coincide.
         None => {
-            let view = crate::render::PostView {
-                username: &post.username,
-                title: post.title.as_deref(),
-                banner: banner.as_deref(),
-                summary: post.summary.as_deref(),
-                rendered_html: &post.rendered_html,
-                time: &time_label,
-                permalink: &post.permalink,
-                tags: &post.tags,
-                tag_ctx: &tag_context,
-                is_author,
-            };
             let inner = crate::render::render_post_inner(&view);
             view! { <article class="j-post" inner_html=inner></article> }.into_any()
         }
-        // Authored layout (own posts, with the action column). The projector never
-        // renders this — it's anonymous-only — so it has no coincidence requirement
-        // and stays ordinary client-reactive markup (proven; kept from before the
-        // render unification, which regressed the authenticated home-feed re-render).
+        // Authored layout (own posts, with the action column). The content column is
+        // the SAME `render_post_content` the anonymous arm wraps, injected via
+        // `inner_html` so it coincides with the projector's paint (#181); only the
+        // reactive action column (`children`, carrying edit/delete handlers that
+        // `inner_html` can't) overlays it as a sibling. This replaces the previously
+        // hand-rebuilt reactive header/title/body markup, which had diverged from
+        // the projector — the divergence that kept the authored path from coinciding.
         Some(children) => {
-            let post_tags = post.tags.clone();
+            let inner_content = crate::render::render_post_content(&view);
             view! {
                 <article class="j-post">
                     <Avatar name=post.username.clone() size=38 />
                     <div style="min-width:0;display:flex;gap:8px;align-items:flex-start">
-                        <div style="flex:1;min-width:0">
-                            <header class="j-post-head">
-                                <span class="j-post-name">{post.username.clone()}</span>
-                                <span class="j-post-handle">"@"{post.username.clone()}</span>
-                                {(!is_author)
-                                    .then(|| {
-                                        view! {
-                                            <>
-                                                <span class="j-spacer"></span>
-                                                <span class="j-post-time">{time_label}</span>
-                                            </>
-                                        }
-                                    })}
-                            </header>
-                            {post
-                                .title
-                                .clone()
-                                .map(|title| {
-                                    if post.permalink.is_empty() {
-                                        view! { <div class="j-post-title">{title}</div> }.into_any()
-                                    } else {
-                                        view! {
-                                            <div class="j-post-title">
-                                                <a href=post.permalink.clone()>{title}</a>
-                                            </div>
-                                        }
-                                            .into_any()
-                                    }
-                                })}
-                            {banner.map(|b| view! { <p class="draft-banner">{b}</p> })}
-                            {post
-                                .summary
-                                .clone()
-                                .map(|s| view! { <p class="j-post-summary">{s}</p> })}
-                            <div class="j-post-body" inner_html=post.rendered_html.clone()></div>
-                            <footer class="j-post-foot">
-                                <TagList tags=post_tags context=tag_context />
-                                <span class="j-spacer"></span>
-                            </footer>
-                        </div>
+                        <div style="flex:1;min-width:0" inner_html=inner_content></div>
                         {children()}
                     </div>
                 </article>
             }
             .into_any()
         }
+    }
+}
+
+/// `true` when the auth marker's username equals `author` (#181, ADR-0044): the
+/// client-side signal that the viewer owns this post, so its action column shows
+/// even though the anonymous seed data has `is_author = false`. `false` on the
+/// host build (no marker) — the affordance is wasm-only chrome.
+fn marker_matches(author: &str) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::auth::marker::read().as_deref() == Some(author)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = author;
+        false
     }
 }
 
@@ -394,10 +379,13 @@ pub fn PostCard(
     #[prop(optional)] on_mutate: Option<Callback<()>>,
     #[prop(optional)] on_unpublish: Option<Callback<()>>,
 ) -> impl IntoView {
-    let is_author = post.is_author;
+    // The seed/anonymous data has `is_author = false` (the projector paints
+    // anonymous-only), so on the Local timeline the owner's own posts would show no
+    // action column. Decide it client-side from the auth marker (#181, ADR-0044 D4)
+    // so the affordance appears synchronously at mount. The server still authorizes
+    // the actual edit/delete by session — the marker only gates visibility.
+    let is_author = post.is_author || marker_matches(&post.username);
     let post_id = post.post_id;
-    let time_label = crate::render::format_post_time(&post.published_at);
-    let permalink = post.permalink.clone();
     let edit_url = format!("/posts/{post_id}/edit");
     let delete_action = ServerAction::<DeletePost>::new();
     let unpublish_action = ServerAction::<UnpublishPost>::new();
@@ -420,12 +408,12 @@ pub fn PostCard(
         }
     });
 
+    // Additive action column (#181, ADR-0044 D4): edit/unpublish/delete only. The
+    // timestamp deliberately stays in the (coincident) content-column header rather
+    // than moving here, so the owner's own post doesn't diverge from the anon paint.
     let action_col = is_author.then(move || {
         view! {
             <div class="j-post-acts">
-                <a class="j-post-plink" href=permalink>
-                    {time_label}
-                </a>
                 <a class="j-btn" href=edit_url>
                     "Edit"
                 </a>
@@ -1034,122 +1022,154 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     let active_key = active.unwrap_or_default();
 
     let location = use_location();
-    let user = crate::server_resource(move || location.pathname.get(), |_| current_user());
     let operator = crate::server_resource(
         move || location.pathname.get(),
         |_| current_user_is_operator(),
     );
 
-    // The anonymous sidebar is fully static, so it is produced by the pure
-    // `render::render_sidebar` — the SAME code the projector server-renders — and
-    // injected via `inner_html`, so a seeded first paint and the reactive
-    // re-render coincide (flash-free). Authed users get the reactive build below
-    // (extra nav, footer avatar) once `current_user` resolves; that authed delta
-    // is #181 territory and needs no coincidence. `display:contents` keeps the
-    // host wrapper out of the aside's layout.
-    let anon_html = crate::render::render_sidebar(&active_key);
-    let anon_fallback = anon_html.clone();
+    // Synchronous boot source (#181, ADR-0044): the auth marker decides authed vs.
+    // anon at mount, so there is NO async <Suspense> swap on first paint. The
+    // anonymous sidebar is the pure `render::render_sidebar` (the SAME code the
+    // projector server-renders) injected via `inner_html`, so a seeded first paint
+    // and the reactive re-render coincide (flash-free). `display:contents` keeps
+    // the host wrapper out of the aside's layout.
+    let owner = RwSignal::new(marker_username_on_boot());
 
+    // Background reconcile / correctness backstop (D3): confirm the marker against
+    // the real session and correct a stale one without gating first paint — a dead
+    // session clears the marker (toward anon, the safe direction); a live session
+    // with a missing marker sets it. wasm-only: the marker lives in localStorage.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let reconcile = crate::server_resource(move || location.pathname.get(), |_| current_user());
+        Effect::new(move |_| {
+            if let Some(res) = reconcile.get() {
+                match res {
+                    Ok(Some(u)) => {
+                        crate::auth::marker::set(&u);
+                        if owner.get_untracked().as_deref() != Some(u.as_str()) {
+                            owner.set(Some(u));
+                        }
+                    }
+                    Ok(None) => {
+                        crate::auth::marker::clear();
+                        if owner.get_untracked().is_some() {
+                            owner.set(None);
+                        }
+                    }
+                    Err(_) => {}
+                }
+            }
+        });
+    }
+
+    let anon_html = crate::render::render_sidebar(&active_key);
     view! {
         <aside class="j-sidebar">
-            <Suspense fallback=move || {
-                let anon_fallback = anon_fallback.clone();
-                view! { <div style="display:contents" inner_html=anon_fallback></div> }
-            }>
-                {
-                    let active_key = active_key.clone();
-                    let anon_html = anon_html.clone();
-                    move || {
-                        let active_key = active_key.clone();
-                        let anon_html = anon_html.clone();
-                        Suspend::new(async move {
-                            let Ok(Some(username)) = user.await else {
-                                return view! {
-                                    <div style="display:contents" inner_html=anon_html></div>
-                                }
-                                    .into_any();
-                            };
-                            let is_operator = matches!(operator.await, Ok(true));
-                            view! {
-                                <div style="display:contents">
-                                    <a
-                                        class="j-brand"
-                                        href="/"
-                                        style="text-decoration:none;color:inherit"
-                                    >
-                                        <div class="j-brand-mark">"j"</div>
-                                        <div class="j-brand-text">"Jaunder"</div>
-                                    </a>
-                                    <div class="j-search">
-                                        <Icon path=Icons::SEARCH size=14 />
-                                        <span>"Search"</span>
-                                        <span class="j-kbd">"⌘K"</span>
-                                    </div>
-                                    <nav class="j-nav">
-                                        {crate::render::NAV_ITEMS
-                                            .iter()
-                                            .filter(|&&(_, _, _, href, _)| href.is_some())
-                                            .map(|&(key, label, icon_path, href, _)| {
-                                                let is_active = key == active_key.as_str();
-                                                view! {
-                                                    <SidebarNavItem
-                                                        label=label
-                                                        icon_path=icon_path
-                                                        active=is_active
-                                                        href=href
-                                                    />
-                                                }
-                                            })
-                                            .collect::<Vec<_>>()}
-                                        {if is_operator {
-                                            view! {
-                                                <SidebarNavItem
-                                                    label="Configure Backups"
-                                                    icon_path=Icons::SHIELD
-                                                    active=active_key == "admin-backups"
-                                                    href=Some("/admin/backups")
-                                                />
-                                                <SidebarNavItem
-                                                    label="Site Settings"
-                                                    icon_path=Icons::SHIELD
-                                                    active=active_key == "admin-site"
-                                                    href=Some("/admin/site")
-                                                />
-                                            }
-                                                .into_any()
-                                        } else {
-                                            ().into_any()
-                                        }}
-                                    </nav>
-                                    <div>
-                                        <div class="j-sb-head">
-                                            <span>"Sources"</span>
-                                            <span class="j-sb-add">"+"</span>
-                                        </div>
-                                        {crate::render::SIDEBAR_SOURCES
-                                            .iter()
-                                            .map(|&(proto, name, sub)| {
-                                                view! { <SidebarSource proto=proto name=name sub=sub /> }
-                                            })
-                                            .collect::<Vec<_>>()}
-                                    </div>
-                                    <div class="j-sb-foot">
-                                        <Avatar name=username.clone() size=28 />
-                                        <div style="font-size:13px;flex:1;min-width:0">
-                                            <div style="font-weight:500">{username}</div>
-                                        </div>
-                                        <a href="/logout" style="font-size:11px;color:var(--muted)">
-                                            "Sign out"
-                                        </a>
-                                    </div>
-                                </div>
-                            }
-                                .into_any()
-                        })
-                    }
+            {move || match owner.get() {
+                None => {
+                    view! { <div style="display:contents" inner_html=anon_html.clone()></div> }
+                        .into_any()
                 }
-            </Suspense>
+                Some(username) => {
+                    authed_sidebar(&active_key, &username, matches!(operator.get(), Some(Ok(true))))
+                        .into_any()
+                }
+            }}
         </aside>
+    }
+}
+
+/// Boot-time marker read: `Some(username)` in the browser when the auth marker is
+/// set, `None` on the host build (the sidebar only ever renders in wasm). Lets the
+/// sidebar pick authed vs. anon synchronously at mount (#181), no async gate.
+fn marker_username_on_boot() -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::auth::marker::read()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        None
+    }
+}
+
+/// The authenticated sidebar chrome (brand, search, nav + operator admin links,
+/// sources, footer avatar). Shared by the marker-seeded initial render and the
+/// reconciled render (#181) so both are byte-for-byte the same authed markup —
+/// only its inputs change from awaited values to these params.
+fn authed_sidebar(active_key: &str, username: &str, is_operator: bool) -> impl IntoView {
+    let active_key = active_key.to_string();
+    let username = username.to_string();
+    view! {
+        <div style="display:contents">
+            <a class="j-brand" href="/" style="text-decoration:none;color:inherit">
+                <div class="j-brand-mark">"j"</div>
+                <div class="j-brand-text">"Jaunder"</div>
+            </a>
+            <div class="j-search">
+                <Icon path=Icons::SEARCH size=14 />
+                <span>"Search"</span>
+                <span class="j-kbd">"⌘K"</span>
+            </div>
+            <nav class="j-nav">
+                {crate::render::NAV_ITEMS
+                    .iter()
+                    .filter(|&&(_, _, _, href, _)| href.is_some())
+                    .map(|&(key, label, icon_path, href, _)| {
+                        let is_active = key == active_key.as_str();
+                        view! {
+                            <SidebarNavItem
+                                label=label
+                                icon_path=icon_path
+                                active=is_active
+                                href=href
+                            />
+                        }
+                    })
+                    .collect::<Vec<_>>()}
+                {if is_operator {
+                    view! {
+                        <SidebarNavItem
+                            label="Configure Backups"
+                            icon_path=Icons::SHIELD
+                            active=active_key == "admin-backups"
+                            href=Some("/admin/backups")
+                        />
+                        <SidebarNavItem
+                            label="Site Settings"
+                            icon_path=Icons::SHIELD
+                            active=active_key == "admin-site"
+                            href=Some("/admin/site")
+                        />
+                    }
+                        .into_any()
+                } else {
+                    ().into_any()
+                }}
+            </nav>
+            <div>
+                <div class="j-sb-head">
+                    <span>"Sources"</span>
+                    <span class="j-sb-add">"+"</span>
+                </div>
+                {crate::render::SIDEBAR_SOURCES
+                    .iter()
+                    .map(|&(proto, name, sub)| {
+                        view! { <SidebarSource proto=proto name=name sub=sub /> }
+                    })
+                    .collect::<Vec<_>>()}
+            </div>
+            <div class="j-sb-foot">
+                <Avatar name=username.clone() size=28 />
+                <div style="font-size:13px;flex:1;min-width:0">
+                    <div style="font-weight:500">{username}</div>
+                </div>
+                <a href="/logout" style="font-size:11px;color:var(--muted)">
+                    "Sign out"
+                </a>
+            </div>
+        </div>
     }
 }
 

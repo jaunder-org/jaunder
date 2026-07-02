@@ -1,6 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
+    <!-- #181 pre-paint auth: byte-identical to web::render::PREPAINT_SCRIPT
+         (drift-guarded). Kept minified + prettier-ignored so the two copies match. -->
+    <!-- prettier-ignore -->
+    <script>(function(){try{var m=localStorage.getItem('jaunder_auth');if(m){var u=JSON.parse(m).username;if(u){var e=document.documentElement;e.classList.add('authed');e.setAttribute('data-user',u);if(localStorage.getItem('jaunder_home_redirect')==='app'&&location.pathname==='/'){location.replace('/app');}}}}catch(_){}})();</script>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="/style/jaunder.css" />

@@ -1,6 +1,7 @@
 pub mod audiences;
 pub mod auth;
 pub mod backup;
+pub mod cockpit;
 pub mod email;
 pub mod home;
 pub mod invites;
@@ -11,6 +12,7 @@ pub mod profile;
 pub mod sessions;
 pub(crate) mod signal_read;
 pub mod site;
+pub(crate) mod timeline;
 pub mod ui;
 pub mod upload;
 pub use ui::{
@@ -27,6 +29,7 @@ pub use crate::render::DEFAULT_THEME;
 use crate::pages::audiences::AudiencesPage;
 use crate::pages::auth::{LoginPage, LogoutPage, RegisterPage};
 use crate::pages::backup::BackupSettingsPage;
+use crate::pages::cockpit::CockpitPage;
 use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
 use crate::pages::invites::InvitesPage;
@@ -125,6 +128,9 @@ pub fn App() -> impl IntoView {
             <Routes fallback=|| "Page not found.".into_view()>
                 <ParentRoute path=StaticSegment("") view=AppShell>
                     <Route path=StaticSegment("") view=HomePage />
+                    // The authed-only cockpit (#181, ADR-0044 D6): the relocated
+                    // home Feed. Static "app" wins over the ParamSegment username route.
+                    <Route path=StaticSegment("app") view=CockpitPage />
                     <Route path=StaticSegment("register") view=RegisterPage />
                     <Route path=StaticSegment("login") view=LoginPage />
                     <Route path=StaticSegment("logout") view=LogoutPage />

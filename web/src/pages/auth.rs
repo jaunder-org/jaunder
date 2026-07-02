@@ -11,6 +11,17 @@ pub fn RegisterPage() -> impl IntoView {
     let policy = crate::server_resource(|| (), |()| get_registration_policy());
     let username = RwSignal::new(String::new());
 
+    // Mirror the new session into the advisory auth marker (#181, ADR-0044): on a
+    // successful register the client knows the submitted username, so pre-paint
+    // auth works on the very next navigation. wasm-only (localStorage); the server
+    // still owns the real session cookie.
+    #[cfg(target_arch = "wasm32")]
+    Effect::new(move |_| {
+        if let Some(Ok(_)) = register_action.value().get() {
+            crate::auth::marker::set(&username.get_untracked());
+        }
+    });
+
     view! {
         <Topbar title="Register".to_string() sub="Create your account".to_string() />
         <div class="j-scroll">
@@ -91,6 +102,15 @@ pub fn LoginPage() -> impl IntoView {
     let login_action = ServerAction::<Login>::new();
     let username = RwSignal::new(String::new());
 
+    // Mirror the session into the advisory auth marker on a successful login
+    // (#181, ADR-0044) — the client's synchronous pre-paint boot source. wasm-only.
+    #[cfg(target_arch = "wasm32")]
+    Effect::new(move |_| {
+        if let Some(Ok(_)) = login_action.value().get() {
+            crate::auth::marker::set(&username.get_untracked());
+        }
+    });
+
     view! {
         <Topbar title="Login".to_string() sub="Sign in to your account".to_string() />
         <div class="j-scroll">
@@ -154,6 +174,15 @@ pub fn LogoutPage() -> impl IntoView {
     #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         logout_action.dispatch(Logout {});
+    });
+
+    // Clear the advisory auth marker once logout succeeds (#181, ADR-0044) so the
+    // next paint is anonymous. wasm-only; the server clears the real cookie.
+    #[cfg(target_arch = "wasm32")]
+    Effect::new(move |_| {
+        if let Some(Ok(())) = logout_action.value().get() {
+            crate::auth::marker::clear();
+        }
     });
 
     view! {

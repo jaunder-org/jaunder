@@ -34,7 +34,7 @@ use web::posts::{
     fetch_local_timeline, fetch_post_record, fetch_posts_by_tag, fetch_user_posts,
     fetch_user_posts_by_tag, post_response,
 };
-use web::render::{render_head, render_shell, PageSeed};
+use web::render::{render_head, render_shell, PageSeed, PREPAINT_SCRIPT};
 
 /// The static SPA shell (`index.html`) the projector falls back to when a public
 /// URL has no anonymous-public content. Cheap to clone (shared `Arc`).
@@ -72,12 +72,15 @@ pub fn document(seed: &PageSeed) -> String {
     let blob = serde_json::to_string(seed).unwrap_or_else(|_| "null".to_string());
     format!(
         concat!(
-            "<!DOCTYPE html><html lang=\"en\"><head>{head}</head><body>",
+            // The pre-paint script is FIRST in <head> (#181, ADR-0044) so it runs
+            // before any paint and marks html.authed for the owner.
+            "<!DOCTYPE html><html lang=\"en\"><head>{prepaint}{head}</head><body>",
             "<div id=\"app\">{body}</div>",
             "<script type=\"application/json\" id=\"jaunder-seed\">{blob}</script>",
             "<script type=\"module\">import init from \"/pkg/jaunder.js\"; init();</script>",
             "</body></html>",
         ),
+        prepaint = PREPAINT_SCRIPT,
         head = head,
         body = body,
         // A verbatim `</script` inside the JSON would close the blob script
@@ -308,5 +311,22 @@ mod tests {
             PageSeed::SiteTimeline,
         );
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn document_head_starts_with_the_prepaint_script() {
+        use super::document;
+        use web::render::PageSeed;
+        let doc = document(&PageSeed::SiteTimeline(web::posts::TimelinePage {
+            posts: vec![],
+            next_cursor_created_at: None,
+            next_cursor_post_id: None,
+            has_more: false,
+        }));
+        assert!(doc.contains(web::render::PREPAINT_SCRIPT), "{doc}");
+        assert!(
+            doc.contains("<head><script>(function()"),
+            "prepaint is first in head: {doc}"
+        );
     }
 }

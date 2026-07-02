@@ -803,6 +803,19 @@ engine). The failure mode is always "please update," never silent corruption.
   real content).
 - **enhance, don't replace** — the authed client _decorates_ the server-painted
   DOM rather than re-rendering a new one (the anti-flash rule for the owner).
+  Concretely (#181, ADR-0044): **additive decoration** — owner affordances are
+  new elements layered onto the untouched projector DOM (an action column,
+  authed sidebar chrome into a reserved slot), never a switch to a different-DOM
+  reactive branch.
+- **auth marker** — a JS-readable **localStorage** value (`{username}`) that
+  advertises "probably the owner" for **pre-paint** chrome adjustment.
+  _Advisory, not a credential_ — the real session stays the HTTP-only cookie;
+  the marker is the client's synchronous boot source, reconciled by
+  `current_user()`. Never sent to the server, so cacheability is untouched.
+- **pre-paint auth detection** — a tiny inline, blocking `<head>` script reads
+  the **auth marker** and sets `<html class="authed">` _before first paint_, so
+  CSS reserves the authed layout and the SPA boots already knowing. Never an
+  _async_ "am I logged in?" call (that guarantees paint-then-swap).
 - **"SSR the data, not the components"** — the server emits data + non-reactive
   HTML, never a reactive UI runtime; clients render from the data. The escape
   from concurrent-SSR (#173).

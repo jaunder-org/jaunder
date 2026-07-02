@@ -1,6 +1,10 @@
 use crate::error::WebResult;
 use leptos::prelude::*;
 
+/// The client-side advisory auth marker (#181, ADR-0044). Pure encode/decode are
+/// host-testable; `read`/`set`/`clear` are wasm-only (localStorage).
+pub mod marker;
+
 #[cfg(feature = "ssr")]
 mod server;
 #[cfg(feature = "ssr")]
