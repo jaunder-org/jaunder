@@ -888,18 +888,21 @@ git commit -m "test(e2e): pre-paint auth, enhanced /, cockpit bookmarkability, s
 - `docs/adr/0043-*` (already written — verify), `docs/README.md` (row — verify),
   `docs/hub-architecture.md` §8 (terms — verify), the spec (already updated).
 
-- [ ] **Step 1: Verify the ADR/README/glossary** land the final decisions
+- [x] **Step 1: Verify the ADR/README/glossary** land the final decisions
       (relocated-Feed cockpit, `/`-no-swap D10). They were authored in the start
       phase; reconcile any wording with what actually shipped.
 
-- [ ] **Step 2: Run the full local gate.**
+- [x] **Step 2: Run the full local gate.**
 
 Run: `cargo xtask validate` Expected: PASS across
 `{sqlite,postgres}×{chromium,firefox}`. Investigate any
 `already been disposed`/panic (there should be none — this issue removes
 reactive gates, it does not add SSR).
 
-- [ ] **Step 3: Commit any doc reconciliation.**
+- [x] **Step 3: Commit any doc reconciliation.** (No content change — the ADR /
+      README / glossary already match what shipped; the ADR format+number
+      reconciliation to main's generated-README world (#196/#204) happens at the
+      ship rebase.)
 
 ```bash
 git add docs/
