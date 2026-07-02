@@ -142,7 +142,7 @@ pub fn render_head(seed: &PageSeed) -> String {
     };
     let title = escape_html(&title);
     let description = escape_html(&description);
-    format!(
+    let mut head = format!(
         concat!(
             "<meta charset=\"utf-8\" />",
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />",
@@ -155,7 +155,84 @@ pub fn render_head(seed: &PageSeed) -> String {
         ),
         title = title,
         description = description,
-    )
+    );
+    head.push_str(&render_discovery(seed));
+    head
+}
+
+/// Feed + RSD autodiscovery `<link>`s for the seed's surface, the pure mirror of
+/// the reactive `FeedDiscovery`/`RsdDiscovery` components (`web::feed_discovery`)
+/// so the projector's `<head>` carries the same discovery metadata the reactive
+/// SSR render did (feed readers + `AtomPub` editors follow these). Each page emits
+/// exactly what its reactive counterpart does: the RSS/Atom/JSON feed links for
+/// its surface, and — only on the user-profile page — the RSD `EditURI` link. The
+/// permalink page renders none. A route param that fails to parse omits the feed
+/// links (mirrors the reactive `.ok()` guard). Post-boot the reactive components
+/// re-add identical links; the duplicates are invisible.
+fn render_discovery(seed: &PageSeed) -> String {
+    use common::feed::{canonicalize, FeedFormat, FeedSurface};
+    use common::{tag::Tag, username::Username};
+
+    let mut out = String::new();
+
+    let surface = match seed {
+        PageSeed::SiteTimeline(_) => Some(FeedSurface::Site),
+        PageSeed::SiteTag { tag, .. } => tag
+            .parse::<Tag>()
+            .ok()
+            .map(|tag| FeedSurface::SiteTag { tag }),
+        PageSeed::Profile { username, .. } => username
+            .parse::<Username>()
+            .ok()
+            .map(|username| FeedSurface::User { username }),
+        PageSeed::UserTag { username, tag, .. } => username
+            .parse::<Username>()
+            .ok()
+            .zip(tag.parse::<Tag>().ok())
+            .map(|(username, tag)| FeedSurface::UserTag { username, tag }),
+        // The reactive permalink page renders no discovery links.
+        PageSeed::Permalink(_) => None,
+    };
+
+    if let Some(surface) = surface {
+        let label = feed_label(&surface);
+        for (format, suffix, mime) in [
+            (FeedFormat::Rss, "RSS", "application/rss+xml"),
+            (FeedFormat::Atom, "Atom", "application/atom+xml"),
+            (FeedFormat::Json, "JSON Feed", "application/feed+json"),
+        ] {
+            let _ = write!(
+                out,
+                "<link rel=\"alternate\" type=\"{mime}\" title=\"{title}\" href=\"{href}\" />",
+                title = escape_html(&format!("{label} ({suffix})")),
+                href = escape_html(&canonicalize(&surface, format)),
+            );
+        }
+    }
+
+    // Only the reactive user-profile page hoists the RSD link (the user-tag page
+    // does not), so mirror that exactly.
+    if let PageSeed::Profile { username, .. } = seed {
+        let _ = write!(
+            out,
+            "<link rel=\"EditURI\" type=\"application/rsd+xml\" title=\"AtomPub (RSD)\" href=\"{href}\" />",
+            href = escape_html(&format!("/~{username}/rsd.xml")),
+        );
+    }
+
+    out
+}
+
+/// Human-readable feed title per surface — the pure mirror of the reactive
+/// `web::feed_discovery::surface_label`.
+fn feed_label(surface: &common::feed::FeedSurface) -> String {
+    use common::feed::FeedSurface;
+    match surface {
+        FeedSurface::Site => "Site feed".to_string(),
+        FeedSurface::SiteTag { tag } => format!("#{tag} feed"),
+        FeedSurface::User { username } => format!("@{username} feed"),
+        FeedSurface::UserTag { username, tag } => format!("@{username} #{tag} feed"),
+    }
 }
 
 /// The full anonymous `#app` shell the projector serves: the exact `j-root`

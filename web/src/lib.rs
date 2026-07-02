@@ -41,29 +41,10 @@ pub mod viewer;
 pub use error::server_resource;
 pub use pages::App;
 
+// Only the wasm32 body of `mount_csr` below uses the leptos prelude (the host
+// csr build compiles that body out), so the import matches that gate.
+#[cfg(all(feature = "csr", target_arch = "wasm32"))]
 use leptos::prelude::*;
-use leptos_meta::MetaTags;
-
-#[must_use]
-pub fn shell(options: LeptosOptions) -> impl IntoView {
-    view! {
-        <!DOCTYPE html>
-        <html lang="en">
-            <head>
-                <meta charset="utf-8" />
-                <meta name="viewport" content="width=device-width, initial-scale=1" />
-                <link rel="stylesheet" href="/style/jaunder.css" />
-                <link rel="stylesheet" href="/style/jaunder-themes.css" />
-                <AutoReload options=options.clone() />
-                <HydrationScripts options />
-                <MetaTags />
-            </head>
-            <body>
-                <App />
-            </body>
-        </html>
-    }
-}
 
 /// Boot the CSR client (#179). Adopts the public projector's data blob (#178):
 /// reads `#jaunder-seed`, drops the projector-painted `#app` container, and

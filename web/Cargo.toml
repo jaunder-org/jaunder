@@ -64,7 +64,6 @@ tracing-subscriber = { workspace = true }
 
 [features]
 default = []
-hydrate = ["leptos/hydrate"]
 csr = ["leptos/csr"]
 ssr = [
     "dep:anyhow",
