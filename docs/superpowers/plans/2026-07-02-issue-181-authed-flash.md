@@ -413,12 +413,12 @@ username; write the marker. On `logout`, clear it. The server-side
 `set_session_cookie` / `clear_session_cookie` are unchanged — the marker is the
 _client_ mirror of that.
 
-- [ ] **Step 1: Find the success-handling sites.** Run the `rg` above; identify
+- [x] **Step 1: Find the success-handling sites.** Run the `rg` above; identify
       the `Effect`/callback that fires on `action.value()` = `Ok(_)` for each of
       login/register/logout (mirroring `home.rs`'s `Effect::new` pattern at
       `web/src/pages/home.rs:76`).
 
-- [ ] **Step 2: Write the marker on login/register success.** In each success
+- [x] **Step 2: Write the marker on login/register success.** In each success
       effect, guarded wasm-only (the surrounding component already runs only in
       the browser, but gate the `marker` calls to be safe):
 
@@ -430,7 +430,7 @@ _client_ mirror of that.
 }
 ```
 
-- [ ] **Step 3: Clear the marker on logout success** (LogoutPage's success
+- [x] **Step 3: Clear the marker on logout success** (LogoutPage's success
       effect):
 
 ```rust
@@ -440,13 +440,13 @@ _client_ mirror of that.
 }
 ```
 
-- [ ] **Step 4: Verify it compiles for wasm and host.**
+- [x] **Step 4: Verify it compiles for wasm and host.**
 
 Run: `cargo xtask check --no-test` Expected: clippy + fmt clean; no `dead_code`
 on the host build (the `marker` wasm fns are `#[cfg(target_arch = "wasm32")]`,
 so the host build won't see them — ensure no host-only reference to them).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/pages/<login/register/logout files>
