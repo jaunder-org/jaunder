@@ -758,4 +758,49 @@ mod tests {
         assert!(!readme_has_markers(&repo).unwrap());
         let _ = std::fs::remove_dir_all(&repo);
     }
+
+    #[test]
+    fn gates_ignore_docs_adr_template_md() {
+        // `docs/adr/template.md` (the copyable ADR skeleton, #207) has no leading
+        // number, so both gate entry points must skip it: it is neither an
+        // `adr-format` subject nor an `adr-readme-parity` row. Guards against a
+        // refactor that starts checking `docs/adr/*.md` regardless of number.
+        //
+        // Teeth: rename the fixture to `0099-template.md` and this fails — the
+        // `# ADR-0000:` heading mismatches `0099` (adr-format) and no README row
+        // exists for 0099 (parity). See the plan's inversion check.
+        let repo = scratch_repo("template-ignored");
+        std::fs::write(
+            repo.join("docs/adr/0001-a.md"),
+            "# ADR-0001: First\n\n- Status: accepted\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.join("docs/adr/template.md"),
+            "# ADR-0000: Title of the decision\n\n- Status: proposed\n",
+        )
+        .unwrap();
+        // README carries only the real ADR's row — none for the template.
+        std::fs::write(
+            repo.join("docs/README.md"),
+            format!(
+                "# Docs\n\n{BEGIN}\n\n| # | Title | Status |\n| --- | --- | --- |\n\
+                 | [0001](adr/0001-a.md) | First | accepted |\n\n{END}\n"
+            ),
+        )
+        .unwrap();
+
+        let fmt = format_problems(&repo);
+        let parity = parity_report(&repo).unwrap();
+        let _ = std::fs::remove_dir_all(&repo);
+
+        assert!(
+            fmt.is_empty(),
+            "template.md must not be an adr-format subject: {fmt:?}"
+        );
+        assert!(
+            parity.is_empty(),
+            "template.md must not be a parity row: {parity:?}"
+        );
+    }
 }

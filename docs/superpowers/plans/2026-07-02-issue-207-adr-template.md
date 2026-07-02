@@ -51,7 +51,9 @@ template becomes the sole SSOT.
     `identifier-collisions` all pass with `template.md` present (not flagged, no
     README row added); prettier-clean.
 
-- [ ] **2. Add an xtask guard test locking template-invisibility.**
+- [x] **2. Add an xtask guard test locking template-invisibility.**
+      (`xtask-tests` gate step runs it; teeth confirmed via the `0099-`
+      inversion — `adr-format` fires.)
   - In `xtask/src/adr_readme.rs` `#[cfg(test)]`, add a test that builds a tmp
     `docs/adr/` with one numbered ADR (`0001-x.md`, valid heading+status)
     **and** a `template.md`, then asserts `format_problems(tmp)` is empty and
