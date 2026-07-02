@@ -108,7 +108,7 @@ git commit -m "docs(issue-181): file authed-flash follow-on issues"
 The JSON shape matches the pre-paint script's parser (Task 3) — keep them in
 sync (the script reads `.username`).
 
-- [ ] **Step 1: Write the failing tests** (`web/src/auth/marker.rs`, in-file
+- [x] **Step 1: Write the failing tests** (`web/src/auth/marker.rs`, in-file
       `#[cfg(test)]` — this is the crate's convention and NOT a dialect file):
 
 ```rust
@@ -137,14 +137,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo nextest run -p jaunder-web round_trips_username` Expected: FAIL —
 `encode_marker`/`decode_marker` not defined. (Crate name: confirm with
 `cargo metadata`; the web crate is `web` in-tree, package name per its
 `Cargo.toml` — use that in `-p`.)
 
-- [ ] **Step 3: Write the implementation** (`web/src/auth/marker.rs`):
+- [x] **Step 3: Write the implementation** (`web/src/auth/marker.rs`):
 
 ```rust
 //! The client-side **auth marker** (#181, ADR-0043): a JS-readable localStorage
@@ -213,11 +213,11 @@ pub fn clear() {
 Add `pub mod marker;` to `web/src/auth/mod.rs` (near the top, after the
 imports).
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `cargo nextest run -p jaunder-web marker::` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/auth/marker.rs web/src/auth/mod.rs
