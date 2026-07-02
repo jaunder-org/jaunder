@@ -21,6 +21,22 @@ existing `warmupEnv` env-passthrough so probing needs no new machinery.
 (`@playwright/test`), TypeScript fixtures, OpenTelemetry traces,
 Rust/`cargo xtask` gate, ADR markdown.
 
+## ⏸ STATUS: PAUSED — blocked on #210 (2026-07-02)
+
+Tasks 1–4 + the worker-aware timeout fix are **done and committed**; the
+workers=4 flip is **verified ready** (3/4 combos 66/66 green at 4c/6GB; Firefox
+rock-solid on both backends). It is **deferred**: `sqlite+chromium`
+intermittently times out on the pre-existing flaky heavy test
+`posts.spec.ts:349`, whose root cause is fixed by **#210** (batch-seed, being
+handled by another agent). Rather than mask it with retries/timeout inflation,
+the branch keeps `workers=1` (green) until #210 lands.
+
+**Resume after #210:** flip `nixPlaywrightConfig` default → 4, add
+`vmMemory=6144; vmCores=4;` to `e2eWarmChecks`, re-verify all 4 combos, revisit
+whether the `workerContentionScale` can shrink, then the remaining tasks below
+(rename `hydrationHeavy*`, ADR-0039, resolve #182/#61, ship). Full status in
+`docs/observability.md` → "#155 — flip status".
+
 ## Global Constraints
 
 - **Faithful measurement surface is the nix e2e derivation**, not a bare host
