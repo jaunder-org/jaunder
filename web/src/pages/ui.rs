@@ -10,19 +10,17 @@ use crate::tags::TagSummary;
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 
-/// Linking context for a [`TagList`] rendering.
-///
-/// `SiteWide` links each chip to `/tags/:slug` only. `ForUser` adds a small
-/// "· here" link next to each chip pointing at `/~:username/tags/:slug`, so
-/// per-user tag listings stay one click away from any user-rooted page.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TagContext {
-    SiteWide,
-    ForUser(String),
-}
+/// Linking context for a post's footer tag chips — re-exported from the pure
+/// `render` layer (`SiteWide` / `ForUser`) so the reactive components and the
+/// projector share one type. See [`crate::render::TagCtx`]. Anonymous posts get
+/// their chips from the pure [`crate::render::render_tag_list`] (byte-coincident
+/// with the projector, injected via `inner_html`); the authored post view — which
+/// the projector never renders — uses the reactive [`TagList`] below.
+pub use crate::render::TagCtx as TagContext;
 
-/// Renders a post's tags as clickable chips for use inside a post-display
-/// footer. See [`TagContext`] for the linking behavior.
+/// Renders a post's tags as clickable chips for the reactive authored post view
+/// (kept markup-equivalent to [`crate::render::render_tag_list`], the anonymous /
+/// projector path). See [`TagContext`] for the linking behavior.
 #[allow(clippy::needless_pass_by_value)]
 #[allow(clippy::must_use_candidate)]
 #[component]
@@ -62,28 +60,10 @@ pub fn TagList(tags: Vec<TagSummary>, context: TagContext) -> impl IntoView {
 
 // ─── Icons ────────────────────────────────────────────────────
 
-/// SVG path `d` attribute strings for all Jaunder icons.
-pub struct Icons;
-
-impl Icons {
-    pub const HOME: &'static str = "M3 10l7-6 7 6v7a1 1 0 0 1-1 1h-4v-5H8v5H4a1 1 0 0 1-1-1z";
-    pub const LOCAL: &'static str = "M4 5h12v10H4z M4 9h12";
-    pub const FED: &'static str =
-        "M10 3a7 7 0 1 0 0 14a7 7 0 0 0 0-14zM3 10h14 M10 3c2 3 2 11 0 14 M10 3c-2 3-2 11 0 14";
-    pub const REPLY: &'static str = "M4 4h12v9H7l-3 3z";
-    pub const BOOKMARK: &'static str = "M5 3h10v14l-5-3-5 3z";
-    pub const BOOST: &'static str =
-        "M5 8l4-4 4 4 M4 7v4a3 3 0 0 0 3 3h9 M15 12l-4 4-4-4 M16 13V9a3 3 0 0 0-3-3H4";
-    pub const HEART: &'static str =
-        "M10 17s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 17 7c0 5.5-7 10-7 10z";
-    pub const SEARCH: &'static str = "M8 3a6 6 0 1 0 0 12a6 6 0 0 0 0-12z M17 17l-4-4";
-    pub const PLUS: &'static str = "M10 4v12 M4 10h12";
-    pub const COG: &'static str = "M10 6v2 M10 12v2 M6 10H4 M16 10h-2 M6.5 6.5l-1.5-1.5 M14 14l1.5 1.5 M6.5 13.5L5 15 M14 6l1.5-1.5 M10 13a3 3 0 1 0 0-6a3 3 0 0 0 0 6z";
-    pub const EDIT: &'static str = "M3 17l4 0 9-9a2.83 2.83 0 0 0-4-4l-9 9 0 4 M12 5l3 3";
-    pub const SHIELD: &'static str = "M10 3l6 2v4c0 4-2.4 7.1-6 8-3.6-.9-6-4-6-8V5l6-2z";
-    pub const MEDIA: &'static str =
-        "M3 5h14v10H3z M7 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2z M5 13l3-3 2 2 3-3 5 5H3z";
-}
+/// SVG path `d` strings — re-exported from the pure `render` layer so the
+/// reactive [`Icon`] component and the projector's [`crate::render::render_icon`]
+/// share one source of truth.
+pub use crate::render::Icons;
 
 // ─── 3.1 Icon ─────────────────────────────────────────────────
 
@@ -109,31 +89,11 @@ pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoVie
 
 // ─── 3.2 Avatar ───────────────────────────────────────────────
 
-/// Derives `(initials, hue)` from a display name.
-/// `initials`: first character of each of the first two whitespace-separated words, uppercased.
-/// `hue`: sum of all char codes mod 360.
-#[allow(clippy::cast_precision_loss)]
-#[allow(clippy::cast_possible_truncation)]
-#[allow(clippy::cast_sign_loss)]
-#[must_use]
-pub fn avatar_parts(name: &str) -> (String, u32) {
-    let initials: String = name
-        .split_whitespace()
-        .take(2)
-        .filter_map(|word| word.chars().next())
-        .map(|c| c.to_ascii_uppercase())
-        .collect();
-
-    let hue: u32 = name.chars().fold(0u32, |acc, c| acc + c as u32) % 360;
-
-    (initials, hue)
-}
-
 #[allow(clippy::needless_pass_by_value)]
 #[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
-    let (initials, hue) = avatar_parts(&name);
+    let (initials, hue) = crate::render::avatar_parts(&name);
     #[allow(clippy::cast_precision_loss)]
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::cast_sign_loss)]
@@ -298,21 +258,6 @@ pub fn ComposerFields(
     }
 }
 
-/// Formats an RFC-3339 timestamp as `"YYYY-MM-DD HH:MM"`.
-/// Falls back to the raw string if the input contains no `T` separator.
-pub(crate) fn format_post_time(ts: &str) -> String {
-    // RFC-3339: "YYYY-MM-DDTHH:MM:SS+HH:MM" or "YYYY-MM-DDTHH:MM:SSZ"
-    // Return "YYYY-MM-DD HH:MM"; fall back to the raw string if malformed.
-    if let Some(t_pos) = ts.find('T') {
-        let date = &ts[..t_pos];
-        let rest = &ts[t_pos + 1..];
-        let time = if rest.len() >= 5 { &rest[..5] } else { rest };
-        format!("{date} {time}")
-    } else {
-        ts.to_owned()
-    }
-}
-
 /// Converts a `datetime-local` input value — a naive local wall-clock such as
 /// "2026-07-01T13:30" — into a UTC RFC3339 instant string for the server.
 /// Returns `None` for an empty/whitespace input (i.e. publish-now).
@@ -354,54 +299,87 @@ pub fn PostDisplay(
     tag_context: TagContext,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
-    let time_label = format_post_time(&post.published_at);
     let is_author = post.is_author;
-    let post_tags = post.tags.clone();
-
-    view! {
-        <article class="j-post">
-            <Avatar name=post.username.clone() size=38 />
-            <div style="min-width:0;display:flex;gap:8px;align-items:flex-start">
-                <div style="flex:1;min-width:0">
-                    <header class="j-post-head">
-                        <span class="j-post-name">{post.username.clone()}</span>
-                        <span class="j-post-handle">"@"{post.username.clone()}</span>
-                        {(!is_author)
-                            .then(|| {
-                                view! {
-                                    <>
-                                        <span class="j-spacer"></span>
-                                        <span class="j-post-time">{time_label}</span>
-                                    </>
-                                }
-                            })}
-                    </header>
-                    {post
-                        .title
-                        .clone()
-                        .map(|title| {
-                            if post.permalink.is_empty() {
-                                view! { <div class="j-post-title">{title}</div> }.into_any()
-                            } else {
-                                view! {
-                                    <div class="j-post-title">
-                                        <a href=post.permalink.clone()>{title}</a>
-                                    </div>
-                                }
-                                    .into_any()
-                            }
-                        })}
-                    {banner.map(|b| view! { <p class="draft-banner">{b}</p> })}
-                    {post.summary.clone().map(|s| view! { <p class="j-post-summary">{s}</p> })}
-                    <div class="j-post-body" inner_html=post.rendered_html.clone()></div>
-                    <footer class="j-post-foot">
-                        <TagList tags=post_tags context=tag_context />
-                        <span class="j-spacer"></span>
-                    </footer>
-                </div>
-                {children.map(|c| c())}
-            </div>
-        </article>
+    let time_label = crate::render::format_post_time(&post.published_at);
+    match children {
+        // Anonymous / no-action layout: the WHOLE article inner is produced by the
+        // pure `render` layer — the SAME code the public projector server-renders
+        // (#179) — and injected via `inner_html`, so a seeded first paint and this
+        // reactive re-render are byte-identical (flash-free). "Share the pure fn,
+        // not the component" (ADR-0041 §4). The projector only ever renders this
+        // anonymous view, so this is the only path that must coincide.
+        None => {
+            let view = crate::render::PostView {
+                username: &post.username,
+                title: post.title.as_deref(),
+                banner: banner.as_deref(),
+                summary: post.summary.as_deref(),
+                rendered_html: &post.rendered_html,
+                time: &time_label,
+                permalink: &post.permalink,
+                tags: &post.tags,
+                tag_ctx: &tag_context,
+                is_author,
+            };
+            let inner = crate::render::render_post_inner(&view);
+            view! { <article class="j-post" inner_html=inner></article> }.into_any()
+        }
+        // Authored layout (own posts, with the action column). The projector never
+        // renders this — it's anonymous-only — so it has no coincidence requirement
+        // and stays ordinary client-reactive markup (proven; kept from before the
+        // render unification, which regressed the authenticated home-feed re-render).
+        Some(children) => {
+            let post_tags = post.tags.clone();
+            view! {
+                <article class="j-post">
+                    <Avatar name=post.username.clone() size=38 />
+                    <div style="min-width:0;display:flex;gap:8px;align-items:flex-start">
+                        <div style="flex:1;min-width:0">
+                            <header class="j-post-head">
+                                <span class="j-post-name">{post.username.clone()}</span>
+                                <span class="j-post-handle">"@"{post.username.clone()}</span>
+                                {(!is_author)
+                                    .then(|| {
+                                        view! {
+                                            <>
+                                                <span class="j-spacer"></span>
+                                                <span class="j-post-time">{time_label}</span>
+                                            </>
+                                        }
+                                    })}
+                            </header>
+                            {post
+                                .title
+                                .clone()
+                                .map(|title| {
+                                    if post.permalink.is_empty() {
+                                        view! { <div class="j-post-title">{title}</div> }.into_any()
+                                    } else {
+                                        view! {
+                                            <div class="j-post-title">
+                                                <a href=post.permalink.clone()>{title}</a>
+                                            </div>
+                                        }
+                                            .into_any()
+                                    }
+                                })}
+                            {banner.map(|b| view! { <p class="draft-banner">{b}</p> })}
+                            {post
+                                .summary
+                                .clone()
+                                .map(|s| view! { <p class="j-post-summary">{s}</p> })}
+                            <div class="j-post-body" inner_html=post.rendered_html.clone()></div>
+                            <footer class="j-post-foot">
+                                <TagList tags=post_tags context=tag_context />
+                                <span class="j-spacer"></span>
+                            </footer>
+                        </div>
+                        {children()}
+                    </div>
+                </article>
+            }
+            .into_any()
+        }
     }
 }
 
@@ -418,7 +396,7 @@ pub fn PostCard(
 ) -> impl IntoView {
     let is_author = post.is_author;
     let post_id = post.post_id;
-    let time_label = format_post_time(&post.published_at);
+    let time_label = crate::render::format_post_time(&post.published_at);
     let permalink = post.permalink.clone();
     let edit_url = format!("/posts/{post_id}/edit");
     let delete_action = ServerAction::<DeletePost>::new();
@@ -1062,148 +1040,115 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
         |_| current_user_is_operator(),
     );
 
-    // (key, label, icon_path, href, auth_required)
-    #[allow(clippy::items_after_statements)]
-    const NAV_ITEMS: &[(&str, &str, &str, Option<&'static str>, bool)] = &[
-        ("home", "Home", Icons::HOME, Some("/"), false),
-        ("local", "Local", Icons::LOCAL, None, true),
-        ("federated", "Federated", Icons::FED, None, true),
-        ("replies", "Replies", Icons::REPLY, None, true),
-        ("bookmarks", "Bookmarks", Icons::BOOKMARK, None, true),
-        ("drafts", "Drafts", Icons::EDIT, Some("/drafts"), true),
-        ("media", "Media", Icons::MEDIA, Some("/media"), true),
-        (
-            "audiences",
-            "Audiences",
-            Icons::BOOKMARK,
-            Some("/audiences"),
-            true,
-        ),
-        ("settings", "Settings", Icons::COG, None, true),
-    ];
-
-    // Items shown when unauthenticated: has a real href and no auth required.
-    let public_nav: Vec<_> = NAV_ITEMS
-        .iter()
-        .filter(|&&(_, _, _, href, auth_required)| href.is_some() && !auth_required)
-        .copied()
-        .collect();
-
-    // Clone active_key for the fallback closure; the original moves into the Suspend closure.
-    let active_key_fallback = active_key.clone();
+    // The anonymous sidebar is fully static, so it is produced by the pure
+    // `render::render_sidebar` — the SAME code the projector server-renders — and
+    // injected via `inner_html`, so a seeded first paint and the reactive
+    // re-render coincide (flash-free). Authed users get the reactive build below
+    // (extra nav, footer avatar) once `current_user` resolves; that authed delta
+    // is #181 territory and needs no coincidence. `display:contents` keeps the
+    // host wrapper out of the aside's layout.
+    let anon_html = crate::render::render_sidebar(&active_key);
+    let anon_fallback = anon_html.clone();
 
     view! {
         <aside class="j-sidebar">
-            <a class="j-brand" href="/" style="text-decoration:none;color:inherit">
-                <div class="j-brand-mark">"j"</div>
-                <div class="j-brand-text">"Jaunder"</div>
-            </a>
-            <div class="j-search">
-                <Icon path=Icons::SEARCH size=14 />
-                <span>"Search"</span>
-                <span class="j-kbd">"⌘K"</span>
-            </div>
-            // Nav: filtered by auth state after Suspense resolves.
             <Suspense fallback=move || {
-                view! {
-                    <nav class="j-nav">
-                        {public_nav
-                            .iter()
-                            .map(|&(key, label, icon_path, href, _)| {
-                                let is_active = key == active_key_fallback.as_str();
-                                view! {
-                                    <SidebarNavItem
-                                        label=label
-                                        icon_path=icon_path
-                                        active=is_active
-                                        href=href
-                                    />
-                                }
-                            })
-                            .collect::<Vec<_>>()}
-                    </nav>
-                }
+                let anon_fallback = anon_fallback.clone();
+                view! { <div style="display:contents" inner_html=anon_fallback></div> }
             }>
-                {move || {
+                {
                     let active_key = active_key.clone();
-                    Suspend::new(async move {
-                        let is_authed = matches!(user.await, Ok(Some(_)));
-                        let is_operator = matches!(operator.await, Ok(true));
-                        view! {
-                            <nav class="j-nav">
-                                {NAV_ITEMS
-                                    .iter()
-                                    .filter(|&&(_, _, _, href, auth_required)| {
-                                        href.is_some() && (!auth_required || is_authed)
-                                    })
-                                    .map(|&(key, label, icon_path, href, _)| {
-                                        let is_active = key == active_key.as_str();
-                                        view! {
-                                            <SidebarNavItem
-                                                label=label
-                                                icon_path=icon_path
-                                                active=is_active
-                                                href=href
-                                            />
-                                        }
-                                    })
-                                    .collect::<Vec<_>>()}
-                                {if is_operator {
-                                    view! {
-                                        <SidebarNavItem
-                                            label="Configure Backups"
-                                            icon_path=Icons::SHIELD
-                                            active=active_key == "admin-backups"
-                                            href=Some("/admin/backups")
-                                        />
-                                        <SidebarNavItem
-                                            label="Site Settings"
-                                            icon_path=Icons::SHIELD
-                                            active=active_key == "admin-site"
-                                            href=Some("/admin/site")
-                                        />
-                                    }
-                                        .into_any()
-                                } else {
-                                    ().into_any()
-                                }}
-                            </nav>
-                        }
-                    })
-                }}
-            </Suspense>
-            <div>
-                <div class="j-sb-head">
-                    <span>"Sources"</span>
-                    <span class="j-sb-add">"+"</span>
-                </div>
-                <SidebarSource proto="atproto" name="Bluesky" sub="mara.bsky.social" />
-                <SidebarSource proto="activitypub" name="Mastodon" sub="@mara@hachyderm.io" />
-                <SidebarSource proto="rss" name="Ivy Chen" sub="weeknotes" />
-                <SidebarSource proto="jsonfeed" name="Manton" sub="manton.org" />
-            </div>
-            // Footer: avatar+sign-out when authed; nothing when not.
-            <div class="j-sb-foot">
-                <Suspense fallback=|| ()>
-                    {move || Suspend::new(async move {
-                        match user.await {
-                            Ok(Some(username)) => {
-                                view! {
-                                    <Avatar name=username.clone() size=28 />
-                                    <div style="font-size:13px;flex:1;min-width:0">
-                                        <div style="font-weight:500">{username}</div>
-                                    </div>
-                                    <a href="/logout" style="font-size:11px;color:var(--muted)">
-                                        "Sign out"
-                                    </a>
+                    let anon_html = anon_html.clone();
+                    move || {
+                        let active_key = active_key.clone();
+                        let anon_html = anon_html.clone();
+                        Suspend::new(async move {
+                            let Ok(Some(username)) = user.await else {
+                                return view! {
+                                    <div style="display:contents" inner_html=anon_html></div>
                                 }
-                                    .into_any()
+                                    .into_any();
+                            };
+                            let is_operator = matches!(operator.await, Ok(true));
+                            view! {
+                                <div style="display:contents">
+                                    <a
+                                        class="j-brand"
+                                        href="/"
+                                        style="text-decoration:none;color:inherit"
+                                    >
+                                        <div class="j-brand-mark">"j"</div>
+                                        <div class="j-brand-text">"Jaunder"</div>
+                                    </a>
+                                    <div class="j-search">
+                                        <Icon path=Icons::SEARCH size=14 />
+                                        <span>"Search"</span>
+                                        <span class="j-kbd">"⌘K"</span>
+                                    </div>
+                                    <nav class="j-nav">
+                                        {crate::render::NAV_ITEMS
+                                            .iter()
+                                            .filter(|&&(_, _, _, href, _)| href.is_some())
+                                            .map(|&(key, label, icon_path, href, _)| {
+                                                let is_active = key == active_key.as_str();
+                                                view! {
+                                                    <SidebarNavItem
+                                                        label=label
+                                                        icon_path=icon_path
+                                                        active=is_active
+                                                        href=href
+                                                    />
+                                                }
+                                            })
+                                            .collect::<Vec<_>>()}
+                                        {if is_operator {
+                                            view! {
+                                                <SidebarNavItem
+                                                    label="Configure Backups"
+                                                    icon_path=Icons::SHIELD
+                                                    active=active_key == "admin-backups"
+                                                    href=Some("/admin/backups")
+                                                />
+                                                <SidebarNavItem
+                                                    label="Site Settings"
+                                                    icon_path=Icons::SHIELD
+                                                    active=active_key == "admin-site"
+                                                    href=Some("/admin/site")
+                                                />
+                                            }
+                                                .into_any()
+                                        } else {
+                                            ().into_any()
+                                        }}
+                                    </nav>
+                                    <div>
+                                        <div class="j-sb-head">
+                                            <span>"Sources"</span>
+                                            <span class="j-sb-add">"+"</span>
+                                        </div>
+                                        {crate::render::SIDEBAR_SOURCES
+                                            .iter()
+                                            .map(|&(proto, name, sub)| {
+                                                view! { <SidebarSource proto=proto name=name sub=sub /> }
+                                            })
+                                            .collect::<Vec<_>>()}
+                                    </div>
+                                    <div class="j-sb-foot">
+                                        <Avatar name=username.clone() size=28 />
+                                        <div style="font-size:13px;flex:1;min-width:0">
+                                            <div style="font-weight:500">{username}</div>
+                                        </div>
+                                        <a href="/logout" style="font-size:11px;color:var(--muted)">
+                                            "Sign out"
+                                        </a>
+                                    </div>
+                                </div>
                             }
-                            _ => ().into_any(),
-                        }
-                    })}
-                </Suspense>
-            </div>
+                                .into_any()
+                        })
+                    }
+                }
+            </Suspense>
         </aside>
     }
 }
@@ -1469,7 +1414,8 @@ pub fn TagInput(
 
 #[cfg(test)]
 mod tests {
-    use super::{avatar_parts, format_post_time, is_valid_tag_slug, normalize_tag_token};
+    use super::{is_valid_tag_slug, normalize_tag_token};
+    use crate::render::{avatar_parts, format_post_time};
 
     #[test]
     fn avatar_parts_single_word() {

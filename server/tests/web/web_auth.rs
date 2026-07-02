@@ -111,41 +111,6 @@ async fn post_form_with_ua(
     (status, set_cookie, body_str)
 }
 
-async fn get_html(
-    state: Arc<storage::AppState>,
-    uri: &str,
-    cookie: Option<&str>,
-) -> (StatusCode, String) {
-    let mut builder = Request::builder().method("GET").uri(uri);
-    if let Some(c) = cookie {
-        builder = builder.header(header::COOKIE, c);
-    }
-    let request = builder.body(Body::empty()).unwrap();
-
-    let local = tokio::task::LocalSet::new();
-    let (status, body_str) = local
-        .run_until(async {
-            let app = jaunder::create_router(
-                test_options(),
-                state,
-                crate::helpers::noop_mailer(),
-                true,
-                crate::helpers::tmp_storage_path(),
-            );
-            let response = app.oneshot(request).await.unwrap();
-
-            let status = response.status();
-            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let body_str = String::from_utf8(bytes.to_vec()).unwrap();
-            (status, body_str)
-        })
-        .await;
-
-    (status, body_str)
-}
-
 /// Sends a form-encoded POST request through a fresh router built from `state`,
 /// attaching an `Authorization: Bearer <token>` header instead of a cookie.
 /// Returns (status, Set-Cookie header value, response body).
@@ -455,33 +420,10 @@ async fn login_correct_password_sets_cookie_and_returns_token(#[case] backend: B
     assert!(cookie.starts_with("session="), "cookie: {cookie}");
 }
 
-#[apply(backends)]
-#[tokio::test]
-async fn authenticated_home_page_shows_logged_in_indicator(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set("site.registration_policy", "open")
-        .await
-        .unwrap();
-
-    let (_, set_cookie, _) = post_form(
-        Arc::clone(&state),
-        "/api/register",
-        "username=alice&password=password123",
-        None,
-        true,
-    )
-    .await;
-    let cookie = set_cookie.expect("register should set a session cookie");
-
-    let (status, body) = get_html(Arc::clone(&state), "/", Some(&cookie)).await;
-
-    assert_eq!(status, StatusCode::OK);
-    // The sidebar footer shows the username when authenticated.
-    assert!(body.contains("j-sb-foot"), "body: {body}");
-    assert!(body.contains("alice"), "body: {body}");
-}
+// (Removed `authenticated_home_page_shows_logged_in_indicator`: under #180 the
+// server renders the anonymous projector view for `/`, never authed page content
+// — the logged-in indicator now appears client-side after the CSR client boots,
+// which is exercised by the e2e suite, not a server-response test.)
 
 #[apply(backends)]
 #[tokio::test]

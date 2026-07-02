@@ -1,7 +1,9 @@
 use crate::error::{InternalError, InternalResult, WebError};
 use crate::tags::TagSummary;
-use chrono::{Datelike, Utc};
+use chrono::{Datelike, NaiveDate, Utc};
 use common::slug::Slug;
+use common::username::Username;
+use common::visibility::ViewerIdentity;
 use leptos::context::use_context;
 use leptos_axum::ResponseOptions;
 use storage::{
@@ -99,6 +101,7 @@ pub fn to_post_cursor(post: &PostRecord) -> PostCursor {
     }
 }
 
+#[must_use]
 pub fn post_response(post: PostRecord, is_author: bool) -> super::PostResponse {
     // Only published posts have a public permalink. For drafts, the permalink is None.
     let permalink = post.published_at.is_some().then(|| post.permalink());
@@ -132,6 +135,36 @@ pub fn post_response(post: PostRecord, is_author: bool) -> super::PostResponse {
         permalink,
         summary,
     }
+}
+
+/// The shared public-permalink lookup used by both the `get_post` server fn and
+/// the non-reactive public projector.
+///
+/// Validates the date, then does the visibility-filtered store lookup for
+/// `viewer`. The caller maps the record to a `PostResponse` with its own
+/// `is_author` (the projector always anonymous → `false`; the server fn derives
+/// it from the session), so there is one query and no drift between the two
+/// public surfaces.
+///
+/// # Errors
+///
+/// Returns a validation error for an impossible calendar date, or a storage
+/// error if the permalink lookup fails.
+pub async fn fetch_post_record(
+    posts: &dyn PostStorage,
+    viewer: &ViewerIdentity,
+    username: &Username,
+    year: i32,
+    month: u32,
+    day: u32,
+    slug: &Slug,
+) -> InternalResult<Option<PostRecord>> {
+    NaiveDate::from_ymd_opt(year, month, day)
+        .ok_or_else(|| InternalError::validation("Invalid permalink"))?;
+    posts
+        .get_post_by_permalink(username, year, month, day, slug, viewer, Utc::now())
+        .await
+        .map_err(InternalError::storage)
 }
 
 pub fn parse_post_cursor(

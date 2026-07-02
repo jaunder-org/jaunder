@@ -1,0 +1,1120 @@
+//! Pure, non-reactive HTML rendering for the public discoverability surface.
+//!
+//! Shared by the server-side projector (`server::projector`) and the CSR client
+//! (`web::pages`): both call the SAME function on the SAME data, so the
+//! projector's server-painted content and the client's first paint coincide
+//! byte-for-byte (flash-free). There is deliberately NO leptos reactivity here
+//! — plain string building only, like `common::feed` — so `reactive_graph`
+//! never sits on the public request path (the #173 escape). See
+//! `docs/adr/0041` and `docs/inbound-data-handling.md` §4.
+//!
+//! The markup mirrors `web::pages::ui::PostDisplay`'s class structure
+//! (`article.j-post` → `j-post-head` / `j-post-title` / `j-post-body` /
+//! `j-post-foot`) so the seeded first paint and the reactive client-navigation
+//! fallback share styling.
+
+use crate::posts::{PostResponse, TimelinePage, TimelinePostSummary};
+use crate::tags::TagSummary;
+use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
+
+/// The default theme applied to `<div class="j-root" data-theme=…>`. Lives here
+/// (the shell-rendering layer) so the projector's server-painted shell and the
+/// reactive `AppShell` share one value; re-exported from `pages` for the client.
+pub const DEFAULT_THEME: &str = "studio";
+
+/// The initial data a public page is rendered from — serialized into the
+/// projector's `#jaunder-seed` blob and adopted by the CSR client on boot.
+///
+/// Variants carry the route context (`username` / `tag`) the bare
+/// [`TimelinePage`] lacks but the heading, title, and permalinks need — the
+/// reactive components get it from the route params today.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PageSeed {
+    SiteTimeline(TimelinePage),
+    Profile {
+        username: String,
+        page: TimelinePage,
+    },
+    SiteTag {
+        tag: String,
+        page: TimelinePage,
+    },
+    UserTag {
+        username: String,
+        tag: String,
+        page: TimelinePage,
+    },
+    Permalink(PostResponse),
+}
+
+/// Linking context for a post's footer tag chips — the pure mirror of
+/// `pages::ui::TagContext` (which is a re-export of this). `SiteWide` links each
+/// chip to `/tags/:slug` only; `ForUser` also renders the "· here" link to
+/// `/~:username/tags/:slug`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TagCtx {
+    SiteWide,
+    ForUser(String),
+}
+
+/// Derives `(initials, hue)` from a display name. `initials`: first character of
+/// each of the first two whitespace-separated words, uppercased. `hue`: sum of
+/// all char codes mod 360. Shared by the reactive `Avatar` component and the
+/// pure [`render_avatar`] so a seeded avatar and its reactive re-render coincide.
+#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_sign_loss)]
+#[must_use]
+pub fn avatar_parts(name: &str) -> (String, u32) {
+    let initials: String = name
+        .split_whitespace()
+        .take(2)
+        .filter_map(|word| word.chars().next())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    let hue: u32 = name.chars().fold(0u32, |acc, c| acc + c as u32) % 360;
+    (initials, hue)
+}
+
+/// One avatar chip as `<div class="j-av" …>`, byte-identical to the reactive
+/// `pages::ui::Avatar` component's output for the same `(name, size)`.
+#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_sign_loss)]
+#[must_use]
+pub fn render_avatar(name: &str, size: u32) -> String {
+    let (initials, hue) = avatar_parts(name);
+    let font_size = (size as f32 * 0.36).round() as u32;
+    format!(
+        "<div class=\"j-av\" style=\"width:{size}px;height:{size}px;background:oklch(0.58 0.07 {hue});font-size:{font_size}px\">{initials}</div>",
+        initials = escape_html(&initials),
+    )
+}
+
+/// Formats an RFC-3339 timestamp as `"YYYY-MM-DD HH:MM"`, falling back to the raw
+/// string if it contains no `T` separator. Shared with the reactive components so
+/// the projected post time and the reactive re-render coincide.
+#[must_use]
+pub fn format_post_time(ts: &str) -> String {
+    if let Some(t_pos) = ts.find('T') {
+        let date = &ts[..t_pos];
+        let rest = &ts[t_pos + 1..];
+        let time = if rest.len() >= 5 { &rest[..5] } else { rest };
+        format!("{date} {time}")
+    } else {
+        ts.to_owned()
+    }
+}
+
+/// Escape text for safe interpolation into HTML element or attribute content.
+fn escape_html(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// The document `<head>` inner HTML: per-page title + description + Open Graph.
+/// This is the SEO/discoverability payload — the whole reason the public
+/// surface stays server-rendered.
+#[must_use]
+pub fn render_head(seed: &PageSeed) -> String {
+    let (title, description) = match seed {
+        PageSeed::Permalink(post) => (
+            post.title
+                .clone()
+                .unwrap_or_else(|| format!("Post by {}", post.username)),
+            post.summary.clone().unwrap_or_default(),
+        ),
+        PageSeed::Profile { username, .. } => (format!("Posts by {username}"), String::new()),
+        PageSeed::SiteTimeline(_) => ("Jaunder".to_string(), String::new()),
+        PageSeed::SiteTag { tag, .. } => (format!("#{tag}"), String::new()),
+        PageSeed::UserTag { username, tag, .. } => (format!("#{tag} by {username}"), String::new()),
+    };
+    let title = escape_html(&title);
+    let description = escape_html(&description);
+    let mut head = format!(
+        concat!(
+            "<meta charset=\"utf-8\" />",
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />",
+            "<link rel=\"stylesheet\" href=\"/style/jaunder.css\" />",
+            "<link rel=\"stylesheet\" href=\"/style/jaunder-themes.css\" />",
+            "<title>{title}</title>",
+            "<meta name=\"description\" content=\"{description}\" />",
+            "<meta property=\"og:title\" content=\"{title}\" />",
+            "<meta property=\"og:description\" content=\"{description}\" />",
+        ),
+        title = title,
+        description = description,
+    );
+    head.push_str(&render_discovery(seed));
+    head
+}
+
+/// Feed + RSD autodiscovery `<link>`s for the seed's surface, the pure mirror of
+/// the reactive `FeedDiscovery`/`RsdDiscovery` components (`web::feed_discovery`)
+/// so the projector's `<head>` carries the same discovery metadata the reactive
+/// SSR render did (feed readers + `AtomPub` editors follow these). Each page emits
+/// exactly what its reactive counterpart does: the RSS/Atom/JSON feed links for
+/// its surface, and — only on the user-profile page — the RSD `EditURI` link. The
+/// permalink page renders none. A route param that fails to parse omits the feed
+/// links (mirrors the reactive `.ok()` guard). Post-boot the reactive components
+/// re-add identical links; the duplicates are invisible.
+fn render_discovery(seed: &PageSeed) -> String {
+    use common::feed::{canonicalize, FeedFormat, FeedSurface};
+    use common::{tag::Tag, username::Username};
+
+    let mut out = String::new();
+
+    let surface = match seed {
+        PageSeed::SiteTimeline(_) => Some(FeedSurface::Site),
+        PageSeed::SiteTag { tag, .. } => tag
+            .parse::<Tag>()
+            .ok()
+            .map(|tag| FeedSurface::SiteTag { tag }),
+        PageSeed::Profile { username, .. } => username
+            .parse::<Username>()
+            .ok()
+            .map(|username| FeedSurface::User { username }),
+        PageSeed::UserTag { username, tag, .. } => username
+            .parse::<Username>()
+            .ok()
+            .zip(tag.parse::<Tag>().ok())
+            .map(|(username, tag)| FeedSurface::UserTag { username, tag }),
+        // The reactive permalink page renders no discovery links.
+        PageSeed::Permalink(_) => None,
+    };
+
+    if let Some(surface) = surface {
+        let label = feed_label(&surface);
+        for (format, suffix, mime) in [
+            (FeedFormat::Rss, "RSS", "application/rss+xml"),
+            (FeedFormat::Atom, "Atom", "application/atom+xml"),
+            (FeedFormat::Json, "JSON Feed", "application/feed+json"),
+        ] {
+            let _ = write!(
+                out,
+                "<link rel=\"alternate\" type=\"{mime}\" title=\"{title}\" href=\"{href}\" />",
+                title = escape_html(&format!("{label} ({suffix})")),
+                href = escape_html(&canonicalize(&surface, format)),
+            );
+        }
+    }
+
+    // Only the reactive user-profile page hoists the RSD link (the user-tag page
+    // does not), so mirror that exactly.
+    if let PageSeed::Profile { username, .. } = seed {
+        let _ = write!(
+            out,
+            "<link rel=\"EditURI\" type=\"application/rsd+xml\" title=\"AtomPub (RSD)\" href=\"{href}\" />",
+            href = escape_html(&format!("/~{username}/rsd.xml")),
+        );
+    }
+
+    out
+}
+
+/// Human-readable feed title per surface — the pure mirror of the reactive
+/// `web::feed_discovery::surface_label`.
+fn feed_label(surface: &common::feed::FeedSurface) -> String {
+    use common::feed::FeedSurface;
+    match surface {
+        FeedSurface::Site => "Site feed".to_string(),
+        FeedSurface::SiteTag { tag } => format!("#{tag} feed"),
+        FeedSurface::User { username } => format!("@{username} feed"),
+        FeedSurface::UserTag { username, tag } => format!("@{username} #{tag} feed"),
+    }
+}
+
+/// The full anonymous `#app` shell the projector serves: the exact `j-root`
+/// layout the reactive `App`/`AppShell` produces for an anonymous viewer (the
+/// sidebar, the main region, and the per-route `<main>` content), so removing
+/// `#app` and mounting the CSR app on boot causes no reflow. The authed extras
+/// (footer avatar, authed nav, action columns) layer on top reactively once
+/// `current_user` resolves (that is #181, and needs no coincidence).
+/// `BackupBanner` renders nothing for an anonymous viewer, so it is omitted here.
+#[must_use]
+pub fn render_shell(seed: &PageSeed) -> String {
+    format!(
+        concat!(
+            "<div class=\"j-root\" data-theme=\"{theme}\"><div class=\"j-shell\">",
+            "<aside class=\"j-sidebar\">{sidebar}</aside>",
+            "<div class=\"j-main-region\"><main class=\"j-main\">{body}</main></div></div></div>",
+        ),
+        theme = DEFAULT_THEME,
+        sidebar = render_sidebar(""),
+        body = render_body(seed),
+    )
+}
+
+/// The `<main class="j-main">` inner content for a route — mirrors each reactive
+/// page's markup (Topbar + wrappers + posts + load-more) so the seeded first paint
+/// coincides. Split from [`render_shell`] so the permalink Suspense fallback can
+/// reuse just [`permalink_article`].
+pub(crate) fn render_body(seed: &PageSeed) -> String {
+    match seed {
+        // Permalink: no Topbar; a single article inside `j-scroll`/`j-page`.
+        PageSeed::Permalink(post) => format!(
+            "<div class=\"j-scroll\"><div class=\"j-page\">{}</div></div>",
+            permalink_article(post),
+        ),
+        // Home (anonymous "Local" mode): Topbar + hero + a bare `j-scroll` of posts.
+        PageSeed::SiteTimeline(page) => {
+            let topbar = render_topbar(
+                "jaunder.local",
+                Some("Read-only \u{00b7} posts originating on this instance"),
+                "<a href=\"/login\" class=\"j-btn\">Sign in</a>\
+                 <a href=\"/register\" class=\"j-btn is-primary\">Register</a>",
+            );
+            let scroll = if page.posts.is_empty() {
+                "<p>No posts yet.</p>".to_string()
+            } else {
+                format!(
+                    "{}{}",
+                    render_posts(&page.posts, &TagCtx::SiteWide),
+                    render_load_more(page.has_more),
+                )
+            };
+            format!(
+                "{topbar}{hero}<div class=\"j-scroll\">{scroll}</div>",
+                hero = render_hero(),
+            )
+        }
+        PageSeed::Profile { username, page } => render_timeline_page(
+            &render_topbar(&format!("Posts by {username}"), Some("User timeline"), ""),
+            &page.posts,
+            page.has_more,
+            &TagCtx::ForUser(username.clone()),
+            "No posts yet.",
+        ),
+        PageSeed::SiteTag { tag, page } => render_timeline_page(
+            &render_topbar(&format!("#{tag}"), Some("Posts on this instance"), ""),
+            &page.posts,
+            page.has_more,
+            &TagCtx::SiteWide,
+            "No posts with this tag yet.",
+        ),
+        PageSeed::UserTag {
+            username,
+            tag,
+            page,
+        } => render_timeline_page(
+            &render_topbar(
+                &format!("#{tag}"),
+                Some(&format!("Posts by ~{username}")),
+                "",
+            ),
+            &page.posts,
+            page.has_more,
+            &TagCtx::ForUser(username.clone()),
+            "No posts with this tag yet.",
+        ),
+    }
+}
+
+/// One permalink post as an `<article>`. Shared by the projector's permalink page
+/// and the reactive `PostPage`'s Suspense fallback so they coincide.
+#[must_use]
+pub(crate) fn permalink_article(post: &PostResponse) -> String {
+    let ctx = TagCtx::ForUser(post.username.clone());
+    render_post_article(&PostView {
+        username: &post.username,
+        title: post.title.as_deref(),
+        banner: None,
+        summary: post.summary.as_deref(),
+        rendered_html: &post.rendered_html,
+        time: &format_post_time(post.published_at.as_deref().unwrap_or(&post.created_at)),
+        permalink: post.permalink.as_deref().unwrap_or_default(),
+        tags: &post.tags,
+        tag_ctx: &ctx,
+        is_author: false,
+    })
+}
+
+/// The `<div class="j-topbar">` bar, mirroring the reactive `pages::ui::Topbar`.
+/// `right` is trusted HTML for the `j-topbar-right` slot (e.g. the home Sign-in /
+/// Register buttons); `title`/`sub` are escaped.
+#[must_use]
+fn render_topbar(title: &str, sub: Option<&str>, right: &str) -> String {
+    let sub_html = sub.map_or_else(String::new, |s| {
+        format!("<div class=\"j-sub\">{}</div>", escape_html(s))
+    });
+    format!(
+        "<div class=\"j-topbar\"><div><h1>{title}</h1>{sub_html}</div><div class=\"j-topbar-right\">{right}</div></div>",
+        title = escape_html(title),
+    )
+}
+
+/// The home page hero block (constant copy), mirroring `home.rs`.
+#[must_use]
+fn render_hero() -> String {
+    "<div class=\"j-hero\"><h1>One timeline. Every protocol.</h1><p>Jaunder is a self-hosted \
+     social client that reads from ActivityPub, AT Protocol, RSS, Atom, and JSON Feed \u{2014} and \
+     publishes back out to the ones you choose. Below: what\u{2019}s been posted from this \
+     instance.</p></div>"
+        .to_string()
+}
+
+/// The non-functional "Load more" button the projector paints so the reactive
+/// button (which replaces it on boot) doesn't reflow. Rendered only when there is
+/// a next page, matching the reactive `has_more` guard.
+#[must_use]
+fn render_load_more(has_more: bool) -> String {
+    if has_more {
+        "<button>Load more</button>".to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Concatenated `<article>`s for a list of timeline posts (anonymous, so no action
+/// column), each coincident with the reactive `PostCard`/`PostDisplay` output.
+#[must_use]
+fn render_posts(posts: &[TimelinePostSummary], tag_ctx: &TagCtx) -> String {
+    let mut out = String::new();
+    for post in posts {
+        out.push_str(&render_post_article(&PostView {
+            username: &post.username,
+            title: post.title.as_deref(),
+            banner: None,
+            summary: post.summary.as_deref(),
+            rendered_html: &post.rendered_html,
+            time: &format_post_time(&post.published_at),
+            permalink: &post.permalink,
+            tags: &post.tags,
+            tag_ctx,
+            is_author: false,
+        }));
+    }
+    out
+}
+
+/// The fields needed to render one post, borrowed from a `PostResponse` or a
+/// `TimelinePostSummary`. `time` is already formatted (see [`format_post_time`]).
+pub(crate) struct PostView<'a> {
+    pub username: &'a str,
+    pub title: Option<&'a str>,
+    pub banner: Option<&'a str>,
+    pub summary: Option<&'a str>,
+    pub rendered_html: &'a str,
+    pub time: &'a str,
+    pub permalink: &'a str,
+    pub tags: &'a [TagSummary],
+    pub tag_ctx: &'a TagCtx,
+    pub is_author: bool,
+}
+
+/// One post as a full `<article class="j-post">…</article>` — the projector's
+/// coincident unit. The reactive `PostDisplay` renders the SAME inner HTML (via
+/// [`render_post_inner`] / [`render_post_content`]) so a seeded first paint and
+/// the reactive re-render are byte-identical.
+#[must_use]
+pub(crate) fn render_post_article(view: &PostView) -> String {
+    format!(
+        "<article class=\"j-post\">{}</article>",
+        render_post_inner(view)
+    )
+}
+
+/// The inner HTML of `<article class="j-post">` for the **anonymous** layout:
+/// avatar + the content column, with no author-action slot. Mirrors
+/// `PostDisplay`'s children when no `children` are passed.
+#[must_use]
+pub(crate) fn render_post_inner(view: &PostView) -> String {
+    format!(
+        concat!(
+            "{avatar}",
+            "<div style=\"min-width:0;display:flex;gap:8px;align-items:flex-start\">",
+            "<div style=\"flex:1;min-width:0\">{content}</div>",
+            "</div>",
+        ),
+        avatar = render_avatar(view.username, 38),
+        content = render_post_content(view),
+    )
+}
+
+/// The inner HTML of the post's content column (`<div style="flex:1;min-width:0">`):
+/// header, title, optional draft banner, summary, body, footer. Shared by the
+/// anonymous [`render_post_inner`] and the reactive author layout, which slots
+/// this into the same content `<div>` via `inner_html` and overlays the reactive
+/// action column as a sibling. When `is_author`, the header time is omitted (it
+/// moves to the action column), exactly as the reactive `PostDisplay` does.
+#[must_use]
+pub(crate) fn render_post_content(view: &PostView) -> String {
+    let user = escape_html(view.username);
+    let header_time = if view.is_author {
+        String::new()
+    } else {
+        format!(
+            "<span class=\"j-spacer\"></span><span class=\"j-post-time\">{}</span>",
+            escape_html(view.time)
+        )
+    };
+    let title_html = view.title.map_or_else(String::new, |t| {
+        let t = escape_html(t);
+        if view.permalink.is_empty() {
+            format!("<div class=\"j-post-title\">{t}</div>")
+        } else {
+            format!(
+                "<div class=\"j-post-title\"><a href=\"{}\">{t}</a></div>",
+                escape_html(view.permalink)
+            )
+        }
+    });
+    let banner_html = view.banner.map_or_else(String::new, |b| {
+        format!("<p class=\"draft-banner\">{}</p>", escape_html(b))
+    });
+    let summary_html = view.summary.map_or_else(String::new, |s| {
+        format!("<p class=\"j-post-summary\">{}</p>", escape_html(s))
+    });
+    format!(
+        concat!(
+            "<header class=\"j-post-head\">",
+            "<span class=\"j-post-name\">{user}</span>",
+            "<span class=\"j-post-handle\">@{user}</span>",
+            "{header_time}",
+            "</header>",
+            "{title_html}{banner_html}{summary_html}",
+            "<div class=\"j-post-body\">{body}</div>",
+            "<footer class=\"j-post-foot\">{tags}<span class=\"j-spacer\"></span></footer>",
+        ),
+        user = user,
+        header_time = header_time,
+        title_html = title_html,
+        banner_html = banner_html,
+        summary_html = summary_html,
+        body = view.rendered_html,
+        tags = render_tag_list(view.tags, view.tag_ctx),
+    )
+}
+
+/// A profile / tag timeline page's `<main>` content: the given `topbar`, then
+/// `j-scroll` > `j-page` holding either the empty placeholder or a `<div>` of
+/// posts followed by the load-more button — mirroring `UserTimelinePage` /
+/// `SiteTagPage` / `UserTagPage` (the anonymous `SubscribeButton` renders nothing).
+#[must_use]
+fn render_timeline_page(
+    topbar: &str,
+    posts: &[TimelinePostSummary],
+    has_more: bool,
+    tag_ctx: &TagCtx,
+    empty_text: &str,
+) -> String {
+    let inner = if posts.is_empty() {
+        format!("<p>{}</p>", escape_html(empty_text))
+    } else {
+        format!(
+            "<div>{}</div>{}",
+            render_posts(posts, tag_ctx),
+            render_load_more(has_more),
+        )
+    };
+    format!("{topbar}<div class=\"j-scroll\"><div class=\"j-page\">{inner}</div></div>")
+}
+
+/// The footer tag chips: a `<span class="j-tag-list">` of `<span class="j-tag-cell">`
+/// chips, each a `#display` link to `/tags/:slug`, plus the "· here" link under
+/// [`TagCtx::ForUser`]. The reactive post markup injects this via `inner_html`, so
+/// there is one source of truth for the chip markup (it replaced the old reactive
+/// `TagList` component).
+#[must_use]
+pub(crate) fn render_tag_list(tags: &[TagSummary], ctx: &TagCtx) -> String {
+    if tags.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("<span class=\"j-tag-list\">");
+    for tag in tags {
+        let slug = escape_html(&tag.slug);
+        let _ = write!(
+            out,
+            "<span class=\"j-tag-cell\"><a class=\"j-tag\" href=\"/tags/{slug}\">#{display}</a>",
+            display = escape_html(&tag.display),
+        );
+        if let TagCtx::ForUser(username) = ctx {
+            let _ = write!(
+                out,
+                "<a class=\"j-tag-here\" href=\"/~{user}/tags/{slug}\" title=\"On this blog\">\u{00b7} here</a>",
+                user = escape_html(username),
+            );
+        }
+        out.push_str("</span>");
+    }
+    out.push_str("</span>");
+    out
+}
+
+/// SVG path `d` attribute strings for all Jaunder icons. Shared by the reactive
+/// `pages::ui::Icon` component and the pure [`render_icon`].
+pub struct Icons;
+
+impl Icons {
+    pub const HOME: &'static str = "M3 10l7-6 7 6v7a1 1 0 0 1-1 1h-4v-5H8v5H4a1 1 0 0 1-1-1z";
+    pub const LOCAL: &'static str = "M4 5h12v10H4z M4 9h12";
+    pub const FED: &'static str =
+        "M10 3a7 7 0 1 0 0 14a7 7 0 0 0 0-14zM3 10h14 M10 3c2 3 2 11 0 14 M10 3c-2 3-2 11 0 14";
+    pub const REPLY: &'static str = "M4 4h12v9H7l-3 3z";
+    pub const BOOKMARK: &'static str = "M5 3h10v14l-5-3-5 3z";
+    pub const BOOST: &'static str =
+        "M5 8l4-4 4 4 M4 7v4a3 3 0 0 0 3 3h9 M15 12l-4 4-4-4 M16 13V9a3 3 0 0 0-3-3H4";
+    pub const HEART: &'static str =
+        "M10 17s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 17 7c0 5.5-7 10-7 10z";
+    pub const SEARCH: &'static str = "M8 3a6 6 0 1 0 0 12a6 6 0 0 0 0-12z M17 17l-4-4";
+    pub const PLUS: &'static str = "M10 4v12 M4 10h12";
+    pub const COG: &'static str = "M10 6v2 M10 12v2 M6 10H4 M16 10h-2 M6.5 6.5l-1.5-1.5 M14 14l1.5 1.5 M6.5 13.5L5 15 M14 6l1.5-1.5 M10 13a3 3 0 1 0 0-6a3 3 0 0 0 0 6z";
+    pub const EDIT: &'static str = "M3 17l4 0 9-9a2.83 2.83 0 0 0-4-4l-9 9 0 4 M12 5l3 3";
+    pub const SHIELD: &'static str = "M10 3l6 2v4c0 4-2.4 7.1-6 8-3.6-.9-6-4-6-8V5l6-2z";
+    pub const MEDIA: &'static str =
+        "M3 5h14v10H3z M7 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2z M5 13l3-3 2 2 3-3 5 5H3z";
+}
+
+/// Sidebar nav items: `(key, label, icon_path, href, auth_required)`. Shared by
+/// [`render_sidebar`] (anonymous → the `href.is_some() && !auth_required` subset)
+/// and the reactive authed sidebar in `pages::ui::Sidebar`.
+pub const NAV_ITEMS: &[(&str, &str, &str, Option<&'static str>, bool)] = &[
+    ("home", "Home", Icons::HOME, Some("/"), false),
+    ("local", "Local", Icons::LOCAL, None, true),
+    ("federated", "Federated", Icons::FED, None, true),
+    ("replies", "Replies", Icons::REPLY, None, true),
+    ("bookmarks", "Bookmarks", Icons::BOOKMARK, None, true),
+    ("drafts", "Drafts", Icons::EDIT, Some("/drafts"), true),
+    ("media", "Media", Icons::MEDIA, Some("/media"), true),
+    (
+        "audiences",
+        "Audiences",
+        Icons::BOOKMARK,
+        Some("/audiences"),
+        true,
+    ),
+    ("settings", "Settings", Icons::COG, None, true),
+];
+
+/// The static demo "Sources" rows in the sidebar: `(proto, name, sub)`.
+pub const SIDEBAR_SOURCES: &[(&str, &str, &str)] = &[
+    ("atproto", "Bluesky", "mara.bsky.social"),
+    ("activitypub", "Mastodon", "@mara@hachyderm.io"),
+    ("rss", "Ivy Chen", "weeknotes"),
+    ("jsonfeed", "Manton", "manton.org"),
+];
+
+/// One inline icon `<svg class="j-icon">`, matching the reactive `pages::ui::Icon`.
+#[must_use]
+pub fn render_icon(path: &str, size: u32) -> String {
+    format!(
+        concat!(
+            "<svg class=\"j-icon\" width=\"{size}\" height=\"{size}\" viewBox=\"0 0 20 20\" ",
+            "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" ",
+            "stroke-linejoin=\"round\"><path d=\"{path}\"></path></svg>",
+        ),
+        size = size,
+        path = path,
+    )
+}
+
+/// The inner HTML of the **anonymous** `<aside class="j-sidebar">`: brand, search,
+/// the public nav (items with an href and no auth requirement — just "Home"),
+/// the sources section, and an empty footer. The reactive `pages::ui::Sidebar`
+/// injects this verbatim via `inner_html` for the anonymous viewer, so a seeded
+/// first paint and the reactive re-render coincide; authed users get the reactive
+/// build (extra nav, footer avatar) layered on top (#181).
+#[must_use]
+pub fn render_sidebar(active_key: &str) -> String {
+    let mut out = String::from(
+        "<a class=\"j-brand\" href=\"/\" style=\"text-decoration:none;color:inherit\">\
+         <div class=\"j-brand-mark\">j</div><div class=\"j-brand-text\">Jaunder</div></a>",
+    );
+    let _ = write!(
+        out,
+        "<div class=\"j-search\">{}<span>Search</span><span class=\"j-kbd\">\u{2318}K</span></div>",
+        render_icon(Icons::SEARCH, 14),
+    );
+    out.push_str("<nav class=\"j-nav\">");
+    for &(key, label, icon_path, href, auth_required) in NAV_ITEMS {
+        let Some(href) = href else { continue };
+        if auth_required {
+            continue;
+        }
+        let active = if key == active_key { " is-active" } else { "" };
+        let _ = write!(
+            out,
+            "<a class=\"j-nav-item{active}\" href=\"{href}\">{icon}<span>{label}</span></a>",
+            icon = render_icon(icon_path, 16),
+        );
+    }
+    out.push_str("</nav><div><div class=\"j-sb-head\"><span>Sources</span><span class=\"j-sb-add\">+</span></div>");
+    for &(proto, name, sub) in SIDEBAR_SOURCES {
+        let _ = write!(
+            out,
+            "<div class=\"j-source\"><span class=\"j-dot\" style=\"width:8px;height:8px;border-radius:4px;background:var(--c-{proto})\"></span>\
+             <div style=\"flex:1;min-width:0\"><div class=\"j-source-name\">{name}</div><div class=\"j-source-sub\">{sub}</div></div></div>",
+        );
+    }
+    out.push_str("</div><div class=\"j-sb-foot\"></div>");
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_post() -> PostResponse {
+        PostResponse {
+            post_id: 7,
+            username: "alice".into(),
+            title: Some("Hello & <World>".into()),
+            slug: "hello".into(),
+            body: "raw".into(),
+            format: "markdown".into(),
+            rendered_html: "<p>Hi <em>there</em></p>".into(),
+            created_at: "2026-01-02T03:04:05Z".into(),
+            published_at: Some("2026-01-02T03:04:05Z".into()),
+            is_draft: false,
+            is_author: false,
+            permalink: Some("/~alice/2026/01/02/hello".into()),
+            tags: vec![TagSummary {
+                slug: "rust".into(),
+                display: "Rust".into(),
+            }],
+            summary: None,
+        }
+    }
+
+    fn sample_summary() -> TimelinePostSummary {
+        TimelinePostSummary {
+            post_id: 1,
+            username: "bob".into(),
+            title: Some("First".into()),
+            summary: Some("An excerpt".into()),
+            slug: "first".into(),
+            rendered_html: "<p>body</p>".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            published_at: "2026-01-01T00:00:00Z".into(),
+            permalink: "/~bob/2026/01/01/first".into(),
+            is_author: false,
+            tags: vec![],
+        }
+    }
+
+    #[test]
+    fn escape_replaces_markup_metacharacters() {
+        assert_eq!(escape_html("a<b>&\"'"), "a&lt;b&gt;&amp;&quot;&#39;");
+    }
+
+    #[test]
+    fn permalink_body_escapes_title_but_injects_rendered_html_raw() {
+        let html = render_body(&PageSeed::Permalink(sample_post()));
+        assert!(
+            html.contains("Hello &amp; &lt;World&gt;"),
+            "title must be escaped: {html}"
+        );
+        assert!(
+            html.contains("<p>Hi <em>there</em></p>"),
+            "rendered_html must be injected raw: {html}"
+        );
+        assert!(
+            html.contains("<article class=\"j-post\""),
+            "expected article: {html}"
+        );
+        assert!(
+            html.contains("/~alice/2026/01/02/hello"),
+            "expected permalink: {html}"
+        );
+        assert!(html.contains("Rust"), "expected tag display: {html}");
+    }
+
+    #[test]
+    fn permalink_head_sets_escaped_title_and_og() {
+        let head = render_head(&PageSeed::Permalink(sample_post()));
+        assert!(
+            head.contains("<title>Hello &amp; &lt;World&gt;</title>"),
+            "{head}"
+        );
+        assert!(head.contains("<meta property=\"og:title\""), "{head}");
+    }
+
+    #[test]
+    fn timeline_renders_each_post_and_heading() {
+        let page = TimelinePage {
+            posts: vec![sample_summary()],
+            next_cursor_created_at: None,
+            next_cursor_post_id: None,
+            has_more: false,
+        };
+        let html = render_body(&PageSeed::Profile {
+            username: "bob".into(),
+            page,
+        });
+        assert!(html.contains("Posts by bob"), "expected heading: {html}");
+        assert!(html.contains("First"), "expected post title: {html}");
+        assert!(html.contains("<p>body</p>"), "expected body: {html}");
+    }
+
+    #[test]
+    fn empty_timeline_renders_placeholder() {
+        let page = TimelinePage {
+            posts: vec![],
+            next_cursor_created_at: None,
+            next_cursor_post_id: None,
+            has_more: false,
+        };
+        let html = render_body(&PageSeed::SiteTimeline(page));
+        assert!(html.contains("No posts yet."), "{html}");
+    }
+
+    fn one_post_page() -> TimelinePage {
+        TimelinePage {
+            posts: vec![sample_summary()],
+            next_cursor_created_at: None,
+            next_cursor_post_id: None,
+            has_more: false,
+        }
+    }
+
+    #[test]
+    fn head_titles_cover_every_page_kind() {
+        let cases = [
+            (
+                PageSeed::SiteTimeline(one_post_page()),
+                "<title>Jaunder</title>",
+            ),
+            (
+                PageSeed::Profile {
+                    username: "bob".into(),
+                    page: one_post_page(),
+                },
+                "<title>Posts by bob</title>",
+            ),
+            (
+                PageSeed::SiteTag {
+                    tag: "rust".into(),
+                    page: one_post_page(),
+                },
+                "<title>#rust</title>",
+            ),
+            (
+                PageSeed::UserTag {
+                    username: "bob".into(),
+                    tag: "rust".into(),
+                    page: one_post_page(),
+                },
+                "<title>#rust by bob</title>",
+            ),
+        ];
+        for (seed, expected_title) in cases {
+            let head = render_head(&seed);
+            assert!(head.contains(expected_title), "{head}");
+        }
+    }
+
+    #[test]
+    fn body_covers_tag_page_headings() {
+        let site = render_body(&PageSeed::SiteTag {
+            tag: "rust".into(),
+            page: one_post_page(),
+        });
+        // Tag pages render the Topbar (h1 + sub), then j-scroll > j-page > posts.
+        assert!(site.contains("<h1>#rust</h1>"), "{site}");
+        assert!(site.contains("Posts on this instance"), "{site}");
+        assert!(
+            site.contains("<div class=\"j-scroll\"><div class=\"j-page\">"),
+            "{site}"
+        );
+        assert!(site.contains("First"), "expected post rendered: {site}");
+
+        let user = render_body(&PageSeed::UserTag {
+            username: "bob".into(),
+            tag: "rust".into(),
+            page: one_post_page(),
+        });
+        assert!(user.contains("<h1>#rust</h1>"), "{user}");
+        assert!(user.contains("Posts by ~bob"), "{user}");
+    }
+
+    #[test]
+    fn shell_wraps_body_in_j_root_with_sidebar_and_main() {
+        let html = render_shell(&PageSeed::SiteTimeline(one_post_page()));
+        assert!(
+            html.starts_with(
+                "<div class=\"j-root\" data-theme=\"studio\"><div class=\"j-shell\">\
+                 <aside class=\"j-sidebar\">"
+            ),
+            "{html}"
+        );
+        // Sidebar inner is present, then the main region.
+        assert!(html.contains("j-brand-text"), "{html}");
+        assert!(
+            html.contains("</aside><div class=\"j-main-region\"><main class=\"j-main\">"),
+            "{html}"
+        );
+        assert!(html.ends_with("</main></div></div></div>"), "{html}");
+    }
+
+    #[test]
+    fn home_local_body_has_topbar_hero_signin_and_posts() {
+        let html = render_body(&PageSeed::SiteTimeline(one_post_page()));
+        assert!(html.contains("<h1>jaunder.local</h1>"), "{html}");
+        assert!(
+            html.contains("<a href=\"/login\" class=\"j-btn\">Sign in</a>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<a href=\"/register\" class=\"j-btn is-primary\">Register</a>"),
+            "{html}"
+        );
+        assert!(html.contains("<div class=\"j-hero\">"), "{html}");
+        // Posts sit directly in j-scroll for the home page (no inner j-page wrapper).
+        assert!(
+            html.contains("<div class=\"j-scroll\"><article class=\"j-post\">"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn load_more_button_rendered_only_when_has_more() {
+        let mut page = one_post_page();
+        page.has_more = true;
+        let with = render_body(&PageSeed::SiteTimeline(page));
+        assert!(with.contains("<button>Load more</button>"), "{with}");
+
+        let without = render_body(&PageSeed::SiteTimeline(one_post_page()));
+        assert!(!without.contains("Load more"), "{without}");
+    }
+
+    #[test]
+    fn topbar_without_sub_omits_the_sub_div() {
+        let html = render_topbar("Title", None, "");
+        assert!(html.contains("<h1>Title</h1>"), "{html}");
+        assert!(!html.contains("j-sub"), "{html}");
+        assert!(
+            html.contains("<div class=\"j-topbar-right\"></div>"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn timeline_page_empty_states_differ_by_route() {
+        let empty = TimelinePage {
+            posts: vec![],
+            next_cursor_created_at: None,
+            next_cursor_post_id: None,
+            has_more: false,
+        };
+        let profile = render_body(&PageSeed::Profile {
+            username: "bob".into(),
+            page: empty.clone(),
+        });
+        assert!(profile.contains("<p>No posts yet.</p>"), "{profile}");
+        let tag = render_body(&PageSeed::SiteTag {
+            tag: "rust".into(),
+            page: empty,
+        });
+        assert!(tag.contains("<p>No posts with this tag yet.</p>"), "{tag}");
+    }
+
+    #[test]
+    fn permalink_body_has_no_topbar_and_wraps_article_in_page() {
+        let html = render_body(&PageSeed::Permalink(sample_post()));
+        assert!(
+            !html.contains("j-topbar"),
+            "permalink has no topbar: {html}"
+        );
+        assert!(
+            html.starts_with(
+                "<div class=\"j-scroll\"><div class=\"j-page\"><article class=\"j-post\">"
+            ),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn body_permalink_falls_back_to_created_at_when_unpublished() {
+        let mut post = sample_post();
+        post.published_at = None;
+        post.permalink = None;
+        let html = render_body(&PageSeed::Permalink(post));
+        // The time is formatted (mirroring the reactive `format_post_time`), not raw.
+        assert!(html.contains("2026-01-02 03:04"), "{html}");
+    }
+
+    #[test]
+    fn avatar_matches_reactive_component_markup() {
+        // Must stay byte-identical to `pages::ui::Avatar` for size 38.
+        let (initials, hue) = avatar_parts("Mara Ek");
+        assert_eq!(initials, "ME");
+        let html = render_avatar("Mara Ek", 38);
+        assert_eq!(
+            html,
+            format!(
+                "<div class=\"j-av\" style=\"width:38px;height:38px;background:oklch(0.58 0.07 {hue});font-size:14px\">ME</div>"
+            )
+        );
+    }
+
+    #[test]
+    fn tag_list_site_wide_has_hash_chip_and_no_here_link() {
+        let tags = [TagSummary {
+            slug: "rust".into(),
+            display: "Rust".into(),
+        }];
+        let html = render_tag_list(&tags, &TagCtx::SiteWide);
+        assert_eq!(
+            html,
+            "<span class=\"j-tag-list\"><span class=\"j-tag-cell\">\
+             <a class=\"j-tag\" href=\"/tags/rust\">#Rust</a></span></span>"
+        );
+    }
+
+    #[test]
+    fn tag_list_for_user_adds_here_link() {
+        let tags = [TagSummary {
+            slug: "rust".into(),
+            display: "Rust".into(),
+        }];
+        let html = render_tag_list(&tags, &TagCtx::ForUser("alice".into()));
+        assert!(
+            html.contains(
+                "<a class=\"j-tag-here\" href=\"/~alice/tags/rust\" title=\"On this blog\">"
+            ),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn empty_tag_list_renders_nothing() {
+        assert_eq!(render_tag_list(&[], &TagCtx::SiteWide), "");
+    }
+
+    #[test]
+    fn post_content_shows_header_time_for_anon_and_hides_it_for_author() {
+        let ctx = TagCtx::SiteWide;
+        let mut view = PostView {
+            username: "bob",
+            title: None,
+            banner: None,
+            summary: None,
+            rendered_html: "<p>b</p>",
+            time: "2026-01-01 00:00",
+            permalink: "",
+            tags: &[],
+            tag_ctx: &ctx,
+            is_author: false,
+        };
+        assert!(render_post_content(&view)
+            .contains("<span class=\"j-post-time\">2026-01-01 00:00</span>"));
+        view.is_author = true;
+        assert!(!render_post_content(&view).contains("j-post-time"));
+    }
+
+    #[test]
+    fn post_content_renders_draft_banner_when_present() {
+        let ctx = TagCtx::SiteWide;
+        let view = PostView {
+            username: "bob",
+            title: None,
+            banner: Some("Draft - visible only to you"),
+            summary: Some("An excerpt"),
+            rendered_html: "<p>b</p>",
+            time: "2026-01-01 00:00",
+            permalink: "",
+            tags: &[],
+            tag_ctx: &ctx,
+            is_author: true,
+        };
+        let html = render_post_content(&view);
+        assert!(
+            html.contains("<p class=\"draft-banner\">Draft - visible only to you</p>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<p class=\"j-post-summary\">An excerpt</p>"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn post_article_wraps_inner_in_j_post_article() {
+        let ctx = TagCtx::SiteWide;
+        let view = PostView {
+            username: "bob",
+            title: Some("T"),
+            banner: None,
+            summary: None,
+            rendered_html: "<p>b</p>",
+            time: "2026-01-01 00:00",
+            permalink: "/~bob/x",
+            tags: &[],
+            tag_ctx: &ctx,
+            is_author: false,
+        };
+        let html = render_post_article(&view);
+        assert!(html.starts_with("<article class=\"j-post\">"), "{html}");
+        assert!(html.ends_with("</article>"), "{html}");
+        // Title links to the permalink, mirroring `PostDisplay`.
+        assert!(
+            html.contains("<div class=\"j-post-title\"><a href=\"/~bob/x\">T</a></div>"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn page_seed_round_trips_through_json() {
+        let seed = PageSeed::Permalink(sample_post());
+        let json = serde_json::to_string(&seed).unwrap();
+        let back: PageSeed = serde_json::from_str(&json).unwrap();
+        assert_eq!(seed, back);
+    }
+
+    #[test]
+    fn sidebar_renders_brand_public_nav_sources_and_empty_foot() {
+        let html = render_sidebar("home");
+        assert!(
+            html.contains("<div class=\"j-brand-text\">Jaunder</div>"),
+            "{html}"
+        );
+        // Public nav = Home only; active class applied for the matching key.
+        assert!(
+            html.contains("<a class=\"j-nav-item is-active\" href=\"/\">"),
+            "{html}"
+        );
+        assert!(html.contains("<span>Home</span>"), "{html}");
+        // Auth-required items must NOT appear for the anonymous sidebar.
+        assert!(!html.contains(">Drafts<"), "{html}");
+        assert!(!html.contains(">Settings<"), "{html}");
+        // Sources section + empty footer.
+        assert!(
+            html.contains("<div class=\"j-source-name\">Bluesky</div>"),
+            "{html}"
+        );
+        assert!(html.ends_with("<div class=\"j-sb-foot\"></div>"), "{html}");
+    }
+
+    #[test]
+    fn sidebar_active_class_absent_for_non_home_route() {
+        let html = render_sidebar("tags");
+        assert!(
+            html.contains("<a class=\"j-nav-item\" href=\"/\">"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn icon_matches_reactive_component_markup() {
+        assert_eq!(
+            render_icon(Icons::HOME, 16),
+            format!(
+                "<svg class=\"j-icon\" width=\"16\" height=\"16\" viewBox=\"0 0 20 20\" \
+                 fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" \
+                 stroke-linejoin=\"round\"><path d=\"{}\"></path></svg>",
+                Icons::HOME
+            )
+        );
+    }
+}

@@ -31,6 +31,7 @@ pub mod pages;
 pub mod password_reset;
 pub mod posts;
 pub mod profile;
+pub mod render;
 pub mod sessions;
 pub mod site;
 pub mod subscriptions;
@@ -40,26 +41,48 @@ pub mod viewer;
 pub use error::server_resource;
 pub use pages::App;
 
+// Only the wasm32 body of `mount_csr` below uses the leptos prelude (the host
+// csr build compiles that body out), so the import matches that gate.
+#[cfg(all(feature = "csr", target_arch = "wasm32"))]
 use leptos::prelude::*;
-use leptos_meta::MetaTags;
 
-#[must_use]
-pub fn shell(options: LeptosOptions) -> impl IntoView {
-    view! {
-        <!DOCTYPE html>
-        <html lang="en">
-            <head>
-                <meta charset="utf-8" />
-                <meta name="viewport" content="width=device-width, initial-scale=1" />
-                <link rel="stylesheet" href="/style/jaunder.css" />
-                <link rel="stylesheet" href="/style/jaunder-themes.css" />
-                <AutoReload options=options.clone() />
-                <HydrationScripts options />
-                <MetaTags />
-            </head>
-            <body>
-                <App />
-            </body>
-        </html>
+/// Boot the CSR client (#179). Adopts the public projector's data blob (#178):
+/// reads `#jaunder-seed`, drops the projector-painted `#app` container, and
+/// mounts [`App`] with the seed in context so the public pages render their
+/// first paint from it (no reactive fetch) via the same `render` fn the
+/// projector used — coincident, flash-free. On the static SPA shell (no blob,
+/// no `#app`) the seed is `None` and this is an ordinary `mount_to_body`.
+#[cfg(feature = "csr")]
+pub fn mount_csr() {
+    // Browser-only: the CSR client only ever runs in wasm, so the DOM adoption +
+    // mount live behind `target_arch = "wasm32"`. On the host build (coverage /
+    // tests) this is a no-op — which is also why it stays out of the coverage
+    // report, like the rest of `web`'s wasm-only code.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let seed = read_dom_seed();
+        if let Some(el) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id("app"))
+        {
+            // App re-renders the identical content from `seed`, so removing the
+            // server-painted copy avoids a duplicate paint without a visible
+            // flash (the removal and remount happen in one synchronous task).
+            el.remove();
+        }
+        leptos::mount::mount_to_body(move || {
+            provide_context(seed.clone());
+            view! { <App /> }
+        });
     }
+}
+
+/// Read and deserialize the projector's `#jaunder-seed` JSON blob, if present.
+#[cfg(all(feature = "csr", target_arch = "wasm32"))]
+fn read_dom_seed() -> Option<render::PageSeed> {
+    let json = web_sys::window()?
+        .document()?
+        .get_element_by_id("jaunder-seed")?
+        .text_content()?;
+    serde_json::from_str(&json).ok()
 }

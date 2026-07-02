@@ -108,9 +108,35 @@ pub fn CreatePostPage() -> impl IntoView {
     }
 }
 
+/// First-paint view for [`PostPage`]'s `Suspense`: the projector-seeded content
+/// (flash-free) when the server painted this permalink, or a spinner while the
+/// reactive fetch runs (client-side navigation, no seed).
+fn permalink_first_paint(seed_post: Option<crate::posts::PostResponse>) -> AnyView {
+    match seed_post {
+        Some(post) => {
+            // Just the article — this fallback sits inside the reactive PostPage's
+            // own `j-scroll`/`j-page`. `display:contents` keeps the host wrapper out
+            // of the layout so it coincides with the projector's permalink page.
+            let html = crate::render::permalink_article(&post);
+            view! { <div style="display:contents" inner_html=html></div> }.into_any()
+        }
+        None => view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any(),
+    }
+}
+
 #[allow(clippy::must_use_candidate)]
 #[component]
 pub fn PostPage() -> impl IntoView {
+    // Public projector seed (#178/#179): the content the server painted for this
+    // permalink. Adopted as the `Suspense` fallback below so first paint shows
+    // real content (flash-free) instead of a spinner. The reactive fetch still
+    // runs and takes over — restoring the author's edit/delete affordances when
+    // the viewer owns the post — so this *enhances* rather than *replaces*.
+    let seed_post = match use_context::<Option<crate::render::PageSeed>>().flatten() {
+        Some(crate::render::PageSeed::Permalink(post)) => Some(post),
+        _ => None,
+    };
+
     let params = use_params_map();
 
     let post_data = move || {
@@ -166,9 +192,9 @@ pub fn PostPage() -> impl IntoView {
     view! {
         <div class="j-scroll">
             <div class="j-page">
-                <Suspense fallback=|| {
-                    view! { <p class="j-loading">"Loading\u{2026}"</p> }
-                }>
+                <Suspense fallback=move || permalink_first_paint(
+                    seed_post.clone(),
+                )>
                     {move || Suspend::new(async move {
                         match post.await {
                             Ok(fetched) => {
@@ -209,6 +235,7 @@ pub fn PostPage() -> impl IntoView {
             </div>
         </div>
     }
+    .into_any()
 }
 
 #[allow(clippy::too_many_lines)]
@@ -314,6 +341,25 @@ pub fn UserTimelinePage() -> impl IntoView {
     let has_more = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
     let initial_loaded = RwSignal::new(false);
+
+    // Public projector seed (#178/#179): if the server painted this profile,
+    // adopt its posts as the initial state so first paint shows content (no
+    // Loading flash). Guarded on the username so a client-side navigation to a
+    // *different* profile ignores the initial URL's seed; the reactive fetch
+    // still runs and takes over.
+    if let Some(crate::render::PageSeed::Profile {
+        username: seed_user,
+        page,
+    }) = use_context::<Option<crate::render::PageSeed>>().flatten()
+    {
+        if seed_user == username.get_untracked() {
+            next_cursor_created_at.set(page.next_cursor_created_at);
+            next_cursor_post_id.set(page.next_cursor_post_id);
+            has_more.set(page.has_more);
+            timeline.set(page.posts);
+            initial_loaded.set(true);
+        }
+    }
 
     let load_more_action = ServerAction::<ListUserPosts>::new();
 
@@ -1025,6 +1071,23 @@ pub fn SiteTagPage() -> impl IntoView {
     let error = RwSignal::new(None::<String>);
     let initial_loaded = RwSignal::new(false);
 
+    // Public projector seed (#178/#179): adopt the seeded posts for a matching
+    // tag so first paint shows content (guarded so a client-side nav to a
+    // different tag ignores the initial URL's seed); the reactive fetch still runs.
+    if let Some(crate::render::PageSeed::SiteTag {
+        tag: seed_tag,
+        page,
+    }) = use_context::<Option<crate::render::PageSeed>>().flatten()
+    {
+        if seed_tag == tag.get_untracked() {
+            next_cursor_created_at.set(page.next_cursor_created_at);
+            next_cursor_post_id.set(page.next_cursor_post_id);
+            has_more.set(page.has_more);
+            timeline.set(page.posts);
+            initial_loaded.set(true);
+        }
+    }
+
     let load_more_action = ServerAction::<ListPostsByTag>::new();
 
     #[cfg(target_arch = "wasm32")]
@@ -1181,6 +1244,23 @@ pub fn UserTagPage() -> impl IntoView {
     let has_more = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
     let initial_loaded = RwSignal::new(false);
+
+    // Public projector seed (#178/#179): adopt the seeded posts for a matching
+    // username+tag so first paint shows content; the reactive fetch still runs.
+    if let Some(crate::render::PageSeed::UserTag {
+        username: seed_user,
+        tag: seed_tag,
+        page,
+    }) = use_context::<Option<crate::render::PageSeed>>().flatten()
+    {
+        if seed_user == username.get_untracked() && seed_tag == tag.get_untracked() {
+            next_cursor_created_at.set(page.next_cursor_created_at);
+            next_cursor_post_id.set(page.next_cursor_post_id);
+            has_more.set(page.has_more);
+            timeline.set(page.posts);
+            initial_loaded.set(true);
+        }
+    }
 
     let load_more_action = ServerAction::<ListUserPostsByTag>::new();
 
