@@ -540,9 +540,32 @@
             // JAUNDER_E2E_WORKERS overrides this for probing / a future flip.
             workers: workers,
             fullyParallel: workers > 1,
+            // admin-site mutates the site.title/base_url global singletons, so
+            // under fullyParallel it must not overlap specs that read them
+            // (ADR-0039). Each browser is split: the main project excludes
+            // admin-site and runs in parallel; a serial `-admin` project runs
+            // admin-site alone AFTER the main project (project `dependencies` +
+            // fullyParallel:false). At workers=1 this is inert (all serial anyway).
             projects: [
               {
                 name: 'chromium',
+                testIgnore: /admin-site\.spec\.ts/,
+                use: {
+                  ...devices['Desktop Chrome'],
+                  launchOptions: {
+                    args: [
+                      '--no-sandbox',
+                      '--disable-gpu',
+                      '--disable-dev-shm-usage',
+                    ],
+                  },
+                },
+              },
+              {
+                name: 'chromium-admin',
+                testMatch: /admin-site\.spec\.ts/,
+                fullyParallel: false,
+                dependencies: ['chromium'],
                 use: {
                   ...devices['Desktop Chrome'],
                   launchOptions: {
@@ -556,6 +579,16 @@
               },
               {
                 name: 'firefox',
+                testIgnore: /admin-site\.spec\.ts/,
+                use: {
+                  ...devices['Desktop Firefox'],
+                },
+              },
+              {
+                name: 'firefox-admin',
+                testMatch: /admin-site\.spec\.ts/,
+                fullyParallel: false,
+                dependencies: ['firefox'],
                 use: {
                   ...devices['Desktop Firefox'],
                 },
@@ -730,7 +763,8 @@
               + " JAUNDER_E2E_TRACEPARENT=${traceParent}"
               + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
               + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-              + " --config playwright.nix.config.js --project ${browser}"
+              + " --config playwright.nix.config.js"
+              + " --project ${browser} --project ${browser}-admin"
             )
             # Stream the Playwright line-reporter output into the build log (-L), so
             # the failing test + assertion are recoverable from build.log alone,
