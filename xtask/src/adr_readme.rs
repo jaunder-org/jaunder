@@ -143,21 +143,9 @@ pub fn parse_table_block(block: &str) -> Vec<TableRow> {
 /// (ascending), reusing an existing row's title when present, else seeding the
 /// title from the ADR heading. Single-space padded — prettier owns alignment.
 pub fn render_block(entries: &[AdrEntry], existing: &[TableRow]) -> String {
-    let title_by_num: BTreeMap<u32, &str> =
-        existing.iter().map(|r| (r.num, r.title.as_str())).collect();
-    let mut sorted: Vec<&AdrEntry> = entries.iter().collect();
-    sorted.sort_by_key(|e| e.num);
-
     let mut out = String::from("| #   | Title | Status |\n| --- | ----- | ------ |\n");
-    for e in sorted {
-        let title = title_by_num
-            .get(&e.num)
-            .copied()
-            .unwrap_or(e.title.as_str());
-        out.push_str(&format!(
-            "| [{:04}](adr/{}) | {} | {} |\n",
-            e.num, e.filename, title, e.status
-        ));
+    for (num, target, title, status) in resolved_rows(entries, existing) {
+        out.push_str(&format!("| [{num:04}]({target}) | {title} | {status} |\n"));
     }
     out.trim_end().to_string()
 }
@@ -194,10 +182,16 @@ fn extract_block(readme: &str) -> Result<String> {
     Ok(readme[begin..end].to_string())
 }
 
-/// A row's mechanical + preserved-title tuple, for a semantic idempotence check.
+/// A row's mechanical cells (number, link target, status) plus its
+/// preserved-or-seeded title: `(num, target, title, status)`.
 type Cells = (u32, String, String, String);
 
-fn desired_cells(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<Cells> {
+/// The desired table rows, ascending by number, applying the title-preservation
+/// rule once: reuse an existing row's title when a row with that number exists,
+/// else seed it from the ADR heading. The single source of that rule — both the
+/// renderer ([`render_block`]) and the idempotence check ([`sync_readme_at`])
+/// consume it, so they can never disagree.
+fn resolved_rows(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<Cells> {
     let title_by_num: BTreeMap<u32, &str> =
         existing.iter().map(|r| (r.num, r.title.as_str())).collect();
     let mut sorted: Vec<&AdrEntry> = entries.iter().collect();
@@ -237,7 +231,7 @@ pub fn sync_readme_at(repo: &Path) -> Result<String> {
     let entries = parse_adr_dir(repo)?;
     let existing = parse_table_block(&extract_block(&readme)?);
 
-    let desired = desired_cells(&entries, &existing);
+    let desired = resolved_rows(&entries, &existing);
     if desired == current_cells(&existing) {
         return Ok(format!("{} rows, already in sync", entries.len()));
     }
@@ -254,6 +248,19 @@ pub fn sync_readme_at(repo: &Path) -> Result<String> {
         "{} rows ({added} added, {removed} removed)",
         entries.len()
     ))
+}
+
+/// Whether `repo`'s README carries the ADR-table markers. `Ok(false)` when the
+/// README is absent (a scratch/test repo may omit it entirely) so the caller can
+/// skip table sync; a genuine read error still propagates rather than being
+/// mistaken for "no markers".
+pub fn readme_has_markers(repo: &Path) -> Result<bool> {
+    let readme_path = repo.join(README);
+    match std::fs::read_to_string(&readme_path) {
+        Ok(s) => Ok(s.contains(BEGIN) && s.contains(END)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e).with_context(|| format!("reading {}", readme_path.display())),
+    }
 }
 
 /// Entry point for `cargo xtask adr sync-readme`.
@@ -502,7 +509,7 @@ mod tests {
             status: "accepted".into(),
         }];
         // The preserved title is the curated one, so desired == current: a no-op.
-        assert_eq!(desired_cells(&entries, &existing), current_cells(&existing));
+        assert_eq!(resolved_rows(&entries, &existing), current_cells(&existing));
     }
 
     #[test]
@@ -637,5 +644,118 @@ mod tests {
             status: "accepted".into(),
         }];
         let _ = parity_problems(&entries, &existing);
+    }
+
+    /// A throwaway repo dir with `docs/adr/`, unique per (pid, tag) so parallel
+    /// tests don't collide. Cleaned best-effort by the caller.
+    fn scratch_repo(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "jaunder-adr-readme-test-{}-{tag}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("docs/adr")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn parse_adr_dir_reads_sorts_and_skips_non_adrs() {
+        let repo = scratch_repo("parse-dir");
+        let adr = repo.join("docs/adr");
+        std::fs::write(
+            adr.join("0002-b.md"),
+            "# ADR-0002: Second\n\n- Status: superseded\n",
+        )
+        .unwrap();
+        std::fs::write(
+            adr.join("0001-a.md"),
+            "# ADR-0001: First\n\n- Status: accepted\n",
+        )
+        .unwrap();
+        // Skipped: not markdown, and markdown without a leading number.
+        std::fs::write(adr.join("0003-c.txt"), "ignore me").unwrap();
+        std::fs::write(adr.join("template.md"), "# ADR-template\n").unwrap();
+
+        let entries = parse_adr_dir(&repo).unwrap();
+        let _ = std::fs::remove_dir_all(&repo);
+
+        let projected: Vec<_> = entries
+            .iter()
+            .map(|e| {
+                (
+                    e.num,
+                    e.filename.as_str(),
+                    e.title.as_str(),
+                    e.status.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            projected,
+            vec![
+                (1, "0001-a.md", "First", "accepted"),
+                (2, "0002-b.md", "Second", "superseded"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parity_report_reads_readme_and_errors_without_markers() {
+        let repo = scratch_repo("parity-report");
+        std::fs::write(
+            repo.join("docs/adr/0001-a.md"),
+            "# ADR-0001: First\n\n- Status: accepted\n",
+        )
+        .unwrap();
+
+        // Markers present, mechanical cells agree (title free to differ): clean.
+        std::fs::write(
+            repo.join("docs/README.md"),
+            format!(
+                "# Docs\n\n{BEGIN}\n\n| # | Title | Status |\n| --- | --- | --- |\n\
+                 | [0001](adr/0001-a.md) | Curated | accepted |\n\n{END}\n"
+            ),
+        )
+        .unwrap();
+        assert!(parity_report(&repo).unwrap().is_empty());
+
+        // A stale status cell is reported.
+        std::fs::write(
+            repo.join("docs/README.md"),
+            format!(
+                "# Docs\n\n{BEGIN}\n\n| # | Title | Status |\n| --- | --- | --- |\n\
+                 | [0001](adr/0001-a.md) | Curated | proposed |\n\n{END}\n"
+            ),
+        )
+        .unwrap();
+        let problems = parity_report(&repo).unwrap();
+        assert!(
+            problems.iter().any(|p| p.contains("ADR 0001 row status")),
+            "{problems:?}"
+        );
+
+        // No markers at all: an error, not a silent empty report.
+        std::fs::write(repo.join("docs/README.md"), "# Docs\n\nno table here\n").unwrap();
+        assert!(parity_report(&repo).is_err());
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn readme_has_markers_distinguishes_absent_present_and_missing() {
+        let repo = scratch_repo("has-markers");
+        // No README file: absent, reported as false (not an error).
+        assert!(!readme_has_markers(&repo).unwrap());
+        // Present markers.
+        std::fs::write(
+            repo.join("docs/README.md"),
+            format!("# Docs\n\n{BEGIN}\n\n{END}\n"),
+        )
+        .unwrap();
+        assert!(readme_has_markers(&repo).unwrap());
+        // README exists but carries no markers.
+        std::fs::write(repo.join("docs/README.md"), "# Docs\n").unwrap();
+        assert!(!readme_has_markers(&repo).unwrap());
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }

@@ -200,10 +200,15 @@ fn run_renumber(repo: &Path, main_ref: &str) -> Result<String> {
     // Keep the README ADR table in lockstep with the renamed/renumbered files: a
     // bump changes a number, a link target, and (for a brand-new ADR) adds a row.
     // Tolerate a README without the table markers — a scratch/test repo may omit
-    // them — by noting the skip rather than failing the renumber.
-    let table_note = match crate::adr_readme::sync_readme_at(repo) {
-        Ok(s) => format!("README table synced ({s})"),
-        Err(e) => format!("README table not synced: {e:#}"),
+    // them — by noting the skip; a genuine sync failure (unreadable README, a
+    // malformed table) still fails the renumber rather than hiding in the summary.
+    let table_note = if crate::adr_readme::readme_has_markers(repo)? {
+        format!(
+            "README table synced ({})",
+            crate::adr_readme::sync_readme_at(repo)?
+        )
+    } else {
+        "README table not synced (no adr-table markers)".to_string()
     };
 
     // The rename is staged (`git mv`); the reference rewrites and the table
