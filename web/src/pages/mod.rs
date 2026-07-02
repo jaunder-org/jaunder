@@ -12,6 +12,7 @@ pub mod profile;
 pub mod sessions;
 pub(crate) mod signal_read;
 pub mod site;
+pub(crate) mod timeline;
 pub mod ui;
 pub mod upload;
 pub use ui::{

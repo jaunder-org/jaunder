@@ -82,6 +82,27 @@ test("owner: /app cockpit boots straight into the personalized feed", async ({
   await expect(page.locator('textarea[name="body"]')).toBeVisible();
 });
 
+test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app", async ({
+  page,
+}, testInfo) => {
+  // D7 / acceptance-#3: the redirect-pref read path exists in PREPAINT_SCRIPT with a
+  // safe stay-default (nothing writes the key yet). Writing it exercises that path:
+  // an authed owner (marker set) with the key = "app" is redirected off / to /app
+  // before first paint. Requires BOTH the marker and the key.
+  await register(
+    page,
+    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  );
+  await page.evaluate(() =>
+    localStorage.setItem("jaunder_home_redirect", "app"),
+  );
+
+  await page.goto(`${BASE_URL}/`, { waitUntil: "commit" });
+  await page.waitForURL(/\/app$/, {
+    timeout: hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+  });
+});
+
 test("anonymous: /app bounces to /login", async ({ page }, testInfo) => {
   // No session and no marker → CockpitPage's current_user() gate resolves anon and
   // redirects to /login (D6).

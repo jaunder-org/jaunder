@@ -302,11 +302,11 @@ pub fn PostDisplay(
     tag_context: TagContext,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
-    let is_author = post.is_author;
     let time_label = crate::render::format_post_time(&post.published_at);
     // Built once and shared by both arms so the authored content column is the SAME
-    // pure render the projector paints (#181, ADR-0043) — no hand-rebuilt reactive
-    // markup that could diverge and reintroduce a flash.
+    // pure, viewer-independent render the projector paints (#181, ADR-0043 D4) — no
+    // hand-rebuilt markup and no is_author-driven content change that could diverge
+    // and reintroduce a flash. The action column is layered on additively.
     let view = crate::render::PostView {
         username: &post.username,
         title: post.title.as_deref(),
@@ -317,7 +317,6 @@ pub fn PostDisplay(
         permalink: &post.permalink,
         tags: &post.tags,
         tag_ctx: &tag_context,
-        is_author,
     };
     match children {
         // Anonymous / no-action layout: the WHOLE article inner is produced by the
@@ -387,8 +386,6 @@ pub fn PostCard(
     // the actual edit/delete by session — the marker only gates visibility.
     let is_author = post.is_author || marker_matches(&post.username);
     let post_id = post.post_id;
-    let time_label = crate::render::format_post_time(&post.published_at);
-    let permalink = post.permalink.clone();
     let edit_url = format!("/posts/{post_id}/edit");
     let delete_action = ServerAction::<DeletePost>::new();
     let unpublish_action = ServerAction::<UnpublishPost>::new();
@@ -411,12 +408,12 @@ pub fn PostCard(
         }
     });
 
+    // Additive action column (#181, ADR-0043 D4): edit/unpublish/delete only. The
+    // timestamp deliberately stays in the (coincident) content-column header rather
+    // than moving here, so the owner's own post doesn't diverge from the anon paint.
     let action_col = is_author.then(move || {
         view! {
             <div class="j-post-acts">
-                <a class="j-post-plink" href=permalink>
-                    {time_label}
-                </a>
                 <a class="j-btn" href=edit_url>
                     "Edit"
                 </a>

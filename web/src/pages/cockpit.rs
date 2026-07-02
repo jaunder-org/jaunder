@@ -10,24 +10,14 @@ use leptos_router::components::Redirect;
 
 use crate::auth::current_user;
 use crate::pages::signal_read::read_signal;
-use crate::pages::ui::{InlineComposer, PostCard, Topbar};
-use crate::posts::{list_home_feed, TimelinePostSummary};
+use crate::pages::timeline::{TimelineRows, TimelineState, PAGE_SIZE};
+use crate::pages::ui::{InlineComposer, Topbar};
+use crate::posts::list_home_feed;
 
-#[cfg(target_arch = "wasm32")]
-use leptos::task::spawn_local;
-
-#[allow(clippy::too_many_lines)]
 #[allow(clippy::must_use_candidate)]
 #[component]
 pub fn CockpitPage() -> impl IntoView {
-    let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
-    let next_cursor_created_at = RwSignal::new(None::<String>);
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
-    let next_cursor_post_id = RwSignal::new(None::<i64>);
-    let has_more = RwSignal::new(false);
-    let loading_more = RwSignal::new(false);
-    let error = RwSignal::new(None::<String>);
+    let state = TimelineState::default();
     let username = RwSignal::new(None::<String>);
     let bounce = RwSignal::new(false);
 
@@ -43,7 +33,7 @@ pub fn CockpitPage() -> impl IntoView {
         move || refresh_version.get(),
         |_| async move {
             match current_user().await {
-                Ok(Some(user)) => list_home_feed(None, None, Some(50))
+                Ok(Some(user)) => list_home_feed(None, None, Some(PAGE_SIZE))
                     .await
                     .map(|page| Some((user, page))),
                 Ok(None) => Ok(None),
@@ -52,9 +42,7 @@ pub fn CockpitPage() -> impl IntoView {
         },
     );
 
-    // Client-only effect copies the resolved Resource into the mutation signals
-    // (plain `Effect::new`, not isomorphic — the server future can resolve after
-    // the per-request owner is disposed).
+    // Client-only effect copies the resolved Resource into the timeline signals.
     #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
@@ -63,83 +51,26 @@ pub fn CockpitPage() -> impl IntoView {
                     // Only set `username` when it actually changes: a spurious set
                     // would re-run the outer view closure and REMOUNT InlineComposer,
                     // wiping its publish/draft flash (a re-fetch fires on every
-                    // publish via `refresh_version`). Same guard the old home feed used.
+                    // publish via `refresh_version`).
                     if username.get_untracked().as_ref() != Some(&user) {
                         username.set(Some(user));
                     }
-                    timeline.set(page.posts);
-                    next_cursor_created_at.set(page.next_cursor_created_at);
-                    next_cursor_post_id.set(page.next_cursor_post_id);
-                    has_more.set(page.has_more);
-                    loading_more.set(false);
-                    if error.get_untracked().is_some() {
-                        error.set(None);
-                    }
+                    state.resolve(page);
                 }
                 Ok(None) => bounce.set(true),
-                Err(err) => {
-                    error.set(Some(err.to_string()));
-                    timeline.set(Vec::new());
-                    has_more.set(false);
-                }
+                Err(err) => state.fail(err.to_string()),
             }
         }
     });
 
-    let on_load_more = move |_| {
-        #[cfg(not(target_arch = "wasm32"))]
-        {}
-
+    let on_load_more = Callback::new(move |()| {
         #[cfg(target_arch = "wasm32")]
-        {
-            if loading_more.get_untracked() || !has_more.get_untracked() {
-                return;
-            }
+        crate::pages::timeline::spawn_load_more(state, |c1, c2, n| list_home_feed(c1, c2, n));
+    });
 
-            loading_more.set(true);
-            let cursor_created_at = next_cursor_created_at.get_untracked();
-            let cursor_post_id = next_cursor_post_id.get_untracked();
-
-            let timeline = timeline;
-            let next_cursor_created_at_signal = next_cursor_created_at;
-            let next_cursor_post_id_signal = next_cursor_post_id;
-            let has_more_signal = has_more;
-            let loading_more_signal = loading_more;
-            let error_signal = error;
-
-            spawn_local(async move {
-                let result = list_home_feed(cursor_created_at, cursor_post_id, Some(50)).await;
-                match result {
-                    Ok(page) => {
-                        timeline.update(|rows| rows.extend(page.posts));
-                        next_cursor_created_at_signal.set(page.next_cursor_created_at);
-                        next_cursor_post_id_signal.set(page.next_cursor_post_id);
-                        has_more_signal.set(page.has_more);
-                        error_signal.set(None);
-                    }
-                    Err(err) => error_signal.set(Some(err.to_string())),
-                }
-                loading_more_signal.set(false);
-            });
-        }
-    };
-
-    let read_error = move || read_signal!(error);
+    let read_error = move || read_signal!(state.error);
     let read_bounce = move || read_signal!(bounce);
     let read_username = move || read_signal!(username);
-    let read_timeline_rows = move || read_signal!(timeline);
-    let read_has_more = move || read_signal!(has_more);
-    let read_loading_more = move || read_signal!(loading_more);
-
-    let load_more_btn = move || {
-        read_has_more().then(|| {
-            view! {
-                <button on:click=on_load_more disabled=read_loading_more>
-                    {move || if read_loading_more() { "Loading\u{2026}" } else { "Load more" }}
-                </button>
-            }
-        })
-    };
 
     view! {
         {move || {
@@ -161,23 +92,7 @@ pub fn CockpitPage() -> impl IntoView {
                     view! {
                         <Topbar title="Home".to_string() sub="Your home feed".to_string() />
                         <InlineComposer username=user on_publish=refresh_version.write_only() />
-                        <div class="j-scroll">
-                            {move || {
-                                let rows = read_timeline_rows();
-                                if rows.is_empty() {
-                                    view! { <p>"No posts yet."</p> }.into_any()
-                                } else {
-                                    rows.into_iter()
-                                        .map(|p| {
-                                            view! {
-                                                <PostCard post=p banner=None on_mutate=on_mutate />
-                                            }
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .into_any()
-                                }
-                            }} {load_more_btn}
-                        </div>
+                        <TimelineRows state=state on_mutate=on_mutate on_load_more=on_load_more />
                     }
                         .into_any()
                 }

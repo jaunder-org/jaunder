@@ -353,7 +353,6 @@ pub(crate) fn permalink_article(post: &PostResponse) -> String {
         permalink: post.permalink.as_deref().unwrap_or_default(),
         tags: &post.tags,
         tag_ctx: &ctx,
-        is_author: false,
     })
 }
 
@@ -409,7 +408,6 @@ fn render_posts(posts: &[TimelinePostSummary], tag_ctx: &TagCtx) -> String {
             permalink: &post.permalink,
             tags: &post.tags,
             tag_ctx,
-            is_author: false,
         }));
     }
     out
@@ -427,7 +425,6 @@ pub(crate) struct PostView<'a> {
     pub permalink: &'a str,
     pub tags: &'a [TagSummary],
     pub tag_ctx: &'a TagCtx,
-    pub is_author: bool,
 }
 
 /// One post as a full `<article class="j-post">…</article>` — the projector's
@@ -463,19 +460,17 @@ pub(crate) fn render_post_inner(view: &PostView) -> String {
 /// header, title, optional draft banner, summary, body, footer. Shared by the
 /// anonymous [`render_post_inner`] and the reactive author layout, which slots
 /// this into the same content `<div>` via `inner_html` and overlays the reactive
-/// action column as a sibling. When `is_author`, the header time is omitted (it
-/// moves to the action column), exactly as the reactive `PostDisplay` does.
+/// action column as a sibling. It is deliberately **viewer-independent** (#181,
+/// ADR-0043 D4): the owner's own-post content column must be byte-identical to the
+/// projector's anonymous paint, so the timestamp always stays in the header and
+/// the action column is purely additive — never a content change.
 #[must_use]
 pub(crate) fn render_post_content(view: &PostView) -> String {
     let user = escape_html(view.username);
-    let header_time = if view.is_author {
-        String::new()
-    } else {
-        format!(
-            "<span class=\"j-spacer\"></span><span class=\"j-post-time\">{}</span>",
-            escape_html(view.time)
-        )
-    };
+    let header_time = format!(
+        "<span class=\"j-spacer\"></span><span class=\"j-post-time\">{}</span>",
+        escape_html(view.time)
+    );
     let title_html = view.title.map_or_else(String::new, |t| {
         let t = escape_html(t);
         if view.permalink.is_empty() {
@@ -703,10 +698,11 @@ mod tests {
     }
 
     #[test]
-    fn author_content_column_equals_anonymous_content() {
-        // The authored PostDisplay injects render_post_content via inner_html (#181);
-        // assert it is exactly the content the anonymous render_post_inner wraps, so
-        // the author article's content column coincides with the projector's paint.
+    fn author_content_column_coincides_with_the_anonymous_paint() {
+        // #181, ADR-0043 D4/D8: the authed own-post PostDisplay injects
+        // render_post_content into the same content <div> the projector's anonymous
+        // render_post_inner wraps. render_post_content is viewer-independent, so the
+        // authed re-render cannot diverge from the paint — no localized flash.
         let ctx = TagCtx::ForUser("alice".into());
         let view = PostView {
             username: "alice",
@@ -718,13 +714,19 @@ mod tests {
             permalink: "/~alice/x",
             tags: &[],
             tag_ctx: &ctx,
-            is_author: true,
         };
         let content = render_post_content(&view);
-        let inner = render_post_inner(&view);
+        // The timestamp stays in the header — the specific divergence #181 fixed. The
+        // projector painted it anonymously, so the authed content column must too.
         assert!(
-            inner.contains(&content),
-            "author inner_html content must be a substring of the anonymous inner: {inner}"
+            content.contains("<span class=\"j-post-time\">2026-01-01 00:00</span>"),
+            "content column must keep the header time to coincide: {content}"
+        );
+        // The anonymous inner the projector paints embeds that exact content column
+        // verbatim — the authed Some arm injects the identical string.
+        assert!(
+            render_post_inner(&view).contains(&content),
+            "anonymous inner must embed the identical content column: {content}"
         );
     }
 
@@ -1068,9 +1070,12 @@ mod tests {
     }
 
     #[test]
-    fn post_content_shows_header_time_for_anon_and_hides_it_for_author() {
+    fn post_content_always_shows_the_header_time() {
+        // Viewer-independent (#181, ADR-0043 D4): the timestamp stays in the header
+        // for every viewer, so the owner's own-post content column coincides with
+        // the projector's anonymous paint (the action column is purely additive).
         let ctx = TagCtx::SiteWide;
-        let mut view = PostView {
+        let view = PostView {
             username: "bob",
             title: None,
             banner: None,
@@ -1080,12 +1085,9 @@ mod tests {
             permalink: "",
             tags: &[],
             tag_ctx: &ctx,
-            is_author: false,
         };
         assert!(render_post_content(&view)
             .contains("<span class=\"j-post-time\">2026-01-01 00:00</span>"));
-        view.is_author = true;
-        assert!(!render_post_content(&view).contains("j-post-time"));
     }
 
     #[test]
@@ -1101,7 +1103,6 @@ mod tests {
             permalink: "",
             tags: &[],
             tag_ctx: &ctx,
-            is_author: true,
         };
         let html = render_post_content(&view);
         assert!(
@@ -1127,7 +1128,6 @@ mod tests {
             permalink: "/~bob/x",
             tags: &[],
             tag_ctx: &ctx,
-            is_author: false,
         };
         let html = render_post_article(&view);
         assert!(html.starts_with("<article class=\"j-post\">"), "{html}");
