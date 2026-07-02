@@ -598,6 +598,11 @@ impl Icons {
 /// and the reactive authed sidebar in `pages::ui::Sidebar`.
 pub const NAV_ITEMS: &[(&str, &str, &str, Option<&'static str>, bool)] = &[
     ("home", "Home", Icons::HOME, Some("/"), false),
+    // The authed-only cockpit (#181, ADR-0043 D6): the owner's personalized feed at
+    // /app. `auth_required = true` keeps it out of the cacheable anonymous sidebar
+    // (`render_sidebar` filters `href.is_some() && !auth_required`) — it appears
+    // only in the authed sidebar, so the projector's anonymous paint is unchanged.
+    ("app", "Feed", Icons::HOME, Some("/app"), true),
     ("local", "Local", Icons::LOCAL, None, true),
     ("federated", "Federated", Icons::FED, None, true),
     ("replies", "Replies", Icons::REPLY, None, true),

@@ -741,7 +741,7 @@ git commit -m "feat(web): / stays the enhanced public timeline; own-post afforda
   `list_home_feed` + `PostCard`s + load-more (the current `home.rs` Feed branch,
   lines 188-211 plus its resource/effect plumbing), authed-only.
 
-- [ ] **Step 1: Create `CockpitPage`** in `web/src/pages/cockpit.rs` by moving
+- [x] **Step 1: Create `CockpitPage`** in `web/src/pages/cockpit.rs` by moving
       the Feed-mode logic out of `home.rs`: the `list_home_feed` fetch, the
       `current_user()` gate (here it _is_ legitimately async — an
       anonymous/expired visitor to `/app` must bounce), the `InlineComposer`,
@@ -750,7 +750,7 @@ git commit -m "feat(web): / stays the enhanced public timeline; own-post afforda
       `rg -n 'redirect\("/login"\)|navigate.*login' web/src/pages` for the
       established pattern).
 
-- [ ] **Step 2: Register the route** (`web/src/pages/mod.rs`, inside `<Routes>`,
+- [x] **Step 2: Register the route** (`web/src/pages/mod.rs`, inside `<Routes>`,
       before `ParamSegment("username")` so the static segment wins):
 
 ```rust
@@ -760,7 +760,7 @@ git commit -m "feat(web): / stays the enhanced public timeline; own-post afforda
 Add `mod cockpit; pub use cockpit::CockpitPage;` and include it in the `ui`
 re-export block as needed.
 
-- [ ] **Step 3: Sidebar nav entry.** Add a cockpit nav item so the owner can
+- [x] **Step 3: Sidebar nav entry.** Add a cockpit nav item so the owner can
       reach `/app` (and it shows active there). Either extend
       `render::NAV_ITEMS` with
       `("app", "App", Icons::HOME_or_new, Some("/app"), true)` (authed-only, so
@@ -769,13 +769,13 @@ re-export block as needed.
       `NAV_ITEMS` for one source of truth; confirm the anonymous
       `render_sidebar` still omits it (it filters `auth_required`).
 
-- [ ] **Step 4: Test.** Cockpit is wasm-reactive → pinned by Task 9 e2e
+- [x] **Step 4: Test.** Cockpit is wasm-reactive → pinned by Task 9 e2e
       ("bookmark `/app` → lands directly in the feed+composer, zero clicks;
       anonymous `/app` → `/login`"). Verify compile + clippy.
 
 Run: `cargo xtask check` Expected: clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/pages/cockpit.rs web/src/pages/mod.rs web/src/pages/ui.rs web/src/render/mod.rs

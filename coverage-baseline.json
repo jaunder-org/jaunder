@@ -1795,6 +1795,288 @@
       "text": "}"
     }
   ],
+  "web/src/pages/cockpit.rs": [
+    {
+      "line": 22,
+      "text": "pub fn CockpitPage() -> impl IntoView {"
+    },
+    {
+      "line": 23,
+      "text": "    let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());"
+    },
+    {
+      "line": 25,
+      "text": "    let next_cursor_created_at = RwSignal::new(None::<String>);"
+    },
+    {
+      "line": 27,
+      "text": "    let next_cursor_post_id = RwSignal::new(None::<i64>);"
+    },
+    {
+      "line": 28,
+      "text": "    let has_more = RwSignal::new(false);"
+    },
+    {
+      "line": 29,
+      "text": "    let loading_more = RwSignal::new(false);"
+    },
+    {
+      "line": 30,
+      "text": "    let error = RwSignal::new(None::<String>);"
+    },
+    {
+      "line": 31,
+      "text": "    let username = RwSignal::new(None::<String>);"
+    },
+    {
+      "line": 32,
+      "text": "    let bounce = RwSignal::new(false);"
+    },
+    {
+      "line": 34,
+      "text": "    let refresh_version = RwSignal::new(0u32);"
+    },
+    {
+      "line": 35,
+      "text": "    let on_mutate = Callback::new(move |()| refresh_version.update(|v| *v += 1));"
+    },
+    {
+      "line": 42,
+      "text": "    let initial_page = crate::server_resource("
+    },
+    {
+      "line": 43,
+      "text": "        move || refresh_version.get(),"
+    },
+    {
+      "line": 44,
+      "text": "        |_| async move {"
+    },
+    {
+      "line": 45,
+      "text": "            match current_user().await {"
+    },
+    {
+      "line": 46,
+      "text": "                Ok(Some(user)) => list_home_feed(None, None, Some(50))"
+    },
+    {
+      "line": 47,
+      "text": "                    .await"
+    },
+    {
+      "line": 48,
+      "text": "                    .map(|page| Some((user, page))),"
+    },
+    {
+      "line": 49,
+      "text": "                Ok(None) => Ok(None),"
+    },
+    {
+      "line": 50,
+      "text": "                Err(e) => Err(e),"
+    },
+    {
+      "line": 52,
+      "text": "        },"
+    },
+    {
+      "line": 83,
+      "text": "    let on_load_more = move |_| {"
+    },
+    {
+      "line": 85,
+      "text": "        {}"
+    },
+    {
+      "line": 119,
+      "text": "    };"
+    },
+    {
+      "line": 121,
+      "text": "    let read_error = move || read_signal!(error);"
+    },
+    {
+      "line": 122,
+      "text": "    let read_bounce = move || read_signal!(bounce);"
+    },
+    {
+      "line": 123,
+      "text": "    let read_username = move || read_signal!(username);"
+    },
+    {
+      "line": 124,
+      "text": "    let read_timeline_rows = move || read_signal!(timeline);"
+    },
+    {
+      "line": 125,
+      "text": "    let read_has_more = move || read_signal!(has_more);"
+    },
+    {
+      "line": 126,
+      "text": "    let read_loading_more = move || read_signal!(loading_more);"
+    },
+    {
+      "line": 128,
+      "text": "    let load_more_btn = move || {"
+    },
+    {
+      "line": 129,
+      "text": "        read_has_more().then(|| {"
+    },
+    {
+      "line": 130,
+      "text": "            view! {"
+    },
+    {
+      "line": 131,
+      "text": "                <button on:click=on_load_more disabled=read_loading_more>"
+    },
+    {
+      "line": 132,
+      "text": "                    {move || if read_loading_more() { \"Loading\\u{2026}\" } else { \"Load more\" }}"
+    },
+    {
+      "line": 135,
+      "text": "        })"
+    },
+    {
+      "line": 136,
+      "text": "    };"
+    },
+    {
+      "line": 138,
+      "text": "    view! {"
+    },
+    {
+      "line": 139,
+      "text": "        {move || {"
+    },
+    {
+      "line": 140,
+      "text": "            if read_bounce() {"
+    },
+    {
+      "line": 141,
+      "text": "                return view! { <Redirect path=\"/login\" /> }.into_any();"
+    },
+    {
+      "line": 142,
+      "text": "            }"
+    },
+    {
+      "line": 143,
+      "text": "            if let Some(err) = read_error() {"
+    },
+    {
+      "line": 144,
+      "text": "                return view! { <p class=\"error\">{err}</p> }.into_any();"
+    },
+    {
+      "line": 145,
+      "text": "            }"
+    },
+    {
+      "line": 146,
+      "text": "            match read_username() {"
+    },
+    {
+      "line": 148,
+      "text": "                    view! {"
+    },
+    {
+      "line": 149,
+      "text": "                        <Topbar title=\"Home\".to_string() />"
+    },
+    {
+      "line": 150,
+      "text": "                        <p class=\"j-loading\">\"Loading\\u{2026}\"</p>"
+    },
+    {
+      "line": 152,
+      "text": "                        .into_any()"
+    },
+    {
+      "line": 154,
+      "text": "                Some(user) => {"
+    },
+    {
+      "line": 155,
+      "text": "                    view! {"
+    },
+    {
+      "line": 156,
+      "text": "                        <Topbar title=\"Home\".to_string() sub=\"Your home feed\".to_string() />"
+    },
+    {
+      "line": 157,
+      "text": "                        <InlineComposer username=user on_publish=refresh_version.write_only() />"
+    },
+    {
+      "line": 158,
+      "text": "                        <div class=\"j-scroll\">"
+    },
+    {
+      "line": 159,
+      "text": "                            {move || {"
+    },
+    {
+      "line": 160,
+      "text": "                                let rows = read_timeline_rows();"
+    },
+    {
+      "line": 161,
+      "text": "                                if rows.is_empty() {"
+    },
+    {
+      "line": 162,
+      "text": "                                    view! { <p>\"No posts yet.\"</p> }.into_any()"
+    },
+    {
+      "line": 164,
+      "text": "                                    rows.into_iter()"
+    },
+    {
+      "line": 165,
+      "text": "                                        .map(|p| {"
+    },
+    {
+      "line": 166,
+      "text": "                                            view! {"
+    },
+    {
+      "line": 167,
+      "text": "                                                <PostCard post=p banner=None on_mutate=on_mutate />"
+    },
+    {
+      "line": 169,
+      "text": "                                        })"
+    },
+    {
+      "line": 170,
+      "text": "                                        .collect::<Vec<_>>()"
+    },
+    {
+      "line": 171,
+      "text": "                                        .into_any()"
+    },
+    {
+      "line": 173,
+      "text": "                            }} {load_more_btn}"
+    },
+    {
+      "line": 176,
+      "text": "                        .into_any()"
+    },
+    {
+      "line": 179,
+      "text": "        }}"
+    },
+    {
+      "line": 181,
+      "text": "}"
+    }
+  ],
   "web/src/pages/email.rs": [
     {
       "line": 11,
@@ -2857,75 +3139,75 @@
   ],
   "web/src/pages/mod.rs": [
     {
-      "line": 50,
+      "line": 52,
       "text": "fn AppShell() -> impl IntoView {"
     },
     {
-      "line": 51,
+      "line": 53,
       "text": "    let theme = use_context::<RwSignal<String>>()"
     },
     {
-      "line": 52,
+      "line": 54,
       "text": "        .unwrap_or_else(|| RwSignal::new(DEFAULT_THEME.to_string()));"
     },
     {
-      "line": 53,
+      "line": 55,
       "text": "    view! {"
     },
     {
-      "line": 54,
+      "line": 56,
       "text": "        <div class=\"j-root\" attr:data-theme=move || theme.get()>"
     },
     {
-      "line": 55,
+      "line": 57,
       "text": "            <div class=\"j-shell\">"
     },
     {
-      "line": 57,
+      "line": 59,
       "text": "                <div class=\"j-main-region\">"
     },
     {
-      "line": 59,
+      "line": 61,
       "text": "                    <main class=\"j-main\">"
     },
     {
-      "line": 70,
+      "line": 72,
       "text": "pub fn App() -> impl IntoView {"
     },
     {
-      "line": 72,
+      "line": 74,
       "text": "    provide_meta_context();"
     },
     {
-      "line": 90,
+      "line": 92,
       "text": "    let theme = RwSignal::new(DEFAULT_THEME.to_string());"
     },
     {
-      "line": 104,
+      "line": 106,
       "text": "    provide_context(theme);"
     },
     {
-      "line": 118,
+      "line": 120,
       "text": "    view! {"
     },
     {
-      "line": 119,
+      "line": 121,
       "text": "        <Stylesheet id=\"leptos\" href=\"/pkg/jaunder.css\" />"
     },
     {
-      "line": 122,
+      "line": 124,
       "text": "        <Title text=\"Jaunder\" />"
     },
     {
-      "line": 125,
+      "line": 127,
       "text": "            <Routes fallback=|| \"Page not found.\".into_view()>"
     },
     {
-      "line": 188,
+      "line": 193,
       "text": "    }"
     },
     {
-      "line": 189,
+      "line": 194,
       "text": "}"
     }
   ],
