@@ -67,6 +67,7 @@ convention). All are currently `accepted`.
 | [0039](adr/0039-e2e-parallelism-via-per-test-identity-fixtures.md) | Per-test identity fixtures for parallel-safe e2e specs (parallelism deferred to #173)      | accepted |
 | [0040](adr/0040-web-rendering-leptos-csr.md)                       | Web rendering: leptos-CSR (drop concurrent reactive SSR)                                   | accepted |
 | [0041](adr/0041-public-projector-and-csr-client.md)                | Public projector and CSR client (SSR the data, not the components)                         | accepted |
+| [0042](adr/0042-emacs-org-atom-mapping-struct-seam.md)             | Emacs org→atom mapping: struct seam, `dom-print` serialization, Emacs 29.1 floor           | accepted |
 
 ## Archive
 

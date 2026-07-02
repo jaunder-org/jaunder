@@ -31,9 +31,9 @@ untouched here.
 
 ## Shape decisions (design interview, 2026-07-01)
 
-These are the ADR-candidate decisions. **The numbered ADR file is deferred to
-ship** (issue #178 is in flight and claims ADR-0041; minting the number now
-would collide). Rationale is recorded here so it is not lost.
+These decisions are recorded as **ADR-0042**
+(`docs/adr/0042-emacs-org-atom-mapping-struct-seam.md`); this section is the
+fuller rationale.
 
 ### D1 — Two-layer seam: struct fields, then a separate serializer
 
