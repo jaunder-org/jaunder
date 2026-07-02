@@ -839,7 +839,7 @@ git commit -m "style(web): reserve authed-chrome layout under html.authed (no-re
 **Interfaces:** Playwright. Assert the pre-paint contract and the enhance
 behavior without brittle pixel diffing (ADR-0043 D8).
 
-- [ ] **Step 1: Pre-paint class assertion.** As a logged-in owner, navigate to
+- [x] **Step 1: Pre-paint class assertion.** As a logged-in owner, navigate to
       `/` (a projector page) and assert `document.documentElement` carries
       `authed` **synchronously** — read it as early as possible (e.g. right
       after `page.goto`, before network idle), and assert `data-user` equals the
@@ -853,26 +853,26 @@ const authed = await page.evaluate(() =>
 expect(authed).toBe(true);
 ```
 
-- [ ] **Step 2: `/` stays public, own-post affordance.** As the owner on `/`,
+- [x] **Step 2: `/` stays public, own-post affordance.** As the owner on `/`,
       assert the local-timeline topbar (`jaunder.local`) is present (NOT the
       personal-feed "Your home feed"), and that the owner's own post shows an
       edit affordance.
 
-- [ ] **Step 3: Cockpit bookmarkability.** Navigate directly to `/app`; assert
+- [x] **Step 3: Cockpit bookmarkability.** Navigate directly to `/app`; assert
       the composer + feed render (zero intermediate clicks). Then as an
       anonymous context, navigate to `/app` and assert the bounce to `/login`.
 
-- [ ] **Step 4: Sidebar no async swap.** As the owner, assert the authed sidebar
+- [x] **Step 4: Sidebar no async swap.** As the owner, assert the authed sidebar
       footer avatar + authed nav items are present after boot; as anonymous,
       assert they are absent (the anon sidebar).
 
-- [ ] **Step 5: Run the e2e locally.**
+- [x] **Step 5: Run the e2e locally.**
 
 Run (background, per CLAUDE.md long-run guidance):
 `cargo xtask e2e sqlite chromium` Expected: PASS. (`tsc` gate also runs — keep
 the specs type-clean.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add end2end/tests/<specs>

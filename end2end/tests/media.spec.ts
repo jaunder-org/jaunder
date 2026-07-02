@@ -103,7 +103,7 @@ test.describe("Media upload and serving", () => {
     expect(url).toContain("/media/upload/");
   });
 
-  test("upload widget on home page uploads file and shows URL", async ({
+  test("upload widget on the /app cockpit uploads file and shows URL", async ({
     page,
   }, testInfo) => {
     test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
@@ -111,7 +111,9 @@ test.describe("Media upload and serving", () => {
       page,
       hydrationHeavyFirstNavigationTimeoutMs(testInfo, 30000),
     );
-    // Home page shows InlineComposer after login, which now includes MediaPanel.
+    // The /app cockpit shows the InlineComposer (#181), which includes MediaPanel.
+    await goto(page, "/app");
+    await waitForSelector(page, ".j-composer");
     const fileInput = page.locator(".j-composer input[type='file']").first();
     await fileInput.setInputFiles({
       name: "home-image.png",

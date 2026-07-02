@@ -60,7 +60,13 @@ pub fn CockpitPage() -> impl IntoView {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
                 Ok(Some((user, page))) => {
-                    username.set(Some(user));
+                    // Only set `username` when it actually changes: a spurious set
+                    // would re-run the outer view closure and REMOUNT InlineComposer,
+                    // wiping its publish/draft flash (a re-fetch fires on every
+                    // publish via `refresh_version`). Same guard the old home feed used.
+                    if username.get_untracked().as_ref() != Some(&user) {
+                        username.set(Some(user));
+                    }
                     timeline.set(page.posts);
                     next_cursor_created_at.set(page.next_cursor_created_at);
                     next_cursor_post_id.set(page.next_cursor_post_id);

@@ -52,7 +52,8 @@ test("password reset flow completes successfully", async ({
   await click(page, 'button[type="submit"]');
   await waitForSelector(page, "a[href='/logout']", { timeout: 10_000 });
   await waitForHydration(page);
-  await expect(page.locator(".j-topbar h1")).toHaveText("Home");
+  // Login redirects to `/`, now the enhanced public Local timeline (#181, D10).
+  await expect(page.locator(".j-topbar h1")).toHaveText("jaunder.local");
 });
 
 // M3.11.14: visiting /reset-password with an invalid token shows an error.
