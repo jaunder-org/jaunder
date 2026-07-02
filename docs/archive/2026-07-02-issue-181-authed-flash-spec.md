@@ -176,7 +176,7 @@ pre-paint with the safe default") is literally satisfied. The user-facing toggle
   is a **possible follow-on** (see below) — its timing/browser flakiness is
   exactly the kind of thing that would undermine #182's parallel-e2e stability.
 
-### D9 — Record as **new ADR-0043**
+### D9 — Record as **new ADR-0044**
 
 A sibling ADR, _"Authenticated-owner flash-free enhancement (pre-paint marker +
 additive decoration)."_ ADR-0041 explicitly deferred this leg to #181, and the
@@ -196,7 +196,7 @@ pages; the `html.authed` CSS reserve-layout rules; **removing the Local→Feed
 swap from `home.rs` so `/` stays the enhanced public timeline** (D10); the
 **`/app` cockpit route hosting the relocated home Feed** (D6); the pre-paint
 redirect-pref \_read* path with the stay default; the coincidence unit test +
-pre-paint/affordance e2e; ADR-0043 + glossary + README row.
+pre-paint/affordance e2e; ADR-0044 + glossary + README row.
 
 **Out (deferred, filed as follow-on issues in plan task 1):**
 

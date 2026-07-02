@@ -40,7 +40,7 @@ background reconcile. See `docs/adr/0043-*` and the spec
 - Per-task gate: `cargo xtask check` (fmt + clippy + Nix coverage/tests). **No
   `Co-Authored-By` trailer.** One clean commit per task.
 - `.ts` e2e edits bust the coverage cache (~2.3 min/commit) — expected.
-- ADR-0043 is already written (start phase); **its number reconciles at ship**
+- ADR-0044 is already written (start phase); **its number reconciles at ship**
   (0042 is #160/PR#195's; rebase onto main before merge).
 
 ---
@@ -56,7 +56,7 @@ where they belong, `web` label.
       cockpit)".** → **#201**. Body: the pre-paint redirect-pref _read_ path +
       safe stay-default land in #181; this issue adds the user-facing toggle
       UI + cross-device sync of the preference. **Depends on the §6 sync
-      engine.** Reference #181, ADR-0043 D7.
+      engine.** Reference #181, ADR-0044 D7.
 
 - [x] **Step 2: File "empirical layout-shift (CLS) e2e assertion for authed
       flash".** → **#202**. Body: #181 verifies flash-freeness structurally
@@ -65,14 +65,14 @@ where they belong, `web` label.
       move between first paint and post-mount. **Downside stated in the issue:**
       timing/browser-dependent flakiness — the kind of instability #182's
       parallel-e2e goal is sensitive to; only add if deterministic. Reference
-      #181, ADR-0043 D8.
+      #181, ADR-0044 D8.
 
 - [x] **Step 3: File "richer cockpit surface (read-state, inline drafts, nav
       hub)".** → **#203**. Body: #181 lands the cockpit at `/app` as the
       relocated home Feed; this issue grows it into the full owner workspace
       (read-state, inline drafts, a nav hub to the other authed pages, possibly
       re-nesting authed routes under `/app`). **Depends on the §6 sync engine.**
-      Reference #181, ADR-0043 D6.
+      Reference #181, ADR-0044 D6.
 
 - [x] **Step 4: Record the three issue numbers** in this plan file (done above:
       #201/#202/#203) so the cycle's follow-ons are traceable. Commit:
@@ -147,7 +147,7 @@ Run: `cargo nextest run -p jaunder-web round_trips_username` Expected: FAIL —
 - [x] **Step 3: Write the implementation** (`web/src/auth/marker.rs`):
 
 ```rust
-//! The client-side **auth marker** (#181, ADR-0043): a JS-readable localStorage
+//! The client-side **auth marker** (#181, ADR-0044): a JS-readable localStorage
 //! value advertising "probably the owner" for pre-paint chrome adjustment. It is
 //! ADVISORY, not a credential — the real session stays the HTTP-only cookie, and
 //! the server authorizes every mutation. The pre-paint `<head>` script
@@ -246,7 +246,7 @@ present sets `document.documentElement.classList.add('authed')` and a
 `data-user` attribute. It also reads the (currently unwritten) redirect-pref key
 `jaunder_home_redirect` and, only if it equals `"app"` **and** the path is
 exactly `/`, redirects to `/app` — the stay-default means this never fires until
-a future issue writes the key (ADR-0043 D7/D10). Inline + blocking + first in
+a future issue writes the key (ADR-0044 D7/D10). Inline + blocking + first in
 `<head>`.
 
 - [x] **Step 1: Write the failing tests** (`web/src/render/mod.rs` tests
@@ -292,13 +292,13 @@ Run: `cargo nextest run -p jaunder-web prepaint` Expected: FAIL —
 - [x] **Step 3: Add the const** (`web/src/render/mod.rs`, near `DEFAULT_THEME`):
 
 ```rust
-/// The pre-paint auth-detection script (#181, ADR-0043). A tiny inline, blocking
+/// The pre-paint auth-detection script (#181, ADR-0044). A tiny inline, blocking
 /// `<head>` script: reads the localStorage auth marker (`jaunder_auth`, same key
 /// as `auth::marker`) and marks `<html class="authed" data-user=…>` BEFORE first
 /// paint, so CSS reserves the authed layout and the SPA boots already knowing.
 /// Never external/deferred (a round-trip would guarantee paint-then-swap). The
 /// redirect-pref (`jaunder_home_redirect`) read path is present with the safe
-/// stay-default (nothing writes the key yet — see ADR-0043 D7/D10). Bytes are
+/// stay-default (nothing writes the key yet — see ADR-0044 D7/D10). Bytes are
 /// identical for every visitor → cacheability intact. Kept byte-identical in
 /// `csr/index.html` (drift-guarded by a unit test).
 pub const PREPAINT_SCRIPT: &str = "<script>(function(){try{\
@@ -837,7 +837,7 @@ git commit -m "style(web): reserve authed-chrome layout under html.authed (no-re
   `rg -n 'login|authed|owner|drafts' end2end/tests`)
 
 **Interfaces:** Playwright. Assert the pre-paint contract and the enhance
-behavior without brittle pixel diffing (ADR-0043 D8).
+behavior without brittle pixel diffing (ADR-0044 D8).
 
 - [x] **Step 1: Pre-paint class assertion.** As a logged-in owner, navigate to
       `/` (a projector page) and assert `document.documentElement` carries
@@ -906,7 +906,7 @@ reactive gates, it does not add SSR).
 
 ```bash
 git add docs/
-git commit -m "docs(issue-181): reconcile ADR-0043 + glossary with shipped design"
+git commit -m "docs(issue-181): reconcile ADR-0044 + glossary with shipped design"
 ```
 
 ---

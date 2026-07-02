@@ -803,7 +803,7 @@ engine). The failure mode is always "please update," never silent corruption.
   real content).
 - **enhance, don't replace** — the authed client _decorates_ the server-painted
   DOM rather than re-rendering a new one (the anti-flash rule for the owner).
-  Concretely (#181, ADR-0043): **additive decoration** — owner affordances are
+  Concretely (#181, ADR-0044): **additive decoration** — owner affordances are
   new elements layered onto the untouched projector DOM (an action column,
   authed sidebar chrome into a reserved slot), never a switch to a different-DOM
   reactive branch.

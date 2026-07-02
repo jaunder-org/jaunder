@@ -304,7 +304,7 @@ pub fn PostDisplay(
 ) -> impl IntoView {
     let time_label = crate::render::format_post_time(&post.published_at);
     // Built once and shared by both arms so the authored content column is the SAME
-    // pure, viewer-independent render the projector paints (#181, ADR-0043 D4) — no
+    // pure, viewer-independent render the projector paints (#181, ADR-0044 D4) — no
     // hand-rebuilt markup and no is_author-driven content change that could diverge
     // and reintroduce a flash. The action column is layered on additively.
     let view = crate::render::PostView {
@@ -352,7 +352,7 @@ pub fn PostDisplay(
     }
 }
 
-/// `true` when the auth marker's username equals `author` (#181, ADR-0043): the
+/// `true` when the auth marker's username equals `author` (#181, ADR-0044): the
 /// client-side signal that the viewer owns this post, so its action column shows
 /// even though the anonymous seed data has `is_author = false`. `false` on the
 /// host build (no marker) — the affordance is wasm-only chrome.
@@ -381,7 +381,7 @@ pub fn PostCard(
 ) -> impl IntoView {
     // The seed/anonymous data has `is_author = false` (the projector paints
     // anonymous-only), so on the Local timeline the owner's own posts would show no
-    // action column. Decide it client-side from the auth marker (#181, ADR-0043 D4)
+    // action column. Decide it client-side from the auth marker (#181, ADR-0044 D4)
     // so the affordance appears synchronously at mount. The server still authorizes
     // the actual edit/delete by session — the marker only gates visibility.
     let is_author = post.is_author || marker_matches(&post.username);
@@ -408,7 +408,7 @@ pub fn PostCard(
         }
     });
 
-    // Additive action column (#181, ADR-0043 D4): edit/unpublish/delete only. The
+    // Additive action column (#181, ADR-0044 D4): edit/unpublish/delete only. The
     // timestamp deliberately stays in the (coincident) content-column header rather
     // than moving here, so the owner's own post doesn't diverge from the anon paint.
     let action_col = is_author.then(move || {
@@ -1027,7 +1027,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
         |_| current_user_is_operator(),
     );
 
-    // Synchronous boot source (#181, ADR-0043): the auth marker decides authed vs.
+    // Synchronous boot source (#181, ADR-0044): the auth marker decides authed vs.
     // anon at mount, so there is NO async <Suspense> swap on first paint. The
     // anonymous sidebar is the pure `render::render_sidebar` (the SAME code the
     // projector server-renders) injected via `inner_html`, so a seeded first paint

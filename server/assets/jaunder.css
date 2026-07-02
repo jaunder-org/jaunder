@@ -1256,7 +1256,7 @@
     margin: 0 auto;
 }
 
-/* ─── #181 pre-paint authed layout (ADR-0043 D4/D5) ─────────────
+/* ─── #181 pre-paint authed layout (ADR-0044 D4/D5) ─────────────
    The pre-paint <head> script sets html.authed BEFORE first paint (from the
    jaunder_auth marker), so these rules adjust the owner's chrome up-front and the
    CSR fill causes no visible reflow:

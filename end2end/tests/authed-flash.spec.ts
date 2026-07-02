@@ -1,5 +1,5 @@
 /**
- * #181 (ADR-0043) — authenticated-owner flash-free enhancement.
+ * #181 (ADR-0044) — authenticated-owner flash-free enhancement.
  *
  * Asserts the pre-paint contract and the enhance-don't-replace behavior without
  * brittle pixel/CLS diffing (D8): the pre-paint script marks `html.authed`

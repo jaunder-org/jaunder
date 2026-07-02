@@ -1,9 +1,8 @@
-# 0043. Authenticated-owner flash-free enhancement (pre-paint marker + additive decoration)
+# ADR-0044: Authenticated-owner flash-free enhancement (pre-paint marker + additive decoration)
 
 - Status: accepted
 - Date: 2026-07-02
-- Issue: #181 (milestone 8 — "Off concurrent SSR"); extends ADR-0041, implements
-  ADR-0040 direction; unblocks #182
+- Issue: [#181](https://github.com/jaunder-org/jaunder/issues/181)
 
 ## Context
 

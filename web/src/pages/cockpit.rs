@@ -1,4 +1,4 @@
-//! The `/app` cockpit (#181, ADR-0043 D6): the authenticated owner's personalized
+//! The `/app` cockpit (#181, ADR-0044 D6): the authenticated owner's personalized
 //! home Feed, relocated off `/` (which stays the enhanced public timeline, D10). A
 //! first-class, directly-bookmarkable authed-only route — served from the SPA
 //! shell (`no-store`), pre-painted `html.authed`, so a direct hit boots straight

@@ -11,7 +11,7 @@ pub fn RegisterPage() -> impl IntoView {
     let policy = crate::server_resource(|| (), |()| get_registration_policy());
     let username = RwSignal::new(String::new());
 
-    // Mirror the new session into the advisory auth marker (#181, ADR-0043): on a
+    // Mirror the new session into the advisory auth marker (#181, ADR-0044): on a
     // successful register the client knows the submitted username, so pre-paint
     // auth works on the very next navigation. wasm-only (localStorage); the server
     // still owns the real session cookie.
@@ -103,7 +103,7 @@ pub fn LoginPage() -> impl IntoView {
     let username = RwSignal::new(String::new());
 
     // Mirror the session into the advisory auth marker on a successful login
-    // (#181, ADR-0043) — the client's synchronous pre-paint boot source. wasm-only.
+    // (#181, ADR-0044) — the client's synchronous pre-paint boot source. wasm-only.
     #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(Ok(_)) = login_action.value().get() {
@@ -176,7 +176,7 @@ pub fn LogoutPage() -> impl IntoView {
         logout_action.dispatch(Logout {});
     });
 
-    // Clear the advisory auth marker once logout succeeds (#181, ADR-0043) so the
+    // Clear the advisory auth marker once logout succeeds (#181, ADR-0044) so the
     // next paint is anonymous. wasm-only; the server clears the real cookie.
     #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {

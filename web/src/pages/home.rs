@@ -14,7 +14,7 @@ pub fn HomePage() -> impl IntoView {
 
     // Public projector seed (#178/#179): `/` is the anonymous site (Local) timeline
     // for EVERYONE, including the authenticated owner — the owner stays on this
-    // enhanced public front page (#181, ADR-0043 D10) rather than swapping to a
+    // enhanced public front page (#181, ADR-0044 D10) rather than swapping to a
     // personalized feed (a content swap can't be flash-free; the projector paints
     // anonymous-only bytes). The personalized Feed lives at the `/app` cockpit.
     // Adopt the seed as the initial state so first paint shows content, no swap.

@@ -128,7 +128,7 @@ pub fn App() -> impl IntoView {
             <Routes fallback=|| "Page not found.".into_view()>
                 <ParentRoute path=StaticSegment("") view=AppShell>
                     <Route path=StaticSegment("") view=HomePage />
-                    // The authed-only cockpit (#181, ADR-0043 D6): the relocated
+                    // The authed-only cockpit (#181, ADR-0044 D6): the relocated
                     // home Feed. Static "app" wins over the ParamSegment username route.
                     <Route path=StaticSegment("app") view=CockpitPage />
                     <Route path=StaticSegment("register") view=RegisterPage />

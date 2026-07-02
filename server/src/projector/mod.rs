@@ -72,7 +72,7 @@ pub fn document(seed: &PageSeed) -> String {
     let blob = serde_json::to_string(seed).unwrap_or_else(|_| "null".to_string());
     format!(
         concat!(
-            // The pre-paint script is FIRST in <head> (#181, ADR-0043) so it runs
+            // The pre-paint script is FIRST in <head> (#181, ADR-0044) so it runs
             // before any paint and marks html.authed for the owner.
             "<!DOCTYPE html><html lang=\"en\"><head>{prepaint}{head}</head><body>",
             "<div id=\"app\">{body}</div>",

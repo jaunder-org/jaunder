@@ -1,4 +1,4 @@
-//! The client-side **auth marker** (#181, ADR-0043): a JS-readable localStorage
+//! The client-side **auth marker** (#181, ADR-0044): a JS-readable localStorage
 //! value advertising "probably the owner" for pre-paint chrome adjustment. It is
 //! ADVISORY, not a credential — the real session stays the HTTP-only cookie, and
 //! the server authorizes every mutation. The pre-paint `<head>` script

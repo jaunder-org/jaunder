@@ -23,13 +23,13 @@ use std::fmt::Write as _;
 /// reactive `AppShell` share one value; re-exported from `pages` for the client.
 pub const DEFAULT_THEME: &str = "studio";
 
-/// The pre-paint auth-detection script (#181, ADR-0043). A tiny inline, blocking
+/// The pre-paint auth-detection script (#181, ADR-0044). A tiny inline, blocking
 /// `<head>` script: reads the localStorage auth marker (`jaunder_auth`, same key
 /// as `auth::marker`) and marks `<html class="authed" data-user=…>` BEFORE first
 /// paint, so CSS reserves the authed layout and the SPA boots already knowing.
 /// Never external/deferred (a round-trip would guarantee paint-then-swap). The
 /// redirect-pref (`jaunder_home_redirect`) read path is present with the safe
-/// stay-default — nothing writes the key yet (ADR-0043 D7/D10). Bytes are
+/// stay-default — nothing writes the key yet (ADR-0044 D7/D10). Bytes are
 /// identical for every visitor → cacheability intact. Kept byte-identical in
 /// `csr/index.html` (a `<!-- prettier-ignore -->`-pinned copy, drift-guarded by a
 /// unit test) — deliberately minified so the two copies can match verbatim.
@@ -461,7 +461,7 @@ pub(crate) fn render_post_inner(view: &PostView) -> String {
 /// anonymous [`render_post_inner`] and the reactive author layout, which slots
 /// this into the same content `<div>` via `inner_html` and overlays the reactive
 /// action column as a sibling. It is deliberately **viewer-independent** (#181,
-/// ADR-0043 D4): the owner's own-post content column must be byte-identical to the
+/// ADR-0044 D4): the owner's own-post content column must be byte-identical to the
 /// projector's anonymous paint, so the timestamp always stays in the header and
 /// the action column is purely additive — never a content change.
 #[must_use]
@@ -593,7 +593,7 @@ impl Icons {
 /// and the reactive authed sidebar in `pages::ui::Sidebar`.
 pub const NAV_ITEMS: &[(&str, &str, &str, Option<&'static str>, bool)] = &[
     ("home", "Home", Icons::HOME, Some("/"), false),
-    // The authed-only cockpit (#181, ADR-0043 D6): the owner's personalized feed at
+    // The authed-only cockpit (#181, ADR-0044 D6): the owner's personalized feed at
     // /app. `auth_required = true` keeps it out of the cacheable anonymous sidebar
     // (`render_sidebar` filters `href.is_some() && !auth_required`) — it appears
     // only in the authed sidebar, so the projector's anonymous paint is unchanged.
@@ -699,7 +699,7 @@ mod tests {
 
     #[test]
     fn author_content_column_coincides_with_the_anonymous_paint() {
-        // #181, ADR-0043 D4/D8: the authed own-post PostDisplay injects
+        // #181, ADR-0044 D4/D8: the authed own-post PostDisplay injects
         // render_post_content into the same content <div> the projector's anonymous
         // render_post_inner wraps. render_post_content is viewer-independent, so the
         // authed re-render cannot diverge from the paint — no localized flash.
@@ -1071,7 +1071,7 @@ mod tests {
 
     #[test]
     fn post_content_always_shows_the_header_time() {
-        // Viewer-independent (#181, ADR-0043 D4): the timestamp stays in the header
+        // Viewer-independent (#181, ADR-0044 D4): the timestamp stays in the header
         // for every viewer, so the owner's own-post content column coincides with
         // the projector's anonymous paint (the action column is purely additive).
         let ctx = TagCtx::SiteWide;
