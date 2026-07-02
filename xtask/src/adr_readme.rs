@@ -21,6 +21,15 @@ pub const ADR_DIR: &str = "docs/adr";
 pub const BEGIN: &str = "<!-- adr-table:begin -->";
 pub const END: &str = "<!-- adr-table:end -->";
 
+/// The recognized ADR status tokens (the canonical status cell is exactly one).
+pub const STATUS_VOCAB: [&str; 5] = [
+    "proposed",
+    "accepted",
+    "superseded",
+    "deprecated",
+    "rejected",
+];
+
 /// An ADR file projected to its table-relevant fields. `title` is the heading
 /// text with the `ADR-NNNN:` / `NNNN.` prefix stripped (used only to seed a new
 /// row); `status` is the single status token.
@@ -255,6 +264,132 @@ pub fn sync_readme() -> StepResult {
     }
 }
 
+/// The `adr-format` problems for one ADR file: the line-1 heading must be
+/// `# ADR-NNNN: <nonempty>` with `NNNN` matching the filename number, and a
+/// `- Status: <token>` line must exist with a single token from [`STATUS_VOCAB`]
+/// and nothing trailing. `filename`/`num` come from the directory entry.
+fn file_format_problems(filename: &str, num: u32, content: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+
+    let line1 = content.lines().next().unwrap_or("");
+    let prefix = format!("# ADR-{:04}: ", num);
+    match line1.strip_prefix(&prefix) {
+        Some(title) if !title.trim().is_empty() => {}
+        Some(_) => problems.push(format!("{filename}: heading has an empty title")),
+        None => problems.push(format!(
+            "{filename}: heading must be `# ADR-{:04}: <title>` (found `{line1}`)",
+            num
+        )),
+    }
+
+    match content.lines().find(|l| l.starts_with("- Status:")) {
+        None => problems.push(format!("{filename}: missing a `- Status: <token>` line")),
+        Some(l) => {
+            let rest = l.strip_prefix("- Status:").unwrap_or("").trim();
+            let tokens: Vec<&str> = rest.split_whitespace().collect();
+            if tokens.len() != 1 {
+                problems.push(format!(
+                    "{filename}: `- Status:` must be a single token with nothing trailing (found `{rest}`)"
+                ));
+            } else if !STATUS_VOCAB.contains(&tokens[0]) {
+                problems.push(format!(
+                    "{filename}: status `{}` is not one of {STATUS_VOCAB:?}",
+                    tokens[0]
+                ));
+            }
+        }
+    }
+    problems
+}
+
+/// Every ADR file's `adr-format` problems, sorted for stable output. A directory
+/// read error is surfaced as a single problem rather than a panic.
+pub fn format_problems(repo: &Path) -> Vec<String> {
+    let dir = repo.join(ADR_DIR);
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(e) => return vec![format!("cannot read {}: {e}", dir.display())],
+    };
+    let mut problems = Vec::new();
+    for ent in entries.flatten() {
+        if !ent.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let filename = ent.file_name().to_string_lossy().into_owned();
+        if !filename.ends_with(".md") {
+            continue;
+        }
+        let Some(num) = ids::leading_number(&filename) else {
+            continue;
+        };
+        match std::fs::read_to_string(ent.path()) {
+            Ok(content) => problems.extend(file_format_problems(&filename, num, &content)),
+            Err(e) => problems.push(format!("{filename}: cannot read ({e})")),
+        }
+    }
+    problems.sort();
+    problems
+}
+
+/// The `adr-readme-parity` problems: the committed table's mechanical cells
+/// (number, link target, status), row presence, and ordering must match the ADR
+/// directory. Titles are not compared (they are hand-owned). Does not panic on a
+/// transient duplicate number — that is `identifier-collisions`' concern.
+pub fn parity_problems(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<String> {
+    let mut problems = Vec::new();
+    let row_by_num: BTreeMap<u32, &TableRow> = existing.iter().map(|r| (r.num, r)).collect();
+    let entry_nums: BTreeSet<u32> = entries.iter().map(|e| e.num).collect();
+
+    for e in entries {
+        match row_by_num.get(&e.num) {
+            None => problems.push(format!("ADR {:04} has no README table row", e.num)),
+            Some(r) => {
+                let want = format!("adr/{}", e.filename);
+                if r.target != want {
+                    problems.push(format!(
+                        "ADR {:04} row link is `{}`, expected `{want}`",
+                        e.num, r.target
+                    ));
+                }
+                if r.status != e.status {
+                    problems.push(format!(
+                        "ADR {:04} row status is `{}`, expected `{}`",
+                        e.num, r.status, e.status
+                    ));
+                }
+            }
+        }
+    }
+    for r in existing {
+        if !entry_nums.contains(&r.num) {
+            problems.push(format!(
+                "README row {:04} has no matching ADR file (orphan)",
+                r.num
+            ));
+        }
+    }
+    let nums: Vec<u32> = existing.iter().map(|r| r.num).collect();
+    let mut ascending = nums.clone();
+    ascending.sort_unstable();
+    if nums != ascending {
+        problems.push("README ADR rows are not in ascending number order".to_string());
+    }
+
+    problems.sort();
+    problems
+}
+
+/// Read `repo`'s README + ADR directory and compute the parity problems. Errors
+/// when the README is unreadable or the table markers are absent.
+pub fn parity_report(repo: &Path) -> Result<Vec<String>> {
+    let readme_path = repo.join(README);
+    let readme = std::fs::read_to_string(&readme_path)
+        .with_context(|| format!("reading {}", readme_path.display()))?;
+    let entries = parse_adr_dir(repo)?;
+    let existing = parse_table_block(&extract_block(&readme)?);
+    Ok(parity_problems(&entries, &existing))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,5 +503,139 @@ mod tests {
         }];
         // The preserved title is the curated one, so desired == current: a no-op.
         assert_eq!(desired_cells(&entries, &existing), current_cells(&existing));
+    }
+
+    #[test]
+    fn file_format_problems_flags_each_violation() {
+        // Clean file: no problems.
+        assert!(
+            file_format_problems("0007-a.md", 7, "# ADR-0007: Auth\n\n- Status: accepted\n")
+                .is_empty()
+        );
+        // Legacy heading form.
+        assert!(
+            file_format_problems("0007-a.md", 7, "# 0007. Auth\n\n- Status: accepted\n")
+                .iter()
+                .any(|p| p.contains("heading must be"))
+        );
+        // Filename/heading number mismatch.
+        assert!(
+            file_format_problems("0007-a.md", 7, "# ADR-0008: Auth\n\n- Status: accepted\n")
+                .iter()
+                .any(|p| p.contains("heading must be"))
+        );
+        // Missing status.
+        assert!(
+            file_format_problems("0007-a.md", 7, "# ADR-0007: Auth\n\nbody\n")
+                .iter()
+                .any(|p| p.contains("missing a `- Status:"))
+        );
+        // Trailing prose after the token.
+        assert!(file_format_problems(
+            "0007-a.md",
+            7,
+            "# ADR-0007: Auth\n\n- Status: accepted (superseded)\n"
+        )
+        .iter()
+        .any(|p| p.contains("single token")));
+        // Out-of-vocabulary token.
+        assert!(
+            file_format_problems("0007-a.md", 7, "# ADR-0007: Auth\n\n- Status: accpeted\n")
+                .iter()
+                .any(|p| p.contains("not one of"))
+        );
+    }
+
+    #[test]
+    fn parity_problems_flags_mechanical_drift_but_ignores_titles() {
+        let entries = vec![
+            entry(1, "0001-a.md", "H1", "accepted"),
+            entry(2, "0002-b.md", "H2", "superseded"),
+        ];
+        // Row 1: title differs (OK — not compared) but everything mechanical agrees.
+        // Row 2: status is stale. Plus an orphan row 9.
+        let existing = vec![
+            TableRow {
+                num: 1,
+                target: "adr/0001-a.md".into(),
+                title: "Totally Different".into(),
+                status: "accepted".into(),
+            },
+            TableRow {
+                num: 2,
+                target: "adr/0002-b.md".into(),
+                title: "H2".into(),
+                status: "accepted".into(),
+            },
+            TableRow {
+                num: 9,
+                target: "adr/0009-x.md".into(),
+                title: "Ghost".into(),
+                status: "accepted".into(),
+            },
+        ];
+        let problems = parity_problems(&entries, &existing);
+        assert!(
+            problems.iter().any(|p| p.contains("ADR 0002 row status")),
+            "{problems:?}"
+        );
+        assert!(
+            problems.iter().any(|p| p.contains("orphan")),
+            "{problems:?}"
+        );
+        assert!(
+            !problems.iter().any(|p| p.contains("0001")),
+            "title-only diff must not flag: {problems:?}"
+        );
+    }
+
+    #[test]
+    fn parity_problems_flags_missing_row_and_bad_ordering() {
+        let entries = vec![
+            entry(1, "0001-a.md", "H1", "accepted"),
+            entry(2, "0002-b.md", "H2", "accepted"),
+        ];
+        // Row for ADR 2 is missing; the two present rows are out of order.
+        let existing = vec![
+            TableRow {
+                num: 3,
+                target: "adr/0003-c.md".into(),
+                title: "T3".into(),
+                status: "accepted".into(),
+            },
+            TableRow {
+                num: 1,
+                target: "adr/0001-a.md".into(),
+                title: "T1".into(),
+                status: "accepted".into(),
+            },
+        ];
+        let problems = parity_problems(&entries, &existing);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("ADR 0002 has no README table row")),
+            "{problems:?}"
+        );
+        assert!(
+            problems.iter().any(|p| p.contains("ascending")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn parity_problems_does_not_panic_on_duplicate_number() {
+        // The always-0000 sentinel: two entries share num 0. Must not panic.
+        let entries = vec![
+            entry(0, "0000-doc.md", "Doc", "accepted"),
+            entry(0, "0000-new.md", "New", "accepted"),
+        ];
+        let existing = vec![TableRow {
+            num: 0,
+            target: "adr/0000-doc.md".into(),
+            title: "Doc".into(),
+            status: "accepted".into(),
+        }];
+        let _ = parity_problems(&entries, &existing);
     }
 }

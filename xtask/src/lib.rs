@@ -9,6 +9,7 @@ mod ids;
 mod result;
 mod sh;
 mod steps {
+    pub mod adr_check;
     pub mod host_tests;
     pub mod nix;
     pub mod sequence_check;
@@ -188,6 +189,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let mut result = CommandResult::new("check");
             steps::static_checks::run(&sh, Mode::Fix, &mut result);
             steps::sequence_check::run(&mut result);
+            steps::adr_check::run(&mut result);
             steps::test_pattern_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             if !no_test {
@@ -214,6 +216,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             }
             steps::static_checks::run(&sh, Mode::Check, &mut result);
             steps::sequence_check::run(&mut result);
+            steps::adr_check::run(&mut result);
             steps::test_pattern_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             steps::nix::coverage(&mut result, Mode::Check);
