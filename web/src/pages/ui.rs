@@ -60,28 +60,10 @@ pub fn TagList(tags: Vec<TagSummary>, context: TagContext) -> impl IntoView {
 
 // ─── Icons ────────────────────────────────────────────────────
 
-/// SVG path `d` attribute strings for all Jaunder icons.
-pub struct Icons;
-
-impl Icons {
-    pub const HOME: &'static str = "M3 10l7-6 7 6v7a1 1 0 0 1-1 1h-4v-5H8v5H4a1 1 0 0 1-1-1z";
-    pub const LOCAL: &'static str = "M4 5h12v10H4z M4 9h12";
-    pub const FED: &'static str =
-        "M10 3a7 7 0 1 0 0 14a7 7 0 0 0 0-14zM3 10h14 M10 3c2 3 2 11 0 14 M10 3c-2 3-2 11 0 14";
-    pub const REPLY: &'static str = "M4 4h12v9H7l-3 3z";
-    pub const BOOKMARK: &'static str = "M5 3h10v14l-5-3-5 3z";
-    pub const BOOST: &'static str =
-        "M5 8l4-4 4 4 M4 7v4a3 3 0 0 0 3 3h9 M15 12l-4 4-4-4 M16 13V9a3 3 0 0 0-3-3H4";
-    pub const HEART: &'static str =
-        "M10 17s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 17 7c0 5.5-7 10-7 10z";
-    pub const SEARCH: &'static str = "M8 3a6 6 0 1 0 0 12a6 6 0 0 0 0-12z M17 17l-4-4";
-    pub const PLUS: &'static str = "M10 4v12 M4 10h12";
-    pub const COG: &'static str = "M10 6v2 M10 12v2 M6 10H4 M16 10h-2 M6.5 6.5l-1.5-1.5 M14 14l1.5 1.5 M6.5 13.5L5 15 M14 6l1.5-1.5 M10 13a3 3 0 1 0 0-6a3 3 0 0 0 0 6z";
-    pub const EDIT: &'static str = "M3 17l4 0 9-9a2.83 2.83 0 0 0-4-4l-9 9 0 4 M12 5l3 3";
-    pub const SHIELD: &'static str = "M10 3l6 2v4c0 4-2.4 7.1-6 8-3.6-.9-6-4-6-8V5l6-2z";
-    pub const MEDIA: &'static str =
-        "M3 5h14v10H3z M7 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2z M5 13l3-3 2 2 3-3 5 5H3z";
-}
+/// SVG path `d` strings — re-exported from the pure `render` layer so the
+/// reactive [`Icon`] component and the projector's [`crate::render::render_icon`]
+/// share one source of truth.
+pub use crate::render::Icons;
 
 // ─── 3.1 Icon ─────────────────────────────────────────────────
 
@@ -1058,148 +1040,115 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
         |_| current_user_is_operator(),
     );
 
-    // (key, label, icon_path, href, auth_required)
-    #[allow(clippy::items_after_statements)]
-    const NAV_ITEMS: &[(&str, &str, &str, Option<&'static str>, bool)] = &[
-        ("home", "Home", Icons::HOME, Some("/"), false),
-        ("local", "Local", Icons::LOCAL, None, true),
-        ("federated", "Federated", Icons::FED, None, true),
-        ("replies", "Replies", Icons::REPLY, None, true),
-        ("bookmarks", "Bookmarks", Icons::BOOKMARK, None, true),
-        ("drafts", "Drafts", Icons::EDIT, Some("/drafts"), true),
-        ("media", "Media", Icons::MEDIA, Some("/media"), true),
-        (
-            "audiences",
-            "Audiences",
-            Icons::BOOKMARK,
-            Some("/audiences"),
-            true,
-        ),
-        ("settings", "Settings", Icons::COG, None, true),
-    ];
-
-    // Items shown when unauthenticated: has a real href and no auth required.
-    let public_nav: Vec<_> = NAV_ITEMS
-        .iter()
-        .filter(|&&(_, _, _, href, auth_required)| href.is_some() && !auth_required)
-        .copied()
-        .collect();
-
-    // Clone active_key for the fallback closure; the original moves into the Suspend closure.
-    let active_key_fallback = active_key.clone();
+    // The anonymous sidebar is fully static, so it is produced by the pure
+    // `render::render_sidebar` — the SAME code the projector server-renders — and
+    // injected via `inner_html`, so a seeded first paint and the reactive
+    // re-render coincide (flash-free). Authed users get the reactive build below
+    // (extra nav, footer avatar) once `current_user` resolves; that authed delta
+    // is #181 territory and needs no coincidence. `display:contents` keeps the
+    // host wrapper out of the aside's layout.
+    let anon_html = crate::render::render_sidebar(&active_key);
+    let anon_fallback = anon_html.clone();
 
     view! {
         <aside class="j-sidebar">
-            <a class="j-brand" href="/" style="text-decoration:none;color:inherit">
-                <div class="j-brand-mark">"j"</div>
-                <div class="j-brand-text">"Jaunder"</div>
-            </a>
-            <div class="j-search">
-                <Icon path=Icons::SEARCH size=14 />
-                <span>"Search"</span>
-                <span class="j-kbd">"⌘K"</span>
-            </div>
-            // Nav: filtered by auth state after Suspense resolves.
             <Suspense fallback=move || {
-                view! {
-                    <nav class="j-nav">
-                        {public_nav
-                            .iter()
-                            .map(|&(key, label, icon_path, href, _)| {
-                                let is_active = key == active_key_fallback.as_str();
-                                view! {
-                                    <SidebarNavItem
-                                        label=label
-                                        icon_path=icon_path
-                                        active=is_active
-                                        href=href
-                                    />
-                                }
-                            })
-                            .collect::<Vec<_>>()}
-                    </nav>
-                }
+                let anon_fallback = anon_fallback.clone();
+                view! { <div style="display:contents" inner_html=anon_fallback></div> }
             }>
-                {move || {
+                {
                     let active_key = active_key.clone();
-                    Suspend::new(async move {
-                        let is_authed = matches!(user.await, Ok(Some(_)));
-                        let is_operator = matches!(operator.await, Ok(true));
-                        view! {
-                            <nav class="j-nav">
-                                {NAV_ITEMS
-                                    .iter()
-                                    .filter(|&&(_, _, _, href, auth_required)| {
-                                        href.is_some() && (!auth_required || is_authed)
-                                    })
-                                    .map(|&(key, label, icon_path, href, _)| {
-                                        let is_active = key == active_key.as_str();
-                                        view! {
-                                            <SidebarNavItem
-                                                label=label
-                                                icon_path=icon_path
-                                                active=is_active
-                                                href=href
-                                            />
-                                        }
-                                    })
-                                    .collect::<Vec<_>>()}
-                                {if is_operator {
-                                    view! {
-                                        <SidebarNavItem
-                                            label="Configure Backups"
-                                            icon_path=Icons::SHIELD
-                                            active=active_key == "admin-backups"
-                                            href=Some("/admin/backups")
-                                        />
-                                        <SidebarNavItem
-                                            label="Site Settings"
-                                            icon_path=Icons::SHIELD
-                                            active=active_key == "admin-site"
-                                            href=Some("/admin/site")
-                                        />
-                                    }
-                                        .into_any()
-                                } else {
-                                    ().into_any()
-                                }}
-                            </nav>
-                        }
-                    })
-                }}
-            </Suspense>
-            <div>
-                <div class="j-sb-head">
-                    <span>"Sources"</span>
-                    <span class="j-sb-add">"+"</span>
-                </div>
-                <SidebarSource proto="atproto" name="Bluesky" sub="mara.bsky.social" />
-                <SidebarSource proto="activitypub" name="Mastodon" sub="@mara@hachyderm.io" />
-                <SidebarSource proto="rss" name="Ivy Chen" sub="weeknotes" />
-                <SidebarSource proto="jsonfeed" name="Manton" sub="manton.org" />
-            </div>
-            // Footer: avatar+sign-out when authed; nothing when not.
-            <div class="j-sb-foot">
-                <Suspense fallback=|| ()>
-                    {move || Suspend::new(async move {
-                        match user.await {
-                            Ok(Some(username)) => {
-                                view! {
-                                    <Avatar name=username.clone() size=28 />
-                                    <div style="font-size:13px;flex:1;min-width:0">
-                                        <div style="font-weight:500">{username}</div>
-                                    </div>
-                                    <a href="/logout" style="font-size:11px;color:var(--muted)">
-                                        "Sign out"
-                                    </a>
+                    let anon_html = anon_html.clone();
+                    move || {
+                        let active_key = active_key.clone();
+                        let anon_html = anon_html.clone();
+                        Suspend::new(async move {
+                            let Ok(Some(username)) = user.await else {
+                                return view! {
+                                    <div style="display:contents" inner_html=anon_html></div>
                                 }
-                                    .into_any()
+                                    .into_any();
+                            };
+                            let is_operator = matches!(operator.await, Ok(true));
+                            view! {
+                                <div style="display:contents">
+                                    <a
+                                        class="j-brand"
+                                        href="/"
+                                        style="text-decoration:none;color:inherit"
+                                    >
+                                        <div class="j-brand-mark">"j"</div>
+                                        <div class="j-brand-text">"Jaunder"</div>
+                                    </a>
+                                    <div class="j-search">
+                                        <Icon path=Icons::SEARCH size=14 />
+                                        <span>"Search"</span>
+                                        <span class="j-kbd">"⌘K"</span>
+                                    </div>
+                                    <nav class="j-nav">
+                                        {crate::render::NAV_ITEMS
+                                            .iter()
+                                            .filter(|&&(_, _, _, href, _)| href.is_some())
+                                            .map(|&(key, label, icon_path, href, _)| {
+                                                let is_active = key == active_key.as_str();
+                                                view! {
+                                                    <SidebarNavItem
+                                                        label=label
+                                                        icon_path=icon_path
+                                                        active=is_active
+                                                        href=href
+                                                    />
+                                                }
+                                            })
+                                            .collect::<Vec<_>>()}
+                                        {if is_operator {
+                                            view! {
+                                                <SidebarNavItem
+                                                    label="Configure Backups"
+                                                    icon_path=Icons::SHIELD
+                                                    active=active_key == "admin-backups"
+                                                    href=Some("/admin/backups")
+                                                />
+                                                <SidebarNavItem
+                                                    label="Site Settings"
+                                                    icon_path=Icons::SHIELD
+                                                    active=active_key == "admin-site"
+                                                    href=Some("/admin/site")
+                                                />
+                                            }
+                                                .into_any()
+                                        } else {
+                                            ().into_any()
+                                        }}
+                                    </nav>
+                                    <div>
+                                        <div class="j-sb-head">
+                                            <span>"Sources"</span>
+                                            <span class="j-sb-add">"+"</span>
+                                        </div>
+                                        {crate::render::SIDEBAR_SOURCES
+                                            .iter()
+                                            .map(|&(proto, name, sub)| {
+                                                view! { <SidebarSource proto=proto name=name sub=sub /> }
+                                            })
+                                            .collect::<Vec<_>>()}
+                                    </div>
+                                    <div class="j-sb-foot">
+                                        <Avatar name=username.clone() size=28 />
+                                        <div style="font-size:13px;flex:1;min-width:0">
+                                            <div style="font-weight:500">{username}</div>
+                                        </div>
+                                        <a href="/logout" style="font-size:11px;color:var(--muted)">
+                                            "Sign out"
+                                        </a>
+                                    </div>
+                                </div>
                             }
-                            _ => ().into_any(),
-                        }
-                    })}
-                </Suspense>
-            </div>
+                                .into_any()
+                        })
+                    }
+                }
+            </Suspense>
         </aside>
     }
 }

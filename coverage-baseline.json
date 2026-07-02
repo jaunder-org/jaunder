@@ -6081,2727 +6081,2727 @@
       "text": "}"
     },
     {
-      "line": 134,
+      "line": 116,
       "text": "pub fn Dot(proto: String) -> impl IntoView {"
     },
     {
-      "line": 135,
+      "line": 117,
       "text": "    let style = format!(\"background: var(--c-{proto})\");"
     },
     {
-      "line": 136,
+      "line": 118,
       "text": "    view! { <span class=\"j-dot\" style=style></span> }"
     },
     {
-      "line": 137,
+      "line": 119,
       "text": "}"
     },
     {
-      "line": 143,
+      "line": 125,
       "text": "pub fn Chip("
     },
     {
-      "line": 144,
+      "line": 126,
       "text": "    label: String,"
     },
     {
-      "line": 145,
+      "line": 127,
       "text": "    #[prop(optional)] proto: Option<String>,"
     },
     {
-      "line": 146,
+      "line": 128,
       "text": "    #[prop(optional)] count: Option<u32>,"
     },
     {
-      "line": 147,
+      "line": 129,
       "text": "    #[prop(default = false)] active: bool,"
     },
     {
-      "line": 148,
+      "line": 130,
       "text": ") -> impl IntoView {"
     },
     {
-      "line": 149,
+      "line": 131,
       "text": "    let class = if active { \"j-chip is-active\" } else { \"j-chip\" };"
     },
     {
-      "line": 150,
+      "line": 132,
       "text": "    view! {"
     },
     {
-      "line": 151,
+      "line": 133,
       "text": "        <span class=class>"
     },
     {
-      "line": 152,
+      "line": 134,
       "text": "            {proto.map(|p| view! { <Dot proto=p /> })} <span>{label}</span>"
     },
     {
-      "line": 153,
+      "line": 135,
       "text": "            {count.map(|n| view! { <span class=\"j-n\">{n}</span> })}"
     },
     {
-      "line": 156,
+      "line": 138,
       "text": "}"
     },
     {
-      "line": 170,
+      "line": 152,
       "text": "                        view! {"
     },
     {
-      "line": 171,
+      "line": 153,
       "text": "                            <div class=\"j-backup-banner\" role=\"alert\">"
     },
     {
-      "line": 179,
+      "line": 161,
       "text": "                            .into_any()"
     },
     {
-      "line": 219,
+      "line": 201,
       "text": "pub fn ComposerFields("
     },
     {
-      "line": 220,
+      "line": 202,
       "text": "    body: RwSignal<String>,"
     },
     {
-      "line": 221,
+      "line": 203,
       "text": "    format: RwSignal<String>,"
     },
     {
-      "line": 222,
+      "line": 204,
       "text": "    #[prop(default = \"Write something\\u{2026}\")] placeholder: &'static str,"
     },
     {
-      "line": 223,
+      "line": 205,
       "text": "    #[prop(default = 16u32)] rows: u32,"
     },
     {
-      "line": 224,
+      "line": 206,
       "text": "    #[prop(default = \"j-edit-form-textarea\")] textarea_class: &'static str,"
     },
     {
-      "line": 225,
+      "line": 207,
       "text": "    /// When false, the `.j-seg` format toggle is not rendered (caller places it elsewhere)."
     },
     {
-      "line": 226,
+      "line": 208,
       "text": "    #[prop(default = true)]"
     },
     {
-      "line": 227,
+      "line": 209,
       "text": "    show_seg: bool,"
     },
     {
-      "line": 228,
+      "line": 210,
       "text": "    /// Optional callback fired on every body input event (e.g. to clear a flash message)."
     },
     {
-      "line": 229,
+      "line": 211,
       "text": "    #[prop(optional)]"
     },
     {
-      "line": 230,
+      "line": 212,
       "text": "    on_input: Option<Callback<()>>,"
     },
     {
-      "line": 231,
+      "line": 213,
       "text": ") -> impl IntoView {"
     },
     {
-      "line": 232,
+      "line": 214,
       "text": "    view! {"
     },
     {
-      "line": 233,
+      "line": 215,
       "text": "        <textarea"
     },
     {
-      "line": 234,
+      "line": 216,
       "text": "            name=\"body\""
     },
     {
-      "line": 235,
+      "line": 217,
       "text": "            class=textarea_class"
     },
     {
-      "line": 236,
+      "line": 218,
       "text": "            rows=rows"
     },
     {
-      "line": 237,
+      "line": 219,
       "text": "            placeholder=placeholder"
     },
     {
-      "line": 238,
+      "line": 220,
       "text": "            prop:value=body"
     },
     {
-      "line": 239,
+      "line": 221,
       "text": "            on:input=move |ev| {"
     },
     {
-      "line": 240,
+      "line": 222,
       "text": "                body.set(event_target_value(&ev));"
     },
     {
-      "line": 241,
+      "line": 223,
       "text": "                if let Some(cb) = on_input {"
     },
     {
-      "line": 242,
+      "line": 224,
       "text": "                    cb.run(());"
     },
     {
-      "line": 243,
+      "line": 225,
       "text": "                }"
     },
     {
-      "line": 244,
+      "line": 226,
       "text": "            }"
     },
     {
-      "line": 246,
+      "line": 228,
       "text": "        {show_seg"
     },
     {
-      "line": 247,
+      "line": 229,
       "text": "            .then(move || {"
     },
     {
-      "line": 248,
+      "line": 230,
       "text": "                view! {"
     },
     {
-      "line": 249,
+      "line": 231,
       "text": "                    <div class=\"j-seg\">"
     },
     {
-      "line": 250,
+      "line": 232,
       "text": "                        <button"
     },
     {
-      "line": 251,
+      "line": 233,
       "text": "                            type=\"button\""
     },
     {
-      "line": 252,
+      "line": 234,
       "text": "                            class=move || {"
     },
     {
-      "line": 253,
+      "line": 235,
       "text": "                                if format.get() == \"markdown\" {"
     },
     {
-      "line": 254,
+      "line": 236,
       "text": "                                    \"j-btn is-selected\""
     },
     {
-      "line": 256,
+      "line": 238,
       "text": "                                    \"j-btn\""
     },
     {
-      "line": 258,
+      "line": 240,
       "text": "                            }"
     },
     {
-      "line": 259,
+      "line": 241,
       "text": "                            on:click=move |_| format.set(\"markdown\".to_string())"
     },
     {
-      "line": 261,
+      "line": 243,
       "text": "                            \"Markdown\""
     },
     {
-      "line": 263,
+      "line": 245,
       "text": "                        <button"
     },
     {
-      "line": 264,
+      "line": 246,
       "text": "                            type=\"button\""
     },
     {
-      "line": 265,
+      "line": 247,
       "text": "                            class=move || {"
     },
     {
-      "line": 266,
+      "line": 248,
       "text": "                                if format.get() == \"org\" { \"j-btn is-selected\" } else { \"j-btn\" }"
     },
     {
-      "line": 267,
+      "line": 249,
       "text": "                            }"
     },
     {
-      "line": 268,
+      "line": 250,
       "text": "                            on:click=move |_| format.set(\"org\".to_string())"
     },
     {
-      "line": 270,
+      "line": 252,
       "text": "                            \"Org\""
     },
     {
-      "line": 274,
+      "line": 256,
       "text": "            })}"
     },
     {
-      "line": 275,
+      "line": 257,
       "text": "        <input type=\"hidden\" name=\"format\" prop:value=move || format.get() />"
     },
     {
-      "line": 277,
+      "line": 259,
       "text": "}"
     },
     {
-      "line": 287,
+      "line": 269,
       "text": "pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {"
     },
     {
-      "line": 288,
+      "line": 270,
       "text": "    let trimmed = local.trim();"
     },
     {
-      "line": 289,
+      "line": 271,
       "text": "    if trimmed.is_empty() {"
     },
     {
-      "line": 290,
+      "line": 272,
       "text": "        return None;"
     },
     {
-      "line": 291,
+      "line": 273,
       "text": "    }"
     },
     {
-      "line": 304,
+      "line": 286,
       "text": "        Some(trimmed.to_string())"
     },
     {
-      "line": 306,
+      "line": 288,
       "text": "}"
     },
     {
-      "line": 311,
+      "line": 293,
       "text": "pub fn PostDisplay("
     },
     {
-      "line": 312,
+      "line": 294,
       "text": "    post: TimelinePostSummary,"
     },
     {
-      "line": 313,
+      "line": 295,
       "text": "    banner: Option<String>,"
     },
     {
-      "line": 314,
+      "line": 296,
       "text": "    /// Linking context for the tag chips in the footer; defaults to"
     },
     {
-      "line": 315,
+      "line": 297,
       "text": "    /// site-wide."
     },
     {
-      "line": 316,
+      "line": 298,
       "text": "    #[prop(default = TagContext::SiteWide)]"
     },
     {
-      "line": 317,
+      "line": 299,
       "text": "    tag_context: TagContext,"
     },
     {
-      "line": 318,
+      "line": 300,
       "text": "    #[prop(optional)] children: Option<Children>,"
     },
     {
-      "line": 319,
+      "line": 301,
       "text": ") -> impl IntoView {"
     },
     {
-      "line": 320,
+      "line": 302,
       "text": "    let is_author = post.is_author;"
     },
     {
-      "line": 321,
+      "line": 303,
       "text": "    let time_label = crate::render::format_post_time(&post.published_at);"
     },
     {
-      "line": 322,
+      "line": 304,
       "text": "    match children {"
     },
     {
-      "line": 330,
+      "line": 312,
       "text": "            let view = crate::render::PostView {"
     },
     {
-      "line": 331,
+      "line": 313,
       "text": "                username: &post.username,"
     },
     {
-      "line": 332,
+      "line": 314,
       "text": "                title: post.title.as_deref(),"
     },
     {
-      "line": 333,
+      "line": 315,
       "text": "                banner: banner.as_deref(),"
     },
     {
-      "line": 334,
+      "line": 316,
       "text": "                summary: post.summary.as_deref(),"
     },
     {
-      "line": 335,
+      "line": 317,
       "text": "                rendered_html: &post.rendered_html,"
     },
     {
-      "line": 336,
+      "line": 318,
       "text": "                time: &time_label,"
     },
     {
-      "line": 337,
+      "line": 319,
       "text": "                permalink: &post.permalink,"
     },
     {
-      "line": 338,
+      "line": 320,
       "text": "                tags: &post.tags,"
     },
     {
-      "line": 339,
+      "line": 321,
       "text": "                tag_ctx: &tag_context,"
     },
     {
-      "line": 340,
+      "line": 322,
       "text": "                is_author,"
     },
     {
-      "line": 341,
+      "line": 323,
       "text": "            };"
     },
     {
-      "line": 342,
+      "line": 324,
       "text": "            let inner = crate::render::render_post_inner(&view);"
     },
     {
-      "line": 343,
+      "line": 325,
       "text": "            view! { <article class=\"j-post\" inner_html=inner></article> }.into_any()"
     },
     {
-      "line": 349,
+      "line": 331,
       "text": "        Some(children) => {"
     },
     {
-      "line": 350,
+      "line": 332,
       "text": "            let post_tags = post.tags.clone();"
     },
     {
-      "line": 351,
+      "line": 333,
       "text": "            view! {"
     },
     {
-      "line": 352,
+      "line": 334,
       "text": "                <article class=\"j-post\">"
     },
     {
-      "line": 353,
+      "line": 335,
       "text": "                    <Avatar name=post.username.clone() size=38 />"
     },
     {
-      "line": 354,
+      "line": 336,
       "text": "                    <div style=\"min-width:0;display:flex;gap:8px;align-items:flex-start\">"
     },
     {
-      "line": 355,
+      "line": 337,
       "text": "                        <div style=\"flex:1;min-width:0\">"
     },
     {
-      "line": 356,
+      "line": 338,
       "text": "                            <header class=\"j-post-head\">"
     },
     {
-      "line": 357,
+      "line": 339,
       "text": "                                <span class=\"j-post-name\">{post.username.clone()}</span>"
     },
     {
-      "line": 358,
+      "line": 340,
       "text": "                                <span class=\"j-post-handle\">\"@\"{post.username.clone()}</span>"
     },
     {
-      "line": 359,
+      "line": 341,
       "text": "                                {(!is_author)"
     },
     {
-      "line": 360,
+      "line": 342,
       "text": "                                    .then(|| {"
     },
     {
-      "line": 361,
+      "line": 343,
       "text": "                                        view! {"
     },
     {
-      "line": 363,
+      "line": 345,
       "text": "                                                <span class=\"j-spacer\"></span>"
     },
     {
-      "line": 364,
+      "line": 346,
       "text": "                                                <span class=\"j-post-time\">{time_label}</span>"
     },
     {
-      "line": 367,
+      "line": 349,
       "text": "                                    })}"
     },
     {
-      "line": 369,
+      "line": 351,
       "text": "                            {post"
     },
     {
-      "line": 370,
+      "line": 352,
       "text": "                                .title"
     },
     {
-      "line": 371,
+      "line": 353,
       "text": "                                .clone()"
     },
     {
-      "line": 372,
+      "line": 354,
       "text": "                                .map(|title| {"
     },
     {
-      "line": 373,
+      "line": 355,
       "text": "                                    if post.permalink.is_empty() {"
     },
     {
-      "line": 374,
+      "line": 356,
       "text": "                                        view! { <div class=\"j-post-title\">{title}</div> }.into_any()"
     },
     {
-      "line": 376,
+      "line": 358,
       "text": "                                        view! {"
     },
     {
-      "line": 377,
+      "line": 359,
       "text": "                                            <div class=\"j-post-title\">"
     },
     {
-      "line": 378,
+      "line": 360,
       "text": "                                                <a href=post.permalink.clone()>{title}</a>"
     },
     {
-      "line": 381,
+      "line": 363,
       "text": "                                            .into_any()"
     },
     {
-      "line": 383,
+      "line": 365,
       "text": "                                })}"
     },
     {
-      "line": 384,
+      "line": 366,
       "text": "                            {banner.map(|b| view! { <p class=\"draft-banner\">{b}</p> })}"
     },
     {
-      "line": 385,
+      "line": 367,
       "text": "                            {post"
     },
     {
-      "line": 386,
+      "line": 368,
       "text": "                                .summary"
     },
     {
-      "line": 387,
+      "line": 369,
       "text": "                                .clone()"
     },
     {
-      "line": 388,
+      "line": 370,
       "text": "                                .map(|s| view! { <p class=\"j-post-summary\">{s}</p> })}"
     },
     {
-      "line": 389,
+      "line": 371,
       "text": "                            <div class=\"j-post-body\" inner_html=post.rendered_html.clone()></div>"
     },
     {
-      "line": 390,
+      "line": 372,
       "text": "                            <footer class=\"j-post-foot\">"
     },
     {
-      "line": 391,
+      "line": 373,
       "text": "                                <TagList tags=post_tags context=tag_context />"
     },
     {
-      "line": 395,
+      "line": 377,
       "text": "                        {children()}"
     },
     {
-      "line": 399,
+      "line": 381,
       "text": "            .into_any()"
     },
     {
-      "line": 402,
+      "line": 384,
       "text": "}"
     },
     {
-      "line": 406,
+      "line": 388,
       "text": "pub fn PostCard("
     },
     {
-      "line": 407,
+      "line": 389,
       "text": "    post: TimelinePostSummary,"
     },
     {
-      "line": 408,
+      "line": 390,
       "text": "    banner: Option<String>,"
     },
     {
-      "line": 409,
+      "line": 391,
       "text": "    /// Linking context for the footer tag chips; defaults to site-wide."
     },
     {
-      "line": 410,
+      "line": 392,
       "text": "    #[prop(default = TagContext::SiteWide)]"
     },
     {
-      "line": 411,
+      "line": 393,
       "text": "    tag_context: TagContext,"
     },
     {
-      "line": 412,
+      "line": 394,
       "text": "    #[prop(optional)] on_mutate: Option<Callback<()>>,"
     },
     {
-      "line": 413,
+      "line": 395,
       "text": "    #[prop(optional)] on_unpublish: Option<Callback<()>>,"
     },
     {
-      "line": 414,
+      "line": 396,
       "text": ") -> impl IntoView {"
     },
     {
-      "line": 415,
+      "line": 397,
       "text": "    let is_author = post.is_author;"
     },
     {
-      "line": 416,
+      "line": 398,
       "text": "    let post_id = post.post_id;"
     },
     {
-      "line": 417,
+      "line": 399,
       "text": "    let time_label = crate::render::format_post_time(&post.published_at);"
     },
     {
-      "line": 418,
+      "line": 400,
       "text": "    let permalink = post.permalink.clone();"
     },
     {
-      "line": 419,
+      "line": 401,
       "text": "    let edit_url = format!(\"/posts/{post_id}/edit\");"
     },
     {
-      "line": 420,
+      "line": 402,
       "text": "    let delete_action = ServerAction::<DeletePost>::new();"
     },
     {
-      "line": 421,
+      "line": 403,
       "text": "    let unpublish_action = ServerAction::<UnpublishPost>::new();"
     },
     {
-      "line": 422,
+      "line": 404,
       "text": "    let deleted = RwSignal::new(false);"
     },
     {
-      "line": 424,
+      "line": 406,
       "text": "    Effect::new_isomorphic(move |_| {"
     },
     {
-      "line": 425,
+      "line": 407,
       "text": "        if let Some(Ok(())) = delete_action.value().get() {"
     },
     {
-      "line": 426,
+      "line": 408,
       "text": "            deleted.set(true);"
     },
     {
-      "line": 427,
+      "line": 409,
       "text": "            if let Some(cb) = on_mutate {"
     },
     {
-      "line": 428,
+      "line": 410,
       "text": "                cb.run(());"
     },
     {
-      "line": 429,
+      "line": 411,
       "text": "            }"
     },
     {
-      "line": 430,
+      "line": 412,
       "text": "        }"
     },
     {
-      "line": 431,
+      "line": 413,
       "text": "    });"
     },
     {
-      "line": 432,
+      "line": 414,
       "text": "    Effect::new_isomorphic(move |_| {"
     },
     {
-      "line": 433,
+      "line": 415,
       "text": "        if let Some(Ok(())) = unpublish_action.value().get() {"
     },
     {
-      "line": 434,
+      "line": 416,
       "text": "            let cb = on_unpublish.or(on_mutate);"
     },
     {
-      "line": 435,
+      "line": 417,
       "text": "            if let Some(cb) = cb {"
     },
     {
-      "line": 436,
+      "line": 418,
       "text": "                cb.run(());"
     },
     {
-      "line": 437,
+      "line": 419,
       "text": "            }"
     },
     {
-      "line": 438,
+      "line": 420,
       "text": "        }"
     },
     {
-      "line": 439,
+      "line": 421,
       "text": "    });"
     },
     {
-      "line": 441,
+      "line": 423,
       "text": "    let action_col = is_author.then(move || {"
     },
     {
-      "line": 442,
+      "line": 424,
       "text": "        view! {"
     },
     {
-      "line": 443,
+      "line": 425,
       "text": "            <div class=\"j-post-acts\">"
     },
     {
-      "line": 444,
+      "line": 426,
       "text": "                <a class=\"j-post-plink\" href=permalink>"
     },
     {
-      "line": 445,
+      "line": 427,
       "text": "                    {time_label}"
     },
     {
-      "line": 447,
+      "line": 429,
       "text": "                <a class=\"j-btn\" href=edit_url>"
     },
     {
-      "line": 448,
+      "line": 430,
       "text": "                    \"Edit\""
     },
     {
-      "line": 450,
+      "line": 432,
       "text": "                <button"
     },
     {
-      "line": 451,
+      "line": 433,
       "text": "                    type=\"button\""
     },
     {
-      "line": 452,
+      "line": 434,
       "text": "                    class=\"j-btn\""
     },
     {
-      "line": 453,
+      "line": 435,
       "text": "                    on:click=move |_| {"
     },
     {
-      "line": 454,
+      "line": 436,
       "text": "                        unpublish_action.dispatch(UnpublishPost { post_id });"
     },
     {
-      "line": 455,
+      "line": 437,
       "text": "                    }"
     },
     {
-      "line": 457,
+      "line": 439,
       "text": "                    \"Unpublish\""
     },
     {
-      "line": 459,
+      "line": 441,
       "text": "                <button"
     },
     {
-      "line": 460,
+      "line": 442,
       "text": "                    type=\"button\""
     },
     {
-      "line": 461,
+      "line": 443,
       "text": "                    class=\"j-btn is-danger\""
     },
     {
-      "line": 462,
+      "line": 444,
       "text": "                    on:click=move |_| {"
     },
     {
-      "line": 463,
+      "line": 445,
       "text": "                        let confirmed = {"
     },
     {
-      "line": 472,
+      "line": 454,
       "text": "                            #[cfg(not(target_arch = \"wasm32\"))] { false }"
     },
     {
-      "line": 474,
+      "line": 456,
       "text": "                        if confirmed {"
     },
     {
-      "line": 475,
+      "line": 457,
       "text": "                            delete_action.dispatch(DeletePost { post_id });"
     },
     {
-      "line": 476,
+      "line": 458,
       "text": "                        }"
     },
     {
-      "line": 477,
+      "line": 459,
       "text": "                    }"
     },
     {
-      "line": 479,
+      "line": 461,
       "text": "                    \"Delete\""
     },
     {
-      "line": 483,
+      "line": 465,
       "text": "    });"
     },
     {
-      "line": 485,
+      "line": 467,
       "text": "    view! {"
     },
     {
-      "line": 486,
+      "line": 468,
       "text": "        {move || {"
     },
     {
-      "line": 487,
+      "line": 469,
       "text": "            deleted.get().then(|| view! { <p class=\"success\">\"Post deleted.\"</p> }.into_any())"
     },
     {
-      "line": 488,
+      "line": 470,
       "text": "        }}"
     },
     {
-      "line": 489,
+      "line": 471,
       "text": "        <PostDisplay post=post banner=banner tag_context=tag_context>"
     },
     {
-      "line": 492,
+      "line": 474,
       "text": "    }"
     },
     {
-      "line": 493,
+      "line": 475,
       "text": "}"
     },
     {
-      "line": 507,
+      "line": 489,
       "text": "pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {"
     },
     {
-      "line": 515,
+      "line": 497,
       "text": "    let named = crate::server_resource(|| (), |()| list_my_audiences());"
     },
     {
-      "line": 516,
+      "line": 498,
       "text": "    let named_audiences = RwSignal::new(Vec::<AudienceSummary>::new());"
     },
     {
-      "line": 524,
+      "line": 506,
       "text": "    let base_options = [\"public\", \"subscribers\", \"private\"];"
     },
     {
-      "line": 525,
+      "line": 507,
       "text": "    let base_labels = [\"Public\", \"Subscribers\", \"Private (only me)\"];"
     },
     {
-      "line": 527,
+      "line": 509,
       "text": "    view! {"
     },
     {
-      "line": 528,
+      "line": 510,
       "text": "        <div class=\"j-field-row\" style=\"grid-template-columns:auto 1fr\">"
     },
     {
-      "line": 532,
+      "line": 514,
       "text": "            <select"
     },
     {
-      "line": 533,
+      "line": 515,
       "text": "                id=\"audience-base\""
     },
     {
-      "line": 534,
+      "line": 516,
       "text": "                class=\"j-field-val\""
     },
     {
-      "line": 535,
+      "line": 517,
       "text": "                on:change=move |ev| {"
     },
     {
-      "line": 536,
+      "line": 518,
       "text": "                    selection"
     },
     {
-      "line": 537,
+      "line": 519,
       "text": "                        .update(|sel| {"
     },
     {
-      "line": 538,
+      "line": 520,
       "text": "                            sel.base = event_target_value(&ev);"
     },
     {
-      "line": 539,
+      "line": 521,
       "text": "                        });"
     },
     {
-      "line": 540,
+      "line": 522,
       "text": "                }"
     },
     {
-      "line": 542,
+      "line": 524,
       "text": "                {base_options"
     },
     {
-      "line": 543,
+      "line": 525,
       "text": "                    .iter()"
     },
     {
-      "line": 544,
+      "line": 526,
       "text": "                    .zip(base_labels)"
     },
     {
-      "line": 545,
+      "line": 527,
       "text": "                    .map(|(value, label)| {"
     },
     {
-      "line": 546,
+      "line": 528,
       "text": "                        let value = (*value).to_string();"
     },
     {
-      "line": 547,
+      "line": 529,
       "text": "                        view! {"
     },
     {
-      "line": 548,
+      "line": 530,
       "text": "                            <option"
     },
     {
-      "line": 549,
+      "line": 531,
       "text": "                                value=value.clone()"
     },
     {
-      "line": 550,
+      "line": 532,
       "text": "                                selected=move || selection.get().base == value"
     },
     {
-      "line": 552,
+      "line": 534,
       "text": "                                {label}"
     },
     {
-      "line": 555,
+      "line": 537,
       "text": "                    })"
     },
     {
-      "line": 556,
+      "line": 538,
       "text": "                    .collect_view()}"
     },
     {
-      "line": 559,
+      "line": 541,
       "text": "        {move || {"
     },
     {
-      "line": 560,
+      "line": 542,
       "text": "            let audiences = named_audiences.get();"
     },
     {
-      "line": 561,
+      "line": 543,
       "text": "            if audiences.is_empty() {"
     },
     {
-      "line": 562,
+      "line": 544,
       "text": "                ().into_any()"
     },
     {
-      "line": 564,
+      "line": 546,
       "text": "                let rows = audiences"
     },
     {
-      "line": 565,
+      "line": 547,
       "text": "                    .into_iter()"
     },
     {
-      "line": 566,
+      "line": 548,
       "text": "                    .map(|a| audience_checkbox(a, selection))"
     },
     {
-      "line": 567,
+      "line": 549,
       "text": "                    .collect_view();"
     },
     {
-      "line": 568,
+      "line": 550,
       "text": "                view! {"
     },
     {
-      "line": 569,
+      "line": 551,
       "text": "                    <div style=\"margin-top:8px\">"
     },
     {
-      "line": 571,
+      "line": 553,
       "text": "                        {rows}"
     },
     {
-      "line": 574,
+      "line": 556,
       "text": "                    .into_any()"
     },
     {
-      "line": 576,
+      "line": 558,
       "text": "        }}"
     },
     {
-      "line": 578,
+      "line": 560,
       "text": "}"
     },
     {
-      "line": 583,
+      "line": 565,
       "text": "fn audience_checkbox("
     },
     {
-      "line": 584,
+      "line": 566,
       "text": "    audience: AudienceSummary,"
     },
     {
-      "line": 585,
+      "line": 567,
       "text": "    selection: RwSignal<AudienceSelection>,"
     },
     {
-      "line": 586,
+      "line": 568,
       "text": ") -> impl IntoView {"
     },
     {
-      "line": 587,
+      "line": 569,
       "text": "    let id = audience.audience_id;"
     },
     {
-      "line": 588,
+      "line": 570,
       "text": "    let input_id = format!(\"audience-named-{id}\");"
     },
     {
-      "line": 589,
+      "line": 571,
       "text": "    let checked = move || selection.get().named.contains(&id);"
     },
     {
-      "line": 590,
+      "line": 572,
       "text": "    let disabled = move || selection.get().base == \"private\";"
     },
     {
-      "line": 591,
+      "line": 573,
       "text": "    view! {"
     },
     {
-      "line": 592,
+      "line": 574,
       "text": "        <label style=\"display:block\" for=input_id.clone()>"
     },
     {
-      "line": 593,
+      "line": 575,
       "text": "            <input"
     },
     {
-      "line": 594,
+      "line": 576,
       "text": "                id=input_id.clone()"
     },
     {
-      "line": 595,
+      "line": 577,
       "text": "                type=\"checkbox\""
     },
     {
-      "line": 596,
+      "line": 578,
       "text": "                prop:checked=checked"
     },
     {
-      "line": 597,
+      "line": 579,
       "text": "                disabled=disabled"
     },
     {
-      "line": 598,
+      "line": 580,
       "text": "                on:change=move |ev| {"
     },
     {
-      "line": 599,
+      "line": 581,
       "text": "                    let on = event_target_checked(&ev);"
     },
     {
-      "line": 600,
+      "line": 582,
       "text": "                    selection"
     },
     {
-      "line": 601,
+      "line": 583,
       "text": "                        .update(|sel| {"
     },
     {
-      "line": 602,
+      "line": 584,
       "text": "                            sel.named.retain(|x| *x != id);"
     },
     {
-      "line": 603,
+      "line": 585,
       "text": "                            if on {"
     },
     {
-      "line": 604,
+      "line": 586,
       "text": "                                sel.named.push(id);"
     },
     {
-      "line": 605,
+      "line": 587,
       "text": "                            }"
     },
     {
-      "line": 606,
+      "line": 588,
       "text": "                        });"
     },
     {
-      "line": 607,
+      "line": 589,
       "text": "                }"
     },
     {
-      "line": 610,
+      "line": 592,
       "text": "            {audience.name}"
     },
     {
-      "line": 613,
+      "line": 595,
       "text": "}"
     },
     {
-      "line": 620,
+      "line": 602,
       "text": "pub fn PostCreateForm("
     },
     {
-      "line": 621,
+      "line": 603,
       "text": "    compact: bool,"
     },
     {
-      "line": 622,
+      "line": 604,
       "text": "    #[prop(optional)] username: Option<String>,"
     },
     {
-      "line": 623,
+      "line": 605,
       "text": "    #[prop(into)] on_success: Callback<CreatePostResult>,"
     },
     {
-      "line": 624,
+      "line": 606,
       "text": "    #[prop(default = 6)] rows: usize,"
     },
     {
-      "line": 625,
+      "line": 607,
       "text": "    #[prop(default = \"What\\u{2019}s on your mind?\")] placeholder: &'static str,"
     },
     {
-      "line": 626,
+      "line": 608,
       "text": "    /// Called on every textarea input event (compact mode only)."
     },
     {
-      "line": 627,
+      "line": 609,
       "text": "    #[prop(optional)]"
     },
     {
-      "line": 628,
+      "line": 610,
       "text": "    on_input: Option<Callback<()>>,"
     },
     {
-      "line": 629,
+      "line": 611,
       "text": ") -> impl IntoView {"
     },
     {
-      "line": 630,
+      "line": 612,
       "text": "    let create_action = ServerAction::<CreatePost>::new();"
     },
     {
-      "line": 631,
+      "line": 613,
       "text": "    let body = RwSignal::new(String::new());"
     },
     {
-      "line": 632,
+      "line": 614,
       "text": "    let format = RwSignal::new(\"markdown\".to_string());"
     },
     {
-      "line": 633,
+      "line": 615,
       "text": "    let summary = RwSignal::new(String::new());"
     },
     {
-      "line": 638,
+      "line": 620,
       "text": "    let publish_at = RwSignal::new(String::new());"
     },
     {
-      "line": 639,
+      "line": 621,
       "text": "    let tags: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());"
     },
     {
-      "line": 642,
+      "line": 624,
       "text": "    let audience = RwSignal::new(AudienceSelection {"
     },
     {
-      "line": 643,
+      "line": 625,
       "text": "        base: \"public\".to_string(),"
     },
     {
-      "line": 644,
+      "line": 626,
       "text": "        named: Vec::new(),"
     },
     {
-      "line": 645,
+      "line": 627,
       "text": "    });"
     },
     {
-      "line": 647,
+      "line": 629,
       "text": "    let default_audience = crate::server_resource(|| (), |()| default_audience_selection());"
     },
     {
-      "line": 673,
+      "line": 655,
       "text": "    let _ = on_success;"
     },
     {
-      "line": 676,
+      "line": 658,
       "text": "    let rows_u32 = rows as u32;"
     },
     {
-      "line": 678,
+      "line": 660,
       "text": "    if compact {"
     },
     {
-      "line": 679,
+      "line": 661,
       "text": "        let dispatch_save = move |_| {"
     },
     {
-      "line": 680,
+      "line": 662,
       "text": "            create_action.dispatch(CreatePost {"
     },
     {
-      "line": 681,
+      "line": 663,
       "text": "                body: body.get(),"
     },
     {
-      "line": 682,
+      "line": 664,
       "text": "                format: format.get(),"
     },
     {
-      "line": 683,
+      "line": 665,
       "text": "                slug_override: None,"
     },
     {
-      "line": 685,
+      "line": 667,
       "text": "                publish_at: local_datetime_to_utc_rfc3339(&publish_at.get()),"
     },
     {
-      "line": 686,
+      "line": 668,
       "text": "                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),"
     },
     {
-      "line": 687,
+      "line": 669,
       "text": "                summary: Some(summary.get()),"
     },
     {
-      "line": 688,
+      "line": 670,
       "text": "                audience: Some(audience.get()),"
     },
     {
-      "line": 690,
+      "line": 672,
       "text": "        };"
     },
     {
-      "line": 691,
+      "line": 673,
       "text": "        let dispatch_publish = move |_| {"
     },
     {
-      "line": 692,
+      "line": 674,
       "text": "            create_action.dispatch(CreatePost {"
     },
     {
-      "line": 693,
+      "line": 675,
       "text": "                body: body.get(),"
     },
     {
-      "line": 694,
+      "line": 676,
       "text": "                format: format.get(),"
     },
     {
-      "line": 695,
+      "line": 677,
       "text": "                slug_override: None,"
     },
     {
-      "line": 697,
+      "line": 679,
       "text": "                publish_at: local_datetime_to_utc_rfc3339(&publish_at.get()),"
     },
     {
-      "line": 698,
+      "line": 680,
       "text": "                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),"
     },
     {
-      "line": 699,
+      "line": 681,
       "text": "                summary: Some(summary.get()),"
     },
     {
-      "line": 700,
+      "line": 682,
       "text": "                audience: Some(audience.get()),"
     },
     {
-      "line": 702,
+      "line": 684,
       "text": "        };"
     },
     {
-      "line": 703,
+      "line": 685,
       "text": "        view! {"
     },
     {
-      "line": 704,
+      "line": 686,
       "text": "            <div class=\"j-composer-row\">"
     },
     {
-      "line": 705,
+      "line": 687,
       "text": "                <Avatar name=username.unwrap_or_default() size=36 />"
     },
     {
-      "line": 706,
+      "line": 688,
       "text": "                <div class=\"j-composer-body\">"
     },
     {
-      "line": 708,
+      "line": 690,
       "text": "                        body=body"
     },
     {
-      "line": 709,
+      "line": 691,
       "text": "                        format=format"
     },
     {
-      "line": 710,
+      "line": 692,
       "text": "                        rows=rows_u32"
     },
     {
-      "line": 711,
+      "line": 693,
       "text": "                        placeholder=placeholder"
     },
     {
-      "line": 712,
+      "line": 694,
       "text": "                        textarea_class=\"\""
     },
     {
-      "line": 713,
+      "line": 695,
       "text": "                        show_seg=false"
     },
     {
-      "line": 714,
+      "line": 696,
       "text": "                        on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))"
     },
     {
-      "line": 717,
+      "line": 699,
       "text": "                    <div style=\"margin-top:10px\">"
     },
     {
-      "line": 719,
+      "line": 701,
       "text": "                        <textarea"
     },
     {
-      "line": 720,
+      "line": 702,
       "text": "                            id=\"compose-summary\""
     },
     {
-      "line": 721,
+      "line": 703,
       "text": "                            class=\"j-field-val\""
     },
     {
-      "line": 722,
+      "line": 704,
       "text": "                            rows=3"
     },
     {
-      "line": 723,
+      "line": 705,
       "text": "                            placeholder=\"Optional summary or excerpt\""
     },
     {
-      "line": 724,
+      "line": 706,
       "text": "                            prop:value=summary"
     },
     {
-      "line": 725,
+      "line": 707,
       "text": "                            on:input=move |ev| {"
     },
     {
-      "line": 726,
+      "line": 708,
       "text": "                                summary.set(event_target_value(&ev));"
     },
     {
-      "line": 727,
+      "line": 709,
       "text": "                            }"
     },
     {
-      "line": 730,
+      "line": 712,
       "text": "                    <TagInput tags=tags />"
     },
     {
-      "line": 731,
+      "line": 713,
       "text": "                    <div class=\"j-composer-toolbar\">"
     },
     {
-      "line": 732,
+      "line": 714,
       "text": "                        <div class=\"j-seg\">"
     },
     {
-      "line": 733,
+      "line": 715,
       "text": "                            <button"
+    },
+    {
+      "line": 716,
+      "text": "                                type=\"button\""
+    },
+    {
+      "line": 717,
+      "text": "                                class=move || {"
+    },
+    {
+      "line": 718,
+      "text": "                                    if format.get() == \"markdown\" {"
+    },
+    {
+      "line": 719,
+      "text": "                                        \"j-btn is-selected\""
+    },
+    {
+      "line": 721,
+      "text": "                                        \"j-btn\""
+    },
+    {
+      "line": 723,
+      "text": "                                }"
+    },
+    {
+      "line": 724,
+      "text": "                                on:click=move |_| format.set(\"markdown\".to_string())"
+    },
+    {
+      "line": 726,
+      "text": "                                \"Markdown\""
+    },
+    {
+      "line": 728,
+      "text": "                            <button"
+    },
+    {
+      "line": 729,
+      "text": "                                type=\"button\""
+    },
+    {
+      "line": 730,
+      "text": "                                class=move || {"
+    },
+    {
+      "line": 731,
+      "text": "                                    if format.get() == \"org\" {"
+    },
+    {
+      "line": 732,
+      "text": "                                        \"j-btn is-selected\""
     },
     {
       "line": 734,
-      "text": "                                type=\"button\""
-    },
-    {
-      "line": 735,
-      "text": "                                class=move || {"
+      "text": "                                        \"j-btn\""
     },
     {
       "line": 736,
-      "text": "                                    if format.get() == \"markdown\" {"
+      "text": "                                }"
     },
     {
       "line": 737,
-      "text": "                                        \"j-btn is-selected\""
+      "text": "                                on:click=move |_| format.set(\"org\".to_string())"
     },
     {
       "line": 739,
-      "text": "                                        \"j-btn\""
+      "text": "                                \"Org\""
     },
     {
-      "line": 741,
-      "text": "                                }"
-    },
-    {
-      "line": 742,
-      "text": "                                on:click=move |_| format.set(\"markdown\".to_string())"
+      "line": 743,
+      "text": "                        <button"
     },
     {
       "line": 744,
-      "text": "                                \"Markdown\""
+      "text": "                            class=\"j-btn\""
+    },
+    {
+      "line": 745,
+      "text": "                            type=\"button\""
     },
     {
       "line": 746,
-      "text": "                            <button"
+      "text": "                            name=\"publish\""
     },
     {
       "line": 747,
-      "text": "                                type=\"button\""
+      "text": "                            value=\"false\""
     },
     {
       "line": 748,
-      "text": "                                class=move || {"
+      "text": "                            disabled=move || body.get().trim().is_empty()"
     },
     {
       "line": 749,
-      "text": "                                    if format.get() == \"org\" {"
-    },
-    {
-      "line": 750,
-      "text": "                                        \"j-btn is-selected\""
-    },
-    {
-      "line": 752,
-      "text": "                                        \"j-btn\""
-    },
-    {
-      "line": 754,
-      "text": "                                }"
-    },
-    {
-      "line": 755,
-      "text": "                                on:click=move |_| format.set(\"org\".to_string())"
-    },
-    {
-      "line": 757,
-      "text": "                                \"Org\""
-    },
-    {
-      "line": 761,
-      "text": "                        <button"
-    },
-    {
-      "line": 762,
-      "text": "                            class=\"j-btn\""
-    },
-    {
-      "line": 763,
-      "text": "                            type=\"button\""
-    },
-    {
-      "line": 764,
-      "text": "                            name=\"publish\""
-    },
-    {
-      "line": 765,
-      "text": "                            value=\"false\""
-    },
-    {
-      "line": 766,
-      "text": "                            disabled=move || body.get().trim().is_empty()"
-    },
-    {
-      "line": 767,
       "text": "                            on:click=dispatch_save"
     },
     {
-      "line": 769,
+      "line": 751,
       "text": "                            \"Save draft\""
     },
     {
-      "line": 771,
+      "line": 753,
       "text": "                        <button"
     },
     {
-      "line": 772,
+      "line": 754,
       "text": "                            class=\"j-btn is-primary\""
     },
     {
-      "line": 773,
+      "line": 755,
       "text": "                            type=\"button\""
     },
     {
-      "line": 774,
+      "line": 756,
       "text": "                            name=\"publish\""
     },
     {
-      "line": 775,
+      "line": 757,
       "text": "                            value=\"true\""
     },
     {
-      "line": 776,
+      "line": 758,
       "text": "                            disabled=move || body.get().trim().is_empty()"
     },
     {
-      "line": 777,
+      "line": 759,
       "text": "                            on:click=dispatch_publish"
     },
     {
-      "line": 779,
+      "line": 761,
       "text": "                            \"Publish\""
     },
     {
-      "line": 784,
+      "line": 766,
       "text": "            {move || {"
     },
     {
-      "line": 785,
+      "line": 767,
       "text": "                create_action"
     },
     {
-      "line": 786,
+      "line": 768,
       "text": "                    .value()"
     },
     {
-      "line": 787,
+      "line": 769,
       "text": "                    .get()"
     },
     {
-      "line": 788,
+      "line": 770,
       "text": "                    .and_then(Result::err)"
     },
     {
-      "line": 789,
+      "line": 771,
       "text": "                    .map(|e| view! { <p class=\"error\">{e.to_string()}</p> })"
     },
     {
-      "line": 790,
+      "line": 772,
       "text": "            }}"
     },
     {
-      "line": 792,
+      "line": 774,
       "text": "        .into_any()"
     },
     {
-      "line": 794,
+      "line": 776,
       "text": "        let slug_override = RwSignal::new(String::new());"
     },
     {
-      "line": 795,
+      "line": 777,
       "text": "        let dispatch_create = move |publish: bool| {"
     },
     {
-      "line": 796,
+      "line": 778,
       "text": "            let slug = slug_override.get();"
     },
     {
-      "line": 797,
+      "line": 779,
       "text": "            let slug_override = common::text::non_empty(&slug).map(str::to_owned);"
     },
     {
-      "line": 798,
+      "line": 780,
       "text": "            create_action.dispatch(CreatePost {"
     },
     {
-      "line": 799,
+      "line": 781,
       "text": "                body: body.get(),"
     },
     {
-      "line": 800,
+      "line": 782,
       "text": "                format: format.get(),"
     },
     {
-      "line": 801,
+      "line": 783,
       "text": "                slug_override,"
     },
     {
-      "line": 802,
+      "line": 784,
       "text": "                publish,"
     },
     {
-      "line": 803,
+      "line": 785,
       "text": "                publish_at: local_datetime_to_utc_rfc3339(&publish_at.get()),"
     },
     {
-      "line": 804,
+      "line": 786,
       "text": "                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),"
     },
     {
-      "line": 805,
+      "line": 787,
       "text": "                summary: Some(summary.get()),"
     },
     {
-      "line": 806,
+      "line": 788,
       "text": "                audience: Some(audience.get()),"
     },
     {
-      "line": 808,
+      "line": 790,
       "text": "        };"
     },
     {
-      "line": 809,
+      "line": 791,
       "text": "        view! {"
     },
     {
-      "line": 810,
+      "line": 792,
       "text": "            <div class=\"j-compose-grid\">"
     },
     {
-      "line": 811,
+      "line": 793,
       "text": "                <div class=\"j-compose-body\">"
     },
     {
-      "line": 813,
+      "line": 795,
       "text": "                        body=body"
     },
     {
-      "line": 814,
+      "line": 796,
       "text": "                        format=format"
     },
     {
-      "line": 815,
+      "line": 797,
       "text": "                        rows=rows_u32"
     },
     {
-      "line": 816,
+      "line": 798,
       "text": "                        placeholder=placeholder"
     },
     {
-      "line": 817,
+      "line": 799,
       "text": "                        show_seg=false"
     },
     {
-      "line": 820,
+      "line": 802,
       "text": "                <aside class=\"j-compose-aside\">"
     },
     {
-      "line": 821,
+      "line": 803,
       "text": "                    <div>"
     },
     {
-      "line": 825,
+      "line": 807,
       "text": "                        <div class=\"j-field-row\" style=\"grid-template-columns:auto 1fr\">"
     },
     {
-      "line": 829,
+      "line": 811,
       "text": "                            <input"
     },
     {
-      "line": 830,
+      "line": 812,
       "text": "                                id=\"compose-slug\""
     },
     {
-      "line": 831,
+      "line": 813,
       "text": "                                type=\"text\""
     },
     {
-      "line": 832,
+      "line": 814,
       "text": "                                name=\"slug_override\""
     },
     {
-      "line": 833,
+      "line": 815,
       "text": "                                placeholder=\"auto\""
     },
     {
-      "line": 834,
+      "line": 816,
       "text": "                                class=\"j-field-val\""
     },
     {
-      "line": 835,
+      "line": 817,
       "text": "                                prop:value=slug_override"
     },
     {
-      "line": 836,
+      "line": 818,
       "text": "                                on:input=move |ev| slug_override.set(event_target_value(&ev))"
     },
     {
-      "line": 839,
+      "line": 821,
       "text": "                        <div style=\"margin-top:10px\">"
     },
     {
-      "line": 843,
+      "line": 825,
       "text": "                            <textarea"
     },
     {
-      "line": 844,
+      "line": 826,
       "text": "                                id=\"compose-summary\""
     },
     {
-      "line": 845,
+      "line": 827,
       "text": "                                name=\"summary\""
     },
     {
-      "line": 846,
+      "line": 828,
       "text": "                                placeholder=\"Optional summary or excerpt\""
     },
     {
-      "line": 847,
+      "line": 829,
       "text": "                                class=\"j-field-val\""
     },
     {
-      "line": 848,
+      "line": 830,
       "text": "                                rows=3"
     },
     {
-      "line": 849,
+      "line": 831,
       "text": "                                prop:value=summary"
     },
     {
-      "line": 850,
+      "line": 832,
       "text": "                                on:input=move |ev| {"
     },
     {
-      "line": 851,
+      "line": 833,
       "text": "                                    summary.set(event_target_value(&ev));"
     },
     {
-      "line": 852,
+      "line": 834,
       "text": "                                }"
     },
     {
-      "line": 855,
+      "line": 837,
       "text": "                        <div style=\"margin-top:10px\">"
     },
     {
-      "line": 856,
+      "line": 838,
       "text": "                            <TagInput tags=tags />"
     },
     {
-      "line": 858,
+      "line": 840,
       "text": "                        <div style=\"margin-top:10px\">"
     },
     {
-      "line": 859,
+      "line": 841,
       "text": "                            <AudiencePicker selection=audience />"
     },
     {
-      "line": 863,
+      "line": 845,
       "text": "                        <div style=\"margin-top:10px\">"
     },
     {
-      "line": 867,
+      "line": 849,
       "text": "                            <input"
     },
     {
-      "line": 868,
+      "line": 850,
       "text": "                                id=\"compose-publish-at\""
     },
     {
-      "line": 869,
+      "line": 851,
       "text": "                                type=\"datetime-local\""
     },
     {
-      "line": 870,
+      "line": 852,
       "text": "                                class=\"j-field-val\""
     },
     {
-      "line": 871,
+      "line": 853,
       "text": "                                prop:value=publish_at"
     },
     {
-      "line": 872,
+      "line": 854,
       "text": "                                on:input=move |ev| publish_at.set(event_target_value(&ev))"
     },
     {
-      "line": 875,
+      "line": 857,
       "text": "                        <div class=\"j-seg\" style=\"margin-top:10px\">"
     },
     {
-      "line": 876,
+      "line": 858,
       "text": "                            <button"
     },
     {
-      "line": 877,
+      "line": 859,
       "text": "                                type=\"button\""
     },
     {
-      "line": 878,
+      "line": 860,
       "text": "                                class=move || {"
     },
     {
-      "line": 879,
+      "line": 861,
       "text": "                                    if format.get() == \"markdown\" {"
     },
     {
-      "line": 880,
+      "line": 862,
       "text": "                                        \"j-btn is-selected\""
     },
     {
-      "line": 882,
+      "line": 864,
       "text": "                                        \"j-btn\""
     },
     {
-      "line": 884,
+      "line": 866,
       "text": "                                }"
     },
     {
-      "line": 885,
+      "line": 867,
       "text": "                                on:click=move |_| format.set(\"markdown\".to_string())"
     },
     {
-      "line": 887,
+      "line": 869,
       "text": "                                \"Markdown\""
     },
     {
-      "line": 889,
+      "line": 871,
       "text": "                            <button"
     },
     {
-      "line": 890,
+      "line": 872,
       "text": "                                type=\"button\""
     },
     {
-      "line": 891,
+      "line": 873,
       "text": "                                class=move || {"
     },
     {
-      "line": 892,
+      "line": 874,
       "text": "                                    if format.get() == \"org\" {"
     },
     {
-      "line": 893,
+      "line": 875,
       "text": "                                        \"j-btn is-selected\""
     },
     {
-      "line": 895,
+      "line": 877,
       "text": "                                        \"j-btn\""
     },
     {
-      "line": 897,
+      "line": 879,
       "text": "                                }"
     },
     {
-      "line": 898,
+      "line": 880,
       "text": "                                on:click=move |_| format.set(\"org\".to_string())"
     },
     {
-      "line": 900,
+      "line": 882,
       "text": "                                \"Org\""
     },
     {
-      "line": 904,
+      "line": 886,
       "text": "                    <div style=\"margin-top:16px\">"
     },
     {
-      "line": 910,
+      "line": 892,
       "text": "                    <div style=\"margin-top:auto;display:flex;align-items:center;gap:8px\">"
     },
     {
-      "line": 911,
+      "line": 893,
       "text": "                        <button"
     },
     {
-      "line": 912,
+      "line": 894,
       "text": "                            class=\"j-btn\""
     },
     {
-      "line": 913,
+      "line": 895,
       "text": "                            type=\"button\""
     },
     {
-      "line": 914,
+      "line": 896,
       "text": "                            name=\"publish\""
     },
     {
-      "line": 915,
+      "line": 897,
       "text": "                            value=\"false\""
     },
     {
-      "line": 916,
+      "line": 898,
       "text": "                            on:click=move |_| dispatch_create(false)"
     },
     {
-      "line": 918,
+      "line": 900,
       "text": "                            \"Save draft\""
     },
     {
-      "line": 920,
+      "line": 902,
       "text": "                        <button"
     },
     {
-      "line": 921,
+      "line": 903,
       "text": "                            class=\"j-btn is-primary\""
     },
     {
-      "line": 922,
+      "line": 904,
       "text": "                            type=\"button\""
     },
     {
-      "line": 923,
+      "line": 905,
       "text": "                            name=\"publish\""
     },
     {
-      "line": 924,
+      "line": 906,
       "text": "                            value=\"true\""
     },
     {
-      "line": 925,
+      "line": 907,
       "text": "                            on:click=move |_| dispatch_create(true)"
     },
     {
-      "line": 927,
+      "line": 909,
       "text": "                            \"Publish\""
     },
     {
-      "line": 932,
+      "line": 914,
       "text": "            {move || {"
     },
     {
-      "line": 933,
+      "line": 915,
       "text": "                create_action"
     },
     {
-      "line": 934,
+      "line": 916,
       "text": "                    .value()"
     },
     {
-      "line": 935,
+      "line": 917,
       "text": "                    .get()"
     },
     {
-      "line": 936,
+      "line": 918,
       "text": "                    .and_then(Result::err)"
     },
     {
-      "line": 937,
+      "line": 919,
       "text": "                    .map(|e| view! { <p class=\"error\">{e.to_string()}</p> })"
     },
     {
-      "line": 938,
+      "line": 920,
       "text": "            }}"
     },
     {
-      "line": 940,
+      "line": 922,
       "text": "        .into_any()"
     },
     {
-      "line": 942,
+      "line": 924,
       "text": "}"
     },
     {
-      "line": 948,
+      "line": 930,
       "text": "pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {"
     },
     {
-      "line": 949,
+      "line": 931,
       "text": "    let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);"
     },
     {
-      "line": 952,
+      "line": 934,
       "text": "    let _ = on_publish;"
     },
     {
-      "line": 954,
+      "line": 936,
       "text": "    let on_success = Callback::new(move |created: CreatePostResult| {"
     },
     {
-      "line": 955,
+      "line": 937,
       "text": "        let url = created"
     },
     {
-      "line": 956,
+      "line": 938,
       "text": "            .permalink"
     },
     {
-      "line": 957,
+      "line": 939,
       "text": "            .clone()"
     },
     {
-      "line": 958,
+      "line": 940,
       "text": "            .unwrap_or_else(|| created.preview_url.clone());"
     },
     {
-      "line": 959,
+      "line": 941,
       "text": "        let msg = if created.published_at.is_some() {"
     },
     {
-      "line": 960,
+      "line": 942,
       "text": "            \"Post published!\".to_string()"
     },
     {
-      "line": 962,
+      "line": 944,
       "text": "            \"Draft saved!\".to_string()"
     },
     {
-      "line": 964,
+      "line": 946,
       "text": "        flash.set(Some((url, msg)));"
     },
     {
-      "line": 974,
+      "line": 956,
       "text": "    });"
     },
     {
-      "line": 976,
+      "line": 958,
       "text": "    view! {"
     },
     {
-      "line": 977,
+      "line": 959,
       "text": "        <div class=\"j-composer\">"
     },
     {
-      "line": 979,
+      "line": 961,
       "text": "                compact=true"
     },
     {
-      "line": 980,
+      "line": 962,
       "text": "                username=username"
     },
     {
-      "line": 981,
+      "line": 963,
       "text": "                on_success=on_success"
     },
     {
-      "line": 982,
+      "line": 964,
       "text": "                rows=6"
     },
     {
-      "line": 983,
+      "line": 965,
       "text": "                placeholder=\"What\\u{2019}s on your mind?\""
     },
     {
-      "line": 984,
+      "line": 966,
       "text": "                on_input=Callback::new(move |()| flash.set(None))"
     },
     {
-      "line": 986,
+      "line": 968,
       "text": "            {move || {"
     },
     {
-      "line": 987,
+      "line": 969,
       "text": "                flash"
     },
     {
-      "line": 988,
+      "line": 970,
       "text": "                    .get()"
     },
     {
-      "line": 989,
+      "line": 971,
       "text": "                    .map(|(url, msg)| {"
     },
     {
-      "line": 990,
+      "line": 972,
       "text": "                        view! {"
     },
     {
-      "line": 991,
+      "line": 973,
       "text": "                            <p class=\"success\">"
     },
     {
-      "line": 992,
+      "line": 974,
       "text": "                                <a href=url>{msg}</a>"
     },
     {
-      "line": 995,
+      "line": 977,
       "text": "                    })"
     },
     {
-      "line": 996,
+      "line": 978,
       "text": "            }}"
     },
     {
-      "line": 999,
+      "line": 981,
       "text": "}"
     },
     {
-      "line": 1012,
+      "line": 994,
       "text": "        \"j-nav-item is-active\""
     },
     {
-      "line": 1027,
+      "line": 1009,
       "text": "        None => view! { <div class=class>{inner}</div> }.into_any(),"
     },
     {
-      "line": 1148,
-      "text": "                                    view! {"
+      "line": 1105,
+      "text": "                                            view! {"
     },
     {
-      "line": 1150,
-      "text": "                                            label=\"Configure Backups\""
+      "line": 1107,
+      "text": "                                                    label=\"Configure Backups\""
     },
     {
-      "line": 1151,
-      "text": "                                            icon_path=Icons::SHIELD"
+      "line": 1108,
+      "text": "                                                    icon_path=Icons::SHIELD"
     },
     {
-      "line": 1152,
-      "text": "                                            active=active_key == \"admin-backups\""
+      "line": 1109,
+      "text": "                                                    active=active_key == \"admin-backups\""
     },
     {
-      "line": 1153,
-      "text": "                                            href=Some(\"/admin/backups\")"
+      "line": 1110,
+      "text": "                                                    href=Some(\"/admin/backups\")"
     },
     {
-      "line": 1156,
-      "text": "                                            label=\"Site Settings\""
+      "line": 1113,
+      "text": "                                                    label=\"Site Settings\""
     },
     {
-      "line": 1157,
-      "text": "                                            icon_path=Icons::SHIELD"
+      "line": 1114,
+      "text": "                                                    icon_path=Icons::SHIELD"
     },
     {
-      "line": 1158,
-      "text": "                                            active=active_key == \"admin-site\""
+      "line": 1115,
+      "text": "                                                    active=active_key == \"admin-site\""
     },
     {
-      "line": 1159,
-      "text": "                                            href=Some(\"/admin/site\")"
+      "line": 1116,
+      "text": "                                                    href=Some(\"/admin/site\")"
     },
     {
-      "line": 1162,
-      "text": "                                        .into_any()"
+      "line": 1119,
+      "text": "                                                .into_any()"
     },
     {
-      "line": 1245,
+      "line": 1194,
       "text": "pub fn TagInput("
     },
     {
-      "line": 1246,
+      "line": 1195,
       "text": "    tags: RwSignal<Vec<TagSummary>>,"
     },
     {
-      "line": 1247,
+      "line": 1196,
       "text": "    #[prop(default = \"tags\")] name: &'static str,"
     },
     {
-      "line": 1248,
+      "line": 1197,
       "text": ") -> impl IntoView {"
     },
     {
-      "line": 1249,
+      "line": 1198,
       "text": "    let input_text = RwSignal::new(String::new());"
     },
     {
-      "line": 1250,
+      "line": 1199,
       "text": "    let error: RwSignal<Option<String>> = RwSignal::new(None);"
     },
     {
-      "line": 1251,
+      "line": 1200,
       "text": "    let suggestions: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());"
     },
     {
-      "line": 1252,
+      "line": 1201,
       "text": "    let suggestions_open = RwSignal::new(false);"
     },
     {
-      "line": 1253,
+      "line": 1202,
       "text": "    let selected_idx: RwSignal<Option<usize>> = RwSignal::new(None);"
     },
     {
-      "line": 1259,
+      "line": 1208,
       "text": "    let on_input = move |ev: leptos::ev::Event| {"
     },
     {
-      "line": 1260,
+      "line": 1209,
       "text": "        let val = event_target_value(&ev);"
     },
     {
-      "line": 1261,
+      "line": 1210,
       "text": "        input_text.set(val.clone());"
     },
     {
-      "line": 1262,
+      "line": 1211,
       "text": "        error.set(None);"
     },
     {
-      "line": 1263,
+      "line": 1212,
       "text": "        selected_idx.set(None);"
     },
     {
-      "line": 1300,
+      "line": 1249,
       "text": "        let _ = val;"
     },
     {
-      "line": 1301,
+      "line": 1250,
       "text": "    };"
     },
     {
-      "line": 1303,
+      "line": 1252,
       "text": "    let on_keydown = move |ev: leptos::ev::KeyboardEvent| {"
     },
     {
-      "line": 1304,
+      "line": 1253,
       "text": "        let key = ev.key();"
     },
     {
-      "line": 1305,
+      "line": 1254,
       "text": "        match key.as_str() {"
     },
     {
-      "line": 1306,
+      "line": 1255,
       "text": "            \"Enter\" | \"Tab\" => {"
     },
     {
-      "line": 1308,
+      "line": 1257,
       "text": "                if let Some(i) = selected_idx.get() {"
     },
     {
-      "line": 1309,
+      "line": 1258,
       "text": "                    if let Some(tag) = suggestions.get().get(i).cloned() {"
     },
     {
-      "line": 1310,
+      "line": 1259,
       "text": "                        ev.prevent_default();"
     },
     {
-      "line": 1311,
+      "line": 1260,
       "text": "                        tags.update(|t| {"
     },
     {
-      "line": 1312,
+      "line": 1261,
       "text": "                            if !t.iter().any(|x| x.slug == tag.slug) {"
     },
     {
-      "line": 1313,
+      "line": 1262,
       "text": "                                t.push(tag.clone());"
     },
     {
-      "line": 1314,
+      "line": 1263,
       "text": "                            }"
     },
     {
-      "line": 1315,
+      "line": 1264,
       "text": "                        });"
     },
     {
-      "line": 1316,
+      "line": 1265,
       "text": "                        input_text.set(String::new());"
     },
     {
-      "line": 1317,
+      "line": 1266,
       "text": "                        error.set(None);"
     },
     {
-      "line": 1318,
+      "line": 1267,
       "text": "                        suggestions.set(Vec::new());"
     },
     {
-      "line": 1319,
+      "line": 1268,
       "text": "                        suggestions_open.set(false);"
     },
     {
-      "line": 1320,
+      "line": 1269,
       "text": "                        selected_idx.set(None);"
     },
     {
-      "line": 1321,
+      "line": 1270,
       "text": "                        return;"
     },
     {
-      "line": 1322,
+      "line": 1271,
       "text": "                    }"
     },
     {
-      "line": 1323,
+      "line": 1272,
       "text": "                }"
     },
     {
-      "line": 1325,
+      "line": 1274,
       "text": "                let text = normalize_tag_token(&input_text.get());"
     },
     {
-      "line": 1326,
+      "line": 1275,
       "text": "                if text.is_empty() {"
     },
     {
-      "line": 1327,
+      "line": 1276,
       "text": "                    return;"
     },
     {
-      "line": 1328,
+      "line": 1277,
       "text": "                }"
     },
     {
-      "line": 1329,
+      "line": 1278,
       "text": "                ev.prevent_default();"
     },
     {
-      "line": 1330,
+      "line": 1279,
       "text": "                if is_valid_tag_slug(&text) {"
     },
     {
-      "line": 1331,
+      "line": 1280,
       "text": "                    let slug = text.clone();"
     },
     {
-      "line": 1332,
+      "line": 1281,
       "text": "                    tags.update(|t| {"
     },
     {
-      "line": 1333,
+      "line": 1282,
       "text": "                        if !t.iter().any(|x| x.slug == slug) {"
     },
     {
-      "line": 1334,
+      "line": 1283,
       "text": "                            t.push(TagSummary {"
     },
     {
-      "line": 1335,
+      "line": 1284,
       "text": "                                slug: slug.clone(),"
     },
     {
-      "line": 1336,
+      "line": 1285,
       "text": "                                display: slug,"
     },
     {
-      "line": 1337,
+      "line": 1286,
       "text": "                            });"
     },
     {
-      "line": 1338,
+      "line": 1287,
       "text": "                        }"
     },
     {
-      "line": 1339,
+      "line": 1288,
       "text": "                    });"
     },
     {
-      "line": 1340,
+      "line": 1289,
       "text": "                    input_text.set(String::new());"
     },
     {
-      "line": 1341,
+      "line": 1290,
       "text": "                    error.set(None);"
     },
     {
-      "line": 1342,
+      "line": 1291,
       "text": "                    suggestions.set(Vec::new());"
     },
     {
-      "line": 1343,
+      "line": 1292,
       "text": "                    suggestions_open.set(false);"
     },
     {
-      "line": 1344,
+      "line": 1293,
       "text": "                    selected_idx.set(None);"
     },
     {
-      "line": 1345,
+      "line": 1294,
       "text": "                } else {"
     },
     {
-      "line": 1346,
+      "line": 1295,
       "text": "                    error.set(Some(format!(\"Invalid tag \\\"{text}\\\"\")));"
     },
     {
-      "line": 1347,
+      "line": 1296,
       "text": "                }"
     },
     {
-      "line": 1349,
+      "line": 1298,
       "text": "            \"Backspace\" if input_text.get().is_empty() => {"
     },
     {
-      "line": 1350,
+      "line": 1299,
       "text": "                tags.update(|t| {"
     },
     {
-      "line": 1351,
+      "line": 1300,
       "text": "                    t.pop();"
     },
     {
-      "line": 1352,
+      "line": 1301,
       "text": "                });"
     },
     {
-      "line": 1354,
+      "line": 1303,
       "text": "            \"ArrowDown\" => {"
     },
     {
-      "line": 1355,
+      "line": 1304,
       "text": "                ev.prevent_default();"
     },
     {
-      "line": 1356,
+      "line": 1305,
       "text": "                let len = suggestions.get().len();"
     },
     {
-      "line": 1357,
+      "line": 1306,
       "text": "                if len > 0 {"
     },
     {
-      "line": 1358,
+      "line": 1307,
       "text": "                    selected_idx.update(|i| {"
     },
     {
-      "line": 1359,
+      "line": 1308,
       "text": "                        *i = Some(i.map_or(0, |n| (n + 1).min(len - 1)));"
     },
     {
-      "line": 1360,
+      "line": 1309,
       "text": "                    });"
     },
     {
-      "line": 1361,
+      "line": 1310,
       "text": "                }"
     },
     {
-      "line": 1363,
+      "line": 1312,
       "text": "            \"ArrowUp\" => {"
     },
     {
-      "line": 1364,
+      "line": 1313,
       "text": "                ev.prevent_default();"
     },
     {
-      "line": 1365,
+      "line": 1314,
       "text": "                selected_idx.update(|i| {"
     },
     {
-      "line": 1366,
+      "line": 1315,
       "text": "                    *i = i.and_then(|n| n.checked_sub(1));"
     },
     {
-      "line": 1367,
+      "line": 1316,
       "text": "                });"
     },
     {
-      "line": 1369,
+      "line": 1318,
       "text": "            \"Escape\" => {"
     },
     {
-      "line": 1370,
+      "line": 1319,
       "text": "                suggestions.set(Vec::new());"
     },
     {
-      "line": 1371,
+      "line": 1320,
       "text": "                suggestions_open.set(false);"
     },
     {
-      "line": 1372,
+      "line": 1321,
       "text": "                selected_idx.set(None);"
     },
     {
-      "line": 1373,
+      "line": 1322,
       "text": "            }"
     },
     {
-      "line": 1374,
+      "line": 1323,
       "text": "            _ => {}"
     },
     {
-      "line": 1376,
+      "line": 1325,
       "text": "    };"
     },
     {
-      "line": 1378,
+      "line": 1327,
       "text": "    view! {"
     },
     {
-      "line": 1379,
+      "line": 1328,
       "text": "        <div class=\"j-tag-input\">"
     },
     {
-      "line": 1380,
+      "line": 1329,
       "text": "            {move || {"
     },
     {
-      "line": 1381,
+      "line": 1330,
       "text": "                tags.get()"
     },
     {
-      "line": 1382,
+      "line": 1331,
       "text": "                    .into_iter()"
     },
     {
-      "line": 1383,
+      "line": 1332,
       "text": "                    .map(|tag| {"
     },
     {
-      "line": 1384,
+      "line": 1333,
       "text": "                        let slug = tag.slug.clone();"
     },
     {
-      "line": 1385,
+      "line": 1334,
       "text": "                        let display = tag.display.clone();"
     },
     {
-      "line": 1386,
+      "line": 1335,
       "text": "                        view! {"
     },
     {
-      "line": 1387,
+      "line": 1336,
       "text": "                            <span class=\"j-tag-chip\">"
     },
     {
-      "line": 1388,
+      "line": 1337,
       "text": "                                <input type=\"hidden\" name=name value=display.clone() />"
     },
     {
-      "line": 1389,
+      "line": 1338,
       "text": "                                <span class=\"j-tag-chip-label\">\"#\" {display}</span>"
     },
     {
-      "line": 1390,
+      "line": 1339,
       "text": "                                <button"
     },
     {
-      "line": 1391,
+      "line": 1340,
       "text": "                                    type=\"button\""
     },
     {
-      "line": 1392,
+      "line": 1341,
       "text": "                                    class=\"j-tag-chip-remove\""
     },
     {
-      "line": 1393,
+      "line": 1342,
       "text": "                                    aria-label=\"Remove tag\""
     },
     {
-      "line": 1394,
+      "line": 1343,
       "text": "                                    on:click=move |_| {"
     },
     {
-      "line": 1395,
+      "line": 1344,
       "text": "                                        tags.update(|t| t.retain(|x| x.slug != slug));"
     },
     {
-      "line": 1396,
+      "line": 1345,
       "text": "                                    }"
     },
     {
-      "line": 1398,
+      "line": 1347,
       "text": "                                    \"\\u{00d7}\""
     },
     {
-      "line": 1402,
+      "line": 1351,
       "text": "                    })"
     },
     {
-      "line": 1403,
+      "line": 1352,
       "text": "                    .collect::<Vec<_>>()"
     },
     {
-      "line": 1404,
+      "line": 1353,
       "text": "            }}"
     },
     {
-      "line": 1405,
+      "line": 1354,
       "text": "            <input"
     },
     {
-      "line": 1406,
+      "line": 1355,
       "text": "                type=\"text\""
     },
     {
-      "line": 1407,
+      "line": 1356,
       "text": "                class=\"j-tag-text\""
     },
     {
-      "line": 1408,
+      "line": 1357,
       "text": "                placeholder=\"Add tag\\u{2026}\""
     },
     {
-      "line": 1409,
+      "line": 1358,
       "text": "                prop:value=input_text"
     },
     {
-      "line": 1410,
+      "line": 1359,
       "text": "                on:input=on_input"
     },
     {
-      "line": 1411,
+      "line": 1360,
       "text": "                on:keydown=on_keydown"
     },
     {
-      "line": 1412,
+      "line": 1361,
       "text": "                autocomplete=\"off\""
     },
     {
-      "line": 1414,
+      "line": 1363,
       "text": "            {move || {"
     },
     {
-      "line": 1415,
+      "line": 1364,
       "text": "                if !suggestions_open.get() {"
     },
     {
-      "line": 1416,
+      "line": 1365,
       "text": "                    return ().into_any();"
     },
     {
-      "line": 1417,
+      "line": 1366,
       "text": "                }"
     },
     {
-      "line": 1418,
+      "line": 1367,
       "text": "                let items = suggestions"
     },
     {
-      "line": 1419,
+      "line": 1368,
       "text": "                    .get()"
     },
     {
-      "line": 1420,
+      "line": 1369,
       "text": "                    .into_iter()"
     },
     {
-      "line": 1421,
+      "line": 1370,
       "text": "                    .enumerate()"
     },
     {
-      "line": 1422,
+      "line": 1371,
       "text": "                    .map(|(idx, tag)| {"
     },
     {
-      "line": 1423,
+      "line": 1372,
       "text": "                        let is_active = selected_idx.get() == Some(idx);"
     },
     {
-      "line": 1424,
+      "line": 1373,
       "text": "                        let slug = tag.slug.clone();"
     },
     {
-      "line": 1425,
+      "line": 1374,
       "text": "                        let display = tag.display.clone();"
     },
     {
-      "line": 1426,
+      "line": 1375,
       "text": "                        view! {"
     },
     {
-      "line": 1427,
+      "line": 1376,
       "text": "                            <li"
     },
     {
-      "line": 1428,
+      "line": 1377,
       "text": "                                class=if is_active {"
     },
     {
-      "line": 1429,
+      "line": 1378,
       "text": "                                    \"j-tag-suggest-item is-active\""
     },
     {
-      "line": 1431,
+      "line": 1380,
       "text": "                                    \"j-tag-suggest-item\""
     },
     {
-      "line": 1433,
+      "line": 1382,
       "text": "                                on:click=move |_| {"
     },
     {
-      "line": 1434,
+      "line": 1383,
       "text": "                                    let slug = slug.clone();"
     },
     {
-      "line": 1435,
+      "line": 1384,
       "text": "                                    let display = display.clone();"
     },
     {
-      "line": 1436,
+      "line": 1385,
       "text": "                                    tags.update(|t| {"
     },
     {
-      "line": 1437,
+      "line": 1386,
       "text": "                                        if !t.iter().any(|x| x.slug == slug) {"
     },
     {
-      "line": 1438,
+      "line": 1387,
       "text": "                                            t.push(TagSummary {"
     },
     {
-      "line": 1439,
+      "line": 1388,
       "text": "                                                slug: slug.clone(),"
     },
     {
-      "line": 1440,
+      "line": 1389,
       "text": "                                                display: display.clone(),"
     },
     {
-      "line": 1441,
+      "line": 1390,
       "text": "                                            });"
     },
     {
-      "line": 1442,
+      "line": 1391,
       "text": "                                        }"
     },
     {
-      "line": 1443,
+      "line": 1392,
       "text": "                                    });"
     },
     {
-      "line": 1444,
+      "line": 1393,
       "text": "                                    input_text.set(String::new());"
     },
     {
-      "line": 1445,
+      "line": 1394,
       "text": "                                    error.set(None);"
     },
     {
-      "line": 1446,
+      "line": 1395,
       "text": "                                    suggestions.set(Vec::new());"
     },
     {
-      "line": 1447,
+      "line": 1396,
       "text": "                                    suggestions_open.set(false);"
     },
     {
-      "line": 1448,
+      "line": 1397,
       "text": "                                    selected_idx.set(None);"
     },
     {
-      "line": 1449,
+      "line": 1398,
       "text": "                                }"
     },
     {
-      "line": 1452,
+      "line": 1401,
       "text": "                                {tag.display}"
     },
     {
-      "line": 1455,
+      "line": 1404,
       "text": "                    })"
     },
     {
-      "line": 1456,
+      "line": 1405,
       "text": "                    .collect::<Vec<_>>();"
     },
     {
-      "line": 1457,
+      "line": 1406,
       "text": "                view! { <ul class=\"j-tag-suggest\">{items}</ul> }.into_any()"
     },
     {
-      "line": 1458,
+      "line": 1407,
       "text": "            }}"
     },
     {
-      "line": 1460,
+      "line": 1409,
       "text": "        {move || error.get().map(|e| view! { <p class=\"j-tag-error\">{e}</p> })}"
     },
     {
-      "line": 1462,
+      "line": 1411,
       "text": "}"
     }
   ],
