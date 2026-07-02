@@ -304,6 +304,21 @@ pub fn PostDisplay(
 ) -> impl IntoView {
     let is_author = post.is_author;
     let time_label = crate::render::format_post_time(&post.published_at);
+    // Built once and shared by both arms so the authored content column is the SAME
+    // pure render the projector paints (#181, ADR-0043) — no hand-rebuilt reactive
+    // markup that could diverge and reintroduce a flash.
+    let view = crate::render::PostView {
+        username: &post.username,
+        title: post.title.as_deref(),
+        banner: banner.as_deref(),
+        summary: post.summary.as_deref(),
+        rendered_html: &post.rendered_html,
+        time: &time_label,
+        permalink: &post.permalink,
+        tags: &post.tags,
+        tag_ctx: &tag_context,
+        is_author,
+    };
     match children {
         // Anonymous / no-action layout: the WHOLE article inner is produced by the
         // pure `render` layer — the SAME code the public projector server-renders
@@ -312,71 +327,23 @@ pub fn PostDisplay(
         // not the component" (ADR-0041 §4). The projector only ever renders this
         // anonymous view, so this is the only path that must coincide.
         None => {
-            let view = crate::render::PostView {
-                username: &post.username,
-                title: post.title.as_deref(),
-                banner: banner.as_deref(),
-                summary: post.summary.as_deref(),
-                rendered_html: &post.rendered_html,
-                time: &time_label,
-                permalink: &post.permalink,
-                tags: &post.tags,
-                tag_ctx: &tag_context,
-                is_author,
-            };
             let inner = crate::render::render_post_inner(&view);
             view! { <article class="j-post" inner_html=inner></article> }.into_any()
         }
-        // Authored layout (own posts, with the action column). The projector never
-        // renders this — it's anonymous-only — so it has no coincidence requirement
-        // and stays ordinary client-reactive markup (proven; kept from before the
-        // render unification, which regressed the authenticated home-feed re-render).
+        // Authored layout (own posts, with the action column). The content column is
+        // the SAME `render_post_content` the anonymous arm wraps, injected via
+        // `inner_html` so it coincides with the projector's paint (#181); only the
+        // reactive action column (`children`, carrying edit/delete handlers that
+        // `inner_html` can't) overlays it as a sibling. This replaces the previously
+        // hand-rebuilt reactive header/title/body markup, which had diverged from
+        // the projector — the divergence that kept the authored path from coinciding.
         Some(children) => {
-            let post_tags = post.tags.clone();
+            let inner_content = crate::render::render_post_content(&view);
             view! {
                 <article class="j-post">
                     <Avatar name=post.username.clone() size=38 />
                     <div style="min-width:0;display:flex;gap:8px;align-items:flex-start">
-                        <div style="flex:1;min-width:0">
-                            <header class="j-post-head">
-                                <span class="j-post-name">{post.username.clone()}</span>
-                                <span class="j-post-handle">"@"{post.username.clone()}</span>
-                                {(!is_author)
-                                    .then(|| {
-                                        view! {
-                                            <>
-                                                <span class="j-spacer"></span>
-                                                <span class="j-post-time">{time_label}</span>
-                                            </>
-                                        }
-                                    })}
-                            </header>
-                            {post
-                                .title
-                                .clone()
-                                .map(|title| {
-                                    if post.permalink.is_empty() {
-                                        view! { <div class="j-post-title">{title}</div> }.into_any()
-                                    } else {
-                                        view! {
-                                            <div class="j-post-title">
-                                                <a href=post.permalink.clone()>{title}</a>
-                                            </div>
-                                        }
-                                            .into_any()
-                                    }
-                                })}
-                            {banner.map(|b| view! { <p class="draft-banner">{b}</p> })}
-                            {post
-                                .summary
-                                .clone()
-                                .map(|s| view! { <p class="j-post-summary">{s}</p> })}
-                            <div class="j-post-body" inner_html=post.rendered_html.clone()></div>
-                            <footer class="j-post-foot">
-                                <TagList tags=post_tags context=tag_context />
-                                <span class="j-spacer"></span>
-                            </footer>
-                        </div>
+                        <div style="flex:1;min-width:0" inner_html=inner_content></div>
                         {children()}
                     </div>
                 </article>

@@ -698,6 +698,32 @@ mod tests {
     }
 
     #[test]
+    fn author_content_column_equals_anonymous_content() {
+        // The authored PostDisplay injects render_post_content via inner_html (#181);
+        // assert it is exactly the content the anonymous render_post_inner wraps, so
+        // the author article's content column coincides with the projector's paint.
+        let ctx = TagCtx::ForUser("alice".into());
+        let view = PostView {
+            username: "alice",
+            title: Some("T"),
+            banner: None,
+            summary: None,
+            rendered_html: "<p>b</p>",
+            time: "2026-01-01 00:00",
+            permalink: "/~alice/x",
+            tags: &[],
+            tag_ctx: &ctx,
+            is_author: true,
+        };
+        let content = render_post_content(&view);
+        let inner = render_post_inner(&view);
+        assert!(
+            inner.contains(&content),
+            "author inner_html content must be a substring of the anonymous inner: {inner}"
+        );
+    }
+
+    #[test]
     fn index_html_shell_contains_the_prepaint_script() {
         // The projector's SPA-shell fallback IS csr/index.html; it must carry the
         // identical pre-paint script (a prettier-ignored, minified copy) so

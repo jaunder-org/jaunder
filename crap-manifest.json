@@ -26,7 +26,7 @@
       "cyclomatic": 4.0,
       "file": "web/src/pages/ui.rs",
       "function": "SidebarNavItem",
-      "line": 987
+      "line": 990
     },
     {
       "coverage": 0.0,
@@ -251,7 +251,7 @@
       "cyclomatic": 3.0,
       "file": "web/src/pages/ui.rs",
       "function": "local_datetime_to_utc_rfc3339",
-      "line": 269
+      "line": 272
     },
     {
       "coverage": 0.0,
@@ -260,7 +260,7 @@
       "cyclomatic": 3.0,
       "file": "web/src/pages/ui.rs",
       "function": "PostDisplay",
-      "line": 293
+      "line": 296
     },
     {
       "coverage": 0.0,
@@ -458,7 +458,7 @@
       "cyclomatic": 9.0,
       "file": "web/src/render/mod.rs",
       "function": "render_discovery",
-      "line": 172
+      "line": 189
     },
     {
       "coverage": 100.0,
@@ -530,7 +530,7 @@
       "cyclomatic": 8.0,
       "file": "web/src/render/mod.rs",
       "function": "escape_html",
-      "line": 111
+      "line": 128
     },
     {
       "coverage": 100.0,
@@ -638,7 +638,7 @@
       "cyclomatic": 7.0,
       "file": "web/src/render/mod.rs",
       "function": "render_body",
-      "line": 263
+      "line": 280
     },
     {
       "coverage": 100.0,
@@ -818,7 +818,7 @@
       "cyclomatic": 2.0,
       "file": "web/src/pages/ui.rs",
       "function": "TagList",
-      "line": 27
+      "line": 30
     },
     {
       "coverage": 0.0,
@@ -827,7 +827,7 @@
       "cyclomatic": 2.0,
       "file": "web/src/pages/ui.rs",
       "function": "Chip",
-      "line": 125
+      "line": 128
     },
     {
       "coverage": 0.0,
@@ -836,7 +836,7 @@
       "cyclomatic": 2.0,
       "file": "web/src/pages/ui.rs",
       "function": "PostCreateForm",
-      "line": 602
+      "line": 605
     },
     {
       "coverage": 0.0,
@@ -863,7 +863,7 @@
       "cyclomatic": 6.0,
       "file": "web/src/render/mod.rs",
       "function": "render_head",
-      "line": 130
+      "line": 147
     },
     {
       "coverage": 100.0,
@@ -1151,7 +1151,7 @@
       "cyclomatic": 5.0,
       "file": "web/src/pages/ui.rs",
       "function": "is_valid_tag_slug",
-      "line": 1165
+      "line": 1200
     },
     {
       "coverage": 100.0,
@@ -1178,7 +1178,7 @@
       "cyclomatic": 5.0,
       "file": "web/src/render/mod.rs",
       "function": "feed_label",
-      "line": 228
+      "line": 245
     },
     {
       "coverage": 100.0,
@@ -1187,7 +1187,7 @@
       "cyclomatic": 5.0,
       "file": "web/src/render/mod.rs",
       "function": "render_sidebar",
-      "line": 629
+      "line": 646
     },
     {
       "coverage": 100.0,
@@ -1691,7 +1691,7 @@
       "cyclomatic": 4.0,
       "file": "web/src/render/mod.rs",
       "function": "render_tag_list",
-      "line": 530
+      "line": 547
     },
     {
       "coverage": 100.0,
@@ -1961,7 +1961,7 @@
       "cyclomatic": 4.0,
       "file": "server/src/projector/mod.rs",
       "function": "cacheable",
-      "line": 93
+      "line": 96
     },
     {
       "coverage": 100.0,
@@ -1970,7 +1970,7 @@
       "cyclomatic": 4.0,
       "file": "server/src/projector/mod.rs",
       "function": "permalink_response",
-      "line": 155
+      "line": 158
     },
     {
       "coverage": 100.0,
@@ -2204,7 +2204,7 @@
       "cyclomatic": 3.0,
       "file": "web/src/render/mod.rs",
       "function": "format_post_time",
-      "line": 99
+      "line": 116
     },
     {
       "coverage": 100.0,
@@ -2654,7 +2654,7 @@
       "cyclomatic": 3.0,
       "file": "server/src/projector/mod.rs",
       "function": "timeline_response",
-      "line": 189
+      "line": 192
     },
     {
       "coverage": 100.0,
@@ -2663,7 +2663,7 @@
       "cyclomatic": 3.0,
       "file": "server/src/projector/mod.rs",
       "function": "profile",
-      "line": 200
+      "line": 203
     },
     {
       "coverage": 100.0,
@@ -2672,7 +2672,7 @@
       "cyclomatic": 3.0,
       "file": "server/src/projector/mod.rs",
       "function": "site_tag",
-      "line": 222
+      "line": 225
     },
     {
       "coverage": 100.0,
@@ -2681,7 +2681,7 @@
       "cyclomatic": 3.0,
       "file": "server/src/projector/mod.rs",
       "function": "user_tag",
-      "line": 247
+      "line": 250
     },
     {
       "coverage": 100.0,
@@ -3059,7 +3059,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "Icon",
-      "line": 72
+      "line": 75
     },
     {
       "coverage": 0.0,
@@ -3068,7 +3068,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "Avatar",
-      "line": 95
+      "line": 98
     },
     {
       "coverage": 0.0,
@@ -3077,7 +3077,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "Dot",
-      "line": 116
+      "line": 119
     },
     {
       "coverage": 0.0,
@@ -3086,7 +3086,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "BackupBanner",
-      "line": 144
+      "line": 147
     },
     {
       "coverage": 0.0,
@@ -3095,7 +3095,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "Topbar",
-      "line": 172
+      "line": 175
     },
     {
       "coverage": 0.0,
@@ -3104,7 +3104,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "ComposerFields",
-      "line": 201
+      "line": 204
     },
     {
       "coverage": 0.0,
@@ -3113,7 +3113,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "PostCard",
-      "line": 388
+      "line": 391
     },
     {
       "coverage": 0.0,
@@ -3122,7 +3122,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "AudiencePicker",
-      "line": 489
+      "line": 492
     },
     {
       "coverage": 0.0,
@@ -3131,7 +3131,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "audience_checkbox",
-      "line": 565
+      "line": 568
     },
     {
       "coverage": 0.0,
@@ -3140,7 +3140,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "InlineComposer",
-      "line": 930
+      "line": 933
     },
     {
       "coverage": 0.0,
@@ -3149,7 +3149,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "SidebarSource",
-      "line": 1015
+      "line": 1018
     },
     {
       "coverage": 0.0,
@@ -3158,7 +3158,25 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "Sidebar",
-      "line": 1033
+      "line": 1036
+    },
+    {
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "web",
+      "cyclomatic": 1.0,
+      "file": "web/src/pages/ui.rs",
+      "function": "marker_username_on_boot",
+      "line": 1101
+    },
+    {
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "web",
+      "cyclomatic": 1.0,
+      "file": "web/src/pages/ui.rs",
+      "function": "authed_sidebar",
+      "line": 1116
     },
     {
       "coverage": 0.0,
@@ -3167,7 +3185,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "TagInput",
-      "line": 1194
+      "line": 1229
     },
     {
       "coverage": 0.0,
@@ -3194,7 +3212,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/auth.rs",
       "function": "LoginPage",
-      "line": 90
+      "line": 101
     },
     {
       "coverage": 0.0,
@@ -3203,7 +3221,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/auth.rs",
       "function": "LogoutPage",
-      "line": 151
+      "line": 171
     },
     {
       "coverage": 0.0,
@@ -3338,7 +3356,7 @@
       "cyclomatic": 2.0,
       "file": "web/src/render/mod.rs",
       "function": "render_load_more",
-      "line": 371
+      "line": 388
     },
     {
       "coverage": 100.0,
@@ -3347,7 +3365,7 @@
       "cyclomatic": 2.0,
       "file": "web/src/render/mod.rs",
       "function": "render_posts",
-      "line": 382
+      "line": 399
     },
     {
       "coverage": 100.0,
@@ -3356,7 +3374,7 @@
       "cyclomatic": 2.0,
       "file": "web/src/render/mod.rs",
       "function": "render_post_content",
-      "line": 452
+      "line": 469
     },
     {
       "coverage": 100.0,
@@ -3365,7 +3383,7 @@
       "cyclomatic": 2.0,
       "file": "web/src/render/mod.rs",
       "function": "render_timeline_page",
-      "line": 505
+      "line": 522
     },
     {
       "coverage": 0.0,
@@ -5012,7 +5030,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "normalize_tag_token",
-      "line": 1176
+      "line": 1211
     },
     {
       "coverage": 100.0,
@@ -5480,15 +5498,6 @@
       "cyclomatic": 1.0,
       "file": "web/src/render/mod.rs",
       "function": "avatar_parts",
-      "line": 69
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "web",
-      "cyclomatic": 1.0,
-      "file": "web/src/render/mod.rs",
-      "function": "render_avatar",
       "line": 86
     },
     {
@@ -5497,8 +5506,17 @@
       "crate": "web",
       "cyclomatic": 1.0,
       "file": "web/src/render/mod.rs",
+      "function": "render_avatar",
+      "line": 103
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web",
+      "cyclomatic": 1.0,
+      "file": "web/src/render/mod.rs",
       "function": "render_shell",
-      "line": 246
+      "line": 263
     },
     {
       "coverage": 100.0,
@@ -5507,7 +5525,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/render/mod.rs",
       "function": "permalink_article",
-      "line": 327
+      "line": 344
     },
     {
       "coverage": 100.0,
@@ -5516,7 +5534,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/render/mod.rs",
       "function": "render_topbar",
-      "line": 347
+      "line": 364
     },
     {
       "coverage": 100.0,
@@ -5525,7 +5543,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/render/mod.rs",
       "function": "render_hero",
-      "line": 359
+      "line": 376
     },
     {
       "coverage": 100.0,
@@ -5534,7 +5552,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/render/mod.rs",
       "function": "render_post_article",
-      "line": 421
+      "line": 438
     },
     {
       "coverage": 100.0,
@@ -5543,7 +5561,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/render/mod.rs",
       "function": "render_post_inner",
-      "line": 432
+      "line": 449
     },
     {
       "coverage": 100.0,
@@ -5552,7 +5570,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/render/mod.rs",
       "function": "render_icon",
-      "line": 610
+      "line": 627
     },
     {
       "coverage": 100.0,
@@ -6704,7 +6722,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/projector/mod.rs",
       "function": "shell_response",
-      "line": 120
+      "line": 123
     },
     {
       "coverage": 100.0,
@@ -6713,7 +6731,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/projector/mod.rs",
       "function": "permalink",
-      "line": 128
+      "line": 131
     },
     {
       "coverage": 100.0,
@@ -6722,7 +6740,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/projector/mod.rs",
       "function": "site_timeline",
-      "line": 170
+      "line": 173
     },
     {
       "coverage": 100.0,

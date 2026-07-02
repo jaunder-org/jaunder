@@ -601,7 +601,7 @@ divergence that made the authored path unable to coincide.
 > action column reactive — only the content column is `inner_html`. Task 9's e2e
 > re-checks the authed home feed explicitly.
 
-- [ ] **Step 1: Write the failing coincidence test** (`web/src/render/mod.rs`
+- [x] **Step 1: Write the failing coincidence test** (`web/src/render/mod.rs`
       tests) — the anonymous inner and the author content-column share one
       source:
 
@@ -624,7 +624,7 @@ fn author_content_column_equals_anonymous_content() {
 }
 ```
 
-- [ ] **Step 2: Run it, verify it passes already** (both call
+- [x] **Step 2: Run it, verify it passes already** (both call
       `render_post_content`) — this test _locks_ the seam so a future edit to
       either side can't silently diverge. If it fails, the render layer already
       drifted; fix before proceeding.
@@ -633,16 +633,16 @@ Run:
 `cargo nextest run -p jaunder-web author_content_column_equals_anonymous_content`
 Expected: PASS (guard test).
 
-- [ ] **Step 3: Rewrite the `Some(children)` arm of `PostDisplay`** to the
+- [x] **Step 3: Rewrite the `Some(children)` arm of `PostDisplay`** to the
       target structure above. Build `view` (the `PostView`) once before the
       `match` so both arms share it (the `None` arm already builds it). Remove
       the divergent reactive markup.
 
-- [ ] **Step 4: Verify compile + clippy + the render tests.**
+- [x] **Step 4: Verify compile + clippy + the render tests.**
 
 Run: `cargo xtask check` Expected: clean; all `render` tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/pages/ui.rs web/src/render/mod.rs
