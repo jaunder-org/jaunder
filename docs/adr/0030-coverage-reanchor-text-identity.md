@@ -1,6 +1,6 @@
-# 0030. Coverage re-anchor by text identity
+# ADR-0030: Coverage re-anchor by text identity
 
-Status: accepted
+- Status: accepted
 
 ## Context
 

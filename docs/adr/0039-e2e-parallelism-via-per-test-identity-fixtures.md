@@ -1,4 +1,4 @@
-# 0039. Per-test identity fixtures for parallel-safe e2e specs
+# ADR-0039: Per-test identity fixtures for parallel-safe e2e specs
 
 - Status: accepted
 - Date: 2026-06-29

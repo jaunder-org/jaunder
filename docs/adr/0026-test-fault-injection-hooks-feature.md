@@ -1,4 +1,4 @@
-# 0026. Test-only fault-injection hooks behind a `test-utils` feature, not `#[cfg(test)]`
+# ADR-0026: Test-only fault-injection hooks behind a `test-utils` feature, not `#[cfg(test)]`
 
 - Status: accepted
 - Date: 2026-06-26

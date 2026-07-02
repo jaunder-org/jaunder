@@ -1,4 +1,4 @@
-# 0037. e2e VM diagnostics are captured before the check is failed, and recovered from the kept outPath
+# ADR-0037: e2e VM diagnostics are captured before the check is failed, and recovered from the kept outPath
 
 - Status: accepted
 - Deciders: mdorman, Claude Opus

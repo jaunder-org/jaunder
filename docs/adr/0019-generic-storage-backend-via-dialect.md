@@ -1,4 +1,4 @@
-# 0019. Generic storage backends via a `Backend` marker and per-trait `Dialect`
+# ADR-0019: Generic storage backends via a `Backend` marker and per-trait `Dialect`
 
 - Status: accepted
 - Date: 2026-06-15
