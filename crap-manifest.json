@@ -26,7 +26,7 @@
       "cyclomatic": 4.0,
       "file": "web/src/pages/ui.rs",
       "function": "SidebarNavItem",
-      "line": 990
+      "line": 978
     },
     {
       "coverage": 0.0,
@@ -835,8 +835,17 @@
       "crate": "web",
       "cyclomatic": 2.0,
       "file": "web/src/pages/ui.rs",
+      "function": "PostCard",
+      "line": 374
+    },
+    {
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "web",
+      "cyclomatic": 2.0,
+      "file": "web/src/pages/ui.rs",
       "function": "PostCreateForm",
-      "line": 605
+      "line": 593
     },
     {
       "coverage": 0.0,
@@ -845,7 +854,7 @@
       "cyclomatic": 2.0,
       "file": "web/src/pages/home.rs",
       "function": "HomePage",
-      "line": 24
+      "line": 15
     },
     {
       "coverage": 0.0,
@@ -1151,7 +1160,7 @@
       "cyclomatic": 5.0,
       "file": "web/src/pages/ui.rs",
       "function": "is_valid_tag_slug",
-      "line": 1200
+      "line": 1188
     },
     {
       "coverage": 100.0,
@@ -3112,8 +3121,8 @@
       "crate": "web",
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
-      "function": "PostCard",
-      "line": 391
+      "function": "marker_matches",
+      "line": 360
     },
     {
       "coverage": 0.0,
@@ -3122,7 +3131,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "AudiencePicker",
-      "line": 492
+      "line": 480
     },
     {
       "coverage": 0.0,
@@ -3131,7 +3140,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "audience_checkbox",
-      "line": 568
+      "line": 556
     },
     {
       "coverage": 0.0,
@@ -3140,7 +3149,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "InlineComposer",
-      "line": 933
+      "line": 921
     },
     {
       "coverage": 0.0,
@@ -3149,7 +3158,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "SidebarSource",
-      "line": 1018
+      "line": 1006
     },
     {
       "coverage": 0.0,
@@ -3158,7 +3167,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "Sidebar",
-      "line": 1036
+      "line": 1024
     },
     {
       "coverage": 0.0,
@@ -3167,7 +3176,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "marker_username_on_boot",
-      "line": 1101
+      "line": 1089
     },
     {
       "coverage": 0.0,
@@ -3176,7 +3185,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "authed_sidebar",
-      "line": 1116
+      "line": 1104
     },
     {
       "coverage": 0.0,
@@ -3185,7 +3194,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "TagInput",
-      "line": 1229
+      "line": 1217
     },
     {
       "coverage": 0.0,
@@ -5030,7 +5039,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "normalize_tag_token",
-      "line": 1211
+      "line": 1199
     },
     {
       "coverage": 100.0,

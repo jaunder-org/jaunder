@@ -353,6 +353,22 @@ pub fn PostDisplay(
     }
 }
 
+/// `true` when the auth marker's username equals `author` (#181, ADR-0043): the
+/// client-side signal that the viewer owns this post, so its action column shows
+/// even though the anonymous seed data has `is_author = false`. `false` on the
+/// host build (no marker) — the affordance is wasm-only chrome.
+fn marker_matches(author: &str) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::auth::marker::read().as_deref() == Some(author)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = author;
+        false
+    }
+}
+
 #[allow(clippy::must_use_candidate)]
 #[component]
 pub fn PostCard(
@@ -364,7 +380,12 @@ pub fn PostCard(
     #[prop(optional)] on_mutate: Option<Callback<()>>,
     #[prop(optional)] on_unpublish: Option<Callback<()>>,
 ) -> impl IntoView {
-    let is_author = post.is_author;
+    // The seed/anonymous data has `is_author = false` (the projector paints
+    // anonymous-only), so on the Local timeline the owner's own posts would show no
+    // action column. Decide it client-side from the auth marker (#181, ADR-0043 D4)
+    // so the affordance appears synchronously at mount. The server still authorizes
+    // the actual edit/delete by session — the marker only gates visibility.
+    let is_author = post.is_author || marker_matches(&post.username);
     let post_id = post.post_id;
     let time_label = crate::render::format_post_time(&post.published_at);
     let permalink = post.permalink.clone();

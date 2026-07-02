@@ -669,7 +669,7 @@ in the Local timeline gain the action column, decided **client-side** from the
 marker (`post.username == marker_username`) — no viewer-aware re-fetch, so the
 affordance appears synchronously at mount into a CSS-reserved gutter (Task 8).
 
-- [ ] **Step 1: Simplify `HomePage`.** Delete `TimelineMode::Feed`, the
+- [x] **Step 1: Simplify `HomePage`.** Delete `TimelineMode::Feed`, the
       `initial_page` `server_resource` that called `current_user()` +
       `list_home_feed`, and the mode-swap `Effect`. Keep: the seed adoption
       (Local, lines 39-47), `list_local_timeline` for load-more, and the Local
@@ -678,7 +678,7 @@ affordance appears synchronously at mount into a CSS-reserved gutter (Task 8).
       directly. `InlineComposer` is **removed** from `/` (it moves to the
       cockpit, Task 8).
 
-- [ ] **Step 2: Own-post affordance in `PostCard`.** `PostCard` (ui.rs:388)
+- [x] **Step 2: Own-post affordance in `PostCard`.** `PostCard` (ui.rs:388)
       already keys its action column on `post.is_author`. Add a client-side
       owner match so the owner's posts in the Local timeline show the column
       even though the seed/anonymous data has `is_author = false`:
@@ -701,7 +701,7 @@ fn marker_matches(author: &str) -> bool {
 (The server still authorizes the actual edit/delete by session — the marker only
 gates the affordance's visibility.)
 
-- [ ] **Step 3: Write/adjust the failing test.** `HomePage`/`PostCard` are
+- [x] **Step 3: Write/adjust the failing test.** `HomePage`/`PostCard` are
       wasm-reactive (out of host coverage); their behavior is pinned by Task 9's
       e2e ("owner on `/` sees the local timeline, not a personal feed; own posts
       show edit"). Add the e2e there. Here, ensure the pure `marker_matches`
@@ -709,12 +709,12 @@ gates the affordance's visibility.)
       `home.rs` host unit exists for `TimelineMode`, update it for the removed
       variant.
 
-- [ ] **Step 4: Verify compile + clippy + full check.**
+- [x] **Step 4: Verify compile + clippy + full check.**
 
 Run: `cargo xtask check` Expected: clean. Confirm no dangling references to
 `TimelineMode::Feed`, `list_home_feed`, or `InlineComposer` in `home.rs`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/pages/home.rs web/src/pages/ui.rs
