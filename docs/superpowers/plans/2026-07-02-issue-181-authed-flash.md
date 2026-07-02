@@ -249,7 +249,7 @@ exactly `/`, redirects to `/app` — the stay-default means this never fires unt
 a future issue writes the key (ADR-0043 D7/D10). Inline + blocking + first in
 `<head>`.
 
-- [ ] **Step 1: Write the failing tests** (`web/src/render/mod.rs` tests
+- [x] **Step 1: Write the failing tests** (`web/src/render/mod.rs` tests
       module):
 
 ```rust
@@ -284,12 +284,12 @@ fn index_html_shell_contains_the_prepaint_script() {
 (Confirm the relative path from `web/src/render/mod.rs` to `csr/index.html`
 resolves; adjust the `../` depth if the crate root differs.)
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo nextest run -p jaunder-web prepaint` Expected: FAIL —
 `PREPAINT_SCRIPT` undefined; index.html lacks it.
 
-- [ ] **Step 3: Add the const** (`web/src/render/mod.rs`, near `DEFAULT_THEME`):
+- [x] **Step 3: Add the const** (`web/src/render/mod.rs`, near `DEFAULT_THEME`):
 
 ```rust
 /// The pre-paint auth-detection script (#181, ADR-0043). A tiny inline, blocking
@@ -309,7 +309,7 @@ if(localStorage.getItem('jaunder_home_redirect')==='app'&&location.pathname==='/
 }catch(_){}})();</script>";
 ```
 
-- [ ] **Step 4: Insert it in the projector `<head>`**
+- [x] **Step 4: Insert it in the projector `<head>`**
       (`server/src/projector/mod.rs`, `document()`), first thing inside
       `<head>`:
 
@@ -329,7 +329,7 @@ if(localStorage.getItem('jaunder_home_redirect')==='app'&&location.pathname==='/
     )
 ```
 
-- [ ] **Step 5: Paste the same script into `csr/index.html`** as the first child
+- [x] **Step 5: Paste the same script into `csr/index.html`** as the first child
       of `<head>` (before the `<meta charset>`), byte-identical to
       `PREPAINT_SCRIPT`:
 
@@ -360,14 +360,14 @@ if(localStorage.getItem('jaunder_home_redirect')==='app'&&location.pathname==='/
 </head>
 ```
 
-- [ ] **Step 6: Run the tests, verify they pass**
+- [x] **Step 6: Run the tests, verify they pass**
 
 Run:
 `cargo nextest run -p jaunder-web prepaint && cargo nextest run -p jaunder index_html`
 Expected: PASS (the projector document test lives with the server crate; the
 drift guard lives in `web`).
 
-- [ ] **Step 7: Add a projector-document assertion** so the projector wiring is
+- [x] **Step 7: Add a projector-document assertion** so the projector wiring is
       covered (`server/src/projector/mod.rs` tests):
 
 ```rust
@@ -386,7 +386,7 @@ fn document_head_starts_with_the_prepaint_script() {
 }
 ```
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add web/src/render/mod.rs server/src/projector/mod.rs csr/index.html

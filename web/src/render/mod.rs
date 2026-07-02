@@ -23,6 +23,23 @@ use std::fmt::Write as _;
 /// reactive `AppShell` share one value; re-exported from `pages` for the client.
 pub const DEFAULT_THEME: &str = "studio";
 
+/// The pre-paint auth-detection script (#181, ADR-0043). A tiny inline, blocking
+/// `<head>` script: reads the localStorage auth marker (`jaunder_auth`, same key
+/// as `auth::marker`) and marks `<html class="authed" data-user=…>` BEFORE first
+/// paint, so CSS reserves the authed layout and the SPA boots already knowing.
+/// Never external/deferred (a round-trip would guarantee paint-then-swap). The
+/// redirect-pref (`jaunder_home_redirect`) read path is present with the safe
+/// stay-default — nothing writes the key yet (ADR-0043 D7/D10). Bytes are
+/// identical for every visitor → cacheability intact. Kept byte-identical in
+/// `csr/index.html` (a `<!-- prettier-ignore -->`-pinned copy, drift-guarded by a
+/// unit test) — deliberately minified so the two copies can match verbatim.
+pub const PREPAINT_SCRIPT: &str = "<script>(function(){try{\
+var m=localStorage.getItem('jaunder_auth');\
+if(m){var u=JSON.parse(m).username;\
+if(u){var e=document.documentElement;e.classList.add('authed');e.setAttribute('data-user',u);\
+if(localStorage.getItem('jaunder_home_redirect')==='app'&&location.pathname==='/'){location.replace('/app');}}}\
+}catch(_){}})();</script>";
+
 /// The initial data a public page is rendered from — serialized into the
 /// projector's `#jaunder-seed` blob and adopted by the CSR client on boot.
 ///
@@ -664,6 +681,33 @@ pub fn render_sidebar(active_key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepaint_script_is_inline_blocking_and_reads_the_marker() {
+        let s = PREPAINT_SCRIPT;
+        assert!(s.starts_with("<script>") && s.ends_with("</script>"), "{s}");
+        // No async/defer/src — a network round-trip would defeat pre-paint.
+        assert!(
+            !s.contains("src=") && !s.contains("defer") && !s.contains("async"),
+            "{s}"
+        );
+        // Reads the same key + field the marker module writes.
+        assert!(s.contains("jaunder_auth"), "{s}");
+        assert!(s.contains(".username"), "{s}");
+        assert!(s.contains("classList") && s.contains("authed"), "{s}");
+    }
+
+    #[test]
+    fn index_html_shell_contains_the_prepaint_script() {
+        // The projector's SPA-shell fallback IS csr/index.html; it must carry the
+        // identical pre-paint script (a prettier-ignored, minified copy) so
+        // authed-only / shell-fallback pages pre-paint too.
+        let index = include_str!("../../../csr/index.html");
+        assert!(
+            index.contains(PREPAINT_SCRIPT),
+            "csr/index.html must embed render::PREPAINT_SCRIPT verbatim (drift guard)"
+        );
+    }
 
     fn sample_post() -> PostResponse {
         PostResponse {

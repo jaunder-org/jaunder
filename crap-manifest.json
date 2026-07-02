@@ -2211,6 +2211,15 @@
       "crap": 3.0,
       "crate": "web",
       "cyclomatic": 3.0,
+      "file": "web/src/auth/marker.rs",
+      "function": "read",
+      "line": 43
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "web",
+      "cyclomatic": 3.0,
       "file": "web/src/auth/server.rs",
       "function": "AuthRejection::into_response",
       "line": 38
@@ -3375,6 +3384,42 @@
       "file": "web/src/feed_discovery.rs",
       "function": "RsdDiscovery",
       "line": 41
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "web",
+      "cyclomatic": 2.0,
+      "file": "web/src/auth/marker.rs",
+      "function": "decode_marker",
+      "line": 26
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "web",
+      "cyclomatic": 2.0,
+      "file": "web/src/auth/marker.rs",
+      "function": "storage",
+      "line": 36
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "web",
+      "cyclomatic": 2.0,
+      "file": "web/src/auth/marker.rs",
+      "function": "set",
+      "line": 50
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "web",
+      "cyclomatic": 2.0,
+      "file": "web/src/auth/marker.rs",
+      "function": "clear",
+      "line": 58
     },
     {
       "coverage": 100.0,
@@ -5595,6 +5640,15 @@
       "crap": 1.0,
       "crate": "web",
       "cyclomatic": 1.0,
+      "file": "web/src/auth/marker.rs",
+      "function": "encode_marker",
+      "line": 20
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web",
+      "cyclomatic": 1.0,
       "file": "web/src/auth/server.rs",
       "function": "require_auth",
       "line": 110
@@ -5606,7 +5660,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/auth/mod.rs",
       "function": "get_registration_policy",
-      "line": 36
+      "line": 40
     },
     {
       "coverage": 100.0,
@@ -5615,7 +5669,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/auth/mod.rs",
       "function": "current_user",
-      "line": 47
+      "line": 51
     },
     {
       "coverage": 100.0,
@@ -5624,7 +5678,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/auth/mod.rs",
       "function": "register",
-      "line": 60
+      "line": 64
     },
     {
       "coverage": 100.0,
@@ -5633,7 +5687,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/auth/mod.rs",
       "function": "login",
-      "line": 149
+      "line": 153
     },
     {
       "coverage": 100.0,
@@ -5642,7 +5696,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/auth/mod.rs",
       "function": "logout",
-      "line": 217
+      "line": 221
     },
     {
       "coverage": 100.0,
