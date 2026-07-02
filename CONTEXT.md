@@ -52,8 +52,19 @@ publication, a followed source in general, or an inbound reading timeline;
 ActivityPub actors and AT records are **not** "feeds." _Avoid_: treating
 `feed_url` as a universal publication/source identity — identity is per-entity.
 
+### Clients
+
+**Protocol Client**: Third-party software that talks to Jaunder over an open
+protocol: a feed reader consuming a **Syndication Feed**, or an AtomPub editor
+(MarsEdit, the Emacs client) working a **Collection**. May be consumer-facing or
+owner-facing, but always confined to the protocol surface. _Avoid_: bare
+"client" for these — unqualified "client" is reserved for software running the
+planned `jaunder-client` runtime (see `docs/hub-architecture.md` §8).
+
 ## Relationships
 
+- A **User** _is_ the publication: there is deliberately no
+  blog/site/publication entity, and Posts group only by their author.
 - A **User** owns one publishing **Collection** of **Posts**.
 - An AtomPub **Member Entry** is the wire form of exactly one **Post**.
 - A **User** may hold many **App Passwords**, each revocable independently.
@@ -73,3 +84,9 @@ ActivityPub actors and AT records are **not** "feeds." _Avoid_: treating
   inbound/normalized _reading timeline_ is also loosely called a "feed," but it
   is not a syndication feed and carries no `feed_*` naming — `feed_*` is
   syndication-only (RSS/Atom/JSON).
+- "Blog" names nothing: there is no blog entity — the **User** is the
+  publication (see Relationships). Do not introduce one casually.
+- "Client" is overloaded: feed readers, AtomPub editors, and the planned rich
+  apps are all casually "clients." Resolved: **Protocol Client** = third-party
+  software on an open protocol; unqualified "client" = software running the
+  planned `jaunder-client` runtime.
