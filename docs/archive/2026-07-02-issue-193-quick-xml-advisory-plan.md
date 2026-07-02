@@ -11,7 +11,7 @@ commit.
 
 ## Prerequisite (before any commit here)
 
-- [ ] **P0. Rebase onto main once hotfix PR #194 has merged.** #194 lands the
+- [x] **P0. Rebase onto main once hotfix PR #194 has merged.** #194 lands the
       temporary `deny.toml` ignore of RUSTSEC-2026-0194/0195 on `main`. Rebase
       this branch onto the updated `main` so the ignore is inherited and the
       verify gate is green during development. (Until then, every commit here
@@ -20,11 +20,11 @@ commit.
 
 ## Tasks
 
-- [ ] **1. Land the design docs.** Commit the staged spec,
+- [x] **1. Land the design docs.** Commit the staged spec,
       `docs/adr/0042-quick-xml-fork-patch.md`, and the `docs/README.md`
       ADR-table row. Pure docs; gate green.
 
-- [ ] **2. (external) Create + patch the forks.**
+- [x] **2. (external) Create + patch the forks.**
   - `gh repo fork rust-syndication/atom --org jaunder-org` and
     `… rust-syndication/rss --org jaunder-org`.
   - On each fork, branch `quick-xml-0.41`; set `quick-xml = "0.41"` (keep
@@ -39,7 +39,7 @@ commit.
   - Push the branches; **record the exact commit rev of each** (needed for
     pinning).
 
-- [ ] **3. Wire the forks into the workspace + hermetic Nix vendoring (one
+- [x] **3. Wire the forks into the workspace + hermetic Nix vendoring (one
       atomic commit).** This must be a single commit: the Cargo-level `[patch]`
       alone would break the hermetic Nix build until the vendoring lands, so
       they land together to keep the gate green.
@@ -60,13 +60,13 @@ commit.
     intractable, STOP and reassess (fallback options in ADR-0042: vendored-path
     `[patch]`, or scoped-ignore-as-end-state) before proceeding.
 
-- [ ] **4. Verify AtomPub round-trip (no functional regression).** Run
+- [x] **4. Verify AtomPub round-trip (no functional regression).** Run
       `common`'s atompub tests and the elisp live-integration suite; confirm
       serialize/parse behaviour is unchanged on quick-xml 0.41. If green with no
       code change, this may fold into Task 3's verification rather than a
       separate commit; otherwise commit any fixups.
 
-- [ ] **5. Remove the temporary advisory ignore (the climax).** Delete the
+- [x] **5. Remove the temporary advisory ignore (the climax).** Delete the
       RUSTSEC-2026-0194/0195 entries (and their scaffold comment) from
       `deny.toml` `[advisories].ignore` — the tree is now on quick-xml 0.41, so
       the advisories genuinely no longer apply. Verify
@@ -74,7 +74,7 @@ commit.
       `cargo xtask check` / `validate --no-e2e` green. Commit. End state: no
       advisory ignore, single quick-xml 0.41.x.
 
-- [ ] **6. (external, user-gated) File follow-up + open upstream PRs.**
+- [x] **6. (external, user-gated) File follow-up + open upstream PRs.**
   - File a fresh GitHub issue (`jaunder-issues`): _"Drop quick-xml git
     `[patch]` + forks once atom_syndication/rss publish releases on quick-xml ≥
     0.41"_ — the drop-fork tracker (per resolved decision #3). It records the
