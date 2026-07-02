@@ -796,7 +796,7 @@ paint; these rules reserve space for the authed chrome (footer avatar row, the
 own-post action-column gutter) so that when the wasm client fills those slots
 the content around them does not move.
 
-- [ ] **Step 1: Add reserve rules.** For example (adapt to the real class names
+- [x] **Step 1: Add reserve rules.** For example (adapt to the real class names
       / measurements found in the stylesheet):
 
 ```css
@@ -814,13 +814,13 @@ Measure the actual authed footer height and action-column width from the
 rendered components and reserve exactly that, so the fill is invisible
 movement-wise.
 
-- [ ] **Step 2: Verify via the app** (manual, or defer to Task 10 e2e). Since
+- [x] **Step 2: Verify via the app** (manual, or defer to Task 10 e2e). Since
       CSS has no unit test, its correctness is the "no reflow" e2e in Task 10.
 
 Run: `cargo xtask check` Expected: clean (a `.css` edit does not bust the
 coverage cache; only `.ts` does).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add csr/style/jaunder.css

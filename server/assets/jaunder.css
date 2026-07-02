@@ -1255,3 +1255,23 @@
 .j-root[data-chrome="rule"] .j-hero p {
     margin: 0 auto;
 }
+
+/* ─── #181 pre-paint authed layout (ADR-0043 D4/D5) ─────────────
+   The pre-paint <head> script sets html.authed BEFORE first paint (from the
+   jaunder_auth marker), so these rules adjust the owner's chrome up-front and the
+   CSR fill causes no visible reflow:
+   - the anon-only Sign in / Register CTA on `/` is hidden for the owner (it never
+     paints, so no flash);
+   - the authed sidebar footer's height is reserved so the avatar row filling in
+     doesn't shift the sidebar.
+   The own-post action-column gutter is deliberately NOT reserved here: ownership
+   is decided client-side from the marker (unknown at the anonymous projector
+   paint), so a per-post reserve can't be pre-painted, and reserving it on every
+   post would wrongly gutter non-owner posts. The empirical layout-shift (CLS)
+   assertion for that bounded case is the deferred follow-up #202. */
+html.authed .j-anon-only {
+    display: none;
+}
+html.authed .j-sb-foot {
+    min-height: 44px;
+}

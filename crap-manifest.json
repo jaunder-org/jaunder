@@ -44,7 +44,7 @@
       "cyclomatic": 4.0,
       "file": "web/src/pages/mod.rs",
       "function": "App",
-      "line": 70
+      "line": 72
     },
     {
       "coverage": 66.66666666666666,
@@ -1196,7 +1196,7 @@
       "cyclomatic": 5.0,
       "file": "web/src/render/mod.rs",
       "function": "render_sidebar",
-      "line": 646
+      "line": 651
     },
     {
       "coverage": 100.0,
@@ -3066,6 +3066,15 @@
       "crap": 2.0,
       "crate": "web",
       "cyclomatic": 1.0,
+      "file": "web/src/pages/cockpit.rs",
+      "function": "CockpitPage",
+      "line": 22
+    },
+    {
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "web",
+      "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "Icon",
       "line": 75
@@ -3338,7 +3347,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/mod.rs",
       "function": "AppShell",
-      "line": 50
+      "line": 52
     },
     {
       "coverage": 0.0,
@@ -5579,7 +5588,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/render/mod.rs",
       "function": "render_icon",
-      "line": 627
+      "line": 632
     },
     {
       "coverage": 100.0,
