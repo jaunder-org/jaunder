@@ -17,7 +17,7 @@
     flake-utils.url = "github:numtide/flake-utils";
     crane.url = "github:ipetkov/crane";
 
-    # TEMPORARY (jaunder #193 / ADR-0042): forks of atom_syndication and rss that
+    # TEMPORARY (jaunder #193 / ADR-0043): forks of atom_syndication and rss that
     # depend on quick-xml >= 0.41 (clears RUSTSEC-2026-0194/0195). Pinned to the exact
     # revs referenced by the root Cargo.toml [patch.crates-io]; fed to crane's cargo
     # vendor step via overrideVendorGitCheckout so the git [patch] resolves hermetically
@@ -288,7 +288,7 @@
             );
         };
 
-        # TEMPORARY (jaunder #193 / ADR-0042): vendor the git [patch.crates-io] forks of
+        # TEMPORARY (jaunder #193 / ADR-0043): vendor the git [patch.crates-io] forks of
         # atom_syndication / rss from pinned flake inputs rather than fetching them at
         # build time, so the hermetic (no-network) sandbox can resolve the patched
         # Cargo.lock. crane groups vendored crates by git source; for each fork source we

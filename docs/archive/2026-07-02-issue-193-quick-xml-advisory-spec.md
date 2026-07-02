@@ -3,7 +3,7 @@
 **Status:** design resolved, awaiting approval **Issue:**
 [#193](https://github.com/jaunder-org/jaunder/issues/193) **Date:** 2026-07-02
 **Related ADR:**
-[0042 — quick-xml advisory: fork + git-patch bridge](../../adr/0042-quick-xml-fork-patch.md)
+[0043 — quick-xml advisory: fork + git-patch bridge](../../adr/0043-quick-xml-fork-patch.md)
 
 ## Problem
 
@@ -53,7 +53,7 @@ syndication crates to stop pinning `^0.39`. Since no such release exists, we
 Fork both crates, bump their `quick-xml` requirement to `0.41`, wire the forks
 into our build via a **git `[patch.crates-io]`**, bump `common`'s direct dep,
 and open upstream PRs so the forks are temporary. Full detail and rationale in
-**ADR-0042**.
+**ADR-0043**.
 
 ## Landing sequence (two phases)
 
@@ -115,7 +115,7 @@ In scope:
   policy). **No** `[advisories].ignore` entry.
 - Open upstream PRs against `rust-syndication/{atom,rss}` (a discrete,
   user-gated step — see Open questions).
-- ADR-0042 + `docs/README.md` ADR-table row.
+- ADR-0043 + `docs/README.md` ADR-table row.
 
 Out of scope (file as follow-ups):
 

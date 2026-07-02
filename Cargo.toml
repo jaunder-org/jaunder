@@ -78,7 +78,7 @@ js-sys = "0.3.82"
 urlencoding = "2"
 percent-encoding = "2"
 
-# TEMPORARY (jaunder #193 / ADR-0042): route atom_syndication and rss to forks that
+# TEMPORARY (jaunder #193 / ADR-0043): route atom_syndication and rss to forks that
 # depend on quick-xml >= 0.41, clearing RUSTSEC-2026-0194/0195. Upstream's latest
 # releases (atom_syndication 0.12.8 / rss 2.0.13) hard-pin quick-xml ^0.39 and no
 # 0.39.x backport exists, so [patch] to quick-xml directly is impossible; the forks

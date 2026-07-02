@@ -2,7 +2,7 @@
 
 **Spec:**
 [2026-07-02-issue-193-quick-xml-advisory.md](../specs/2026-07-02-issue-193-quick-xml-advisory.md)
-**ADR:** [0042](../../adr/0042-quick-xml-fork-patch.md) **Branch:**
+**ADR:** [0043](../../adr/0043-quick-xml-fork-patch.md) **Branch:**
 `worktree-issue-193-quick-xml-advisory`
 
 Each task is one clean, gate-verified commit (`cargo xtask check` green) unless
@@ -15,13 +15,13 @@ commit.
       temporary `deny.toml` ignore of RUSTSEC-2026-0194/0195 on `main`. Rebase
       this branch onto the updated `main` so the ignore is inherited and the
       verify gate is green during development. (Until then, every commit here
-      would fail `cargo-deny`.) The design docs (spec, ADR-0042, README row) are
+      would fail `cargo-deny`.) The design docs (spec, ADR-0043, README row) are
       already staged and become Task 1's commit.
 
 ## Tasks
 
 - [x] **1. Land the design docs.** Commit the staged spec,
-      `docs/adr/0042-quick-xml-fork-patch.md`, and the `docs/README.md`
+      `docs/adr/0043-quick-xml-fork-patch.md`, and the `docs/README.md`
       ADR-table row. Pure docs; gate green.
 
 - [x] **2. (external) Create + patch the forks.**
@@ -57,7 +57,7 @@ commit.
     **and** the hermetic Nix path resolves the git patch — e.g.
     `nix build .#checks.<sys>.deny` and the app derivation build succeed with no
     network in the sandbox. If crane vendoring of the git source proves
-    intractable, STOP and reassess (fallback options in ADR-0042: vendored-path
+    intractable, STOP and reassess (fallback options in ADR-0043: vendored-path
     `[patch]`, or scoped-ignore-as-end-state) before proceeding.
 
 - [x] **4. Verify AtomPub round-trip (no functional regression).** Run
@@ -78,7 +78,7 @@ commit.
   - File a fresh GitHub issue (`jaunder-issues`): _"Drop quick-xml git
     `[patch]` + forks once atom_syndication/rss publish releases on quick-xml ≥
     0.41"_ — the drop-fork tracker (per resolved decision #3). It records the
-    exit steps from ADR-0042.
+    exit steps from ADR-0043.
   - **After** the user reviews the local green result, open PRs to
     `rust-syndication/{atom,rss}` from the fork branches (outward-facing —
     confirm first).
