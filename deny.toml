@@ -70,6 +70,14 @@ feature-depth = 1
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
 ignore = [
+    # TEMPORARY SCAFFOLD (jaunder #193) — remove once the tree is on quick-xml >= 0.41
+    # via the atom_syndication/rss forks (ADR-0042). Present only so the verify gate is
+    # green repo-wide while that fix lands; the fork/[patch] PR removes these two lines.
+    # quick-xml 0.39.4 (transitive via atom_syndication 0.12.8 / rss 2.0.13) is DoS-only
+    # and reachable solely through authenticated app-password AtomPub clients. Both fixed
+    # in quick-xml >= 0.41.0.
+    { id = "RUSTSEC-2026-0194", reason = "TEMPORARY (jaunder #193): quick-xml 0.39.4 O(N^2) attribute check; removed once the atom_syndication/rss forks move the tree to quick-xml >= 0.41 (ADR-0042)." },
+    { id = "RUSTSEC-2026-0195", reason = "TEMPORARY (jaunder #193): quick-xml 0.39.4 unbounded namespace-declaration allocation; removed once the atom_syndication/rss forks move the tree to quick-xml >= 0.41 (ADR-0042)." },
     { id = "RUSTSEC-2024-0436", reason = "The issue seems overblown, original author simply sees no future development required." },
     { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is unmaintained but is a compile-time-only (proc-macro) transitive dep pulled in solely by leptos 0.8.x macro crates (leptos_macro, leptos_router_macro, reactive_stores_macro, rstml); it never ships in the binary. No leptos 0.8.x release drops it. Remove this ignore once leptos drops the dependency (likely a 0.9 upgrade) — see jaunder-0eir." },
     #"RUSTSEC-0000-0000",
