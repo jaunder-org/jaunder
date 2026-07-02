@@ -114,18 +114,26 @@ they run in CI, or locally via `cargo xtask validate`. Bypass with
 
 ### Adding an ADR
 
-ADRs are `docs/adr/NNNN-slug.md` with a sequential number, indexed in the table
-in `docs/README.md`. The `identifier-collisions` step of
-`cargo xtask check`/`validate` fails if two ADRs — or two migrations, per
+ADRs are `docs/adr/NNNN-slug.md` with a canonical `# ADR-NNNN: <title>` heading
+and a single-token `- Status: <token>` line (one of
+proposed/accepted/superseded/deprecated/rejected). They are indexed in the table
+in `docs/README.md`, whose number, link, and status cells are **generated** from
+`docs/adr/`: the `adr-format` and `adr-readme-parity` steps of
+`cargo xtask check`/`validate` fail on a non-canonical heading/status or a table
+that has drifted from the directory (recovery: `cargo xtask adr sync-readme`,
+which is also folded into `adr renumber`). Table titles are hand-curated — a new
+row is seeded from the ADR heading, then owned by you (ADR-0036 §#196 addendum).
+
+The `identifier-collisions` step fails if two ADRs — or two migrations, per
 backend — share a number, or if the sqlite/postgres migration sets diverge.
 Because two differently-named files (`0099-foo.md` / `0099-bar.md`) merge with
 no git conflict, this check is what makes a concurrent-branch collision **loud**
 instead of silent (ADR-0036). If another branch took "your" number, the check
 goes red after you rebase onto `main`; run `cargo xtask adr renumber` to bump
-your new ADR to the next free number and rewrite its references automatically
-(the ADR already on `origin/main` keeps its number). Migrations use the same
-sequential convention and detection check but are renumbered by hand on the rare
-occasion it is needed.
+your new ADR to the next free number, rewrite its references, and re-sync the
+README table in one command (the ADR already on `origin/main` keeps its number).
+Migrations use the same sequential convention and detection check but are
+renumbered by hand on the rare occasion it is needed.
 
 ## Testing
 
