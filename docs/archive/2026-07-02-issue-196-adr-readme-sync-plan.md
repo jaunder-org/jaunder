@@ -89,12 +89,12 @@ it must report malformed files the parser would otherwise choke on:
 `adr-format` gate lands in Task 4), so this is a safe standalone docs commit
 that leaves the corpus uniform _before_ the gate is introduced.
 
-- [ ] **Step 1: Rewrite the 12 non-canonical headings.** Uniform rule on line 1
+- [x] **Step 1: Rewrite the 12 non-canonical headings.** Uniform rule on line 1
     of each listed file: `# NNNN. <title>` → `# ADR-NNNN:
 <title>` (same number, title text verbatim). E.g. `# 0030. Coverage re-anchor by
 text identity` → `# ADR-0030: Coverage re-anchor by text identity`.
 
-- [ ] **Step 2: Fix the 3 status lines.**
+- [x] **Step 2: Fix the 3 status lines.**
   - `0029` line 3: `Status: accepted` → `- Status: accepted`.
   - `0030` line 3: `Status: accepted` → `- Status: accepted` (heading already
     done in Step 1).
@@ -112,14 +112,14 @@ text identity` → `# ADR-0030: Coverage re-anchor by text identity`.
       principle stands.
     ```
 
-- [ ] **Step 3: Add the table markers in `docs/README.md`.** Insert
+- [x] **Step 3: Add the table markers in `docs/README.md`.** Insert
       `<!-- adr-table:begin -->` on its own line immediately before the table
       header (current line 26, `| # | Title | Status |`) and
       `<!-- adr-table:end -->` immediately after the last row (current line 69,
       `0041`). Leave the table contents exactly as they are — they already match
       `docs/adr/` for number/link/ status, so no row changes here.
 
-- [ ] **Step 4: Gate + commit.**
+- [x] **Step 4: Gate + commit.**
   ```
   cargo xtask check --no-test
   ```
@@ -148,24 +148,24 @@ text identity` → `# ADR-0030: Coverage re-anchor by text identity`.
   ADR). Consumes the shared core (`parse_adr_dir`, `parse_table_block`,
   `render_block`, `splice_block`).
 
-- [ ] **Step 1: Implement the shared core** (`AdrEntry`, `TableRow`,
+- [x] **Step 1: Implement the shared core** (`AdrEntry`, `TableRow`,
       `parse_adr_dir`, `parse_table_block`, `render_block`, marker consts,
       `splice_block`) as described in **Shared core** above. Heading parse must
       accept the canonical `# ADR-NNNN: <title>` form (post-Task-1 the corpus is
       uniform); strip the `ADR-NNNN:` prefix for the seeded title.
 
-- [ ] **Step 2: Implement `sync_readme()`** — read `docs/adr/` and
+- [x] **Step 2: Implement `sync_readme()`** — read `docs/adr/` and
       `docs/README.md`,
       `render_block(parse_adr_dir, parse_table_block(current))`, `splice_block`,
       write back only if changed. Return a summary
       (`rows: N, added: [..], removed: [..]`).
 
-- [ ] **Step 3: Wire the CLI** — add `SyncReadme` to `AdrCommand` (with
+- [x] **Step 3: Wire the CLI** — add `SyncReadme` to `AdrCommand` (with
       `after_help` example `cargo xtask adr sync-readme`), the `command_name`
       arm, and the dispatch arm (mirror the `Renumber` arm at `lib.rs:259-265`).
       This consumes the new code — no dead-code gap.
 
-- [ ] **Step 4: Unit tests** (in the core module) — `parse_adr_dir` extracts
+- [x] **Step 4: Unit tests** (in the core module) — `parse_adr_dir` extracts
       num/title/status from a canonical file; `parse_table_block` trims padded
       cells; `render_block` **preserves an existing title** and **seeds a new
       row's title from the heading**; `render_block` **drops an orphan** and
@@ -173,7 +173,7 @@ text identity` → `# ADR-0030: Coverage re-anchor by text identity`.
       **errors on a missing marker**. Add a `sync-readme parses ADR command` CLI
       test mirroring `adr_renumber_parses` (`lib.rs:478`).
 
-- [ ] **Step 5: Gate + prove idempotence + commit.**
+- [x] **Step 5: Gate + prove idempotence + commit.**
   ```
   cargo xtask check
   ```
@@ -207,7 +207,7 @@ text identity` → `# ADR-0030: Coverage re-anchor by text identity`.
   number and slug and updates the row's number + link; a brand-new number
   appends a row seeded from the (rewritten) heading.
 
-- [ ] **Step 1: Regenerate the table at the end of `run_renumber`.** After the
+- [x] **Step 1: Regenerate the table at the end of `run_renumber`.** After the
       `for added_name in &added` loop, run the same
       `render_block`/`splice_block` against `repo.join("docs/README.md")` and
       `repo.join("docs/adr")`, writing it back (unstaged, like the reference
@@ -215,13 +215,13 @@ text identity` → `# ADR-0030: Coverage re-anchor by text identity`.
       Make it tolerant when the README has no markers (skip with a note rather
       than erroring — a test repo may omit them).
 
-- [ ] **Step 2: Test.** Extend the temp-repo renumber tests: seed a
+- [x] **Step 2: Test.** Extend the temp-repo renumber tests: seed a
       `docs/README.md` with markers and a row for the colliding ADR, run
       `run_renumber`, assert the row's number cell and link target moved to the
       bumped number. (Reuse the existing `write`/`git` helpers at
       `adr.rs:245-254`.)
 
-- [ ] **Step 3: Gate + commit.**
+- [x] **Step 3: Gate + commit.**
   ```
   cargo xtask check
   ```
@@ -252,29 +252,29 @@ text identity` → `# ADR-0030: Coverage re-anchor by text identity`.
   matching `sequence_check.rs:41`). Both consume the shared core /
   `format_problems`.
 
-- [ ] **Step 1: Implement `format_problems`** (in the core module) per **Shared
+- [x] **Step 1: Implement `format_problems`** (in the core module) per **Shared
       core**, with the fixed status vocabulary. Return sorted, human-readable
       lines.
 
-- [ ] **Step 2: Implement `steps::adr_check::run`** — push `adr-format` (ok/fail
+- [x] **Step 2: Implement `steps::adr_check::run`** — push `adr-format` (ok/fail
       from `format_problems`); push `adr-readme-parity` (ok/fail from
       `parity_problems(parse_adr_dir, parse_table_block(readme-block))`, with
       the `recovery:` line appended on failure). If the README markers are
       missing, fail `adr-readme-parity` with a clear "add the adr-table markers"
       message.
 
-- [ ] **Step 3: Wire into `check` and `validate`.** Add the call after
+- [x] **Step 3: Wire into `check` and `validate`.** Add the call after
       `sequence_check::run` in both pipelines. Register the module in the
       `steps { … }` block at `lib.rs:10-16`.
 
-- [ ] **Step 4: Unit tests** — `format_problems` flags a bad heading form, a
+- [x] **Step 4: Unit tests** — `format_problems` flags a bad heading form, a
       filename/heading number mismatch, a missing/malformed status, an
       out-of-vocabulary token, and is empty on a clean set. `parity_problems`
       flags a missing row, a wrong target, a wrong status, an orphan row, and
       mis-ordering; **ignores a title difference**; is empty when mechanical
       cells agree; does not panic on a duplicate num.
 
-- [ ] **Step 5: Gate + commit.** By now the tree is uniform (Task 1) and the
+- [x] **Step 5: Gate + commit.** By now the tree is uniform (Task 1) and the
       table matches (Task 2), so both new steps pass.
   ```
   cargo xtask check
@@ -298,7 +298,7 @@ text identity` → `# ADR-0030: Coverage re-anchor by text identity`.
 
 **Interfaces:** none (documentation).
 
-- [ ] **Step 1: Write the ADR-0036 addendum** — a
+- [x] **Step 1: Write the ADR-0036 addendum** — a
       `## Addendum (#196): the README ADR table is a generated projection`
       section recording: the table's number/link/ status cells are generated
       from `docs/adr/` by `cargo xtask adr sync-readme` (folded into
@@ -308,11 +308,11 @@ text identity` → `# ADR-0030: Coverage re-anchor by text identity`.
       (`adr-format`, `adr-readme-parity`) enforce it. Keep `Status: accepted`
       unchanged.
 
-- [ ] **Step 2: Check CONTRIBUTING.** `rg -n 'ADR' CONTRIBUTING.md` — if it
+- [x] **Step 2: Check CONTRIBUTING.** `rg -n 'ADR' CONTRIBUTING.md` — if it
       tells authors to hand-edit the README ADR row, replace that with the
       generated-table flow. If it says nothing about the table, make no change.
 
-- [ ] **Step 3: Gate + commit.**
+- [x] **Step 3: Gate + commit.**
   ```
   cargo xtask check --no-test
   ```
@@ -327,7 +327,7 @@ text identity` → `# ADR-0030: Coverage re-anchor by text identity`.
 
 **Files:** none (verification gate).
 
-- [ ] **Step 1: Full local gate.**
+- [x] **Step 1: Full local gate.**
 
   ```
   cargo xtask validate --no-e2e
@@ -339,7 +339,7 @@ text identity` → `# ADR-0030: Coverage re-anchor by text identity`.
   new `adr-format` + `adr-readme-parity`, host xtask unit suite, coverage
   unchanged.
 
-- [ ] **Step 2: End-to-end behavior spot-check** (throwaway, not committed) — in
+- [x] **Step 2: End-to-end behavior spot-check** (throwaway, not committed) — in
       a scratch area, create a `docs/adr/0000-scratch.md` with a canonical
       heading + status, confirm `adr-format` passes it but
       `identifier-collisions` flags the `0000` dup, run
@@ -347,7 +347,7 @@ text identity` → `# ADR-0030: Coverage re-anchor by text identity`.
       heading number, and appends a README row seeded from the heading. Revert
       the scratch file. Record the observed behavior for the ship hand-off.
 
-- [ ] **Step 3: Record evidence** — summarize the gate result + the spot-check
+- [x] **Step 3: Record evidence** — summarize the gate result + the spot-check
       for the pre-merge halt.
 
 ---
