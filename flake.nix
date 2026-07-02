@@ -16,6 +16,20 @@
     };
     flake-utils.url = "github:numtide/flake-utils";
     crane.url = "github:ipetkov/crane";
+
+    # TEMPORARY (jaunder #193 / ADR-0042): forks of atom_syndication and rss that
+    # depend on quick-xml >= 0.41 (clears RUSTSEC-2026-0194/0195). Pinned to the exact
+    # revs referenced by the root Cargo.toml [patch.crates-io]; fed to crane's cargo
+    # vendor step via overrideVendorGitCheckout so the git [patch] resolves hermetically
+    # (no build-time network). Remove once upstream releases on quick-xml >= 0.41.
+    atom-fork = {
+      url = "github:jaunder-org/atom/2462e3798295047ba35078b9634bcd129e887ffe";
+      flake = false;
+    };
+    rss-fork = {
+      url = "github:jaunder-org/rss/60b2a81445160af85ab94a23774c74e6616decfe";
+      flake = false;
+    };
   };
 
   outputs =
@@ -25,6 +39,8 @@
       fenix,
       flake-utils,
       crane,
+      atom-fork,
+      rss-fork,
     }:
     let
       interactiveTestingVmSystem = "x86_64-linux";
@@ -272,8 +288,48 @@
             );
         };
 
-        commonArgs = {
+        # TEMPORARY (jaunder #193 / ADR-0042): vendor the git [patch.crates-io] forks of
+        # atom_syndication / rss from pinned flake inputs rather than fetching them at
+        # build time, so the hermetic (no-network) sandbox can resolve the patched
+        # Cargo.lock. crane groups vendored crates by git source; for each fork source we
+        # substitute the flake-input checkout (each fork's repo root *is* the crate).
+        # crane's linkLockedDeps symlinks each git-sourced crate as `<name>-<version>`
+        # pointing at `<checkout>/<name>-<version>`, so the returned checkout must place
+        # the crate under that subdir. Each fork is a single-crate repo with its crate at
+        # the root, so wrap the flake input in the expected `<name>-<version>/` layout.
+        cargoVendorDir = craneLib.vendorCargoDeps {
           inherit src;
+          overrideVendorGitCheckout =
+            ps: drv:
+            let
+              forkFor =
+                name:
+                if name == "atom_syndication" then
+                  atom-fork
+                else if name == "rss" then
+                  rss-fork
+                else
+                  null;
+              p = builtins.head ps;
+              fork = forkFor p.name;
+            in
+            if fork != null then
+              pkgs.runCommandLocal "fork-vendor-${p.name}-${p.version}" { } ''
+                dst="$out/${p.name}-${p.version}"
+                mkdir -p "$dst"
+                cp -a ${fork}/. "$dst/"
+                chmod -R u+w "$dst"
+                # Vendored git crates still need a checksum manifest; git sources carry
+                # no registry checksum (package = null), and an empty files map skips
+                # per-file verification (crane does the same for its own git checkouts).
+                echo '{"files":{},"package":null}' > "$dst/.cargo-checksum.json"
+              ''
+            else
+              drv;
+        };
+
+        commonArgs = {
+          inherit src cargoVendorDir;
           pname = "jaunder";
           version = "0.1.0";
           strictDeps = true;
@@ -1081,7 +1137,7 @@
                   touch $out
                 '';
             deny = craneLib.cargoDeny {
-              inherit src;
+              inherit src cargoVendorDir;
               pname = "jaunder";
               version = "0.1.0";
             };

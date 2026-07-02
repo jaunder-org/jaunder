@@ -251,8 +251,11 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
 
 [sources.allow-org]
-# github.com organizations to allow git sources for
-github = []
+# github.com organizations to allow git sources for.
+# TEMPORARY (jaunder #193 / ADR-0042): jaunder-org hosts the atom_syndication/rss forks
+# on quick-xml >= 0.41 that the root Cargo.toml [patch.crates-io] points at. Remove once
+# upstream releases and the [patch] is dropped.
+github = ["jaunder-org"]
 # gitlab.com organizations to allow git sources for
 gitlab = []
 # bitbucket.org organizations to allow git sources for
