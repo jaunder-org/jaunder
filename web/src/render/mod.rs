@@ -354,6 +354,115 @@ pub(crate) fn render_tag_list(tags: &[TagSummary], ctx: &TagCtx) -> String {
     out
 }
 
+/// SVG path `d` attribute strings for all Jaunder icons. Shared by the reactive
+/// `pages::ui::Icon` component and the pure [`render_icon`].
+pub struct Icons;
+
+impl Icons {
+    pub const HOME: &'static str = "M3 10l7-6 7 6v7a1 1 0 0 1-1 1h-4v-5H8v5H4a1 1 0 0 1-1-1z";
+    pub const LOCAL: &'static str = "M4 5h12v10H4z M4 9h12";
+    pub const FED: &'static str =
+        "M10 3a7 7 0 1 0 0 14a7 7 0 0 0 0-14zM3 10h14 M10 3c2 3 2 11 0 14 M10 3c-2 3-2 11 0 14";
+    pub const REPLY: &'static str = "M4 4h12v9H7l-3 3z";
+    pub const BOOKMARK: &'static str = "M5 3h10v14l-5-3-5 3z";
+    pub const BOOST: &'static str =
+        "M5 8l4-4 4 4 M4 7v4a3 3 0 0 0 3 3h9 M15 12l-4 4-4-4 M16 13V9a3 3 0 0 0-3-3H4";
+    pub const HEART: &'static str =
+        "M10 17s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 17 7c0 5.5-7 10-7 10z";
+    pub const SEARCH: &'static str = "M8 3a6 6 0 1 0 0 12a6 6 0 0 0 0-12z M17 17l-4-4";
+    pub const PLUS: &'static str = "M10 4v12 M4 10h12";
+    pub const COG: &'static str = "M10 6v2 M10 12v2 M6 10H4 M16 10h-2 M6.5 6.5l-1.5-1.5 M14 14l1.5 1.5 M6.5 13.5L5 15 M14 6l1.5-1.5 M10 13a3 3 0 1 0 0-6a3 3 0 0 0 0 6z";
+    pub const EDIT: &'static str = "M3 17l4 0 9-9a2.83 2.83 0 0 0-4-4l-9 9 0 4 M12 5l3 3";
+    pub const SHIELD: &'static str = "M10 3l6 2v4c0 4-2.4 7.1-6 8-3.6-.9-6-4-6-8V5l6-2z";
+    pub const MEDIA: &'static str =
+        "M3 5h14v10H3z M7 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2z M5 13l3-3 2 2 3-3 5 5H3z";
+}
+
+/// Sidebar nav items: `(key, label, icon_path, href, auth_required)`. Shared by
+/// [`render_sidebar`] (anonymous → the `href.is_some() && !auth_required` subset)
+/// and the reactive authed sidebar in `pages::ui::Sidebar`.
+pub const NAV_ITEMS: &[(&str, &str, &str, Option<&'static str>, bool)] = &[
+    ("home", "Home", Icons::HOME, Some("/"), false),
+    ("local", "Local", Icons::LOCAL, None, true),
+    ("federated", "Federated", Icons::FED, None, true),
+    ("replies", "Replies", Icons::REPLY, None, true),
+    ("bookmarks", "Bookmarks", Icons::BOOKMARK, None, true),
+    ("drafts", "Drafts", Icons::EDIT, Some("/drafts"), true),
+    ("media", "Media", Icons::MEDIA, Some("/media"), true),
+    (
+        "audiences",
+        "Audiences",
+        Icons::BOOKMARK,
+        Some("/audiences"),
+        true,
+    ),
+    ("settings", "Settings", Icons::COG, None, true),
+];
+
+/// The static demo "Sources" rows in the sidebar: `(proto, name, sub)`.
+pub const SIDEBAR_SOURCES: &[(&str, &str, &str)] = &[
+    ("atproto", "Bluesky", "mara.bsky.social"),
+    ("activitypub", "Mastodon", "@mara@hachyderm.io"),
+    ("rss", "Ivy Chen", "weeknotes"),
+    ("jsonfeed", "Manton", "manton.org"),
+];
+
+/// One inline icon `<svg class="j-icon">`, matching the reactive `pages::ui::Icon`.
+#[must_use]
+pub fn render_icon(path: &str, size: u32) -> String {
+    format!(
+        concat!(
+            "<svg class=\"j-icon\" width=\"{size}\" height=\"{size}\" viewBox=\"0 0 20 20\" ",
+            "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" ",
+            "stroke-linejoin=\"round\"><path d=\"{path}\"></path></svg>",
+        ),
+        size = size,
+        path = path,
+    )
+}
+
+/// The inner HTML of the **anonymous** `<aside class="j-sidebar">`: brand, search,
+/// the public nav (items with an href and no auth requirement — just "Home"),
+/// the sources section, and an empty footer. The reactive `pages::ui::Sidebar`
+/// injects this verbatim via `inner_html` for the anonymous viewer, so a seeded
+/// first paint and the reactive re-render coincide; authed users get the reactive
+/// build (extra nav, footer avatar) layered on top (#181).
+#[must_use]
+pub fn render_sidebar(active_key: &str) -> String {
+    let mut out = String::from(
+        "<a class=\"j-brand\" href=\"/\" style=\"text-decoration:none;color:inherit\">\
+         <div class=\"j-brand-mark\">j</div><div class=\"j-brand-text\">Jaunder</div></a>",
+    );
+    let _ = write!(
+        out,
+        "<div class=\"j-search\">{}<span>Search</span><span class=\"j-kbd\">\u{2318}K</span></div>",
+        render_icon(Icons::SEARCH, 14),
+    );
+    out.push_str("<nav class=\"j-nav\">");
+    for &(key, label, icon_path, href, auth_required) in NAV_ITEMS {
+        let Some(href) = href else { continue };
+        if auth_required {
+            continue;
+        }
+        let active = if key == active_key { " is-active" } else { "" };
+        let _ = write!(
+            out,
+            "<a class=\"j-nav-item{active}\" href=\"{href}\">{icon}<span>{label}</span></a>",
+            icon = render_icon(icon_path, 16),
+        );
+    }
+    out.push_str("</nav><div><div class=\"j-sb-head\"><span>Sources</span><span class=\"j-sb-add\">+</span></div>");
+    for &(proto, name, sub) in SIDEBAR_SOURCES {
+        let _ = write!(
+            out,
+            "<div class=\"j-source\"><span class=\"j-dot\" style=\"width:8px;height:8px;border-radius:4px;background:var(--c-{proto})\"></span>\
+             <div style=\"flex:1;min-width:0\"><div class=\"j-source-name\">{name}</div><div class=\"j-source-sub\">{sub}</div></div></div>",
+        );
+    }
+    out.push_str("</div><div class=\"j-sb-foot\"></div>");
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -660,5 +769,51 @@ mod tests {
         let json = serde_json::to_string(&seed).unwrap();
         let back: PageSeed = serde_json::from_str(&json).unwrap();
         assert_eq!(seed, back);
+    }
+
+    #[test]
+    fn sidebar_renders_brand_public_nav_sources_and_empty_foot() {
+        let html = render_sidebar("home");
+        assert!(
+            html.contains("<div class=\"j-brand-text\">Jaunder</div>"),
+            "{html}"
+        );
+        // Public nav = Home only; active class applied for the matching key.
+        assert!(
+            html.contains("<a class=\"j-nav-item is-active\" href=\"/\">"),
+            "{html}"
+        );
+        assert!(html.contains("<span>Home</span>"), "{html}");
+        // Auth-required items must NOT appear for the anonymous sidebar.
+        assert!(!html.contains(">Drafts<"), "{html}");
+        assert!(!html.contains(">Settings<"), "{html}");
+        // Sources section + empty footer.
+        assert!(
+            html.contains("<div class=\"j-source-name\">Bluesky</div>"),
+            "{html}"
+        );
+        assert!(html.ends_with("<div class=\"j-sb-foot\"></div>"), "{html}");
+    }
+
+    #[test]
+    fn sidebar_active_class_absent_for_non_home_route() {
+        let html = render_sidebar("tags");
+        assert!(
+            html.contains("<a class=\"j-nav-item\" href=\"/\">"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn icon_matches_reactive_component_markup() {
+        assert_eq!(
+            render_icon(Icons::HOME, 16),
+            format!(
+                "<svg class=\"j-icon\" width=\"16\" height=\"16\" viewBox=\"0 0 20 20\" \
+                 fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" \
+                 stroke-linejoin=\"round\"><path d=\"{}\"></path></svg>",
+                Icons::HOME
+            )
+        );
     }
 }
