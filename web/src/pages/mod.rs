@@ -19,11 +19,10 @@ pub use ui::{
 };
 pub use upload::{MediaPanel, MediaUploadButton};
 
-/// Default theme identifier. This selects the CSS variable pack applied via
-/// `data-theme` on the root element. "studio" is the pragmatic default chosen
-/// during initial UI import; to make this per-server-configurable, replace this
-/// constant with a value from server configuration.
-pub const DEFAULT_THEME: &str = "studio";
+/// Default theme identifier (the CSS variable pack applied via `data-theme` on the
+/// root element). Defined in `crate::render` (the shell layer) so the projector's
+/// server-painted shell and this reactive `AppShell` share one value.
+pub use crate::render::DEFAULT_THEME;
 
 use crate::pages::audiences::AudiencesPage;
 use crate::pages::auth::{LoginPage, LogoutPage, RegisterPage};

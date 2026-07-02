@@ -26,7 +26,7 @@
       "cyclomatic": 4.0,
       "file": "web/src/pages/posts.rs",
       "function": "UserTagPage",
-      "line": 1208
+      "line": 1211
     },
     {
       "coverage": 66.66666666666666,
@@ -233,7 +233,7 @@
       "cyclomatic": 3.0,
       "file": "web/src/pages/ui.rs",
       "function": "local_datetime_to_utc_rfc3339",
-      "line": 246
+      "line": 269
     },
     {
       "coverage": 0.0,
@@ -242,7 +242,7 @@
       "cyclomatic": 3.0,
       "file": "web/src/pages/ui.rs",
       "function": "PostDisplay",
-      "line": 270
+      "line": 293
     },
     {
       "coverage": 0.0,
@@ -260,7 +260,7 @@
       "cyclomatic": 3.0,
       "file": "web/src/pages/posts.rs",
       "function": "PostPage",
-      "line": 126
+      "line": 129
     },
     {
       "coverage": 0.0,
@@ -269,7 +269,7 @@
       "cyclomatic": 3.0,
       "file": "web/src/pages/posts.rs",
       "function": "SiteTagPage",
-      "line": 1046
+      "line": 1049
     },
     {
       "coverage": 100.0,
@@ -494,7 +494,7 @@
       "cyclomatic": 8.0,
       "file": "web/src/render/mod.rs",
       "function": "escape_html",
-      "line": 106
+      "line": 111
     },
     {
       "coverage": 100.0,
@@ -594,6 +594,15 @@
       "file": "web/src/error.rs",
       "function": "kind_class_for",
       "line": 342
+    },
+    {
+      "coverage": 100.0,
+      "crap": 7.0,
+      "crate": "web",
+      "cyclomatic": 7.0,
+      "file": "web/src/render/mod.rs",
+      "function": "render_body",
+      "line": 186
     },
     {
       "coverage": 100.0,
@@ -772,8 +781,17 @@
       "crate": "web",
       "cyclomatic": 2.0,
       "file": "web/src/pages/ui.rs",
+      "function": "TagList",
+      "line": 27
+    },
+    {
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "web",
+      "cyclomatic": 2.0,
+      "file": "web/src/pages/ui.rs",
       "function": "Chip",
-      "line": 102
+      "line": 125
     },
     {
       "coverage": 0.0,
@@ -782,7 +800,7 @@
       "cyclomatic": 2.0,
       "file": "web/src/pages/ui.rs",
       "function": "PostCreateForm",
-      "line": 542
+      "line": 602
     },
     {
       "coverage": 0.0,
@@ -800,16 +818,7 @@
       "cyclomatic": 6.0,
       "file": "web/src/render/mod.rs",
       "function": "render_head",
-      "line": 125
-    },
-    {
-      "coverage": 100.0,
-      "crap": 6.0,
-      "crate": "web",
-      "cyclomatic": 6.0,
-      "file": "web/src/render/mod.rs",
-      "function": "render_body",
-      "line": 158
+      "line": 130
     },
     {
       "coverage": 100.0,
@@ -1097,7 +1106,7 @@
       "cyclomatic": 5.0,
       "file": "web/src/pages/ui.rs",
       "function": "is_valid_tag_slug",
-      "line": 1138
+      "line": 1165
     },
     {
       "coverage": 100.0,
@@ -1116,6 +1125,15 @@
       "file": "web/src/error.rs",
       "function": "ErrorClass::as_metric_str",
       "line": 139
+    },
+    {
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "web",
+      "cyclomatic": 5.0,
+      "file": "web/src/render/mod.rs",
+      "function": "render_sidebar",
+      "line": 552
     },
     {
       "coverage": 100.0,
@@ -1493,7 +1511,7 @@
       "cyclomatic": 4.0,
       "file": "web/src/pages/ui.rs",
       "function": "SidebarNavItem",
-      "line": 927
+      "line": 987
     },
     {
       "coverage": 90.0,
@@ -1502,7 +1520,7 @@
       "cyclomatic": 4.0,
       "file": "web/src/pages/mod.rs",
       "function": "App",
-      "line": 71
+      "line": 70
     },
     {
       "coverage": 91.66666666666666,
@@ -1637,7 +1655,7 @@
       "cyclomatic": 4.0,
       "file": "web/src/render/mod.rs",
       "function": "render_tag_list",
-      "line": 332
+      "line": 453
     },
     {
       "coverage": 100.0,
@@ -1907,7 +1925,7 @@
       "cyclomatic": 4.0,
       "file": "server/src/projector/mod.rs",
       "function": "cacheable",
-      "line": 92
+      "line": 93
     },
     {
       "coverage": 100.0,
@@ -1916,7 +1934,7 @@
       "cyclomatic": 4.0,
       "file": "server/src/projector/mod.rs",
       "function": "permalink_response",
-      "line": 154
+      "line": 155
     },
     {
       "coverage": 100.0,
@@ -1997,7 +2015,7 @@
       "cyclomatic": 3.0,
       "file": "web/src/pages/posts.rs",
       "function": "UserTimelinePage",
-      "line": 309
+      "line": 312
     },
     {
       "coverage": 85.71428571428571,
@@ -2159,16 +2177,7 @@
       "cyclomatic": 3.0,
       "file": "web/src/render/mod.rs",
       "function": "format_post_time",
-      "line": 94
-    },
-    {
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "web",
-      "cyclomatic": 3.0,
-      "file": "web/src/render/mod.rs",
-      "function": "timeline",
-      "line": 298
+      "line": 99
     },
     {
       "coverage": 100.0,
@@ -2609,7 +2618,7 @@
       "cyclomatic": 3.0,
       "file": "server/src/projector/mod.rs",
       "function": "timeline_response",
-      "line": 188
+      "line": 189
     },
     {
       "coverage": 100.0,
@@ -2618,7 +2627,7 @@
       "cyclomatic": 3.0,
       "file": "server/src/projector/mod.rs",
       "function": "profile",
-      "line": 199
+      "line": 200
     },
     {
       "coverage": 100.0,
@@ -2627,7 +2636,7 @@
       "cyclomatic": 3.0,
       "file": "server/src/projector/mod.rs",
       "function": "site_tag",
-      "line": 221
+      "line": 222
     },
     {
       "coverage": 100.0,
@@ -2636,7 +2645,7 @@
       "cyclomatic": 3.0,
       "file": "server/src/projector/mod.rs",
       "function": "user_tag",
-      "line": 246
+      "line": 247
     },
     {
       "coverage": 100.0,
@@ -3014,7 +3023,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "Dot",
-      "line": 93
+      "line": 116
     },
     {
       "coverage": 0.0,
@@ -3023,7 +3032,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "ComposerFields",
-      "line": 178
+      "line": 201
     },
     {
       "coverage": 0.0,
@@ -3032,7 +3041,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "PostCard",
-      "line": 328
+      "line": 388
     },
     {
       "coverage": 0.0,
@@ -3041,7 +3050,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "AudiencePicker",
-      "line": 429
+      "line": 489
     },
     {
       "coverage": 0.0,
@@ -3050,7 +3059,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "audience_checkbox",
-      "line": 505
+      "line": 565
     },
     {
       "coverage": 0.0,
@@ -3059,7 +3068,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "InlineComposer",
-      "line": 870
+      "line": 930
     },
     {
       "coverage": 0.0,
@@ -3068,7 +3077,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "TagInput",
-      "line": 1167
+      "line": 1194
     },
     {
       "coverage": 0.0,
@@ -3095,7 +3104,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "DraftPreviewPage",
-      "line": 500
+      "line": 503
     },
     {
       "coverage": 0.0,
@@ -3104,7 +3113,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "EditPostPage",
-      "line": 602
+      "line": 605
     },
     {
       "coverage": 0.0,
@@ -3113,7 +3122,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "DraftsPage",
-      "line": 880
+      "line": 883
     },
     {
       "coverage": 0.0,
@@ -3122,7 +3131,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "render_draft_row",
-      "line": 955
+      "line": 958
     },
     {
       "coverage": 0.0,
@@ -3131,7 +3140,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "render_delete_form",
-      "line": 1008
+      "line": 1011
     },
     {
       "coverage": 0.0,
@@ -3140,7 +3149,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "render_delete_result",
-      "line": 1027
+      "line": 1030
     },
     {
       "coverage": 100.0,
@@ -3157,8 +3166,35 @@
       "crate": "web",
       "cyclomatic": 2.0,
       "file": "web/src/render/mod.rs",
+      "function": "render_load_more",
+      "line": 294
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "web",
+      "cyclomatic": 2.0,
+      "file": "web/src/render/mod.rs",
+      "function": "render_posts",
+      "line": 305
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "web",
+      "cyclomatic": 2.0,
+      "file": "web/src/render/mod.rs",
       "function": "render_post_content",
-      "line": 247
+      "line": 375
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "web",
+      "cyclomatic": 2.0,
+      "file": "web/src/render/mod.rs",
+      "function": "render_timeline_page",
+      "line": 428
     },
     {
       "coverage": 100.0,
@@ -4022,7 +4058,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/posts.rs",
       "function": "SubscribeButton",
-      "line": 246
+      "line": 249
     },
     {
       "coverage": 72.72727272727273,
@@ -4049,7 +4085,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "BackupBanner",
-      "line": 121
+      "line": 144
     },
     {
       "coverage": 79.3103448275862,
@@ -4070,13 +4106,13 @@
       "line": 37
     },
     {
-      "coverage": 88.63636363636364,
-      "crap": 1.001467411720511,
+      "coverage": 85.5072463768116,
+      "crap": 1.0030440566316297,
       "crate": "web",
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "Sidebar",
-      "line": 973
+      "line": 1033
     },
     {
       "coverage": 91.17647058823528,
@@ -4859,15 +4895,6 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "Icon",
-      "line": 49
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "web",
-      "cyclomatic": 1.0,
-      "file": "web/src/pages/ui.rs",
-      "function": "Avatar",
       "line": 72
     },
     {
@@ -4876,8 +4903,17 @@
       "crate": "web",
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
+      "function": "Avatar",
+      "line": 95
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web",
+      "cyclomatic": 1.0,
+      "file": "web/src/pages/ui.rs",
       "function": "Topbar",
-      "line": 149
+      "line": 172
     },
     {
       "coverage": 100.0,
@@ -4886,7 +4922,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "SidebarSource",
-      "line": 955
+      "line": 1015
     },
     {
       "coverage": 100.0,
@@ -4895,7 +4931,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/ui.rs",
       "function": "normalize_tag_token",
-      "line": 1149
+      "line": 1176
     },
     {
       "coverage": 100.0,
@@ -4904,7 +4940,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/pages/mod.rs",
       "function": "AppShell",
-      "line": 51
+      "line": 50
     },
     {
       "coverage": 100.0,
@@ -5390,7 +5426,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/render/mod.rs",
       "function": "avatar_parts",
-      "line": 64
+      "line": 69
     },
     {
       "coverage": 100.0,
@@ -5399,7 +5435,43 @@
       "cyclomatic": 1.0,
       "file": "web/src/render/mod.rs",
       "function": "render_avatar",
-      "line": 81
+      "line": 86
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web",
+      "cyclomatic": 1.0,
+      "file": "web/src/render/mod.rs",
+      "function": "render_shell",
+      "line": 169
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web",
+      "cyclomatic": 1.0,
+      "file": "web/src/render/mod.rs",
+      "function": "permalink_article",
+      "line": 250
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web",
+      "cyclomatic": 1.0,
+      "file": "web/src/render/mod.rs",
+      "function": "render_topbar",
+      "line": 270
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web",
+      "cyclomatic": 1.0,
+      "file": "web/src/render/mod.rs",
+      "function": "render_hero",
+      "line": 282
     },
     {
       "coverage": 100.0,
@@ -5408,7 +5480,7 @@
       "cyclomatic": 1.0,
       "file": "web/src/render/mod.rs",
       "function": "render_post_article",
-      "line": 216
+      "line": 344
     },
     {
       "coverage": 100.0,
@@ -5417,7 +5489,16 @@
       "cyclomatic": 1.0,
       "file": "web/src/render/mod.rs",
       "function": "render_post_inner",
-      "line": 227
+      "line": 355
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "web",
+      "cyclomatic": 1.0,
+      "file": "web/src/render/mod.rs",
+      "function": "render_icon",
+      "line": 533
     },
     {
       "coverage": 100.0,
@@ -6569,7 +6650,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/projector/mod.rs",
       "function": "document",
-      "line": 68
+      "line": 69
     },
     {
       "coverage": 100.0,
@@ -6578,7 +6659,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/projector/mod.rs",
       "function": "shell_response",
-      "line": 119
+      "line": 120
     },
     {
       "coverage": 100.0,
@@ -6587,7 +6668,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/projector/mod.rs",
       "function": "permalink",
-      "line": 127
+      "line": 128
     },
     {
       "coverage": 100.0,
@@ -6596,7 +6677,7 @@
       "cyclomatic": 1.0,
       "file": "server/src/projector/mod.rs",
       "function": "site_timeline",
-      "line": 169
+      "line": 170
     },
     {
       "coverage": 100.0,

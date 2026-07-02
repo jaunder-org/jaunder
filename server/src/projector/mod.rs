@@ -34,7 +34,7 @@ use web::posts::{
     fetch_local_timeline, fetch_post_record, fetch_posts_by_tag, fetch_user_posts,
     fetch_user_posts_by_tag, post_response,
 };
-use web::render::{render_body, render_head, PageSeed};
+use web::render::{render_head, render_shell, PageSeed};
 
 /// The static SPA shell (`index.html`) the projector falls back to when a public
 /// URL has no anonymous-public content. Cheap to clone (shared `Arc`).
@@ -63,11 +63,12 @@ where
 }
 
 /// Assemble the full cacheable HTML document: per-page `<head>` SEO, the
-/// `<div id="app">` semantic content, the JSON data blob, and the CSR boot.
+/// `<div id="app">` full anonymous shell (so the CSR mount causes no reflow), the
+/// JSON data blob, and the CSR boot.
 #[must_use]
 pub fn document(seed: &PageSeed) -> String {
     let head = render_head(seed);
-    let body = render_body(seed);
+    let body = render_shell(seed);
     let blob = serde_json::to_string(seed).unwrap_or_else(|_| "null".to_string());
     format!(
         concat!(
