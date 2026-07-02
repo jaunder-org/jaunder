@@ -2,7 +2,7 @@
 
 ;; Author: Jaunder contributors
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: hypermedia, comm, outlines
 ;; URL: https://jaunder.org
 
@@ -13,7 +13,11 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+(require 'org)
+(require 'dom)
 (require 'url-parse)
+(require 'url-util)
 (require 'auth-source)
 (require 'seq)
 (require 'plz)
@@ -123,9 +127,172 @@ the auth header under load (ADR-0038)."
              (jaunder--plz-response->plist resp)
            (signal (car err) (cdr err))))))))
 
-(defun jaunder--org->atom (&rest _args)
-  "Org->Atom mapping seam.  Implemented by unit C (issue #74)."
-  (error "jaunder: org->atom mapping not yet implemented (unit C, issue #74)"))
+;;; org -> atom mapping (unit C, issue #74/#160)
+
+(cl-defstruct (jaunder-entry (:constructor jaunder--make-entry))
+              "Structured AtomPub entry mapped from an org buffer (issue #160).
+Holds abstract field values only; wire encoding (namespaces, media types,
+`app:draft' nesting) lives in `jaunder--atom-entry->xml'.  `body' is the
+body-only content with the metadata header block stripped."
+              title categories summary draft content-type body published)
+
+(defconst jaunder--header-keyword-re
+  "^[ \t]*#\\+[A-Za-z][A-Za-z0-9_-]*:"
+  "Regexp matching any org file-keyword line (`#+KEY:').
+The metadata header block is the leading run of these; matching *any*
+keyword (not just the mapped ones) means an interleaved keyword such as
+`#+AUTHOR:' cannot halt stripping and leak a later `#+PROPERTY: JAUNDER_*'
+into the sent body.  The trailing colon excludes block markers like
+`#+begin_src' (issue #160).")
+
+(defconst jaunder--blank-line-re "^[ \t]*$"
+  "Regexp matching a blank (whitespace-only) line.")
+
+(defconst jaunder--org-media-type "text/org"
+  "The atom:content media type for org source.
+`jaunder--org->atom' converts an org buffer, so its content is always org;
+the media type is knowable from the converter, not from any header field.
+Non-org authoring buffers (markdown/html) are separate future converters,
+out of scope for v1 (issue #160).")
+
+(defun jaunder--collect-properties (keywords)
+  "Return an alist of file-level #+PROPERTY: KEY/VALUE pairs from KEYWORDS.
+KEYWORDS is the result of `org-collect-keywords'; each PROPERTY entry is a
+\"KEY VALUE\" string split on the first run of whitespace."
+  (delq nil
+        (mapcar (lambda (line)
+                  (when (string-match "\\`\\([^ \t]+\\)[ \t]+\\(.*\\)\\'" line)
+                    (cons (match-string 1 line) (match-string 2 line))))
+                (cdr (assoc "PROPERTY" keywords)))))
+
+(defun jaunder--split-keywords (values)
+  "Split each #+KEYWORDS: string in VALUES on commas and flatten.
+Whitespace is trimmed and empty terms dropped."
+  (let (out)
+    (dolist (line values (nreverse out))
+      (dolist (term (split-string line "," t "[ \t]+"))
+        (unless (string= term "") (push term out))))))
+
+(defun jaunder--strip-header-block (text)
+  "Return TEXT with its leading metadata header block removed.
+Drops the leading contiguous run of header keyword lines and blank lines,
+then trims surrounding whitespace from the remaining body."
+  (with-temp-buffer
+    (insert text)
+    (goto-char (point-min))
+    (let ((case-fold-search t))
+      (while (and (not (eobp))
+                  (or (looking-at-p jaunder--blank-line-re)
+                      (looking-at-p jaunder--header-keyword-re)))
+        (forward-line 1)))
+    (string-trim (buffer-substring-no-properties (point) (point-max)))))
+
+(defun jaunder--offset->seconds (offset)
+  "Parse a numeric UTC OFFSET string (\"±HHMM\" or \"±HH:MM\") to integer seconds.
+Returns nil when OFFSET is not a numeric offset.  Used only for the
+JAUNDER_DATE_TZ fallback: `encode-time' silently misreads an offset *string*
+as UTC, so a numeric offset must be handed to it as integer seconds (#160)."
+  (when (and offset
+             (string-match
+              "\\`\\([+-]\\)\\([0-9]\\{2\\}\\):?\\([0-9]\\{2\\}\\)\\'" offset))
+    (let ((sign (if (string= (match-string 1 offset) "-") -1 1))
+          (hours (string-to-number (match-string 2 offset)))
+          (mins (string-to-number (match-string 3 offset))))
+      (* sign (+ (* hours 3600) (* mins 60))))))
+
+(defun jaunder--resolve-zone (tz)
+  "Resolve a JAUNDER_DATE_TZ string TZ to an `encode-time' ZONE value.
+An IANA name is preferred and returned as-is (DST-correct); a numeric offset
+is parsed to integer seconds (the fallback — see `jaunder--offset->seconds').
+nil or empty TZ falls back to the local zone.  A typo'd IANA name is silently
+treated as UTC by `encode-time'; time zones are hard and we do our best (#160)."
+  (cond
+   ((or (null tz) (string= (string-trim tz) "")) nil)
+   ((jaunder--offset->seconds tz))
+   (t tz)))
+
+(defun jaunder--org-date->utc (date-raw tz)
+  "Interpret org timestamp DATE-RAW in zone TZ; return RFC-3339 UTC, or nil.
+DATE-RAW is a raw #+DATE value (e.g. \"[2026-07-01 Wed 09:00]\"); TZ is a
+JAUNDER_DATE_TZ string (IANA name preferred, numeric offset as fallback).
+Returns nil when DATE-RAW does not parse to a time."
+  (let ((decoded (ignore-errors (org-parse-time-string date-raw))))
+    (when decoded
+      (setf (nth 8 decoded) (jaunder--resolve-zone tz))
+      (format-time-string "%Y-%m-%dT%H:%M:%SZ" (encode-time decoded) t))))
+
+(defun jaunder--org->atom ()
+  "Map the current org buffer to a `jaunder-entry' (issue #160).
+Reads the metadata header block via `org-collect-keywords' and carries the
+body-only content with the header block stripped.  Non-mutating.  The
+`published' slot is filled by the timezone computation (see
+`jaunder--org-date->utc'); `body' still holds local media links, substituted
+later by the media unit (#161)."
+  (let* ((kws (org-collect-keywords
+               '("TITLE" "DATE" "KEYWORDS" "DESCRIPTION" "PROPERTY")))
+         (props (jaunder--collect-properties kws))
+         (raw-title (cadr (assoc "TITLE" kws)))
+         (title (and raw-title (not (string= (string-trim raw-title) "")) raw-title))
+         (categories (jaunder--split-keywords (cdr (assoc "KEYWORDS" kws))))
+         (descriptions (cdr (assoc "DESCRIPTION" kws)))
+         (summary (and descriptions (mapconcat #'identity descriptions "\n")))
+         (status (cdr (assoc "JAUNDER_STATUS" props)))
+         (draft (and status (string= (downcase status) "draft") t))
+         (date-raw (cadr (assoc "DATE" kws)))
+         (tz (cdr (assoc "JAUNDER_DATE_TZ" props)))
+         ;; Drafts carry no publish time; "publish now" (published status, no
+         ;; #+DATE) omits it so the server stamps it (see the spec status table).
+         (published (and (not draft) date-raw
+                         (jaunder--org-date->utc date-raw tz))))
+    (jaunder--make-entry
+     :title title
+     :categories categories
+     :summary summary
+     :draft draft
+     :content-type jaunder--org-media-type
+     :body (jaunder--strip-header-block (buffer-string))
+     :published published)))
+
+(defconst jaunder--atom-ns "http://www.w3.org/2005/Atom"
+  "The Atom namespace URI.")
+
+(defconst jaunder--app-ns "http://www.w3.org/2007/app"
+  "The Atom Publishing Protocol namespace URI (`app:control'/`app:draft').")
+
+(defun jaunder--atom-entry->xml (entry)
+  "Serialize a `jaunder-entry' ENTRY to a standalone AtomPub <entry> XML string.
+Builds a `dom' node and renders it with `dom-print', which escapes text and
+attribute values.  Emits only set fields: `<title>'/`<summary>'/`<published>'
+are omitted when nil, one `<category term>' per tag, and the
+`<app:control><app:draft>yes>' marker (with the `app' namespace) only for a
+draft.  All wire knowledge (namespaces, media types, element order) lives
+here (issue #160)."
+  (let* ((draft (jaunder-entry-draft entry))
+         (attrs (append
+                 (list (cons 'xmlns jaunder--atom-ns))
+                 ;; Declare the app namespace only when it is used.
+                 (when draft (list (cons 'xmlns:app jaunder--app-ns)))))
+         (children '()))
+    (when (jaunder-entry-title entry)
+      (push (list 'title nil (jaunder-entry-title entry)) children))
+    (when (jaunder-entry-summary entry)
+      (push (list 'summary nil (jaunder-entry-summary entry)) children))
+    (dolist (term (jaunder-entry-categories entry))
+      (push (list 'category (list (cons 'term term))) children))
+    (push (list 'content
+                (list (cons 'type (jaunder-entry-content-type entry)))
+                (or (jaunder-entry-body entry) ""))
+          children)
+    (when (jaunder-entry-published entry)
+      (push (list 'published nil (jaunder-entry-published entry)) children))
+    (when draft
+      (push (list 'app:control nil (list 'app:draft nil "yes")) children))
+    (with-temp-buffer
+      ;; `dom-print' escapes unconditionally; the HTML/XML flag would only
+      ;; change boolean-attribute handling, which none of these elements use,
+      ;; so the single-arg call keeps output identical while staying portable.
+      (dom-print (append (list 'entry attrs) (nreverse children)))
+      (buffer-string))))
 
 (defun jaunder--atom->org (&rest _args)
   "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."
