@@ -1,4 +1,4 @@
-# 0040. Web rendering: leptos-CSR (drop concurrent reactive SSR)
+# ADR-0040: Web rendering: leptos-CSR (drop concurrent reactive SSR)
 
 - Status: accepted
 - Date: 2026-07-01

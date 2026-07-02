@@ -1,4 +1,4 @@
-# 0021. SQLite dialect transaction discipline: avoid read-then-write deferred transactions
+# ADR-0021: SQLite dialect transaction discipline: avoid read-then-write deferred transactions
 
 - Status: accepted
 - Date: 2026-06-26

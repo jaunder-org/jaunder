@@ -1,4 +1,4 @@
-# 0041. Public projector and CSR client (the "SSR the data, not the components" mechanism)
+# ADR-0041: Public projector and CSR client (the "SSR the data, not the components" mechanism)
 
 - Status: accepted
 - Date: 2026-07-01

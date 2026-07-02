@@ -1,4 +1,4 @@
-# 0022. Validate cheaply before expensive work when the gate is a high-entropy secret
+# ADR-0022: Validate cheaply before expensive work when the gate is a high-entropy secret
 
 - Status: accepted
 - Date: 2026-06-26

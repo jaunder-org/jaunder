@@ -1,4 +1,4 @@
-# 0032. The e2e suite fails on any server Rust panic, and its log is visible by default
+# ADR-0032: The e2e suite fails on any server Rust panic, and its log is visible by default
 
 - Status: accepted
 - Deciders: mdorman, Claude Opus

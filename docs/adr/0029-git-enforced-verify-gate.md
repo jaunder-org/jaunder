@@ -1,6 +1,6 @@
 # ADR-0029: Git-Enforced Verify Gate — Hook-Routed `check`/`validate` and Clean-Tree Gating
 
-Status: accepted
+- Status: accepted
 
 ## Context
 

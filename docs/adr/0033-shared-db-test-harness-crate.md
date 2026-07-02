@@ -1,4 +1,4 @@
-# 0033. In-`storage` `test_support` Module for Both-Backend Test Parametrization
+# ADR-0033: In-`storage` `test_support` Module for Both-Backend Test Parametrization
 
 - Status: accepted
 - Date: 2026-06-28 (amended same day — see "History")

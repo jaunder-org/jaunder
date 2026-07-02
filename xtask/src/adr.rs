@@ -194,15 +194,30 @@ fn run_renumber(repo: &Path, main_ref: &str) -> Result<String> {
     }
 
     if summary.is_empty() {
-        Ok("no ADR collisions to resolve".to_string())
-    } else {
-        // The rename is staged (`git mv`); the reference rewrites are written to the
-        // worktree but left unstaged, so flag the mixed state for the caller.
-        Ok(format!(
-            "{} — review and `git add` the renamed files and rewritten references before committing",
-            summary.join("; ")
-        ))
+        return Ok("no ADR collisions to resolve".to_string());
     }
+
+    // Keep the README ADR table in lockstep with the renamed/renumbered files: a
+    // bump changes a number, a link target, and (for a brand-new ADR) adds a row.
+    // Tolerate a README without the table markers — a scratch/test repo may omit
+    // them — by noting the skip; a genuine sync failure (unreadable README, a
+    // malformed table) still fails the renumber rather than hiding in the summary.
+    let table_note = if crate::adr_readme::readme_has_markers(repo)? {
+        format!(
+            "README table synced ({})",
+            crate::adr_readme::sync_readme_at(repo)?
+        )
+    } else {
+        "README table not synced (no adr-table markers)".to_string()
+    };
+
+    // The rename is staged (`git mv`); the reference rewrites and the table
+    // regen are written to the worktree but left unstaged, so flag the mixed
+    // state for the caller.
+    Ok(format!(
+        "{} — {table_note}; review and `git add` the renamed files, rewritten references, and README before committing",
+        summary.join("; ")
+    ))
 }
 
 #[cfg(test)]
@@ -311,6 +326,62 @@ mod tests {
         // main's pre-existing file keeps its bare ADR-0034 (NOT branch-touched).
         let contributing = std::fs::read_to_string(tmp.join("CONTRIBUTING.md")).unwrap();
         assert_eq!(contributing, "See ADR-0034 at docs/adr/0034-foo.md.\n");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn renumber_syncs_the_readme_table() {
+        // A bump must move the row's number + link target and add a row for a
+        // brand-new ADR (seeded from its heading), leaving the existing row intact.
+        let tmp = std::env::temp_dir().join(format!("jaunder-adr-readme-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        git(&tmp, &["init", "-q", "-b", "main"]);
+        git(&tmp, &["config", "user.email", "t@t"]);
+        git(&tmp, &["config", "user.name", "t"]);
+
+        // main: ADR-0034-foo with a status line + a README carrying the marked
+        // table with foo's (curated) row.
+        write(
+            &tmp,
+            "docs/adr/0034-foo.md",
+            "# ADR-0034: Foo\n\n- Status: accepted\n",
+        );
+        write(
+            &tmp,
+            "docs/README.md",
+            "# Docs\n\n<!-- adr-table:begin -->\n\n\
+             | #   | Title | Status |\n| --- | ----- | ------ |\n\
+             | [0034](adr/0034-foo.md) | Foo | accepted |\n\n\
+             <!-- adr-table:end -->\n",
+        );
+        git(&tmp, &["add", "."]);
+        git(&tmp, &["commit", "-qm", "main: 0034-foo + README"]);
+
+        // branch: a colliding ADR-0034-bar (no README row — the point of the flow).
+        git(&tmp, &["checkout", "-q", "-b", "feature"]);
+        write(
+            &tmp,
+            "docs/adr/0034-bar.md",
+            "# ADR-0034: Bar\n\n- Status: accepted\n",
+        );
+        git(&tmp, &["add", "."]);
+        git(&tmp, &["commit", "-qm", "feature: 0034-bar"]);
+
+        run_renumber(&tmp, "main").unwrap();
+
+        let readme = std::fs::read_to_string(tmp.join("docs/README.md")).unwrap();
+        // Bar's row was added under its bumped number, seeded from the heading.
+        assert!(
+            readme.contains("[0035](adr/0035-bar.md)"),
+            "README: {readme}"
+        );
+        assert!(readme.contains("| Bar |"), "seeded title from heading");
+        // Foo's existing row is untouched; no stale 0034-bar link remains.
+        assert!(readme.contains("[0034](adr/0034-foo.md)"));
+        assert!(!readme.contains("0034-bar.md"));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

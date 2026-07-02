@@ -1,8 +1,9 @@
 # ADR-0015: Separate Serialization Surfaces for Syndication and AtomPub
 
-- Status: accepted (content-type token scheme superseded by
+- Status: accepted
+- Note: the content-type token scheme is superseded by
   [ADR-0023](0023-atompub-jaunder-wire-extensions.md); the separate-serializers
-  principle stands)
+  principle stands.
 - Deciders: mdorman, Claude
 - Date: 2026-05-29
 
