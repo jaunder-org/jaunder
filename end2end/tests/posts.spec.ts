@@ -361,19 +361,15 @@ test("home page shows local timeline for unauthenticated users", async ({
   );
 
   await perf.timed("seed_author_one", async () => {
-    await register(page, firstNavigationTimeoutMs);
-    for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
-      await createPublishedPostViaApi(page, `Local Author One ${i}`);
-    }
+    const u1 = await register(page, firstNavigationTimeoutMs);
+    seedPostsViaTool(u1, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author One");
   });
 
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
   await perf.timed("seed_author_two", async () => {
-    await register(secondPage, firstNavigationTimeoutMs);
-    for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
-      await createPublishedPostViaApi(secondPage, `Local Author Two ${i}`);
-    }
+    const u2 = await register(secondPage, firstNavigationTimeoutMs);
+    seedPostsViaTool(u2, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author Two");
   });
 
   const guestContext = await browser.newContext();
