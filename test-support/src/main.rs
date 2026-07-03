@@ -4,7 +4,7 @@
 use clap::{Parser, Subcommand};
 use storage::DbConnectOptions;
 
-use test_support::seed_posts_for_user;
+use test_support::{create_user, seed_posts_for_user};
 
 #[derive(Parser)]
 #[command(
@@ -36,6 +36,24 @@ enum Commands {
         #[arg(long)]
         published: bool,
     },
+    /// Create a fixture user through the real storage path.
+    CreateUser {
+        /// Database URL (`sqlite:...` or `postgres://...`) — the server's `--db`.
+        #[arg(long, env = "JAUNDER_DB")]
+        db: DbConnectOptions,
+        /// The username to create.
+        #[arg(long)]
+        username: String,
+        /// The account password.
+        #[arg(long)]
+        password: String,
+        /// Optional display name.
+        #[arg(long)]
+        display_name: Option<String>,
+        /// Grant operator (admin) privileges.
+        #[arg(long)]
+        operator: bool,
+    },
 }
 
 #[tokio::main]
@@ -53,6 +71,24 @@ async fn main() -> anyhow::Result<()> {
             let ids =
                 seed_posts_for_user(&state, &username, count, published, &body_prefix).await?;
             eprintln!("seeded {} posts for {username}", ids.len());
+        }
+        Commands::CreateUser {
+            db,
+            username,
+            password,
+            display_name,
+            operator,
+        } => {
+            let state = storage::open_existing_database(&db).await?;
+            let id = create_user(
+                &state,
+                &username,
+                &password,
+                display_name.as_deref(),
+                operator,
+            )
+            .await?;
+            eprintln!("created user {username} with id {id}");
         }
     }
     Ok(())

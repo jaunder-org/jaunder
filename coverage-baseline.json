@@ -649,11 +649,11 @@
   ],
   "storage/src/post_service.rs": [
     {
-      "line": 367,
+      "line": 401,
       "text": "            Err(CreatePostError::Internal(e)) => {"
     },
     {
-      "line": 368,
+      "line": 402,
       "text": "                return Err(PerformCreationError::Storage(e));"
     }
   ],
@@ -749,75 +749,147 @@
   ],
   "test-support/src/main.rs": [
     {
-      "line": 42,
+      "line": 60,
       "text": "async fn main() -> anyhow::Result<()> {"
     },
     {
-      "line": 43,
+      "line": 61,
       "text": "    let cli = Cli::parse();"
     },
     {
-      "line": 44,
+      "line": 62,
       "text": "    match cli.command {"
     },
     {
-      "line": 45,
+      "line": 63,
       "text": "        Commands::SeedPosts {"
     },
     {
-      "line": 46,
+      "line": 64,
       "text": "            db,"
     },
     {
-      "line": 47,
+      "line": 65,
       "text": "            username,"
     },
     {
-      "line": 48,
+      "line": 66,
       "text": "            count,"
     },
     {
-      "line": 49,
+      "line": 67,
       "text": "            body_prefix,"
     },
     {
-      "line": 50,
+      "line": 68,
       "text": "            published,"
     },
     {
-      "line": 51,
+      "line": 69,
       "text": "        } => {"
     },
     {
-      "line": 52,
+      "line": 70,
       "text": "            let state = storage::open_existing_database(&db).await?;"
     },
     {
-      "line": 53,
+      "line": 71,
       "text": "            let ids ="
     },
     {
-      "line": 54,
+      "line": 72,
       "text": "                seed_posts_for_user(&state, &username, count, published, &body_prefix).await?;"
     },
     {
-      "line": 55,
+      "line": 73,
       "text": "            eprintln!(\"seeded {} posts for {username}\", ids.len());"
     },
     {
-      "line": 56,
+      "line": 74,
       "text": "        }"
     },
     {
-      "line": 57,
+      "line": 75,
+      "text": "        Commands::CreateUser {"
+    },
+    {
+      "line": 76,
+      "text": "            db,"
+    },
+    {
+      "line": 77,
+      "text": "            username,"
+    },
+    {
+      "line": 78,
+      "text": "            password,"
+    },
+    {
+      "line": 79,
+      "text": "            display_name,"
+    },
+    {
+      "line": 80,
+      "text": "            operator,"
+    },
+    {
+      "line": 81,
+      "text": "        } => {"
+    },
+    {
+      "line": 82,
+      "text": "            let state = storage::open_existing_database(&db).await?;"
+    },
+    {
+      "line": 83,
+      "text": "            let id = create_user("
+    },
+    {
+      "line": 84,
+      "text": "                &state,"
+    },
+    {
+      "line": 85,
+      "text": "                &username,"
+    },
+    {
+      "line": 86,
+      "text": "                &password,"
+    },
+    {
+      "line": 87,
+      "text": "                display_name.as_deref(),"
+    },
+    {
+      "line": 88,
+      "text": "                operator,"
+    },
+    {
+      "line": 89,
+      "text": "            )"
+    },
+    {
+      "line": 90,
+      "text": "            .await?;"
+    },
+    {
+      "line": 91,
+      "text": "            eprintln!(\"created user {username} with id {id}\");"
+    },
+    {
+      "line": 92,
+      "text": "        }"
+    },
+    {
+      "line": 93,
       "text": "    }"
     },
     {
-      "line": 58,
+      "line": 94,
       "text": "    Ok(())"
     },
     {
-      "line": 59,
+      "line": 95,
       "text": "}"
     }
   ],

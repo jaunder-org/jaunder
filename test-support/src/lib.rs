@@ -88,6 +88,36 @@ pub async fn seed_posts_for_user(
     Ok(ids)
 }
 
+/// Create a fixture user through the real `UserStorage::create_user` path — the
+/// same call `jaunder user-create` makes (`server::commands::cmd_user_create`),
+/// minus that command's `CliBypass` registration metric: this is out-of-process
+/// test seeding and must not emit observability noise the e2e suite might assert
+/// on. Assumes a freshly-initialised DB (no upsert). Returns the new user id.
+///
+/// # Errors
+///
+/// Returns `Err` if the username or password is invalid, or the user cannot be
+/// created (e.g. a duplicate username).
+pub async fn create_user(
+    state: &Arc<AppState>,
+    username: &str,
+    password: &str,
+    display_name: Option<&str>,
+    operator: bool,
+) -> anyhow::Result<i64> {
+    let uname = username
+        .parse::<Username>()
+        .map_err(|_| anyhow::anyhow!("invalid username: {username}"))?;
+    let pw = password
+        .parse::<common::password::Password>()
+        .map_err(|e| anyhow::anyhow!("invalid password: {e}"))?;
+    let id = state
+        .users
+        .create_user(&uname, &pw, display_name, operator)
+        .await?;
+    Ok(id)
+}
+
 #[cfg(test)]
 mod content_tests {
     use super::*;
@@ -160,5 +190,41 @@ mod seed_tests {
             .await
             .expect_err("invalid generated slug should error");
         assert!(err.to_string().contains("generated slug invalid"));
+    }
+}
+
+#[cfg(test)]
+mod create_user_tests {
+    //! `SQLite`-only by design (same rationale as `seed_tests`): `create_user`
+    //! has no per-backend branching — it dispatches through
+    //! `UserStorage::create_user`, implemented per backend — so the e2e matrix
+    //! proves the dual-backend path; here we smoke the logic on `SQLite`.
+    use super::*;
+    use storage::test_support;
+
+    #[tokio::test]
+    async fn creates_a_lookupable_operator_and_rejects_duplicates() {
+        let base = tempfile::TempDir::new().unwrap();
+        let (state, _pool) = test_support::test_sqlite_state_with_pool(&base).await;
+
+        let id = create_user(&state, "testoperator", "testpassword123", None, true)
+            .await
+            .expect("create ok");
+
+        let u = state
+            .users
+            .get_user_by_username(&"testoperator".parse().unwrap())
+            .await
+            .expect("lookup ok")
+            .expect("user exists");
+        assert_eq!(u.user_id, id);
+        assert!(u.is_operator, "--operator should set is_operator");
+
+        // A freshly-init'd DB has a per-user uniqueness constraint, so a second
+        // create with the same username surfaces as an error (no upsert).
+        let err = create_user(&state, "testoperator", "testpassword123", None, false)
+            .await
+            .expect_err("duplicate username should error");
+        let _ = err;
     }
 }
