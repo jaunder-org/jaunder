@@ -9,7 +9,7 @@
 //! parity gate. No behavior lives in more than one place.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -46,6 +46,43 @@ pub struct TableRow {
     pub target: String,
     pub title: String,
     pub status: String,
+}
+
+/// A directory entry that qualifies as an ADR: a regular `*.md` file whose name
+/// carries a leading number. Content is intentionally not read here so each
+/// caller keeps its own IO-error policy.
+struct AdrFile {
+    num: u32,
+    filename: String,
+    path: PathBuf,
+}
+
+/// The qualifying ADR files under `repo/docs/adr`, unsorted — the single home of
+/// the "what counts as an ADR file" rule (`is_file` → `.md` → leading number).
+/// The `read_dir` error is returned unwrapped so callers phrase their own context
+/// (`parse_adr_dir` wants "reading <dir>", `format_problems` wants
+/// "cannot read <dir>").
+fn adr_files(repo: &Path) -> Result<Vec<AdrFile>> {
+    let mut files = Vec::new();
+    for ent in std::fs::read_dir(repo.join(ADR_DIR))? {
+        let ent = ent?;
+        if !ent.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let filename = ent.file_name().to_string_lossy().into_owned();
+        if !filename.ends_with(".md") {
+            continue;
+        }
+        let Some(num) = ids::leading_number(&filename) else {
+            continue;
+        };
+        files.push(AdrFile {
+            num,
+            filename,
+            path: ent.path(),
+        });
+    }
+    Ok(files)
 }
 
 /// The title text of a `# ADR-NNNN: Title` (or legacy `# NNNN. Title`) heading,
@@ -109,23 +146,12 @@ fn parse_row(line: &str) -> Option<TableRow> {
 pub fn parse_adr_dir(repo: &Path) -> Result<Vec<AdrEntry>> {
     let dir = repo.join(ADR_DIR);
     let mut entries = Vec::new();
-    for ent in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
-        let ent = ent?;
-        if !ent.file_type().map(|t| t.is_file()).unwrap_or(false) {
-            continue;
-        }
-        let filename = ent.file_name().to_string_lossy().into_owned();
-        if !filename.ends_with(".md") {
-            continue;
-        }
-        let Some(num) = ids::leading_number(&filename) else {
-            continue;
-        };
-        let content = std::fs::read_to_string(ent.path())
-            .with_context(|| format!("reading {}", ent.path().display()))?;
+    for f in adr_files(repo).with_context(|| format!("reading {}", dir.display()))? {
+        let content = std::fs::read_to_string(&f.path)
+            .with_context(|| format!("reading {}", f.path.display()))?;
         entries.push(AdrEntry {
-            num,
-            filename,
+            num: f.num,
+            filename: f.filename,
             title: heading_title(&content),
             status: status_token(&content),
         });
@@ -312,26 +338,15 @@ fn file_format_problems(filename: &str, num: u32, content: &str) -> Vec<String> 
 /// Every ADR file's `adr-format` problems, sorted for stable output. A directory
 /// read error is surfaced as a single problem rather than a panic.
 pub fn format_problems(repo: &Path) -> Vec<String> {
-    let dir = repo.join(ADR_DIR);
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(e) => return vec![format!("cannot read {}: {e}", dir.display())],
+    let files = match adr_files(repo) {
+        Ok(f) => f,
+        Err(e) => return vec![format!("cannot read {}: {e}", repo.join(ADR_DIR).display())],
     };
     let mut problems = Vec::new();
-    for ent in entries.flatten() {
-        if !ent.file_type().map(|t| t.is_file()).unwrap_or(false) {
-            continue;
-        }
-        let filename = ent.file_name().to_string_lossy().into_owned();
-        if !filename.ends_with(".md") {
-            continue;
-        }
-        let Some(num) = ids::leading_number(&filename) else {
-            continue;
-        };
-        match std::fs::read_to_string(ent.path()) {
-            Ok(content) => problems.extend(file_format_problems(&filename, num, &content)),
-            Err(e) => problems.push(format!("{filename}: cannot read ({e})")),
+    for f in files {
+        match std::fs::read_to_string(&f.path) {
+            Ok(content) => problems.extend(file_format_problems(&f.filename, f.num, &content)),
+            Err(e) => problems.push(format!("{}: cannot read ({e})", f.filename)),
         }
     }
     problems.sort();
