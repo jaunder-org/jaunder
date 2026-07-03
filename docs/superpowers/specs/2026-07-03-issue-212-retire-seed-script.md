@@ -50,11 +50,13 @@ create-user --db <DbConnectOptions>       # --db / JAUNDER_DB, like seed-posts
             [--operator]
 ```
 
-- lib: `create_user(state, username, password, display_name, operator) -> Result<i64>`.
+- lib:
+  `create_user(state, username, password, display_name, operator) -> Result<i64>`.
   Parses `username: &str -> common::username::Username` and
   `password: &str -> common::password::Password`, then calls
   `state.users.create_user(&uname, &pw, display_name, operator)` — the **same
-  storage path** `jaunder user-create` uses (`server::commands::cmd_user_create`).
+  storage path** `jaunder user-create` uses
+  (`server::commands::cmd_user_create`).
 - **Omits** the `common::metrics::registration(… CliBypass …)` call that
   `cmd_user_create` makes (decision: skip the metric — this is out-of-process
   test seeding, and the metric would pollute observability/registration-policy
@@ -70,10 +72,11 @@ set-site-config --db <DbConnectOptions>
                 --value <value>
 ```
 
-- lib: `set_site_config(state, key, value) -> Result<()>` → `state.site_config.set(key, value)`
-  (`SiteConfigStorage::set`, an upsert). Generic key/value — one command absorbs
-  **both** raw-SQL INSERTs (`site.registration_policy`, `feeds.websub_hub_url`)
-  and any future site-config the e2e suite needs.
+- lib: `set_site_config(state, key, value) -> Result<()>` →
+  `state.site_config.set(key, value)` (`SiteConfigStorage::set`, an upsert).
+  Generic key/value — one command absorbs **both** raw-SQL INSERTs
+  (`site.registration_policy`, `feeds.websub_hub_url`) and any future
+  site-config the e2e suite needs.
 
 ### `test-support reset-mail`
 
@@ -89,8 +92,8 @@ reset-mail --path <file>                   # --path / JAUNDER_MAIL_CAPTURE_FILE
 
 ## Deduplication — the shared seed recipe
 
-`storage::test_support::seed_posts` and the binary's `seed_posts_for_user`
-today each hand-inline the same "a timeline-visible seeded post is
+`storage::test_support::seed_posts` and the binary's `seed_posts_for_user` today
+each hand-inline the same "a timeline-visible seeded post is
 `create_rendered_post(… Markdown, published?.now, vec![Public])`" recipe (a
 deliberate ~12-line duplication — the binary re-implements it to avoid linking
 storage's heavy `test-support` scaffolding `tempfile`/`rstest_reuse`; see
@@ -112,15 +115,16 @@ the differing slug/body schemes) into one helper:
           None, vec![AudienceTarget::Public]).await
   }
   ```
+
 - `storage`'s `test-support` feature **implies** `seed-posts`
   (`test-support = ["seed-posts", "dep:tempfile", "dep:rstest_reuse"]`), so the
   in-crate `test_support::seed_posts` (and storage's own `cfg(test)`) reach the
   helper; it keeps its `seed-{i}` / `# Post {i}` scheme and its panic-on-error
   loop, now a one-liner over `seed_rendered_post`.
-- The **binary enables `storage/seed-posts`** in its *normal* deps (light — NOT
+- The **binary enables `storage/seed-posts`** in its _normal_ deps (light — NOT
   `storage/test-support`, which stays dev-only). `seed_posts_for_user` keeps its
-  username lookup, per-`prefix` `seed_slug`/`seed_body` scheme, slug-parse error,
-  and `Result` loop — but the `create_rendered_post` call becomes
+  username lookup, per-`prefix` `seed_slug`/`seed_body` scheme, slug-parse
+  error, and `Result` loop — but the `create_rendered_post` call becomes
   `seed_rendered_post(&*state.posts, user.user_id, slug, body, published)`.
 
 The recipe now lives once; the two callers still own their genuinely-different
@@ -129,8 +133,8 @@ schemes and error styles; and the binary still never links `tempfile`/
 the `seed-posts` feature). This is **not** the ADR-0046 "move `seed_posts` into
 `test-support`" idea (still ruled out — see Out of scope): nothing leaves
 `storage`; ADR-0033's same-instance constraint is untouched because
-`seed_rendered_post` is a plain storage fn, not part of the
-`AppState`-returning harness.
+`seed_rendered_post` is a plain storage fn, not part of the `AppState`-returning
+harness.
 
 ## `flake.nix` changes
 
@@ -168,8 +172,8 @@ test-support reset-mail      --path /var/lib/jaunder/mail.jsonl
     errors (uniqueness).
   - `set_site_config`: `set` then `get` round-trips; a second `set` on the same
     key overwrites (upsert).
-  - `reset_mail`: removing an existing temp file deletes it; removing a
-    missing file is `Ok` (rm -f semantics).
+  - `reset_mail`: removing an existing temp file deletes it; removing a missing
+    file is `Ok` (rm -f semantics).
 - `seed_rendered_post` (the shared recipe) is exercised transitively by both
   `storage::test_support::seed_posts`' existing tests and the binary's
   `seed_posts_for_user` smoke test — no new dedicated test needed, but confirm
@@ -186,12 +190,12 @@ No other testing-infrastructure code moves out of `storage/` (or elsewhere) into
 
 - `storage::test_support` (`seed_posts`, `seed_user`, `TestEnv`, `Backend`,
   rstest templates) **cannot** move — **ADR-0033**: `storage`'s own
-  `#[cfg(test)]` tests use it as the *same crate instance*; any crate returning
+  `#[cfg(test)]` tests use it as the _same crate instance_; any crate returning
   `AppState` must depend on `storage`, so extracting it reintroduces the
   dev-dependency cycle → `E0308: multiple different versions of crate storage`.
   The `seed_posts`-**migration** note in ADR-0046 §Consequences is therefore
   no-op-at-best / cycle-at-worst and is **not** pursued: nothing leaves
-  `storage`. (Distinct from the recipe **deduplication** above, which *shares* a
+  `storage`. (Distinct from the recipe **deduplication** above, which _shares_ a
   plain storage fn without moving the harness — see "Deduplication".)
 - `server::test_support` (`#[cfg(test)]`-only), `common::mailer::test_utils`
   (`CapturingMailSender`, feature-gated), and `server/tests/helpers` are all

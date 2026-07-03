@@ -29,9 +29,9 @@ e2e sites (T6); migrate the local runner and delete the script (T7).
   dispatches through `create_rendered_post`, which storage implements per
   backend), so the `test-support` smoke tests are **SQLite-only by design** —
   the same precedent as the existing `seed_tests` in `test-support/src/lib.rs`.
-  The e2e matrix (`{sqlite,postgres}×{chromium,firefox}`) proves the dual-backend
-  behaviour end-to-end. Do NOT add a `#[template]` dual-backend harness to the
-  `test-support` crate.
+  The e2e matrix (`{sqlite,postgres}×{chromium,firefox}`) proves the
+  dual-backend behaviour end-to-end. Do NOT add a `#[template]` dual-backend
+  harness to the `test-support` crate.
 - Coverage: the new `pub` fns (`create_user`, `set_site_config`, `reset_mail`,
   `seed_rendered_post`) are covered by the smoke tests / transitively; the
   classifier is line-based (see repo coverage policy).
@@ -130,7 +130,8 @@ e2e sites (T6); migrate the local runner and delete the script (T7).
   without `test-support`).
 - `cargo nextest run -p storage` — **PASS** (existing seed-using tests green).
 
-**Commit** (after `cargo xtask check`): `refactor(storage): extract seed_rendered_post behind seed-posts feature (#212)`
+**Commit** (after `cargo xtask check`):
+`refactor(storage): extract seed_rendered_post behind seed-posts feature (#212)`
 
 ---
 
@@ -153,9 +154,9 @@ e2e sites (T6); migrate the local runner and delete the script (T7).
   storage = { workspace = true, features = ["test-support"] }
   tempfile = { workspace = true }
   ```
-- `test-support/src/lib.rs` — in `seed_posts_for_user` (lines ~78-90) replace the
-  inline `create_rendered_post(...)` call with the shared helper, keeping the
-  username lookup, the per-`prefix` `seed_slug`/`seed_body` scheme, and the
+- `test-support/src/lib.rs` — in `seed_posts_for_user` (lines ~78-90) replace
+  the inline `create_rendered_post(...)` call with the shared helper, keeping
+  the username lookup, the per-`prefix` `seed_slug`/`seed_body` scheme, and the
   slug-parse error:
   ```rust
   let slug = seed_slug(prefix, i).parse().map_err(|_| {
@@ -180,7 +181,8 @@ e2e sites (T6); migrate the local runner and delete the script (T7).
   `cargo tree -p test-support -e no-dev`).
 - `cargo nextest run -p test-support` — **PASS**.
 
-**Commit**: `refactor(test-support): seed via storage::seed_rendered_post (#212)`
+**Commit**:
+`refactor(test-support): seed via storage::seed_rendered_post (#212)`
 
 ---
 
@@ -225,9 +227,9 @@ e2e sites (T6); migrate the local runner and delete the script (T7).
       assert!(create_user(&state, "testoperator", "testpassword123", None, false).await.is_err());
   }
   ```
-  (Confirm the operator-flag field name on the user record while implementing; if
-  the record doesn't expose it, assert operator behaviour via a capability check
-  instead of the raw field.)
+  (Confirm the operator-flag field name on the user record while implementing;
+  if the record doesn't expose it, assert operator behaviour via a capability
+  check instead of the raw field.)
 - `test-support/src/main.rs` — add the `Commands::CreateUser` variant (mirror
   `SeedPosts`' `--db`/`JAUNDER_DB` `DbConnectOptions`) and dispatch:
   ```rust
@@ -278,7 +280,9 @@ e2e sites (T6); migrate the local runner and delete the script (T7).
   }
   ```
   Smoke test: `set` then `get` round-trips; a second `set` overwrites (upsert).
-- `test-support/src/main.rs` — `Commands::SetSiteConfig { db (--db/JAUNDER_DB), key, value }` + dispatch calling `set_site_config`.
+- `test-support/src/main.rs` —
+  `Commands::SetSiteConfig { db (--db/JAUNDER_DB), key, value }` + dispatch
+  calling `set_site_config`.
 
 **Run**: `cargo nextest run -p test-support set_site_config` — FAIL → PASS.
 
@@ -307,7 +311,9 @@ e2e sites (T6); migrate the local runner and delete the script (T7).
   ```
   Smoke test: create a temp file → `reset_mail` deletes it (`!exists`); a second
   `reset_mail` on the now-missing path returns `Ok`.
-- `test-support/src/main.rs` — `Commands::ResetMail { path (--path, env = "JAUNDER_MAIL_CAPTURE_FILE", PathBuf) }` — **no `--db`** — dispatch calls `reset_mail(&path)`.
+- `test-support/src/main.rs` —
+  `Commands::ResetMail { path (--path, env = "JAUNDER_MAIL_CAPTURE_FILE", PathBuf) }`
+  — **no `--db`** — dispatch calls `reset_mail(&path)`.
 
 **Run**: `cargo nextest run -p test-support reset_mail` — FAIL → PASS.
 
@@ -317,10 +323,10 @@ e2e sites (T6); migrate the local runner and delete the script (T7).
 
 ## Task 6 — migrate the two `flake.nix` e2e sites
 
-**Files** — `flake.nix`. In **`mkE2eSqliteCheck`** replace the two `sqlite3 …
-INSERT … site_config …` lines (~830-831) and the
-`cd /var/lib/jaunder && JAUNDER_BIN=… && JAUNDER_MAIL_CAPTURE_FILE=… &&
-${./scripts/seed-e2e-fixtures.sh}` block (~834-837) with:
+**Files** — `flake.nix`. In **`mkE2eSqliteCheck`** replace the two
+`sqlite3 … INSERT … site_config …` lines (~830-831) and the
+`cd /var/lib/jaunder && JAUNDER_BIN=… && JAUNDER_MAIL_CAPTURE_FILE=… && ${./scripts/seed-e2e-fixtures.sh}`
+block (~834-837) with:
 
 ```
 test-support create-user     --db sqlite:/var/lib/jaunder/data/jaunder.db --username testlogin    --password testpassword123
@@ -336,19 +342,22 @@ lines (~989-990) and the script block (~991-997) with the same six commands but
 `--db postgres://jaunder:testpassword@127.0.0.1/jaunder` (the URL already set as
 `JAUNDER_DB` there — passing `--db` explicitly keeps both sites uniform).
 
-- `testSupportBin` is already on both VMs' `environment.systemPackages`
-  (~793 / ~912) — no wiring change.
+- `testSupportBin` is already on both VMs' `environment.systemPackages` (~793 /
+  ~912) — no wiring change.
 - The **SQLite** site change is load-bearing: the deleted script relied on cwd +
   default path with no `--db`; `test-support` needs the explicit
-  `sqlite:/var/lib/jaunder/data/jaunder.db` URL (the DB the raw INSERTs targeted).
+  `sqlite:/var/lib/jaunder/data/jaunder.db` URL (the DB the raw INSERTs
+  targeted).
 
 **Test** — no unit test; the e2e Nix checks are the proof.
 
-**Run** (heavy — Bash background mode): `devtool run -- cargo xtask e2e sqlite chromium`
-and `… e2e postgres chromium` — **PASS** (fixtures seed; auth/timeline/feeds
-tests green). Full `cargo xtask validate` is the final gate (Task 7 / ship).
+**Run** (heavy — Bash background mode):
+`devtool run -- cargo xtask e2e sqlite chromium` and `… e2e postgres chromium` —
+**PASS** (fixtures seed; auth/timeline/feeds tests green). Full
+`cargo xtask validate` is the final gate (Task 7 / ship).
 
-**Commit**: `test-infra(e2e): seed flake e2e via test-support subcommands (#212)`
+**Commit**:
+`test-infra(e2e): seed flake e2e via test-support subcommands (#212)`
 
 ---
 
@@ -357,8 +366,9 @@ tests green). Full `cargo xtask validate` is the final gate (Task 7 / ship).
 **Files**
 
 - `end2end/run-e2e.sh` — replace the two `sqlite3 … INSERT … site_config …`
-  lines (40-43) and the `"$(git rev-parse --show-toplevel)/scripts/seed-e2e-fixtures.sh"`
-  invocation (45) with `test-support` calls. The local path is always SQLite:
+  lines (40-43) and the
+  `"$(git rev-parse --show-toplevel)/scripts/seed-e2e-fixtures.sh"` invocation
+  (45) with `test-support` calls. The local path is always SQLite:
   ```bash
   TS="../target/debug/test-support"; DB="sqlite:${JAUNDER_DB_PATH}"
   "$TS" create-user     --db "$DB" --username testlogin    --password testpassword123
@@ -373,16 +383,17 @@ tests green). Full `cargo xtask validate` is the final gate (Task 7 / ship).
   wrapper — Read `scripts/e2e-local.sh` and put the build where it builds the
   server binary (or guard it in `run-e2e.sh`: build if `$TS` is not executable).
   Drop the now-unused `JAUNDER_BIN` export if nothing else uses it.
-- Delete `scripts/seed-e2e-fixtures.sh` (both consumers — flake T6, runner here —
-  are migrated). Confirm no remaining references:
+- Delete `scripts/seed-e2e-fixtures.sh` (both consumers — flake T6, runner here
+  — are migrated). Confirm no remaining references:
   `rg -n 'seed-e2e-fixtures' -- flake.nix end2end scripts` returns nothing.
 
 **Test** — local e2e (`scripts/e2e-local.sh`) — **PASS** end-to-end.
 
-**Run**: `devtool run -- cargo xtask validate` — the full local gate
-(static + coverage + the four e2e combos). **PASS** = done.
+**Run**: `devtool run -- cargo xtask validate` — the full local gate (static +
+coverage + the four e2e combos). **PASS** = done.
 
-**Commit**: `test-infra(e2e): migrate local runner to test-support, delete seed script (#212)`
+**Commit**:
+`test-infra(e2e): migrate local runner to test-support, delete seed script (#212)`
 
 ---
 
