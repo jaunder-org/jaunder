@@ -14,26 +14,23 @@ pointed at the default `.git/hooks`.
 
 ## Decision
 
-- **Pre-commit hook → two passes** (a deliberate stopgap, see below):
-  1. `cargo xtask check --no-test` — fixes fmt/leptosfmt/prettier + runs clippy,
-     but **skips the Nix coverage step** so it cannot churn the coverage
-     manifests. If it rewrote anything (i.e. reformatted staged code), the hook
-     **fails and asks the author to restage** rather than silently folding the
-     fix in. Detection is a `git status --porcelain` before/after diff — safe
-     here because `--no-test` means the only possible change is real formatting.
-  2. `cargo xtask validate --no-e2e --allow-dirty` — runs the real coverage/test
-     gate in **Check mode** (verify-only, never mutates → no churn).
-     `--allow-dirty` is required because at pre-commit time the staged commit
-     content makes the tree "dirty" by validate's strict definition; the refusal
-     is meant for pre-push, not here.
+- **Pre-commit hook → a single `cargo xtask check`** (fmt/leptosfmt/prettier +
+  clippy + the Nix coverage/test gate, all in **Fix mode** with auto-heal). If
+  the run changed the tree — a reformat, or a genuine coverage-baseline / CRAP
+  heal — the hook **fails and asks the author to restage** rather than silently
+  folding the fix into their commit. Detection is a `git status --porcelain`
+  before/after diff.
 
-  The obvious single-pass `cargo xtask check` is **not** usable at pre-commit
-  today: its Fix-mode coverage step regenerates `coverage-baseline.json` /
-  `crap-manifest.json` on essentially every run (the manifests are not yet
-  idempotent — #7), which would make the fail-and-restage diff fire on every
-  commit and entangle the hook with regen behavior the coverage work owns. The
-  two-pass split avoids touching the manifests at the cost of running fmt +
-  clippy twice (coverage, the expensive part, runs once).
+  This single pass is safe because the Fix-mode heal is **idempotent on a clean
+  tree**: the accepted-uncovered baseline compares by a line-independent text
+  fingerprint and is rewritten only when it genuinely differs, the CRAP manifest
+  ignores line attribution (#7), and a benign pure line-shift self-heals to a
+  hint via re-anchor (#86) instead of churning the file (#113). So `check`
+  mutates the tree only on a **real** change, never on every run — the
+  fail-and-restage fires only when there is something genuine to restage. (This
+  replaced an earlier two-pass stopgap — `check --no-test` +
+  `validate --no-e2e --allow-dirty` — that ran fmt/clippy twice to avoid
+  touching the then-non-idempotent manifests; see Consequences.)
 
 - **Pre-push hook → `cargo xtask validate --no-e2e`.** Its value is the
   clean-tree backstop below, not a re-verify of `check`.
@@ -53,10 +50,11 @@ pointed at the default `.git/hooks`.
 - Commits run the full coverage build (slower commits) in exchange for a
   per-commit green history and a warm coverage cache that makes pre-push a
   near-instant cache hit.
-- The two-pass pre-commit hook is a stopgap: once coverage auto-healing (#86)
-  makes `check` idempotent on a clean tree, the hook collapses to a single
-  `cargo xtask check` with the same porcelain-diff fail-and-restage, dropping
-  the duplicated fmt/clippy pass.
+- The pre-commit hook was collapsed to a single `cargo xtask check` (#113) once
+  the Fix-mode heal became idempotent on a clean tree (#7 line-agnostic CRAP,
+  #86 re-anchor safety, #113 line-as-hint baseline heal), dropping the earlier
+  two-pass stopgap and its duplicated fmt/clippy pass. A clean-tree commit no
+  longer triggers fail-and-restage from manifest churn.
 - The dirty-tree refusal neutralizes #37's untracked-instrumentation footgun on
   the gate path without changing the flake source filter (#37 remains open for
   the flake-side contract).
