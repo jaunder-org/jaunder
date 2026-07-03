@@ -73,6 +73,7 @@ convention). All are currently `accepted`.
 | [0043](adr/0043-quick-xml-fork-patch.md)                           | quick-xml advisory: fork + git-patch bridge (RUSTSEC-2026-0194/0195)                       | accepted |
 | [0044](adr/0044-authenticated-owner-flash-free-enhancement.md)     | Authenticated-owner flash-free enhancement (pre-paint marker + additive decoration)        | accepted |
 | [0045](adr/0045-emacs-media-content-src.md)                        | Emacs client harvests media URLs from the response `<content src>`                         | accepted |
+| [0045](adr/0045-test-support-seed-binary.md)                       | A `test-support` binary that links `storage` for out-of-process e2e seeding                | proposed |
 
 <!-- adr-table:end -->
 
