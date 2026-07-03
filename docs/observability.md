@@ -123,6 +123,18 @@ This warmup runs on the same test page/context and waits for
 `body[data-hydrated]`, so subsequent navigations within that test are measured
 as warm-cache behavior.
 
+### Heavy timeline fixture seeding (#210)
+
+The three heavy timeline tests (`posts.spec.ts` `:305`/`:349`/`:410`) seed their
+paginated fixtures through the `test-support` binary (ADR-0045) — one in-process
+storage write per post — rather than a sequential loop of
+`POST /api/create_post` round-trips. That removes the setup cost `#155`
+mitigated with worker-contention timeout headroom (`workerContentionScale` in
+`end2end/tests/fixtures.ts`), so that headroom is now a candidate for reduction
+once `workers>1` is unblocked (`#173`). The before/after measurement is driven
+separately by the `#152` `run-e2e-trace-analysis` harness; the timeouts are not
+re-tuned here.
+
 ## WASM Bundle Audit
 
 Use `cargo xtask audit-wasm` to measure frontend bundle size from the
