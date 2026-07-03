@@ -31,11 +31,28 @@ intermittently times out on the pre-existing flaky heavy test
 handled by another agent). Rather than mask it with retries/timeout inflation,
 the branch keeps `workers=1` (green) until #210 lands.
 
-**Resume after #210:** flip `nixPlaywrightConfig` default → 4, add
-`vmMemory=6144; vmCores=4;` to `e2eWarmChecks`, re-verify all 4 combos, revisit
-whether the `workerContentionScale` can shrink, then the remaining tasks below
-(rename `hydrationHeavy*`, ADR-0039, resolve #182/#61, ship). Full status in
-`docs/observability.md` → "#155 — flip status".
+**Resume after #210 — `/jaunder-develop issue 155` reconstructs the cycle from
+these artifacts; the steps below are the remaining work:**
+
+0. **PREREQUISITE (load-bearing): get #210's fix onto this branch first.**
+   Confirm #210 has **merged to `main`**, then rebase this branch onto `main`
+   (`jaunder-ship/base-moved.md`). Until #210's batch-seed change is present
+   here, `posts.spec.ts:349` is still the old slow version and step 2 will flake
+   exactly as it does now. Sanity-check that #210 actually made the heavy
+   timeline tests fast (its acceptance) before flipping.
+1. Flip `nixPlaywrightConfig` default → 4; add `vmMemory=6144; vmCores=4;` to
+   `e2eWarmChecks` (values recorded in `docs/observability.md` → "#155 AC3").
+2. Re-verify all 4 combos green at workers=4 (`cargo xtask validate`, or the 4
+   `cargo xtask e2e <backend> <browser>` builds). With #210 landed,
+   `sqlite+chromium` should now be stable.
+3. Revisit whether `workerContentionScale` (fixtures.ts) can shrink now that the
+   heavy tests are fast — the headroom was sized for the _slow_ tests.
+4. Remaining tasks below: rename `hydrationHeavy*` off the false hydration
+   premise (Task 6b) + fix the `run-e2e-trace-analysis` out-path parser bug;
+   ADR-0039 update (Task 7); resolve #182/#61; ship.
+
+Full status in `docs/observability.md` → "#155 — flip status". #155 is still
+claimed (Status: In Progress in project #1) — a resume continues, not re-claims.
 
 ## Global Constraints
 
