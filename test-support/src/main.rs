@@ -1,10 +1,12 @@
 //! `test-support` — out-of-process test/e2e helpers that link jaunder's real
 //! crates (see `lib.rs`). Never shipped in the `jaunder` production binary.
 
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 use storage::DbConnectOptions;
 
-use test_support::{create_user, seed_posts_for_user, set_site_config};
+use test_support::{create_user, reset_mail, seed_posts_for_user, set_site_config};
 
 #[derive(Parser)]
 #[command(
@@ -66,6 +68,12 @@ enum Commands {
         #[arg(long)]
         value: String,
     },
+    /// Reset the mail-capture file (delete it; missing is fine).
+    ResetMail {
+        /// Path to the mail-capture file.
+        #[arg(long, env = "JAUNDER_MAIL_CAPTURE_FILE")]
+        path: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -106,6 +114,10 @@ async fn main() -> anyhow::Result<()> {
             let state = storage::open_existing_database(&db).await?;
             set_site_config(&state, &key, &value).await?;
             eprintln!("set site_config {key} = {value}");
+        }
+        Commands::ResetMail { path } => {
+            reset_mail(&path)?;
+            eprintln!("reset mail-capture file {}", path.display());
         }
     }
     Ok(())

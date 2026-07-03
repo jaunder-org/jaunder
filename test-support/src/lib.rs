@@ -131,6 +131,22 @@ pub async fn set_site_config(state: &Arc<AppState>, key: &str, value: &str) -> a
     Ok(())
 }
 
+/// Reset the mail-capture file: delete `path` if it exists. A missing file is
+/// success (`rm -f` semantics — matching the shell the script used); any other
+/// error propagates. The one fixture step that is not storage-linked; folding it
+/// here lets the shell script be retired in full.
+///
+/// # Errors
+///
+/// Returns `Err` if `path` exists but cannot be removed.
+pub fn reset_mail(path: &std::path::Path) -> anyhow::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(anyhow::anyhow!("reset-mail: {}: {e}", path.display())),
+    }
+}
+
 #[cfg(test)]
 mod content_tests {
     use super::*;
@@ -279,5 +295,36 @@ mod set_site_config_tests {
                 .unwrap(),
             Some("closed".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod reset_mail_tests {
+    use super::*;
+
+    #[test]
+    fn removes_an_existing_file_and_is_idempotent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("mail.jsonl");
+        std::fs::write(&path, "{}\n").unwrap();
+        assert!(path.exists());
+
+        reset_mail(&path).expect("remove ok");
+        assert!(!path.exists(), "file should be gone");
+
+        // rm -f semantics: a second reset on the now-missing file is still Ok.
+        reset_mail(&path).expect("missing file is not an error");
+    }
+
+    #[test]
+    fn propagates_errors_other_than_not_found() {
+        // `remove_file` on a directory fails with a non-`NotFound` error, so the
+        // catch-all arm surfaces it (rather than swallowing it like a missing file).
+        let dir = tempfile::TempDir::new().unwrap();
+        let subdir = dir.path().join("a-directory");
+        std::fs::create_dir(&subdir).unwrap();
+
+        let err = reset_mail(&subdir).expect_err("removing a directory should error");
+        assert!(err.to_string().contains("reset-mail"));
     }
 }

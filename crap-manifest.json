@@ -3,12 +3,12 @@
   "entries": [
     {
       "coverage": 0.0,
-      "crap": 110.0,
+      "crap": 156.0,
       "crate": "test-support",
-      "cyclomatic": 10.0,
+      "cyclomatic": 12.0,
       "file": "test-support/src/main.rs",
       "function": "main",
-      "line": 72
+      "line": 80
     },
     {
       "coverage": 83.33333333333334,
@@ -2088,6 +2088,15 @@
       "file": "test-support/src/lib.rs",
       "function": "create_user",
       "line": 101
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "test-support",
+      "cyclomatic": 4.0,
+      "file": "test-support/src/lib.rs",
+      "function": "reset_mail",
+      "line": 142
     },
     {
       "coverage": 85.71428571428571,
