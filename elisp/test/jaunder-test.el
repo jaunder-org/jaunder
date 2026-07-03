@@ -271,6 +271,62 @@
                   (concat "#+PROPERTY: JAUNDER_STATUS scheduled\n"
                           "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n\nB\n"))))))
 
+;;; utc->org-date + machine-zone capture (C4 / issue #162)
+
+(ert-deftest jaunder-utc->org-date-renders-in-zone ()
+  ;; 13:00Z in America/New_York (EDT, -04:00) is 09:00 local.
+  (should (equal (jaunder--utc->org-date "2026-07-01T13:00:00Z" "America/New_York")
+                 "[2026-07-01 Wed 09:00]"))
+  ;; Round-trips through the existing forward mapping.
+  (should (equal (jaunder--org-date->utc
+                  (jaunder--utc->org-date "2026-07-01T13:00:00Z" "America/New_York")
+                  "America/New_York")
+                 "2026-07-01T13:00:00Z")))
+
+(ert-deftest jaunder-current-zone-name-is-nonempty ()
+  (let ((z (jaunder--current-zone-name)))
+    (should (stringp z))
+    (should (> (length z) 0))))
+
+(ert-deftest jaunder-ensure-date-tz-captures-when-unset-and-preserves ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+TITLE: T\n\nBody.\n")
+    ;; Unset → captured to something non-empty.
+    (jaunder--ensure-date-tz)
+    (let ((captured (jaunder--buffer-property "JAUNDER_DATE_TZ")))
+      (should (stringp captured))
+      (should (> (length captured) 0))
+      ;; Already set → preserved verbatim (idempotent, no re-capture).
+      (jaunder--set-property "JAUNDER_DATE_TZ" "Europe/Paris")
+      (jaunder--ensure-date-tz)
+      (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "Europe/Paris")))))
+
+;;; multi-blog config + resolution (C4 / issue #162)
+
+(ert-deftest jaunder-resolve-blog-longest-prefix ()
+  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a" :username "a")
+                         ("/home/me/blog/work/" :base-url "https://b" :username "b")))
+        (jaunder-base-url nil) (jaunder-username nil))
+    (should (equal (plist-get (jaunder--resolve-blog "/home/me/blog/post.org") :username) "a"))
+    (should (equal (plist-get (jaunder--resolve-blog "/home/me/blog/work/x.org") :username) "b"))))
+
+(ert-deftest jaunder-resolve-blog-falls-back-to-globals ()
+  (let ((jaunder-blogs nil)
+        (jaunder-base-url "https://g") (jaunder-username "g"))
+    (should (equal (plist-get (jaunder--resolve-blog "/tmp/x.org") :base-url) "https://g"))))
+
+(ert-deftest jaunder-resolve-blog-errors-when-unconfigured ()
+  (let ((jaunder-blogs nil) (jaunder-base-url nil) (jaunder-username nil))
+    (should-error (jaunder--resolve-blog "/tmp/x.org"))))
+
+(ert-deftest jaunder-with-blog-binds-transport-specials ()
+  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a" :username "a")))
+        (jaunder-base-url nil) (jaunder-username nil))
+    (jaunder--with-blog "/home/me/blog/post.org"
+                        (should (equal jaunder-base-url "https://a"))
+                        (should (equal jaunder-username "a")))))
+
 ;;; atom-entry -> xml serializer (C2 / issue #160)
 
 (ert-deftest jaunder-atom-entry->xml-full-entry ()
@@ -361,6 +417,31 @@
                    "https://h/media/upload/ab/cd/abcd/p.png"))
     (should (equal (cdr (assq 'content-type (jaunder--atom-entry-fields xml)))
                    "image/png"))))
+
+(ert-deftest jaunder-atom-entry-fields-harvests-slug-and-published ()
+  (let ((xml (concat
+              "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+              " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+              "<content type=\"text/org\">Body</content>"
+              "<published>2026-07-01T13:00:00+00:00</published>"
+              "<j:slug>my-post</j:slug></entry>")))
+    (let ((fields (jaunder--atom-entry-fields xml)))
+      (should (equal (cdr (assq 'slug fields)) "my-post"))
+      (should (equal (cdr (assq 'published fields)) "2026-07-01T13:00:00+00:00"))
+      (should (equal (cdr (assq 'content-type fields)) "text/org")))))
+
+(ert-deftest jaunder-atom-entry-fields-absent-slug-published-are-nil ()
+  ;; A content-only entry (no <j:slug>, no <published> — e.g. a draft, which
+  ;; the server stamps <published> onto only when live) yields nil for both,
+  ;; exercising the `(and NODE (dom-text NODE))' nil-guard branches.
+  (let ((xml (concat
+              "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+              " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+              "<content type=\"text/org\">Body</content></entry>")))
+    (let ((fields (jaunder--atom-entry-fields xml)))
+      (should (null (cdr (assq 'slug fields))))
+      (should (null (cdr (assq 'published fields))))
+      (should (equal (cdr (assq 'content-type fields)) "text/org")))))
 
 (ert-deftest jaunder-media-content-type-maps-extensions ()
   (should (equal (jaunder--media-content-type "a.png") "image/png"))
@@ -471,6 +552,16 @@
              (should (equal (cdr (assoc "Content-Type" captured)) "image/png"))
              (should (assoc "Authorization" captured)))))
 
+(ert-deftest jaunder-curl-header-value-escapes-quotes-and-backslashes ()
+  ;; plz 0.9.1 wraps each header value in double quotes inside a curl --config
+  ;; file without escaping it, so a raw quote (a strong ETag echoed as If-Match)
+  ;; truncates the header and curl drops it.  Escaping \ and " lets curl rebuild
+  ;; the literal value; a value without either is unchanged.
+  (should (equal (jaunder--curl-header-value "\"abc123\"") "\\\"abc123\\\""))
+  (should (equal (jaunder--curl-header-value "a\\b") "a\\\\b"))
+  (should (equal (jaunder--curl-header-value "application/atom+xml;type=entry")
+                 "application/atom+xml;type=entry")))
+
 (ert-deftest jaunder-upload-media-errors-on-non-2xx ()
   (cl-letf (((symbol-function 'jaunder--http-request)
              (lambda (&rest _) '(:status 500 :body "boom"))))
@@ -523,5 +614,159 @@
                (let ((body (jaunder-entry-body (jaunder--org->atom))))
                  (should (equal (jaunder--localize-media body) body))
                  (should-not called))))))
+
+;;; buffer read/write helpers (unit C4, issue #162)
+
+(ert-deftest jaunder-set-property-replaces-existing ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+TITLE: T\n#+PROPERTY: JAUNDER_ID 7\n\nBody.\n")
+    (jaunder--set-property "JAUNDER_ID" "42")
+    (should (equal (jaunder--buffer-property "JAUNDER_ID") "42"))
+    (should (string-match-p "Body\\." (buffer-string)))
+    (should-not (string-match-p "JAUNDER_ID 7" (buffer-string)))))
+
+(ert-deftest jaunder-set-property-inserts-into-header-block ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+TITLE: T\n\nBody.\n")
+    (jaunder--set-property "JAUNDER_SLUG" "my-post")
+    (should (equal (jaunder--buffer-property "JAUNDER_SLUG") "my-post"))
+    ;; Inserted in the header block, body untouched.
+    (should (string-match-p "\\`#\\+TITLE: T\n#\\+PROPERTY: JAUNDER_SLUG my-post\n\nBody\\."
+                            (buffer-string)))))
+
+(ert-deftest jaunder-set-keyword-replaces-and-inserts ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+TITLE: T\n\nBody.\n")
+    (jaunder--set-keyword "DATE" "[2026-07-01 Wed 09:00]")
+    (should (equal (jaunder--buffer-keyword "DATE") "[2026-07-01 Wed 09:00]"))
+    (jaunder--set-keyword "DATE" "[2027-01-01 Fri 00:00]")
+    (should (equal (jaunder--buffer-keyword "DATE") "[2027-01-01 Fri 00:00]"))))
+
+;;; publish validation + Location->id + force-draft (C4 / issue #162)
+
+(ert-deftest jaunder-validate-publish-rejects-empty-body ()
+  (let ((e (jaunder--make-entry :body "   \n")))
+    (should-error (jaunder--validate-publish e "published" nil nil))))
+
+(ert-deftest jaunder-validate-publish-scheduled-needs-future ()
+  (let ((e (jaunder--make-entry :body "x")))
+    (should-error (jaunder--validate-publish e "scheduled" "[2000-01-01 Sat 00:00]" nil))
+    ;; A far-future date passes.
+    (should-not (jaunder--validate-publish e "scheduled" "[2999-01-01 Tue 00:00]" nil))))
+
+(ert-deftest jaunder-location->id-extracts-numeric-tail ()
+  (should (equal (jaunder--location->id "https://x/atompub/alice/posts/42") "42"))
+  (should (equal (jaunder--location->id "https://x/atompub/alice/posts/42/") "42"))
+  (should (null (jaunder--location->id nil))))
+
+(ert-deftest jaunder-force-draft-sets-draft-and-clears-published ()
+  ;; A dated, non-draft entry forced to draft must not carry <published>:
+  ;; the serializer emits <published> whenever the slot is set, independent of
+  ;; the draft flag, so force-draft has to nil it (spec invariant).
+  (let ((e (jaunder--make-entry :body "x" :draft nil :content-type "text/org"
+                                :published "2026-07-01T13:00:00Z")))
+    (jaunder--force-draft e)
+    (should (jaunder-entry-draft e))
+    (should (null (jaunder-entry-published e)))
+    ;; And the wire entry indeed omits <published>.
+    (should-not (string-match-p "<published>" (jaunder--atom-entry->xml e)))))
+
+;;; rename temp draft to <slug>.org (C4 / issue #162)
+
+(ert-deftest jaunder-rename-to-slug-renames-and-handles-collision ()
+  (let ((dir (make-temp-file "jaunder-rn-" t)))
+    (unwind-protect
+        (let ((tmp (expand-file-name "draft-20260101T000000.org" dir)))
+          (with-temp-file tmp (insert "x"))
+          (let ((buf (find-file-noselect tmp)))
+            (unwind-protect
+                (with-current-buffer buf
+                  (let ((p (jaunder--rename-to-slug "my-post")))
+                    (should (equal (file-name-nondirectory p) "my-post.org"))
+                    (should (equal (buffer-file-name) p))
+                    (should (file-exists-p p))
+                    (should-not (file-exists-p tmp))
+                    ;; Idempotent: renaming to the same slug is a no-op.
+                    (should (equal (jaunder--rename-to-slug "my-post") p))))
+              (kill-buffer buf)))
+          ;; Collision: a second post with the same slug gets -1.
+          (let ((tmp2 (expand-file-name "draft-20260101T000001.org" dir)))
+            (with-temp-file tmp2 (insert "y"))
+            (let ((buf2 (find-file-noselect tmp2)))
+              (unwind-protect
+                  (with-current-buffer buf2
+                    (should (equal (file-name-nondirectory
+                                    (jaunder--rename-to-slug "my-post"))
+                                   "my-post-1.org")))
+                (kill-buffer buf2)))))
+      (delete-directory dir t))))
+
+(defun jaunder-test--response (status headers body)
+  "Build a `jaunder--http-request'-shaped plist for tests."
+  (list :status status
+        :headers (mapcar (lambda (h) (cons (downcase (car h)) (cdr h))) headers)
+        :body body))
+
+(ert-deftest jaunder-write-back-create-writes-id-first ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+TITLE: T\n#+PROPERTY: JAUNDER_STATUS published\n\nBody.\n")
+    (set-visited-file-name (make-temp-file "jaunder-wb-" nil ".org") nil t)
+    (unwind-protect
+        (let ((resp (jaunder-test--response
+                     201
+                     '(("Location" . "https://x/atompub/alice/posts/42")
+                       ("ETag" . "\"abc\""))
+                     (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+                             " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+                             "<content type=\"text/org\">Body</content>"
+                             "<published>2026-07-01T13:00:00+00:00</published>"
+                             "<j:slug>my-post</j:slug></entry>"))))
+          (should (equal (jaunder--write-back resp t) "my-post"))
+          (should (equal (jaunder--buffer-property "JAUNDER_ID") "42"))
+          (should (equal (jaunder--buffer-property "JAUNDER_SLUG") "my-post"))
+          (should (equal (jaunder--buffer-property "JAUNDER_SYNCED") "\"abc\""))
+          ;; The server's <published> offset is dropped to the canonical UTC
+          ;; instant (tz-independent, so deterministic across machines).
+          (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC")
+                         "2026-07-01T13:00:00Z"))
+          ;; publish-now (no author #+DATE:) → #+DATE: rendered from server time.
+          (should (jaunder--buffer-keyword "DATE")))
+      (when (buffer-file-name) (delete-file (buffer-file-name))))))
+
+(ert-deftest jaunder-write-back-update-keeps-id ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+TITLE: T\n#+PROPERTY: JAUNDER_ID 7\n#+DATE: [2026-07-01 Wed 09:00]\n\nBody.\n")
+    (set-visited-file-name (make-temp-file "jaunder-wb-" nil ".org") nil t)
+    (unwind-protect
+        (let ((resp (jaunder-test--response
+                     200 '(("ETag" . "\"z\""))
+                     (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+                             " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+                             "<content type=\"text/org\">Body</content>"
+                             "<j:slug>my-post</j:slug></entry>"))))
+          (jaunder--write-back resp nil)     ; created = nil (update)
+          (should (equal (jaunder--buffer-property "JAUNDER_ID") "7"))  ; unchanged
+          (should (equal (jaunder--buffer-property "JAUNDER_SYNCED") "\"z\"")))
+      (when (buffer-file-name) (delete-file (buffer-file-name))))))
+
+(ert-deftest jaunder-new-post-writes-timestamped-draft ()
+  (let ((dir (make-temp-file "jaunder-np-" t)))
+    (unwind-protect
+        (let ((path (jaunder--new-post-in dir "20260703T101500")))
+          (should (equal (file-name-nondirectory path) "draft-20260703T101500.org"))
+          (should (file-exists-p path))
+          (let ((buf (find-file-noselect path)))
+            (unwind-protect
+                (with-current-buffer buf
+                  (should (equal (jaunder--buffer-property "JAUNDER_STATUS") "draft"))
+                  (should (jaunder--buffer-keyword "TITLE"))   ; present (may be empty)
+                  (should (jaunder--buffer-keyword "DATE")))
+              (kill-buffer buf))))
+      (delete-directory dir t))))
 
 ;;; jaunder-test.el ends here

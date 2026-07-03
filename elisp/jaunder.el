@@ -38,6 +38,15 @@
   :type '(choice (const :tag "Unset" nil) string)
   :group 'jaunder)
 
+(defcustom jaunder-blogs nil
+  "Alist mapping a local directory to a Jaunder blog.
+Each element is (DIRECTORY . PLIST), where PLIST carries :base-url and
+:username (strings) and an optional :format (accepted for forward
+compatibility but not used in v1 — org is the only converter)."
+  :type '(alist :key-type directory
+                :value-type (plist :key-type symbol :value-type string))
+  :group 'jaunder)
+
 ;;; Pure helpers
 
 (defun jaunder--build-url (base &rest segments)
@@ -103,6 +112,16 @@ Thin I/O wrapper over `auth-source-search' using `jaunder--auth-source-spec'."
           (t (error "jaunder: no auth-source entry for %s@%s"
                     jaunder-username jaunder-base-url)))))
 
+(defun jaunder--curl-header-value (value)
+  "Escape VALUE so `plz' transmits the header intact through curl's config file.
+plz writes each header as `--header \"NAME: VALUE\"' into a curl `--config' file
+without escaping VALUE (plz 0.9.1, plz.el:503).  A raw double quote — as in a
+strong `ETag' echoed back via `If-Match' — closes the config-file string early,
+truncating the header to an empty value that curl then drops, so the precondition
+never reaches the server.  Backslash-escaping `\\' and `\"' lets curl's config
+parser rebuild the literal value."
+  (replace-regexp-in-string "[\\\"]" "\\\\\\&" value))
+
 (defun jaunder--http-request (method url &optional body content-type extra-headers)
   "Make an authenticated METHOD request to URL via `plz', returning a plist.
 METHOD is an HTTP verb string; URL an absolute URL.  BODY is a request body: a
@@ -116,11 +135,13 @@ failure re-signals.
 `plz' drives the `curl' binary, so request construction does not depend on
 the finicky dynamic-variable handling that made `url.el' occasionally drop
 the auth header under load (ADR-0038)."
-  (let ((headers (append
-                  (list (jaunder--basic-auth-header jaunder-username
-                                                    (jaunder--auth-secret)))
-                  (when content-type (list (cons "Content-Type" content-type)))
-                  extra-headers))
+  (let ((headers (mapcar
+                  (lambda (h) (cons (car h) (jaunder--curl-header-value (cdr h))))
+                  (append
+                   (list (jaunder--basic-auth-header jaunder-username
+                                                     (jaunder--auth-secret)))
+                   (when content-type (list (cons "Content-Type" content-type)))
+                   extra-headers)))
         (verb (intern (downcase method))))
     (condition-case err
         (jaunder--plz-response->plist
@@ -234,6 +255,39 @@ Returns nil when DATE-RAW does not parse to a time."
       (setf (nth 8 decoded) (jaunder--resolve-zone tz))
       (format-time-string "%Y-%m-%dT%H:%M:%SZ" (encode-time decoded) t))))
 
+(defun jaunder--utc->org-date (utc tz)
+  "Render an org inactive timestamp for UTC interpreted in zone TZ (C4 / #162).
+UTC is an RFC-3339 UTC string (e.g. \"2026-07-01T13:00:00Z\"); TZ a
+JAUNDER_DATE_TZ string.  Inverse of `jaunder--org-date->utc' at org's minute
+resolution: a server UTC carrying non-zero seconds is truncated to the minute
+\(org timestamps have no seconds field)."
+  (format-time-string "[%Y-%m-%d %a %H:%M]"
+                      (date-to-time utc)
+                      (jaunder--resolve-zone tz)))
+
+(defun jaunder--current-zone-name ()
+  "Return the machine's current IANA zone name, else a numeric offset string (C4 / #162).
+Prefers a `TZ' IANA name, then the /etc/localtime symlink target; falls back to
+the current numeric UTC offset (IANA preferred, offset caveat).  The TZ branch
+trusts a non-empty, non-`:'-prefixed value as an IANA name; a POSIX-style TZ
+\(e.g. \"EST5EDT\") is passed through as-is."
+  (or (let ((tz (getenv "TZ")))
+        (and tz (not (string= tz "")) (not (string-prefix-p ":" tz)) tz))
+      (let ((link (ignore-errors (file-symlink-p "/etc/localtime"))))
+        (and link (string-match "zoneinfo/\\(.+\\)\\'" link)
+             (match-string 1 link)))
+      (format-time-string "%z")))
+
+(defun jaunder--ensure-date-tz ()
+  "Ensure the buffer records a JAUNDER_DATE_TZ; return the effective zone string (C4 / #162).
+When unset, captures the machine's current zone (`jaunder--current-zone-name')
+so #+DATE: is interpreted in a recorded zone, not one silently re-inferred on a
+later machine.  Idempotent: an existing value is preserved verbatim."
+  (or (jaunder--buffer-property "JAUNDER_DATE_TZ")
+      (let ((zone (jaunder--current-zone-name)))
+        (jaunder--set-property "JAUNDER_DATE_TZ" zone)
+        zone)))
+
 (defun jaunder--org->atom ()
   "Map the current org buffer to a `jaunder-entry' (issue #160).
 Reads the metadata header block via `org-collect-keywords' and carries the
@@ -311,16 +365,22 @@ here (issue #160)."
 
 (defun jaunder--atom-entry-fields (xml)
   "Parse AtomPub entry XML into an alist of harvested fields.
-Returns `content-src' and `content-type' from the entry's `<content>' element.
-The shared entry-parse primitive (issue #161): C3 uses the content subset; C4 and
-Unit D extend the returned set.  `libxml-parse-xml-region' drops the default
-namespace prefix, so the element is `content'."
+Returns `content-src'/`content-type' from `<content>', `slug' from `<j:slug>',
+and `published' from `<published>'.  The shared entry-parse primitive: C3 uses
+the content subset, C4 the slug/published subset, Unit D extends it further.
+`libxml-parse-xml-region' folds the default namespace, so `<content>' and
+`<published>' are `content'/`published'; the `j:'-prefixed slug is matched by
+local name via `dom-by-tag' on the `slug' symbol."
   (let* ((dom (with-temp-buffer
                 (insert xml)
                 (libxml-parse-xml-region (point-min) (point-max))))
-         (content (car (dom-by-tag dom 'content))))
+         (content (car (dom-by-tag dom 'content)))
+         (slug (car (dom-by-tag dom 'slug)))
+         (published (car (dom-by-tag dom 'published))))
     (list (cons 'content-src (dom-attr content 'src))
-          (cons 'content-type (dom-attr content 'type)))))
+          (cons 'content-type (dom-attr content 'type))
+          (cons 'slug (and slug (dom-text slug)))
+          (cons 'published (and published (dom-text published))))))
 
 (defconst jaunder--media-image-types
   '(("png" . "image/png")
@@ -451,6 +511,260 @@ harvested server URLs, in order.  The authoring buffer is never modified (#161).
       (jaunder--substitute-media
        body
        (mapcar (lambda (r) (gethash (plist-get r :path) cache)) records)))))
+
+;;; buffer read/write helpers (unit C4, issue #162)
+
+(defun jaunder--set-keyword-line (line-re new-line)
+  "Replace the first LINE-RE match in the leading header block with NEW-LINE.
+When absent, insert NEW-LINE after the last contiguous header-keyword line
+\(before any blank line or the body).  Header block only; the body is never
+touched."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((case-fold-search t)
+          (limit (jaunder--body-start)))
+      (if (re-search-forward line-re limit t)
+          (progn (beginning-of-line)
+                 (delete-region (point) (line-end-position))
+                 (insert new-line))
+        (goto-char (point-min))
+        (let ((insert-at (point-min)))
+          (while (looking-at-p jaunder--header-keyword-re)
+            (forward-line 1)
+            (setq insert-at (point)))
+          (goto-char insert-at)
+          (insert new-line "\n"))))))
+
+(defun jaunder--set-property (key value)
+  "Set the file-level #+PROPERTY: KEY to VALUE (idempotent replace or insert)."
+  (jaunder--set-keyword-line
+   (format "^[ \t]*#\\+PROPERTY:[ \t]+%s\\(?:[ \t].*\\)?$" (regexp-quote key))
+   (format "#+PROPERTY: %s %s" key value)))
+
+(defun jaunder--set-keyword (keyword value)
+  "Set the file-level #+KEYWORD: to VALUE (idempotent replace or insert)."
+  (jaunder--set-keyword-line
+   (format "^[ \t]*#\\+%s:.*$" (regexp-quote keyword))
+   (format "#+%s: %s" keyword value)))
+
+(defun jaunder--buffer-property (key)
+  "Return the #+PROPERTY: KEY value in the current buffer, or nil."
+  (cdr (assoc key (jaunder--collect-properties
+                   (org-collect-keywords '("PROPERTY"))))))
+
+(defun jaunder--buffer-keyword (key)
+  "Return the #+KEY: value in the current buffer, or nil."
+  (cadr (assoc key (org-collect-keywords (list key)))))
+
+;;; multi-blog config + resolution (unit C4, issue #162)
+
+(defun jaunder--blog-entry-for (file-or-dir)
+  "Return the `jaunder-blogs' entry (DIRECTORY . PLIST) governing FILE-OR-DIR, or nil.
+Longest-prefix match: the entry whose DIRECTORY is the longest prefix of
+FILE-OR-DIR's expanded directory, so a nested blog root wins over its parent.
+Both `jaunder--resolve-blog' (which blog to publish to) and `jaunder-new-post'
+\(where to create a draft) share this one matcher."
+  (let ((dir (file-name-as-directory
+              (expand-file-name (if (file-directory-p file-or-dir)
+                                    file-or-dir
+                                  (file-name-directory file-or-dir)))))
+        (best nil) (best-len -1))
+    (dolist (entry jaunder-blogs)
+      (let ((root (file-name-as-directory (expand-file-name (car entry)))))
+        (when (and (string-prefix-p root dir) (> (length root) best-len))
+          (setq best entry best-len (length root)))))
+    best))
+
+(defun jaunder--resolve-blog (file-or-dir)
+  "Return the active-blog plist (:base-url :username) for FILE-OR-DIR.
+Longest-prefix match against `jaunder-blogs' (`jaunder--blog-entry-for'); else
+the single-blog globals; else an error naming FILE-OR-DIR."
+  (let ((best (cdr (jaunder--blog-entry-for file-or-dir))))
+    (cond
+     (best (list :base-url (plist-get best :base-url)
+                 :username (plist-get best :username)))
+     ((and jaunder-base-url jaunder-username)
+      (list :base-url jaunder-base-url :username jaunder-username))
+     (t (error "jaunder: no blog configured for %s" file-or-dir)))))
+
+(defmacro jaunder--with-blog (file &rest body)
+  "Resolve the blog for FILE and run BODY with the transport specials bound."
+  (declare (indent 1) (debug t))
+  (let ((blog (make-symbol "blog")))
+    `(let* ((,blog (jaunder--resolve-blog ,file))
+            (jaunder-base-url (plist-get ,blog :base-url))
+            (jaunder-username (plist-get ,blog :username)))
+       ,@body)))
+
+;;; publish validation + Location->id + force-draft (unit C4, issue #162)
+
+(defun jaunder--validate-publish (entry status date-raw tz)
+  "Signal an error if ENTRY is not publishable; return nil otherwise.
+Requires a non-empty body; a `scheduled' STATUS requires a future #+DATE:
+\(DATE-RAW interpreted in TZ)."
+  (when (string= (string-trim (or (jaunder-entry-body entry) "")) "")
+    (error "jaunder: refusing to publish an empty body"))
+  (when (and status (string= (downcase status) "scheduled"))
+    (let ((utc (and date-raw (jaunder--org-date->utc date-raw tz))))
+      (unless (and utc (time-less-p (current-time) (date-to-time utc)))
+        (error "jaunder: a scheduled post needs a future #+DATE:"))))
+  nil)
+
+(defun jaunder--location->id (location)
+  "Return the trailing numeric post id from a create `Location' URL, or nil."
+  (when (and location (string-match "/\\([0-9]+\\)/?\\'" location))
+    (match-string 1 location)))
+
+(defun jaunder--force-draft (entry)
+  "Mark ENTRY a server-side draft in place: set `draft', clear `published'.
+Clearing `published' keeps `jaunder--atom-entry->xml' from emitting a
+`<published>' on a draft (it emits one whenever the slot is set)."
+  (setf (jaunder-entry-draft entry) t
+        (jaunder-entry-published entry) nil)
+  entry)
+
+(defun jaunder--rename-to-slug (slug)
+  "Rename the current buffer's file and buffer to SLUG.org in its directory.
+A no-op when already so named; on collision appends `-N'.  Returns the path."
+  (let* ((old (or (buffer-file-name)
+                  (error "jaunder: buffer is not visiting a file")))
+         (dir (file-name-directory old))
+         (target (expand-file-name (concat slug ".org") dir)))
+    (if (string= old target)
+        old
+      (let ((final target) (n 1))
+        (while (file-exists-p final)
+          (setq final (expand-file-name (format "%s-%d.org" slug n) dir)
+                n (1+ n)))
+        (rename-file old final)
+        ;; ALONG-WITH-FILE=t: the file is already moved, so don't re-save it;
+        ;; NO-QUERY=t: never prompt (publish is automated).
+        (set-visited-file-name final t t)
+        final))))
+
+(defun jaunder--write-back (response created)
+  "Persist server-assigned values from RESPONSE into the current buffer.
+RESPONSE is a `jaunder--http-request' plist.  CREATED non-nil (a POST) writes
+JAUNDER_ID from the `Location' header; an update leaves it unchanged.  Writes
+JAUNDER_ID first, then JAUNDER_SLUG, JAUNDER_SYNCED (ETag, verbatim),
+JAUNDER_SYNCED_AT (now), and the resolved publish time.  Saves the buffer and
+returns the slug.
+
+Precondition for the publish-now `#+DATE:' render: the buffer's JAUNDER_DATE_TZ
+must already be recorded (the command calls `jaunder--ensure-date-tz' before the
+send); absent it, the render falls back to the local zone via
+`jaunder--resolve-zone'."
+  (let* ((fields (jaunder--atom-entry-fields (plist-get response :body)))
+         (slug (cdr (assq 'slug fields)))
+         (published (cdr (assq 'published fields)))
+         (etag (jaunder--response-header response "ETag"))
+         (now (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t)))
+    (when created
+      (let ((id (jaunder--location->id
+                 (jaunder--response-header response "Location"))))
+        (when id (jaunder--set-property "JAUNDER_ID" id))))
+    (when slug (jaunder--set-property "JAUNDER_SLUG" slug))
+    (when etag (jaunder--set-property "JAUNDER_SYNCED" etag))
+    (jaunder--set-property "JAUNDER_SYNCED_AT" now)
+    (when published
+      ;; published→UTC (drop the offset): the canonical value the server stamped.
+      (let ((utc (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                                     (date-to-time published) t))
+            (tz (jaunder--buffer-property "JAUNDER_DATE_TZ")))
+        (jaunder--set-property "JAUNDER_DATE_UTC" utc)
+        ;; "publish now": no author #+DATE: — render it from the server time.
+        (unless (jaunder--buffer-keyword "DATE")
+          (jaunder--set-keyword "DATE" (jaunder--utc->org-date utc tz)))))
+    (save-buffer)
+    slug))
+
+;;; new-post command (unit C4, issue #162)
+
+(defun jaunder--new-post-in (dir now-string)
+  "Create and save a timestamped draft in DIR stamped NOW-STRING; return its path.
+Inserts the minimal org template (empty TITLE, DATE now, empty KEYWORDS and
+DESCRIPTION, JAUNDER_STATUS draft) and leaves point in the body."
+  (let* ((path (expand-file-name (format "draft-%s.org" now-string) dir))
+         (buf (find-file-noselect path)))
+    (with-current-buffer buf
+      (insert "#+TITLE: \n"
+              (format "#+DATE: %s\n" (format-time-string "[%Y-%m-%d %a %H:%M]"))
+              "#+KEYWORDS: \n"
+              "#+DESCRIPTION: \n"
+              "#+PROPERTY: JAUNDER_STATUS draft\n\n")
+      (save-buffer))
+    path))
+
+(defun jaunder-new-post ()
+  "Create a new Jaunder draft in the blog whose directory contains `default-directory'.
+When no blog matches, prompt to choose one from `jaunder-blogs'.  Inserts the
+minimal template and visits the file."
+  (interactive)
+  (let* ((dir (or (car (jaunder--blog-entry-for default-directory))
+                  (if jaunder-blogs
+                      (completing-read "Blog directory: " (mapcar #'car jaunder-blogs) nil t)
+                    default-directory)))
+         (path (jaunder--new-post-in dir (format-time-string "%Y%m%dT%H%M%S"))))
+    (switch-to-buffer (find-file-noselect path))
+    (goto-char (point-max))))
+
+;;; publish commands (unit C4, issue #162)
+
+(defconst jaunder--entry-content-type "application/atom+xml;type=entry"
+  "Request Content-Type for an AtomPub <entry> POST/PUT.")
+
+(defun jaunder-publish (&optional force-draft)
+  "Publish the current buffer's org post over AtomPub.
+Resolves the blog from the buffer's file, records the machine zone when unset,
+maps + validates, uploads media (sent body only), sends (POST create / PUT with
+If-Match on update), writes back server values (ID first), and renames the temp
+file to <slug>.org.  With FORCE-DRAFT (see `jaunder-save-draft') pushes an
+`app:draft' regardless of JAUNDER_STATUS.  A non-2xx status leaves the on-disk
+file pristine."
+  (interactive)
+  (let ((file (or (buffer-file-name)
+                  (error "jaunder: buffer is not visiting a file"))))
+    (jaunder--with-blog file
+                        (let* ((status (jaunder--buffer-property "JAUNDER_STATUS"))
+                               (date-raw (jaunder--buffer-keyword "DATE"))
+                               (tz (jaunder--buffer-property "JAUNDER_DATE_TZ"))
+                               (id (jaunder--buffer-property "JAUNDER_ID"))
+                               (synced (jaunder--buffer-property "JAUNDER_SYNCED"))
+                               (entry (jaunder--org->atom)))
+                          (when force-draft (jaunder--force-draft entry))
+                          ;; Validate BEFORE any buffer write, so a rejected publish leaves the
+                          ;; on-disk file pristine.
+                          (jaunder--validate-publish entry status date-raw tz)
+                          ;; Record the machine zone (idempotent) so #+DATE: is interpreted in a
+                          ;; recorded zone on later machines.  A first-publish's org->atom above
+                          ;; already used the local zone, which equals the captured name.
+                          (jaunder--ensure-date-tz)
+                          (setf (jaunder-entry-body entry)
+                                (jaunder--localize-media (jaunder-entry-body entry)))
+                          (let* ((xml (jaunder--atom-entry->xml entry))
+                                 (resp (if id
+                                           (jaunder--http-request
+                                            "PUT"
+                                            (jaunder--build-url jaunder-base-url "atompub"
+                                                                jaunder-username "posts" id)
+                                            xml jaunder--entry-content-type
+                                            (when synced (list (cons "If-Match" synced))))
+                                         (jaunder--http-request
+                                          "POST"
+                                          (jaunder--build-url jaunder-base-url "atompub"
+                                                              jaunder-username "posts")
+                                          xml jaunder--entry-content-type)))
+                                 (code (plist-get resp :status)))
+                            (unless (memq code '(200 201))
+                              (error "jaunder: publish failed (HTTP %s)" code))
+                            (let ((slug (jaunder--write-back resp (null id))))
+                              (when slug (jaunder--rename-to-slug slug))
+                              (message "jaunder: published %s" (or slug ""))))))))
+
+(defun jaunder-save-draft ()
+  "Publish the current buffer as a server-side draft (forces `app:draft')."
+  (interactive)
+  (jaunder-publish t))
 
 (defun jaunder--atom->org (&rest _args)
   "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."
