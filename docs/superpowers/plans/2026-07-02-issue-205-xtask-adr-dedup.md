@@ -279,7 +279,7 @@ git commit -m "refactor(xtask): one ADR-table marker-lookup helper (marker_bound
   `resolved_rows(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<TableRow>`
   (was `Vec<Cells>`). `TableRow` gains `#[derive(Debug, PartialEq, Eq)]`.
 
-- [ ] **Step 1: Derive `Debug, PartialEq, Eq` on `TableRow`**
+- [x] **Step 1: Derive `Debug, PartialEq, Eq` on `TableRow`**
 
 Change lines 43-44 from:
 
@@ -299,7 +299,7 @@ pub struct TableRow {
 (`Debug` is needed because the test uses `assert_eq!` on `Vec<TableRow>`;
 `PartialEq`/`Eq` power the `desired == existing` idempotence check.)
 
-- [ ] **Step 2: Change `resolved_rows` to build `TableRow`, delete `Cells` +
+- [x] **Step 2: Change `resolved_rows` to build `TableRow`, delete `Cells` +
       `current_cells`**
 
 First, delete the `Cells` type alias (lines 185-187, including its doc comment):
@@ -353,7 +353,7 @@ fn current_cells(existing: &[TableRow]) -> Vec<Cells> {
 }
 ```
 
-- [ ] **Step 3: Update `render_block` and `sync_readme_at`, and the one test**
+- [x] **Step 3: Update `render_block` and `sync_readme_at`, and the one test**
 
 Replace `render_block`'s loop (lines 147-149) so it reads `TableRow` fields.
 Replace the whole `render_block` body (145-151) with:
@@ -400,7 +400,7 @@ to:
         assert_eq!(resolved_rows(&entries, &existing), existing);
 ```
 
-- [ ] **Step 4: Run the gate, verify green**
+- [x] **Step 4: Run the gate, verify green**
 
 Run: `cargo xtask check` Expected: PASS — esp.
 `desired_matches_current_when_in_sync`,
@@ -408,7 +408,7 @@ Run: `cargo xtask check` Expected: PASS — esp.
 `render_block_drops_orphans_and_sorts_ascending`. Confirm no leftover reference
 to `Cells` or `current_cells` (a stale reference is a compile error).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/adr_readme.rs

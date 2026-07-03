@@ -41,6 +41,7 @@ pub struct AdrEntry {
 }
 
 /// A parsed committed table row. Cells are trimmed (padding-proof).
+#[derive(Debug, PartialEq, Eq)]
 pub struct TableRow {
     pub num: u32,
     pub target: String,
@@ -170,8 +171,11 @@ pub fn parse_table_block(block: &str) -> Vec<TableRow> {
 /// title from the ADR heading. Single-space padded — prettier owns alignment.
 pub fn render_block(entries: &[AdrEntry], existing: &[TableRow]) -> String {
     let mut out = String::from("| #   | Title | Status |\n| --- | ----- | ------ |\n");
-    for (num, target, title, status) in resolved_rows(entries, existing) {
-        out.push_str(&format!("| [{num:04}]({target}) | {title} | {status} |\n"));
+    for r in resolved_rows(entries, existing) {
+        out.push_str(&format!(
+            "| [{:04}]({}) | {} | {} |\n",
+            r.num, r.target, r.title, r.status
+        ));
     }
     out.trim_end().to_string()
 }
@@ -208,16 +212,12 @@ fn extract_block(readme: &str) -> Result<String> {
     Ok(readme[start..end].to_string())
 }
 
-/// A row's mechanical cells (number, link target, status) plus its
-/// preserved-or-seeded title: `(num, target, title, status)`.
-type Cells = (u32, String, String, String);
-
 /// The desired table rows, ascending by number, applying the title-preservation
 /// rule once: reuse an existing row's title when a row with that number exists,
 /// else seed it from the ADR heading. The single source of that rule — both the
 /// renderer ([`render_block`]) and the idempotence check ([`sync_readme_at`])
 /// consume it, so they can never disagree.
-fn resolved_rows(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<Cells> {
+fn resolved_rows(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<TableRow> {
     let title_by_num: BTreeMap<u32, &str> =
         existing.iter().map(|r| (r.num, r.title.as_str())).collect();
     let mut sorted: Vec<&AdrEntry> = entries.iter().collect();
@@ -230,20 +230,13 @@ fn resolved_rows(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<Cells> {
                 .copied()
                 .unwrap_or(e.title.as_str())
                 .to_string();
-            (
-                e.num,
-                format!("adr/{}", e.filename),
+            TableRow {
+                num: e.num,
+                target: format!("adr/{}", e.filename),
                 title,
-                e.status.clone(),
-            )
+                status: e.status.clone(),
+            }
         })
-        .collect()
-}
-
-fn current_cells(existing: &[TableRow]) -> Vec<Cells> {
-    existing
-        .iter()
-        .map(|r| (r.num, r.target.clone(), r.title.clone(), r.status.clone()))
         .collect()
 }
 
@@ -258,7 +251,7 @@ pub fn sync_readme_at(repo: &Path) -> Result<String> {
     let existing = parse_table_block(&extract_block(&readme)?);
 
     let desired = resolved_rows(&entries, &existing);
-    if desired == current_cells(&existing) {
+    if desired == existing {
         return Ok(format!("{} rows, already in sync", entries.len()));
     }
 
@@ -524,7 +517,7 @@ mod tests {
             status: "accepted".into(),
         }];
         // The preserved title is the curated one, so desired == current: a no-op.
-        assert_eq!(resolved_rows(&entries, &existing), current_cells(&existing));
+        assert_eq!(resolved_rows(&entries, &existing), existing);
     }
 
     #[test]
