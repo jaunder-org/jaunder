@@ -694,4 +694,54 @@
                 (kill-buffer buf2)))))
       (delete-directory dir t))))
 
+(defun jaunder-test--response (status headers body)
+  "Build a `jaunder--http-request'-shaped plist for tests."
+  (list :status status
+        :headers (mapcar (lambda (h) (cons (downcase (car h)) (cdr h))) headers)
+        :body body))
+
+(ert-deftest jaunder-write-back-create-writes-id-first ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+TITLE: T\n#+PROPERTY: JAUNDER_STATUS published\n\nBody.\n")
+    (set-visited-file-name (make-temp-file "jaunder-wb-" nil ".org") nil t)
+    (unwind-protect
+        (let ((resp (jaunder-test--response
+                     201
+                     '(("Location" . "https://x/atompub/alice/posts/42")
+                       ("ETag" . "\"abc\""))
+                     (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+                             " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+                             "<content type=\"text/org\">Body</content>"
+                             "<published>2026-07-01T13:00:00+00:00</published>"
+                             "<j:slug>my-post</j:slug></entry>"))))
+          (should (equal (jaunder--write-back resp t) "my-post"))
+          (should (equal (jaunder--buffer-property "JAUNDER_ID") "42"))
+          (should (equal (jaunder--buffer-property "JAUNDER_SLUG") "my-post"))
+          (should (equal (jaunder--buffer-property "JAUNDER_SYNCED") "\"abc\""))
+          ;; The server's <published> offset is dropped to the canonical UTC
+          ;; instant (tz-independent, so deterministic across machines).
+          (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC")
+                         "2026-07-01T13:00:00Z"))
+          ;; publish-now (no author #+DATE:) → #+DATE: rendered from server time.
+          (should (jaunder--buffer-keyword "DATE")))
+      (when (buffer-file-name) (delete-file (buffer-file-name))))))
+
+(ert-deftest jaunder-write-back-update-keeps-id ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+TITLE: T\n#+PROPERTY: JAUNDER_ID 7\n#+DATE: [2026-07-01 Wed 09:00]\n\nBody.\n")
+    (set-visited-file-name (make-temp-file "jaunder-wb-" nil ".org") nil t)
+    (unwind-protect
+        (let ((resp (jaunder-test--response
+                     200 '(("ETag" . "\"z\""))
+                     (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+                             " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+                             "<content type=\"text/org\">Body</content>"
+                             "<j:slug>my-post</j:slug></entry>"))))
+          (jaunder--write-back resp nil)     ; created = nil (update)
+          (should (equal (jaunder--buffer-property "JAUNDER_ID") "7"))  ; unchanged
+          (should (equal (jaunder--buffer-property "JAUNDER_SYNCED") "\"z\"")))
+      (when (buffer-file-name) (delete-file (buffer-file-name))))))
+
 ;;; jaunder-test.el ends here

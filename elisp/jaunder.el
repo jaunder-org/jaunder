@@ -621,6 +621,42 @@ A no-op when already so named; on collision appends `-N'.  Returns the path."
         (set-visited-file-name final t t)
         final))))
 
+(defun jaunder--write-back (response created)
+  "Persist server-assigned values from RESPONSE into the current buffer.
+RESPONSE is a `jaunder--http-request' plist.  CREATED non-nil (a POST) writes
+JAUNDER_ID from the `Location' header; an update leaves it unchanged.  Writes
+JAUNDER_ID first, then JAUNDER_SLUG, JAUNDER_SYNCED (ETag, verbatim),
+JAUNDER_SYNCED_AT (now), and the resolved publish time.  Saves the buffer and
+returns the slug.
+
+Precondition for the publish-now `#+DATE:' render: the buffer's JAUNDER_DATE_TZ
+must already be recorded (the command calls `jaunder--ensure-date-tz' before the
+send); absent it, the render falls back to the local zone via
+`jaunder--resolve-zone'."
+  (let* ((fields (jaunder--atom-entry-fields (plist-get response :body)))
+         (slug (cdr (assq 'slug fields)))
+         (published (cdr (assq 'published fields)))
+         (etag (jaunder--response-header response "ETag"))
+         (now (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t)))
+    (when created
+      (let ((id (jaunder--location->id
+                 (jaunder--response-header response "Location"))))
+        (when id (jaunder--set-property "JAUNDER_ID" id))))
+    (when slug (jaunder--set-property "JAUNDER_SLUG" slug))
+    (when etag (jaunder--set-property "JAUNDER_SYNCED" etag))
+    (jaunder--set-property "JAUNDER_SYNCED_AT" now)
+    (when published
+      ;; published→UTC (drop the offset): the canonical value the server stamped.
+      (let ((utc (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                                     (date-to-time published) t))
+            (tz (jaunder--buffer-property "JAUNDER_DATE_TZ")))
+        (jaunder--set-property "JAUNDER_DATE_UTC" utc)
+        ;; "publish now": no author #+DATE: — render it from the server time.
+        (unless (jaunder--buffer-keyword "DATE")
+          (jaunder--set-keyword "DATE" (jaunder--utc->org-date utc tz)))))
+    (save-buffer)
+    slug))
+
 (defun jaunder--atom->org (&rest _args)
   "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."
   (error "jaunder: atom->org mapping not yet implemented (units C/D, issues #74/#75)"))

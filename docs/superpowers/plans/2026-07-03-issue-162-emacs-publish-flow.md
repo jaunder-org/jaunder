@@ -699,7 +699,7 @@ git commit -m "feat(emacs): rename temp draft to <slug>.org with collision handl
   `JAUNDER_SYNCED_AT`, and the resolved publish time; saves the buffer. Used by
   Task 10.
 
-- [ ] **Step 1: Write the failing tests** (construct a fake response plist — no
+- [x] **Step 1: Write the failing tests** (construct a fake response plist — no
       server)
 
 ```elisp
@@ -750,12 +750,12 @@ git commit -m "feat(emacs): rename temp draft to <slug>.org with collision handl
       (when (buffer-file-name) (delete-file (buffer-file-name))))))
 ```
 
-- [ ] **Step 2: Run, verify fail**
+- [x] **Step 2: Run, verify fail**
 
 Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: FAIL —
 `jaunder--write-back` undefined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```elisp
 (defun jaunder--write-back (response created)
@@ -790,11 +790,11 @@ returns the slug."
     slug))
 ```
 
-- [ ] **Step 4: Run, verify pass**
+- [x] **Step 4: Run, verify pass**
 
 Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add elisp/jaunder.el elisp/test/jaunder-test.el
