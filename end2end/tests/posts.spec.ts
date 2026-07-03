@@ -8,6 +8,7 @@ import type { Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
 import { BASE_URL, goto, click, waitForSelector, register } from "./helpers";
 import { createPerfProbe } from "./perf";
+import { seedPostsViaTool } from "./seed";
 
 const TIMELINE_PAGE_SIZE = 50;
 const TIMELINE_OVERFLOW_COUNT = 1;
@@ -315,9 +316,11 @@ test("per-user timeline lists published posts with pagination", async ({
   const username = await register(page, firstNavigationTimeoutMs);
 
   await perf.timed("seed_posts", async () => {
-    for (let i = 0; i < TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT; i += 1) {
-      await createPublishedPostViaApi(page, `Timeline Post ${i}`);
-    }
+    seedPostsViaTool(
+      username,
+      TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT,
+      "Timeline Post",
+    );
   });
 
   await goto(page, `/~${username}`, { timeout: firstNavigationTimeoutMs });
