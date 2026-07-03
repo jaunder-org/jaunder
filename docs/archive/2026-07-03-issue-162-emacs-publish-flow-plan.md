@@ -13,7 +13,7 @@ temp→`<slug>.org` rename.
 and unit-tested in `elisp/test/jaunder-test.el`; the three interactive commands
 orchestrate them, resolving the target blog from the buffer's directory and
 dynamically `let`-binding the existing `jaunder-base-url`/`jaunder-username`
-transport specials (ADR: `docs/adr/0046-emacs-publish-orchestration.md`, held
+transport specials (ADR: `docs/adr/0047-emacs-publish-orchestration.md`, held
 uncommitted until ship — see Task 1). End-to-end behavior is covered by live ERT
 against a real server (`jaunder-test--with-live-server`, ADR-0035).
 
@@ -51,7 +51,7 @@ against a real server (`jaunder-test--with-live-server`, ADR-0035).
 **Files:**
 
 - Working-tree only (held uncommitted until ship):
-  `docs/adr/0046-emacs-publish-orchestration.md`, `docs/README.md` (generated
+  `docs/adr/0047-emacs-publish-orchestration.md`, `docs/README.md` (generated
   table row)
 - Commit now: the spec
   (`docs/superpowers/specs/2026-07-03-issue-162-emacs-publish-flow.md`) and this
@@ -79,14 +79,14 @@ C4):**
 `merge-base(origin/main, HEAD)..HEAD`), so it cannot renumber an uncommitted
 draft. To keep the ADR out of history until land — its final number is likely to
 move again if more ADRs merge first — the renumber is replicated by hand and
-left uncommitted: `git mv 0000-…` → `0046-…` (max+1), rewrite the `# ADR-0000:`
-heading → `# ADR-0046:`, and `cargo xtask adr sync-readme` to fold in the README
+left uncommitted: `git mv 0000-…` → `0047-…` (max+1), rewrite the `# ADR-0000:`
+heading → `# ADR-0047:`, and `cargo xtask adr sync-readme` to fold in the README
 table row. Then unstage the ADR + `docs/README.md` (`git reset`). They persist
 as working-tree changes through Tasks 2–10; the **authoritative** `adr renumber`
 (and the ADR/README commit) happen at ship, once the ADR is committed and the
 real max is known.
 
-The `0046` ADR (unique number) + its README row keep the working-tree gate
+The `0047` ADR (unique number) + its README row keep the working-tree gate
 (`adr-format` + `adr-readme-parity`, both working-tree-based) green on every
 subsequent commit, without the ADR entering any commit.
 
@@ -96,7 +96,7 @@ subsequent commit, without the ADR entering any commit.
 ```bash
 git add docs/superpowers/specs/2026-07-03-issue-162-emacs-publish-flow.md \
         docs/superpowers/plans/2026-07-03-issue-162-emacs-publish-flow.md
-cargo xtask check   # working-tree ADR (0046) + README row must keep the gate green
+cargo xtask check   # working-tree ADR (0047) + README row must keep the gate green
 git commit -m "docs(issue-162): C4 publish-flow spec + plan"
 ```
 
