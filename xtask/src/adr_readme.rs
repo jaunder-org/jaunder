@@ -811,4 +811,53 @@ mod tests {
             "template.md must not be a parity row: {parity:?}"
         );
     }
+
+    #[test]
+    fn gates_ignore_docs_adr_drafts_subdir() {
+        // Drafts live numberless under `docs/adr/drafts/` until `cargo xtask adr
+        // promote` numbers them at ship (#219). The subdirectory is excluded
+        // twice over by the shared enumeration rule (a non-recursive `read_dir`
+        // skips the subdir entry, which is not a file; and there is no leading
+        // number), so a draft — even one that violates every ADR format rule (no
+        // `# ADR-NNNN:` heading, no status line) — must never trip `adr-format`
+        // or `adr-readme-parity`.
+        //
+        // Teeth: move the fixture up to `docs/adr/0099-some-decision.md` and this
+        // fails — the `# ADR-DRAFT:` heading mismatches 0099 (adr-format) and no
+        // README row exists for 0099 (parity).
+        let repo = scratch_repo("drafts-ignored");
+        std::fs::write(
+            repo.join("docs/adr/0001-a.md"),
+            "# ADR-0001: First\n\n- Status: accepted\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(repo.join("docs/adr/drafts")).unwrap();
+        std::fs::write(
+            repo.join("docs/adr/drafts/some-decision.md"),
+            "# ADR-DRAFT: Some Decision\n\nNo status line, no number — still invisible.\n",
+        )
+        .unwrap();
+        // README carries only the real ADR's row — none for the draft.
+        std::fs::write(
+            repo.join("docs/README.md"),
+            format!(
+                "# Docs\n\n{BEGIN}\n\n| # | Title | Status |\n| --- | --- | --- |\n\
+                 | [0001](adr/0001-a.md) | First | accepted |\n\n{END}\n"
+            ),
+        )
+        .unwrap();
+
+        let fmt = format_problems(&repo);
+        let parity = parity_report(&repo).unwrap();
+        let _ = std::fs::remove_dir_all(&repo);
+
+        assert!(
+            fmt.is_empty(),
+            "a drafts/ entry must not be an adr-format subject: {fmt:?}"
+        );
+        assert!(
+            parity.is_empty(),
+            "a drafts/ entry must not be a parity row: {parity:?}"
+        );
+    }
 }
