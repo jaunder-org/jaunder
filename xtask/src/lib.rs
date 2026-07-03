@@ -133,6 +133,12 @@ pub enum AdrCommand {
     /// the marked table block. The `adr-readme-parity` gate fails on drift.
     #[command(after_help = "EXAMPLES:\n  cargo xtask adr sync-readme")]
     SyncReadme,
+    /// Number the numberless drafts in `docs/adr/drafts/`: assign each the next
+    /// free number, move it to `docs/adr/NNNN-<slug>.md`, rewrite its path-form
+    /// references, sync the README table, and stage the result. Run at ship,
+    /// after the final rebase, so the number is collision-free on first commit.
+    #[command(after_help = "EXAMPLES:\n  cargo xtask adr promote")]
+    Promote,
 }
 
 /// `coverage` subcommands.
@@ -176,6 +182,7 @@ impl Cli {
             Command::E2e { .. } => "e2e",
             Command::Adr(AdrCommand::Renumber) => "adr-renumber",
             Command::Adr(AdrCommand::SyncReadme) => "adr-sync-readme",
+            Command::Adr(AdrCommand::Promote) => "adr-promote",
             Command::ElispIntegration => "elisp-integration",
         }
     }
@@ -278,6 +285,13 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("adr-sync-readme");
             result.push(adr_readme::sync_readme());
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::Adr(AdrCommand::Promote) => {
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("adr-promote");
+            result.push(adr::promote());
             finalize(&mut result, start);
             Ok(result)
         }
@@ -503,6 +517,12 @@ mod cli_tests {
     fn adr_sync_readme_parses() {
         let cli = Cli::try_parse_from(["xtask", "adr", "sync-readme"]).unwrap();
         assert_eq!(cli.command_name(), "adr-sync-readme");
+    }
+
+    #[test]
+    fn adr_promote_parses() {
+        let cli = Cli::try_parse_from(["xtask", "adr", "promote"]).unwrap();
+        assert_eq!(cli.command_name(), "adr-promote");
     }
 }
 
