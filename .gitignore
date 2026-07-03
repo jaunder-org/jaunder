@@ -40,3 +40,8 @@ mutants.out.old/
 
 # Subagent-driven-development scratch (briefs, ledger, review packages)
 /.superpowers/
+
+# ADR drafts live out of git until `cargo xtask adr promote` numbers them at
+# ship (see docs/adr/drafts/README.md). Keep the explainer tracked.
+docs/adr/drafts/*
+!docs/adr/drafts/README.md

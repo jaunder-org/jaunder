@@ -1,4 +1,4 @@
-# ADR-0000: Title of the decision
+# ADR-DRAFT: Title of the decision
 
 - Status: proposed
 - Date: YYYY-MM-DD

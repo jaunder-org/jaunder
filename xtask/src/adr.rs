@@ -1,9 +1,15 @@
-//! `cargo xtask adr renumber`: resolve an ADR number collision by bumping the
-//! branch's newly-added ADR to the next free number and rewriting references.
-//! The ADR already reachable from `origin/main` is immutable; only branch
-//! additions move. Path-form references (which carry the slug) are rewritten
-//! repo-wide; bare `ADR-NNNN` references are rewritten only in branch-touched
-//! files, so `main`'s references to the other number are never clobbered.
+//! ADR numbering commands.
+//!
+//! - `cargo xtask adr promote`: number the numberless drafts in
+//!   `docs/adr/drafts/` at ship, graduating each into `docs/adr/NNNN-<slug>.md`.
+//!   The number is assigned as late as possible, so the ADR's first appearance
+//!   in git history is already collision-free (issue #219).
+//! - `cargo xtask adr renumber`: resolve an ADR number collision by bumping the
+//!   branch's newly-added ADR to the next free number and rewriting references.
+//!   The ADR already reachable from `origin/main` is immutable; only branch
+//!   additions move. Path-form references (which carry the slug) are rewritten
+//!   repo-wide; bare `ADR-NNNN` references are rewritten only in branch-touched
+//!   files, so `main`'s references to the other number are never clobbered.
 
 use std::path::{Path, PathBuf};
 
@@ -13,6 +19,7 @@ use crate::ids;
 use crate::result::StepResult;
 
 const ADR_DIR: &str = "docs/adr";
+const DRAFTS_DIR: &str = "docs/adr/drafts";
 
 /// Four-digit zero-padded number, e.g. `34 -> "0034"`.
 pub fn pad(n: u32) -> String {
@@ -220,6 +227,104 @@ fn run_renumber(repo: &Path, main_ref: &str) -> Result<String> {
     ))
 }
 
+/// Slugs of the draft ADRs under `repo`'s `docs/adr/drafts`, sorted for a
+/// deterministic assignment order. The tracked `README.md` explainer and any
+/// non-`.md` entry are skipped; `<slug>.md` yields `slug`.
+fn draft_slugs(repo: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(repo.join(DRAFTS_DIR)) else {
+        return Vec::new();
+    };
+    let mut slugs: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n != "README.md")
+        .filter_map(|n| n.strip_suffix(".md").map(str::to_string))
+        .collect();
+    slugs.sort();
+    slugs
+}
+
+/// Entry point for `cargo xtask adr promote`: operate on the current repo.
+pub fn promote() -> StepResult {
+    match run_promote(Path::new(".")) {
+        Ok(summary) => StepResult::ok("adr-promote").detail(summary),
+        Err(e) => StepResult::fail("adr-promote").detail(format!("{e:#}")),
+    }
+}
+
+/// Number every draft in `docs/adr/drafts`, graduate it into
+/// `docs/adr/NNNN-<slug>.md`, rewrite its path-form references, sync the README
+/// table, and stage the result. Numbers are assigned at ship (post-rebase), so
+/// the ADR's first appearance in git history is already collision-free.
+///
+/// Unlike `renumber`, the source is an *untracked* draft: it is written under its
+/// number, the draft is dropped, and the result is staged with `git add` (no
+/// `git mv`); and there is no bare `ADR-NNNN` form to rewrite, since a draft is
+/// referenced only by its `drafts/<slug>` path.
+fn run_promote(repo: &Path) -> Result<String> {
+    let slugs = draft_slugs(repo);
+    if slugs.is_empty() {
+        return Ok("no ADR drafts to promote".to_string());
+    }
+
+    // Pass A — assign every draft a number before rewriting anything, so a draft
+    // that references another draft can resolve to the assigned number. `all`
+    // grows with each assignment, exactly as the renumber loop does.
+    let mut all = adr_filenames(repo);
+    let mut assigned: Vec<(String, u32, String)> = Vec::new();
+    for slug in &slugs {
+        let num = ids::next_number(&all);
+        let new_name = format!("{}-{slug}.md", pad(num));
+        all.push(new_name.clone());
+        assigned.push((slug.clone(), num, new_name));
+    }
+
+    // Pass B — graduate each draft (heading token `ADR-DRAFT` -> `ADR-NNNN`,
+    // write it under its number, drop the draft) and stage it. Staging first
+    // makes the path-form rewrite below see cross-references between graduated
+    // drafts (which now live in tracked files).
+    for (slug, num, new_name) in &assigned {
+        let draft_rel = format!("{DRAFTS_DIR}/{slug}.md");
+        let new_rel = format!("{ADR_DIR}/{new_name}");
+        let body = std::fs::read_to_string(repo.join(&draft_rel))
+            .with_context(|| format!("reading {draft_rel}"))?;
+        let numbered = body.replace("ADR-DRAFT", &format!("ADR-{}", pad(*num)));
+        std::fs::write(repo.join(&new_rel), numbered)
+            .with_context(|| format!("writing {new_rel}"))?;
+        std::fs::remove_file(repo.join(&draft_rel))
+            .with_context(|| format!("removing {draft_rel}"))?;
+        git_out(repo, &["add", &new_rel], false)?;
+    }
+
+    // Pass C — rewrite path-form references repo-wide. `drafts/<slug>` carries the
+    // slug, so it is unambiguous (same substring-replace assumption
+    // `rewrite_stem` documents). The graduated files are staged (tracked), so a
+    // draft-to-draft reference is rewritten too.
+    let mut summary = Vec::new();
+    for (slug, num, new_name) in &assigned {
+        let draft_stem = format!("drafts/{slug}");
+        let new_stem = format!("{}-{slug}", pad(*num));
+        for file in git_lines(repo, &["grep", "-l", "--fixed-strings", &draft_stem], true)? {
+            rewrite_file(repo, &file, |c| rewrite_stem(c, &draft_stem, &new_stem))?;
+            git_out(repo, &["add", &file], false)?;
+        }
+        summary.push(format!("{DRAFTS_DIR}/{slug}.md -> {ADR_DIR}/{new_name}"));
+    }
+
+    // Keep the README table in lockstep: each graduated ADR adds a row, seeded
+    // from its heading. Tolerate a markerless README (a scratch/test repo).
+    let table_note = if crate::adr_readme::readme_has_markers(repo)? {
+        let note = crate::adr_readme::sync_readme_at(repo)?;
+        git_out(repo, &["add", crate::adr_readme::README], false)?;
+        format!("README table synced ({note})")
+    } else {
+        "README table not synced (no adr-table markers)".to_string()
+    };
+
+    Ok(format!("{} — {table_note}; staged", summary.join("; ")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +371,34 @@ mod tests {
         let p = dir.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, body).unwrap();
+    }
+
+    /// Trimmed stdout of a git command that must succeed — for asserting index
+    /// state (`diff --cached`).
+    fn git_stdout(dir: &Path, args: &[&str]) -> String {
+        let out = crate::git::at(dir).args(args).output().unwrap();
+        assert!(out.status.success(), "git {args:?} failed");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A committed repo with `docs/adr/0001-foo.md` on `main` — the base state the
+    /// promote tests graduate a draft on top of.
+    fn promote_repo(tag: &str) -> std::path::PathBuf {
+        let tmp =
+            std::env::temp_dir().join(format!("jaunder-adr-promote-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        git(&tmp, &["init", "-q", "-b", "main"]);
+        git(&tmp, &["config", "user.email", "t@t"]);
+        git(&tmp, &["config", "user.name", "t"]);
+        write(
+            &tmp,
+            "docs/adr/0001-foo.md",
+            "# ADR-0001: Foo\n\n- Status: accepted\n",
+        );
+        git(&tmp, &["add", "."]);
+        git(&tmp, &["commit", "-qm", "main: 0001-foo"]);
+        tmp
     }
 
     #[test]
@@ -419,5 +552,200 @@ mod tests {
         assert!(tmp.join("docs/adr/0036-baz.md").exists());
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_numbers_single_draft() {
+        let tmp = promote_repo("single");
+        // A README with the table so the row-sync path is exercised.
+        write(
+            &tmp,
+            "docs/README.md",
+            "# Docs\n\n<!-- adr-table:begin -->\n\n\
+             | #   | Title | Status |\n| --- | ----- | ------ |\n\
+             | [0001](adr/0001-foo.md) | Foo | accepted |\n\n\
+             <!-- adr-table:end -->\n",
+        );
+        git(&tmp, &["add", "docs/README.md"]);
+        git(&tmp, &["commit", "-qm", "main: README table"]);
+
+        // An untracked, numberless draft.
+        write(
+            &tmp,
+            "docs/adr/drafts/my-decision.md",
+            "# ADR-DRAFT: My Decision\n\n- Status: proposed\n",
+        );
+
+        let summary = run_promote(&tmp).unwrap();
+        assert!(
+            summary.contains("docs/adr/drafts/my-decision.md -> docs/adr/0002-my-decision.md"),
+            "summary: {summary}"
+        );
+
+        // Graduated to the next free number; draft gone; heading token rewritten.
+        assert!(!tmp.join("docs/adr/drafts/my-decision.md").exists());
+        let body = std::fs::read_to_string(tmp.join("docs/adr/0002-my-decision.md")).unwrap();
+        assert!(body.contains("# ADR-0002: My Decision"), "body: {body}");
+        assert!(!body.contains("ADR-DRAFT"));
+
+        // README row added, seeded from the heading.
+        let readme = std::fs::read_to_string(tmp.join("docs/README.md")).unwrap();
+        assert!(
+            readme.contains("[0002](adr/0002-my-decision.md)"),
+            "readme: {readme}"
+        );
+        assert!(readme.contains("| My Decision |"), "seeded title");
+
+        // The graduated file and the README are staged, ready to commit.
+        let staged = git_stdout(&tmp, &["diff", "--cached", "--name-only"]);
+        assert!(
+            staged.contains("docs/adr/0002-my-decision.md"),
+            "staged: {staged}"
+        );
+        assert!(staged.contains("docs/README.md"), "staged: {staged}");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_assigns_distinct_numbers_to_multiple_drafts() {
+        let tmp = promote_repo("multi");
+        write(
+            &tmp,
+            "docs/adr/drafts/aaa.md",
+            "# ADR-DRAFT: Aaa\n\n- Status: proposed\n",
+        );
+        write(
+            &tmp,
+            "docs/adr/drafts/bbb.md",
+            "# ADR-DRAFT: Bbb\n\n- Status: proposed\n",
+        );
+
+        run_promote(&tmp).unwrap();
+
+        // Sorted (aaa before bbb) → consecutive numbers; both drafts consumed.
+        assert!(tmp.join("docs/adr/0002-aaa.md").exists());
+        assert!(tmp.join("docs/adr/0003-bbb.md").exists());
+        assert!(!tmp.join("docs/adr/drafts/aaa.md").exists());
+        assert!(!tmp.join("docs/adr/drafts/bbb.md").exists());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_rewrites_path_form_references() {
+        let tmp = promote_repo("path-refs");
+        // A tracked file referencing the draft by path — only tracked files are
+        // visible to `git grep`.
+        write(
+            &tmp,
+            "docs/notes.md",
+            "Decided in docs/adr/drafts/my-decision.md.\n",
+        );
+        git(&tmp, &["add", "docs/notes.md"]);
+        git(&tmp, &["commit", "-qm", "main: notes"]);
+
+        write(
+            &tmp,
+            "docs/adr/drafts/my-decision.md",
+            "# ADR-DRAFT: My Decision\n\n- Status: proposed\n",
+        );
+
+        run_promote(&tmp).unwrap();
+
+        let notes = std::fs::read_to_string(tmp.join("docs/notes.md")).unwrap();
+        assert_eq!(notes, "Decided in docs/adr/0002-my-decision.md.\n");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_resolves_draft_referencing_another_draft() {
+        let tmp = promote_repo("draft-ref-draft");
+        write(
+            &tmp,
+            "docs/adr/drafts/aaa.md",
+            "# ADR-DRAFT: Aaa\n\n- Status: proposed\n",
+        );
+        // Draft bbb references draft aaa by path; the rewrite must reach the
+        // graduated (now-tracked) file, not just pre-existing committed files.
+        write(
+            &tmp,
+            "docs/adr/drafts/bbb.md",
+            "# ADR-DRAFT: Bbb\n\nBuilds on docs/adr/drafts/aaa.md.\n",
+        );
+
+        run_promote(&tmp).unwrap();
+
+        let bbb = std::fs::read_to_string(tmp.join("docs/adr/0003-bbb.md")).unwrap();
+        assert!(
+            bbb.contains("docs/adr/0002-aaa.md"),
+            "cross-reference rewritten: {bbb}"
+        );
+        assert!(!bbb.contains("drafts/aaa"), "no stale draft path: {bbb}");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_is_noop_without_drafts() {
+        let tmp = promote_repo("noop");
+        let summary = run_promote(&tmp).unwrap();
+        assert_eq!(summary, "no ADR drafts to promote");
+        // Nothing staged.
+        let staged = git_stdout(&tmp, &["diff", "--cached", "--name-only"]);
+        assert!(staged.is_empty(), "staged: {staged}");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_picks_next_after_committed_adr() {
+        // A branch that already committed a higher-numbered ADR: the draft must
+        // pick up after it, not collide with the base `0001`.
+        let tmp = promote_repo("after-committed");
+        write(
+            &tmp,
+            "docs/adr/0005-x.md",
+            "# ADR-0005: X\n\n- Status: accepted\n",
+        );
+        git(&tmp, &["add", "docs/adr/0005-x.md"]);
+        git(&tmp, &["commit", "-qm", "branch: 0005-x"]);
+
+        write(
+            &tmp,
+            "docs/adr/drafts/later.md",
+            "# ADR-DRAFT: Later\n\n- Status: proposed\n",
+        );
+
+        run_promote(&tmp).unwrap();
+
+        assert!(tmp.join("docs/adr/0006-later.md").exists());
+        assert!(!tmp.join("docs/adr/drafts/later.md").exists());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn adr_filenames_skips_the_drafts_subdir() {
+        // The renumber/promote base set must not see draft entries: `adr_filenames`
+        // is non-recursive and file-only, so the `docs/adr/drafts/` subdirectory
+        // (and anything inside it) is excluded — the same rule that keeps a
+        // numberless draft invisible to the ADR gates (#219).
+        let tmp =
+            std::env::temp_dir().join(format!("jaunder-adr-drafts-vis-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("docs/adr/drafts")).unwrap();
+        write(&tmp, "docs/adr/0001-a.md", "# ADR-0001: A\n");
+        write(
+            &tmp,
+            "docs/adr/drafts/some-decision.md",
+            "# ADR-DRAFT: Some\n",
+        );
+
+        let names = adr_filenames(&tmp);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        assert_eq!(names, vec!["0001-a.md".to_string()]);
     }
 }

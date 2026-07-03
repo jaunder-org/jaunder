@@ -115,8 +115,20 @@ they run in CI, or locally via `cargo xtask validate`. Bypass with
 ### Adding an ADR
 
 Start from [`docs/adr/template.md`](docs/adr/template.md): copy it to
-`docs/adr/0000-<slug>.md` — always `0000`, never a hand-picked number — and let
-`cargo xtask adr renumber` assign the real one (see collisions, below).
+`docs/adr/drafts/<slug>.md` — a numberless **draft**, never a hand-picked
+number. The `docs/adr/drafts/` directory is gitignored (except its `README.md`),
+so a draft lives out of git until it ships and cannot be committed with a
+premature number; keep the draft heading `# ADR-DRAFT: <Title>` and cite the
+draft by its `docs/adr/drafts/<slug>.md` path. See
+[`docs/adr/drafts/README.md`](docs/adr/drafts/README.md) for the full flow.
+
+At ship, after the final rebase onto `main`, run `cargo xtask adr promote` (via
+`devtool run -- …`): for each draft it assigns the next free number, moves it to
+`docs/adr/NNNN-<slug>.md`, rewrites its path-form references, syncs the README
+table, and stages the result — so the number is assigned as late as possible and
+the ADR's first appearance in git history is already collision-free. If a
+collision still surfaces between that commit and the merge, re-rebase, re-run,
+and **amend the commit that introduced the ADR** — never a fixup commit.
 
 ADRs are `docs/adr/NNNN-slug.md` with a canonical `# ADR-NNNN: <title>` heading
 and a single-token `- Status: <token>` line (one of
@@ -125,19 +137,23 @@ in `docs/README.md`, whose number, link, and status cells are **generated** from
 `docs/adr/`: the `adr-format` and `adr-readme-parity` steps of
 `cargo xtask check`/`validate` fail on a non-canonical heading/status or a table
 that has drifted from the directory (recovery: `cargo xtask adr sync-readme`,
-which is also folded into `adr renumber`). Table titles are hand-curated — a new
-row is seeded from the ADR heading, then owned by you (ADR-0036 §#196 addendum).
+which is also folded into `adr promote`/`renumber`). Table titles are
+hand-curated — a new row is seeded from the ADR heading, then owned by you
+(ADR-0036 §#196 addendum). A numberless draft under `docs/adr/drafts/` is
+invisible to all three ADR gates by construction: their shared `is_file` → `.md`
+→ leading-number enumeration is non-recursive over `docs/adr/`.
 
-The `identifier-collisions` step fails if two ADRs — or two migrations, per
-backend — share a number, or if the sqlite/postgres migration sets diverge.
-Because two differently-named files (`0099-foo.md` / `0099-bar.md`) merge with
-no git conflict, this check is what makes a concurrent-branch collision **loud**
-instead of silent (ADR-0036). If another branch took "your" number, the check
-goes red after you rebase onto `main`; run `cargo xtask adr renumber` to bump
-your new ADR to the next free number, rewrite its references, and re-sync the
-README table in one command (the ADR already on `origin/main` keeps its number).
-Migrations use the same sequential convention and detection check but are
-renumbered by hand on the rare occasion it is needed.
+The `identifier-collisions` step fails if two _committed_ ADRs — or two
+migrations, per backend — share a number, or if the sqlite/postgres migration
+sets diverge. Because two differently-named files (`0099-foo.md` /
+`0099-bar.md`) merge with no git conflict, this check is what makes a
+concurrent-branch collision **loud** instead of silent (ADR-0036). An
+already-committed ADR that collides after a rebase is bumped with
+`cargo xtask adr renumber` (it `git mv`s it to the next free number, rewrites
+references, and re-syncs the table — then amend the introducing commit; the ADR
+already on `origin/main` keeps its number). Migrations use the same sequential
+convention and detection check but are renumbered by hand on the rare occasion
+it is needed.
 
 ## Testing
 
