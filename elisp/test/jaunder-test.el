@@ -456,4 +456,25 @@
                   "plain [[https://x/y.png]] and [[file:notes.txt]] only" nil)
                  "plain [[https://x/y.png]] and [[file:notes.txt]] only")))
 
+(ert-deftest jaunder-http-request-passes-extra-headers ()
+  (let (captured)
+    (cl-letf (((symbol-function 'jaunder--auth-secret) (lambda () "tok"))
+              ((symbol-function 'jaunder--plz-response->plist) (lambda (r) r))
+              ((symbol-function 'plz)
+               (lambda (_verb _url &rest args)
+                 (setq captured (plist-get args :headers))
+                 '(:status 201 :body ""))))
+             (let ((jaunder-username "alice"))
+               (jaunder--http-request "POST" "http://x/media" (list 'file "/tmp/a.png")
+                                      "image/png" (list (cons "Slug" "a.png"))))
+             (should (equal (cdr (assoc "Slug" captured)) "a.png"))
+             (should (equal (cdr (assoc "Content-Type" captured)) "image/png"))
+             (should (assoc "Authorization" captured)))))
+
+(ert-deftest jaunder-upload-media-errors-on-non-2xx ()
+  (cl-letf (((symbol-function 'jaunder--http-request)
+             (lambda (&rest _) '(:status 500 :body "boom"))))
+           (let ((jaunder-base-url "http://x") (jaunder-username "alice"))
+             (should-error (jaunder--upload-media "/tmp/x.png" "image/png") :type 'error))))
+
 ;;; jaunder-test.el ends here

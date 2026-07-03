@@ -611,7 +611,7 @@ git commit -m "feat(media): positional collision-safe link substitution into sen
   (existing), `plz` file-body form `(file PATH)` → `curl --upload-file`
   (verified in plz 0.9.1: sends raw bytes, no coding-system re-encoding).
 
-- [ ] **Step 1: Write the failing tests** (extra-headers reach plz; upload
+- [x] **Step 1: Write the failing tests** (extra-headers reach plz; upload
       errors on non-2xx):
 
 ```elisp
@@ -637,11 +637,11 @@ git commit -m "feat(media): positional collision-safe link substitution into sen
       (should-error (jaunder--upload-media "/tmp/x.png" "image/png") :type 'error))))
 ```
 
-- [ ] **Step 2: Run it, verify it fails.** Run:
+- [x] **Step 2: Run it, verify it fails.** Run:
       `emacs --batch -Q -l elisp/scripts/run-tests.el` — FAIL (arity /
       undefined).
 
-- [ ] **Step 3a: Extend `jaunder--http-request`.** Change its signature and
+- [x] **Step 3a: Extend `jaunder--http-request`.** Change its signature and
       header assembly. Replace the `let`-binding of `headers`:
 
 ```elisp
@@ -674,7 +674,7 @@ header under load (ADR-0038)."
            (signal (car err) (cdr err))))))))
 ```
 
-- [ ] **Step 3b: Add `jaunder--upload-media`** (in the media region):
+- [x] **Step 3b: Add `jaunder--upload-media`** (in the media region):
 
 ```elisp
 (defun jaunder--upload-media (path content-type)
@@ -694,11 +694,11 @@ server-assigned binary URL from the response entry's `<content src>' via
                (jaunder--atom-entry-fields (plist-get resp :body))))))
 ```
 
-- [ ] **Step 4: Run it, verify it passes.** Run:
+- [x] **Step 4: Run it, verify it passes.** Run:
       `emacs --batch -Q -l elisp/scripts/run-tests.el` — PASS (existing
       transport tests still pass — the new param is optional).
 
-- [ ] **Step 5: Commit:**
+- [x] **Step 5: Commit:**
 
 ```bash
 cargo xtask check

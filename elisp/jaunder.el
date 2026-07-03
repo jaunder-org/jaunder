@@ -103,20 +103,24 @@ Thin I/O wrapper over `auth-source-search' using `jaunder--auth-source-spec'."
           (t (error "jaunder: no auth-source entry for %s@%s"
                     jaunder-username jaunder-base-url)))))
 
-(defun jaunder--http-request (method url &optional body content-type)
+(defun jaunder--http-request (method url &optional body content-type extra-headers)
   "Make an authenticated METHOD request to URL via `plz', returning a plist.
-METHOD is an HTTP verb string; URL an absolute URL.  BODY (a string) and
-CONTENT-TYPE apply to write requests.  Basic-auth credentials come from
-`jaunder--auth-secret' for `jaunder-username'.  Returns the
-`jaunder--plz-response->plist' plist; HTTP error statuses (4xx/5xx) are
-reported in :status, not signalled.  A transport-level failure re-signals.
+METHOD is an HTTP verb string; URL an absolute URL.  BODY is a request body: a
+string, or the `plz' file form `(file PATH)' to upload a file's raw bytes.
+CONTENT-TYPE and EXTRA-HEADERS (an alist of extra (NAME . VALUE) headers) apply to
+write requests.  Basic-auth credentials come from `jaunder--auth-secret' for
+`jaunder-username'.  Returns the `jaunder--plz-response->plist' plist; HTTP error
+statuses (4xx/5xx) are reported in :status, not signalled.  A transport-level
+failure re-signals.
 
 `plz' drives the `curl' binary, so request construction does not depend on
 the finicky dynamic-variable handling that made `url.el' occasionally drop
 the auth header under load (ADR-0038)."
-  (let ((headers (cons (jaunder--basic-auth-header jaunder-username
-                                                   (jaunder--auth-secret))
-                       (when content-type (list (cons "Content-Type" content-type)))))
+  (let ((headers (append
+                  (list (jaunder--basic-auth-header jaunder-username
+                                                    (jaunder--auth-secret)))
+                  (when content-type (list (cons "Content-Type" content-type)))
+                  extra-headers))
         (verb (intern (downcase method))))
     (condition-case err
         (jaunder--plz-response->plist
@@ -334,6 +338,22 @@ key are uploaded.  Non-image media is #25.")
 The extension match is case-insensitive."
   (let ((ext (downcase (or (file-name-extension filename) ""))))
     (cdr (assoc ext jaunder--media-image-types))))
+
+(defun jaunder--upload-media (path content-type)
+  "Upload the file at PATH as CONTENT-TYPE to the media collection; return its URL.
+POSTs the raw bytes to `/atompub/{user}/media' with the filename in a `Slug'
+header (the server sha256-dedups: 201 new / 200 re-upload), then harvests the
+server-assigned binary URL from the response entry's `<content src>' via
+`jaunder--atom-entry-fields'.  Signals an error on any non-2xx status (#161)."
+  (let* ((url (jaunder--build-url jaunder-base-url "atompub" jaunder-username "media"))
+         (resp (jaunder--http-request
+                "POST" url (list 'file path) content-type
+                (list (cons "Slug" (file-name-nondirectory path)))))
+         (status (plist-get resp :status)))
+    (unless (memq status '(200 201))
+      (error "jaunder: media upload of %s failed (HTTP %s)" path status))
+    (cdr (assq 'content-src
+               (jaunder--atom-entry-fields (plist-get resp :body))))))
 
 (defun jaunder--collect-media-links ()
   "Collect qualifying local-image links in the current buffer's body region, in order.
