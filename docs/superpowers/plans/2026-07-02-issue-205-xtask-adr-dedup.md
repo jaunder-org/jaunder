@@ -1,53 +1,63 @@
 # xtask ADR-table dedup & naming polish — Implementation Plan
 
-> **For agentic workers:** Execute this plan task-by-task with `jaunder-iterate` (delegating individual tasks to a subagent via `jaunder-dispatch` when useful). Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Execute this plan task-by-task with `jaunder-iterate`
+> (delegating individual tasks to a subagent via `jaunder-dispatch` when
+> useful). Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Four pure refactors in `xtask/src/adr_readme.rs` that give each duplicated rule one home, with no behavior change.
+**Goal:** Four pure refactors in `xtask/src/adr_readme.rs` that give each
+duplicated rule one home, with no behavior change.
 
-**Architecture:** All four are internal to `xtask/src/adr_readme.rs`. R1 extracts one directory-walk primitive; R2 extracts one marker-lookup helper; R3 replaces a tuple alias with the existing `TableRow` struct; R4 folds two heading-prefix branches into a table-driven loop. `xtask/src/adr.rs` is read but not modified (`adr_filenames` is deliberately left alone — it is a looser walk).
+**Architecture:** All four are internal to `xtask/src/adr_readme.rs`. R1
+extracts one directory-walk primitive; R2 extracts one marker-lookup helper; R3
+replaces a tuple alias with the existing `TableRow` struct; R4 folds two
+heading-prefix branches into a table-driven loop. `xtask/src/adr.rs` is read but
+not modified (`adr_filenames` is deliberately left alone — it is a looser walk).
 
 **Tech Stack:** Rust, `anyhow`, `cargo xtask` (host-only dev driver).
 
 ## Global Constraints
 
-- **No behavior change.** Every public fn of `adr_readme.rs` must produce identical
-  outputs/errors for identical inputs. The `#[cfg(test)]` suite in
+- **No behavior change.** Every public fn of `adr_readme.rs` must produce
+  identical outputs/errors for identical inputs. The `#[cfg(test)]` suite in
   `adr_readme.rs` is the safety net — it must stay green with only the one RHS
   edit R3 forces (Task 3, Step 3).
-- **`xtask/` is outside the coverage gate** — guardrails are the host unit suite +
-  clippy. No new tests are added (no new behavior).
-- **Per-task gate:** full `cargo xtask check` (fmt + clippy + host tests; auto-heals
-  formatting). Run it before each commit so the pre-commit hook passes clean
-  (`jaunder-commit`).
+- **`xtask/` is outside the coverage gate** — guardrails are the host unit
+  suite + clippy. No new tests are added (no new behavior).
+- **Per-task gate:** full `cargo xtask check` (fmt + clippy + host tests;
+  auto-heals formatting). Run it before each commit so the pre-commit hook
+  passes clean (`jaunder-commit`).
 - **One clean commit per task. No `Co-Authored-By` trailer.**
-- **Do not modify `xtask/src/adr.rs`** — `adr_filenames`/`run_renumber` stay as-is.
+- **Do not modify `xtask/src/adr.rs`** — `adr_filenames`/`run_renumber` stay
+  as-is.
 
 ---
 
 ### Task 1: R1 — one ADR directory-walk primitive (`adr_files`)
 
 **Files:**
+
 - Modify: `xtask/src/adr_readme.rs` (imports line 12; `parse_adr_dir` 109-135;
   `format_problems` 314-339; add `AdrFile` + `adr_files` near the top of the
   file, e.g. just above `heading_title` at line 51)
 
 **Interfaces:**
+
 - Consumes: `crate::ids::leading_number`, `ADR_DIR`.
-- Produces: `struct AdrFile { num: u32, filename: String, path: PathBuf }` (private)
-  and `fn adr_files(repo: &Path) -> Result<Vec<AdrFile>>` (private). No later task
-  depends on these.
+- Produces: `struct AdrFile { num: u32, filename: String, path: PathBuf }`
+  (private) and `fn adr_files(repo: &Path) -> Result<Vec<AdrFile>>` (private).
+  No later task depends on these.
 
 **Behavior-preservation note (record, not a blocker):** the `read_dir` error is
-returned *unwrapped* so `parse_adr_dir` and `format_problems` each phrase their own
-existing context string. The realistic path (directory missing) is byte-identical
-for both. The *only* non-identical path is a per-`DirEntry` metadata error raised
-*mid-iteration* (an already-opened directory whose entry can't be stat'd): today
-`parse_adr_dir` propagates it bare and `format_problems` silently skips it via
-`.flatten()`; after this change both surface it through `adr_files`. This path is
-effectively unreachable in the repo and is not under test; it is noted here so a
-reviewer isn't surprised.
+returned _unwrapped_ so `parse_adr_dir` and `format_problems` each phrase their
+own existing context string. The realistic path (directory missing) is
+byte-identical for both. The _only_ non-identical path is a per-`DirEntry`
+metadata error raised _mid-iteration_ (an already-opened directory whose entry
+can't be stat'd): today `parse_adr_dir` propagates it bare and `format_problems`
+silently skips it via `.flatten()`; after this change both surface it through
+`adr_files`. This path is effectively unreachable in the repo and is not under
+test; it is noted here so a reviewer isn't surprised.
 
-- [ ] **Step 1: Extend the `std::path` import**
+- [x] **Step 1: Extend the `std::path` import**
 
 Change line 12 from:
 
@@ -61,7 +71,7 @@ to:
 use std::path::{Path, PathBuf};
 ```
 
-- [ ] **Step 2: Add the `AdrFile` struct and `adr_files` primitive**
+- [x] **Step 2: Add the `AdrFile` struct and `adr_files` primitive**
 
 Insert immediately before `fn heading_title` (currently line 51):
 
@@ -104,7 +114,7 @@ fn adr_files(repo: &Path) -> Result<Vec<AdrFile>> {
 }
 ```
 
-- [ ] **Step 3: Rewrite `parse_adr_dir` to consume `adr_files`**
+- [x] **Step 3: Rewrite `parse_adr_dir` to consume `adr_files`**
 
 Replace the whole `parse_adr_dir` body (lines 109-135) with:
 
@@ -128,7 +138,7 @@ pub fn parse_adr_dir(repo: &Path) -> Result<Vec<AdrEntry>> {
 }
 ```
 
-- [ ] **Step 4: Rewrite `format_problems` to consume `adr_files`**
+- [x] **Step 4: Rewrite `format_problems` to consume `adr_files`**
 
 Replace the whole `format_problems` body (lines 314-339) with:
 
@@ -152,14 +162,14 @@ pub fn format_problems(repo: &Path) -> Vec<String> {
 }
 ```
 
-- [ ] **Step 5: Run the gate, verify green**
+- [x] **Step 5: Run the gate, verify green**
 
-Run: `cargo xtask check`
-Expected: PASS — clippy clean, all `xtask` unit tests pass (esp.
-`parse_adr_dir_reads_sorts_and_skips_non_adrs`,
-`file_format_problems_flags_each_violation`, `gates_ignore_docs_adr_template_md`).
+Run: `cargo xtask check` Expected: PASS — clippy clean, all `xtask` unit tests
+pass (esp. `parse_adr_dir_reads_sorts_and_skips_non_adrs`,
+`file_format_problems_flags_each_violation`,
+`gates_ignore_docs_adr_template_md`).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/src/adr_readme.rs
@@ -171,18 +181,21 @@ git commit -m "refactor(xtask): one ADR directory-walk primitive (adr_files)"
 ### Task 2: R2 — one marker-lookup helper (`marker_bounds`)
 
 **Files:**
+
 - Modify: `xtask/src/adr_readme.rs` (`splice_block` 155-170; `extract_block`
   173-183; add `marker_bounds` just above `splice_block`)
 
 **Interfaces:**
+
 - Consumes: `BEGIN`, `END`, `README`.
-- Produces: `fn marker_bounds(readme: &str) -> Result<(usize, usize)>` (private),
-  returning `(start, end)` = `(begin + BEGIN.len(), end_marker_offset)`.
+- Produces: `fn marker_bounds(readme: &str) -> Result<(usize, usize)>`
+  (private), returning `(start, end)` =
+  `(begin + BEGIN.len(), end_marker_offset)`.
 
 - [ ] **Step 1: Add `marker_bounds` above `splice_block`**
 
-Insert immediately before `pub fn splice_block` (currently line 155, above its doc
-comment):
+Insert immediately before `pub fn splice_block` (currently line 155, above its
+doc comment):
 
 ```rust
 /// The byte range strictly between the ADR-table markers: `(start, end)` where
@@ -232,14 +245,14 @@ fn extract_block(readme: &str) -> Result<String> {
 ```
 
 (`extract_block`'s order check was `<=`; `marker_bounds` uses strict `<`. Since
-`BEGIN`/`END` are distinct, mutually non-substring markers, both `find`s succeeding
-implies distinct offsets, so `begin == end` is impossible and no real input's
-behavior changes.)
+`BEGIN`/`END` are distinct, mutually non-substring markers, both `find`s
+succeeding implies distinct offsets, so `begin == end` is impossible and no real
+input's behavior changes.)
 
 - [ ] **Step 4: Run the gate, verify green**
 
-Run: `cargo xtask check`
-Expected: PASS — esp. `splice_block_replaces_only_between_markers` and
+Run: `cargo xtask check` Expected: PASS — esp.
+`splice_block_replaces_only_between_markers` and
 `splice_block_errors_on_missing_marker` (error still contains `"marker"`).
 
 - [ ] **Step 5: Commit**
@@ -254,15 +267,17 @@ git commit -m "refactor(xtask): one ADR-table marker-lookup helper (marker_bound
 ### Task 3: R3 — reuse `TableRow`, drop `Cells` and `current_cells`
 
 **Files:**
+
 - Modify: `xtask/src/adr_readme.rs` (`TableRow` 43-49; `render_block` 145-151;
   delete `Cells` 185-187 and `current_cells` 217-222; `resolved_rows` 194-215;
   `sync_readme_at` 234-235; test `desired_matches_current_when_in_sync` ~512)
 
 **Interfaces:**
+
 - Consumes: `AdrEntry`, `BTreeMap`.
-- Produces: `resolved_rows(entries: &[AdrEntry], existing: &[TableRow]) ->
-  Vec<TableRow>` (was `Vec<Cells>`). `TableRow` gains `#[derive(Debug, PartialEq,
-  Eq)]`.
+- Produces:
+  `resolved_rows(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<TableRow>`
+  (was `Vec<Cells>`). `TableRow` gains `#[derive(Debug, PartialEq, Eq)]`.
 
 - [ ] **Step 1: Derive `Debug, PartialEq, Eq` on `TableRow`**
 
@@ -284,7 +299,8 @@ pub struct TableRow {
 (`Debug` is needed because the test uses `assert_eq!` on `Vec<TableRow>`;
 `PartialEq`/`Eq` power the `desired == existing` idempotence check.)
 
-- [ ] **Step 2: Change `resolved_rows` to build `TableRow`, delete `Cells` + `current_cells`**
+- [ ] **Step 2: Change `resolved_rows` to build `TableRow`, delete `Cells` +
+      `current_cells`**
 
 First, delete the `Cells` type alias (lines 185-187, including its doc comment):
 
@@ -386,11 +402,11 @@ to:
 
 - [ ] **Step 4: Run the gate, verify green**
 
-Run: `cargo xtask check`
-Expected: PASS — esp. `desired_matches_current_when_in_sync`,
+Run: `cargo xtask check` Expected: PASS — esp.
+`desired_matches_current_when_in_sync`,
 `render_block_preserves_existing_title_and_seeds_new_from_heading`,
-`render_block_drops_orphans_and_sorts_ascending`. Confirm no leftover reference to
-`Cells` or `current_cells` (a stale reference is a compile error).
+`render_block_drops_orphans_and_sorts_ascending`. Confirm no leftover reference
+to `Cells` or `current_cells` (a stale reference is a compile error).
 
 - [ ] **Step 5: Commit**
 
@@ -404,13 +420,15 @@ git commit -m "refactor(xtask): reuse TableRow for resolved rows, drop Cells tup
 ### Task 4: R4 — fold `heading_title`'s prefix branches
 
 **Files:**
+
 - Modify: `xtask/src/adr_readme.rs` (`heading_title` 53-67)
 
 **Interfaces:** none new — `heading_title` keeps its signature.
 
 - [ ] **Step 1: Replace the two branches with a table-driven loop**
 
-Replace the whole `heading_title` body (lines 53-67, keeping its doc comment) with:
+Replace the whole `heading_title` body (lines 53-67, keeping its doc comment)
+with:
 
 ```rust
 fn heading_title(content: &str) -> String {
@@ -430,14 +448,14 @@ fn heading_title(content: &str) -> String {
 }
 ```
 
-(Reproduces both arms bit-for-bit: `!lhs.is_empty()` is redundant-but-harmless for
-the `"ADR-"` row and load-bearing for the `""` legacy row; the table order keeps
-the `": "`-before-`". "` first-match precedence.)
+(Reproduces both arms bit-for-bit: `!lhs.is_empty()` is redundant-but-harmless
+for the `"ADR-"` row and load-bearing for the `""` legacy row; the table order
+keeps the `": "`-before-`". "` first-match precedence.)
 
 - [ ] **Step 2: Run the gate, verify green**
 
-Run: `cargo xtask check`
-Expected: PASS — esp. `heading_title_strips_canonical_and_legacy_prefixes`.
+Run: `cargo xtask check` Expected: PASS — esp.
+`heading_title_strips_canonical_and_legacy_prefixes`.
 
 - [ ] **Step 3: Commit**
 
@@ -451,17 +469,19 @@ git commit -m "refactor(xtask): fold heading_title prefix branches into a loop"
 ## Self-Review
 
 **Spec coverage:**
+
 - R1 → Task 1 (AC1). R2 → Task 2 (AC2). R3 → Task 3 (AC3). R4 → Task 4 (AC4).
 - AC5 (`cargo xtask check` green) → each task's gate step.
 - AC6 (no observable behavior change) → the Global Constraints + Task 1's
   behavior-preservation note; the existing unit suite is the running proof.
-- Out-of-scope (leave `adr_filenames`/`adr.rs`, no new tests, no format changes) →
-  Global Constraints + Task 1 note; no task touches `adr.rs`.
+- Out-of-scope (leave `adr_filenames`/`adr.rs`, no new tests, no format changes)
+  → Global Constraints + Task 1 note; no task touches `adr.rs`.
 
 **Placeholder scan:** none — every code step shows full code; no TBD/TODO.
 
-**Type consistency:** `AdrFile { num, filename, path }` defined in Task 1 and used
-only there. `resolved_rows -> Vec<TableRow>` (Task 3) is consumed by `render_block`
-and `sync_readme_at` in the same task. `marker_bounds -> (usize, usize)` (Task 2)
-consumed by `splice_block`/`extract_block` in the same task. `TableRow` derive
-(Task 3) is what the Task 3 test edit relies on. No cross-task name drift.
+**Type consistency:** `AdrFile { num, filename, path }` defined in Task 1 and
+used only there. `resolved_rows -> Vec<TableRow>` (Task 3) is consumed by
+`render_block` and `sync_readme_at` in the same task.
+`marker_bounds -> (usize, usize)` (Task 2) consumed by
+`splice_block`/`extract_block` in the same task. `TableRow` derive (Task 3) is
+what the Task 3 test edit relies on. No cross-task name drift.
