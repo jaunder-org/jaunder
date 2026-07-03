@@ -477,4 +477,51 @@
            (let ((jaunder-base-url "http://x") (jaunder-username "alice"))
              (should-error (jaunder--upload-media "/tmp/x.png" "image/png") :type 'error))))
 
+(ert-deftest jaunder-media-link-p-qualifies-file-and-attachment ()
+  ;; file: (image ext) and attachment: (image ext) qualify; http, non-image
+  ;; file:, and bare fuzzy links do not.  Pure coverage of attachment
+  ;; *qualification* (resolution needs a live org-attach dir — see the live tests).
+  (with-temp-buffer
+    (insert "[[file:a.png]] [[attachment:b.gif]] [[https://x/c.png]] "
+            "[[file:d.txt]] [[e.png]]")
+    (org-mode)
+    (let ((links (org-element-map (org-element-parse-buffer) 'link #'identity)))
+      (should (equal (mapcar (lambda (l) (and (jaunder--media-link-p l) t)) links)
+                     '(t t nil nil nil))))))
+
+(ert-deftest jaunder-localize-media-uploads-each-file-once ()
+  ;; Two links to the same file upload once (dedup cache); both rewrite to the
+  ;; harvested URL; the authoring buffer is never modified.
+  (let* ((d (make-temp-file "jt-localize-" t))
+         (img (expand-file-name "x.png" d))
+         (calls nil))
+    (unwind-protect
+        (progn
+          (with-temp-file img (insert "x"))
+          (cl-letf (((symbol-function 'jaunder--upload-media)
+                     (lambda (path _ct) (push path calls) "https://h/m/x.png")))
+                   (with-temp-buffer
+                     (insert (format "#+TITLE: T\n\n[[file:%s]] and [[file:%s]]\n" img img))
+                     (org-mode)
+                     (let* ((body (jaunder-entry-body (jaunder--org->atom)))
+                            (before (buffer-string))
+                            (out (jaunder--localize-media body)))
+                       (should (equal calls (list img)))
+                       (should (equal out
+                                      "[[https://h/m/x.png]] and [[https://h/m/x.png]]"))
+                       (should (equal (buffer-string) before))))))
+      (delete-directory d t))))
+
+(ert-deftest jaunder-localize-media-no-images-is-noop ()
+  ;; A body with no qualifying local images returns unchanged, uploading nothing.
+  (let (called)
+    (cl-letf (((symbol-function 'jaunder--upload-media)
+               (lambda (&rest _) (setq called t) "u")))
+             (with-temp-buffer
+               (insert "#+TITLE: T\n\nJust prose, [[https://x/y.png]] absolute.\n")
+               (org-mode)
+               (let ((body (jaunder-entry-body (jaunder--org->atom))))
+                 (should (equal (jaunder--localize-media body) body))
+                 (should-not called))))))
+
 ;;; jaunder-test.el ends here

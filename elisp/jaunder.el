@@ -339,6 +339,15 @@ The extension match is case-insensitive."
   (let ((ext (downcase (or (file-name-extension filename) ""))))
     (cdr (assoc ext jaunder--media-image-types))))
 
+(defun jaunder--media-link-p (link)
+  "Return the media MIME type if org-element LINK is a qualifying local-image link.
+Qualifies a `file:'- or `attachment:'-type link whose target has an image
+extension; nil otherwise.  The single source of truth for \"qualifies\", shared by
+detection and substitution so the two stay in lockstep — their positional
+one-for-one alignment rides on agreeing here (#161)."
+  (and (member (org-element-property :type link) '("file" "attachment"))
+       (jaunder--media-content-type (org-element-property :path link))))
+
 (defun jaunder--upload-media (path content-type)
   "Upload the file at PATH as CONTENT-TYPE to the media collection; return its URL.
 POSTs the raw bytes to `/atompub/{user}/media' with the filename in a `Slug'
@@ -370,21 +379,18 @@ in order with the links in the C2 sent body (#161)."
       (delq nil
             (org-element-map tree 'link
                              (lambda (link)
-                               (let* ((type (org-element-property :type link))
-                                      (raw (org-element-property :raw-link link))
-                                      (path (org-element-property :path link))
-                                      (mime (jaunder--media-content-type path)))
-                                 (cond
-                                  ((and mime (string= type "file"))
-                                   (list :raw-link raw
-                                         :path (expand-file-name path)
-                                         :content-type mime))
-                                  ((and mime (string= type "attachment"))
-                                   (list :raw-link raw
-                                         :path (save-excursion
-                                                 (goto-char (org-element-property :begin link))
-                                                 (org-attach-expand path))
-                                         :content-type mime))))))))))
+                               (let ((mime (jaunder--media-link-p link)))
+                                 (when mime
+                                   (let ((raw (org-element-property :raw-link link))
+                                         (path (org-element-property :path link)))
+                                     (list :raw-link raw
+                                           :content-type mime
+                                           :path (if (string= (org-element-property :type link)
+                                                              "attachment")
+                                                     (save-excursion
+                                                       (goto-char (org-element-property :begin link))
+                                                       (org-attach-expand path))
+                                                   (expand-file-name path))))))))))))
 
 (defun jaunder--substitute-media (body urls)
   "Return BODY with its qualifying media links rewritten to URLS, in order.
@@ -398,11 +404,7 @@ target is replaced with its URL, brackets and any `[…][description]' preserved
            (links (delq nil
                         (org-element-map tree 'link
                                          (lambda (link)
-                                           (when (and (jaunder--media-content-type
-                                                       (org-element-property :path link))
-                                                      (member (org-element-property :type link)
-                                                              '("file" "attachment")))
-                                             link)))))
+                                           (when (jaunder--media-link-p link) link)))))
            (pairs (cl-mapcar #'cons links urls)))
       (dolist (pair (nreverse pairs))
         (let* ((link (car pair))
