@@ -15,6 +15,7 @@
 
 (require 'cl-lib)
 (require 'org)
+(require 'org-attach)
 (require 'dom)
 (require 'url-parse)
 (require 'url-util)
@@ -102,20 +103,24 @@ Thin I/O wrapper over `auth-source-search' using `jaunder--auth-source-spec'."
           (t (error "jaunder: no auth-source entry for %s@%s"
                     jaunder-username jaunder-base-url)))))
 
-(defun jaunder--http-request (method url &optional body content-type)
+(defun jaunder--http-request (method url &optional body content-type extra-headers)
   "Make an authenticated METHOD request to URL via `plz', returning a plist.
-METHOD is an HTTP verb string; URL an absolute URL.  BODY (a string) and
-CONTENT-TYPE apply to write requests.  Basic-auth credentials come from
-`jaunder--auth-secret' for `jaunder-username'.  Returns the
-`jaunder--plz-response->plist' plist; HTTP error statuses (4xx/5xx) are
-reported in :status, not signalled.  A transport-level failure re-signals.
+METHOD is an HTTP verb string; URL an absolute URL.  BODY is a request body: a
+string, or the `plz' file form `(file PATH)' to upload a file's raw bytes.
+CONTENT-TYPE and EXTRA-HEADERS (an alist of extra (NAME . VALUE) headers) apply to
+write requests.  Basic-auth credentials come from `jaunder--auth-secret' for
+`jaunder-username'.  Returns the `jaunder--plz-response->plist' plist; HTTP error
+statuses (4xx/5xx) are reported in :status, not signalled.  A transport-level
+failure re-signals.
 
 `plz' drives the `curl' binary, so request construction does not depend on
 the finicky dynamic-variable handling that made `url.el' occasionally drop
 the auth header under load (ADR-0038)."
-  (let ((headers (cons (jaunder--basic-auth-header jaunder-username
-                                                   (jaunder--auth-secret))
-                       (when content-type (list (cons "Content-Type" content-type)))))
+  (let ((headers (append
+                  (list (jaunder--basic-auth-header jaunder-username
+                                                    (jaunder--auth-secret)))
+                  (when content-type (list (cons "Content-Type" content-type)))
+                  extra-headers))
         (verb (intern (downcase method))))
     (condition-case err
         (jaunder--plz-response->plist
@@ -173,19 +178,27 @@ Whitespace is trimmed and empty terms dropped."
       (dolist (term (split-string line "," t "[ \t]+"))
         (unless (string= term "") (push term out))))))
 
-(defun jaunder--strip-header-block (text)
-  "Return TEXT with its leading metadata header block removed.
-Drops the leading contiguous run of header keyword lines and blank lines,
-then trims surrounding whitespace from the remaining body."
-  (with-temp-buffer
-    (insert text)
+(defun jaunder--body-start ()
+  "Return the position after the leading metadata header block in this buffer.
+The header block is the leading contiguous run of header-keyword and blank lines.
+Shared by `jaunder--strip-header-block' and media detection so both see the same
+body region (#161)."
+  (save-excursion
     (goto-char (point-min))
     (let ((case-fold-search t))
       (while (and (not (eobp))
                   (or (looking-at-p jaunder--blank-line-re)
                       (looking-at-p jaunder--header-keyword-re)))
         (forward-line 1)))
-    (string-trim (buffer-substring-no-properties (point) (point-max)))))
+    (point)))
+
+(defun jaunder--strip-header-block (text)
+  "Return TEXT with its leading metadata header block removed.
+Drops the leading contiguous run of header keyword lines and blank lines
+(`jaunder--body-start'), then trims surrounding whitespace from the remaining body."
+  (with-temp-buffer
+    (insert text)
+    (string-trim (buffer-substring-no-properties (jaunder--body-start) (point-max)))))
 
 (defun jaunder--offset->seconds (offset)
   "Parse a numeric UTC OFFSET string (\"±HHMM\" or \"±HH:MM\") to integer seconds.
@@ -293,6 +306,151 @@ here (issue #160)."
       ;; so the single-arg call keeps output identical while staying portable.
       (dom-print (append (list 'entry attrs) (nreverse children)))
       (buffer-string))))
+
+;;; media upload + content-addressed link substitution (unit C, issue #161)
+
+(defun jaunder--atom-entry-fields (xml)
+  "Parse AtomPub entry XML into an alist of harvested fields.
+Returns `content-src' and `content-type' from the entry's `<content>' element.
+The shared entry-parse primitive (issue #161): C3 uses the content subset; C4 and
+Unit D extend the returned set.  `libxml-parse-xml-region' drops the default
+namespace prefix, so the element is `content'."
+  (let* ((dom (with-temp-buffer
+                (insert xml)
+                (libxml-parse-xml-region (point-min) (point-max))))
+         (content (car (dom-by-tag dom 'content))))
+    (list (cons 'content-src (dom-attr content 'src))
+          (cons 'content-type (dom-attr content 'type)))))
+
+(defconst jaunder--media-image-types
+  '(("png" . "image/png")
+    ("jpg" . "image/jpeg")
+    ("jpeg" . "image/jpeg")
+    ("gif" . "image/gif")
+    ("webp" . "image/webp")
+    ("svg" . "image/svg+xml"))
+  "Alist of lowercase image extension → MIME type for uploadable media (#161).
+Its key set is the qualification predicate: only links whose file extension is a
+key are uploaded.  Non-image media is #25.")
+
+(defun jaunder--media-content-type (filename)
+  "Return the media MIME type for FILENAME by extension, or nil if unqualified.
+The extension match is case-insensitive."
+  (let ((ext (downcase (or (file-name-extension filename) ""))))
+    (cdr (assoc ext jaunder--media-image-types))))
+
+(defun jaunder--media-link-p (link)
+  "Return the media MIME type if org-element LINK is a qualifying local-image link.
+Qualifies a `file:'- or `attachment:'-type link whose target has an image
+extension; nil otherwise.  The single source of truth for \"qualifies\", shared by
+detection and substitution so the two stay in lockstep — their positional
+one-for-one alignment rides on agreeing here (#161)."
+  (and (member (org-element-property :type link) '("file" "attachment"))
+       (jaunder--media-content-type (org-element-property :path link))))
+
+(defun jaunder--upload-media (path content-type)
+  "Upload the file at PATH as CONTENT-TYPE to the media collection; return its URL.
+POSTs the raw bytes to `/atompub/{user}/media' with the filename in a `Slug'
+header (the server sha256-dedups: 201 new / 200 re-upload), then harvests the
+server-assigned binary URL from the response entry's `<content src>' via
+`jaunder--atom-entry-fields'.  Signals an error on any non-2xx status (#161)."
+  (let* ((url (jaunder--build-url jaunder-base-url "atompub" jaunder-username "media"))
+         (resp (jaunder--http-request
+                "POST" url (list 'file path) content-type
+                (list (cons "Slug" (file-name-nondirectory path)))))
+         (status (plist-get resp :status)))
+    (unless (memq status '(200 201))
+      (error "jaunder: media upload of %s failed (HTTP %s)" path status))
+    (cdr (assq 'content-src
+               (jaunder--atom-entry-fields (plist-get resp :body))))))
+
+(defun jaunder--collect-media-links ()
+  "Collect qualifying local-image links in the current buffer's body region, in order.
+Walks `org-element' `link' objects after the header block (`jaunder--body-start'),
+keeping `file:'-type links whose extension is an image and `attachment:' links
+(both via `jaunder--media-content-type').  Returns an ordered list of plists
+\(:raw-link RAW :path ABS :content-type MIME).  `file:' paths resolve against
+`default-directory'; `attachment:' paths via `org-attach-expand' at the link's
+heading.  Restricting to the body region keeps this list aligned one-for-one and
+in order with the links in the C2 sent body (#161)."
+  (save-restriction
+    (narrow-to-region (jaunder--body-start) (point-max))
+    (let ((tree (org-element-parse-buffer)))
+      (delq nil
+            (org-element-map tree 'link
+                             (lambda (link)
+                               (let ((mime (jaunder--media-link-p link)))
+                                 (when mime
+                                   (let ((raw (org-element-property :raw-link link))
+                                         (path (org-element-property :path link)))
+                                     (list :raw-link raw
+                                           :content-type mime
+                                           :path (if (string= (org-element-property :type link)
+                                                              "attachment")
+                                                     (save-excursion
+                                                       (goto-char (org-element-property :begin link))
+                                                       (org-attach-expand path))
+                                                   (expand-file-name path))))))))))))
+
+(defun jaunder--substitute-media (body urls)
+  "Return BODY with its qualifying media links rewritten to URLS, in order.
+URLS has one entry per qualifying link in document order.  Each link's whole inner
+target is replaced with its URL, brackets and any `[…][description]' preserved
+\(result stays `[[URL]]' / `[[URL][desc]]').  Rewrites right-to-left (#161)."
+  (with-temp-buffer
+    (insert body)
+    (org-mode)
+    (let* ((tree (org-element-parse-buffer))
+           (links (delq nil
+                        (org-element-map tree 'link
+                                         (lambda (link)
+                                           (when (jaunder--media-link-p link) link)))))
+           (pairs (cl-mapcar #'cons links urls)))
+      (dolist (pair (nreverse pairs))
+        (let* ((link (car pair))
+               (url (cdr pair))
+               (beg (org-element-property :begin link))
+               (end (- (org-element-property :end link)
+                       (or (org-element-property :post-blank link) 0)))
+               (cb (org-element-property :contents-begin link))
+               (ce (org-element-property :contents-end link))
+               (desc (and cb ce (buffer-substring-no-properties cb ce))))
+          (delete-region beg end)
+          (goto-char beg)
+          (insert (if desc (format "[[%s][%s]]" url desc) (format "[[%s]]" url))))))
+    (buffer-substring-no-properties (point-min) (point-max))))
+
+(defun jaunder--media-preflight (records)
+  "Signal an error if any RECORDS `:path' is not a readable file.
+RECORDS is a `jaunder--collect-media-links' list.  Checks every path and, if any
+are missing, signals one error listing them all — fail-fast, upload nothing (#161)."
+  (let ((missing (delq nil
+                       (mapcar (lambda (r)
+                                 (let ((p (plist-get r :path)))
+                                   (unless (file-readable-p p) p)))
+                               records))))
+    (when missing
+      (error "jaunder: media file(s) not found: %s"
+             (mapconcat #'identity missing ", ")))))
+
+(defun jaunder--localize-media (body)
+  "Upload the current buffer's local images and return BODY with links localized.
+Detects qualifying media links in the buffer's body region, pre-flights that all
+exist (else errors, uploading nothing), uploads each distinct file once (server
+sha256-dedups), and rewrites those links in BODY — the C2 sent body — to the
+harvested server URLs, in order.  The authoring buffer is never modified (#161)."
+  (let ((records (jaunder--collect-media-links)))
+    (jaunder--media-preflight records)
+    (let ((cache (make-hash-table :test 'equal)))
+      (dolist (r records)
+        (let ((path (plist-get r :path)))
+          (unless (gethash path cache)
+            (puthash path
+                     (jaunder--upload-media path (plist-get r :content-type))
+                     cache))))
+      (jaunder--substitute-media
+       body
+       (mapcar (lambda (r) (gethash (plist-get r :path) cache)) records)))))
 
 (defun jaunder--atom->org (&rest _args)
   "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."

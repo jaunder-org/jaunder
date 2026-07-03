@@ -50,12 +50,13 @@ write-back: `JAUNDER_ID` from the `Location` header, `JAUNDER_SYNCED` from the
 from the returned entry.
 
 To read `j:slug`/`atom:published` from the response without duplicating XML
-parsing between C and D, **C4 lands a small shared primitive
-`jaunder--atom-entry-fields`** (entry XML string → alist of element values). C4
-consumes the slug/published subset; Unit D's `jaunder--atom->org` later builds
-the full org-buffer synthesis on top of the same primitive. (Option B of the
-C/D-boundary decision.) `jaunder--atom-entry-fields` is pure and ERT-tested in
-C4.
+parsing between C and D, a small shared primitive `jaunder--atom-entry-fields`
+(entry XML string → alist of element values) is introduced. **(Amended #161):**
+it lands in **C3** (media upload harvests `<content src>`/`content-type` from
+the response — see ADR-0045), not C4; C4 then consumes the slug/published subset
+and Unit D's `jaunder--atom->org` builds the full org-buffer synthesis on top of
+the same primitive. (Option B of the C/D-boundary decision.)
+`jaunder--atom-entry-fields` is pure and ERT-tested where it lands.
 
 ## Test approach
 

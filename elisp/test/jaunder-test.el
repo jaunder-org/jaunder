@@ -343,4 +343,185 @@
       (insert xml)
       (should (consp (libxml-parse-xml-region (point-min) (point-max)))))))
 
+;;; media upload (unit C, issue #161)
+
+(ert-deftest jaunder-atom-entry-fields-harvests-content-src-and-type ()
+  (skip-unless (fboundp 'libxml-parse-xml-region))
+  (let ((xml (concat "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+                     "<entry xmlns=\"http://www.w3.org/2005/Atom\">"
+                     "<id>x</id><title>p.png</title>"
+                     "<updated>2026-07-02T00:00:00Z</updated>"
+                     "<published>2026-07-02T00:00:00Z</published>"
+                     "<content type=\"image/png\""
+                     " src=\"https://h/media/upload/ab/cd/abcd/p.png\"/>"
+                     "<link rel=\"edit-media\""
+                     " href=\"https://h/media/upload/ab/cd/abcd/p.png\"/>"
+                     "</entry>")))
+    (should (equal (cdr (assq 'content-src (jaunder--atom-entry-fields xml)))
+                   "https://h/media/upload/ab/cd/abcd/p.png"))
+    (should (equal (cdr (assq 'content-type (jaunder--atom-entry-fields xml)))
+                   "image/png"))))
+
+(ert-deftest jaunder-media-content-type-maps-extensions ()
+  (should (equal (jaunder--media-content-type "a.png") "image/png"))
+  (should (equal (jaunder--media-content-type "a.jpg") "image/jpeg"))
+  (should (equal (jaunder--media-content-type "a.jpeg") "image/jpeg"))
+  (should (equal (jaunder--media-content-type "a.gif") "image/gif"))
+  (should (equal (jaunder--media-content-type "a.webp") "image/webp"))
+  (should (equal (jaunder--media-content-type "a.svg") "image/svg+xml")))
+
+(ert-deftest jaunder-media-content-type-is-case-insensitive ()
+  (should (equal (jaunder--media-content-type "IMG.PNG") "image/png"))
+  (should (equal (jaunder--media-content-type "p.JPEG") "image/jpeg")))
+
+(ert-deftest jaunder-media-content-type-non-image-is-nil ()
+  (should (null (jaunder--media-content-type "notes.txt")))
+  (should (null (jaunder--media-content-type "noext"))))
+
+(defun jaunder-test--collect (org dir)
+  "Collect media links from ORG with `default-directory' DIR."
+  (with-temp-buffer
+    (insert org)
+    (org-mode)
+    (setq default-directory dir)
+    (jaunder--collect-media-links)))
+
+(ert-deftest jaunder-media-collect-file-links-qualify-and-resolve ()
+  ;; relative, ./-relative-with-desc, and absolute file: links all qualify.
+  (let ((rs (jaunder-test--collect
+             (concat "#+TITLE: T\n\nSee [[file:img/a.png]] and [[./b.JPG][alt]]"
+                     " and [[file:/abs/c.gif]].\n")
+             "/home/u/post/")))
+    (should (equal (mapcar (lambda (r) (plist-get r :raw-link)) rs)
+                   '("file:img/a.png" "./b.JPG" "file:/abs/c.gif")))
+    (should (equal (mapcar (lambda (r) (plist-get r :path)) rs)
+                   '("/home/u/post/img/a.png" "/home/u/post/b.JPG" "/abs/c.gif")))
+    (should (equal (mapcar (lambda (r) (plist-get r :content-type)) rs)
+                   '("image/png" "image/jpeg" "image/gif")))))
+
+(ert-deftest jaunder-media-collect-excludes-nonqualifying ()
+  ;; header-region link (in the stripped #+DESCRIPTION block), absolute http,
+  ;; bare fuzzy link, non-image file link, and links inside src/example blocks.
+  (let ((rs (jaunder-test--collect
+             (concat "#+DESCRIPTION: [[file:cover.png]]\n"
+                     "\n"
+                     "abs [[https://x/y.png]] "
+                     "fuzzy [[a.png]] "
+                     "doc [[file:notes.txt]]\n"
+                     "#+begin_src org\n[[file:code.png]]\n#+end_src\n"
+                     "#+begin_example\n[[file:ex.png]]\n#+end_example\n")
+             "/d/")))
+    (should (null rs))))
+
+(ert-deftest jaunder-media-preflight-errors-on-missing-listing-all ()
+  (let* ((d (make-temp-file "jt-preflight-" t))
+         (present (expand-file-name "a.png" d)))
+    (unwind-protect
+        (progn
+          (with-temp-file present (insert "x"))
+          (should-not (jaunder--media-preflight (list (list :path present))))
+          (let ((err (should-error
+                      (jaunder--media-preflight
+                       (list (list :path (expand-file-name "m1.png" d))
+                             (list :path present)
+                             (list :path (expand-file-name "m2.png" d))))
+                      :type 'error)))
+            (should (string-match-p "m1.png" (error-message-string err)))
+            (should (string-match-p "m2.png" (error-message-string err)))
+            (should-not (string-match-p "a.png" (error-message-string err)))))
+      (delete-directory d t))))
+
+(ert-deftest jaunder-media-substitute-single-and-desc ()
+  (should (equal (jaunder--substitute-media
+                  "a [[file:x.png]] b [[./y.png][alt]] c"
+                  '("https://h/m/x.png" "https://h/m/y.png"))
+                 "a [[https://h/m/x.png]] b [[https://h/m/y.png][alt]] c")))
+
+(ert-deftest jaunder-media-substitute-collision-is-positional ()
+  ;; same raw target, different resolved URLs -> each rewritten independently
+  (should (equal (jaunder--substitute-media
+                  "[[attachment:p.png]] and [[attachment:p.png]]"
+                  '("https://h/m/aaa/p.png" "https://h/m/bbb/p.png"))
+                 "[[https://h/m/aaa/p.png]] and [[https://h/m/bbb/p.png]]")))
+
+(ert-deftest jaunder-media-substitute-same-file-same-url ()
+  ;; one file behind two links -> caller passes the same URL twice; both rewrite
+  (should (equal (jaunder--substitute-media
+                  "[[file:x.png]] then [[file:x.png]]"
+                  '("https://h/m/x.png" "https://h/m/x.png"))
+                 "[[https://h/m/x.png]] then [[https://h/m/x.png]]")))
+
+(ert-deftest jaunder-media-substitute-no-links-is-noop ()
+  (should (equal (jaunder--substitute-media
+                  "plain [[https://x/y.png]] and [[file:notes.txt]] only" nil)
+                 "plain [[https://x/y.png]] and [[file:notes.txt]] only")))
+
+(ert-deftest jaunder-http-request-passes-extra-headers ()
+  (let (captured)
+    (cl-letf (((symbol-function 'jaunder--auth-secret) (lambda () "tok"))
+              ((symbol-function 'jaunder--plz-response->plist) (lambda (r) r))
+              ((symbol-function 'plz)
+               (lambda (_verb _url &rest args)
+                 (setq captured (plist-get args :headers))
+                 '(:status 201 :body ""))))
+             (let ((jaunder-username "alice"))
+               (jaunder--http-request "POST" "http://x/media" (list 'file "/tmp/a.png")
+                                      "image/png" (list (cons "Slug" "a.png"))))
+             (should (equal (cdr (assoc "Slug" captured)) "a.png"))
+             (should (equal (cdr (assoc "Content-Type" captured)) "image/png"))
+             (should (assoc "Authorization" captured)))))
+
+(ert-deftest jaunder-upload-media-errors-on-non-2xx ()
+  (cl-letf (((symbol-function 'jaunder--http-request)
+             (lambda (&rest _) '(:status 500 :body "boom"))))
+           (let ((jaunder-base-url "http://x") (jaunder-username "alice"))
+             (should-error (jaunder--upload-media "/tmp/x.png" "image/png") :type 'error))))
+
+(ert-deftest jaunder-media-link-p-qualifies-file-and-attachment ()
+  ;; file: (image ext) and attachment: (image ext) qualify; http, non-image
+  ;; file:, and bare fuzzy links do not.  Pure coverage of attachment
+  ;; *qualification* (resolution needs a live org-attach dir — see the live tests).
+  (with-temp-buffer
+    (insert "[[file:a.png]] [[attachment:b.gif]] [[https://x/c.png]] "
+            "[[file:d.txt]] [[e.png]]")
+    (org-mode)
+    (let ((links (org-element-map (org-element-parse-buffer) 'link #'identity)))
+      (should (equal (mapcar (lambda (l) (and (jaunder--media-link-p l) t)) links)
+                     '(t t nil nil nil))))))
+
+(ert-deftest jaunder-localize-media-uploads-each-file-once ()
+  ;; Two links to the same file upload once (dedup cache); both rewrite to the
+  ;; harvested URL; the authoring buffer is never modified.
+  (let* ((d (make-temp-file "jt-localize-" t))
+         (img (expand-file-name "x.png" d))
+         (calls nil))
+    (unwind-protect
+        (progn
+          (with-temp-file img (insert "x"))
+          (cl-letf (((symbol-function 'jaunder--upload-media)
+                     (lambda (path _ct) (push path calls) "https://h/m/x.png")))
+                   (with-temp-buffer
+                     (insert (format "#+TITLE: T\n\n[[file:%s]] and [[file:%s]]\n" img img))
+                     (org-mode)
+                     (let* ((body (jaunder-entry-body (jaunder--org->atom)))
+                            (before (buffer-string))
+                            (out (jaunder--localize-media body)))
+                       (should (equal calls (list img)))
+                       (should (equal out
+                                      "[[https://h/m/x.png]] and [[https://h/m/x.png]]"))
+                       (should (equal (buffer-string) before))))))
+      (delete-directory d t))))
+
+(ert-deftest jaunder-localize-media-no-images-is-noop ()
+  ;; A body with no qualifying local images returns unchanged, uploading nothing.
+  (let (called)
+    (cl-letf (((symbol-function 'jaunder--upload-media)
+               (lambda (&rest _) (setq called t) "u")))
+             (with-temp-buffer
+               (insert "#+TITLE: T\n\nJust prose, [[https://x/y.png]] absolute.\n")
+               (org-mode)
+               (let ((body (jaunder-entry-body (jaunder--org->atom))))
+                 (should (equal (jaunder--localize-media body) body))
+                 (should-not called))))))
+
 ;;; jaunder-test.el ends here
