@@ -575,6 +575,33 @@ else an error naming the directory."
             (jaunder-username (plist-get ,blog :username)))
        ,@body)))
 
+;;; publish validation + Location->id + force-draft (unit C4, issue #162)
+
+(defun jaunder--validate-publish (entry status date-raw tz)
+  "Signal an error if ENTRY is not publishable; return nil otherwise.
+Requires a non-empty body; a `scheduled' STATUS requires a future #+DATE:
+\(DATE-RAW interpreted in TZ)."
+  (when (string= (string-trim (or (jaunder-entry-body entry) "")) "")
+    (error "jaunder: refusing to publish an empty body"))
+  (when (and status (string= (downcase status) "scheduled"))
+    (let ((utc (and date-raw (jaunder--org-date->utc date-raw tz))))
+      (unless (and utc (time-less-p (current-time) (date-to-time utc)))
+        (error "jaunder: a scheduled post needs a future #+DATE:"))))
+  nil)
+
+(defun jaunder--location->id (location)
+  "Return the trailing numeric post id from a create `Location' URL, or nil."
+  (when (and location (string-match "/\\([0-9]+\\)/?\\'" location))
+    (match-string 1 location)))
+
+(defun jaunder--force-draft (entry)
+  "Mark ENTRY a server-side draft in place: set `draft', clear `published'.
+Clearing `published' keeps `jaunder--atom-entry->xml' from emitting a
+`<published>' on a draft (it emits one whenever the slot is set)."
+  (setf (jaunder-entry-draft entry) t
+        (jaunder-entry-published entry) nil)
+  entry)
+
 (defun jaunder--atom->org (&rest _args)
   "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."
   (error "jaunder: atom->org mapping not yet implemented (units C/D, issues #74/#75)"))

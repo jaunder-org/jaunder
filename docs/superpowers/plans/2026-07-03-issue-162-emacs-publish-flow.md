@@ -517,7 +517,7 @@ git commit -m "feat(emacs): jaunder-blogs directory->blog config + resolver"
   `jaunder--force-draft (entry)` (mutates: draft=t, published=nil). Used by
   Task 10.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```elisp
 (ert-deftest jaunder-validate-publish-rejects-empty-body ()
@@ -548,12 +548,12 @@ git commit -m "feat(emacs): jaunder-blogs directory->blog config + resolver"
     (should-not (string-match-p "<published>" (jaunder--atom-entry->xml e)))))
 ```
 
-- [ ] **Step 2: Run, verify fail**
+- [x] **Step 2: Run, verify fail**
 
 Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: FAIL — helpers
 undefined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```elisp
 (defun jaunder--validate-publish (entry status date-raw tz)
@@ -582,11 +582,11 @@ Clearing `published' keeps `jaunder--atom-entry->xml' from emitting a
   entry)
 ```
 
-- [ ] **Step 4: Run, verify pass**
+- [x] **Step 4: Run, verify pass**
 
 Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add elisp/jaunder.el elisp/test/jaunder-test.el

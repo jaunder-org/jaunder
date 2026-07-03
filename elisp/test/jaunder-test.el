@@ -635,4 +635,33 @@
     (jaunder--set-keyword "DATE" "[2027-01-01 Fri 00:00]")
     (should (equal (jaunder--buffer-keyword "DATE") "[2027-01-01 Fri 00:00]"))))
 
+;;; publish validation + Location->id + force-draft (C4 / issue #162)
+
+(ert-deftest jaunder-validate-publish-rejects-empty-body ()
+  (let ((e (jaunder--make-entry :body "   \n")))
+    (should-error (jaunder--validate-publish e "published" nil nil))))
+
+(ert-deftest jaunder-validate-publish-scheduled-needs-future ()
+  (let ((e (jaunder--make-entry :body "x")))
+    (should-error (jaunder--validate-publish e "scheduled" "[2000-01-01 Sat 00:00]" nil))
+    ;; A far-future date passes.
+    (should-not (jaunder--validate-publish e "scheduled" "[2999-01-01 Tue 00:00]" nil))))
+
+(ert-deftest jaunder-location->id-extracts-numeric-tail ()
+  (should (equal (jaunder--location->id "https://x/atompub/alice/posts/42") "42"))
+  (should (equal (jaunder--location->id "https://x/atompub/alice/posts/42/") "42"))
+  (should (null (jaunder--location->id nil))))
+
+(ert-deftest jaunder-force-draft-sets-draft-and-clears-published ()
+  ;; A dated, non-draft entry forced to draft must not carry <published>:
+  ;; the serializer emits <published> whenever the slot is set, independent of
+  ;; the draft flag, so force-draft has to nil it (spec invariant).
+  (let ((e (jaunder--make-entry :body "x" :draft nil :content-type "text/org"
+                                :published "2026-07-01T13:00:00Z")))
+    (jaunder--force-draft e)
+    (should (jaunder-entry-draft e))
+    (should (null (jaunder-entry-published e)))
+    ;; And the wire entry indeed omits <published>.
+    (should-not (string-match-p "<published>" (jaunder--atom-entry->xml e)))))
+
 ;;; jaunder-test.el ends here
