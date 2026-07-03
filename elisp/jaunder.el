@@ -366,6 +366,38 @@ in order with the links in the C2 sent body (#161)."
                                                  (org-attach-expand path))
                                          :content-type mime))))))))))
 
+(defun jaunder--substitute-media (body urls)
+  "Return BODY with its qualifying media links rewritten to URLS, in order.
+URLS has one entry per qualifying link in document order.  Each link's whole inner
+target is replaced with its URL, brackets and any `[…][description]' preserved
+\(result stays `[[URL]]' / `[[URL][desc]]').  Rewrites right-to-left (#161)."
+  (with-temp-buffer
+    (insert body)
+    (org-mode)
+    (let* ((tree (org-element-parse-buffer))
+           (links (delq nil
+                        (org-element-map tree 'link
+                                         (lambda (link)
+                                           (when (and (jaunder--media-content-type
+                                                       (org-element-property :path link))
+                                                      (member (org-element-property :type link)
+                                                              '("file" "attachment")))
+                                             link)))))
+           (pairs (cl-mapcar #'cons links urls)))
+      (dolist (pair (nreverse pairs))
+        (let* ((link (car pair))
+               (url (cdr pair))
+               (beg (org-element-property :begin link))
+               (end (- (org-element-property :end link)
+                       (or (org-element-property :post-blank link) 0)))
+               (cb (org-element-property :contents-begin link))
+               (ce (org-element-property :contents-end link))
+               (desc (and cb ce (buffer-substring-no-properties cb ce))))
+          (delete-region beg end)
+          (goto-char beg)
+          (insert (if desc (format "[[%s][%s]]" url desc) (format "[[%s]]" url))))))
+    (buffer-substring-no-properties (point-min) (point-max))))
+
 (defun jaunder--media-preflight (records)
   "Signal an error if any RECORDS `:path' is not a readable file.
 RECORDS is a `jaunder--collect-media-links' list.  Checks every path and, if any

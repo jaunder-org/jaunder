@@ -431,4 +431,29 @@
             (should-not (string-match-p "a.png" (error-message-string err)))))
       (delete-directory d t))))
 
+(ert-deftest jaunder-media-substitute-single-and-desc ()
+  (should (equal (jaunder--substitute-media
+                  "a [[file:x.png]] b [[./y.png][alt]] c"
+                  '("https://h/m/x.png" "https://h/m/y.png"))
+                 "a [[https://h/m/x.png]] b [[https://h/m/y.png][alt]] c")))
+
+(ert-deftest jaunder-media-substitute-collision-is-positional ()
+  ;; same raw target, different resolved URLs -> each rewritten independently
+  (should (equal (jaunder--substitute-media
+                  "[[attachment:p.png]] and [[attachment:p.png]]"
+                  '("https://h/m/aaa/p.png" "https://h/m/bbb/p.png"))
+                 "[[https://h/m/aaa/p.png]] and [[https://h/m/bbb/p.png]]")))
+
+(ert-deftest jaunder-media-substitute-same-file-same-url ()
+  ;; one file behind two links -> caller passes the same URL twice; both rewrite
+  (should (equal (jaunder--substitute-media
+                  "[[file:x.png]] then [[file:x.png]]"
+                  '("https://h/m/x.png" "https://h/m/x.png"))
+                 "[[https://h/m/x.png]] then [[https://h/m/x.png]]")))
+
+(ert-deftest jaunder-media-substitute-no-links-is-noop ()
+  (should (equal (jaunder--substitute-media
+                  "plain [[https://x/y.png]] and [[file:notes.txt]] only" nil)
+                 "plain [[https://x/y.png]] and [[file:notes.txt]] only")))
+
 ;;; jaunder-test.el ends here

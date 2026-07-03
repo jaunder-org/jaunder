@@ -514,7 +514,7 @@ git commit -m "feat(media): pre-flight all media links, fail-fast listing missin
 - Consumes: `jaunder--media-content-type` (Task 3) as the shared qualification
   predicate.
 
-- [ ] **Step 1: Write the failing tests** (single/desc, collision,
+- [x] **Step 1: Write the failing tests** (single/desc, collision,
       dedup-same-url, no-op):
 
 ```elisp
@@ -544,10 +544,10 @@ git commit -m "feat(media): pre-flight all media links, fail-fast listing missin
                  "plain [[https://x/y.png]] and [[file:notes.txt]] only")))
 ```
 
-- [ ] **Step 2: Run it, verify it fails.** Run:
+- [x] **Step 2: Run it, verify it fails.** Run:
       `emacs --batch -Q -l elisp/scripts/run-tests.el` — FAIL (undefined).
 
-- [ ] **Step 3: Implement:**
+- [x] **Step 3: Implement:**
 
 ```elisp
 (defun jaunder--substitute-media (body urls)
@@ -583,10 +583,10 @@ target is replaced with its URL, brackets and any `[…][description]' preserved
     (buffer-substring-no-properties (point-min) (point-max))))
 ```
 
-- [ ] **Step 4: Run it, verify it passes.** Run:
+- [x] **Step 4: Run it, verify it passes.** Run:
       `emacs --batch -Q -l elisp/scripts/run-tests.el` — PASS.
 
-- [ ] **Step 5: Commit:**
+- [x] **Step 5: Commit:**
 
 ```bash
 cargo xtask check
