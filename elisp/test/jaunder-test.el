@@ -744,4 +744,19 @@
           (should (equal (jaunder--buffer-property "JAUNDER_SYNCED") "\"z\"")))
       (when (buffer-file-name) (delete-file (buffer-file-name))))))
 
+(ert-deftest jaunder-new-post-writes-timestamped-draft ()
+  (let ((dir (make-temp-file "jaunder-np-" t)))
+    (unwind-protect
+        (let ((path (jaunder--new-post-in dir "20260703T101500")))
+          (should (equal (file-name-nondirectory path) "draft-20260703T101500.org"))
+          (should (file-exists-p path))
+          (let ((buf (find-file-noselect path)))
+            (unwind-protect
+                (with-current-buffer buf
+                  (should (equal (jaunder--buffer-property "JAUNDER_STATUS") "draft"))
+                  (should (jaunder--buffer-keyword "TITLE"))   ; present (may be empty)
+                  (should (jaunder--buffer-keyword "DATE")))
+              (kill-buffer buf))))
+      (delete-directory dir t))))
+
 ;;; jaunder-test.el ends here

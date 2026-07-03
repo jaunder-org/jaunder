@@ -546,25 +546,34 @@ touched."
 
 ;;; multi-blog config + resolution (unit C4, issue #162)
 
-(defun jaunder--resolve-blog (file-or-dir)
-  "Return the active-blog plist (:base-url :username) for FILE-OR-DIR.
-Longest-prefix match against `jaunder-blogs'; else the single-blog globals;
-else an error naming the directory."
-  (let* ((dir (file-name-as-directory
-               (expand-file-name (if (file-directory-p file-or-dir)
-                                     file-or-dir
-                                   (file-name-directory file-or-dir)))))
-         (best nil) (best-len -1))
+(defun jaunder--blog-entry-for (file-or-dir)
+  "Return the `jaunder-blogs' entry (DIRECTORY . PLIST) governing FILE-OR-DIR, or nil.
+Longest-prefix match: the entry whose DIRECTORY is the longest prefix of
+FILE-OR-DIR's expanded directory, so a nested blog root wins over its parent.
+Both `jaunder--resolve-blog' (which blog to publish to) and `jaunder-new-post'
+\(where to create a draft) share this one matcher."
+  (let ((dir (file-name-as-directory
+              (expand-file-name (if (file-directory-p file-or-dir)
+                                    file-or-dir
+                                  (file-name-directory file-or-dir)))))
+        (best nil) (best-len -1))
     (dolist (entry jaunder-blogs)
       (let ((root (file-name-as-directory (expand-file-name (car entry)))))
         (when (and (string-prefix-p root dir) (> (length root) best-len))
-          (setq best (cdr entry) best-len (length root)))))
+          (setq best entry best-len (length root)))))
+    best))
+
+(defun jaunder--resolve-blog (file-or-dir)
+  "Return the active-blog plist (:base-url :username) for FILE-OR-DIR.
+Longest-prefix match against `jaunder-blogs' (`jaunder--blog-entry-for'); else
+the single-blog globals; else an error naming FILE-OR-DIR."
+  (let ((best (cdr (jaunder--blog-entry-for file-or-dir))))
     (cond
      (best (list :base-url (plist-get best :base-url)
                  :username (plist-get best :username)))
      ((and jaunder-base-url jaunder-username)
       (list :base-url jaunder-base-url :username jaunder-username))
-     (t (error "jaunder: no blog configured for %s" dir)))))
+     (t (error "jaunder: no blog configured for %s" file-or-dir)))))
 
 (defmacro jaunder--with-blog (file &rest body)
   "Resolve the blog for FILE and run BODY with the transport specials bound."
@@ -656,6 +665,36 @@ send); absent it, the render falls back to the local zone via
           (jaunder--set-keyword "DATE" (jaunder--utc->org-date utc tz)))))
     (save-buffer)
     slug))
+
+;;; new-post command (unit C4, issue #162)
+
+(defun jaunder--new-post-in (dir now-string)
+  "Create and save a timestamped draft in DIR stamped NOW-STRING; return its path.
+Inserts the minimal org template (empty TITLE, DATE now, empty KEYWORDS and
+DESCRIPTION, JAUNDER_STATUS draft) and leaves point in the body."
+  (let* ((path (expand-file-name (format "draft-%s.org" now-string) dir))
+         (buf (find-file-noselect path)))
+    (with-current-buffer buf
+      (insert "#+TITLE: \n"
+              (format "#+DATE: %s\n" (format-time-string "[%Y-%m-%d %a %H:%M]"))
+              "#+KEYWORDS: \n"
+              "#+DESCRIPTION: \n"
+              "#+PROPERTY: JAUNDER_STATUS draft\n\n")
+      (save-buffer))
+    path))
+
+(defun jaunder-new-post ()
+  "Create a new Jaunder draft in the blog whose directory contains `default-directory'.
+When no blog matches, prompt to choose one from `jaunder-blogs'.  Inserts the
+minimal template and visits the file."
+  (interactive)
+  (let* ((dir (or (car (jaunder--blog-entry-for default-directory))
+                  (if jaunder-blogs
+                      (completing-read "Blog directory: " (mapcar #'car jaunder-blogs) nil t)
+                    default-directory)))
+         (path (jaunder--new-post-in dir (format-time-string "%Y%m%dT%H%M%S"))))
+    (switch-to-buffer (find-file-noselect path))
+    (goto-char (point-max))))
 
 (defun jaunder--atom->org (&rest _args)
   "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."
