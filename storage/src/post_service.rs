@@ -51,6 +51,40 @@ pub async fn create_rendered_post(
     storage.create_post(&input).await
 }
 
+/// The single definition of "a timeline-visible seeded post": a public,
+/// Markdown-rendered post, published now iff `published`. Shared by
+/// `storage::test_support::seed_posts` (in-process) and the `test-support`
+/// binary's `seed_posts_for_user` (out-of-process), so the recipe — not just a
+/// row, but the Public audience + rendered HTML that make it timeline-visible —
+/// lives in one place. Gated so a normal `storage` build never compiles it, yet
+/// the `test-support` binary reaches it via the lightweight `seed-posts` feature
+/// (no `tempfile`/`rstest_reuse`).
+///
+/// # Errors
+///
+/// Returns `Err(CreatePostError)` if the storage write fails.
+#[cfg(any(test, feature = "seed-posts"))]
+pub async fn seed_rendered_post(
+    storage: &dyn PostStorage,
+    user_id: i64,
+    slug: Slug,
+    body: String,
+    published: bool,
+) -> Result<i64, CreatePostError> {
+    create_rendered_post(
+        storage,
+        user_id,
+        None,
+        slug,
+        body,
+        PostFormat::Markdown,
+        published.then(Utc::now),
+        None,
+        vec![AudienceTarget::Public],
+    )
+    .await
+}
+
 /// Renders `body` according to `format` and updates the post via storage.
 ///
 /// # Errors

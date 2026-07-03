@@ -2,6 +2,15 @@
   "$schema": "https://raw.githubusercontent.com/minikin/cargo-crap/main/schemas/report-v1.json",
   "entries": [
     {
+      "coverage": 0.0,
+      "crap": 156.0,
+      "crate": "test-support",
+      "cyclomatic": 12.0,
+      "file": "test-support/src/main.rs",
+      "function": "main",
+      "line": 80
+    },
+    {
       "coverage": 83.33333333333334,
       "crap": 27.893518518518512,
       "crate": "jaunder",
@@ -45,15 +54,6 @@
       "file": "web/src/pages/mod.rs",
       "function": "App",
       "line": 73
-    },
-    {
-      "coverage": 0.0,
-      "crap": 20.0,
-      "crate": "test-support",
-      "cyclomatic": 4.0,
-      "file": "test-support/src/main.rs",
-      "function": "main",
-      "line": 42
     },
     {
       "coverage": 66.66666666666666,
@@ -179,7 +179,7 @@
       "cyclomatic": 13.0,
       "file": "storage/src/post_service.rs",
       "function": "perform_post_creation",
-      "line": 298
+      "line": 332
     },
     {
       "coverage": 100.0,
@@ -692,7 +692,7 @@
       "cyclomatic": 7.0,
       "file": "storage/src/post_service.rs",
       "function": "perform_post_update",
-      "line": 177
+      "line": 211
     },
     {
       "coverage": 100.0,
@@ -773,7 +773,7 @@
       "cyclomatic": 7.0,
       "file": "test-support/src/lib.rs",
       "function": "seed_posts_for_user",
-      "line": 51
+      "line": 56
     },
     {
       "coverage": 95.23809523809524,
@@ -1871,7 +1871,7 @@
       "cyclomatic": 4.0,
       "file": "storage/src/post_service.rs",
       "function": "PerformUpdateError::from",
-      "line": 108
+      "line": 142
     },
     {
       "coverage": 100.0,
@@ -2079,6 +2079,24 @@
       "file": "server/src/atompub/mod.rs",
       "function": "HandlerError::from",
       "line": 215
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "test-support",
+      "cyclomatic": 4.0,
+      "file": "test-support/src/lib.rs",
+      "function": "create_user",
+      "line": 101
+    },
+    {
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "test-support",
+      "cyclomatic": 4.0,
+      "file": "test-support/src/lib.rs",
+      "function": "reset_mail",
+      "line": 142
     },
     {
       "coverage": 85.71428571428571,
@@ -2492,7 +2510,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/post_service.rs",
       "function": "PublishUpdate::into_inputs",
-      "line": 134
+      "line": 168
     },
     {
       "coverage": 100.0,
@@ -2547,15 +2565,6 @@
       "file": "storage/src/test_support.rs",
       "function": "splice_db_name",
       "line": 269
-    },
-    {
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "storage",
-      "cyclomatic": 3.0,
-      "file": "storage/src/test_support.rs",
-      "function": "seed_posts",
-      "line": 554
     },
     {
       "coverage": 100.0,
@@ -3761,7 +3770,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/post_service.rs",
       "function": "candidate_slug",
-      "line": 253
+      "line": 287
     },
     {
       "coverage": 100.0,
@@ -3861,6 +3870,15 @@
       "file": "storage/src/test_support.rs",
       "function": "TestBase::drop",
       "line": 89
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/test_support.rs",
+      "function": "seed_posts",
+      "line": 554
     },
     {
       "coverage": 100.0,
@@ -4320,6 +4338,15 @@
       "file": "server/src/atompub/mod.rs",
       "function": "require_user_match",
       "line": 105
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "test-support",
+      "cyclomatic": 2.0,
+      "file": "test-support/src/lib.rs",
+      "function": "set_site_config",
+      "line": 129
     },
     {
       "coverage": 52.38095238095239,
@@ -6235,8 +6262,17 @@
       "crate": "storage",
       "cyclomatic": 1.0,
       "file": "storage/src/post_service.rs",
+      "function": "seed_rendered_post",
+      "line": 67
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/post_service.rs",
       "function": "update_rendered_post",
-      "line": 60
+      "line": 94
     },
     {
       "coverage": 100.0,
@@ -6488,7 +6524,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
       "function": "seed_user",
-      "line": 591
+      "line": 582
     },
     {
       "coverage": 100.0,

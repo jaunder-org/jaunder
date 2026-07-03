@@ -827,13 +827,14 @@
                 machine.succeed("systemctl start jaunder.service")
                 machine.wait_for_unit("jaunder.service", timeout=60)
                 machine.wait_for_open_port(3000, timeout=30)
-                machine.succeed("sqlite3 /var/lib/jaunder/data/jaunder.db \"INSERT OR REPLACE INTO site_config (key, value) VALUES ('site.registration_policy', 'open')\"")
-                machine.succeed("sqlite3 /var/lib/jaunder/data/jaunder.db \"INSERT OR REPLACE INTO site_config (key, value) VALUES ('feeds.websub_hub_url', 'https://hub.test.local/')\"")
                 machine.succeed(
-                  "cd /var/lib/jaunder"
-                  + " && JAUNDER_BIN=${jaunderBin}/bin/jaunder"
-                  + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
-                  + " ${./scripts/seed-e2e-fixtures.sh}"
+                  "export JAUNDER_DB=sqlite:/var/lib/jaunder/data/jaunder.db; "
+                  + "test-support create-user --username testlogin --password testpassword123 && "
+                  + "test-support create-user --username testnoemail --password testpassword123 && "
+                  + "test-support create-user --username testoperator --password testpassword123 --operator && "
+                  + "test-support set-site-config --key site.registration_policy --value open && "
+                  + "test-support set-site-config --key feeds.websub_hub_url --value https://hub.test.local/ && "
+                  + "test-support reset-mail --path /var/lib/jaunder/mail.jsonl"
                 )
 
               machine.start()
@@ -986,14 +987,14 @@
                   + " EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' CASCADE';"
                   + " END LOOP; END \\$\\$;\""
                 )
-                machine.succeed("sudo -u postgres psql -d jaunder -c \"INSERT INTO site_config (key, value) VALUES ('site.registration_policy', 'open')\"")
-                machine.succeed("sudo -u postgres psql -d jaunder -c \"INSERT INTO site_config (key, value) VALUES ('feeds.websub_hub_url', 'https://hub.test.local/')\"")
                 machine.succeed(
-                  "cd /var/lib/jaunder"
-                  + " && JAUNDER_BIN=${jaunderPkg}/bin/jaunder"
-                  + " JAUNDER_DB=postgres://jaunder:testpassword@127.0.0.1/jaunder"
-                  + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
-                  + " ${./scripts/seed-e2e-fixtures.sh}"
+                  "export JAUNDER_DB=postgres://jaunder:testpassword@127.0.0.1/jaunder; "
+                  + "test-support create-user --username testlogin --password testpassword123 && "
+                  + "test-support create-user --username testnoemail --password testpassword123 && "
+                  + "test-support create-user --username testoperator --password testpassword123 --operator && "
+                  + "test-support set-site-config --key site.registration_policy --value open && "
+                  + "test-support set-site-config --key feeds.websub_hub_url --value https://hub.test.local/ && "
+                  + "test-support reset-mail --path /var/lib/jaunder/mail.jsonl"
                 )
 
               # Seed a fresh DB and run the one browser this derivation targets.

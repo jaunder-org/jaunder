@@ -559,21 +559,12 @@ pub async fn seed_posts(
 ) -> Vec<i64> {
     let mut ids = Vec::with_capacity(count);
     for i in 0..count {
-        let published_at = if published {
-            Some(chrono::Utc::now())
-        } else {
-            None
-        };
-        let id = crate::create_rendered_post(
+        let id = crate::seed_rendered_post(
             &*state.posts,
             user_id,
-            None,
             format!("seed-{i}").parse().expect("valid slug"),
             format!("# Post {i}\n\nbody"),
-            crate::PostFormat::Markdown,
-            published_at,
-            None,
-            vec![common::visibility::AudienceTarget::Public],
+            published,
         )
         .await
         .expect("seed post should be created");

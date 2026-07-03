@@ -13,17 +13,18 @@ name = "test-support"
 path = "src/main.rs"
 
 [dependencies]
-storage = { workspace = true }
+storage = { workspace = true, features = ["seed-posts"] }
 common = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 
-# The seed core's unit test reaches storage's in-process test scaffolding
-# (`storage::test_support`), which is gated behind storage's `test-support`
-# feature. It is a dev-dependency ONLY so the shipped binary never links the
-# scaffolding — the binary seeds through the plain `create_rendered_post` path.
+# The binary shares storage's `seed_rendered_post` recipe via the lightweight
+# `seed-posts` feature above (no extra deps). The heavy `test-support`
+# scaffolding (`storage::test_support`, tempfile, rstest_reuse) is a
+# dev-dependency ONLY, for the smoke tests below — the shipped binary never
+# links it.
 [dev-dependencies]
 storage = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }

@@ -649,11 +649,11 @@
   ],
   "storage/src/post_service.rs": [
     {
-      "line": 367,
+      "line": 401,
       "text": "            Err(CreatePostError::Internal(e)) => {"
     },
     {
-      "line": 368,
+      "line": 402,
       "text": "                return Err(PerformCreationError::Storage(e));"
     }
   ],
@@ -749,75 +749,183 @@
   ],
   "test-support/src/main.rs": [
     {
-      "line": 42,
+      "line": 80,
       "text": "async fn main() -> anyhow::Result<()> {"
     },
     {
-      "line": 43,
+      "line": 81,
       "text": "    let cli = Cli::parse();"
     },
     {
-      "line": 44,
+      "line": 82,
       "text": "    match cli.command {"
     },
     {
-      "line": 45,
+      "line": 83,
       "text": "        Commands::SeedPosts {"
     },
     {
-      "line": 46,
+      "line": 84,
       "text": "            db,"
     },
     {
-      "line": 47,
+      "line": 85,
       "text": "            username,"
     },
     {
-      "line": 48,
+      "line": 86,
       "text": "            count,"
     },
     {
-      "line": 49,
+      "line": 87,
       "text": "            body_prefix,"
     },
     {
-      "line": 50,
+      "line": 88,
       "text": "            published,"
     },
     {
-      "line": 51,
+      "line": 89,
       "text": "        } => {"
     },
     {
-      "line": 52,
+      "line": 90,
       "text": "            let state = storage::open_existing_database(&db).await?;"
     },
     {
-      "line": 53,
+      "line": 91,
       "text": "            let ids ="
     },
     {
-      "line": 54,
+      "line": 92,
       "text": "                seed_posts_for_user(&state, &username, count, published, &body_prefix).await?;"
     },
     {
-      "line": 55,
+      "line": 93,
       "text": "            eprintln!(\"seeded {} posts for {username}\", ids.len());"
     },
     {
-      "line": 56,
+      "line": 94,
       "text": "        }"
     },
     {
-      "line": 57,
+      "line": 95,
+      "text": "        Commands::CreateUser {"
+    },
+    {
+      "line": 96,
+      "text": "            db,"
+    },
+    {
+      "line": 97,
+      "text": "            username,"
+    },
+    {
+      "line": 98,
+      "text": "            password,"
+    },
+    {
+      "line": 99,
+      "text": "            display_name,"
+    },
+    {
+      "line": 100,
+      "text": "            operator,"
+    },
+    {
+      "line": 101,
+      "text": "        } => {"
+    },
+    {
+      "line": 102,
+      "text": "            let state = storage::open_existing_database(&db).await?;"
+    },
+    {
+      "line": 103,
+      "text": "            let id = create_user("
+    },
+    {
+      "line": 104,
+      "text": "                &state,"
+    },
+    {
+      "line": 105,
+      "text": "                &username,"
+    },
+    {
+      "line": 106,
+      "text": "                &password,"
+    },
+    {
+      "line": 107,
+      "text": "                display_name.as_deref(),"
+    },
+    {
+      "line": 108,
+      "text": "                operator,"
+    },
+    {
+      "line": 109,
+      "text": "            )"
+    },
+    {
+      "line": 110,
+      "text": "            .await?;"
+    },
+    {
+      "line": 111,
+      "text": "            eprintln!(\"created user {username} with id {id}\");"
+    },
+    {
+      "line": 112,
+      "text": "        }"
+    },
+    {
+      "line": 113,
+      "text": "        Commands::SetSiteConfig { db, key, value } => {"
+    },
+    {
+      "line": 114,
+      "text": "            let state = storage::open_existing_database(&db).await?;"
+    },
+    {
+      "line": 115,
+      "text": "            set_site_config(&state, &key, &value).await?;"
+    },
+    {
+      "line": 116,
+      "text": "            eprintln!(\"set site_config {key} = {value}\");"
+    },
+    {
+      "line": 117,
+      "text": "        }"
+    },
+    {
+      "line": 118,
+      "text": "        Commands::ResetMail { path } => {"
+    },
+    {
+      "line": 119,
+      "text": "            reset_mail(&path)?;"
+    },
+    {
+      "line": 120,
+      "text": "            eprintln!(\"reset mail-capture file {}\", path.display());"
+    },
+    {
+      "line": 121,
+      "text": "        }"
+    },
+    {
+      "line": 122,
       "text": "    }"
     },
     {
-      "line": 58,
+      "line": 123,
       "text": "    Ok(())"
     },
     {
-      "line": 59,
+      "line": 124,
       "text": "}"
     }
   ],
