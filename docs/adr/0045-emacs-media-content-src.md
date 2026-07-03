@@ -1,4 +1,4 @@
-# ADR-0044: Emacs client harvests media URLs from the response `<content src>`
+# ADR-0045: Emacs client harvests media URLs from the response `<content src>`
 
 - Status: accepted
 - Date: 2026-07-02

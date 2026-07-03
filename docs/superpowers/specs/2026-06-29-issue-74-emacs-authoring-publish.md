@@ -53,7 +53,7 @@ To read `j:slug`/`atom:published` from the response without duplicating XML
 parsing between C and D, a small shared primitive `jaunder--atom-entry-fields`
 (entry XML string → alist of element values) is introduced. **(Amended #161):**
 it lands in **C3** (media upload harvests `<content src>`/`content-type` from
-the response — see ADR-0044), not C4; C4 then consumes the slug/published subset
+the response — see ADR-0045), not C4; C4 then consumes the slug/published subset
 and Unit D's `jaunder--atom->org` builds the full org-buffer synthesis on top of
 the same primitive. (Option B of the C/D-boundary decision.)
 `jaunder--atom-entry-fields` is pure and ERT-tested where it lands.

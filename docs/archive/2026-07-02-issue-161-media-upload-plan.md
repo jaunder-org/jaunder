@@ -66,7 +66,7 @@ Spec: `docs/superpowers/specs/2026-07-02-issue-161-media-upload.md`.
   upload path.
 - `elisp/test/jaunder-media-integration.el` — **new** live ERT file (globbed by
   `run-integration-tests.el`).
-- `docs/adr/0044-emacs-media-content-src.md` — **new** ADR (renumbered on
+- `docs/adr/0045-emacs-media-content-src.md` — **new** ADR (renumbered on
   commit).
 - `docs/superpowers/specs/2026-06-29-issue-74-emacs-authoring-publish.md` —
   annotate the C4 scope-boundary prose (the `jaunder--atom-entry-fields` move to
@@ -78,7 +78,7 @@ Spec: `docs/superpowers/specs/2026-07-02-issue-161-media-upload.md`.
 
 **Files:**
 
-- Create: `docs/adr/0044-emacs-media-content-src.md`
+- Create: `docs/adr/0045-emacs-media-content-src.md`
 - Modify:
   `docs/superpowers/specs/2026-06-29-issue-74-emacs-authoring-publish.md` (C4
   scope prose, ≈ lines 52–58)
@@ -88,11 +88,11 @@ Spec: `docs/superpowers/specs/2026-07-02-issue-161-media-upload.md`.
 harvest `<content src>` (Task 2), and `jaunder--atom-entry-fields` pulled into
 C3.
 
-- [x] **Step 1: Write the ADR** as `docs/adr/0044-emacs-media-content-src.md`,
+- [x] **Step 1: Write the ADR** as `docs/adr/0045-emacs-media-content-src.md`,
       canonical format:
 
 ```markdown
-# ADR-0044: Emacs client harvests media URLs from the response `<content src>`
+# ADR-0045: Emacs client harvests media URLs from the response `<content src>`
 
 - Status: accepted
 - Date: 2026-07-02
@@ -135,9 +135,9 @@ field set (slug, published, ETag).
 
 - [x] **Step 3: Assign the ADR number + sync the README**
 
-Run: `cargo xtask adr renumber` Expected: `0044-emacs-media-content-src.md`
-renamed to the next free number (`0044-…`), the `# ADR-0044:` heading rewritten
-to `# ADR-0044:`, and the `docs/README.md` ADR table regenerated with the new
+Run: `cargo xtask adr renumber` Expected: `0045-emacs-media-content-src.md`
+renamed to the next free number (`0044-…`), the `# ADR-0045:` heading rewritten
+to `# ADR-0045:`, and the `docs/README.md` ADR table regenerated with the new
 row.
 
 - [x] **Step 4: Run the gate**

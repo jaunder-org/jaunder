@@ -69,8 +69,8 @@ local links. C3 turns those local links into uploaded, absolute media URLs. C4
   spec assigns this primitive to C4 in its scope-boundary prose (≈ lines 52–58)
   — annotate that paragraph to record the move.**
 - **ADR (always-0000 workflow)** — write
-  `docs/adr/0044-emacs-media-content-src.md` in the canonical format
-  (`# ADR-0044: …` heading, `- Status: accepted`/`- Date:`/`- Issue:` tokens)
+  `docs/adr/0045-emacs-media-content-src.md` in the canonical format
+  (`# ADR-0045: …` heading, `- Status: accepted`/`- Date:`/`- Issue:` tokens)
   and let **`cargo xtask adr renumber`** assign the number and regenerate the
   `docs/README.md` ADR table. Records (a) the client reads the binary URL from
   the response entry's `<content src>` (not `Location`, not reconstructed) and
