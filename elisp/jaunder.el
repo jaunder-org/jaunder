@@ -112,6 +112,16 @@ Thin I/O wrapper over `auth-source-search' using `jaunder--auth-source-spec'."
           (t (error "jaunder: no auth-source entry for %s@%s"
                     jaunder-username jaunder-base-url)))))
 
+(defun jaunder--curl-header-value (value)
+  "Escape VALUE so `plz' transmits the header intact through curl's config file.
+plz writes each header as `--header \"NAME: VALUE\"' into a curl `--config' file
+without escaping VALUE (plz 0.9.1, plz.el:503).  A raw double quote — as in a
+strong `ETag' echoed back via `If-Match' — closes the config-file string early,
+truncating the header to an empty value that curl then drops, so the precondition
+never reaches the server.  Backslash-escaping `\\' and `\"' lets curl's config
+parser rebuild the literal value."
+  (replace-regexp-in-string "[\\\"]" "\\\\\\&" value))
+
 (defun jaunder--http-request (method url &optional body content-type extra-headers)
   "Make an authenticated METHOD request to URL via `plz', returning a plist.
 METHOD is an HTTP verb string; URL an absolute URL.  BODY is a request body: a
@@ -125,11 +135,13 @@ failure re-signals.
 `plz' drives the `curl' binary, so request construction does not depend on
 the finicky dynamic-variable handling that made `url.el' occasionally drop
 the auth header under load (ADR-0038)."
-  (let ((headers (append
-                  (list (jaunder--basic-auth-header jaunder-username
-                                                    (jaunder--auth-secret)))
-                  (when content-type (list (cons "Content-Type" content-type)))
-                  extra-headers))
+  (let ((headers (mapcar
+                  (lambda (h) (cons (car h) (jaunder--curl-header-value (cdr h))))
+                  (append
+                   (list (jaunder--basic-auth-header jaunder-username
+                                                     (jaunder--auth-secret)))
+                   (when content-type (list (cons "Content-Type" content-type)))
+                   extra-headers)))
         (verb (intern (downcase method))))
     (condition-case err
         (jaunder--plz-response->plist
@@ -695,6 +707,64 @@ minimal template and visits the file."
          (path (jaunder--new-post-in dir (format-time-string "%Y%m%dT%H%M%S"))))
     (switch-to-buffer (find-file-noselect path))
     (goto-char (point-max))))
+
+;;; publish commands (unit C4, issue #162)
+
+(defconst jaunder--entry-content-type "application/atom+xml;type=entry"
+  "Request Content-Type for an AtomPub <entry> POST/PUT.")
+
+(defun jaunder-publish (&optional force-draft)
+  "Publish the current buffer's org post over AtomPub.
+Resolves the blog from the buffer's file, records the machine zone when unset,
+maps + validates, uploads media (sent body only), sends (POST create / PUT with
+If-Match on update), writes back server values (ID first), and renames the temp
+file to <slug>.org.  With FORCE-DRAFT (see `jaunder-save-draft') pushes an
+`app:draft' regardless of JAUNDER_STATUS.  A non-2xx status leaves the on-disk
+file pristine."
+  (interactive)
+  (let ((file (or (buffer-file-name)
+                  (error "jaunder: buffer is not visiting a file"))))
+    (jaunder--with-blog file
+                        (let* ((status (jaunder--buffer-property "JAUNDER_STATUS"))
+                               (date-raw (jaunder--buffer-keyword "DATE"))
+                               (tz (jaunder--buffer-property "JAUNDER_DATE_TZ"))
+                               (id (jaunder--buffer-property "JAUNDER_ID"))
+                               (synced (jaunder--buffer-property "JAUNDER_SYNCED"))
+                               (entry (jaunder--org->atom)))
+                          (when force-draft (jaunder--force-draft entry))
+                          ;; Validate BEFORE any buffer write, so a rejected publish leaves the
+                          ;; on-disk file pristine.
+                          (jaunder--validate-publish entry status date-raw tz)
+                          ;; Record the machine zone (idempotent) so #+DATE: is interpreted in a
+                          ;; recorded zone on later machines.  A first-publish's org->atom above
+                          ;; already used the local zone, which equals the captured name.
+                          (jaunder--ensure-date-tz)
+                          (setf (jaunder-entry-body entry)
+                                (jaunder--localize-media (jaunder-entry-body entry)))
+                          (let* ((xml (jaunder--atom-entry->xml entry))
+                                 (resp (if id
+                                           (jaunder--http-request
+                                            "PUT"
+                                            (jaunder--build-url jaunder-base-url "atompub"
+                                                                jaunder-username "posts" id)
+                                            xml jaunder--entry-content-type
+                                            (when synced (list (cons "If-Match" synced))))
+                                         (jaunder--http-request
+                                          "POST"
+                                          (jaunder--build-url jaunder-base-url "atompub"
+                                                              jaunder-username "posts")
+                                          xml jaunder--entry-content-type)))
+                                 (code (plist-get resp :status)))
+                            (unless (memq code '(200 201))
+                              (error "jaunder: publish failed (HTTP %s)" code))
+                            (let ((slug (jaunder--write-back resp (null id))))
+                              (when slug (jaunder--rename-to-slug slug))
+                              (message "jaunder: published %s" (or slug ""))))))))
+
+(defun jaunder-save-draft ()
+  "Publish the current buffer as a server-side draft (forces `app:draft')."
+  (interactive)
+  (jaunder-publish t))
 
 (defun jaunder--atom->org (&rest _args)
   "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."

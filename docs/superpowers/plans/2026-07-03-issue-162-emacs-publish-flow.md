@@ -909,7 +909,7 @@ git commit -m "feat(emacs): jaunder-new-post minimal template + timestamped draf
 - Produces: `jaunder-publish (&optional force-draft)` and
   `jaunder-save-draft ()` (interactive).
 
-- [ ] **Step 1: Write the failing live tests**
+- [x] **Step 1: Write the failing live tests**
 
 ```elisp
 ;;; jaunder-publish-integration.el --- C4 live publish tests -*- lexical-binding: t; -*-
@@ -1005,13 +1005,13 @@ git commit -m "feat(emacs): jaunder-new-post minimal template + timestamped draf
 ;;; jaunder-publish-integration.el ends here
 ```
 
-- [ ] **Step 2: Run the live suite, verify it fails**
+- [x] **Step 2: Run the live suite, verify it fails**
 
 Run: `devtool run -- cargo xtask elisp-integration` Then read the parked log:
 `rg -n 'FAILED|jaunder-publish' .xtask/run/*.err` (or `.out`). Expected: FAIL —
 `jaunder-publish`/`jaunder-save-draft` undefined.
 
-- [ ] **Step 3: Implement the commands**
+- [x] **Step 3: Implement the commands**
 
 ```elisp
 (defconst jaunder--entry-content-type "application/atom+xml;type=entry"
@@ -1071,13 +1071,13 @@ file pristine."
   (jaunder-publish t))
 ```
 
-- [ ] **Step 4: Run the live suite, verify it passes**
+- [x] **Step 4: Run the live suite, verify it passes**
 
 Run: `devtool run -- cargo xtask elisp-integration` Expected: all
 `jaunder-publish-*` / `jaunder-save-draft-*` tests PASS (check for
 `xtask-done: … ok=true`).
 
-- [ ] **Step 5: Full gate + commit**
+- [x] **Step 5: Full gate + commit**
 
 ```bash
 git add elisp/jaunder.el elisp/test/jaunder-publish-integration.el

@@ -552,6 +552,16 @@
              (should (equal (cdr (assoc "Content-Type" captured)) "image/png"))
              (should (assoc "Authorization" captured)))))
 
+(ert-deftest jaunder-curl-header-value-escapes-quotes-and-backslashes ()
+  ;; plz 0.9.1 wraps each header value in double quotes inside a curl --config
+  ;; file without escaping it, so a raw quote (a strong ETag echoed as If-Match)
+  ;; truncates the header and curl drops it.  Escaping \ and " lets curl rebuild
+  ;; the literal value; a value without either is unchanged.
+  (should (equal (jaunder--curl-header-value "\"abc123\"") "\\\"abc123\\\""))
+  (should (equal (jaunder--curl-header-value "a\\b") "a\\\\b"))
+  (should (equal (jaunder--curl-header-value "application/atom+xml;type=entry")
+                 "application/atom+xml;type=entry")))
+
 (ert-deftest jaunder-upload-media-errors-on-non-2xx ()
   (cl-letf (((symbol-function 'jaunder--http-request)
              (lambda (&rest _) '(:status 500 :body "boom"))))
