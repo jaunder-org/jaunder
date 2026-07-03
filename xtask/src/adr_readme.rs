@@ -9,7 +9,7 @@
 //! parity gate. No behavior lives in more than one place.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -41,6 +41,7 @@ pub struct AdrEntry {
 }
 
 /// A parsed committed table row. Cells are trimmed (padding-proof).
+#[derive(Debug, PartialEq, Eq)]
 pub struct TableRow {
     pub num: u32,
     pub target: String,
@@ -48,19 +49,56 @@ pub struct TableRow {
     pub status: String,
 }
 
+/// A directory entry that qualifies as an ADR: a regular `*.md` file whose name
+/// carries a leading number. Content is intentionally not read here so each
+/// caller keeps its own IO-error policy.
+struct AdrFile {
+    num: u32,
+    filename: String,
+    path: PathBuf,
+}
+
+/// The qualifying ADR files under `repo/docs/adr`, unsorted — the single home of
+/// the "what counts as an ADR file" rule (`is_file` → `.md` → leading number).
+/// The `read_dir` error is returned unwrapped so callers phrase their own context
+/// (`parse_adr_dir` wants "reading <dir>", `format_problems` wants
+/// "cannot read <dir>").
+fn adr_files(repo: &Path) -> Result<Vec<AdrFile>> {
+    let mut files = Vec::new();
+    for ent in std::fs::read_dir(repo.join(ADR_DIR))? {
+        let ent = ent?;
+        if !ent.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let filename = ent.file_name().to_string_lossy().into_owned();
+        if !filename.ends_with(".md") {
+            continue;
+        }
+        let Some(num) = ids::leading_number(&filename) else {
+            continue;
+        };
+        files.push(AdrFile {
+            num,
+            filename,
+            path: ent.path(),
+        });
+    }
+    Ok(files)
+}
+
 /// The title text of a `# ADR-NNNN: Title` (or legacy `# NNNN. Title`) heading,
 /// prefix stripped. Falls back to the whole heading when it matches neither form.
 fn heading_title(content: &str) -> String {
     let line = content.lines().find(|l| l.starts_with("# ")).unwrap_or("");
     let after = line.trim_start_matches("# ").trim();
-    if let Some((lhs, title)) = after.split_once(": ") {
-        if lhs.starts_with("ADR-") && lhs[4..].chars().all(|c| c.is_ascii_digit()) {
-            return title.trim().to_string();
-        }
-    }
-    if let Some((lhs, title)) = after.split_once(". ") {
-        if !lhs.is_empty() && lhs.chars().all(|c| c.is_ascii_digit()) {
-            return title.trim().to_string();
+    for (prefix, sep) in [("ADR-", ": "), ("", ". ")] {
+        if let Some((lhs, title)) = after.split_once(sep) {
+            if lhs.starts_with(prefix)
+                && !lhs.is_empty()
+                && lhs[prefix.len()..].chars().all(|c| c.is_ascii_digit())
+            {
+                return title.trim().to_string();
+            }
         }
     }
     after.to_string()
@@ -109,23 +147,12 @@ fn parse_row(line: &str) -> Option<TableRow> {
 pub fn parse_adr_dir(repo: &Path) -> Result<Vec<AdrEntry>> {
     let dir = repo.join(ADR_DIR);
     let mut entries = Vec::new();
-    for ent in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
-        let ent = ent?;
-        if !ent.file_type().map(|t| t.is_file()).unwrap_or(false) {
-            continue;
-        }
-        let filename = ent.file_name().to_string_lossy().into_owned();
-        if !filename.ends_with(".md") {
-            continue;
-        }
-        let Some(num) = ids::leading_number(&filename) else {
-            continue;
-        };
-        let content = std::fs::read_to_string(ent.path())
-            .with_context(|| format!("reading {}", ent.path().display()))?;
+    for f in adr_files(repo).with_context(|| format!("reading {}", dir.display()))? {
+        let content = std::fs::read_to_string(&f.path)
+            .with_context(|| format!("reading {}", f.path.display()))?;
         entries.push(AdrEntry {
-            num,
-            filename,
+            num: f.num,
+            filename: f.filename,
             title: heading_title(&content),
             status: status_token(&content),
         });
@@ -144,15 +171,19 @@ pub fn parse_table_block(block: &str) -> Vec<TableRow> {
 /// title from the ADR heading. Single-space padded — prettier owns alignment.
 pub fn render_block(entries: &[AdrEntry], existing: &[TableRow]) -> String {
     let mut out = String::from("| #   | Title | Status |\n| --- | ----- | ------ |\n");
-    for (num, target, title, status) in resolved_rows(entries, existing) {
-        out.push_str(&format!("| [{num:04}]({target}) | {title} | {status} |\n"));
+    for r in resolved_rows(entries, existing) {
+        out.push_str(&format!(
+            "| [{:04}]({}) | {} | {} |\n",
+            r.num, r.target, r.title, r.status
+        ));
     }
     out.trim_end().to_string()
 }
 
-/// Replace the text strictly between the markers with `new_block`. Errors when a
-/// marker is missing or out of order.
-pub fn splice_block(readme: &str, new_block: &str) -> Result<String> {
+/// The byte range strictly between the ADR-table markers: `(start, end)` where
+/// `start` is just past `BEGIN` and `end` is at `END`. Errors when either marker
+/// is missing or they are out of order.
+fn marker_bounds(readme: &str) -> Result<(usize, usize)> {
     let begin = readme
         .find(BEGIN)
         .with_context(|| format!("{README} is missing the `{BEGIN}` marker"))?;
@@ -160,7 +191,13 @@ pub fn splice_block(readme: &str, new_block: &str) -> Result<String> {
         .find(END)
         .with_context(|| format!("{README} is missing the `{END}` marker"))?;
     anyhow::ensure!(begin < end, "{README} adr-table markers are out of order");
-    let after_begin = begin + BEGIN.len();
+    Ok((begin + BEGIN.len(), end))
+}
+
+/// Replace the text strictly between the markers with `new_block`. Errors when a
+/// marker is missing or out of order.
+pub fn splice_block(readme: &str, new_block: &str) -> Result<String> {
+    let (after_begin, end) = marker_bounds(readme)?;
     Ok(format!(
         "{}\n\n{}\n\n{}",
         &readme[..after_begin],
@@ -171,27 +208,16 @@ pub fn splice_block(readme: &str, new_block: &str) -> Result<String> {
 
 /// The block text between the markers (for reading existing titles).
 fn extract_block(readme: &str) -> Result<String> {
-    let begin = readme
-        .find(BEGIN)
-        .with_context(|| format!("{README} is missing the `{BEGIN}` marker"))?
-        + BEGIN.len();
-    let end = readme
-        .find(END)
-        .with_context(|| format!("{README} is missing the `{END}` marker"))?;
-    anyhow::ensure!(begin <= end, "{README} adr-table markers are out of order");
-    Ok(readme[begin..end].to_string())
+    let (start, end) = marker_bounds(readme)?;
+    Ok(readme[start..end].to_string())
 }
-
-/// A row's mechanical cells (number, link target, status) plus its
-/// preserved-or-seeded title: `(num, target, title, status)`.
-type Cells = (u32, String, String, String);
 
 /// The desired table rows, ascending by number, applying the title-preservation
 /// rule once: reuse an existing row's title when a row with that number exists,
 /// else seed it from the ADR heading. The single source of that rule — both the
 /// renderer ([`render_block`]) and the idempotence check ([`sync_readme_at`])
 /// consume it, so they can never disagree.
-fn resolved_rows(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<Cells> {
+fn resolved_rows(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<TableRow> {
     let title_by_num: BTreeMap<u32, &str> =
         existing.iter().map(|r| (r.num, r.title.as_str())).collect();
     let mut sorted: Vec<&AdrEntry> = entries.iter().collect();
@@ -204,20 +230,13 @@ fn resolved_rows(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<Cells> {
                 .copied()
                 .unwrap_or(e.title.as_str())
                 .to_string();
-            (
-                e.num,
-                format!("adr/{}", e.filename),
+            TableRow {
+                num: e.num,
+                target: format!("adr/{}", e.filename),
                 title,
-                e.status.clone(),
-            )
+                status: e.status.clone(),
+            }
         })
-        .collect()
-}
-
-fn current_cells(existing: &[TableRow]) -> Vec<Cells> {
-    existing
-        .iter()
-        .map(|r| (r.num, r.target.clone(), r.title.clone(), r.status.clone()))
         .collect()
 }
 
@@ -232,7 +251,7 @@ pub fn sync_readme_at(repo: &Path) -> Result<String> {
     let existing = parse_table_block(&extract_block(&readme)?);
 
     let desired = resolved_rows(&entries, &existing);
-    if desired == current_cells(&existing) {
+    if desired == existing {
         return Ok(format!("{} rows, already in sync", entries.len()));
     }
 
@@ -312,26 +331,15 @@ fn file_format_problems(filename: &str, num: u32, content: &str) -> Vec<String> 
 /// Every ADR file's `adr-format` problems, sorted for stable output. A directory
 /// read error is surfaced as a single problem rather than a panic.
 pub fn format_problems(repo: &Path) -> Vec<String> {
-    let dir = repo.join(ADR_DIR);
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(e) => return vec![format!("cannot read {}: {e}", dir.display())],
+    let files = match adr_files(repo) {
+        Ok(f) => f,
+        Err(e) => return vec![format!("cannot read {}: {e}", repo.join(ADR_DIR).display())],
     };
     let mut problems = Vec::new();
-    for ent in entries.flatten() {
-        if !ent.file_type().map(|t| t.is_file()).unwrap_or(false) {
-            continue;
-        }
-        let filename = ent.file_name().to_string_lossy().into_owned();
-        if !filename.ends_with(".md") {
-            continue;
-        }
-        let Some(num) = ids::leading_number(&filename) else {
-            continue;
-        };
-        match std::fs::read_to_string(ent.path()) {
-            Ok(content) => problems.extend(file_format_problems(&filename, num, &content)),
-            Err(e) => problems.push(format!("{filename}: cannot read ({e})")),
+    for f in files {
+        match std::fs::read_to_string(&f.path) {
+            Ok(content) => problems.extend(file_format_problems(&f.filename, f.num, &content)),
+            Err(e) => problems.push(format!("{}: cannot read ({e})", f.filename)),
         }
     }
     problems.sort();
@@ -509,7 +517,7 @@ mod tests {
             status: "accepted".into(),
         }];
         // The preserved title is the curated one, so desired == current: a no-op.
-        assert_eq!(resolved_rows(&entries, &existing), current_cells(&existing));
+        assert_eq!(resolved_rows(&entries, &existing), existing);
     }
 
     #[test]
