@@ -49,14 +49,14 @@ Playwright (TypeScript, `node:child_process`).
 
 ---
 
-### Task 1: File the follow-up issue (separable concern)
+### Task 1: File the follow-up issue (separable concern) — filed #212
 
 Per `jaunder-start` step 5 / `jaunder-plan` scope rule, the separable concern is
 filed as the first task — not folded in silently.
 
 **Files:** none (GitHub issue only).
 
-- [ ] **Step 1: File the issue** via `jaunder-issues` conventions (GitHub MCP
+- [x] **Step 1: File the issue** via `jaunder-issues` conventions (GitHub MCP
       `issue_write` or `gh issue create`), repo `jaunder-org/jaunder`, milestone
       "E2E test suite", type Task, label `test-infra`:
   - **Title:**
@@ -74,7 +74,7 @@ filed as the first task — not folded in silently.
     > `storage::test_support::seed_posts` out of `storage` into `test-support`
     > (noted in #210's ADR; not committed there).
 
-- [ ] **Step 2: Record the issue number** in this plan's Task 1 heading (append
+- [x] **Step 2: Record the issue number** in this plan's Task 1 heading (append
       `— filed #<N>`) so `jaunder-ship` can reference it. No commit needed (docs
       updated with the plan checkboxes at ship).
 
@@ -105,7 +105,7 @@ filed as the first task — not folded in silently.
   `test-support seed-posts --db <url> --username <name> --count <N> --body-prefix <P> [--published]`
   and library fns `seed_body`, `seed_slug`, `seed_posts_for_user` (unit-tested).
 
-- [ ] **Step 1: Add the crate to the workspace**
+- [x] **Step 1: Add the crate to the workspace**
 
   In root `Cargo.toml`, add `"test-support"` to `[workspace] members` (keep
   alphabetical):
@@ -121,7 +121,7 @@ filed as the first task — not folded in silently.
   ]
   ```
 
-- [ ] **Step 2: Write `test-support/Cargo.toml`**
+- [x] **Step 2: Write `test-support/Cargo.toml`**
 
   ```toml
   [package]
@@ -154,7 +154,7 @@ filed as the first task — not folded in silently.
   the version specs `server/Cargo.toml` uses (copy its `clap`/`tokio`/`anyhow`
   lines).
 
-- [ ] **Step 3: Write the failing unit tests for the pure content helpers** in
+- [x] **Step 3: Write the failing unit tests for the pure content helpers** in
       `test-support/src/lib.rs`:
 
   ```rust
@@ -202,14 +202,14 @@ filed as the first task — not folded in silently.
   }
   ```
 
-- [ ] **Step 4: Run the helper tests, verify they fail (not yet compiled)**
+- [x] **Step 4: Run the helper tests, verify they fail (not yet compiled)**
 
   Run:
   `cargo nextest run -p test-support seed_body_renders_prefix_and_index seed_slug_is_slug_safe`
   Expected: FAIL to compile / not found — crate doesn't build yet (no
   `main.rs`).
 
-- [ ] **Step 5: Add the DB-touching seed core + its test** to
+- [x] **Step 5: Add the DB-touching seed core + its test** to
       `test-support/src/lib.rs`. Mirror the type imports from the top of
       `storage/src/test_support.rs` (adjust paths to the crate-public re-exports
       — `storage::create_rendered_post`, `storage::PostFormat`, the
@@ -305,13 +305,13 @@ filed as the first task — not folded in silently.
   accessor, mirror the call in `server/tests/web/web_posts.rs` — do not invent a
   signature.
 
-- [ ] **Step 6: Run the seed-core test, verify it fails**
+- [x] **Step 6: Run the seed-core test, verify it fails**
 
   Run:
   `cargo nextest run -p test-support seeds_published_posts_visible_to_the_author`
   Expected: FAIL — `seed_posts_for_user` not yet compiling / assertions unmet.
 
-- [ ] **Step 7: Write `test-support/src/main.rs` (thin clap shell)**
+- [x] **Step 7: Write `test-support/src/main.rs` (thin clap shell)**
 
   ```rust
   use clap::{Parser, Subcommand};
@@ -362,12 +362,12 @@ filed as the first task — not folded in silently.
   `db: String` and parse it via the same `FromStr`/constructor
   `server/src/cli.rs` uses for its `StorageArgs.db` field (copy that mechanism).
 
-- [ ] **Step 8: Run the full crate test suite, verify pass**
+- [x] **Step 8: Run the full crate test suite, verify pass**
 
   Run: `cargo nextest run -p test-support` Expected: PASS (all helper +
   seed-core tests).
 
-- [ ] **Step 9: Run the gate; absorb residual `main.rs` coverage**
+- [x] **Step 9: Run the gate; absorb residual `main.rs` coverage**
 
   Run: `cargo xtask check` If coverage flags new uncovered lines in
   `test-support/src/main.rs` (the `#[tokio::main]` wiring, which unit tests
@@ -378,7 +378,7 @@ filed as the first task — not folded in silently.
   eventual PR per the coverage-baseline policy (tooling glue, no
   server-fn/storage logic baselined).
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
   ```bash
   git add Cargo.toml test-support/ coverage-baseline.json
@@ -401,7 +401,7 @@ filed as the first task — not folded in silently.
 - Produces: `test-support` on the e2e VM PATH; `JAUNDER_DB` set in the
   Playwright process env for both backends.
 
-- [ ] **Step 1: Add the crane package** next to `jaunderBin` (flake.nix ~359):
+- [x] **Step 1: Add the crane package** next to `jaunderBin` (flake.nix ~359):
 
   ```nix
   testSupportBin = craneLib.buildPackage (
@@ -414,7 +414,7 @@ filed as the first task — not folded in silently.
   );
   ```
 
-- [ ] **Step 2: Put it on both VMs' PATH.** In `mkE2eSqliteCheck` (env ~770) and
+- [x] **Step 2: Put it on both VMs' PATH.** In `mkE2eSqliteCheck` (env ~770) and
       `mkE2ePostgresCheck` (env ~887), add `testSupportBin` to
       `environment.systemPackages`:
 
@@ -426,7 +426,7 @@ filed as the first task — not folded in silently.
   ];
   ```
 
-- [ ] **Step 3: Inject `JAUNDER_DB` into the Playwright exec env.** In the
+- [x] **Step 3: Inject `JAUNDER_DB` into the Playwright exec env.** In the
       `e2eRunAndCapture` Playwright invocation (flake.nix ~705, the
       `machine.execute("cd /tmp/e2e" + " && …")` string), add a `JAUNDER_DB=`
       clause so the test process (and the `test-support` child it spawns, which
@@ -440,7 +440,7 @@ filed as the first task — not folded in silently.
   it and pass the backend-appropriate value from `mkE2eSqliteCheck` /
   `mkE2ePostgresCheck` (mirror how `browser`/`traceId` are already threaded).
 
-- [ ] **Step 4: Verify the flake evaluates and the package builds**
+- [x] **Step 4: Verify the flake evaluates and the package builds**
 
   Run: `cargo xtask check` (evaluates flake for the coverage/check derivations)
   and `nix build .#packages.x86_64-linux.jaunder` sanity, then build the tool:
@@ -452,7 +452,7 @@ filed as the first task — not folded in silently.
   If `test-support` should be a named package output, add it under `packages`
   alongside `jaunder` (mirror that attr) so it's directly buildable.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add flake.nix
@@ -474,7 +474,7 @@ filed as the first task — not folded in silently.
 - Produces: `seedPostsViaTool(username, count, bodyPrefix, opts?)` for Tasks
   5–6.
 
-- [ ] **Step 1: Write the helper** `end2end/tests/seed.ts`:
+- [x] **Step 1: Write the helper** `end2end/tests/seed.ts`:
 
   ```typescript
   import { execFileSync } from "node:child_process";
@@ -505,7 +505,7 @@ filed as the first task — not folded in silently.
   }
   ```
 
-- [ ] **Step 2: Rewrite the `:305` seed block.** In `posts.spec.ts`, replace the
+- [x] **Step 2: Rewrite the `:305` seed block.** In `posts.spec.ts`, replace the
       `perf.timed("seed_posts", …)` loop (the `for` over
       `createPublishedPostViaApi(page, \`Timeline Post ${i}\`)`) with:
 
@@ -528,14 +528,14 @@ filed as the first task — not folded in silently.
   `Timeline Post 0`. These hold because `seed_body("Timeline Post", i)` renders
   `# Timeline Post i` and ordering is newest-first.
 
-- [ ] **Step 3: Run the tsc gate + the e2e combo**
+- [x] **Step 3: Run the tsc gate + the e2e combo**
 
   Run: `cargo xtask check --no-test` (includes the `end2end` `tsc --noEmit`
   gate, #169). Then: `cargo xtask e2e sqlite chromium` Expected: the `:305` test
   passes; no `SQLITE_BUSY` in the log. (Grep the parked log for
   `SQLITE_BUSY`/`database is locked` — expect none.)
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
   ```bash
   git add end2end/tests/seed.ts end2end/tests/posts.spec.ts
@@ -554,7 +554,7 @@ filed as the first task — not folded in silently.
 
 - Consumes: `seedPostsViaTool` (Task 4).
 
-- [ ] **Step 1: Rewrite both author seed blocks.** Replace the two
+- [x] **Step 1: Rewrite both author seed blocks.** Replace the two
       `createPublishedPostViaApi` loops with tool calls, keeping the
       two-browser-context / two-user structure and the
       `LOCAL_TIMELINE_AUTHOR_COUNT` count:
@@ -578,14 +578,14 @@ filed as the first task — not folded in silently.
   Load-more growth, `jaunder.local` title) unchanged — this test asserts
   counts/growth, not titles.
 
-- [ ] **Step 2: Run tsc + e2e combo**
+- [x] **Step 2: Run tsc + e2e combo**
 
   Run: `cargo xtask check --no-test` then `cargo xtask e2e sqlite chromium`
   Expected: `:349` passes (allowing the documented environmental flake — re-run
   once if a lone `:349` timeout appears, per
   [[project_csr_e2e_local_heavy_test_flake]]); no `SQLITE_BUSY`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
   ```bash
   git add end2end/tests/posts.spec.ts
@@ -604,7 +604,7 @@ filed as the first task — not folded in silently.
 
 - Consumes: `seedPostsViaTool` (Task 4).
 
-- [ ] **Step 1: Rewrite the self + other seed blocks.** Confirmed safe: the
+- [x] **Step 1: Rewrite the self + other seed blocks.** Confirmed safe: the
       `/app` feed reads live via `list_published_by_user`
       (web/src/posts/listing.rs:199), which the seeded posts populate directly —
       no feed-event emission needed.
@@ -630,17 +630,17 @@ filed as the first task — not folded in silently.
   silently produced an empty/leaky feed the count or exclusion assertion fails
   rather than passing vacuously.
 
-- [ ] **Step 2: Run tsc + e2e combo**
+- [x] **Step 2: Run tsc + e2e combo**
 
   Run: `cargo xtask check --no-test` then `cargo xtask e2e sqlite chromium`
   Expected: `:410` passes; no `SQLITE_BUSY`.
 
-- [ ] **Step 3: Confirm `createPublishedPostViaApi` is now unused** and remove
+- [x] **Step 3: Confirm `createPublishedPostViaApi` is now unused** and remove
       it (and any now-unused imports) if no test references it. Search: Run:
       `rg -n 'createPublishedPostViaApi' end2end/tests` If zero non-definition
       hits, delete the function (posts.spec.ts:18–33). Otherwise leave it.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
   ```bash
   git add end2end/tests/posts.spec.ts
@@ -657,7 +657,7 @@ filed as the first task — not folded in silently.
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Run the full local gate**
+- [x] **Step 1: Run the full local gate**
 
   Run: `cargo xtask validate` Expected: static + coverage + all four e2e combos
   green (allowing a lone `:349` environmental flake — re-run once before
@@ -665,13 +665,13 @@ filed as the first task — not folded in silently.
   **postgres** combos too (the tool's only automated dual-backend proof — its
   unit test is sqlite-only).
 
-- [ ] **Step 2: Grep all four parked e2e logs for lock errors**
+- [x] **Step 2: Grep all four parked e2e logs for lock errors**
 
   Use the Grep tool / `rg -i 'sqlite_busy|database is locked' .xtask/run/` on
   the parked logs. Expected: no matches (acceptance criterion — the SQLite
   concurrent-write risk did not materialize).
 
-- [ ] **Step 3: Add the observability pointer.** Append to
+- [x] **Step 3: Add the observability pointer.** Append to
       `docs/observability.md` a short note that the heavy timeline tests
       (`:305/:349/:410`) now seed via the `test-support` binary rather than
       sequential `create_post` loops, and that the #155 worker-contention
@@ -680,7 +680,7 @@ filed as the first task — not folded in silently.
       `run-e2e-trace-analysis` harness separately (out of scope here). Keep it
       to a few lines; do not re-tune timeouts in this cycle.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
   ```bash
   git add docs/observability.md
