@@ -664,4 +664,34 @@
     ;; And the wire entry indeed omits <published>.
     (should-not (string-match-p "<published>" (jaunder--atom-entry->xml e)))))
 
+;;; rename temp draft to <slug>.org (C4 / issue #162)
+
+(ert-deftest jaunder-rename-to-slug-renames-and-handles-collision ()
+  (let ((dir (make-temp-file "jaunder-rn-" t)))
+    (unwind-protect
+        (let ((tmp (expand-file-name "draft-20260101T000000.org" dir)))
+          (with-temp-file tmp (insert "x"))
+          (let ((buf (find-file-noselect tmp)))
+            (unwind-protect
+                (with-current-buffer buf
+                  (let ((p (jaunder--rename-to-slug "my-post")))
+                    (should (equal (file-name-nondirectory p) "my-post.org"))
+                    (should (equal (buffer-file-name) p))
+                    (should (file-exists-p p))
+                    (should-not (file-exists-p tmp))
+                    ;; Idempotent: renaming to the same slug is a no-op.
+                    (should (equal (jaunder--rename-to-slug "my-post") p))))
+              (kill-buffer buf)))
+          ;; Collision: a second post with the same slug gets -1.
+          (let ((tmp2 (expand-file-name "draft-20260101T000001.org" dir)))
+            (with-temp-file tmp2 (insert "y"))
+            (let ((buf2 (find-file-noselect tmp2)))
+              (unwind-protect
+                  (with-current-buffer buf2
+                    (should (equal (file-name-nondirectory
+                                    (jaunder--rename-to-slug "my-post"))
+                                   "my-post-1.org")))
+                (kill-buffer buf2)))))
+      (delete-directory dir t))))
+
 ;;; jaunder-test.el ends here

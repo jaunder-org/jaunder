@@ -609,7 +609,7 @@ git commit -m "feat(emacs): publish validation + Location->id + force-draft"
   buffer's file + buffer; no-op when already named; appends `-N` on collision).
   Used by Task 10.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```elisp
 (ert-deftest jaunder-rename-to-slug-renames-and-handles-collision ()
@@ -641,12 +641,12 @@ git commit -m "feat(emacs): publish validation + Location->id + force-draft"
       (delete-directory dir t))))
 ```
 
-- [ ] **Step 2: Run, verify fail**
+- [x] **Step 2: Run, verify fail**
 
 Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: FAIL —
 `jaunder--rename-to-slug` undefined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```elisp
 (defun jaunder--rename-to-slug (slug)
@@ -667,11 +667,11 @@ A no-op when already so named; on collision appends `-N'.  Returns the path."
         final))))
 ```
 
-- [ ] **Step 4: Run, verify pass**
+- [x] **Step 4: Run, verify pass**
 
 Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add elisp/jaunder.el elisp/test/jaunder-test.el

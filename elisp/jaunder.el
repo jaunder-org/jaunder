@@ -602,6 +602,25 @@ Clearing `published' keeps `jaunder--atom-entry->xml' from emitting a
         (jaunder-entry-published entry) nil)
   entry)
 
+(defun jaunder--rename-to-slug (slug)
+  "Rename the current buffer's file and buffer to SLUG.org in its directory.
+A no-op when already so named; on collision appends `-N'.  Returns the path."
+  (let* ((old (or (buffer-file-name)
+                  (error "jaunder: buffer is not visiting a file")))
+         (dir (file-name-directory old))
+         (target (expand-file-name (concat slug ".org") dir)))
+    (if (string= old target)
+        old
+      (let ((final target) (n 1))
+        (while (file-exists-p final)
+          (setq final (expand-file-name (format "%s-%d.org" slug n) dir)
+                n (1+ n)))
+        (rename-file old final)
+        ;; ALONG-WITH-FILE=t: the file is already moved, so don't re-save it;
+        ;; NO-QUERY=t: never prompt (publish is automated).
+        (set-visited-file-name final t t)
+        final))))
+
 (defun jaunder--atom->org (&rest _args)
   "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."
   (error "jaunder: atom->org mapping not yet implemented (units C/D, issues #74/#75)"))
