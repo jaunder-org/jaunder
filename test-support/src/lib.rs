@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use common::username::Username;
-use storage::{create_rendered_post, AppState, PostFormat};
+use storage::{seed_rendered_post, AppState};
 
 /// The rendered-body source for seeded post `i` under `prefix`. Its Markdown H1
 /// renders the text `"{prefix} {i}"`, which the heavy e2e timeline tests assert
@@ -71,20 +71,15 @@ pub async fn seed_posts_for_user(
 
     let mut ids = Vec::with_capacity(count);
     for i in 0..count {
-        let published_at = published.then(chrono::Utc::now);
         let slug = seed_slug(prefix, i).parse().map_err(|_| {
             anyhow::anyhow!("generated slug invalid for prefix {prefix:?} index {i}")
         })?;
-        let id = create_rendered_post(
+        let id = seed_rendered_post(
             &*state.posts,
             user.user_id,
-            None,
             slug,
             seed_body(prefix, i),
-            PostFormat::Markdown,
-            published_at,
-            None,
-            vec![common::visibility::AudienceTarget::Public],
+            published,
         )
         .await
         .map_err(|e| anyhow::anyhow!("seed post {i} failed: {e:?}"))?;
