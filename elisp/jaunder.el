@@ -431,6 +431,25 @@ are missing, signals one error listing them all — fail-fast, upload nothing (#
       (error "jaunder: media file(s) not found: %s"
              (mapconcat #'identity missing ", ")))))
 
+(defun jaunder--localize-media (body)
+  "Upload the current buffer's local images and return BODY with links localized.
+Detects qualifying media links in the buffer's body region, pre-flights that all
+exist (else errors, uploading nothing), uploads each distinct file once (server
+sha256-dedups), and rewrites those links in BODY — the C2 sent body — to the
+harvested server URLs, in order.  The authoring buffer is never modified (#161)."
+  (let ((records (jaunder--collect-media-links)))
+    (jaunder--media-preflight records)
+    (let ((cache (make-hash-table :test 'equal)))
+      (dolist (r records)
+        (let ((path (plist-get r :path)))
+          (unless (gethash path cache)
+            (puthash path
+                     (jaunder--upload-media path (plist-get r :content-type))
+                     cache))))
+      (jaunder--substitute-media
+       body
+       (mapcar (lambda (r) (gethash (plist-get r :path) cache)) records)))))
+
 (defun jaunder--atom->org (&rest _args)
   "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."
   (error "jaunder: atom->org mapping not yet implemented (units C/D, issues #74/#75)"))

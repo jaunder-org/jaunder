@@ -722,7 +722,7 @@ git commit -m "feat(media): upload via Slug+file body, harvest content-src; http
   (Task 5), `jaunder--upload-media` (Task 7), `jaunder--substitute-media` (Task
   6).
 
-- [ ] **Step 1: Implement the orchestrator** (in `elisp/jaunder.el`):
+- [x] **Step 1: Implement the orchestrator** (in `elisp/jaunder.el`):
 
 ```elisp
 (defun jaunder--localize-media (body)
@@ -745,7 +745,7 @@ harvested server URLs, in order.  The authoring buffer is never modified (#161).
        (mapcar (lambda (r) (gethash (plist-get r :path) cache)) records)))))
 ```
 
-- [ ] **Step 2: Write the live tests** in a new file
+- [x] **Step 2: Write the live tests** in a new file
       `elisp/test/jaunder-media-integration.el`:
 
 ```elisp
@@ -852,18 +852,18 @@ credentials, so `require_user_match' fails deterministically (403)."
 ;;; jaunder-media-integration.el ends here
 ```
 
-- [ ] **Step 3: Run the pure gate** (orchestrator has no pure test of its own,
+- [x] **Step 3: Run the pure gate** (orchestrator has no pure test of its own,
       but must not break the suite):
 
 Run: `cargo xtask check` Expected: PASS.
 
-- [ ] **Step 4: Run the live suite**
+- [x] **Step 4: Run the live suite**
 
 Run: `cargo xtask elisp-integration` Expected: PASS — the four media integration
 tests green (real upload+substitute, idempotent re-upload asserting HTTP 200,
 non-2xx rejection, attachment resolution).
 
-- [ ] **Step 5: Commit:**
+- [x] **Step 5: Commit:**
 
 ```bash
 git add elisp/jaunder.el elisp/test/jaunder-media-integration.el
