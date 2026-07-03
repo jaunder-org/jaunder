@@ -425,7 +425,7 @@ git commit -m "refactor(xtask): reuse TableRow for resolved rows, drop Cells tup
 
 **Interfaces:** none new — `heading_title` keeps its signature.
 
-- [ ] **Step 1: Replace the two branches with a table-driven loop**
+- [x] **Step 1: Replace the two branches with a table-driven loop**
 
 Replace the whole `heading_title` body (lines 53-67, keeping its doc comment)
 with:
@@ -452,12 +452,12 @@ fn heading_title(content: &str) -> String {
 for the `"ADR-"` row and load-bearing for the `""` legacy row; the table order
 keeps the `": "`-before-`". "` first-match precedence.)
 
-- [ ] **Step 2: Run the gate, verify green**
+- [x] **Step 2: Run the gate, verify green**
 
 Run: `cargo xtask check` Expected: PASS — esp.
 `heading_title_strips_canonical_and_legacy_prefixes`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add xtask/src/adr_readme.rs
