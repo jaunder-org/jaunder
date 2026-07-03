@@ -3,12 +3,12 @@
   "entries": [
     {
       "coverage": 0.0,
-      "crap": 56.0,
+      "crap": 110.0,
       "crate": "test-support",
-      "cyclomatic": 7.0,
+      "cyclomatic": 10.0,
       "file": "test-support/src/main.rs",
       "function": "main",
-      "line": 60
+      "line": 72
     },
     {
       "coverage": 83.33333333333334,
@@ -4329,6 +4329,15 @@
       "file": "server/src/atompub/mod.rs",
       "function": "require_user_match",
       "line": 105
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "test-support",
+      "cyclomatic": 2.0,
+      "file": "test-support/src/lib.rs",
+      "function": "set_site_config",
+      "line": 129
     },
     {
       "coverage": 52.38095238095239,

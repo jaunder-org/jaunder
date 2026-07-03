@@ -4,7 +4,7 @@
 use clap::{Parser, Subcommand};
 use storage::DbConnectOptions;
 
-use test_support::{create_user, seed_posts_for_user};
+use test_support::{create_user, seed_posts_for_user, set_site_config};
 
 #[derive(Parser)]
 #[command(
@@ -54,6 +54,18 @@ enum Commands {
         #[arg(long)]
         operator: bool,
     },
+    /// Set a `site_config` key/value (an upsert) through the real storage path.
+    SetSiteConfig {
+        /// Database URL (`sqlite:...` or `postgres://...`) — the server's `--db`.
+        #[arg(long, env = "JAUNDER_DB")]
+        db: DbConnectOptions,
+        /// The `site_config` key (e.g. `site.registration_policy`).
+        #[arg(long)]
+        key: String,
+        /// The value to store.
+        #[arg(long)]
+        value: String,
+    },
 }
 
 #[tokio::main]
@@ -89,6 +101,11 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             eprintln!("created user {username} with id {id}");
+        }
+        Commands::SetSiteConfig { db, key, value } => {
+            let state = storage::open_existing_database(&db).await?;
+            set_site_config(&state, &key, &value).await?;
+            eprintln!("set site_config {key} = {value}");
         }
     }
     Ok(())
