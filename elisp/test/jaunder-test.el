@@ -524,4 +524,34 @@
                  (should (equal (jaunder--localize-media body) body))
                  (should-not called))))))
 
+;;; buffer read/write helpers (unit C4, issue #162)
+
+(ert-deftest jaunder-set-property-replaces-existing ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+TITLE: T\n#+PROPERTY: JAUNDER_ID 7\n\nBody.\n")
+    (jaunder--set-property "JAUNDER_ID" "42")
+    (should (equal (jaunder--buffer-property "JAUNDER_ID") "42"))
+    (should (string-match-p "Body\\." (buffer-string)))
+    (should-not (string-match-p "JAUNDER_ID 7" (buffer-string)))))
+
+(ert-deftest jaunder-set-property-inserts-into-header-block ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+TITLE: T\n\nBody.\n")
+    (jaunder--set-property "JAUNDER_SLUG" "my-post")
+    (should (equal (jaunder--buffer-property "JAUNDER_SLUG") "my-post"))
+    ;; Inserted in the header block, body untouched.
+    (should (string-match-p "\\`#\\+TITLE: T\n#\\+PROPERTY: JAUNDER_SLUG my-post\n\nBody\\."
+                            (buffer-string)))))
+
+(ert-deftest jaunder-set-keyword-replaces-and-inserts ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+TITLE: T\n\nBody.\n")
+    (jaunder--set-keyword "DATE" "[2026-07-01 Wed 09:00]")
+    (should (equal (jaunder--buffer-keyword "DATE") "[2026-07-01 Wed 09:00]"))
+    (jaunder--set-keyword "DATE" "[2027-01-01 Fri 00:00]")
+    (should (equal (jaunder--buffer-keyword "DATE") "[2027-01-01 Fri 00:00]"))))
+
 ;;; jaunder-test.el ends here

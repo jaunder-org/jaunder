@@ -452,6 +452,50 @@ harvested server URLs, in order.  The authoring buffer is never modified (#161).
        body
        (mapcar (lambda (r) (gethash (plist-get r :path) cache)) records)))))
 
+;;; buffer read/write helpers (unit C4, issue #162)
+
+(defun jaunder--set-keyword-line (line-re new-line)
+  "Replace the first LINE-RE match in the leading header block with NEW-LINE.
+When absent, insert NEW-LINE after the last contiguous header-keyword line
+\(before any blank line or the body).  Header block only; the body is never
+touched."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((case-fold-search t)
+          (limit (jaunder--body-start)))
+      (if (re-search-forward line-re limit t)
+          (progn (beginning-of-line)
+                 (delete-region (point) (line-end-position))
+                 (insert new-line))
+        (goto-char (point-min))
+        (let ((insert-at (point-min)))
+          (while (looking-at-p jaunder--header-keyword-re)
+            (forward-line 1)
+            (setq insert-at (point)))
+          (goto-char insert-at)
+          (insert new-line "\n"))))))
+
+(defun jaunder--set-property (key value)
+  "Set the file-level #+PROPERTY: KEY to VALUE (idempotent replace or insert)."
+  (jaunder--set-keyword-line
+   (format "^[ \t]*#\\+PROPERTY:[ \t]+%s\\(?:[ \t].*\\)?$" (regexp-quote key))
+   (format "#+PROPERTY: %s %s" key value)))
+
+(defun jaunder--set-keyword (keyword value)
+  "Set the file-level #+KEYWORD: to VALUE (idempotent replace or insert)."
+  (jaunder--set-keyword-line
+   (format "^[ \t]*#\\+%s:.*$" (regexp-quote keyword))
+   (format "#+%s: %s" keyword value)))
+
+(defun jaunder--buffer-property (key)
+  "Return the #+PROPERTY: KEY value in the current buffer, or nil."
+  (cdr (assoc key (jaunder--collect-properties
+                   (org-collect-keywords '("PROPERTY"))))))
+
+(defun jaunder--buffer-keyword (key)
+  "Return the #+KEY: value in the current buffer, or nil."
+  (cadr (assoc key (org-collect-keywords (list key)))))
+
 (defun jaunder--atom->org (&rest _args)
   "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."
   (error "jaunder: atom->org mapping not yet implemented (units C/D, issues #74/#75)"))
