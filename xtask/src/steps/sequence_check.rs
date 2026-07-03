@@ -108,4 +108,23 @@ mod tests {
         assert!(detail.contains("backend parity"));
         assert!(detail.contains("0002_b (postgres only)"));
     }
+
+    #[test]
+    fn filenames_skips_the_drafts_subdir() {
+        // A numberless ADR draft under `docs/adr/drafts/` must be invisible to the
+        // `identifier-collisions` scan: `filenames` is non-recursive and file-only,
+        // so the `drafts` subdirectory entry (and anything inside it) is excluded
+        // (#219). Locks the enumeration rule the drafts-out-of-git flow relies on.
+        let dir =
+            std::env::temp_dir().join(format!("jaunder-seqcheck-drafts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("drafts")).unwrap();
+        std::fs::write(dir.join("0001-a.md"), "x").unwrap();
+        std::fs::write(dir.join("drafts/some-decision.md"), "x").unwrap();
+
+        let names = filenames(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(names, vec!["0001-a.md".to_string()]);
+    }
 }

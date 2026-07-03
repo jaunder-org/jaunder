@@ -316,7 +316,7 @@ fn run_promote(repo: &Path) -> Result<String> {
     // from its heading. Tolerate a markerless README (a scratch/test repo).
     let table_note = if crate::adr_readme::readme_has_markers(repo)? {
         let note = crate::adr_readme::sync_readme_at(repo)?;
-        git_out(repo, &["add", "docs/README.md"], false)?;
+        git_out(repo, &["add", crate::adr_readme::README], false)?;
         format!("README table synced ({note})")
     } else {
         "README table not synced (no adr-table markers)".to_string()
@@ -724,5 +724,28 @@ mod tests {
         assert!(!tmp.join("docs/adr/drafts/later.md").exists());
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn adr_filenames_skips_the_drafts_subdir() {
+        // The renumber/promote base set must not see draft entries: `adr_filenames`
+        // is non-recursive and file-only, so the `docs/adr/drafts/` subdirectory
+        // (and anything inside it) is excluded — the same rule that keeps a
+        // numberless draft invisible to the ADR gates (#219).
+        let tmp =
+            std::env::temp_dir().join(format!("jaunder-adr-drafts-vis-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("docs/adr/drafts")).unwrap();
+        write(&tmp, "docs/adr/0001-a.md", "# ADR-0001: A\n");
+        write(
+            &tmp,
+            "docs/adr/drafts/some-decision.md",
+            "# ADR-DRAFT: Some\n",
+        );
+
+        let names = adr_filenames(&tmp);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        assert_eq!(names, vec!["0001-a.md".to_string()]);
     }
 }
