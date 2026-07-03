@@ -4,8 +4,6 @@ import {
   hydrationHeavyFirstNavigationTimeoutMs,
   hydrationHeavyTimeoutMs,
 } from "./fixtures";
-import type { Page } from "@playwright/test";
-import { withTimedAction } from "./actions";
 import { BASE_URL, goto, click, waitForSelector, register } from "./helpers";
 import { createPerfProbe } from "./perf";
 import { seedPostsViaTool } from "./seed";
@@ -15,23 +13,6 @@ const TIMELINE_OVERFLOW_COUNT = 1;
 const LOCAL_TIMELINE_AUTHOR_COUNT = 26;
 const HOME_FEED_SELF_COUNT = 51;
 const HOME_FEED_OTHER_COUNT = 2;
-
-async function createPublishedPostViaApi(
-  page: Page,
-  title: string,
-): Promise<void> {
-  const response = await withTimedAction(page, "api.create_post", () =>
-    page.request.post(`${BASE_URL}/api/create_post`, {
-      data: {
-        body: `# ${title}\n\nBody for ${title}`,
-        format: "markdown",
-        slug_override: null,
-        publish: true,
-      },
-    }),
-  );
-  expect(response.ok()).toBeTruthy();
-}
 
 test("authenticated user can create a post through the UI", async ({
   page,
@@ -418,19 +399,15 @@ test("cockpit /app shows the authenticated home feed with pagination", async ({
   );
 
   await perf.timed("seed_self", async () => {
-    await register(page, firstNavigationTimeoutMs);
-    for (let i = 0; i < HOME_FEED_SELF_COUNT; i += 1) {
-      await createPublishedPostViaApi(page, `Home Feed Mine ${i}`);
-    }
+    const me = await register(page, firstNavigationTimeoutMs);
+    seedPostsViaTool(me, HOME_FEED_SELF_COUNT, "Home Feed Mine");
   });
 
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
   await perf.timed("seed_other", async () => {
-    await register(secondPage, firstNavigationTimeoutMs);
-    for (let i = 0; i < HOME_FEED_OTHER_COUNT; i += 1) {
-      await createPublishedPostViaApi(secondPage, `Home Feed Other ${i}`);
-    }
+    const other = await register(secondPage, firstNavigationTimeoutMs);
+    seedPostsViaTool(other, HOME_FEED_OTHER_COUNT, "Home Feed Other");
   });
 
   await goto(page, "/app", { timeout: firstNavigationTimeoutMs });
