@@ -362,4 +362,20 @@
     (should (equal (cdr (assq 'content-type (jaunder--atom-entry-fields xml)))
                    "image/png"))))
 
+(ert-deftest jaunder-media-content-type-maps-extensions ()
+  (should (equal (jaunder--media-content-type "a.png") "image/png"))
+  (should (equal (jaunder--media-content-type "a.jpg") "image/jpeg"))
+  (should (equal (jaunder--media-content-type "a.jpeg") "image/jpeg"))
+  (should (equal (jaunder--media-content-type "a.gif") "image/gif"))
+  (should (equal (jaunder--media-content-type "a.webp") "image/webp"))
+  (should (equal (jaunder--media-content-type "a.svg") "image/svg+xml")))
+
+(ert-deftest jaunder-media-content-type-is-case-insensitive ()
+  (should (equal (jaunder--media-content-type "IMG.PNG") "image/png"))
+  (should (equal (jaunder--media-content-type "p.JPEG") "image/jpeg")))
+
+(ert-deftest jaunder-media-content-type-non-image-is-nil ()
+  (should (null (jaunder--media-content-type "notes.txt")))
+  (should (null (jaunder--media-content-type "noext"))))
+
 ;;; jaunder-test.el ends here

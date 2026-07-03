@@ -235,7 +235,7 @@ git commit -m "feat(media): jaunder--atom-entry-fields harvests content-src from
   `(jaunder--media-content-type FILENAME)` → MIME string or nil. Its key set is
   **the qualification predicate** used by Tasks 4 & 6.
 
-- [ ] **Step 1: Write the failing test:**
+- [x] **Step 1: Write the failing test:**
 
 ```elisp
 (ert-deftest jaunder-media-content-type-maps-extensions ()
@@ -255,10 +255,10 @@ git commit -m "feat(media): jaunder--atom-entry-fields harvests content-src from
   (should (null (jaunder--media-content-type "noext"))))
 ```
 
-- [ ] **Step 2: Run it, verify it fails.** Run:
+- [x] **Step 2: Run it, verify it fails.** Run:
       `emacs --batch -Q -l elisp/scripts/run-tests.el` — FAIL (undefined).
 
-- [ ] **Step 3: Implement:**
+- [x] **Step 3: Implement:**
 
 ```elisp
 (defconst jaunder--media-image-types
@@ -279,10 +279,10 @@ The extension match is case-insensitive."
     (cdr (assoc ext jaunder--media-image-types))))
 ```
 
-- [ ] **Step 4: Run it, verify it passes.** Run:
+- [x] **Step 4: Run it, verify it passes.** Run:
       `emacs --batch -Q -l elisp/scripts/run-tests.el` — PASS.
 
-- [ ] **Step 5: Commit:**
+- [x] **Step 5: Commit:**
 
 ```bash
 cargo xtask check

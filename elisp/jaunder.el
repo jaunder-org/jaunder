@@ -309,6 +309,23 @@ namespace prefix, so the element is `content'."
     (list (cons 'content-src (dom-attr content 'src))
           (cons 'content-type (dom-attr content 'type)))))
 
+(defconst jaunder--media-image-types
+  '(("png" . "image/png")
+    ("jpg" . "image/jpeg")
+    ("jpeg" . "image/jpeg")
+    ("gif" . "image/gif")
+    ("webp" . "image/webp")
+    ("svg" . "image/svg+xml"))
+  "Alist of lowercase image extension → MIME type for uploadable media (#161).
+Its key set is the qualification predicate: only links whose file extension is a
+key are uploaded.  Non-image media is #25.")
+
+(defun jaunder--media-content-type (filename)
+  "Return the media MIME type for FILENAME by extension, or nil if unqualified.
+The extension match is case-insensitive."
+  (let ((ext (downcase (or (file-name-extension filename) ""))))
+    (cdr (assoc ext jaunder--media-image-types))))
+
 (defun jaunder--atom->org (&rest _args)
   "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."
   (error "jaunder: atom->org mapping not yet implemented (units C/D, issues #74/#75)"))
