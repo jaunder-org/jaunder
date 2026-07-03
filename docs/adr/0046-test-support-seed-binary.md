@@ -1,6 +1,6 @@
 # ADR-0046: A `test-support` binary that links `storage` for out-of-process e2e seeding
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-02
 - Issue: [#210](https://github.com/jaunder-org/jaunder/issues/210)
 
