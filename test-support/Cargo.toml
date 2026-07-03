@@ -1,0 +1,29 @@
+[package]
+name = "test-support"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "test-support"
+path = "src/main.rs"
+
+[dependencies]
+storage = { workspace = true }
+common = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+
+# The seed core's unit test reaches storage's in-process test scaffolding
+# (`storage::test_support`), which is gated behind storage's `test-support`
+# feature. It is a dev-dependency ONLY so the shipped binary never links the
+# scaffolding — the binary seeds through the plain `create_rendered_post` path.
+[dev-dependencies]
+storage = { workspace = true, features = ["test-support"] }
+tempfile = { workspace = true }

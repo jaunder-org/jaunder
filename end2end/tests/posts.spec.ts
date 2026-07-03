@@ -4,33 +4,15 @@ import {
   hydrationHeavyFirstNavigationTimeoutMs,
   hydrationHeavyTimeoutMs,
 } from "./fixtures";
-import type { Page } from "@playwright/test";
-import { withTimedAction } from "./actions";
 import { BASE_URL, goto, click, waitForSelector, register } from "./helpers";
 import { createPerfProbe } from "./perf";
+import { seedPostsViaTool } from "./seed";
 
 const TIMELINE_PAGE_SIZE = 50;
 const TIMELINE_OVERFLOW_COUNT = 1;
 const LOCAL_TIMELINE_AUTHOR_COUNT = 26;
 const HOME_FEED_SELF_COUNT = 51;
 const HOME_FEED_OTHER_COUNT = 2;
-
-async function createPublishedPostViaApi(
-  page: Page,
-  title: string,
-): Promise<void> {
-  const response = await withTimedAction(page, "api.create_post", () =>
-    page.request.post(`${BASE_URL}/api/create_post`, {
-      data: {
-        body: `# ${title}\n\nBody for ${title}`,
-        format: "markdown",
-        slug_override: null,
-        publish: true,
-      },
-    }),
-  );
-  expect(response.ok()).toBeTruthy();
-}
 
 test("authenticated user can create a post through the UI", async ({
   page,
@@ -315,9 +297,11 @@ test("per-user timeline lists published posts with pagination", async ({
   const username = await register(page, firstNavigationTimeoutMs);
 
   await perf.timed("seed_posts", async () => {
-    for (let i = 0; i < TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT; i += 1) {
-      await createPublishedPostViaApi(page, `Timeline Post ${i}`);
-    }
+    seedPostsViaTool(
+      username,
+      TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT,
+      "Timeline Post",
+    );
   });
 
   await goto(page, `/~${username}`, { timeout: firstNavigationTimeoutMs });
@@ -358,19 +342,15 @@ test("home page shows local timeline for unauthenticated users", async ({
   );
 
   await perf.timed("seed_author_one", async () => {
-    await register(page, firstNavigationTimeoutMs);
-    for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
-      await createPublishedPostViaApi(page, `Local Author One ${i}`);
-    }
+    const u1 = await register(page, firstNavigationTimeoutMs);
+    seedPostsViaTool(u1, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author One");
   });
 
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
   await perf.timed("seed_author_two", async () => {
-    await register(secondPage, firstNavigationTimeoutMs);
-    for (let i = 0; i < LOCAL_TIMELINE_AUTHOR_COUNT; i += 1) {
-      await createPublishedPostViaApi(secondPage, `Local Author Two ${i}`);
-    }
+    const u2 = await register(secondPage, firstNavigationTimeoutMs);
+    seedPostsViaTool(u2, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author Two");
   });
 
   const guestContext = await browser.newContext();
@@ -419,19 +399,15 @@ test("cockpit /app shows the authenticated home feed with pagination", async ({
   );
 
   await perf.timed("seed_self", async () => {
-    await register(page, firstNavigationTimeoutMs);
-    for (let i = 0; i < HOME_FEED_SELF_COUNT; i += 1) {
-      await createPublishedPostViaApi(page, `Home Feed Mine ${i}`);
-    }
+    const me = await register(page, firstNavigationTimeoutMs);
+    seedPostsViaTool(me, HOME_FEED_SELF_COUNT, "Home Feed Mine");
   });
 
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
   await perf.timed("seed_other", async () => {
-    await register(secondPage, firstNavigationTimeoutMs);
-    for (let i = 0; i < HOME_FEED_OTHER_COUNT; i += 1) {
-      await createPublishedPostViaApi(secondPage, `Home Feed Other ${i}`);
-    }
+    const other = await register(secondPage, firstNavigationTimeoutMs);
+    seedPostsViaTool(other, HOME_FEED_OTHER_COUNT, "Home Feed Other");
   });
 
   await goto(page, "/app", { timeout: firstNavigationTimeoutMs });

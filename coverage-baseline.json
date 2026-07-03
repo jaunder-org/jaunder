@@ -747,6 +747,80 @@
       "text": "        }"
     }
   ],
+  "test-support/src/main.rs": [
+    {
+      "line": 42,
+      "text": "async fn main() -> anyhow::Result<()> {"
+    },
+    {
+      "line": 43,
+      "text": "    let cli = Cli::parse();"
+    },
+    {
+      "line": 44,
+      "text": "    match cli.command {"
+    },
+    {
+      "line": 45,
+      "text": "        Commands::SeedPosts {"
+    },
+    {
+      "line": 46,
+      "text": "            db,"
+    },
+    {
+      "line": 47,
+      "text": "            username,"
+    },
+    {
+      "line": 48,
+      "text": "            count,"
+    },
+    {
+      "line": 49,
+      "text": "            body_prefix,"
+    },
+    {
+      "line": 50,
+      "text": "            published,"
+    },
+    {
+      "line": 51,
+      "text": "        } => {"
+    },
+    {
+      "line": 52,
+      "text": "            let state = storage::open_existing_database(&db).await?;"
+    },
+    {
+      "line": 53,
+      "text": "            let ids ="
+    },
+    {
+      "line": 54,
+      "text": "                seed_posts_for_user(&state, &username, count, published, &body_prefix).await?;"
+    },
+    {
+      "line": 55,
+      "text": "            eprintln!(\"seeded {} posts for {username}\", ids.len());"
+    },
+    {
+      "line": 56,
+      "text": "        }"
+    },
+    {
+      "line": 57,
+      "text": "    }"
+    },
+    {
+      "line": 58,
+      "text": "    Ok(())"
+    },
+    {
+      "line": 59,
+      "text": "}"
+    }
+  ],
   "web/src/audiences/mod.rs": [
     {
       "line": 57,

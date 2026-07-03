@@ -47,6 +47,15 @@
       "line": 73
     },
     {
+      "coverage": 0.0,
+      "crap": 20.0,
+      "crate": "test-support",
+      "cyclomatic": 4.0,
+      "file": "test-support/src/main.rs",
+      "function": "main",
+      "line": 42
+    },
+    {
       "coverage": 66.66666666666666,
       "crap": 17.333333333333343,
       "crate": "storage",
@@ -756,6 +765,15 @@
       "file": "server/src/atompub/mod.rs",
       "function": "HandlerError::into_response",
       "line": 152
+    },
+    {
+      "coverage": 100.0,
+      "crap": 7.0,
+      "crate": "test-support",
+      "cyclomatic": 7.0,
+      "file": "test-support/src/lib.rs",
+      "function": "seed_posts_for_user",
+      "line": 51
     },
     {
       "coverage": 95.23809523809524,
@@ -7209,6 +7227,24 @@
       "file": "server/src/atompub/mod.rs",
       "function": "HandlerError::from",
       "line": 246
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "test-support",
+      "cyclomatic": 1.0,
+      "file": "test-support/src/lib.rs",
+      "function": "seed_body",
+      "line": 21
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "test-support",
+      "cyclomatic": 1.0,
+      "file": "test-support/src/lib.rs",
+      "function": "seed_slug",
+      "line": 31
     }
   ],
   "version": "0.2.2"

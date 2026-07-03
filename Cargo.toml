@@ -5,6 +5,7 @@ members = [
   "csr",
   "server",
   "storage",
+  "test-support",
   "web"
 ]
 exclude = ["xtask"]

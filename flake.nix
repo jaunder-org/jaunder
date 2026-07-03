@@ -358,6 +358,21 @@
           }
         );
 
+        # The out-of-process e2e seed helper (ADR-0046). Built as its own small
+        # crane package (no leptos/wasm/web deps; shares cargoArtifacts) and placed
+        # ONLY on the e2e VM PATH — deliberately absent from the `jaunder` prod
+        # binary and the `services.jaunder` NixOS module, so there is no seed
+        # surface anywhere near the release artifact.
+        testSupportBin = craneLib.buildPackage (
+          commonArgs
+          // {
+            inherit cargoArtifacts;
+            pname = "test-support";
+            cargoExtraArgs = "-p test-support";
+            doCheck = false;
+          }
+        );
+
         # The in-sandbox dev tool (tools/ workspace: devtool + its coverage
         # path-dep), built as its OWN crane package with deps vendored from
         # tools/Cargo.lock. The offline coverage sandbox runs it from PATH
@@ -689,6 +704,10 @@
             browser,
             traceId,
             traceParent,
+            # The same DB the running server uses, exported into the Playwright
+            # process env so the `test-support` seed helper it spawns points at
+            # that DB (it reads `JAUNDER_DB`). Backend-specific; see each check.
+            jaunderDb,
             warmupEnv ? "",
           }:
           ''
@@ -699,6 +718,7 @@
               + "${warmupEnv}"
               + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
               + " JAUNDER_WEBSUB_CAPTURE_FILE=/var/lib/jaunder/websub.jsonl"
+              + " JAUNDER_DB=${jaunderDb}"
               + " JAUNDER_E2E_TRACE_ID=${traceId}"
               + " JAUNDER_E2E_TRACEPARENT=${traceParent}"
               + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
@@ -770,6 +790,7 @@
                 environment.systemPackages = [
                   pkgs.sqlite
                   pkgs.opentelemetry-collector-contrib
+                  testSupportBin
                 ];
                 environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
 
@@ -829,6 +850,7 @@
               seed_db()
               ${e2eRunAndCapture {
                 backend = "sqlite";
+                jaunderDb = "sqlite:/var/lib/jaunder/data/jaunder.db";
                 inherit browser traceId traceParent warmupEnv;
               }}
             '';
@@ -887,6 +909,7 @@
                 environment.systemPackages = [
                   pkgs.postgresql_16
                   pkgs.opentelemetry-collector-contrib
+                  testSupportBin
                 ];
                 environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
 
@@ -979,6 +1002,7 @@
               seed_db()
               ${e2eRunAndCapture {
                 backend = "postgres";
+                jaunderDb = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
                 inherit browser traceId traceParent warmupEnv;
               }}
             '';
@@ -1042,6 +1066,10 @@
             jaunder = jaunderBin;
             site = site;
             devtool = devtoolBin;
+            # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
+            # directly buildable/verifiable; it is placed only on the e2e VM PATH,
+            # never in the prod artifact or the NixOS module.
+            test-support = testSupportBin;
 
             # The e2e aggregate: a symlinkJoin of every `e2e-*` check, exposed as
             # `checks.e2e` and built by `cargo xtask validate`. Adding a new e2e
