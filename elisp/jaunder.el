@@ -15,6 +15,7 @@
 
 (require 'cl-lib)
 (require 'org)
+(require 'org-attach)
 (require 'dom)
 (require 'url-parse)
 (require 'url-util)
@@ -173,19 +174,27 @@ Whitespace is trimmed and empty terms dropped."
       (dolist (term (split-string line "," t "[ \t]+"))
         (unless (string= term "") (push term out))))))
 
-(defun jaunder--strip-header-block (text)
-  "Return TEXT with its leading metadata header block removed.
-Drops the leading contiguous run of header keyword lines and blank lines,
-then trims surrounding whitespace from the remaining body."
-  (with-temp-buffer
-    (insert text)
+(defun jaunder--body-start ()
+  "Return the position after the leading metadata header block in this buffer.
+The header block is the leading contiguous run of header-keyword and blank lines.
+Shared by `jaunder--strip-header-block' and media detection so both see the same
+body region (#161)."
+  (save-excursion
     (goto-char (point-min))
     (let ((case-fold-search t))
       (while (and (not (eobp))
                   (or (looking-at-p jaunder--blank-line-re)
                       (looking-at-p jaunder--header-keyword-re)))
         (forward-line 1)))
-    (string-trim (buffer-substring-no-properties (point) (point-max)))))
+    (point)))
+
+(defun jaunder--strip-header-block (text)
+  "Return TEXT with its leading metadata header block removed.
+Drops the leading contiguous run of header keyword lines and blank lines
+(`jaunder--body-start'), then trims surrounding whitespace from the remaining body."
+  (with-temp-buffer
+    (insert text)
+    (string-trim (buffer-substring-no-properties (jaunder--body-start) (point-max)))))
 
 (defun jaunder--offset->seconds (offset)
   "Parse a numeric UTC OFFSET string (\"±HHMM\" or \"±HH:MM\") to integer seconds.
@@ -325,6 +334,37 @@ key are uploaded.  Non-image media is #25.")
 The extension match is case-insensitive."
   (let ((ext (downcase (or (file-name-extension filename) ""))))
     (cdr (assoc ext jaunder--media-image-types))))
+
+(defun jaunder--collect-media-links ()
+  "Collect qualifying local-image links in the current buffer's body region, in order.
+Walks `org-element' `link' objects after the header block (`jaunder--body-start'),
+keeping `file:'-type links whose extension is an image and `attachment:' links
+(both via `jaunder--media-content-type').  Returns an ordered list of plists
+\(:raw-link RAW :path ABS :content-type MIME).  `file:' paths resolve against
+`default-directory'; `attachment:' paths via `org-attach-expand' at the link's
+heading.  Restricting to the body region keeps this list aligned one-for-one and
+in order with the links in the C2 sent body (#161)."
+  (save-restriction
+    (narrow-to-region (jaunder--body-start) (point-max))
+    (let ((tree (org-element-parse-buffer)))
+      (delq nil
+            (org-element-map tree 'link
+                             (lambda (link)
+                               (let* ((type (org-element-property :type link))
+                                      (raw (org-element-property :raw-link link))
+                                      (path (org-element-property :path link))
+                                      (mime (jaunder--media-content-type path)))
+                                 (cond
+                                  ((and mime (string= type "file"))
+                                   (list :raw-link raw
+                                         :path (expand-file-name path)
+                                         :content-type mime))
+                                  ((and mime (string= type "attachment"))
+                                   (list :raw-link raw
+                                         :path (save-excursion
+                                                 (goto-char (org-element-property :begin link))
+                                                 (org-attach-expand path))
+                                         :content-type mime))))))))))
 
 (defun jaunder--atom->org (&rest _args)
   "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."

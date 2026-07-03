@@ -11,18 +11,18 @@ Publishing an org post (C3, #161) uploads its local images to
 server's content-addressed URL. The server returns a media-link `<entry>` whose
 `<content src>` is the network-resolvable binary URL
 (`{base}/media/upload/{sha0..2}/{sha2..4}/{sha}/{filename}`), plus a `Location`
-header holding the *edit* URL. The client needs the binary URL.
+header holding the _edit_ URL. The client needs the binary URL.
 
 ## Decision
 
-The client **harvests `<content src>` from the response entry XML** — it does not
-use the `Location` header (that is the edit URL) and does not reconstruct the path
-from the sha client-side. The server is authoritative about URL layout.
+The client **harvests `<content src>` from the response entry XML** — it does
+not use the `Location` header (that is the edit URL) and does not reconstruct
+the path from the sha client-side. The server is authoritative about URL layout.
 
 To parse the entry, introduce a shared primitive `jaunder--atom-entry-fields`
-(entry XML → alist, on `libxml`/`dom`), **pulled forward from C4 (#162) into C3**.
-C3 consumes its `content-src`/`content-type`; C4 and Unit D extend the field set
-(slug, published, ETag).
+(entry XML → alist, on `libxml`/`dom`), **pulled forward from C4 (#162) into
+C3**. C3 consumes its `content-src`/`content-type`; C4 and Unit D extend the
+field set (slug, published, ETag).
 
 ## Consequences
 

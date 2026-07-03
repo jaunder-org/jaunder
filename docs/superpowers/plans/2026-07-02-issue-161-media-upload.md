@@ -308,7 +308,7 @@ git commit -m "feat(media): image extension -> MIME map + jaunder--media-content
 - Consumes: `jaunder--media-content-type` (Task 3),
   `jaunder--header-keyword-re`/`jaunder--blank-line-re` (existing).
 
-- [ ] **Step 1: Write the failing tests** (body-region detection + resolution +
+- [x] **Step 1: Write the failing tests** (body-region detection + resolution +
       exclusions). Add a helper and tests:
 
 ```elisp
@@ -348,18 +348,18 @@ git commit -m "feat(media): image extension -> MIME map + jaunder--media-content
     (should (null rs))))
 ```
 
-- [ ] **Step 2: Run it, verify it fails.** Run:
+- [x] **Step 2: Run it, verify it fails.** Run:
       `emacs --batch -Q -l elisp/scripts/run-tests.el` — FAIL (undefined
       `jaunder--collect-media-links`).
 
-- [ ] **Step 3a: Add the require.** In the `require` block at the top of
+- [x] **Step 3a: Add the require.** In the `require` block at the top of
       `elisp/jaunder.el`, after `(require 'org)`:
 
 ```elisp
 (require 'org-attach)
 ```
 
-- [ ] **Step 3b: Extract `jaunder--body-start` and refactor
+- [x] **Step 3b: Extract `jaunder--body-start` and refactor
       `jaunder--strip-header-block`.** Replace the existing
       `jaunder--strip-header-block` with:
 
@@ -387,7 +387,7 @@ Drops the leading contiguous run of header keyword lines and blank lines
     (string-trim (buffer-substring-no-properties (jaunder--body-start) (point-max)))))
 ```
 
-- [ ] **Step 3c: Add `jaunder--collect-media-links`:**
+- [x] **Step 3c: Add `jaunder--collect-media-links`:**
 
 ```elisp
 (defun jaunder--collect-media-links ()
@@ -422,12 +422,12 @@ in order with the links in the C2 sent body (#161)."
                           :content-type mime)))))))))))
 ```
 
-- [ ] **Step 4: Run it, verify it passes.** Run:
+- [x] **Step 4: Run it, verify it passes.** Run:
       `emacs --batch -Q -l elisp/scripts/run-tests.el` — PASS (the existing
       `jaunder-org->atom-body-strips-*` tests still pass, confirming the
       refactor is behavior-preserving).
 
-- [ ] **Step 5: Commit:**
+- [x] **Step 5: Commit:**
 
 ```bash
 cargo xtask check

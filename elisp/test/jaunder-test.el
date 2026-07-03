@@ -378,4 +378,39 @@
   (should (null (jaunder--media-content-type "notes.txt")))
   (should (null (jaunder--media-content-type "noext"))))
 
+(defun jaunder-test--collect (org dir)
+  "Collect media links from ORG with `default-directory' DIR."
+  (with-temp-buffer
+    (insert org)
+    (org-mode)
+    (setq default-directory dir)
+    (jaunder--collect-media-links)))
+
+(ert-deftest jaunder-media-collect-file-links-qualify-and-resolve ()
+  ;; relative, ./-relative-with-desc, and absolute file: links all qualify.
+  (let ((rs (jaunder-test--collect
+             (concat "#+TITLE: T\n\nSee [[file:img/a.png]] and [[./b.JPG][alt]]"
+                     " and [[file:/abs/c.gif]].\n")
+             "/home/u/post/")))
+    (should (equal (mapcar (lambda (r) (plist-get r :raw-link)) rs)
+                   '("file:img/a.png" "./b.JPG" "file:/abs/c.gif")))
+    (should (equal (mapcar (lambda (r) (plist-get r :path)) rs)
+                   '("/home/u/post/img/a.png" "/home/u/post/b.JPG" "/abs/c.gif")))
+    (should (equal (mapcar (lambda (r) (plist-get r :content-type)) rs)
+                   '("image/png" "image/jpeg" "image/gif")))))
+
+(ert-deftest jaunder-media-collect-excludes-nonqualifying ()
+  ;; header-region link (in the stripped #+DESCRIPTION block), absolute http,
+  ;; bare fuzzy link, non-image file link, and links inside src/example blocks.
+  (let ((rs (jaunder-test--collect
+             (concat "#+DESCRIPTION: [[file:cover.png]]\n"
+                     "\n"
+                     "abs [[https://x/y.png]] "
+                     "fuzzy [[a.png]] "
+                     "doc [[file:notes.txt]]\n"
+                     "#+begin_src org\n[[file:code.png]]\n#+end_src\n"
+                     "#+begin_example\n[[file:ex.png]]\n#+end_example\n")
+             "/d/")))
+    (should (null rs))))
+
 ;;; jaunder-test.el ends here
