@@ -234,6 +234,39 @@ Returns nil when DATE-RAW does not parse to a time."
       (setf (nth 8 decoded) (jaunder--resolve-zone tz))
       (format-time-string "%Y-%m-%dT%H:%M:%SZ" (encode-time decoded) t))))
 
+(defun jaunder--utc->org-date (utc tz)
+  "Render an org inactive timestamp for UTC interpreted in zone TZ (C4 / #162).
+UTC is an RFC-3339 UTC string (e.g. \"2026-07-01T13:00:00Z\"); TZ a
+JAUNDER_DATE_TZ string.  Inverse of `jaunder--org-date->utc' at org's minute
+resolution: a server UTC carrying non-zero seconds is truncated to the minute
+\(org timestamps have no seconds field)."
+  (format-time-string "[%Y-%m-%d %a %H:%M]"
+                      (date-to-time utc)
+                      (jaunder--resolve-zone tz)))
+
+(defun jaunder--current-zone-name ()
+  "Return the machine's current IANA zone name, else a numeric offset string (C4 / #162).
+Prefers a `TZ' IANA name, then the /etc/localtime symlink target; falls back to
+the current numeric UTC offset (IANA preferred, offset caveat).  The TZ branch
+trusts a non-empty, non-`:'-prefixed value as an IANA name; a POSIX-style TZ
+\(e.g. \"EST5EDT\") is passed through as-is."
+  (or (let ((tz (getenv "TZ")))
+        (and tz (not (string= tz "")) (not (string-prefix-p ":" tz)) tz))
+      (let ((link (ignore-errors (file-symlink-p "/etc/localtime"))))
+        (and link (string-match "zoneinfo/\\(.+\\)\\'" link)
+             (match-string 1 link)))
+      (format-time-string "%z")))
+
+(defun jaunder--ensure-date-tz ()
+  "Ensure the buffer records a JAUNDER_DATE_TZ; return the effective zone string (C4 / #162).
+When unset, captures the machine's current zone (`jaunder--current-zone-name')
+so #+DATE: is interpreted in a recorded zone, not one silently re-inferred on a
+later machine.  Idempotent: an existing value is preserved verbatim."
+  (or (jaunder--buffer-property "JAUNDER_DATE_TZ")
+      (let ((zone (jaunder--current-zone-name)))
+        (jaunder--set-property "JAUNDER_DATE_TZ" zone)
+        zone)))
+
 (defun jaunder--org->atom ()
   "Map the current org buffer to a `jaunder-entry' (issue #160).
 Reads the metadata header block via `org-collect-keywords' and carries the

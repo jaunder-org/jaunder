@@ -309,7 +309,7 @@ git commit -m "feat(emacs): harvest j:slug and published from entry XML"
   (captures the machine zone into `JAUNDER_DATE_TZ` when unset, returns the
   effective zone). Used by Tasks 8/10.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```elisp
 (ert-deftest jaunder-utc->org-date-renders-in-zone ()
@@ -342,12 +342,12 @@ git commit -m "feat(emacs): harvest j:slug and published from entry XML"
       (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "Europe/Paris")))))
 ```
 
-- [ ] **Step 2: Run, verify fail**
+- [x] **Step 2: Run, verify fail**
 
 Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: FAIL — helpers
 undefined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```elisp
 (defun jaunder--utc->org-date (utc tz)
@@ -380,13 +380,13 @@ later machine.  Idempotent: an existing value is preserved verbatim."
         zone)))
 ```
 
-- [ ] **Step 4: Run, verify pass**
+- [x] **Step 4: Run, verify pass**
 
 Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: PASS. (The zone
 test needs a zone database — the hermetic `ert-check` provides `TZDIR`; this
 matches ADR-0042's `encode-time` note.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add elisp/jaunder.el elisp/test/jaunder-test.el

@@ -271,6 +271,37 @@
                   (concat "#+PROPERTY: JAUNDER_STATUS scheduled\n"
                           "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n\nB\n"))))))
 
+;;; utc->org-date + machine-zone capture (C4 / issue #162)
+
+(ert-deftest jaunder-utc->org-date-renders-in-zone ()
+  ;; 13:00Z in America/New_York (EDT, -04:00) is 09:00 local.
+  (should (equal (jaunder--utc->org-date "2026-07-01T13:00:00Z" "America/New_York")
+                 "[2026-07-01 Wed 09:00]"))
+  ;; Round-trips through the existing forward mapping.
+  (should (equal (jaunder--org-date->utc
+                  (jaunder--utc->org-date "2026-07-01T13:00:00Z" "America/New_York")
+                  "America/New_York")
+                 "2026-07-01T13:00:00Z")))
+
+(ert-deftest jaunder-current-zone-name-is-nonempty ()
+  (let ((z (jaunder--current-zone-name)))
+    (should (stringp z))
+    (should (> (length z) 0))))
+
+(ert-deftest jaunder-ensure-date-tz-captures-when-unset-and-preserves ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+TITLE: T\n\nBody.\n")
+    ;; Unset → captured to something non-empty.
+    (jaunder--ensure-date-tz)
+    (let ((captured (jaunder--buffer-property "JAUNDER_DATE_TZ")))
+      (should (stringp captured))
+      (should (> (length captured) 0))
+      ;; Already set → preserved verbatim (idempotent, no re-capture).
+      (jaunder--set-property "JAUNDER_DATE_TZ" "Europe/Paris")
+      (jaunder--ensure-date-tz)
+      (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "Europe/Paris")))))
+
 ;;; atom-entry -> xml serializer (C2 / issue #160)
 
 (ert-deftest jaunder-atom-entry->xml-full-entry ()
