@@ -13,12 +13,11 @@
 # repo-relative dev paths preserves the legacy direct-invocation flow.
 set -euo pipefail
 
-# The jaunder binary built by cargo-leptos lives in the target directory.
-BIN="../target/server/debug/jaunder"
-if [[ ! -x "$BIN" ]]; then
-    BIN="../target/debug/jaunder"
-fi
-export JAUNDER_BIN="$BIN"
+# Fixture setup goes through the test-support binary (links storage — the same
+# code path as the flake VM's seed_db). cargo-leptos builds only the server, so
+# build test-support here; it lands in the workspace target/debug.
+cargo build -p test-support
+TEST_SUPPORT="$(git rev-parse --show-toplevel)/target/debug/test-support"
 export JAUNDER_DB_PATH="${JAUNDER_DB_PATH:-../data/jaunder.db}"
 export JAUNDER_MAIL_CAPTURE_FILE="${JAUNDER_MAIL_CAPTURE_FILE:-/tmp/jaunder-mail.jsonl}"
 export JAUNDER_WEBSUB_CAPTURE_FILE="${JAUNDER_WEBSUB_CAPTURE_FILE:-/tmp/jaunder-websub.jsonl}"
@@ -31,18 +30,19 @@ for _ in $(seq 1 30); do
     sleep 0.5
 done
 
-# Open registration so the auth-flow tests can register fresh users. The
-# shared seed script is backend-agnostic and doesn't touch site_config;
-# we do it here via sqlite3 (the local path is always SQLite). These must match
-# the VM's seed_db (flake.nix): open registration so the auth-flow tests can
-# register fresh users, and a WebSub hub URL so the feeds.spec.ts hub-ping tests
-# have a hub to ping.
-sqlite3 "$JAUNDER_DB_PATH" \
-    "INSERT OR REPLACE INTO site_config (key, value) VALUES ('site.registration_policy', 'open')"
-sqlite3 "$JAUNDER_DB_PATH" \
-    "INSERT OR REPLACE INTO site_config (key, value) VALUES ('feeds.websub_hub_url', 'https://hub.test.local/')"
-
-"$(git rev-parse --show-toplevel)/scripts/seed-e2e-fixtures.sh"
+# Seed fixtures through test-support (links storage; same code path as the
+# flake VM's seed_db). The local backend is always SQLite, so JAUNDER_DB points
+# at the SQLite file the server auto-initialised. These must match flake.nix's
+# seed_db: three fixture users, open registration so the auth-flow tests can
+# register fresh users, a WebSub hub URL so feeds.spec.ts hub-ping tests have a
+# hub to ping, and a reset mail-capture file.
+export JAUNDER_DB="sqlite:$JAUNDER_DB_PATH"
+"$TEST_SUPPORT" create-user --username testlogin --password testpassword123
+"$TEST_SUPPORT" create-user --username testnoemail --password testpassword123
+"$TEST_SUPPORT" create-user --username testoperator --password testpassword123 --operator
+"$TEST_SUPPORT" set-site-config --key site.registration_policy --value open
+"$TEST_SUPPORT" set-site-config --key feeds.websub_hub_url --value https://hub.test.local/
+"$TEST_SUPPORT" reset-mail --path "$JAUNDER_MAIL_CAPTURE_FILE"
 
 # Run Playwright — chromium only for local dev.
 # To re-enable verbose server logging, run with JAUNDER_VERBOSE=true or pass --verbose to the server.
