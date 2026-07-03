@@ -362,6 +362,31 @@
     (should (equal (cdr (assq 'content-type (jaunder--atom-entry-fields xml)))
                    "image/png"))))
 
+(ert-deftest jaunder-atom-entry-fields-harvests-slug-and-published ()
+  (let ((xml (concat
+              "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+              " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+              "<content type=\"text/org\">Body</content>"
+              "<published>2026-07-01T13:00:00+00:00</published>"
+              "<j:slug>my-post</j:slug></entry>")))
+    (let ((fields (jaunder--atom-entry-fields xml)))
+      (should (equal (cdr (assq 'slug fields)) "my-post"))
+      (should (equal (cdr (assq 'published fields)) "2026-07-01T13:00:00+00:00"))
+      (should (equal (cdr (assq 'content-type fields)) "text/org")))))
+
+(ert-deftest jaunder-atom-entry-fields-absent-slug-published-are-nil ()
+  ;; A content-only entry (no <j:slug>, no <published> — e.g. a draft, which
+  ;; the server stamps <published> onto only when live) yields nil for both,
+  ;; exercising the `(and NODE (dom-text NODE))' nil-guard branches.
+  (let ((xml (concat
+              "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+              " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+              "<content type=\"text/org\">Body</content></entry>")))
+    (let ((fields (jaunder--atom-entry-fields xml)))
+      (should (null (cdr (assq 'slug fields))))
+      (should (null (cdr (assq 'published fields))))
+      (should (equal (cdr (assq 'content-type fields)) "text/org")))))
+
 (ert-deftest jaunder-media-content-type-maps-extensions ()
   (should (equal (jaunder--media-content-type "a.png") "image/png"))
   (should (equal (jaunder--media-content-type "a.jpg") "image/jpeg"))

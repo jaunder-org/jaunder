@@ -119,7 +119,7 @@ git commit -m "docs(issue-162): C4 publish-flow spec + plan"
   `jaunder--buffer-property (key) → string|nil`,
   `jaunder--buffer-keyword (key) → string|nil`. Used by Tasks 8/10.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```elisp
 (ert-deftest jaunder-set-property-replaces-existing ()
@@ -151,13 +151,13 @@ git commit -m "docs(issue-162): C4 publish-flow spec + plan"
     (should (equal (jaunder--buffer-keyword "DATE") "[2027-01-01 Fri 00:00]"))))
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: FAIL —
 `jaunder--set-property` / `jaunder--set-keyword` / `jaunder--buffer-property` /
 `jaunder--buffer-keyword` undefined.
 
-- [ ] **Step 3: Write the minimal implementation**
+- [x] **Step 3: Write the minimal implementation**
 
 ```elisp
 (defun jaunder--set-keyword-line (line-re new-line)
@@ -203,11 +203,11 @@ touched."
   (cadr (assoc key (org-collect-keywords (list key)))))
 ```
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add elisp/jaunder.el elisp/test/jaunder-test.el
@@ -230,7 +230,7 @@ git commit -m "feat(emacs): header-block property/keyword set + read helpers"
   `(published . …)` alongside the existing `content-src`/`content-type`. Used by
   Task 8.
 
-- [ ] **Step 1: Write the failing test** (pins the `<j:slug>` namespace-prefix
+- [x] **Step 1: Write the failing test** (pins the `<j:slug>` namespace-prefix
       parse on server-shaped XML)
 
 ```elisp
@@ -247,12 +247,12 @@ git commit -m "feat(emacs): header-block property/keyword set + read helpers"
       (should (equal (cdr (assq 'content-type fields)) "text/org")))))
 ```
 
-- [ ] **Step 2: Run the test, verify it fails**
+- [x] **Step 2: Run the test, verify it fails**
 
 Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: FAIL —
 `slug`/`published` keys absent.
 
-- [ ] **Step 3: Extend the implementation**
+- [x] **Step 3: Extend the implementation**
 
 ```elisp
 (defun jaunder--atom-entry-fields (xml)
@@ -278,12 +278,12 @@ local name via `dom-by-tag' on the `slug' symbol."
 > `libxml-parse-xml-region` strips the `j:` prefix, so `<j:slug>` is the `slug`
 > symbol (verified) — `(dom-by-tag dom 'slug)` is correct; the test pins it.
 
-- [ ] **Step 4: Run the test, verify it passes** (and the C3 `content-src` tests
+- [x] **Step 4: Run the test, verify it passes** (and the C3 `content-src` tests
       still pass)
 
 Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add elisp/jaunder.el elisp/test/jaunder-test.el

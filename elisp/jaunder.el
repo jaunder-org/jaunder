@@ -311,16 +311,22 @@ here (issue #160)."
 
 (defun jaunder--atom-entry-fields (xml)
   "Parse AtomPub entry XML into an alist of harvested fields.
-Returns `content-src' and `content-type' from the entry's `<content>' element.
-The shared entry-parse primitive (issue #161): C3 uses the content subset; C4 and
-Unit D extend the returned set.  `libxml-parse-xml-region' drops the default
-namespace prefix, so the element is `content'."
+Returns `content-src'/`content-type' from `<content>', `slug' from `<j:slug>',
+and `published' from `<published>'.  The shared entry-parse primitive: C3 uses
+the content subset, C4 the slug/published subset, Unit D extends it further.
+`libxml-parse-xml-region' folds the default namespace, so `<content>' and
+`<published>' are `content'/`published'; the `j:'-prefixed slug is matched by
+local name via `dom-by-tag' on the `slug' symbol."
   (let* ((dom (with-temp-buffer
                 (insert xml)
                 (libxml-parse-xml-region (point-min) (point-max))))
-         (content (car (dom-by-tag dom 'content))))
+         (content (car (dom-by-tag dom 'content)))
+         (slug (car (dom-by-tag dom 'slug)))
+         (published (car (dom-by-tag dom 'published))))
     (list (cons 'content-src (dom-attr content 'src))
-          (cons 'content-type (dom-attr content 'type)))))
+          (cons 'content-type (dom-attr content 'type))
+          (cons 'slug (and slug (dom-text slug)))
+          (cons 'published (and published (dom-text published))))))
 
 (defconst jaunder--media-image-types
   '(("png" . "image/png")
