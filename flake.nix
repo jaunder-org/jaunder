@@ -509,16 +509,34 @@
         nixPlaywrightConfig = pkgs.writeText "playwright.nix.config.js" ''
           const { defineConfig, devices } = require('@playwright/test');
           const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
-          // Worker count is env-driven. The workers=4 flip (#155) is READY — all
-          // enabling infra is in place (worker-aware per-test budgets in
-          // fixtures.ts, admin-site serial quarantine below, VM sizing) and 3 of 4
-          // combos run 66/66 green at workers=4 — but it is DEFERRED behind #210:
-          // sqlite+chromium intermittently times out on the pre-existing flaky
-          // heavy test posts.spec.ts:349, which #210 fixes at the root (batch-seed
-          // instead of sequential api.create_post). Once #210 lands, flip this
-          // default to 4 + size the VMs (see docs/observability.md #155 AC3) and
-          // re-verify. Override now with JAUNDER_E2E_WORKERS.
-          const workers = parseInt(process.env.JAUNDER_E2E_WORKERS || '1', 10);
+          // Worker count is env-driven (#155). Default is 2: it cuts the e2e
+          // wall-clock well below the old serial baseline (Firefox was the ~12min
+          // long pole) while staying robust — 2 browser instances per combo is
+          // far less bursty than 4, so it tolerates a shared/loaded host and lets
+          // all four combos run concurrently in small (2-core/3GB) VMs without
+          // oversubscribing a 16-core box. workers=4 is also viable (and ~1min
+          // faster on the isolated CI combo) but needs cores>=workers, so its
+          // 4-core VMs can't pack 4-wide — the local aggregate is slower and
+          // needs concurrency throttling. workers=2 is the better balance
+          // (measured #155). See docs/observability.md #155 AC3/AC4. Override
+          // with JAUNDER_E2E_WORKERS.
+          const workers = parseInt(process.env.JAUNDER_E2E_WORKERS || '2', 10);
+          // Firefox in a headless VM defaults to Fission site-isolation plus a
+          // pool of content processes; each Playwright worker is a separate
+          // instance, so the RSS multiplies. These prefs collapse each instance
+          // to a single content process and trim the in-memory caches. The e2e
+          // suite exercises app behavior, not Firefox's process-isolation, so
+          // this is transparent to the tests — it just cuts RSS enough to run
+          // the VMs at 3 GB (#155, #61).
+          const firefoxLaunchOptions = {
+            firefoxUserPrefs: {
+              'fission.autostart': false,
+              'dom.ipc.processCount': 1,
+              'dom.ipc.processCount.webIsolated': 1,
+              'browser.sessionhistory.max_total_viewers': 0,
+              'browser.cache.memory.capacity': 51200,
+            },
+          };
           module.exports = defineConfig({
             testDir: './tests',
             timeout: 30 * 1000,
@@ -588,6 +606,7 @@
                 testIgnore: /admin-site\.spec\.ts/,
                 use: {
                   ...devices['Desktop Firefox'],
+                  launchOptions: firefoxLaunchOptions,
                 },
               },
               {
@@ -597,6 +616,7 @@
                 dependencies: ['firefox'],
                 use: {
                   ...devices['Desktop Firefox'],
+                  launchOptions: firefoxLaunchOptions,
                 },
               },
             ],
@@ -1029,14 +1049,23 @@
           };
 
         # attr name -> warm check, e.g. { "e2e-sqlite-chromium" = <drv>; ... }
-        # NOTE (#155): when the workers=4 flip lands (deferred behind #210, see
-        # nixPlaywrightConfig), add `vmMemory = 6144; vmCores = 4;` here — 4 vCPU
-        # matches the CI ubuntu-latest runner and 6 GB clears the 4-worker Firefox
-        # OOM a 2 GB VM hit (#61). At workers=1 the default 2 GB / 1 core suffices.
+        # The warm gate runs at workers=2 (#155, see nixPlaywrightConfig), so the
+        # VMs are sized 3 GB / 2 vCPU: cores >= workers avoids in-guest CPU
+        # starvation, and with the Firefox process-slimming prefs 3 GB clears the
+        # OOM that heavier VMs hit (#61). At workers=2 the per-VM footprint is
+        # small enough that a 16-core dev box (and CI's per-combo runners) run the
+        # combos comfortably; see docs/observability.md #155 AC3/AC4.
         e2eWarmChecks = pkgs.lib.listToAttrs (
           map (c: {
             name = "e2e-${c.backend}-${c.browser}";
-            value = mkE2eCombo (c // { warmupEnv = " JAUNDER_E2E_WARMUP=1"; });
+            value = mkE2eCombo (
+              c
+              // {
+                warmupEnv = " JAUNDER_E2E_WARMUP=1";
+                vmMemory = 3072;
+                vmCores = 2;
+              }
+            );
           }) e2eCombos
         );
 
@@ -1045,10 +1074,20 @@
         # NOT part of the gate — built on demand by
         # `scripts/run-e2e-trace-analysis --cold` to capture cold-cache OTel
         # navigation traces for performance diagnostics (see docs/observability.md).
+        # Pinned to workers=1 (overriding the workers=4 gate default): these
+        # measure per-navigation cold cost, where worker contention would corrupt
+        # the attribution, and they keep the default 2 GB VM (4 Firefox workers
+        # would OOM it, #61).
         e2eColdPackages = pkgs.lib.listToAttrs (
           map (c: {
             name = "e2e-${c.backend}-${c.browser}-cold";
-            value = mkE2eCombo (c // { nameSuffix = "-cold"; });
+            value = mkE2eCombo (
+              c
+              // {
+                nameSuffix = "-cold";
+                warmupEnv = " JAUNDER_E2E_WORKERS=1";
+              }
+            );
           }) e2eCombos
         );
 

@@ -188,27 +188,81 @@ chromium once applied. (An asymmetric firefox=4/chromium=2 config was considered
 browsers per VM — but uniform-4 was chosen for config simplicity.) Expected gate
 ≈ 3.5m (firefox-bound), down from ~10m+ (~65%).
 
-## #155 — flip status: READY, deferred behind #210
+## #155 — flip landed: `workers=2`, small VMs, Firefox slimming (AC4, 2026-07-03)
 
-The full workers=4 flip was verified across all four combos on 4-core / 6 GB
-VMs: `postgres-chromium` 66/66 (1.6m), `postgres-firefox` 66/66 (2.7m),
-`sqlite-firefox` 66/66 (2.9m) — **3 of 4 rock-solid**, Firefox (the long pole)
-stable at workers=4 on both backends. The lone failure was `sqlite-chromium` on
-`posts.spec.ts:349`, a **pre-existing known-flaky heavy test** that
-intermittently times out under 4-worker CPU contention (sqlite's
-write-serialization makes it the tightest combo). It is a timeout on marginal
-fixture setup, not a race or a regression.
+**Supersedes the AC3 "uniform `workers=4`" decision above.** #210 landed
+(batch-seed for the heavy timeline tests); this branch rebased onto it, and the
+heavy `posts.spec.ts` timeline tests now seed via `test-support`. With that in,
+the flip was re-verified — and a fuller sweep on a real 16-core / 32 GB dev box
+changed the chosen operating point.
 
-Rather than paper over it with retries or more timeout inflation, the root cause
-is being fixed in **#210** (batch-seed the heavy timeline tests instead of
-sequential `api.create_post` calls — see `storage::test_support::seed_posts` for
-the pattern). **#155 is therefore paused, blocked on #210.** All enabling
-infrastructure has landed at the current `workers=1` default (env-driven worker
-count, worker-aware per-test budgets, the admin-site serial quarantine, VM-size
-params, spike-scaffolding cleanup); once #210 makes the heavy test reliable,
-flip the `nixPlaywrightConfig` default to 4 + size the `e2eWarmChecks` VMs (6 GB
-/ 4 cores) and re-verify — and revisit whether the worker-contention timeout
-headroom can shrink.
+**What the sweep showed.** At `workers=4` every combo is 71/71 green _in
+isolation_ (~3 min Firefox), and CI is unaffected because its matrix runs one
+combo per dedicated runner (ADR-0034). But the **local `cargo xtask validate`
+aggregate** builds all combos in one `nix build`, and on a host with
+`max-jobs>1` they realize concurrently. At `workers=4` each VM needs `cores=4`
+(one core per worker or the guest starves — `cores=3` was _worse_, 12–19
+failures/combo), so N concurrent VMs demand N×4 host cores; four of them
+oversubscribe a 16-core box and trip already-scaled timeouts at random. The
+per-VM footprint, not the DB or OOM, is the binding constraint.
+
+Measured (all four combos, 16-core / 32 GB, live-loaded host):
+
+| workers | cores | mem           | concurrency | wall-clock | result           | peak RAM  |
+| ------- | ----- | ------------- | ----------- | ---------- | ---------------- | --------- |
+| 4       | 4     | 6 GB          | 4-wide      | 6.6m       | flaky (host CPU) | 24 GB     |
+| 4       | 3     | 6 GB          | 4-wide      | 12.6m      | badly flaky      | 24 GB     |
+| 4       | 4     | 6 GB          | 2-wide      | 8.4m       | flaky            | 12 GB     |
+| 4       | 4     | 4 GB+slim     | 2-wide      | 10.5m      | flaky            | 8 GB      |
+| 2       | 2     | 4 GB+slim     | 4-wide      | 8.2m       | **green**        | 16 GB     |
+| **2**   | **2** | **3 GB+slim** | **4-wide**  | **8.7m**   | **green**        | **12 GB** |
+
+**Budget-bug correction (important — the `workers=4` "flaky" rows above are
+tainted).** Those rows ran with a **worker-scaling bug**:
+`workerContentionScale` in `fixtures.ts` re-read `JAUNDER_E2E_WORKERS` with its
+own default of `1`, which diverged from the config's `workers` default, so when
+the env was unset the budgets computed **zero** contention headroom while N>1
+workers actually ran. Because the scale is applied as
+`max(browserScale, workerContentionScale)`, Firefox (browserScale 2.2) was
+unaffected but **chromium (browserScale 1.0) got no headroom at all** — which is
+why the `workers=4` failures were overwhelmingly chromium timeouts. Fixed
+structurally by deriving the scale from `testInfo.config.workers` (Playwright's
+resolved count) so it can never diverge from the running worker count. A
+corrected-budget re-test of **`workers=4` / `cores=4` / 6 GB / 2-wide** then ran
+**71/71 green on every combo** (chromium 2.9–3.0 m). So `workers=4` is _viable_,
+not unfixably flaky.
+
+**Decision (AC4): `workers=2`, `cores=2`, 3 GB VMs, Firefox process-slimming —
+chosen on the balance, not because `workers=4` fails.** With both configs green
+on corrected budgets: `workers=2` / 4-wide ran the local aggregate in **8.7 m**
+vs `workers=4` / 2-wide's **10.8 m** — running all four at once beats
+2-at-a-time even though each `workers=4` combo is quicker. `workers=2` also
+needs only 2 cores (so it packs 4-wide with no concurrency throttling), is far
+less bursty on a shared host (2 browser instances/combo vs 4), and — via the
+Firefox `firefoxUserPrefs` slimming (Fission off, single content process,
+trimmed caches, transparent to the app-level tests) — fits **3 GB** VMs, ≤12 GB
+peak. (`cores` must be `≥ workers` or the guest CPU-starves:
+`workers=4`/`cores=3` was _worse_, 12–19 failures/combo.)
+
+**CI tradeoff, accepted:** `workers`/`cores`/`mem` are baked into the shared
+`e2eWarmChecks` derivation, so CI's per-combo matrix uses the same values.
+`workers=4` would give a slightly faster _isolated_ CI combo (the re-test put
+the gap at **~1 min** — ~3 m vs `workers=2`'s ~4–5 m, not the ~4 min first
+estimated), but only on CI where each combo has its own runner; locally it is
+slower and would need the `--max-jobs 2` throttle re-added. Both configs are a
+large reduction from the old ~12 min Firefox long pole (#155's acceptance), so
+the ~1 min of CI headroom is worth trading for the simpler, faster, gentler
+local story. `--max-jobs` is the only local-only lever (cores/mem/workers can't
+diverge local-vs-CI without impurity), and at `workers=2`'s small per-VM
+footprint it isn't needed — the host's own `max-jobs` schedules the four 2-core
+VMs safely.
+
+**Marginal-test budget fixes (kept from the `workers=4` work):** two tests
+bypassed the worker-contention budget and were fixed — the `verifiedUser`
+fixture now scales its own timeout at setup time (an in-body `test.setTimeout`
+runs too late to cover fixture setup), and `posts.spec.ts` "draft lifecycle"
+scales the post-navigation `.j-post-body` assertion (it used the global 5 s
+`expect` timeout). Both help any `workers>1` run and give CI headroom.
 
 ## Timeout Budgeting
 

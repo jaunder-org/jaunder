@@ -259,9 +259,20 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   await waitForSelector(page, ".j-save-summary");
 
   await goto(page, permalinkUrl);
-  await expect(page.locator(".j-post-body")).toContainText("edited draft body");
+  // The permalink is a fresh CSR mount; under worker CPU contention (#155,
+  // workers=4) its render can exceed the global 5s expect timeout, so scale
+  // these post-navigation assertions with the same contention factor the
+  // test-level budget uses.
+  const bodyRenderTimeoutMs = hydrationHeavyTimeoutMs(testInfo, 5_000);
+  await expect(page.locator(".j-post-body")).toContainText(
+    "edited draft body",
+    {
+      timeout: bodyRenderTimeoutMs,
+    },
+  );
   await expect(page.locator(".draft-banner")).toContainText(
     "Draft - visible only to you",
+    { timeout: bodyRenderTimeoutMs },
   );
 
   const guestContext = await context.browser()!.newContext();

@@ -62,11 +62,15 @@ fn sentinel_detail(status: &coverage::status::CoverageStatus) -> String {
 /// {sqlite,postgres}×{chromium,firefox} combo VM checks. They are independent
 /// derivations, so the host realizes them in parallel up to its `max-jobs` —
 /// CI's install-nix-action sets `max-jobs = auto`; a plain dev box defaults to 1
-/// and runs them serially. The fan-out intent is declared in the flake (the
-/// `e2e-checks` aggregate / `e2eCombos`), not here. This aggregate path is the
-/// full LOCAL `validate` equivalent; CI instead fans the combos across runners
-/// via `cargo xtask e2e` (see `e2e_combo`). `postgres-integration` is
-/// deliberately not dispatched — its tests already run under the coverage check.
+/// and runs them serially. Since the workers=2 flip (#155) each combo VM is
+/// sized small (cores=2, 3 GB) and runs only 2 Playwright workers, so several
+/// realize concurrently without oversubscribing a typical multi-core host — the
+/// fan-out is left to the host's `max-jobs` rather than pinned here. The intent
+/// is declared in the flake (`e2e-checks` aggregate / `e2eCombos`). This
+/// aggregate path is the full LOCAL `validate` equivalent; CI instead fans the
+/// combos across runners via `cargo xtask e2e` (see `e2e_combo`).
+/// `postgres-integration` is deliberately not dispatched — its tests already run
+/// under the coverage check.
 pub fn e2e(result: &mut CommandResult) {
     let step = build_check("nix-e2e", "e2e");
     // #93: surface the server journals in the one canonical, always-uploaded

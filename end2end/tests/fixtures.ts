@@ -117,12 +117,20 @@ type NavigationSummary = {
 const hydrationHeavyTimeoutScale = 2.2;
 const hydrationHeavyFirstNavigationScale = 2.6;
 
-// CPU-contention headroom as a function of the Playwright worker count
-// (JAUNDER_E2E_WORKERS, default 1). Calibrated so 4 workers reaches Firefox's
-// proven 2.2x; intermediate counts interpolate. 1 worker = no contention.
-function workerContentionScale(): number {
-  const parsed = Number.parseInt(process.env.JAUNDER_E2E_WORKERS ?? "1", 10);
-  const workers = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+// CPU-contention headroom as a function of the Playwright worker count.
+// Calibrated so 4 workers reaches Firefox's proven 2.2x; intermediate counts
+// interpolate. 1 worker = no contention.
+//
+// The count comes from `testInfo.config.workers` — the value Playwright actually
+// resolved from the config's `workers` setting — NOT a second read of
+// JAUNDER_E2E_WORKERS. The env is read in exactly one place (the config's
+// `workers`); everything downstream derives from Playwright's resolved value, so
+// the budget scale can never disagree with the number of workers actually
+// running. (Reading the env here with its own default silently diverged from the
+// config default and applied zero headroom while N>1 workers ran — #155.)
+function workerContentionScale(testInfo: TestInfo): number {
+  const resolved = testInfo.config.workers;
+  const workers = Number.isFinite(resolved) && resolved > 0 ? resolved : 1;
   if (workers <= 1) return 1.0;
   if (workers === 2) return 1.5;
   if (workers === 3) return 2.0;
@@ -198,7 +206,7 @@ export function hydrationHeavyTimeoutMs(
   const browserScale =
     testInfo.project.name === "chromium" ? 1.0 : hydrationHeavyTimeoutScale;
   return Math.ceil(
-    chromiumBudgetMs * Math.max(browserScale, workerContentionScale()),
+    chromiumBudgetMs * Math.max(browserScale, workerContentionScale(testInfo)),
   );
 }
 
@@ -211,7 +219,7 @@ export function hydrationHeavyFirstNavigationTimeoutMs(
       ? 1.0
       : hydrationHeavyFirstNavigationScale;
   return Math.ceil(
-    chromiumBudgetMs * Math.max(browserScale, workerContentionScale()),
+    chromiumBudgetMs * Math.max(browserScale, workerContentionScale(testInfo)),
   );
 }
 
@@ -283,6 +291,12 @@ const test = base.extend<{
   // out-of-band so the test's `page` stays logged out. Yields the same
   // credentials; the account now has a verified email.
   verifiedUser: async ({ browser, user, mailbox }, use, testInfo) => {
+    // Fixture setup (newContext + login + set-email + verify) runs BEFORE the
+    // test body, so a `test.setTimeout(...)` in the body is too late to cover
+    // it — this expensive out-of-band flow would run under the un-scaled 30s
+    // default and time out under worker CPU contention (#155, workers=4). Scale
+    // the whole test's budget here, at the fixture's start, so setup is covered.
+    testInfo.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
     const context = await browser.newContext();
     const page = await context.newPage();
     const firstNav = hydrationHeavyFirstNavigationTimeoutMs(testInfo, 15_000);
