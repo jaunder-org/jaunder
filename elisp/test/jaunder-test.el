@@ -302,6 +302,31 @@
       (jaunder--ensure-date-tz)
       (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "Europe/Paris")))))
 
+;;; multi-blog config + resolution (C4 / issue #162)
+
+(ert-deftest jaunder-resolve-blog-longest-prefix ()
+  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a" :username "a")
+                         ("/home/me/blog/work/" :base-url "https://b" :username "b")))
+        (jaunder-base-url nil) (jaunder-username nil))
+    (should (equal (plist-get (jaunder--resolve-blog "/home/me/blog/post.org") :username) "a"))
+    (should (equal (plist-get (jaunder--resolve-blog "/home/me/blog/work/x.org") :username) "b"))))
+
+(ert-deftest jaunder-resolve-blog-falls-back-to-globals ()
+  (let ((jaunder-blogs nil)
+        (jaunder-base-url "https://g") (jaunder-username "g"))
+    (should (equal (plist-get (jaunder--resolve-blog "/tmp/x.org") :base-url) "https://g"))))
+
+(ert-deftest jaunder-resolve-blog-errors-when-unconfigured ()
+  (let ((jaunder-blogs nil) (jaunder-base-url nil) (jaunder-username nil))
+    (should-error (jaunder--resolve-blog "/tmp/x.org"))))
+
+(ert-deftest jaunder-with-blog-binds-transport-specials ()
+  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a" :username "a")))
+        (jaunder-base-url nil) (jaunder-username nil))
+    (jaunder--with-blog "/home/me/blog/post.org"
+                        (should (equal jaunder-base-url "https://a"))
+                        (should (equal jaunder-username "a")))))
+
 ;;; atom-entry -> xml serializer (C2 / issue #160)
 
 (ert-deftest jaunder-atom-entry->xml-full-entry ()

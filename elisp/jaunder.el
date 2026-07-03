@@ -38,6 +38,15 @@
   :type '(choice (const :tag "Unset" nil) string)
   :group 'jaunder)
 
+(defcustom jaunder-blogs nil
+  "Alist mapping a local directory to a Jaunder blog.
+Each element is (DIRECTORY . PLIST), where PLIST carries :base-url and
+:username (strings) and an optional :format (accepted for forward
+compatibility but not used in v1 — org is the only converter)."
+  :type '(alist :key-type directory
+                :value-type (plist :key-type symbol :value-type string))
+  :group 'jaunder)
+
 ;;; Pure helpers
 
 (defun jaunder--build-url (base &rest segments)
@@ -534,6 +543,37 @@ touched."
 (defun jaunder--buffer-keyword (key)
   "Return the #+KEY: value in the current buffer, or nil."
   (cadr (assoc key (org-collect-keywords (list key)))))
+
+;;; multi-blog config + resolution (unit C4, issue #162)
+
+(defun jaunder--resolve-blog (file-or-dir)
+  "Return the active-blog plist (:base-url :username) for FILE-OR-DIR.
+Longest-prefix match against `jaunder-blogs'; else the single-blog globals;
+else an error naming the directory."
+  (let* ((dir (file-name-as-directory
+               (expand-file-name (if (file-directory-p file-or-dir)
+                                     file-or-dir
+                                   (file-name-directory file-or-dir)))))
+         (best nil) (best-len -1))
+    (dolist (entry jaunder-blogs)
+      (let ((root (file-name-as-directory (expand-file-name (car entry)))))
+        (when (and (string-prefix-p root dir) (> (length root) best-len))
+          (setq best (cdr entry) best-len (length root)))))
+    (cond
+     (best (list :base-url (plist-get best :base-url)
+                 :username (plist-get best :username)))
+     ((and jaunder-base-url jaunder-username)
+      (list :base-url jaunder-base-url :username jaunder-username))
+     (t (error "jaunder: no blog configured for %s" dir)))))
+
+(defmacro jaunder--with-blog (file &rest body)
+  "Resolve the blog for FILE and run BODY with the transport specials bound."
+  (declare (indent 1) (debug t))
+  (let ((blog (make-symbol "blog")))
+    `(let* ((,blog (jaunder--resolve-blog ,file))
+            (jaunder-base-url (plist-get ,blog :base-url))
+            (jaunder-username (plist-get ,blog :username)))
+       ,@body)))
 
 (defun jaunder--atom->org (&rest _args)
   "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."

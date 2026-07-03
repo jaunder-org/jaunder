@@ -412,7 +412,7 @@ git commit -m "feat(emacs): render org #+DATE: from UTC + capture machine zone"
   `jaunder--resolve-blog (file-or-dir) → (:base-url … :username …)`,
   `jaunder--with-blog (file &rest body)` macro. Used by Tasks 9/10.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```elisp
 (ert-deftest jaunder-resolve-blog-longest-prefix ()
@@ -439,12 +439,12 @@ git commit -m "feat(emacs): render org #+DATE: from UTC + capture machine zone"
       (should (equal jaunder-username "a")))))
 ```
 
-- [ ] **Step 2: Run, verify fail**
+- [x] **Step 2: Run, verify fail**
 
 Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: FAIL —
 `jaunder-blogs`/`jaunder--resolve-blog`/`jaunder--with-blog` undefined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```elisp
 (defcustom jaunder-blogs nil
@@ -486,11 +486,11 @@ else an error naming the directory."
        ,@body)))
 ```
 
-- [ ] **Step 4: Run, verify pass**
+- [x] **Step 4: Run, verify pass**
 
 Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add elisp/jaunder.el elisp/test/jaunder-test.el
