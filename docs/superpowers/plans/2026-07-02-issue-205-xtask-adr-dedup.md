@@ -192,7 +192,7 @@ git commit -m "refactor(xtask): one ADR directory-walk primitive (adr_files)"
   (private), returning `(start, end)` =
   `(begin + BEGIN.len(), end_marker_offset)`.
 
-- [ ] **Step 1: Add `marker_bounds` above `splice_block`**
+- [x] **Step 1: Add `marker_bounds` above `splice_block`**
 
 Insert immediately before `pub fn splice_block` (currently line 155, above its
 doc comment):
@@ -213,7 +213,7 @@ fn marker_bounds(readme: &str) -> Result<(usize, usize)> {
 }
 ```
 
-- [ ] **Step 2: Rewrite `splice_block` to use `marker_bounds`**
+- [x] **Step 2: Rewrite `splice_block` to use `marker_bounds`**
 
 Replace the whole `splice_block` body (lines 155-170, keeping its existing doc
 comment) with:
@@ -232,7 +232,7 @@ pub fn splice_block(readme: &str, new_block: &str) -> Result<String> {
 }
 ```
 
-- [ ] **Step 3: Rewrite `extract_block` to use `marker_bounds`**
+- [x] **Step 3: Rewrite `extract_block` to use `marker_bounds`**
 
 Replace the whole `extract_block` body (lines 173-183) with:
 
@@ -249,13 +249,13 @@ fn extract_block(readme: &str) -> Result<String> {
 succeeding implies distinct offsets, so `begin == end` is impossible and no real
 input's behavior changes.)
 
-- [ ] **Step 4: Run the gate, verify green**
+- [x] **Step 4: Run the gate, verify green**
 
 Run: `cargo xtask check` Expected: PASS — esp.
 `splice_block_replaces_only_between_markers` and
 `splice_block_errors_on_missing_marker` (error still contains `"marker"`).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/adr_readme.rs

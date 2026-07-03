@@ -176,9 +176,10 @@ pub fn render_block(entries: &[AdrEntry], existing: &[TableRow]) -> String {
     out.trim_end().to_string()
 }
 
-/// Replace the text strictly between the markers with `new_block`. Errors when a
-/// marker is missing or out of order.
-pub fn splice_block(readme: &str, new_block: &str) -> Result<String> {
+/// The byte range strictly between the ADR-table markers: `(start, end)` where
+/// `start` is just past `BEGIN` and `end` is at `END`. Errors when either marker
+/// is missing or they are out of order.
+fn marker_bounds(readme: &str) -> Result<(usize, usize)> {
     let begin = readme
         .find(BEGIN)
         .with_context(|| format!("{README} is missing the `{BEGIN}` marker"))?;
@@ -186,7 +187,13 @@ pub fn splice_block(readme: &str, new_block: &str) -> Result<String> {
         .find(END)
         .with_context(|| format!("{README} is missing the `{END}` marker"))?;
     anyhow::ensure!(begin < end, "{README} adr-table markers are out of order");
-    let after_begin = begin + BEGIN.len();
+    Ok((begin + BEGIN.len(), end))
+}
+
+/// Replace the text strictly between the markers with `new_block`. Errors when a
+/// marker is missing or out of order.
+pub fn splice_block(readme: &str, new_block: &str) -> Result<String> {
+    let (after_begin, end) = marker_bounds(readme)?;
     Ok(format!(
         "{}\n\n{}\n\n{}",
         &readme[..after_begin],
@@ -197,15 +204,8 @@ pub fn splice_block(readme: &str, new_block: &str) -> Result<String> {
 
 /// The block text between the markers (for reading existing titles).
 fn extract_block(readme: &str) -> Result<String> {
-    let begin = readme
-        .find(BEGIN)
-        .with_context(|| format!("{README} is missing the `{BEGIN}` marker"))?
-        + BEGIN.len();
-    let end = readme
-        .find(END)
-        .with_context(|| format!("{README} is missing the `{END}` marker"))?;
-    anyhow::ensure!(begin <= end, "{README} adr-table markers are out of order");
-    Ok(readme[begin..end].to_string())
+    let (start, end) = marker_bounds(readme)?;
+    Ok(readme[start..end].to_string())
 }
 
 /// A row's mechanical cells (number, link target, status) plus its
