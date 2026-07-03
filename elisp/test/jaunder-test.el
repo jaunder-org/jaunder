@@ -343,4 +343,23 @@
       (insert xml)
       (should (consp (libxml-parse-xml-region (point-min) (point-max)))))))
 
+;;; media upload (unit C, issue #161)
+
+(ert-deftest jaunder-atom-entry-fields-harvests-content-src-and-type ()
+  (skip-unless (fboundp 'libxml-parse-xml-region))
+  (let ((xml (concat "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+                     "<entry xmlns=\"http://www.w3.org/2005/Atom\">"
+                     "<id>x</id><title>p.png</title>"
+                     "<updated>2026-07-02T00:00:00Z</updated>"
+                     "<published>2026-07-02T00:00:00Z</published>"
+                     "<content type=\"image/png\""
+                     " src=\"https://h/media/upload/ab/cd/abcd/p.png\"/>"
+                     "<link rel=\"edit-media\""
+                     " href=\"https://h/media/upload/ab/cd/abcd/p.png\"/>"
+                     "</entry>")))
+    (should (equal (cdr (assq 'content-src (jaunder--atom-entry-fields xml)))
+                   "https://h/media/upload/ab/cd/abcd/p.png"))
+    (should (equal (cdr (assq 'content-type (jaunder--atom-entry-fields xml)))
+                   "image/png"))))
+
 ;;; jaunder-test.el ends here

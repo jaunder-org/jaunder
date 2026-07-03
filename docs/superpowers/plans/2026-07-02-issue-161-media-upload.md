@@ -1,46 +1,95 @@
 # Emacs Media Upload + Content-Addressed Link Substitution (C3 of #74) — Implementation Plan
 
-> **For agentic workers:** Execute this plan task-by-task with `jaunder-iterate` (delegating individual tasks to a subagent via `jaunder-dispatch` when useful). Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Execute this plan task-by-task with `jaunder-iterate`
+> (delegating individual tasks to a subagent via `jaunder-dispatch` when
+> useful). Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** On publish, upload an org post's local image links to the server and rewrite them — only in the *sent* body — to the server's content-addressed URLs, leaving the author's buffer untouched.
+**Goal:** On publish, upload an org post's local image links to the server and
+rewrite them — only in the _sent_ body — to the server's content-addressed URLs,
+leaving the author's buffer untouched.
 
-**Architecture:** A separate elisp step (not folded into C2's `jaunder--org->atom`) that (1) walks the live buffer's **body region** with `org-element` to collect qualifying `file:`/`attachment:` image links in order, (2) pre-flights that all exist (fail-fast), (3) uploads each distinct file once via `jaunder--http-request` (server sha256-dedups), harvesting the `<content src>` URL from the response entry, and (4) rewrites those links positionally into the C2 sent body. All new code lives in `elisp/jaunder.el`; pure tests in `elisp/test/jaunder-test.el`; live tests in a new `elisp/test/jaunder-media-integration.el`.
+**Architecture:** A separate elisp step (not folded into C2's
+`jaunder--org->atom`) that (1) walks the live buffer's **body region** with
+`org-element` to collect qualifying `file:`/`attachment:` image links in order,
+(2) pre-flights that all exist (fail-fast), (3) uploads each distinct file once
+via `jaunder--http-request` (server sha256-dedups), harvesting the
+`<content src>` URL from the response entry, and (4) rewrites those links
+positionally into the C2 sent body. All new code lives in `elisp/jaunder.el`;
+pure tests in `elisp/test/jaunder-test.el`; live tests in a new
+`elisp/test/jaunder-media-integration.el`.
 
-**Tech Stack:** Emacs Lisp (org-element, org-attach, dom/libxml, plz→curl), ERT. Spec: `docs/superpowers/specs/2026-07-02-issue-161-media-upload.md`.
+**Tech Stack:** Emacs Lisp (org-element, org-attach, dom/libxml, plz→curl), ERT.
+Spec: `docs/superpowers/specs/2026-07-02-issue-161-media-upload.md`.
 
 ## Global Constraints
 
-- **Emacs floor:** 29.1 (`Package-Requires` in `jaunder.el`). `libxml-parse-xml-region` requires a libxml2-enabled Emacs (the nix `emacsForCi` is).
+- **Emacs floor:** 29.1 (`Package-Requires` in `jaunder.el`).
+  `libxml-parse-xml-region` requires a libxml2-enabled Emacs (the nix
+  `emacsForCi` is).
 - **No `Co-Authored-By` trailers** in any commit (overrides the global default).
-- **Worktree only / never `main`:** all commits land on `worktree-issue-161-media-upload` (base `6500cf7d`, post-#204 main). Review against the fork point: `git diff wt-base-issue-161..HEAD`.
+- **Worktree only / never `main`:** all commits land on
+  `worktree-issue-161-media-upload` (base `6500cf7d`, post-#204 main). Review
+  against the fork point: `git diff wt-base-issue-161..HEAD`.
 - **Commit only after explicit user approval** of this plan.
-- **Per-task gate:** `cargo xtask check` — runs the elisp `ert` StepSpec (`emacs --batch -Q -l elisp/scripts/run-tests.el`, which globs `test/*-test.el`) + `elisp-fmt` (`jaunder-fmt-check`). Run it before each commit (`jaunder-commit`); the pre-commit hook runs the full gate and auto-heals formatting. **Fast pure-test iteration inside the devShell:** `emacs --batch -Q -l elisp/scripts/run-tests.el` (bare host `emacs -Q` lacks `plz`; run via the `.#ci` devShell / `devtool run`).
-- **Live tests** (`test/*-integration.el`, ADR-0035 harness) do **not** run in `cargo xtask check`. They run via **`cargo xtask elisp-integration`** (the hermetic `e2e-elisp-integration` nixosTest; also in CI's `elisp-integration` job). The `run-integration-tests.el` runner globs `test/*-integration.el` and needs a built binary via `JAUNDER_TEST_BINARY`/PATH; `jaunder-test--with-live-server` (helper) self-boots a server as user `alice`.
-- **ADR workflow (always-0000, post-#196/#204):** write `docs/adr/0000-<slug>.md`; `cargo xtask adr renumber` assigns the number and regenerates the `docs/README.md` ADR table. The `adr-format`/`adr-readme-parity` gates enforce the canonical `# ADR-NNNN:` heading + `- Status:` token — do **not** hand-edit the README table.
-- **Server contract** (verified): `POST /atompub/{user}/media`, raw bytes body, `Content-Type` = image MIME, `Slug` = filename; `201` new / `200` idempotent; response is a media-link `<entry xmlns="http://www.w3.org/2005/Atom">` whose `<content type=… src="{base}/media/upload/{sha0..2}/{sha2..4}/{sha}/{filename}"/>` carries the binary URL (harvest it — never `Location`, never reconstruct).
+- **Per-task gate:** `cargo xtask check` — runs the elisp `ert` StepSpec
+  (`emacs --batch -Q -l elisp/scripts/run-tests.el`, which globs
+  `test/*-test.el`) + `elisp-fmt` (`jaunder-fmt-check`). Run it before each
+  commit (`jaunder-commit`); the pre-commit hook runs the full gate and
+  auto-heals formatting. **Fast pure-test iteration inside the devShell:**
+  `emacs --batch -Q -l elisp/scripts/run-tests.el` (bare host `emacs -Q` lacks
+  `plz`; run via the `.#ci` devShell / `devtool run`).
+- **Live tests** (`test/*-integration.el`, ADR-0035 harness) do **not** run in
+  `cargo xtask check`. They run via **`cargo xtask elisp-integration`** (the
+  hermetic `e2e-elisp-integration` nixosTest; also in CI's `elisp-integration`
+  job). The `run-integration-tests.el` runner globs `test/*-integration.el` and
+  needs a built binary via `JAUNDER_TEST_BINARY`/PATH;
+  `jaunder-test--with-live-server` (helper) self-boots a server as user `alice`.
+- **ADR workflow (always-0000, post-#196/#204):** write
+  `docs/adr/0000-<slug>.md`; `cargo xtask adr renumber` assigns the number and
+  regenerates the `docs/README.md` ADR table. The
+  `adr-format`/`adr-readme-parity` gates enforce the canonical `# ADR-NNNN:`
+  heading + `- Status:` token — do **not** hand-edit the README table.
+- **Server contract** (verified): `POST /atompub/{user}/media`, raw bytes body,
+  `Content-Type` = image MIME, `Slug` = filename; `201` new / `200` idempotent;
+  response is a media-link `<entry xmlns="http://www.w3.org/2005/Atom">` whose
+  `<content type=… src="{base}/media/upload/{sha0..2}/{sha2..4}/{sha}/{filename}"/>`
+  carries the binary URL (harvest it — never `Location`, never reconstruct).
 
 ---
 
 ## File Structure
 
-- `elisp/jaunder.el` — all new helpers, added in the "org → atom mapping" region (after C2's code, before the `jaunder--atom->org` seam). One new `require` (`org-attach`).
-- `elisp/test/jaunder-test.el` — new pure ERT for every helper except the live upload path.
-- `elisp/test/jaunder-media-integration.el` — **new** live ERT file (globbed by `run-integration-tests.el`).
-- `docs/adr/0044-emacs-media-content-src.md` — **new** ADR (renumbered on commit).
-- `docs/superpowers/specs/2026-06-29-issue-74-emacs-authoring-publish.md` — annotate the C4 scope-boundary prose (the `jaunder--atom-entry-fields` move to C3).
+- `elisp/jaunder.el` — all new helpers, added in the "org → atom mapping" region
+  (after C2's code, before the `jaunder--atom->org` seam). One new `require`
+  (`org-attach`).
+- `elisp/test/jaunder-test.el` — new pure ERT for every helper except the live
+  upload path.
+- `elisp/test/jaunder-media-integration.el` — **new** live ERT file (globbed by
+  `run-integration-tests.el`).
+- `docs/adr/0044-emacs-media-content-src.md` — **new** ADR (renumbered on
+  commit).
+- `docs/superpowers/specs/2026-06-29-issue-74-emacs-authoring-publish.md` —
+  annotate the C4 scope-boundary prose (the `jaunder--atom-entry-fields` move to
+  C3).
 
 ---
 
 ## Task 1: ADR + epic-spec annotation (the architectural record)
 
 **Files:**
+
 - Create: `docs/adr/0044-emacs-media-content-src.md`
-- Modify: `docs/superpowers/specs/2026-06-29-issue-74-emacs-authoring-publish.md` (C4 scope prose, ≈ lines 52–58)
+- Modify:
+  `docs/superpowers/specs/2026-06-29-issue-74-emacs-authoring-publish.md` (C4
+  scope prose, ≈ lines 52–58)
 - Regenerated by tooling: `docs/README.md` (ADR table — via `adr renumber`)
 
-**Interfaces:** none (docs). Records the two decisions later tasks implement: harvest `<content src>` (Task 2), and `jaunder--atom-entry-fields` pulled into C3.
+**Interfaces:** none (docs). Records the two decisions later tasks implement:
+harvest `<content src>` (Task 2), and `jaunder--atom-entry-fields` pulled into
+C3.
 
-- [ ] **Step 1: Write the ADR** as `docs/adr/0044-emacs-media-content-src.md`, canonical format:
+- [x] **Step 1: Write the ADR** as `docs/adr/0044-emacs-media-content-src.md`,
+      canonical format:
 
 ```markdown
 # ADR-0044: Emacs client harvests media URLs from the response `<content src>`
@@ -56,18 +105,18 @@ Publishing an org post (C3, #161) uploads its local images to
 server's content-addressed URL. The server returns a media-link `<entry>` whose
 `<content src>` is the network-resolvable binary URL
 (`{base}/media/upload/{sha0..2}/{sha2..4}/{sha}/{filename}`), plus a `Location`
-header holding the *edit* URL. The client needs the binary URL.
+header holding the _edit_ URL. The client needs the binary URL.
 
 ## Decision
 
-The client **harvests `<content src>` from the response entry XML** — it does not
-use the `Location` header (that is the edit URL) and does not reconstruct the path
-from the sha client-side. The server is authoritative about URL layout.
+The client **harvests `<content src>` from the response entry XML** — it does
+not use the `Location` header (that is the edit URL) and does not reconstruct
+the path from the sha client-side. The server is authoritative about URL layout.
 
 To parse the entry, introduce a shared primitive `jaunder--atom-entry-fields`
-(entry XML → alist, on `libxml`/`dom`), **pulled forward from C4 (#162) into C3**.
-C3 consumes its `content-src`/`content-type`; C4 and Unit D extend the field set
-(slug, published, ETag).
+(entry XML → alist, on `libxml`/`dom`), **pulled forward from C4 (#162) into
+C3**. C3 consumes its `content-src`/`content-type`; C4 and Unit D extend the
+field set (slug, published, ETag).
 
 ## Consequences
 
@@ -77,19 +126,26 @@ C3 consumes its `content-src`/`content-type`; C4 and Unit D extend the field set
 - Requires a libxml2-enabled Emacs for `libxml-parse-xml-region`.
 ```
 
-- [ ] **Step 2: Annotate the epic spec.** In `docs/superpowers/specs/2026-06-29-issue-74-emacs-authoring-publish.md`, find the C4 scope-boundary prose that assigns the entry-parse primitive to C4 and add a note that it moved to C3 (#161), e.g. append: `**(Amended #161):** the shared entry-XML parse primitive \`jaunder--atom-entry-fields\` is introduced in C3, not C4; C4 extends its field set.`
+- [x] **Step 2: Annotate the epic spec.** In
+      `docs/superpowers/specs/2026-06-29-issue-74-emacs-authoring-publish.md`,
+      find the C4 scope-boundary prose that assigns the entry-parse primitive to
+      C4 and add a note that it moved to C3 (#161), e.g. append:
+      `**(Amended #161):** the shared entry-XML parse primitive \`jaunder--atom-entry-fields\`
+      is introduced in C3, not C4; C4 extends its field set.`
 
-- [ ] **Step 3: Assign the ADR number + sync the README**
+- [x] **Step 3: Assign the ADR number + sync the README**
 
-Run: `cargo xtask adr renumber`
-Expected: `0044-emacs-media-content-src.md` renamed to the next free number (`0044-…`), the `# ADR-0044:` heading rewritten to `# ADR-0044:`, and the `docs/README.md` ADR table regenerated with the new row.
+Run: `cargo xtask adr renumber` Expected: `0044-emacs-media-content-src.md`
+renamed to the next free number (`0044-…`), the `# ADR-0044:` heading rewritten
+to `# ADR-0044:`, and the `docs/README.md` ADR table regenerated with the new
+row.
 
-- [ ] **Step 4: Run the gate**
+- [x] **Step 4: Run the gate**
 
-Run: `cargo xtask check`
-Expected: PASS — `adr-format` + `adr-readme-parity` green.
+Run: `cargo xtask check` Expected: PASS — `adr-format` + `adr-readme-parity`
+green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/adr docs/README.md docs/superpowers/specs/2026-06-29-issue-74-emacs-authoring-publish.md
@@ -101,13 +157,18 @@ git commit -m "docs(issue-161): ADR for media content-src harvest + atom-entry-f
 ## Task 2: `jaunder--atom-entry-fields` — shared entry-XML parse primitive
 
 **Files:**
+
 - Modify: `elisp/jaunder.el` (add in the org→atom region)
 - Test: `elisp/test/jaunder-test.el`
 
 **Interfaces:**
-- Produces: `(jaunder--atom-entry-fields XML)` → alist with keys `content-src`, `content-type` (strings, or nil if absent). Consumed by `jaunder--upload-media` (Task 7).
 
-- [ ] **Step 1: Write the failing test** (append to `elisp/test/jaunder-test.el`):
+- Produces: `(jaunder--atom-entry-fields XML)` → alist with keys `content-src`,
+  `content-type` (strings, or nil if absent). Consumed by
+  `jaunder--upload-media` (Task 7).
+
+- [x] **Step 1: Write the failing test** (append to
+      `elisp/test/jaunder-test.el`):
 
 ```elisp
 (ert-deftest jaunder-atom-entry-fields-harvests-content-src-and-type ()
@@ -127,12 +188,13 @@ git commit -m "docs(issue-161): ADR for media content-src harvest + atom-entry-f
                    "image/png"))))
 ```
 
-- [ ] **Step 2: Run it, verify it fails**
+- [x] **Step 2: Run it, verify it fails**
 
-Run: `emacs --batch -Q -l elisp/scripts/run-tests.el`
-Expected: FAIL — `jaunder--atom-entry-fields` undefined.
+Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: FAIL —
+`jaunder--atom-entry-fields` undefined.
 
-- [ ] **Step 3: Implement** (in `elisp/jaunder.el`, before `jaunder--atom->org`):
+- [x] **Step 3: Implement** (in `elisp/jaunder.el`, before
+      `jaunder--atom->org`):
 
 ```elisp
 (defun jaunder--atom-entry-fields (xml)
@@ -149,12 +211,11 @@ namespace prefix, so the element is `content'."
           (cons 'content-type (dom-attr content 'type)))))
 ```
 
-- [ ] **Step 4: Run it, verify it passes**
+- [x] **Step 4: Run it, verify it passes**
 
-Run: `emacs --batch -Q -l elisp/scripts/run-tests.el`
-Expected: PASS.
+Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cargo xtask check
@@ -169,7 +230,10 @@ git commit -m "feat(media): jaunder--atom-entry-fields harvests content-src from
 **Files:** Modify `elisp/jaunder.el`; Test `elisp/test/jaunder-test.el`.
 
 **Interfaces:**
-- Produces: `jaunder--media-image-types` (alist), `(jaunder--media-content-type FILENAME)` → MIME string or nil. Its key set is **the qualification predicate** used by Tasks 4 & 6.
+
+- Produces: `jaunder--media-image-types` (alist),
+  `(jaunder--media-content-type FILENAME)` → MIME string or nil. Its key set is
+  **the qualification predicate** used by Tasks 4 & 6.
 
 - [ ] **Step 1: Write the failing test:**
 
@@ -191,7 +255,8 @@ git commit -m "feat(media): jaunder--atom-entry-fields harvests content-src from
   (should (null (jaunder--media-content-type "noext"))))
 ```
 
-- [ ] **Step 2: Run it, verify it fails.** Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` — FAIL (undefined).
+- [ ] **Step 2: Run it, verify it fails.** Run:
+      `emacs --batch -Q -l elisp/scripts/run-tests.el` — FAIL (undefined).
 
 - [ ] **Step 3: Implement:**
 
@@ -214,7 +279,8 @@ The extension match is case-insensitive."
     (cdr (assoc ext jaunder--media-image-types))))
 ```
 
-- [ ] **Step 4: Run it, verify it passes.** Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` — PASS.
+- [ ] **Step 4: Run it, verify it passes.** Run:
+      `emacs --batch -Q -l elisp/scripts/run-tests.el` — PASS.
 
 - [ ] **Step 5: Commit:**
 
@@ -228,13 +294,22 @@ git commit -m "feat(media): image extension -> MIME map + jaunder--media-content
 
 ## Task 4: `jaunder--body-start` refactor + `jaunder--collect-media-links`
 
-**Files:** Modify `elisp/jaunder.el` (add `(require 'org-attach)`; extract `jaunder--body-start`; refactor `jaunder--strip-header-block`; add `jaunder--collect-media-links`); Test `elisp/test/jaunder-test.el`.
+**Files:** Modify `elisp/jaunder.el` (add `(require 'org-attach)`; extract
+`jaunder--body-start`; refactor `jaunder--strip-header-block`; add
+`jaunder--collect-media-links`); Test `elisp/test/jaunder-test.el`.
 
 **Interfaces:**
-- Produces: `(jaunder--body-start)` → point after the header block (current buffer). `(jaunder--collect-media-links)` → ordered list of plists `(:raw-link RAW :path ABS :content-type MIME)` for qualifying links in the current buffer's **body region**, in document order. Consumed by pre-flight (Task 5) and the orchestrator (Task 8).
-- Consumes: `jaunder--media-content-type` (Task 3), `jaunder--header-keyword-re`/`jaunder--blank-line-re` (existing).
 
-- [ ] **Step 1: Write the failing tests** (body-region detection + resolution + exclusions). Add a helper and tests:
+- Produces: `(jaunder--body-start)` → point after the header block (current
+  buffer). `(jaunder--collect-media-links)` → ordered list of plists
+  `(:raw-link RAW :path ABS :content-type MIME)` for qualifying links in the
+  current buffer's **body region**, in document order. Consumed by pre-flight
+  (Task 5) and the orchestrator (Task 8).
+- Consumes: `jaunder--media-content-type` (Task 3),
+  `jaunder--header-keyword-re`/`jaunder--blank-line-re` (existing).
+
+- [ ] **Step 1: Write the failing tests** (body-region detection + resolution +
+      exclusions). Add a helper and tests:
 
 ```elisp
 (defun jaunder-test--collect (org dir)
@@ -273,15 +348,20 @@ git commit -m "feat(media): image extension -> MIME map + jaunder--media-content
     (should (null rs))))
 ```
 
-- [ ] **Step 2: Run it, verify it fails.** Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` — FAIL (undefined `jaunder--collect-media-links`).
+- [ ] **Step 2: Run it, verify it fails.** Run:
+      `emacs --batch -Q -l elisp/scripts/run-tests.el` — FAIL (undefined
+      `jaunder--collect-media-links`).
 
-- [ ] **Step 3a: Add the require.** In the `require` block at the top of `elisp/jaunder.el`, after `(require 'org)`:
+- [ ] **Step 3a: Add the require.** In the `require` block at the top of
+      `elisp/jaunder.el`, after `(require 'org)`:
 
 ```elisp
 (require 'org-attach)
 ```
 
-- [ ] **Step 3b: Extract `jaunder--body-start` and refactor `jaunder--strip-header-block`.** Replace the existing `jaunder--strip-header-block` with:
+- [ ] **Step 3b: Extract `jaunder--body-start` and refactor
+      `jaunder--strip-header-block`.** Replace the existing
+      `jaunder--strip-header-block` with:
 
 ```elisp
 (defun jaunder--body-start ()
@@ -342,7 +422,10 @@ in order with the links in the C2 sent body (#161)."
                           :content-type mime)))))))))))
 ```
 
-- [ ] **Step 4: Run it, verify it passes.** Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` — PASS (the existing `jaunder-org->atom-body-strips-*` tests still pass, confirming the refactor is behavior-preserving).
+- [ ] **Step 4: Run it, verify it passes.** Run:
+      `emacs --batch -Q -l elisp/scripts/run-tests.el` — PASS (the existing
+      `jaunder-org->atom-body-strips-*` tests still pass, confirming the
+      refactor is behavior-preserving).
 
 - [ ] **Step 5: Commit:**
 
@@ -359,7 +442,9 @@ git commit -m "feat(media): collect qualifying body-region image links via org-e
 **Files:** Modify `elisp/jaunder.el`; Test `elisp/test/jaunder-test.el`.
 
 **Interfaces:**
-- Produces: `(jaunder--media-preflight RECORDS)` → nil, or signals `error` listing every unreadable `:path`. Consumed by the orchestrator (Task 8).
+
+- Produces: `(jaunder--media-preflight RECORDS)` → nil, or signals `error`
+  listing every unreadable `:path`. Consumed by the orchestrator (Task 8).
 - Consumes: the `jaunder--collect-media-links` record shape (`:path`).
 
 - [ ] **Step 1: Write the failing test:**
@@ -384,7 +469,8 @@ git commit -m "feat(media): collect qualifying body-region image links via org-e
       (delete-directory d t))))
 ```
 
-- [ ] **Step 2: Run it, verify it fails.** Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` — FAIL (undefined).
+- [ ] **Step 2: Run it, verify it fails.** Run:
+      `emacs --batch -Q -l elisp/scripts/run-tests.el` — FAIL (undefined).
 
 - [ ] **Step 3: Implement:**
 
@@ -403,7 +489,8 @@ are missing, signals one error listing them all — fail-fast, upload nothing (#
              (mapconcat #'identity missing ", ")))))
 ```
 
-- [ ] **Step 4: Run it, verify it passes.** Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` — PASS.
+- [ ] **Step 4: Run it, verify it passes.** Run:
+      `emacs --batch -Q -l elisp/scripts/run-tests.el` — PASS.
 
 - [ ] **Step 5: Commit:**
 
@@ -420,10 +507,15 @@ git commit -m "feat(media): pre-flight all media links, fail-fast listing missin
 **Files:** Modify `elisp/jaunder.el`; Test `elisp/test/jaunder-test.el`.
 
 **Interfaces:**
-- Produces: `(jaunder--substitute-media BODY URLS)` → BODY with its qualifying media links rewritten to URLS (one URL per qualifying link, in document order). Consumed by the orchestrator (Task 8).
-- Consumes: `jaunder--media-content-type` (Task 3) as the shared qualification predicate.
 
-- [ ] **Step 1: Write the failing tests** (single/desc, collision, dedup-same-url, no-op):
+- Produces: `(jaunder--substitute-media BODY URLS)` → BODY with its qualifying
+  media links rewritten to URLS (one URL per qualifying link, in document
+  order). Consumed by the orchestrator (Task 8).
+- Consumes: `jaunder--media-content-type` (Task 3) as the shared qualification
+  predicate.
+
+- [ ] **Step 1: Write the failing tests** (single/desc, collision,
+      dedup-same-url, no-op):
 
 ```elisp
 (ert-deftest jaunder-media-substitute-single-and-desc ()
@@ -452,7 +544,8 @@ git commit -m "feat(media): pre-flight all media links, fail-fast listing missin
                  "plain [[https://x/y.png]] and [[file:notes.txt]] only")))
 ```
 
-- [ ] **Step 2: Run it, verify it fails.** Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` — FAIL (undefined).
+- [ ] **Step 2: Run it, verify it fails.** Run:
+      `emacs --batch -Q -l elisp/scripts/run-tests.el` — FAIL (undefined).
 
 - [ ] **Step 3: Implement:**
 
@@ -490,7 +583,8 @@ target is replaced with its URL, brackets and any `[…][description]' preserved
     (buffer-substring-no-properties (point-min) (point-max))))
 ```
 
-- [ ] **Step 4: Run it, verify it passes.** Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` — PASS.
+- [ ] **Step 4: Run it, verify it passes.** Run:
+      `emacs --batch -Q -l elisp/scripts/run-tests.el` — PASS.
 
 - [ ] **Step 5: Commit:**
 
@@ -507,10 +601,18 @@ git commit -m "feat(media): positional collision-safe link substitution into sen
 **Files:** Modify `elisp/jaunder.el`; Test `elisp/test/jaunder-test.el`.
 
 **Interfaces:**
-- Produces: `(jaunder--http-request METHOD URL &optional BODY CONTENT-TYPE EXTRA-HEADERS)` — EXTRA-HEADERS is an alist of extra `(NAME . VALUE)` request headers. `(jaunder--upload-media PATH CONTENT-TYPE)` → the harvested `content-src` URL string; signals `error` on non-2xx. Consumed by the orchestrator (Task 8).
-- Consumes: `jaunder--atom-entry-fields` (Task 2), `jaunder--build-url` (existing), `plz` file-body form `(file PATH)` → `curl --upload-file` (verified in plz 0.9.1: sends raw bytes, no coding-system re-encoding).
 
-- [ ] **Step 1: Write the failing tests** (extra-headers reach plz; upload errors on non-2xx):
+- Produces:
+  `(jaunder--http-request METHOD URL &optional BODY CONTENT-TYPE EXTRA-HEADERS)`
+  — EXTRA-HEADERS is an alist of extra `(NAME . VALUE)` request headers.
+  `(jaunder--upload-media PATH CONTENT-TYPE)` → the harvested `content-src` URL
+  string; signals `error` on non-2xx. Consumed by the orchestrator (Task 8).
+- Consumes: `jaunder--atom-entry-fields` (Task 2), `jaunder--build-url`
+  (existing), `plz` file-body form `(file PATH)` → `curl --upload-file`
+  (verified in plz 0.9.1: sends raw bytes, no coding-system re-encoding).
+
+- [ ] **Step 1: Write the failing tests** (extra-headers reach plz; upload
+      errors on non-2xx):
 
 ```elisp
 (ert-deftest jaunder-http-request-passes-extra-headers ()
@@ -535,9 +637,12 @@ git commit -m "feat(media): positional collision-safe link substitution into sen
       (should-error (jaunder--upload-media "/tmp/x.png" "image/png") :type 'error))))
 ```
 
-- [ ] **Step 2: Run it, verify it fails.** Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` — FAIL (arity / undefined).
+- [ ] **Step 2: Run it, verify it fails.** Run:
+      `emacs --batch -Q -l elisp/scripts/run-tests.el` — FAIL (arity /
+      undefined).
 
-- [ ] **Step 3a: Extend `jaunder--http-request`.** Change its signature and header assembly. Replace the `let`-binding of `headers`:
+- [ ] **Step 3a: Extend `jaunder--http-request`.** Change its signature and
+      header assembly. Replace the `let`-binding of `headers`:
 
 ```elisp
 (defun jaunder--http-request (method url &optional body content-type extra-headers)
@@ -589,7 +694,9 @@ server-assigned binary URL from the response entry's `<content src>' via
                (jaunder--atom-entry-fields (plist-get resp :body))))))
 ```
 
-- [ ] **Step 4: Run it, verify it passes.** Run: `emacs --batch -Q -l elisp/scripts/run-tests.el` — PASS (existing transport tests still pass — the new param is optional).
+- [ ] **Step 4: Run it, verify it passes.** Run:
+      `emacs --batch -Q -l elisp/scripts/run-tests.el` — PASS (existing
+      transport tests still pass — the new param is optional).
 
 - [ ] **Step 5: Commit:**
 
@@ -603,11 +710,17 @@ git commit -m "feat(media): upload via Slug+file body, harvest content-src; http
 
 ## Task 8: `jaunder--localize-media` orchestrator + live ERT
 
-**Files:** Modify `elisp/jaunder.el`; Create `elisp/test/jaunder-media-integration.el`.
+**Files:** Modify `elisp/jaunder.el`; Create
+`elisp/test/jaunder-media-integration.el`.
 
 **Interfaces:**
-- Produces: `(jaunder--localize-media BODY)` → BODY with local image links rewritten to uploaded URLs; uploads happen as a side effect; the authoring buffer is never modified. This is the C3 entry point C4 (#162) calls.
-- Consumes: `jaunder--collect-media-links` (Task 4), `jaunder--media-preflight` (Task 5), `jaunder--upload-media` (Task 7), `jaunder--substitute-media` (Task 6).
+
+- Produces: `(jaunder--localize-media BODY)` → BODY with local image links
+  rewritten to uploaded URLs; uploads happen as a side effect; the authoring
+  buffer is never modified. This is the C3 entry point C4 (#162) calls.
+- Consumes: `jaunder--collect-media-links` (Task 4), `jaunder--media-preflight`
+  (Task 5), `jaunder--upload-media` (Task 7), `jaunder--substitute-media` (Task
+  6).
 
 - [ ] **Step 1: Implement the orchestrator** (in `elisp/jaunder.el`):
 
@@ -632,7 +745,8 @@ harvested server URLs, in order.  The authoring buffer is never modified (#161).
        (mapcar (lambda (r) (gethash (plist-get r :path) cache)) records)))))
 ```
 
-- [ ] **Step 2: Write the live tests** in a new file `elisp/test/jaunder-media-integration.el`:
+- [ ] **Step 2: Write the live tests** in a new file
+      `elisp/test/jaunder-media-integration.el`:
 
 ```elisp
 ;;; jaunder-media-integration.el --- C3 live media upload tests -*- lexical-binding: t; -*-
@@ -738,15 +852,16 @@ credentials, so `require_user_match' fails deterministically (403)."
 ;;; jaunder-media-integration.el ends here
 ```
 
-- [ ] **Step 3: Run the pure gate** (orchestrator has no pure test of its own, but must not break the suite):
+- [ ] **Step 3: Run the pure gate** (orchestrator has no pure test of its own,
+      but must not break the suite):
 
-Run: `cargo xtask check`
-Expected: PASS.
+Run: `cargo xtask check` Expected: PASS.
 
 - [ ] **Step 4: Run the live suite**
 
-Run: `cargo xtask elisp-integration`
-Expected: PASS — the four media integration tests green (real upload+substitute, idempotent re-upload asserting HTTP 200, non-2xx rejection, attachment resolution).
+Run: `cargo xtask elisp-integration` Expected: PASS — the four media integration
+tests green (real upload+substitute, idempotent re-upload asserting HTTP 200,
+non-2xx rejection, attachment resolution).
 
 - [ ] **Step 5: Commit:**
 
@@ -760,16 +875,33 @@ git commit -m "feat(media): jaunder--localize-media orchestrator + live upload t
 ## Self-Review
 
 **Spec coverage:**
-- Decision (a) harvest `<content src>` → Task 2 (`jaunder--atom-entry-fields`), Task 7 (`jaunder--upload-media` reads it). ✓
-- (b) org-element detection, `file:`+`attachment:`, case-insensitive image exts → Task 3 (predicate) + Task 4 (collect). ✓
+
+- Decision (a) harvest `<content src>` → Task 2 (`jaunder--atom-entry-fields`),
+  Task 7 (`jaunder--upload-media` reads it). ✓
+- (b) org-element detection, `file:`+`attachment:`, case-insensitive image exts
+  → Task 3 (predicate) + Task 4 (collect). ✓
 - (c) resolve on live buffer, body region, org-attach → Task 4. ✓
 - (d) extension→MIME alist → Task 3. ✓
-- (e) distinct-upload dedup + positional collision-safe substitution → Task 8 (cache) + Task 6. ✓
-- (f) pre-flight fail-fast (missing) + non-2xx upload error → Task 5 + Task 7 (pure: upload-media's abort branch) + Task 8 (live: server really returns 4xx). ✓
+- (e) distinct-upload dedup + positional collision-safe substitution → Task 8
+  (cache) + Task 6. ✓
+- (f) pre-flight fail-fast (missing) + non-2xx upload error → Task 5 + Task 7
+  (pure: upload-media's abort branch) + Task 8 (live: server really returns
+  4xx). ✓
 - (g) separate step, substitute into C2 body, buffer never mutated → Task 8. ✓
-- Structural moves: `jaunder--atom-entry-fields` into C3 → Task 2; ADR + epic annotation → Task 1. ✓
-- Test plan: pure ERT (entry-fields, MIME, detection+exclusions incl. header-region/src+example blocks/absolute-file, substitution incl. collision+dedup+no-op, pre-flight, upload-failure branch) → Tasks 2–7; live ERT (upload+substitute, idempotent asserting HTTP 200, non-2xx rejection, attachment) → Task 8. The spec's non-2xx *live* bullet is covered by Task 8's rejection test; upload-media's own abort branch is unit-tested with a stub in Task 7 (the two layers together). ✓ (`#206` git-hygiene warn is out of scope, filed.)
+- Structural moves: `jaunder--atom-entry-fields` into C3 → Task 2; ADR + epic
+  annotation → Task 1. ✓
+- Test plan: pure ERT (entry-fields, MIME, detection+exclusions incl.
+  header-region/src+example blocks/absolute-file, substitution incl.
+  collision+dedup+no-op, pre-flight, upload-failure branch) → Tasks 2–7; live
+  ERT (upload+substitute, idempotent asserting HTTP 200, non-2xx rejection,
+  attachment) → Task 8. The spec's non-2xx _live_ bullet is covered by Task 8's
+  rejection test; upload-media's own abort branch is unit-tested with a stub in
+  Task 7 (the two layers together). ✓ (`#206` git-hygiene warn is out of scope,
+  filed.)
 
 **Placeholder scan:** none — every code/test step is complete.
 
-**Type consistency:** record shape `(:raw-link :path :content-type)` is produced by Task 4 and consumed identically by Tasks 5 & 8; `jaunder--media-content-type` is the shared predicate in Tasks 3/4/6; `jaunder--http-request`'s new `extra-headers` arg (Task 7) matches its `jaunder--upload-media` caller. ✓
+**Type consistency:** record shape `(:raw-link :path :content-type)` is produced
+by Task 4 and consumed identically by Tasks 5 & 8; `jaunder--media-content-type`
+is the shared predicate in Tasks 3/4/6; `jaunder--http-request`'s new
+`extra-headers` arg (Task 7) matches its `jaunder--upload-media` caller. ✓

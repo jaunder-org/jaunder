@@ -294,6 +294,21 @@ here (issue #160)."
       (dom-print (append (list 'entry attrs) (nreverse children)))
       (buffer-string))))
 
+;;; media upload + content-addressed link substitution (unit C, issue #161)
+
+(defun jaunder--atom-entry-fields (xml)
+  "Parse AtomPub entry XML into an alist of harvested fields.
+Returns `content-src' and `content-type' from the entry's `<content>' element.
+The shared entry-parse primitive (issue #161): C3 uses the content subset; C4 and
+Unit D extend the returned set.  `libxml-parse-xml-region' drops the default
+namespace prefix, so the element is `content'."
+  (let* ((dom (with-temp-buffer
+                (insert xml)
+                (libxml-parse-xml-region (point-min) (point-max))))
+         (content (car (dom-by-tag dom 'content))))
+    (list (cons 'content-src (dom-attr content 'src))
+          (cons 'content-type (dom-attr content 'type)))))
+
 (defun jaunder--atom->org (&rest _args)
   "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."
   (error "jaunder: atom->org mapping not yet implemented (units C/D, issues #74/#75)"))
