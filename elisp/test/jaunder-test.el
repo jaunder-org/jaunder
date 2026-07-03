@@ -413,4 +413,22 @@
              "/d/")))
     (should (null rs))))
 
+(ert-deftest jaunder-media-preflight-errors-on-missing-listing-all ()
+  (let* ((d (make-temp-file "jt-preflight-" t))
+         (present (expand-file-name "a.png" d)))
+    (unwind-protect
+        (progn
+          (with-temp-file present (insert "x"))
+          (should-not (jaunder--media-preflight (list (list :path present))))
+          (let ((err (should-error
+                      (jaunder--media-preflight
+                       (list (list :path (expand-file-name "m1.png" d))
+                             (list :path present)
+                             (list :path (expand-file-name "m2.png" d))))
+                      :type 'error)))
+            (should (string-match-p "m1.png" (error-message-string err)))
+            (should (string-match-p "m2.png" (error-message-string err)))
+            (should-not (string-match-p "a.png" (error-message-string err)))))
+      (delete-directory d t))))
+
 ;;; jaunder-test.el ends here

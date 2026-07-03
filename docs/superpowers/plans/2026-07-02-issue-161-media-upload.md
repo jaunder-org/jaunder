@@ -447,7 +447,7 @@ git commit -m "feat(media): collect qualifying body-region image links via org-e
   listing every unreadable `:path`. Consumed by the orchestrator (Task 8).
 - Consumes: the `jaunder--collect-media-links` record shape (`:path`).
 
-- [ ] **Step 1: Write the failing test:**
+- [x] **Step 1: Write the failing test:**
 
 ```elisp
 (ert-deftest jaunder-media-preflight-errors-on-missing-listing-all ()
@@ -469,10 +469,10 @@ git commit -m "feat(media): collect qualifying body-region image links via org-e
       (delete-directory d t))))
 ```
 
-- [ ] **Step 2: Run it, verify it fails.** Run:
+- [x] **Step 2: Run it, verify it fails.** Run:
       `emacs --batch -Q -l elisp/scripts/run-tests.el` — FAIL (undefined).
 
-- [ ] **Step 3: Implement:**
+- [x] **Step 3: Implement:**
 
 ```elisp
 (defun jaunder--media-preflight (records)
@@ -489,10 +489,10 @@ are missing, signals one error listing them all — fail-fast, upload nothing (#
              (mapconcat #'identity missing ", ")))))
 ```
 
-- [ ] **Step 4: Run it, verify it passes.** Run:
+- [x] **Step 4: Run it, verify it passes.** Run:
       `emacs --batch -Q -l elisp/scripts/run-tests.el` — PASS.
 
-- [ ] **Step 5: Commit:**
+- [x] **Step 5: Commit:**
 
 ```bash
 cargo xtask check

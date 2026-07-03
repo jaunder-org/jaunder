@@ -366,6 +366,19 @@ in order with the links in the C2 sent body (#161)."
                                                  (org-attach-expand path))
                                          :content-type mime))))))))))
 
+(defun jaunder--media-preflight (records)
+  "Signal an error if any RECORDS `:path' is not a readable file.
+RECORDS is a `jaunder--collect-media-links' list.  Checks every path and, if any
+are missing, signals one error listing them all — fail-fast, upload nothing (#161)."
+  (let ((missing (delq nil
+                       (mapcar (lambda (r)
+                                 (let ((p (plist-get r :path)))
+                                   (unless (file-readable-p p) p)))
+                               records))))
+    (when missing
+      (error "jaunder: media file(s) not found: %s"
+             (mapconcat #'identity missing ", ")))))
+
 (defun jaunder--atom->org (&rest _args)
   "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."
   (error "jaunder: atom->org mapping not yet implemented (units C/D, issues #74/#75)"))
