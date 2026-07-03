@@ -44,6 +44,11 @@ pub fn seed_slug(prefix: &str, i: usize) -> String {
 /// Public audience so the posts surface on the timeline; otherwise they are
 /// drafts. Returns the created ids oldest-to-newest.
 ///
+/// Slugs derive from `prefix` + index and the slug-uniqueness constraint is
+/// per-user, so callers that share one database (the e2e suite) must pass a
+/// distinct `prefix` for each user they seed — re-seeding the same user with the
+/// same prefix would collide on the second invocation.
+///
 /// # Errors
 ///
 /// Returns `Err` if `username` is invalid or unknown, a generated slug fails to
@@ -109,6 +114,12 @@ mod content_tests {
 
 #[cfg(test)]
 mod seed_tests {
+    //! `SQLite`-only by design: `seed_posts_for_user` has no per-backend
+    //! branching — it dispatches through `storage::create_rendered_post`, which
+    //! the storage layer implements per backend — so these tests smoke the seed
+    //! *logic* on `SQLite` for speed. The tool's dual-backend behaviour is proven
+    //! end-to-end by the e2e matrix, which drives `test-support` against both
+    //! `SQLite` and `Postgres` ({sqlite,postgres}×{chromium,firefox}).
     use super::*;
     use storage::test_support;
 

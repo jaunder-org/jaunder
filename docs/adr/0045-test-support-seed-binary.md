@@ -41,9 +41,14 @@ paths — never a production CLI subcommand, a production HTTP surface, or
 hand-written per-backend SQL.
 
 For #210 its one subcommand is
-`test-support seed-posts --db <StorageArgs> --username <name> --count <N> [--published]`,
-which builds storage from the same `StorageArgs` the server uses and seeds via
-`storage::test_support::seed_posts`.
+`test-support seed-posts --db <StorageArgs> --username <name> --count <N> --body-prefix <P> [--published]`,
+which builds storage from the same `StorageArgs` the server uses and seeds each
+post through `storage::create_rendered_post` — the same storage code path
+`storage::test_support::seed_posts` itself calls. It does **not** invoke
+`seed_posts` verbatim: that helper's fixed `seed-{i}` slug would collide on the
+e2e suite's shared database, so the tool derives per-`--body-prefix` slugs
+instead (a distinct prefix per user keeps every invocation collision-free under
+the per-user slug-uniqueness constraint).
 
 Invariants that make this a decision, not a convenience:
 
@@ -53,10 +58,10 @@ Invariants that make this a decision, not a convenience:
 - It is **not `xtask`**: xtask is host-only and must never run inside a Nix
   derivation; `test-support` is a normal crane-built binary placed on the e2e VM
   PATH so it runs _inside_ the VM.
-- It **reuses** the real code paths (`storage::test_support::seed_posts` /
-  `create_rendered_post`); it does not fork a parallel seeding implementation.
-  Backend parity, audience rows, and rendered HTML come from the one storage
-  code path.
+- It **reuses** the real storage code path (`storage::create_rendered_post`, the
+  same call `storage::test_support::seed_posts` makes); it does not fork a
+  parallel seeding implementation. Backend parity, audience rows, and rendered
+  HTML come from that one storage code path.
 
 ## Consequences
 
