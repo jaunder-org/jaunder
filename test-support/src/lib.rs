@@ -2,7 +2,7 @@
 //! server process — a live-server Playwright e2e drives the `test-support`
 //! binary over a process boundary to seed fixtures. It is the cross-process
 //! sibling of the in-process `storage::test_support` module and is never linked
-//! into the `jaunder` production binary (see ADR-0045, `test-support-seed-binary`).
+//! into the `jaunder` production binary (see ADR-0046, `test-support-seed-binary`).
 //!
 //! The seed core drives `storage::create_rendered_post` directly rather than
 //! calling `storage::test_support::seed_posts`: the e2e suite shares one database

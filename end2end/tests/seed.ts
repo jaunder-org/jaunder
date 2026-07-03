@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 
 /**
  * Seed `count` published posts for `username` via the `test-support` binary
- * (ADR-0045): one in-process storage write per post, no HTTP round-trip. Post
+ * (ADR-0046): one in-process storage write per post, no HTTP round-trip. Post
  * `i` renders an article H1 of `"${bodyPrefix} ${i}"`, so the timeline
  * assertions that key on post titles still hold. Runs synchronously; the tool
  * reads the target database from `JAUNDER_DB` in the environment (set by the nix

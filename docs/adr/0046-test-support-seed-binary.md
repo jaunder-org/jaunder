@@ -1,4 +1,4 @@
-# ADR-0045: A `test-support` binary that links `storage` for out-of-process e2e seeding
+# ADR-0046: A `test-support` binary that links `storage` for out-of-process e2e seeding
 
 - Status: proposed
 - Date: 2026-07-02

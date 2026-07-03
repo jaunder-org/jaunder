@@ -358,7 +358,7 @@
           }
         );
 
-        # The out-of-process e2e seed helper (ADR-0045). Built as its own small
+        # The out-of-process e2e seed helper (ADR-0046). Built as its own small
         # crane package (no leptos/wasm/web deps; shares cargoArtifacts) and placed
         # ONLY on the e2e VM PATH — deliberately absent from the `jaunder` prod
         # binary and the `services.jaunder` NixOS module, so there is no seed
@@ -1066,7 +1066,7 @@
             jaunder = jaunderBin;
             site = site;
             devtool = devtoolBin;
-            # The out-of-process e2e seed helper (ADR-0045). Exposed so it is
+            # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
             # directly buildable/verifiable; it is placed only on the e2e VM PATH,
             # never in the prod artifact or the NixOS module.
             test-support = testSupportBin;
