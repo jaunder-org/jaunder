@@ -4,10 +4,11 @@
 //! sibling of the in-process `storage::test_support` module and is never linked
 //! into the `jaunder` production binary (see ADR-0046, `test-support-seed-binary`).
 //!
-//! The seed core drives `storage::create_rendered_post` directly rather than
-//! calling `storage::test_support::seed_posts`: the e2e suite shares one database
-//! across all tests, so seeds need per-user-unique, content-shaped slugs/bodies
-//! that the module helper's fixed `seed-{i}` / `# Post {i}` scheme cannot give.
+//! The seed core drives the shared `storage::seed_rendered_post` recipe rather
+//! than the `storage::test_support::seed_posts` module helper: the e2e suite
+//! shares one database across all tests, so seeds need per-user-unique,
+//! content-shaped slugs/bodies that the module helper's fixed `seed-{i}` /
+//! `# Post {i}` scheme cannot give.
 
 use std::sync::Arc;
 
@@ -38,11 +39,11 @@ pub fn seed_slug(prefix: &str, i: usize) -> String {
     format!("{base}-{i}")
 }
 
-/// Seed `count` posts for `username` through the real `create_rendered_post`
-/// path — the same code the server runs, so audience rows, rendered HTML, and
-/// both SQL dialects come for free. `published` sets `published_at = now` and a
-/// Public audience so the posts surface on the timeline; otherwise they are
-/// drafts. Returns the created ids oldest-to-newest.
+/// Seed `count` posts for `username` through the shared `seed_rendered_post`
+/// recipe — the same `create_rendered_post` path the server runs, so audience
+/// rows, rendered HTML, and both SQL dialects come for free. `published` sets
+/// `published_at = now` and a Public audience so the posts surface on the
+/// timeline; otherwise they are drafts. Returns the created ids oldest-to-newest.
 ///
 /// Slugs derive from `prefix` + index and the slug-uniqueness constraint is
 /// per-user, so callers that share one database (the e2e suite) must pass a
@@ -251,10 +252,9 @@ mod create_user_tests {
 
         // A freshly-init'd DB has a per-user uniqueness constraint, so a second
         // create with the same username surfaces as an error (no upsert).
-        let err = create_user(&state, "testoperator", "testpassword123", None, false)
+        create_user(&state, "testoperator", "testpassword123", None, false)
             .await
             .expect_err("duplicate username should error");
-        let _ = err;
     }
 }
 
