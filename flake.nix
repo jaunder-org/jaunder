@@ -509,6 +509,34 @@
         nixPlaywrightConfig = pkgs.writeText "playwright.nix.config.js" ''
           const { defineConfig, devices } = require('@playwright/test');
           const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
+          // Worker count is env-driven (#155). Default is 2: it cuts the e2e
+          // wall-clock well below the old serial baseline (Firefox was the ~12min
+          // long pole) while staying robust — 2 browser instances per combo is
+          // far less bursty than 4, so it tolerates a shared/loaded host and lets
+          // all four combos run concurrently in small (2-core/3GB) VMs without
+          // oversubscribing a 16-core box. workers=4 is also viable (and ~1min
+          // faster on the isolated CI combo) but needs cores>=workers, so its
+          // 4-core VMs can't pack 4-wide — the local aggregate is slower and
+          // needs concurrency throttling. workers=2 is the better balance
+          // (measured #155). See docs/observability.md #155 AC3/AC4. Override
+          // with JAUNDER_E2E_WORKERS.
+          const workers = parseInt(process.env.JAUNDER_E2E_WORKERS || '2', 10);
+          // Firefox in a headless VM defaults to Fission site-isolation plus a
+          // pool of content processes; each Playwright worker is a separate
+          // instance, so the RSS multiplies. These prefs collapse each instance
+          // to a single content process and trim the in-memory caches. The e2e
+          // suite exercises app behavior, not Firefox's process-isolation, so
+          // this is transparent to the tests — it just cuts RSS enough to run
+          // the VMs at 3 GB (#155, #61).
+          const firefoxLaunchOptions = {
+            firefoxUserPrefs: {
+              'fission.autostart': false,
+              'dom.ipc.processCount': 1,
+              'dom.ipc.processCount.webIsolated': 1,
+              'browser.sessionhistory.max_total_viewers': 0,
+              'browser.cache.memory.capacity': 51200,
+            },
+          };
           module.exports = defineConfig({
             testDir: './tests',
             timeout: 30 * 1000,
@@ -529,13 +557,39 @@
             },
             // Artifact root for traces/screenshots; copied out by the testScript.
             outputDir: '/tmp/e2e/test-results',
-            // Run spec files sequentially to avoid SQLite write contention.
-            // Each browser project is already run in isolation (separate seed_db()
-            // calls), so one worker is sufficient and prevents locking errors.
-            workers: 1,
+            // SQLite write contention was the historical reason for workers:1,
+            // but the pool runs WAL + 5s busy_timeout + BEGIN IMMEDIATE
+            // (ADR-0039) and the #155 probes measured ZERO SQLITE_BUSY at 4
+            // concurrent workers — the real limit was CPU oversubscription,
+            // handled by worker-aware per-test budgets (fixtures.ts).
+            workers: workers,
+            fullyParallel: workers > 1,
+            // admin-site mutates the site.title/base_url global singletons, so
+            // under fullyParallel it must not overlap specs that read them
+            // (ADR-0039). Each browser is split: the main project excludes
+            // admin-site and runs in parallel; a serial `-admin` project runs
+            // admin-site alone AFTER the main project (project `dependencies` +
+            // fullyParallel:false). At workers=1 this is inert (all serial anyway).
             projects: [
               {
                 name: 'chromium',
+                testIgnore: /admin-site\.spec\.ts/,
+                use: {
+                  ...devices['Desktop Chrome'],
+                  launchOptions: {
+                    args: [
+                      '--no-sandbox',
+                      '--disable-gpu',
+                      '--disable-dev-shm-usage',
+                    ],
+                  },
+                },
+              },
+              {
+                name: 'chromium-admin',
+                testMatch: /admin-site\.spec\.ts/,
+                fullyParallel: false,
+                dependencies: ['chromium'],
                 use: {
                   ...devices['Desktop Chrome'],
                   launchOptions: {
@@ -549,62 +603,20 @@
               },
               {
                 name: 'firefox',
+                testIgnore: /admin-site\.spec\.ts/,
                 use: {
                   ...devices['Desktop Firefox'],
-                },
-              },
-            ],
-          });
-        '';
-
-        # leptos-CSR spike (#177): the CSR e2e's Playwright config. A copy of
-        # nixPlaywrightConfig kept SEPARATE so the concurrency flip (workers:4 +
-        # fullyParallel, the #173 reproduction recipe) lives only on the CSR path
-        # and never touches the default SSR e2e. Task 4 keeps workers:1 to isolate
-        # "do the specs pass under CSR" from "does concurrency panic"; Task 5 flips
-        # it to workers:4 + fullyParallel for the campaign.
-        csrPlaywrightConfig = pkgs.writeText "playwright.csr.config.js" ''
-          const { defineConfig, devices } = require('@playwright/test');
-          const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
-          module.exports = defineConfig({
-            testDir: './tests',
-            timeout: 30 * 1000,
-            expect: { timeout: 5000 },
-            reporter: [
-              ['line'],
-              ['json', { outputFile: '/tmp/e2e/playwright-report.json' }],
-            ],
-            use: {
-              actionTimeout: 0,
-              trace: 'retain-on-failure',
-              screenshot: 'only-on-failure',
-              ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
-            },
-            outputDir: '/tmp/e2e/test-results',
-            // The #173 reproduction recipe: 4 concurrent workers + fullyParallel
-            // maximize overlapping requests. Under SSR this panicked ~12% of runs
-            // (reactive_graph disposal); CSR has no server-side reactive render, so
-            // the spike campaign confirms zero panics. Needs the 4-vCPU/6 GB VM.
-            fullyParallel: true,
-            workers: 4,
-            projects: [
-              {
-                name: 'chromium',
-                use: {
-                  ...devices['Desktop Chrome'],
-                  launchOptions: {
-                    args: [
-                      '--no-sandbox',
-                      '--disable-gpu',
-                      '--disable-dev-shm-usage',
-                    ],
-                  },
+                  launchOptions: firefoxLaunchOptions,
                 },
               },
               {
-                name: 'firefox',
+                name: 'firefox-admin',
+                testMatch: /admin-site\.spec\.ts/,
+                fullyParallel: false,
+                dependencies: ['firefox'],
                 use: {
                   ...devices['Desktop Firefox'],
+                  launchOptions: firefoxLaunchOptions,
                 },
               },
             ],
@@ -723,7 +735,8 @@
               + " JAUNDER_E2E_TRACEPARENT=${traceParent}"
               + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
               + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-              + " --config playwright.nix.config.js --project ${browser}"
+              + " --config playwright.nix.config.js"
+              + " --project ${browser} --project ${browser}-admin"
             )
             # Stream the Playwright line-reporter output into the build log (-L), so
             # the failing test + assertion are recoverable from build.log alone,
@@ -771,6 +784,8 @@
             traceId,
             traceParent,
             warmupEnv ? "",
+            vmMemory ? 2048,
+            vmCores ? null,
           }:
           pkgs.testers.nixosTest {
             name = checkName;
@@ -782,11 +797,16 @@
             globalTimeout = 1200;
 
             nodes.machine =
-              { pkgs, ... }:
+              { pkgs, lib, ... }:
               {
                 imports = [ self.nixosModules.jaunder ];
 
-                virtualisation.memorySize = 2048;
+                virtualisation.memorySize = vmMemory;
+                # Default (null) leaves the nixosTest core count alone; the #155
+                # worker probes set >1 so concurrent workers get real parallelism
+                # (a 1-vCPU VM would timeshare them, under-stressing SQLite
+                # write contention — the very thing the probe measures).
+                virtualisation.cores = lib.mkIf (vmCores != null) vmCores;
                 environment.systemPackages = [
                   pkgs.sqlite
                   pkgs.opentelemetry-collector-contrib
@@ -864,14 +884,6 @@
             traceId,
             traceParent,
             warmupEnv ? "",
-            # leptos-CSR spike (#177): these default to the SSR build/config, so
-            # the existing e2e-postgres-* calls are byte-identical. The CSR check
-            # passes jaunderBinCsr/csrSite/csrPlaywrightConfig + a bigger VM. The
-            # binary/site overrides below are mkIf-guarded on `jaunderPkg !=
-            # jaunderBin`, so the default derivation is untouched (no override added).
-            jaunderPkg ? jaunderBin,
-            sitePkg ? site,
-            playwrightConfig ? nixPlaywrightConfig,
             vmMemory ? 2048,
             vmCores ? null,
           }:
@@ -890,23 +902,10 @@
                 imports = [ self.nixosModules.jaunder ];
 
                 virtualisation.memorySize = vmMemory;
-                # Default (null) leaves the nixosTest core count alone; the CSR
-                # campaign sets 4 (workers:4 needs the cores — 1 vCPU gives false
-                # hydration-timeouts, per #173 handoff).
+                # Default (null) leaves the nixosTest core count alone; the #155
+                # workers=4 flip sets 4 (workers>1 needs the cores; 1 vCPU
+                # timeshares and starves the client render).
                 virtualisation.cores = lib.mkIf (vmCores != null) vmCores;
-                # CSR only: point the jaunder service at the CSR binary + site.
-                # mkIf-guarded so the default (jaunderPkg == jaunderBin) adds
-                # nothing and the existing derivations stay byte-identical.
-                systemd.services.jaunder.preStart = lib.mkIf (jaunderPkg != jaunderBin) (
-                  lib.mkForce ''
-                    mkdir -p target
-                    ln -sfn ${sitePkg} target/site
-                    ${jaunderPkg}/bin/jaunder init --db "$JAUNDER_DB" --skip-if-exists
-                  ''
-                );
-                systemd.services.jaunder.serviceConfig.ExecStart = lib.mkIf (
-                  jaunderPkg != jaunderBin
-                ) (lib.mkForce "${jaunderPkg}/bin/jaunder serve");
                 environment.systemPackages = [
                   pkgs.postgresql_16
                   pkgs.opentelemetry-collector-contrib
@@ -956,7 +955,7 @@
 
               # Exercise create-pg-db
               machine.succeed(
-                "${jaunderPkg}/bin/jaunder create-pg-db"
+                "${jaunderBin}/bin/jaunder create-pg-db"
                 + " --bootstrap-db postgres://postgres@127.0.0.1/postgres"
                 + " --app-db postgres://jaunder@127.0.0.1/jaunder"
                 + " --app-role-password testpassword"
@@ -968,7 +967,7 @@
               machine.wait_for_open_port(3000, timeout=30)
 
               machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
-              machine.succeed("cp ${playwrightConfig} /tmp/e2e/playwright.nix.config.js")
+              machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")
 
               def seed_db():
                 # Dynamic TRUNCATE of every public-schema table avoids
@@ -1028,6 +1027,8 @@
             traceDigit,
             nameSuffix ? "",
             warmupEnv ? "",
+            vmMemory ? 2048,
+            vmCores ? null,
           }:
           let
             mk = if backend == "sqlite" then mkE2eSqliteCheck else mkE2ePostgresCheck;
@@ -1037,14 +1038,34 @@
           in
           mk {
             checkName = "jaunder-e2e-${backend}-${browser}${nameSuffix}";
-            inherit browser traceId traceParent warmupEnv;
+            inherit
+              browser
+              traceId
+              traceParent
+              warmupEnv
+              vmMemory
+              vmCores
+              ;
           };
 
         # attr name -> warm check, e.g. { "e2e-sqlite-chromium" = <drv>; ... }
+        # The warm gate runs at workers=2 (#155, see nixPlaywrightConfig), so the
+        # VMs are sized 3 GB / 2 vCPU: cores >= workers avoids in-guest CPU
+        # starvation, and with the Firefox process-slimming prefs 3 GB clears the
+        # OOM that heavier VMs hit (#61). At workers=2 the per-VM footprint is
+        # small enough that a 16-core dev box (and CI's per-combo runners) run the
+        # combos comfortably; see docs/observability.md #155 AC3/AC4.
         e2eWarmChecks = pkgs.lib.listToAttrs (
           map (c: {
             name = "e2e-${c.backend}-${c.browser}";
-            value = mkE2eCombo (c // { warmupEnv = " JAUNDER_E2E_WARMUP=1"; });
+            value = mkE2eCombo (
+              c
+              // {
+                warmupEnv = " JAUNDER_E2E_WARMUP=1";
+                vmMemory = 3072;
+                vmCores = 2;
+              }
+            );
           }) e2eCombos
         );
 
@@ -1053,10 +1074,20 @@
         # NOT part of the gate — built on demand by
         # `scripts/run-e2e-trace-analysis --cold` to capture cold-cache OTel
         # navigation traces for performance diagnostics (see docs/observability.md).
+        # Pinned to workers=1 (overriding the workers=4 gate default): these
+        # measure per-navigation cold cost, where worker contention would corrupt
+        # the attribution, and they keep the default 2 GB VM (4 Firefox workers
+        # would OOM it, #61).
         e2eColdPackages = pkgs.lib.listToAttrs (
           map (c: {
             name = "e2e-${c.backend}-${c.browser}-cold";
-            value = mkE2eCombo (c // { nameSuffix = "-cold"; });
+            value = mkE2eCombo (
+              c
+              // {
+                nameSuffix = "-cold";
+                warmupEnv = " JAUNDER_E2E_WORKERS=1";
+              }
+            );
           }) e2eCombos
         );
 
