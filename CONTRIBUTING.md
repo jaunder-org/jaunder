@@ -464,7 +464,7 @@ with no text-identity guessing after a rebase — but on three axes it is
 These are accepted: component UI is covered by e2e, all non-exempt code still
 fails on any uncovered line, and the deleted machinery's fragility outweighed
 the marginal ratchet protection on already-accepted lines. See
-[the stateless-coverage-gate ADR](docs/adr/drafts/stateless-coverage-gate.md).
+[the stateless-coverage-gate ADR](docs/adr/0050-stateless-coverage-gate.md).
 
 Some areas are inherently uncovered host-side and are accepted rather than
 force-fitted with artificial tests:
