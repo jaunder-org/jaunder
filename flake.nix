@@ -1243,15 +1243,36 @@
               commonArgs
               // {
                 src = pkgs.lib.cleanSourceWith {
-                  src = ./.;
+                  src = craneLib.path ./.;
                   filter =
-                    path: _type:
+                    path: type:
+                    # Coverage-specific exclusions: none of these are
+                    # instrumented, and admitting them would let unrelated edits
+                    # bust the coverage cache. xtask/ is the host-only driver;
+                    # tools/, docs/, .github/, elisp/, and top-level *.md are
+                    # non-source.
                     !(pkgs.lib.hasInfix "/xtask/" path)
                     && !(pkgs.lib.hasInfix "/tools/" path)
                     && !(pkgs.lib.hasInfix "/docs/" path)
                     && !(pkgs.lib.hasInfix "/.github/" path)
                     && !(pkgs.lib.hasInfix "/elisp/" path)
-                    && !(pkgs.lib.hasSuffix ".md" path);
+                    && !(pkgs.lib.hasSuffix ".md" path)
+                    && (
+                      # Cargo-source ADMISSION clause (mirrors commonArgs.src
+                      # :272-289): without it, ANY untracked non-gitignored file
+                      # (a stray .txt, an editor temp) would enter the derivation
+                      # and change its hash — impure (#37). Only buildable inputs
+                      # are admitted.
+                      (pkgs.lib.hasSuffix ".sql" path)
+                      || (pkgs.lib.hasSuffix ".css" path)
+                      || (builtins.match "scripts/.*" path != null)
+                      # web/src/render/mod.rs `include_str!`s csr/index.html
+                      # inside a #[test], so the instrumented coverage BUILD needs
+                      # it at compile time. filterCargoSources drops .html, so
+                      # re-admit it explicitly or the build fails to compile.
+                      || (pkgs.lib.hasSuffix "csr/index.html" path)
+                      || (craneLib.filterCargoSources path type)
+                    );
                 };
                 inherit cargoArtifacts;
                 pname = "jaunder-coverage";
