@@ -60,6 +60,11 @@ pub struct CommandResult {
     pub coverage: Option<crate::coverage::CoverageReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audit: Option<crate::audit_wasm::AuditReport>,
+    /// Pre-rendered `traces analyze` report text. Human-facing only — `traces
+    /// analyze` rejects `--json`, so this is never serialized (skipped when None,
+    /// and never Some on a `--json` run).
+    #[serde(skip)]
+    pub traces: Option<String>,
 }
 
 impl CommandResult {
@@ -72,6 +77,7 @@ impl CommandResult {
             steps: Vec::new(),
             coverage: None,
             audit: None,
+            traces: None,
         }
     }
 
@@ -126,6 +132,11 @@ impl CommandResult {
         // not the pass/fail line, so render it inline when present.
         if let Some(audit) = &self.audit {
             print!("{}", crate::audit_wasm::render_table(audit));
+        }
+        // Same informational-payload treatment for `traces analyze`: the report
+        // tables are the point, not the pass/fail line.
+        if let Some(traces) = &self.traces {
+            print!("{traces}");
         }
         let verdict = if self.ok { "PASSED" } else { "FAILED" };
         println!(
