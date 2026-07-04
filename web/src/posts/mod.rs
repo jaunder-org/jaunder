@@ -212,7 +212,7 @@ fn parse_publish_at(raw: Option<&str>) -> crate::error::InternalResult<Option<Da
 ///
 /// `publish_at` is an optional RFC3339 UTC instant supplied by the compose
 /// form's datetime control. It is carried as a `String` (not `DateTime<Utc>`)
-/// because `chrono` is an `ssr`-only dependency here and the server-fn
+/// because `chrono` is a `server`-only dependency here and the server-fn
 /// signature must also compile for the wasm client. The wire is UTC; the
 /// browser converts the author's local `datetime-local` value before sending.
 #[allow(clippy::too_many_arguments)]
