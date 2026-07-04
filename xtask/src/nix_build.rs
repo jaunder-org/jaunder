@@ -48,6 +48,7 @@ pub fn build_out_path(attr: &str) -> Result<String> {
         &String::from_utf8_lossy(&out.stdout),
         &String::from_utf8_lossy(&out.stderr),
     )
+    .with_context(|| format!("`nix build {flake_ref}` produced no store path"))
 }
 
 #[cfg(test)]
