@@ -133,22 +133,25 @@ fn shell_boot_artifacts(index_html: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Resolve the site path, then measure the frontend artifacts the shell boots
-/// (raw, gzip, brotli). The targets are read from the site's `index.html` (see
+/// The CSR SPA shell the server embeds and serves (#239). Audited from source — it
+/// is no longer copied into the built site — against the emitted bundle. xtask is
+/// rebuilt from the live tree every run, so this stays current. Path depth:
+/// `audit_wasm.rs` is at `xtask/src/`, so `../../` reaches the repo root.
+const SPA_SHELL: &str = include_str!("../../csr/index.html");
+
+/// Resolve the site path, then measure the frontend artifacts the embedded SPA
+/// shell boots (raw, gzip, brotli). The targets are read from the shell (see
 /// [`shell_boot_artifacts`]), so this Errs — naming the offending path — if the
 /// build didn't emit a file the shell references.
 pub fn run(site_path: Option<&str>) -> Result<AuditReport> {
     let site_path = resolve_site_path(site_path)?;
-    let index_path = Path::new(&site_path).join("index.html");
-    let index_html = std::fs::read_to_string(&index_path)
-        .with_context(|| format!("reading {}", index_path.display()))?;
-    let names = shell_boot_artifacts(&index_html)?;
+    let names = shell_boot_artifacts(SPA_SHELL)?;
     let mut artifacts = Vec::new();
     for name in &names {
         let path = Path::new(&site_path).join(name);
         let bytes = std::fs::read(&path).with_context(|| {
             format!(
-                "reading artifact {} (referenced by index.html)",
+                "reading artifact {} (referenced by the SPA shell)",
                 path.display()
             )
         })?;
@@ -255,15 +258,10 @@ mod tests {
 
     #[test]
     fn run_errors_when_a_referenced_artifact_is_missing() {
-        // A site whose index.html boots `/pkg/jaunder.wasm` but has no such file →
-        // run() must Err naming the missing artifact, without ever invoking `nix`.
+        // The embedded SPA shell boots `/pkg/jaunder.wasm`; a site without that file
+        // → run() must Err naming the missing artifact, without ever invoking `nix`.
         let dir = std::env::temp_dir().join(format!("audit-wasm-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("index.html"),
-            r#"<script type="module">import init from "/pkg/jaunder.js"; init("/pkg/jaunder.wasm");</script>"#,
-        )
-        .unwrap();
         let res = run(Some(dir.to_str().unwrap()));
         std::fs::remove_dir_all(&dir).ok();
         let err = res.unwrap_err().to_string();
