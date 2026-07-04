@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 mod adr;
 mod adr_readme;
 mod audit_wasm;
-mod coverage;
+pub mod coverage;
 pub mod git;
 mod ids;
 mod nix_build;

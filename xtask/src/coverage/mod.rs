@@ -16,6 +16,7 @@ pub mod baseline;
 pub mod classify;
 pub mod crap;
 pub mod diffmap;
+pub mod exempt;
 pub mod reanchor;
 pub mod report;
 

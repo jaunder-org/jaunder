@@ -17,3 +17,5 @@ brotli = "7"
 coverage = { path = "../tools/coverage" }
 tabled = "0.21.0"
 url = "2.5.8"
+syn = { version = "2", features = ["full", "visit", "extra-traits"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
