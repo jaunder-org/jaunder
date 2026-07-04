@@ -39,7 +39,11 @@ pub struct SlowSpanRow {
 /// Sort a `f64`-keyed vector descending, treating the key as a total order (NaN
 /// sinks to the end). Used by every ranked section.
 fn sort_desc_by<T>(rows: &mut [T], key: impl Fn(&T) -> f64) {
-    rows.sort_by(|a, b| key(b).partial_cmp(&key(a)).unwrap_or(std::cmp::Ordering::Equal));
+    rows.sort_by(|a, b| {
+        key(b)
+            .partial_cmp(&key(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 }
 
 /// Compute the whole [`Analysis`] from already-parsed spans. No I/O.
@@ -97,7 +101,10 @@ mod tests {
         // Every span present (not sliced), sorted by duration descending.
         assert_eq!(a.slowest_spans.len(), n);
         for pair in a.slowest_spans.windows(2) {
-            assert!(pair[0].duration_ms >= pair[1].duration_ms, "not sorted desc");
+            assert!(
+                pair[0].duration_ms >= pair[1].duration_ms,
+                "not sorted desc"
+            );
         }
     }
 

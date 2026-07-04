@@ -125,13 +125,21 @@ pub fn parse_spans(content: &str, filters: &Filters, source: &str) -> Result<Vec
                     .cloned()
                     .unwrap_or_default();
                 for span in nested {
-                    let name = span.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+                    let name = span
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
                     let project = get_attr(&span, "e2e.project");
                     if !passes(&span, &name, &project, filters) {
                         continue;
                     }
                     spans.push(Span {
-                        trace_id: span.get("traceId").and_then(Value::as_str).unwrap_or("").to_string(),
+                        trace_id: span
+                            .get("traceId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
                         method: get_attr(&span, "method"),
                         uri: get_attr(&span, "uri"),
                         busy_ns: get_attr(&span, "busy_ns"),
@@ -199,13 +207,20 @@ mod tests {
     #[test]
     fn parse_spans_malformed_line_is_hard_error() {
         let err = parse_spans("{bad json\n", &Filters::default(), "t").unwrap_err();
-        assert!(err.to_string().contains('t'), "error names the source: {err}");
+        assert!(
+            err.to_string().contains('t'),
+            "error names the source: {err}"
+        );
     }
 
     #[test]
     fn parse_spans_empty_content_is_empty_vec() {
-        assert!(parse_spans("", &Filters::default(), "t").unwrap().is_empty());
-        assert!(parse_spans("\n  \n", &Filters::default(), "t").unwrap().is_empty());
+        assert!(parse_spans("", &Filters::default(), "t")
+            .unwrap()
+            .is_empty());
+        assert!(parse_spans("\n  \n", &Filters::default(), "t")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -214,7 +229,10 @@ mod tests {
             { "traceId": "aa", "name": "a" },
             { "traceId": "bb", "name": "b" },
         ]));
-        let filters = Filters { trace: Some("aa".into()), project: None };
+        let filters = Filters {
+            trace: Some("aa".into()),
+            project: None,
+        };
         let spans = parse_spans(&content, &filters, "t").unwrap();
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].trace_id, "aa");
@@ -233,7 +251,10 @@ mod tests {
             "attributes": [{ "key": "method", "value": { "stringValue": "GET" } }]
         });
         let content = line(json!([e2e("firefox"), e2e("chromium"), http]));
-        let filters = Filters { trace: None, project: Some("firefox".into()) };
+        let filters = Filters {
+            trace: None,
+            project: Some("firefox".into()),
+        };
         let spans = parse_spans(&content, &filters, "t").unwrap();
         // firefox e2e.test kept, chromium e2e.test dropped, HTTP span always kept:
         // exactly one e2e.test survives (the firefox one) plus the GET span.
@@ -245,6 +266,9 @@ mod tests {
     #[test]
     fn read_spans_file_not_found_errors() {
         let err = read_spans(Path::new("/no/such/trace.jsonl"), &Filters::default()).unwrap_err();
-        assert!(err.to_string().contains("/no/such/trace.jsonl"), "names the path: {err}");
+        assert!(
+            err.to_string().contains("/no/such/trace.jsonl"),
+            "names the path: {err}"
+        );
     }
 }

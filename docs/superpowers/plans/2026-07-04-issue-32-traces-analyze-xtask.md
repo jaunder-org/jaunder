@@ -217,7 +217,7 @@ Filter semantics (Node `readSpans` :131-142): skip spans whose `traceId !=`
 its `name` starts with `"e2e."` and its `e2e.project != project` (HTTP spans
 pass).
 
-- [ ] **Step 1: Author the fixture** `otel-traces-sample.jsonl`
+- [x] **Step 1: Author the fixture** `otel-traces-sample.jsonl`
 
   Hand-craft JSONL (one `resourceSpans` record per line) exercising, per spec
   §8: ≥2 traces; several `e2e.test` spans carrying `e2e.project`, `e2e.test`,
@@ -230,7 +230,7 @@ pass).
   Small but total — every section must have data. (Only slowest-spans is
   asserted in this task; Tasks 3–5 assert the rest against this same fixture.)
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
   ```
   // parse.rs #[cfg(test)]
@@ -291,12 +291,12 @@ pass).
       // and the Err message mentions --json / structured output
   ```
 
-- [ ] **Step 3: Run the tests, verify they fail**
+- [x] **Step 3: Run the tests, verify they fail**
 
   Run: `cargo test --manifest-path xtask/Cargo.toml` Expected: FAIL —
   module/types/variants not defined.
 
-- [ ] **Step 4: Implement the slice**
+- [x] **Step 4: Implement the slice**
   - `parse.rs`: `get_attr` (:70-83), `parse_duration_ms`, the
     `resourceSpans[].scopeSpans[].spans[]` walk building each `Span` (scalars
     via `get_attr`/`parse_duration_ms`, `source` from the arg,
@@ -318,10 +318,10 @@ pass).
     `render(&analysis, top as usize)` to stdout, pushing
     `StepResult::ok("traces-analyze")`, `finalize`.
 
-- [ ] **Step 5: Run, verify pass.** Run:
+- [x] **Step 5: Run, verify pass.** Run:
       `cargo test --manifest-path xtask/Cargo.toml` → PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   ```bash
   git add xtask/src/traces/ xtask/src/lib.rs xtask/Cargo.toml
   git commit -m "feat(xtask): traces analyze — parse + CLI + slowest-spans; --json rejection (#32)"

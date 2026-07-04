@@ -603,7 +603,14 @@ mod cli_tests {
     #[test]
     fn traces_analyze_parses_flags_and_files() {
         let cli = Cli::try_parse_from([
-            "xtask", "traces", "analyze", "--top", "40", "--project", "firefox", "a.jsonl",
+            "xtask",
+            "traces",
+            "analyze",
+            "--top",
+            "40",
+            "--project",
+            "firefox",
+            "a.jsonl",
             "b.jsonl",
         ])
         .unwrap();
@@ -617,7 +624,10 @@ mod cli_tests {
                 assert_eq!(top, 40);
                 assert_eq!(trace, None);
                 assert_eq!(project.as_deref(), Some("firefox"));
-                assert_eq!(files, vec![PathBuf::from("a.jsonl"), PathBuf::from("b.jsonl")]);
+                assert_eq!(
+                    files,
+                    vec![PathBuf::from("a.jsonl"), PathBuf::from("b.jsonl")]
+                );
             }
             _ => panic!("expected traces analyze"),
         }
@@ -636,7 +646,9 @@ mod cli_tests {
 
     #[test]
     fn traces_analyze_top_must_be_positive() {
-        assert!(Cli::try_parse_from(["xtask", "traces", "analyze", "--top", "0", "x.jsonl"]).is_err());
+        assert!(
+            Cli::try_parse_from(["xtask", "traces", "analyze", "--top", "0", "x.jsonl"]).is_err()
+        );
     }
 
     #[test]
@@ -664,7 +676,10 @@ mod cli_tests {
             Ok(_) => panic!("expected --json to be rejected for traces analyze"),
             Err(e) => e.to_string(),
         };
-        assert!(err.contains("--json"), "error explains the --json rejection: {err}");
+        assert!(
+            err.contains("--json"),
+            "error explains the --json rejection: {err}"
+        );
     }
 }
 
