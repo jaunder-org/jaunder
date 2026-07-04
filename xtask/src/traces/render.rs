@@ -8,7 +8,7 @@
 use tabled::settings::Style;
 use tabled::{Table, Tabled};
 
-use super::analyze::{Analysis, SlowSpanRow};
+use super::analyze::{Analysis, ByProjectRow, E2eTestRow, SlowSpanRow, TraceTotalRow};
 
 /// Format a millisecond value the way the Node reports did — three decimals.
 fn ms(value: f64) -> String {
@@ -68,6 +68,74 @@ fn top_display<T, D: for<'a> From<&'a T>>(rows: &[T], top: usize) -> Vec<D> {
     rows.iter().take(top).map(Into::into).collect()
 }
 
+/// All `rows` as display structs (the tables that ignore `--top`).
+fn all_display<T, D: for<'a> From<&'a T>>(rows: &[T]) -> Vec<D> {
+    rows.iter().map(Into::into).collect()
+}
+
+#[derive(Tabled)]
+struct E2eTestDisplay {
+    duration_ms: String,
+    project: String,
+    actions: u64,
+    requests: u64,
+    trace_id: String,
+    test: String,
+}
+
+impl From<&E2eTestRow> for E2eTestDisplay {
+    fn from(r: &E2eTestRow) -> Self {
+        Self {
+            duration_ms: ms(r.duration_ms),
+            project: r.project.clone(),
+            actions: r.actions,
+            requests: r.requests,
+            trace_id: dash(&r.trace_id),
+            test: r.test.clone(),
+        }
+    }
+}
+
+#[derive(Tabled)]
+struct ByProjectDisplay {
+    project: String,
+    tests: usize,
+    avg_ms: String,
+    max_ms: String,
+    avg_actions: String,
+    avg_requests: String,
+}
+
+impl From<&ByProjectRow> for ByProjectDisplay {
+    fn from(r: &ByProjectRow) -> Self {
+        Self {
+            project: r.project.clone(),
+            tests: r.tests,
+            avg_ms: ms(r.avg_ms),
+            max_ms: ms(r.max_ms),
+            avg_actions: format!("{:.2}", r.avg_actions),
+            avg_requests: format!("{:.2}", r.avg_requests),
+        }
+    }
+}
+
+#[derive(Tabled)]
+struct TraceTotalDisplay {
+    total_ms: String,
+    spans: usize,
+    trace_id: String,
+}
+
+impl From<&TraceTotalRow> for TraceTotalDisplay {
+    fn from(r: &TraceTotalRow) -> Self {
+        Self {
+            total_ms: ms(r.total_ms),
+            spans: r.spans,
+            trace_id: r.trace_id.clone(),
+        }
+    }
+}
+
 /// The full report text for `analysis`, with ranked tables bounded by `top`.
 pub fn render(analysis: &Analysis, top: usize) -> String {
     if analysis.span_count == 0 {
@@ -83,6 +151,22 @@ pub fn render(analysis: &Analysis, top: usize) -> String {
         &mut out,
         &format!("Top {top} slowest spans"),
         &top_display(&analysis.slowest_spans, top),
+    );
+    section::<E2eTestDisplay>(
+        &mut out,
+        &format!("Top {top} slowest e2e.test spans"),
+        &top_display(&analysis.slowest_e2e_tests, top),
+    );
+    // Sections 3–10 (hotspots) are inserted here by Tasks 4–5.
+    section::<ByProjectDisplay>(
+        &mut out,
+        "E2E test duration by project",
+        &all_display(&analysis.by_project),
+    );
+    section::<TraceTotalDisplay>(
+        &mut out,
+        "Trace totals (sum of span durations)",
+        &top_display(&analysis.trace_totals, top),
     );
 
     out
@@ -118,6 +202,7 @@ mod tests {
             span_count: 1,
             project_filter: Some("firefox".into()),
             slowest_spans: vec![slow_row(10.0)],
+            ..Default::default()
         };
         assert!(render(&a, 25).starts_with("Project filter: firefox"));
     }

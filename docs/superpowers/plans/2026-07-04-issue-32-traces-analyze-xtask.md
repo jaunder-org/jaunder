@@ -355,7 +355,7 @@ pub trace_totals: Vec<TraceTotalRow>,     // per-trace sum, desc
 }
 ```
 
-- [ ] **Step 1: Write the failing tests** (extend `analyze.rs` tests over the
+- [x] **Step 1: Write the failing tests** (extend `analyze.rs` tests over the
       fixture)
 
   ```
@@ -371,18 +371,18 @@ pub trace_totals: Vec<TraceTotalRow>,     // per-trace sum, desc
 
   Pin exact numbers where feasible.
 
-- [ ] **Step 2: Run, verify fail.**
+- [x] **Step 2: Run, verify fail.**
       `cargo test --manifest-path xtask/Cargo.toml traces::analyze` → FAIL.
 
-- [ ] **Step 3: Implement** faithfully: `printSlowestE2eTests` (:216-249),
+- [x] **Step 3: Implement** faithfully: `printSlowestE2eTests` (:216-249),
       `printE2eByProject` (:1017-1067, all rows), `printTraceTotals`
       (:1070-1096). Extend `render` to emit these three sections (by-project
       prints all rows). A section whose vec is empty is skipped, except
       slowest/by-project/trace-totals which always print when their spans exist.
 
-- [ ] **Step 4: Run, verify pass.** → PASS.
+- [x] **Step 4: Run, verify pass.** → PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   ```bash
   git add xtask/src/traces/analyze.rs xtask/src/traces/render.rs
   git commit -m "feat(xtask): traces analyze — e2e-tests, by-project, trace-totals (#32)"

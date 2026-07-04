@@ -11,20 +11,23 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-/// A single flattened span with the scalar fields the reports read. The e2e
-/// project and the raw span object (for on-demand `e2e.*_json` reads) are added
-/// alongside the sections that consume them. Node keeps `spanId`/`parentSpanId`
-/// too, but no report reads them, so they are omitted.
+/// A single flattened span with the scalar fields the reports read, its e2e
+/// project, and the raw span object for on-demand `e2e.*_json` reads (only
+/// `e2e.test` spans carry those, so they are parsed lazily by the sections that
+/// need them). Node keeps `spanId`/`parentSpanId` too, but no report reads them,
+/// so they are omitted.
 #[derive(Debug, Clone)]
 pub struct Span {
     pub trace_id: String,
     pub name: String,
     pub method: String,
     pub uri: String,
+    pub project: String,
     pub busy_ns: String,
     pub idle_ns: String,
     pub duration_ms: f64,
     pub source: String,
+    pub raw: Value,
 }
 
 /// The two span filters `traces analyze` accepts.
@@ -147,6 +150,8 @@ pub fn parse_spans(content: &str, filters: &Filters, source: &str) -> Result<Vec
                         duration_ms: parse_duration_ms(&span),
                         source: source.to_string(),
                         name,
+                        project,
+                        raw: span,
                     });
                 }
             }
