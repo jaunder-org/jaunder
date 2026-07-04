@@ -1,15 +1,15 @@
 //! Stateless coverage gate: a verdict computed purely from the current report
 //! plus each file's structural exemptions ([`super::exempt`]) — no baseline, no
-//! anchor, no history. An executable line FAILS iff it is uncovered AND not
-//! exempt. This is built alongside the baseline classifier and runs in SHADOW
-//! mode (computed + printed, but not yet authoritative) until the gate is
-//! swapped (see the #231 plan, Tasks 3 → 7).
+//! anchor, no history. This is the authoritative coverage gate (its verdict
+//! feeds `gate_fails` in [`super`]): an executable line FAILS iff it is
+//! uncovered AND not `#[component]`-exempt AND not suppressed by a `cov:ignore`
+//! marker.
 //!
 //! The A1-guard tripwire is the load-bearing safety check: a *covered* line
 //! inside an exempt (`#[component]`) span means the "components are never
 //! rendered natively" invariant — the premise that makes blanket component
 //! exemption a wash — is violated. Such a line is reported as a
-//! `guard_violation` so the swap is blocked until it is understood.
+//! `guard_violation` so the gate fails until it is understood.
 
 use std::collections::BTreeSet;
 

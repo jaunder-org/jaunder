@@ -77,7 +77,7 @@ convention). See the Status column below for each ADR's current status.
 | [0047](adr/0047-emacs-publish-orchestration.md)                    | The Emacs Publish Orchestration — Multi-Blog Config via Dynamic Specials, ID-First Safe-to-Resume Write-Back | proposed   |
 | [0048](adr/0048-adr-out-of-git-draft-workflow.md)                  | ADRs drafted out of git, numbered at ship                                                                    | proposed   |
 | [0049](adr/0049-app-driven-scoped-server-diagnostics.md)           | App-driven scoped server-diagnostics capture                                                                 | accepted   |
-| [0050](adr/0050-stateless-coverage-gate.md)                        | Stateless coverage gate — `cov:ignore` + `#[component]` exemption + CRAP threshold                           | proposed   |
+| [0050](adr/0050-stateless-coverage-gate.md)                        | Stateless coverage gate — `cov:ignore` + `#[component]` exemption + CRAP threshold                           | accepted   |
 
 <!-- adr-table:end -->
 

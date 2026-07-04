@@ -1,6 +1,6 @@
 # ADR-0050: Stateless coverage gate — `cov:ignore` + `#[component]` exemption + CRAP threshold
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-04
 - Issue: [#231](https://github.com/jaunder-org/jaunder/issues/231)
 

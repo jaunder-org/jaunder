@@ -108,7 +108,10 @@ fn is_zero_count(count: &str) -> bool {
 /// Return the text of the first real trailing line comment in `src` — the slice
 /// after the first `//` that begins OUTSIDE a `"`-string or `'`-char literal.
 /// Returns `None` when there is no such comment (so a `//` inside a string or a
-/// doc/string-embedded marker never counts). Escapes (`\"`, `\'`) are honored;
+/// doc/string-embedded marker never counts). A **doc comment** — outer `///` or
+/// inner `//!` — is deliberately NOT treated as a marker-bearing comment: it
+/// can never open/close a `cov:ignore` block or suppress a line, so a marker
+/// mentioned in prose documentation is inert. Escapes (`\"`, `\'`) are honored;
 /// a `'` that does not open a well-formed char literal (a lifetime tick) is
 /// treated as ordinary text. Raw strings are not specially handled — rare in
 /// report lines, and a best-effort scan is sufficient here.
@@ -128,7 +131,15 @@ fn line_comment(src: &str) -> Option<&str> {
             continue;
         }
         match b {
-            b'/' if bytes.get(i + 1) == Some(&b'/') => return Some(&src[i + 2..]),
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                // `///` (outer doc) or `//!` (inner doc) is a doc comment, not a
+                // marker-bearing comment — the rest of the line is documentation
+                // prose and can never suppress coverage.
+                if matches!(bytes.get(i + 2), Some(&b'/') | Some(&b'!')) {
+                    return None;
+                }
+                return Some(&src[i + 2..]);
+            }
             b'"' => in_str = true,
             b'\'' => {
                 if let Some(len) = char_literal_len(&bytes[i..]) {
@@ -306,5 +317,39 @@ mod tests {
             line_comment("    fn f<'a>() {} // cov:ignore"),
             Some(" cov:ignore")
         );
+        // Doc comments (`///` outer, `//!` inner) are not marker-bearing
+        // comments — a real `//` still is.
+        assert_eq!(line_comment("/// cov:ignore-start"), None);
+        assert_eq!(line_comment("//! cov:ignore"), None);
+        assert_eq!(line_comment("    boom() /// cov:ignore"), None);
+    }
+
+    #[test]
+    fn doc_comment_line_marker_does_not_suppress() {
+        // A `cov:ignore` mentioned inside a doc comment must NOT drop the line:
+        // doc comments document behavior, they don't suppress coverage.
+        let report = "\
+/repo/a.rs:
+    1|     0|    kept() /// cov:ignore
+    2|     0|    also_kept() //! cov:ignore
+";
+        let files = parse_text_report(report, "/repo").unwrap();
+        let lines: Vec<u32> = files[0].lines.iter().map(|l| l.line).collect();
+        assert_eq!(lines, vec![1, 2]);
+    }
+
+    #[test]
+    fn doc_comment_block_start_is_ignored() {
+        // A `/// cov:ignore-start` inside a doc comment must NOT open a block:
+        // the following executable line is still measured, and there is no
+        // spurious unmatched-`-start` error at EOF.
+        let report = "\
+/repo/a.rs:
+    1|      |    /// cov:ignore-start
+    2|     0|    still_measured()
+";
+        let files = parse_text_report(report, "/repo").unwrap();
+        let lines: Vec<u32> = files[0].lines.iter().map(|l| l.line).collect();
+        assert_eq!(lines, vec![2]);
     }
 }
