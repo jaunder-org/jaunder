@@ -742,6 +742,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn csr_index_html_boots_wasm_with_an_explicit_url() {
+        // Fast unit smoke (#234): the SPA shell must pass an explicit wasm URL to
+        // init(), not the arg-less init() that falls back to wasm-bindgen's
+        // `jaunder_bg.wasm` default. This runs in `check`; `cargo xtask audit-wasm`
+        // is what ties this URL to the file the build actually emits.
+        let index = include_str!("../../../csr/index.html");
+        assert!(
+            index.contains(r#"init("/pkg/jaunder.wasm")"#),
+            "csr/index.html must boot via an explicit init(\"/pkg/jaunder.wasm\") (drift guard #234)"
+        );
+    }
+
     fn sample_post() -> PostResponse {
         PostResponse {
             post_id: 7,

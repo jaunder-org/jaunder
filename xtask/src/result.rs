@@ -173,7 +173,7 @@ mod tests {
         r.audit = Some(crate::audit_wasm::AuditReport {
             site_path: "/nix/store/x-jaunder-site".into(),
             artifacts: vec![crate::audit_wasm::ArtifactMetrics {
-                path: "/nix/store/x-jaunder-site/pkg/jaunder_bg.wasm".into(),
+                path: "/nix/store/x-jaunder-site/pkg/jaunder.wasm".into(),
                 raw_bytes: 2 * 1024 * 1024,
                 gzip_bytes: 700 * 1024,
                 brotli_bytes: 600 * 1024,

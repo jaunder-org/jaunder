@@ -1035,7 +1035,7 @@ mod tests {
         // Assets keyed by URL path; the wasm asset is slowest, initiator "fetch".
         assert_eq!(a.resource_assets.len(), 3);
         let wasm = &a.resource_assets[0];
-        assert_eq!(wasm.name, "jaunder.local:8080/pkg/jaunder_bg.wasm");
+        assert_eq!(wasm.name, "jaunder.local:8080/pkg/jaunder.wasm");
         assert_eq!(wasm.initiator, "fetch");
         assert_eq!(wasm.max_ms, 300.0);
     }

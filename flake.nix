@@ -503,8 +503,8 @@
                 ${csrWasm}/lib/csr.wasm
               # Rename to the "jaunder" output-name the CSR shell's <script> imports.
               mv $out/csr.js $out/jaunder.js
-              mv $out/csr_bg.wasm $out/jaunder_bg.wasm
-              sed -i 's/csr_bg\.wasm/jaunder_bg.wasm/g' $out/jaunder.js
+              mv $out/csr_bg.wasm $out/jaunder.wasm
+              sed -i 's/csr_bg\.wasm/jaunder.wasm/g' $out/jaunder.js
             '';
 
         # Playwright config for the Nix VM environment.

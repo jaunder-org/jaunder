@@ -77,7 +77,7 @@ pub fn document(seed: &PageSeed) -> String {
             "<!DOCTYPE html><html lang=\"en\"><head>{prepaint}{head}</head><body>",
             "<div id=\"app\">{body}</div>",
             "<script type=\"application/json\" id=\"jaunder-seed\">{blob}</script>",
-            "<script type=\"module\">import init from \"/pkg/jaunder.js\"; init();</script>",
+            "<script type=\"module\">import init from \"/pkg/jaunder.js\"; init(\"/pkg/jaunder.wasm\");</script>",
             "</body></html>",
         ),
         prepaint = PREPAINT_SCRIPT,
@@ -327,6 +327,36 @@ mod tests {
         assert!(
             doc.contains("<head><script>(function()"),
             "prepaint is first in head: {doc}"
+        );
+    }
+
+    #[test]
+    fn document_boots_the_same_wasm_url_as_the_spa_shell() {
+        use super::document;
+        use web::render::PageSeed;
+        // Drift guard (#234): the projector's server-rendered boot and the SPA
+        // shell (`csr/index.html`) are two hand-written copies — they must load the
+        // SAME wasm URL, or hydration 404s on projector routes. Cross-checking the
+        // two (rather than asserting a literal against itself) means neither can
+        // silently drift; `cargo xtask audit-wasm` ties that shared URL to the file
+        // the build actually emits.
+        fn boot_wasm_url(html: &str) -> &str {
+            let marker = "init(\"";
+            let start = html.find(marker).expect("boot script calls init(\"…\")") + marker.len();
+            let rest = &html[start..];
+            &rest[..rest.find('"').expect("init(\"…\") closing quote")]
+        }
+        let doc = document(&PageSeed::SiteTimeline(web::posts::TimelinePage {
+            posts: vec![],
+            next_cursor_created_at: None,
+            next_cursor_post_id: None,
+            has_more: false,
+        }));
+        let spa_shell = include_str!("../../../csr/index.html");
+        assert_eq!(
+            boot_wasm_url(&doc),
+            boot_wasm_url(spa_shell),
+            "projector and csr/index.html must boot the same wasm URL (drift guard #234)"
         );
     }
 }
