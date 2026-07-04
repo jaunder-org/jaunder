@@ -12,6 +12,7 @@ mod sh;
 mod traces;
 mod steps {
     pub mod adr_check;
+    pub mod e2e_local;
     pub mod host_tests;
     pub mod nix;
     pub mod sequence_check;
@@ -107,6 +108,16 @@ pub enum Command {
         backend: E2eBackend,
         #[arg(value_enum)]
         browser: E2eBrowser,
+    },
+    /// Run the host e2e loop (seed + Playwright chromium) against an
+    /// ALREADY-RUNNING dev server. cargo-leptos invokes this as its
+    /// `end2end-cmd`; run the full loop (build + serve + this) with
+    /// `cargo leptos end-to-end`. Standalone runs assume a server is already
+    /// serving on :3000 (fast re-runs). Loads the same `playwright.config.ts`
+    /// the CI VM loads. Host only.
+    E2eLocal {
+        /// A spec file or `-g` grep passed through to Playwright (single-test runs).
+        test: Option<String>,
     },
     /// ADR maintenance.
     #[command(subcommand)]
@@ -217,6 +228,7 @@ impl Cli {
             Command::Validate { .. } => "validate",
             Command::AuditWasm { .. } => "audit-wasm",
             Command::E2e { .. } => "e2e",
+            Command::E2eLocal { .. } => "e2e-local",
             Command::Adr(AdrCommand::Renumber) => "adr-renumber",
             Command::Adr(AdrCommand::SyncReadme) => "adr-sync-readme",
             Command::Adr(AdrCommand::Promote) => "adr-promote",
@@ -325,6 +337,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("coverage-probe-source");
             result.push(coverage::probe::probe_source());
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::E2eLocal { test } => {
+            let sh = xshell::Shell::new()?;
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("e2e-local");
+            steps::e2e_local::run(&sh, &mut result, test.as_deref());
             finalize(&mut result, start);
             Ok(result)
         }
@@ -483,6 +503,20 @@ mod cli_tests {
                 assert_eq!(browser, E2eBrowser::Firefox);
             }
             _ => panic!("expected e2e"),
+        }
+    }
+
+    #[test]
+    fn e2e_local_parses_with_optional_filter() {
+        let cli = Cli::try_parse_from(["xtask", "e2e-local"]).unwrap();
+        match cli.command {
+            Command::E2eLocal { test } => assert_eq!(test, None),
+            _ => panic!("expected e2e-local"),
+        }
+        let cli = Cli::try_parse_from(["xtask", "e2e-local", "auth-flow.spec.ts"]).unwrap();
+        match cli.command {
+            Command::E2eLocal { test } => assert_eq!(test.as_deref(), Some("auth-flow.spec.ts")),
+            _ => panic!("expected e2e-local with filter"),
         }
     }
 
