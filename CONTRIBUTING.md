@@ -253,11 +253,11 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
   `db.system`, and `error.kind` instead. See
   [ADR-0011](docs/adr/0011-unified-observability.md).
 
-- **Trace Analysis**: Use `scripts/analyze-otel-traces` to process trace
+- **Trace Analysis**: Use `cargo xtask traces analyze` to process trace
   artifacts (JSONL) from VM runs or local tests.
 
   ```bash
-  scripts/analyze-otel-traces \
+  cargo xtask traces analyze \
     /path/to/otel-traces-sqlite.jsonl/otel-traces.jsonl \
     /path/to/otel-traces-postgres.jsonl/otel-traces.jsonl
   ```

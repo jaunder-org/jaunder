@@ -576,7 +576,7 @@ pub hydration_runtime_by_project: Vec<RuntimeProjectRow>,
 
 **Interfaces:** none (docs + a one-time dev check).
 
-- [ ] **Step 1: Repoint docs**
+- [x] **Step 1: Repoint docs**
 
   Replace `scripts/analyze-otel-traces` invocation examples in `CONTRIBUTING.md`
   (:256-273) and `docs/observability.md` (:51-89) with
@@ -584,7 +584,8 @@ pub hydration_runtime_by_project: Vec<RuntimeProjectRow>,
   all `scripts/run-e2e-trace-analysis` references intact (retired in #33); both
   scripts remain on disk.
 
-- [ ] **Step 2: One-time Rust-vs-Node equivalence diff** (dev-time validation)
+- [x] **Step 2: One-time Rust-vs-Node equivalence diff** (dev-time validation) —
+      confirmed identical statistics across all twelve sections on the fixture.
 
   ```bash
   node scripts/analyze-otel-traces xtask/src/traces/testdata/otel-traces-sample.jsonl > /tmp/node.out
@@ -595,13 +596,13 @@ pub hydration_runtime_by_project: Vec<RuntimeProjectRow>,
   by design). Reconcile any **statistical** difference by fixing `analyze` (+
   its test). Not an enduring test — the script is deleted in #33.
 
-- [ ] **Step 3: Full gate**
+- [x] **Step 3: Full gate**
 
   Run `cargo xtask check` — must be green (static + clippy + host xtask unit
   suite
   - coverage for the rest of the tree).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
   ```bash
   git add CONTRIBUTING.md docs/observability.md
   git commit -m "docs(observability): point trace analysis at cargo xtask traces analyze (#32)"
