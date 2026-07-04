@@ -21,7 +21,7 @@ use crate::error::WebResult;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
     crate::error::InternalError,
@@ -48,7 +48,7 @@ pub struct SubscriberSummary {
 /// Maps an [`AudienceError`] to a user-facing [`InternalError`]: duplicate
 /// names and missing audiences are client-correctable; everything else is a
 /// masked storage failure.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 fn map_audience_error(err: AudienceError) -> InternalError {
     match err {
         AudienceError::DuplicateName => {
@@ -62,7 +62,7 @@ fn map_audience_error(err: AudienceError) -> InternalError {
 /// Confirms `audience_id` belongs to `author_user_id` by checking it appears in
 /// the author's own audience list. This is the ownership gate for the store
 /// methods that are not author-scoped (`remove_member`, `list_members`).
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 async fn assert_owns_audience(
     audiences: &dyn AudienceStorage,
     author_user_id: i64,

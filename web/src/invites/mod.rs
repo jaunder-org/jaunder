@@ -1,4 +1,4 @@
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
     crate::error::InternalError,

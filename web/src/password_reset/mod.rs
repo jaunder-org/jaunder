@@ -1,4 +1,4 @@
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use {
     chrono::Duration,
     common::mailer::{EmailMessage, MailSender},
@@ -8,7 +8,7 @@ use {
     storage::{AtomicOps, PasswordResetStorage, UserStorage},
 };
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use crate::error::InternalError;
 use crate::error::WebResult;
 use leptos::prelude::*;

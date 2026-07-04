@@ -5,20 +5,20 @@ use leptos::prelude::*;
 /// host-testable; `read`/`set`/`clear` are wasm-only (localStorage).
 pub mod marker;
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 mod server;
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use server::{
     classify_current_user, clear_session_cookie, login_error, login_outcome, register_invite_error,
     register_open_error, set_session_cookie,
 };
 
 // Public re-exports — must remain accessible as crate::auth::* for other modules
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 pub use server::{require_auth, AuthRejection, AuthUser, CookieSettings};
 
 // SSR-only imports for #[server] bodies
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use {
     crate::error::InternalError,
     common::{password::Password, username::Username},
@@ -34,7 +34,7 @@ use {
 /// Possible values: `"open"`, `"invite_only"`, `"closed"`.
 #[server(endpoint = "/get_registration_policy")]
 #[cfg_attr(
-    feature = "ssr",
+    feature = "server",
     tracing::instrument(name = "web.auth.get_registration_policy")
 )]
 pub async fn get_registration_policy() -> WebResult<String> {
@@ -47,7 +47,10 @@ pub async fn get_registration_policy() -> WebResult<String> {
 
 /// Returns the current logged-in username, if any.
 #[server(endpoint = "/current_user")]
-#[cfg_attr(feature = "ssr", tracing::instrument(name = "web.auth.current_user"))]
+#[cfg_attr(
+    feature = "server",
+    tracing::instrument(name = "web.auth.current_user")
+)]
 pub async fn current_user() -> WebResult<Option<String>> {
     boundary!("current_user", {
         classify_current_user(require_auth().await)
@@ -58,7 +61,7 @@ pub async fn current_user() -> WebResult<Option<String>> {
 /// the `session` cookie.
 #[server(endpoint = "/register")]
 #[cfg_attr(
-    feature = "ssr",
+    feature = "server",
     tracing::instrument(name = "web.auth.register", skip(password, invite_code))
 )]
 pub async fn register(
@@ -147,7 +150,7 @@ pub async fn register(
 /// the `session` cookie.
 #[server(endpoint = "/login")]
 #[cfg_attr(
-    feature = "ssr",
+    feature = "server",
     tracing::instrument(name = "web.auth.login", skip(password, label))
 )]
 pub async fn login(username: String, password: String, label: Option<String>) -> WebResult<String> {
@@ -217,7 +220,7 @@ pub async fn login(username: String, password: String, label: Option<String>) ->
 
 /// Revokes the current session and clears the `session` cookie.
 #[server(endpoint = "/logout")]
-#[cfg_attr(feature = "ssr", tracing::instrument(name = "web.auth.logout"))]
+#[cfg_attr(feature = "server", tracing::instrument(name = "web.auth.logout"))]
 pub async fn logout() -> WebResult<()> {
     boundary!("logout", {
         if let Ok(auth) = require_auth().await {

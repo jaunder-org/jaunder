@@ -3,7 +3,7 @@
 // recursion limit, so raise it for this crate.
 #![recursion_limit = "512"]
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 pub use common::username;
 
 /// Wraps a `#[server]` function body in [`error::server_boundary`]: runs the

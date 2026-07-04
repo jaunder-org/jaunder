@@ -12,7 +12,7 @@
 //! seeded lookup row), so it is resolved once and memoized in a process-level
 //! [`OnceLock`](std::sync::OnceLock) rather than queried on every request.
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use {
     crate::auth::AuthUser,
     common::visibility::ViewerIdentity,
@@ -26,7 +26,7 @@ use {
 /// The `local` channel is created once by migration `0018` and never changes,
 /// so a single lookup is reused for the life of the process instead of querying
 /// `channels` on every read request.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 static LOCAL_CHANNEL_ID: OnceLock<i64> = OnceLock::new();
 
 /// Resolves the viewer for a `#[server]` read path.
@@ -45,7 +45,7 @@ static LOCAL_CHANNEL_ID: OnceLock<i64> = OnceLock::new();
 /// A failure to look up the `local` channel id (storage error) falls back to
 /// [`ViewerIdentity::Anonymous`] — fail closed: a viewer we cannot positively
 /// identify is treated as anonymous and sees only public content.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 pub async fn viewer_identity() -> ViewerIdentity {
     use leptos::prelude::expect_context;
 
@@ -68,7 +68,7 @@ pub async fn viewer_identity() -> ViewerIdentity {
 /// `Some(channel_id)` → a `local` channel viewer; `None` (the `local` channel id
 /// could not be resolved) → [`ViewerIdentity::Anonymous`], fail-closed: a viewer
 /// we cannot positively place on a channel gets no non-public reach.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 fn account_viewer(user_id: i64, local_channel_id: Option<i64>) -> ViewerIdentity {
     match local_channel_id {
         Some(channel_id) => ViewerIdentity::local(user_id, channel_id),
@@ -82,7 +82,7 @@ fn account_viewer(user_id: i64, local_channel_id: Option<i64>) -> ViewerIdentity
 /// bare `user_id`: `Some(user_id)` for a `local` channel viewer, `None` for
 /// anonymous. Filtering itself lives in the store query; this is used only to
 /// decide whether to render author-only UI affordances.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 #[must_use]
 pub fn viewer_user_id(viewer: &ViewerIdentity) -> Option<i64> {
     match viewer {
@@ -97,7 +97,7 @@ pub fn viewer_user_id(viewer: &ViewerIdentity) -> Option<i64> {
 /// [`OnceLock`] is populated it is returned without touching storage. A storage
 /// error leaves the cell empty (the next request retries) and yields `None`,
 /// which `viewer_identity` treats as fail-closed.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 async fn local_channel_id(subscriptions: &dyn SubscriptionStorage) -> Option<i64> {
     if let Some(id) = LOCAL_CHANNEL_ID.get() {
         return Some(*id);
@@ -108,7 +108,7 @@ async fn local_channel_id(subscriptions: &dyn SubscriptionStorage) -> Option<i64
     Some(id)
 }
 
-#[cfg(all(test, feature = "ssr"))]
+#[cfg(all(test, feature = "server"))]
 mod tests {
     use super::{account_viewer, viewer_user_id};
     use common::visibility::ViewerIdentity;

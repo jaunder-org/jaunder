@@ -2,7 +2,7 @@ use leptos::prelude::*;
 use leptos::server_fn::codec::Json;
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 mod server;
 
 /// Timeline/listing endpoints, split out from the single-post lifecycle below.
@@ -10,7 +10,7 @@ mod server;
 mod listing;
 pub use listing::*;
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use server::{
     apply_post_tag_diff, find_draft_by_permalink_for_user, not_found_error, parse_post_cursor,
     perform_creation_error, perform_update_error, private_post_not_found_error,
@@ -18,14 +18,14 @@ use server::{
 // Re-exported for the `server` crate's public projector, which fetches the same
 // public data and maps records the same way (one query, no drift). These stay
 // in scope for the `#[server]` fns below via the `pub use`.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 pub use server::{fetch_post_record, post_response};
 
 use crate::error::WebResult;
 use crate::tags::TagSummary;
 
 // SSR-only imports for #[server] bodies
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
     crate::error::InternalError,
@@ -197,7 +197,7 @@ pub struct PostResponse {
 /// compose/editor datetime control) into a `DateTime<Utc>`. An absent or
 /// blank value is `None`; a present-but-unparseable value is a validation
 /// error.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 fn parse_publish_at(raw: Option<&str>) -> crate::error::InternalResult<Option<DateTime<Utc>>> {
     raw.and_then(common::text::non_empty)
         .map(|s| {
@@ -830,7 +830,7 @@ mod tests {
         assert_eq!(candidate_slug("hello-world", 2), "hello-world-3");
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn parse_post_cursor_accepts_empty_cursor() {
         use crate::posts::server::parse_post_cursor;
@@ -839,7 +839,7 @@ mod tests {
         assert!(cursor.is_none());
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn timeline_post_summary_keeps_titleless_posts_titleless() {
         use crate::posts::server::timeline_post_summary;
@@ -876,7 +876,7 @@ mod tests {
         assert_eq!(summary.permalink, "/~author/2026/04/16/titleless-note");
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn post_response_marks_draft_state_from_published_at() {
         use crate::posts::server::post_response;

@@ -65,7 +65,7 @@ tracing-subscriber = { workspace = true }
 [features]
 default = []
 csr = ["leptos/csr"]
-ssr = [
+server = [
     "dep:anyhow",
     "common/metrics",
     "leptos/ssr",

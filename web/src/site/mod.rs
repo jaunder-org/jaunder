@@ -2,14 +2,17 @@ use crate::error::WebResult;
 use common::site::SiteIdentity;
 use leptos::prelude::*;
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use crate::backup::server::require_operator;
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use {crate::error::InternalError, std::sync::Arc, storage::SiteConfigStorage};
 
 #[server(endpoint = "/get_site_identity")]
-#[cfg_attr(feature = "ssr", tracing::instrument(name = "web.site.get_identity"))]
+#[cfg_attr(
+    feature = "server",
+    tracing::instrument(name = "web.site.get_identity")
+)]
 pub async fn get_site_identity() -> WebResult<SiteIdentity> {
     boundary!("get_site_identity", {
         require_operator().await?;
@@ -23,7 +26,7 @@ pub async fn get_site_identity() -> WebResult<SiteIdentity> {
 
 #[server(endpoint = "/update_site_identity")]
 #[cfg_attr(
-    feature = "ssr",
+    feature = "server",
     tracing::instrument(name = "web.site.update_identity", skip(title, base_url))
 )]
 pub async fn update_site_identity(title: String, base_url: String) -> WebResult<()> {

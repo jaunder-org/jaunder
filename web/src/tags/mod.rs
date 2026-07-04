@@ -2,7 +2,7 @@ use leptos::prelude::*;
 use leptos::server_fn::codec::Json;
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use {crate::error::InternalError, std::sync::Arc, storage::PostStorage};
 
 use crate::error::WebResult;
