@@ -340,14 +340,14 @@ pub fn build_out_path(attr: &str) -> Result<String>;
       `docs/observability.md`, and the `traces/*.rs` lineage comments remain —
       nothing instructional.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
   ```bash
   git add scripts/ CONTRIBUTING.md docs/observability.md docs/ARCHITECTURE.md flake.nix
   git commit -m "test-infra(e2e): retire trace scripts for cargo xtask traces run/analyze (#33)"
   ```
 
-- [ ] **Step 5: Coordinate #224** (tracker — no commit) Comment on
+- [x] **Step 5: Coordinate #224** (tracker — no commit) Comment on
       [#224](https://github.com/jaunder-org/jaunder/issues/224): the
       `run-e2e-trace-analysis` out-path parser fix is handled by #33 (the script
       is retired and its Rust replacement `cargo xtask traces run` parses stdout
