@@ -45,6 +45,39 @@ fn otel_exporter_otlp_endpoint() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// The scoped diagnostic-log path, if `JAUNDER_DIAG_LOG_FILE` names one. When set
+/// (e2e only), the server appends a small JSONL file of WARN+ events plus panic
+/// records to it — a purpose-built, low-noise artifact the e2e zero-panic gate
+/// consumes, demoting the kernel-laden journal to a fallback (issue #144). Unset in
+/// production, so the whole feature is inert there.
+fn diag_log_file() -> Option<std::path::PathBuf> {
+    std::env::var("JAUNDER_DIAG_LOG_FILE")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
+/// Build the scoped diagnostic layer: a JSON `fmt` layer writing to `make_writer`,
+/// gated to WARN and above by its **own per-layer filter**.
+///
+/// The `.with_filter(LevelFilter::WARN)` is load-bearing and must stay a *per-layer*
+/// filter (`Filtered`), never a second global `.with(LevelFilter::WARN)` on the
+/// registry: a global level would clamp the whole subscriber to WARN+, silencing INFO
+/// to the fmt/OTel sinks. As a per-layer filter it narrows only this sink, so the diag
+/// file captures `WARN+ ∩ global-filter` while the other layers keep their own levels
+/// (issue #144).
+fn diag_layer<S, W>(make_writer: W) -> impl Layer<S>
+where
+    S: tracing::Subscriber + for<'span> LookupSpan<'span>,
+    W: for<'writer> fmt::MakeWriter<'writer> + 'static,
+{
+    fmt::layer()
+        .json()
+        .with_writer(make_writer)
+        .with_filter(tracing::level_filters::LevelFilter::WARN)
+}
+
 fn build_otel_tracer(
     endpoint: &str,
 ) -> Result<opentelemetry_sdk::trace::SdkTracerProvider, String> {
@@ -182,6 +215,28 @@ fn init_tracing_impl(verbose: bool) -> TelemetryGuard {
         fmt::layer().boxed()
     };
 
+    // Scoped diagnostic layer (issue #144): when JAUNDER_DIAG_LOG_FILE is set, append
+    // WARN+ events as JSONL to it via a synchronous `Arc<File>` sink — deliberately not
+    // a buffered/non-blocking writer, so a `panic = abort` can't drop the very lines the
+    // feature exists to keep. An open failure disables the sink (non-fatal) rather than
+    // taking down startup. `Option<Layer>` is a no-op when absent, mirroring `otel_layer`.
+    let diag_log_layer = diag_log_file().and_then(|path| {
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            Ok(file) => Some(diag_layer(std::sync::Arc::new(file))),
+            Err(error) => {
+                eprintln!(
+                    "diag log disabled; could not open {}: {error}",
+                    path.display()
+                );
+                None
+            }
+        }
+    });
+
     // Resolve the endpoint once; traces and metrics share it. The provider
     // handles are retained in the returned guard so a one-shot process can flush
     // them before exit.
@@ -223,6 +278,7 @@ fn init_tracing_impl(verbose: bool) -> TelemetryGuard {
         .with(env_filter)
         .with(slow_span_layer)
         .with(fmt_layer)
+        .with(diag_log_layer)
         .with(otel_layer)
         .try_init()
     {
@@ -354,7 +410,7 @@ mod tests {
     use axum::http::{HeaderMap, Request, StatusCode};
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
     use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::{Arc, Mutex, MutexGuard};
     use tower::ServiceExt;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -364,6 +420,88 @@ mod tests {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         }
+    }
+
+    /// An in-memory `MakeWriter` capturing every write into a shared buffer, so a
+    /// layer's output can be asserted on. `Arc<Mutex<Vec<u8>>>` is not itself a
+    /// `MakeWriter`, and `fmt::TestWriter` targets std{out,err} (uncapturable), so a
+    /// small newtype is required.
+    #[derive(Clone)]
+    struct Shared(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Shared {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("shared buffer lock")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'writer> fmt::MakeWriter<'writer> for Shared {
+        type Writer = Shared;
+        fn make_writer(&'writer self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    #[test]
+    fn shared_writer_captures_writes() {
+        use std::io::Write;
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let mut writer = Shared(buf.clone());
+        writer.write_all(b"captured").expect("write");
+        writer.flush().expect("flush");
+        assert_eq!(&*buf.lock().expect("lock"), b"captured");
+    }
+
+    #[test]
+    fn diag_layer_captures_warn_and_above_not_info_under_global_info_filter() {
+        // The load-bearing AND-gate check: the diag layer's per-layer WARN filter must
+        // narrow only its own sink, under the same global `info` filter e2e uses — INFO
+        // stays out of the diag file but still reaches the other layers.
+        let _lock = lock_env();
+        let diag_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let other_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let subscriber = tracing_subscriber::registry()
+            .with(EnvFilter::new("info"))
+            .with(
+                fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(Shared(other_buf.clone())),
+            )
+            .with(diag_layer(Shared(diag_buf.clone())));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!("info-line");
+            tracing::warn!("warn-line");
+            tracing::error!("error-line");
+        });
+
+        let diag = String::from_utf8(diag_buf.lock().expect("diag lock").clone()).expect("utf8");
+        let other = String::from_utf8(other_buf.lock().expect("other lock").clone()).expect("utf8");
+
+        assert!(!diag.contains("info-line"), "diag sink must drop INFO");
+        assert!(diag.contains("warn-line"), "diag sink must keep WARN");
+        assert!(diag.contains("error-line"), "diag sink must keep ERROR");
+        for line in diag.lines() {
+            serde_json::from_str::<serde_json::Value>(line).expect("diag line is valid JSONL");
+        }
+        // The other sink still sees INFO: we narrowed only the diag layer, not the registry.
+        assert!(
+            other.contains("info-line"),
+            "global filter must not be clamped to WARN"
+        );
+    }
+
+    #[test]
+    fn diag_log_file_is_none_when_env_unset() {
+        let _lock = lock_env();
+        std::env::remove_var("JAUNDER_DIAG_LOG_FILE");
+        assert!(diag_log_file().is_none());
     }
 
     #[test]
@@ -497,6 +635,31 @@ mod tests {
         );
         init_tracing_impl(false);
         std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+    }
+
+    #[test]
+    fn init_tracing_impl_creates_diag_file_when_env_set() {
+        let _guard = lock_env();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("jaunder-diag.log");
+        std::env::set_var("JAUNDER_DIAG_LOG_FILE", &path);
+        // `OpenOptions::create` makes the file on open — independent of whether this
+        // process's `try_init` wins the global-subscriber slot — so the sink's file
+        // exists even when a prior test already installed the subscriber.
+        init_tracing_impl(false);
+        std::env::remove_var("JAUNDER_DIAG_LOG_FILE");
+        assert!(path.exists(), "diag file should be created when env is set");
+    }
+
+    #[test]
+    fn init_tracing_impl_survives_unopenable_diag_path() {
+        let _guard = lock_env();
+        // Point the var at a directory: opening it as a file fails, exercising the
+        // non-fatal `Err`/`eprintln` arm without taking down startup.
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        std::env::set_var("JAUNDER_DIAG_LOG_FILE", dir.path());
+        init_tracing_impl(false);
+        std::env::remove_var("JAUNDER_DIAG_LOG_FILE");
     }
 
     #[test]
