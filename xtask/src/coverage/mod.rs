@@ -291,6 +291,27 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
     // guard-violation count is the critical signal (Task 4 go/no-go).
     shadow_gate(&current, &repo_root);
 
+    // SHADOW: CRAP threshold check (#231 Task 6) — mirrors the shadow gate above.
+    // Observation only: the authoritative CRAP verdict is still `crap::compare`
+    // below, and this never touches `gate_fails`. Reuses the already-read CRAP
+    // report; each over-threshold function's source is read (relative to
+    // `repo_root`) to honor an in-source `crap:allow` override.
+    {
+        let allow = crap::AllowSet::new(|file: &str| {
+            std::fs::read_to_string(std::path::Path::new(&repo_root).join(file)).ok()
+        });
+        match crap::parse_entries(&crap_report_str) {
+            Ok(entries) => {
+                let fails = crap::evaluate_crap(&entries, &allow);
+                eprintln!("CRAP-SHADOW: over_threshold={}", fails.len());
+                for f in &fails {
+                    eprintln!("CRAP-SHADOW: {}::{} crap={}", f.file, f.function, f.crap);
+                }
+            }
+            Err(e) => eprintln!("CRAP-SHADOW: parse error: {e:#}"),
+        }
+    }
+
     let (baseline, verdict, safety) = classify_against_anchor(&current)?;
 
     let old_crap_manifest = std::fs::read_to_string(crap::CRAP_MANIFEST_PATH).unwrap_or_default();

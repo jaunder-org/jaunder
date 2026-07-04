@@ -79,6 +79,7 @@ enum Commands {
 #[tokio::main]
 // cov:ignore-start
 async fn main() -> anyhow::Result<()> {
+    // crap:allow: test harness entrypoint; real fix tracked in #232
     let cli = Cli::parse();
     match cli.command {
         Commands::SeedPosts {
