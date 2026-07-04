@@ -34,8 +34,8 @@ nix-excerpt companion (all in spec §Out-of-scope).
    panic-hook install (independent `O_APPEND` handle, chains to prev,
    `Option<PathBuf>` so the enablement check keeps `init_tracing_impl`'s CRAP
    flat), wired into `init_tracing_impl` — one commit.
-3. `flake.nix` server env (`JAUNDER_DIAG_LOG_FILE`) + copy-out rename in
-   `e2eRunAndCapture`.
+3. ✅ **DONE** (`6c8c4527`) — `flake.nix` server env (`JAUNDER_DIAG_LOG_FILE` in
+   `mailCaptureEnv`) + copy-out rename in `e2eRunAndCapture`.
 4. `xtask` `copy_e2e_diagnostics_between`: add `jaunder-diag-` prefix + doc +
    unit test.
 5. `e2ePanicGate` rewrite: scoped ∪ journal, de-dup by location, scoped
