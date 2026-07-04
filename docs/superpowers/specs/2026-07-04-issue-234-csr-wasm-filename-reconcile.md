@@ -84,17 +84,21 @@ bootstrap load it directly, ignoring wasm-bindgen's unused internal default.
 
 ## Acceptance criteria
 
-1. `cargo leptos end-to-end` on the host runs the e2e suite green;
-   `body[data-hydrated]` is set (hydration recovers), including on
-   projector-owned public routes.
+1. The CSR wasm bundle hydrates — `body[data-hydrated]` is set. **Verified via
+   the Nix e2e** (`cargo xtask e2e sqlite chromium` → 71/71, covering both
+   projector and SPA-fallback routes). A fully-green _host_
+   `cargo leptos end-to-end` run additionally requires #239 (the host
+   `index.html` seam — `csr/index.html` is never placed in `site_root` on the
+   host), discovered during execution and out of scope here.
 2. Nix e2e (CI) stays green; the Nix site serves `pkg/jaunder.wasm` and both
    bootstraps load it.
 3. Both bootstraps (`csr/index.html`, `server/src/projector/mod.rs`) load the
    wasm explicitly by its emitted name; no arg-less `init()` remains.
 4. A drift-guard test fails if a bootstrap's wasm URL and the emitted/served
    wasm filename diverge.
-5. The fix is **standalone** — it depends on no #153 changes; #153's
-   `cargo xtask e2e-local` driver works once this lands.
+5. The wasm fix is **standalone** — it depends on no #153 changes. (Note: #153's
+   host-loop-green also requires #239, the host `index.html` seam — a co-blocker
+   discovered during execution.)
 6. `cargo xtask audit-wasm` succeeds against the renamed artifact (its name +
    tests updated).
 
@@ -124,5 +128,7 @@ bootstrap load it directly, ignoring wasm-bindgen's unused internal default.
 
 ## Relations
 
-- Unblocks #153 AC8 (host-loop-green verification).
-- Follow-ups filed: #236 (build unification); #237 (single-binary restoration).
+- Partially unblocks #153 AC8: fixes the wasm defect (Nix-verified 71/71);
+  #153's host-loop-green additionally needs #239.
+- Follow-ups filed: #236 (build unification); #237 (single-binary restoration);
+  #239 (host `index.html` seam).
