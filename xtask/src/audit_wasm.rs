@@ -103,17 +103,55 @@ pub fn resolve_site_path(explicit: Option<&str>) -> Result<String> {
     }
 }
 
-/// Resolve the site path, then measure the two frontend artifacts (raw, gzip,
-/// brotli). Errors (naming the offending path) if the build fails or an expected
-/// artifact is absent.
+/// The substring between the first occurrence of `marker` (a prefix ending at an
+/// opening `"`) and the next `"` — the URL a boot-script directive quotes. `None`
+/// if the marker or its closing quote is absent.
+fn quoted_after(haystack: &str, marker: &str) -> Option<String> {
+    let start = haystack.find(marker)? + marker.len();
+    let rest = &haystack[start..];
+    rest.find('"').map(|end| rest[..end].to_string())
+}
+
+/// The `pkg/`-relative artifacts the CSR shell actually boots, read from the
+/// site's `index.html`: the wasm the boot passes to `init` (`init("…")`) and the
+/// JS module it imports (`import init from "…"`). Deriving the audit's targets
+/// from the shell — rather than a hard-coded name — is what makes this a real
+/// guard: a wasm the shell references but the build never emitted (issue #234)
+/// becomes a missing artifact here, instead of a silent 404 in the browser.
+/// Rejects an arg-less `init()` (no explicit URL → wasm-bindgen's `_bg` default,
+/// the #234 regression).
+fn shell_boot_artifacts(index_html: &str) -> Result<Vec<String>> {
+    let wasm = quoted_after(index_html, "init(\"").context(
+        "index.html boot script has no explicit `init(\"…\")` wasm URL \
+         (arg-less init() falls back to wasm-bindgen's _bg default — issue #234)",
+    )?;
+    let js = quoted_after(index_html, "import init from \"")
+        .context("index.html has no `import init from \"…\"` module URL")?;
+    Ok([wasm, js]
+        .into_iter()
+        .map(|url| url.trim_start_matches('/').to_string())
+        .collect())
+}
+
+/// Resolve the site path, then measure the frontend artifacts the shell boots
+/// (raw, gzip, brotli). The targets are read from the site's `index.html` (see
+/// [`shell_boot_artifacts`]), so this Errs — naming the offending path — if the
+/// build didn't emit a file the shell references.
 pub fn run(site_path: Option<&str>) -> Result<AuditReport> {
     let site_path = resolve_site_path(site_path)?;
-    let names = ["pkg/jaunder.wasm", "pkg/jaunder.js"];
+    let index_path = Path::new(&site_path).join("index.html");
+    let index_html = std::fs::read_to_string(&index_path)
+        .with_context(|| format!("reading {}", index_path.display()))?;
+    let names = shell_boot_artifacts(&index_html)?;
     let mut artifacts = Vec::new();
-    for name in names {
+    for name in &names {
         let path = Path::new(&site_path).join(name);
-        let bytes =
-            std::fs::read(&path).with_context(|| format!("reading artifact {}", path.display()))?;
+        let bytes = std::fs::read(&path).with_context(|| {
+            format!(
+                "reading artifact {} (referenced by index.html)",
+                path.display()
+            )
+        })?;
         artifacts.push(ArtifactMetrics {
             path: path.to_string_lossy().into_owned(),
             raw_bytes: bytes.len() as u64,
@@ -191,11 +229,41 @@ mod tests {
     }
 
     #[test]
-    fn run_errors_when_artifact_missing() {
-        // An explicit empty temp dir has no pkg/jaunder.wasm → run() must Err
-        // (and name the missing artifact), without ever invoking `nix`.
+    fn shell_boot_artifacts_reads_the_boot_urls_from_index_html() {
+        // wasm first (the boot's `init(...)` target), then the JS module.
+        let index = r#"<!doctype html><script type="module">
+          import init from "/pkg/jaunder.js";
+          init("/pkg/jaunder.wasm");
+        </script>"#;
+        assert_eq!(
+            shell_boot_artifacts(index).unwrap(),
+            vec!["pkg/jaunder.wasm".to_string(), "pkg/jaunder.js".to_string()]
+        );
+    }
+
+    #[test]
+    fn shell_boot_artifacts_rejects_arg_less_init() {
+        // The exact #234 regression: arg-less init() carries no explicit wasm URL,
+        // so wasm-bindgen falls back to its `_bg` default → the audit must refuse it.
+        let index = r#"<script type="module">import init from "/pkg/jaunder.js"; init();</script>"#;
+        let err = shell_boot_artifacts(index).unwrap_err().to_string();
+        assert!(
+            err.contains("234"),
+            "error explains the #234 regression: {err}"
+        );
+    }
+
+    #[test]
+    fn run_errors_when_a_referenced_artifact_is_missing() {
+        // A site whose index.html boots `/pkg/jaunder.wasm` but has no such file →
+        // run() must Err naming the missing artifact, without ever invoking `nix`.
         let dir = std::env::temp_dir().join(format!("audit-wasm-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("index.html"),
+            r#"<script type="module">import init from "/pkg/jaunder.js"; init("/pkg/jaunder.wasm");</script>"#,
+        )
+        .unwrap();
         let res = run(Some(dir.to_str().unwrap()));
         std::fs::remove_dir_all(&dir).ok();
         let err = res.unwrap_err().to_string();

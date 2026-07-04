@@ -743,14 +743,15 @@ mod tests {
     }
 
     #[test]
-    fn csr_index_html_boots_wasm_by_emitted_filename() {
-        // Drift guard (#234): the SPA shell must load the wasm by the filename
-        // cargo-leptos emits (`jaunder.wasm`), NOT wasm-bindgen's arg-less
-        // `jaunder_bg.wasm` default. If these drift, hydration 404s silently.
+    fn csr_index_html_boots_wasm_with_an_explicit_url() {
+        // Fast unit smoke (#234): the SPA shell must pass an explicit wasm URL to
+        // init(), not the arg-less init() that falls back to wasm-bindgen's
+        // `jaunder_bg.wasm` default. This runs in `check`; `cargo xtask audit-wasm`
+        // is what ties this URL to the file the build actually emits.
         let index = include_str!("../../../csr/index.html");
         assert!(
             index.contains(r#"init("/pkg/jaunder.wasm")"#),
-            "csr/index.html must boot via init(\"/pkg/jaunder.wasm\") (drift guard #234)"
+            "csr/index.html must boot via an explicit init(\"/pkg/jaunder.wasm\") (drift guard #234)"
         );
     }
 

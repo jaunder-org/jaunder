@@ -331,22 +331,32 @@ mod tests {
     }
 
     #[test]
-    fn document_boots_wasm_by_emitted_filename() {
+    fn document_boots_the_same_wasm_url_as_the_spa_shell() {
         use super::document;
         use web::render::PageSeed;
-        // Drift guard (#234): projector anonymous HTML must load the wasm by the
-        // filename cargo-leptos emits (`jaunder.wasm`). Public projector routes use
-        // this shell, so an arg-less init() here 404s hydration on those routes even
-        // when the SPA shell is fixed.
+        // Drift guard (#234): the projector's server-rendered boot and the SPA
+        // shell (`csr/index.html`) are two hand-written copies — they must load the
+        // SAME wasm URL, or hydration 404s on projector routes. Cross-checking the
+        // two (rather than asserting a literal against itself) means neither can
+        // silently drift; `cargo xtask audit-wasm` ties that shared URL to the file
+        // the build actually emits.
+        fn boot_wasm_url(html: &str) -> &str {
+            let marker = "init(\"";
+            let start = html.find(marker).expect("boot script calls init(\"…\")") + marker.len();
+            let rest = &html[start..];
+            &rest[..rest.find('"').expect("init(\"…\") closing quote")]
+        }
         let doc = document(&PageSeed::SiteTimeline(web::posts::TimelinePage {
             posts: vec![],
             next_cursor_created_at: None,
             next_cursor_post_id: None,
             has_more: false,
         }));
-        assert!(
-            doc.contains(r#"init("/pkg/jaunder.wasm")"#),
-            "projector document() must boot via init(\"/pkg/jaunder.wasm\") (drift guard #234): {doc}"
+        let spa_shell = include_str!("../../../csr/index.html");
+        assert_eq!(
+            boot_wasm_url(&doc),
+            boot_wasm_url(spa_shell),
+            "projector and csr/index.html must boot the same wasm URL (drift guard #234)"
         );
     }
 }
