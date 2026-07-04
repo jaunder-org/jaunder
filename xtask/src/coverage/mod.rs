@@ -159,7 +159,7 @@ fn reanchor_inner(out_dir: &str) -> Result<StepResult> {
         )
     })?;
     let repo_root = git_repo_root()?;
-    let current = report::parse_text_report(&report, &repo_root);
+    let current = report::parse_text_report(&report, &repo_root)?;
     let (_baseline, _verdict, safety) = classify_against_anchor(&current)?;
     let candidate = Baseline::from_files(&current);
     match reanchor::plan_reanchor(safety, candidate) {
@@ -282,7 +282,7 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
     };
 
     let repo_root = git_repo_root()?;
-    let current = report::parse_text_report(&report, &repo_root);
+    let current = report::parse_text_report(&report, &repo_root)?;
 
     let (baseline, verdict, safety) = classify_against_anchor(&current)?;
 
