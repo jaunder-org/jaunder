@@ -21,7 +21,7 @@ definitive working hub for humans and agents.
 
 Architecture decisions live in [`adr/`](adr/), one file per decision (see
 [ADR-0000: Documentation Strategy](adr/0000-documentation-strategy.md) for the
-convention). All are currently `accepted`.
+convention). See the Status column below for each ADR's current status.
 
 <!-- adr-table:begin -->
 
@@ -57,7 +57,7 @@ convention). All are currently `accepted`.
 | [0027](adr/0027-scheduled-publishing-time-gated-visibility.md)     | Scheduled Publishing — Time-Gated Visibility and Restart-Durable Go-Live                                     | accepted |
 | [0028](adr/0028-devtool-vs-xtask-boundary.md)                      | The `devtool` / `xtask` Boundary — In-Sandbox Producer vs. Host Analyzer                                     | accepted |
 | [0029](adr/0029-git-enforced-verify-gate.md)                       | Git-Enforced Verify Gate — Hook-Routed check/validate and Clean-Tree Gating                                  | accepted |
-| [0030](adr/0030-coverage-reanchor-text-identity.md)                | Coverage Re-Anchor by Text Identity                                                                          | accepted |
+| [0030](adr/0030-coverage-reanchor-text-identity.md)                | Coverage Re-Anchor by Text Identity                                                                          | superseded |
 | [0031](adr/0031-elisp-separately-tested-subproject.md)             | Elisp as a Separately-Tested Subproject                                                                      | accepted |
 | [0032](adr/0032-e2e-zero-panic-gate.md)                            | E2E Zero-Panic Gate and Visible-by-Default Server Log                                                        | accepted |
 | [0033](adr/0033-shared-db-test-harness-crate.md)                   | In-`storage` `test_support` Module for Both-Backend Test Parametrization                                     | accepted |
