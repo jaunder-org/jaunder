@@ -30,17 +30,17 @@ Prerequisite for #135.
 
 1. ✅ File the deferred `make_*_app_state` unification as a separate issue →
    **#238**.
-2. Add `CloseablePool` + `open_*_with_pool` seams; store the pool in `TestBase`
-   with `close_pool()`/`pool()`.
-3. Convert the two `web_backup.rs` storage-error tests to `#[apply(backends)]`
-   via `base.close_pool()`.
-4. Remove `test_sqlite_state_with_pool`; migrate the 4 `test-support` smoke
-   tests to `Backend::Sqlite.setup()`.
-5. Rename `make_app_state` → `make_sqlite_app_state`.
-6. Migrate pool-only raw-SQL PG sites from `recorded_postgres_url` reconnect to
-   `base.pool()`.
-7. Full gate: `cargo xtask validate --no-e2e` green; reanchor coverage baseline
-   if needed (with approval).
+2. ✅ Add `CloseablePool` + `open_*_with_pool` seams; store the pool in `TestBase`
+   with `close_pool()`/`pool()`. (commit ca25a55d)
+3. ✅ Convert the two `web_backup.rs` storage-error tests to `#[apply(backends)]`
+   via `base.close_pool()`. (ca25a55d)
+4. ✅ Remove `test_sqlite_state_with_pool`; migrate the 4 `test-support` smoke
+   tests to `Backend::Sqlite.setup()`. (ca25a55d)
+5. ✅ Rename `make_app_state` → `make_sqlite_app_state`. (ca25a55d)
+6. ✅ Migrate pool-only raw-SQL PG sites from `recorded_postgres_url` reconnect to
+   `base.pool()`; guard covered by a `#[should_panic]` test (no baseline change). (commit 39887d54)
+7. ✅ Full gate green (pre-commit `validate --no-e2e` on both commits;
+   `coverage-baseline.json` unchanged — no reanchor/approval needed).
 
 **Key risks/decisions.**
 
