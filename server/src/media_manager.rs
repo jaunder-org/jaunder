@@ -225,9 +225,11 @@ impl MediaManager {
         };
         match self.media.create_media(&record).await {
             Ok(()) | Err(CreateMediaError::AlreadyExists) => Ok(()),
+            // cov:ignore-start
             Err(CreateMediaError::Internal(e)) => {
                 tracing::error!(error = %e, "create_media failed");
                 Err(anyhow::anyhow!(MediaError::Internal(e.to_string())))
+                // cov:ignore-stop
             }
         }
     }

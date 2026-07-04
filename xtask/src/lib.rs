@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 mod adr;
 mod adr_readme;
 mod audit_wasm;
-mod coverage;
+pub mod coverage;
 pub mod git;
 mod ids;
 mod nix_build;
@@ -99,9 +99,6 @@ pub enum Command {
         #[arg(long)]
         site_path: Option<String>,
     },
-    /// Coverage-baseline maintenance.
-    #[command(subcommand)]
-    Coverage(CoverageCommand),
     /// Build ONE e2e VM check (a {backend}×{browser} combo) through the same
     /// diagnostic-preserving wrapper `validate` uses. For CI matrix fan-out;
     /// not part of `check`/`validate`. Runs on the host only.
@@ -199,44 +196,12 @@ pub enum TracesCommand {
     },
 }
 
-/// `coverage` subcommands.
-#[derive(Subcommand)]
-pub enum CoverageCommand {
-    /// Re-anchor `coverage-baseline.json` to the current coverage report when the
-    /// drift is a safe line-shift (ADR-0030); refuse and write a candidate to
-    /// `.xtask/coverage-baseline.candidate.json` on a genuine coverage lowering.
-    /// Consumes an existing report (run `check`/`validate` first); never rebuilds.
-    #[command(after_help = "EXAMPLES:\n  \
-        cargo xtask coverage reanchor\n  \
-        cargo xtask coverage reanchor --gcroot .xtask/gcroots/coverage")]
-    Reanchor {
-        /// GC-root / out-link directory holding `coverage-report.txt`.
-        #[arg(long, default_value = ".xtask/gcroots/coverage")]
-        gcroot: String,
-    },
-    /// Refresh `crap-manifest.json` from the current CRAP report. With no
-    /// regressions it rewrites the committed manifest in place (a no-op when no
-    /// CRAP-relevant field changed); on a regression it refuses and writes a
-    /// candidate to `.xtask/crap-manifest.candidate.json` for a deliberate `cp`.
-    /// Consumes an existing report (run `check`/`validate` first); never rebuilds.
-    #[command(after_help = "EXAMPLES:\n  \
-        cargo xtask coverage refresh-crap\n  \
-        cargo xtask coverage refresh-crap --gcroot .xtask/gcroots/coverage")]
-    RefreshCrap {
-        /// GC-root / out-link directory holding `crap-report.json`.
-        #[arg(long, default_value = ".xtask/gcroots/coverage")]
-        gcroot: String,
-    },
-}
-
 impl Cli {
     pub fn command_name(&self) -> &'static str {
         match self.command {
             Command::Check { .. } => "check",
             Command::Validate { .. } => "validate",
             Command::AuditWasm { .. } => "audit-wasm",
-            Command::Coverage(CoverageCommand::Reanchor { .. }) => "coverage-reanchor",
-            Command::Coverage(CoverageCommand::RefreshCrap { .. }) => "coverage-refresh-crap",
             Command::E2e { .. } => "e2e",
             Command::Adr(AdrCommand::Renumber) => "adr-renumber",
             Command::Adr(AdrCommand::SyncReadme) => "adr-sync-readme",
@@ -281,7 +246,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::test_pattern_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             if !no_test {
-                steps::nix::coverage(&mut result, Mode::Fix);
+                steps::nix::coverage(&mut result);
             }
             finalize(&mut result, start);
             Ok(result)
@@ -307,7 +272,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::adr_check::run(&mut result);
             steps::test_pattern_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
-            steps::nix::coverage(&mut result, Mode::Check);
+            steps::nix::coverage(&mut result);
             if !no_e2e {
                 // `e2e` builds the `e2e-checks` aggregate, which now includes the
                 // `e2e-elisp-integration` check — so it runs in parallel with the
@@ -330,20 +295,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                     result.push(StepResult::fail("audit-wasm").detail(format!("{e:#}")));
                 }
             }
-            finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::Coverage(CoverageCommand::Reanchor { gcroot }) => {
-            let start = std::time::Instant::now();
-            let mut result = CommandResult::new("coverage-reanchor");
-            result.push(coverage::reanchor(&gcroot));
-            finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::Coverage(CoverageCommand::RefreshCrap { gcroot }) => {
-            let start = std::time::Instant::now();
-            let mut result = CommandResult::new("coverage-refresh-crap");
-            result.push(coverage::refresh_crap(&gcroot));
             finalize(&mut result, start);
             Ok(result)
         }
@@ -440,78 +391,6 @@ pub fn ensure_hooks_installed() {
     }
 }
 
-/// Register the keep-ours merge driver in `repo_dir`'s local git config. The
-/// driver command is `true`: it exits 0 without touching `%A` (ours), so a merge
-/// of the generated coverage artifacts resolves to our side with no conflict
-/// markers. The next `cargo xtask check` re-heals to the merged-tree state.
-fn register_keepours(repo_dir: &std::path::Path) -> anyhow::Result<()> {
-    use anyhow::ensure;
-    let cfg = |args: &[&str]| -> anyhow::Result<()> {
-        let status = git::at(repo_dir).args(args).status()?;
-        ensure!(status.success(), "git {:?} failed", args);
-        Ok(())
-    };
-    cfg(&[
-        "config",
-        "merge.coverage-keepours.name",
-        "keep ours for generated coverage artifacts",
-    ])?;
-    cfg(&["config", "merge.coverage-keepours.driver", "true"])?;
-    Ok(())
-}
-
-/// Whether the `coverage-keepours` merge driver needs (re)registering, given the
-/// current `merge.coverage-keepours.driver` value (`None` = unset). The driver command
-/// is the shell builtin `true`; any other value (or unset) means re-register.
-fn needs_merge_driver(current: Option<&str>) -> bool {
-    match current {
-        Some(value) => value.trim() != "true",
-        None => true,
-    }
-}
-
-/// Current `merge.coverage-keepours.driver` in `repo_dir`, or `None` when unset/blank.
-/// `git config --get` exits non-zero (empty stdout) when the key is missing, so a blank
-/// read maps to `None`. Goes through `git::at` so ambient `GIT_DIR`/etc. (exported when
-/// run inside a hook) cannot redirect the query at another repo.
-fn merge_driver_value(repo_dir: &std::path::Path) -> Option<String> {
-    let out = git::at(repo_dir)
-        .args(["config", "--get", "merge.coverage-keepours.driver"])
-        .output()
-        .ok()?;
-    let value = String::from_utf8(out.stdout).ok()?.trim().to_string();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
-}
-
-/// Ensure the keep-ours merge driver is registered in `repo_dir`; register it when
-/// unset/wrong. Returns `true` when it changed config. Mirrors [`git::ensure_hooks_path`].
-fn ensure_merge_driver(repo_dir: &std::path::Path) -> anyhow::Result<bool> {
-    if needs_merge_driver(merge_driver_value(repo_dir).as_deref()) {
-        register_keepours(repo_dir)?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
-}
-
-/// Self-healing merge-driver registration: register the keep-ours driver for the
-/// generated coverage artifacts if it is not already, so fresh clones wire up on first
-/// run. Git config is shared per-clone, so this also covers every worktree. Best-effort —
-/// a failure here must never block the actual command. Parallels [`ensure_hooks_installed`].
-pub fn ensure_merge_driver_installed() {
-    match ensure_merge_driver(std::path::Path::new(".")) {
-        Ok(true) => eprintln!("xtask: registered merge.coverage-keepours (keep-ours)"),
-        Ok(false) => {}
-        Err(e) => {
-            eprintln!("xtask: warning: could not register merge.coverage-keepours: {e:#}")
-        }
-    }
-}
-
 fn finalize(result: &mut CommandResult, start: std::time::Instant) {
     result.duration_ms = start.elapsed().as_millis();
     result.finished_at_unix = std::time::SystemTime::now()
@@ -570,50 +449,6 @@ mod cli_tests {
         match cli.command {
             Command::Validate { allow_dirty, .. } => assert!(!allow_dirty),
             _ => panic!("expected validate"),
-        }
-    }
-
-    #[test]
-    fn coverage_reanchor_parses_with_default_gcroot() {
-        let cli = Cli::try_parse_from(["xtask", "coverage", "reanchor"]).unwrap();
-        match cli.command {
-            Command::Coverage(CoverageCommand::Reanchor { gcroot }) => {
-                assert_eq!(gcroot, ".xtask/gcroots/coverage");
-            }
-            _ => panic!("expected coverage reanchor"),
-        }
-    }
-
-    #[test]
-    fn coverage_reanchor_accepts_gcroot() {
-        let cli =
-            Cli::try_parse_from(["xtask", "coverage", "reanchor", "--gcroot", "/tmp/x"]).unwrap();
-        match cli.command {
-            Command::Coverage(CoverageCommand::Reanchor { gcroot }) => assert_eq!(gcroot, "/tmp/x"),
-            _ => panic!("expected coverage reanchor"),
-        }
-    }
-
-    #[test]
-    fn coverage_refresh_crap_parses_with_default_gcroot() {
-        let cli = Cli::try_parse_from(["xtask", "coverage", "refresh-crap"]).unwrap();
-        match cli.command {
-            Command::Coverage(CoverageCommand::RefreshCrap { gcroot }) => {
-                assert_eq!(gcroot, ".xtask/gcroots/coverage");
-            }
-            _ => panic!("expected coverage refresh-crap"),
-        }
-    }
-
-    #[test]
-    fn coverage_refresh_crap_accepts_gcroot() {
-        let cli = Cli::try_parse_from(["xtask", "coverage", "refresh-crap", "--gcroot", "/tmp/x"])
-            .unwrap();
-        match cli.command {
-            Command::Coverage(CoverageCommand::RefreshCrap { gcroot }) => {
-                assert_eq!(gcroot, "/tmp/x")
-            }
-            _ => panic!("expected coverage refresh-crap"),
         }
     }
 
@@ -820,26 +655,15 @@ mod cli_tests {
 }
 
 #[cfg(test)]
-mod merge_driver_tests {
-    use super::{ensure_merge_driver, needs_merge_driver, register_keepours};
+mod git_env_tests {
     use crate::git::at as git_at;
-
-    fn git(dir: &std::path::Path, args: &[&str]) {
-        let ok = git_at(dir).args(args).status().unwrap().success();
-        assert!(ok, "git {args:?} failed");
-    }
-
-    fn git_stdout(dir: &std::path::Path, args: &[&str]) -> String {
-        let out = git_at(dir).args(args).output().unwrap();
-        String::from_utf8(out.stdout).unwrap().trim().to_string()
-    }
 
     #[test]
     fn git_at_scrubs_repo_redirecting_env() {
         // Regression guard: without scrubbing these, a git op meant for `dir`
-        // (a throwaway test repo, or the user's repo via the merge-driver self-heal)
-        // would be redirected at the hook's repo when run inside a git hook,
-        // corrupting it. `get_envs()` yields `(key, None)` for a removed var.
+        // (a throwaway test repo) would be redirected at the hook's repo when run
+        // inside a git hook, corrupting it. `get_envs()` yields `(key, None)` for a
+        // removed var.
         let cmd = git_at(std::path::Path::new("/tmp/x"));
         let removed: std::collections::HashSet<std::ffi::OsString> = cmd
             .get_envs()
@@ -859,82 +683,5 @@ mod merge_driver_tests {
                 "{var} must be scrubbed so -C wins"
             );
         }
-    }
-
-    #[test]
-    fn keepours_driver_resolves_merge_to_ours_without_markers() {
-        let tmp = std::env::temp_dir().join(format!("jaunder-mergetest-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-
-        git(&tmp, &["init", "-q"]);
-        git(&tmp, &["config", "user.email", "t@t"]);
-        git(&tmp, &["config", "user.name", "t"]);
-        register_keepours(&tmp).unwrap();
-        std::fs::write(
-            tmp.join(".gitattributes"),
-            "crap-manifest.json merge=coverage-keepours\n",
-        )
-        .unwrap();
-        std::fs::write(tmp.join("crap-manifest.json"), "base\n").unwrap();
-        git(&tmp, &["add", "."]);
-        git(&tmp, &["commit", "-q", "-m", "base"]);
-        // The default branch name varies (main vs master) — capture it.
-        let base = git_stdout(&tmp, &["branch", "--show-current"]);
-
-        git(&tmp, &["checkout", "-q", "-b", "feature"]);
-        std::fs::write(tmp.join("crap-manifest.json"), "theirs\n").unwrap();
-        git(&tmp, &["commit", "-qam", "theirs"]);
-
-        git(&tmp, &["checkout", "-q", &base]);
-        std::fs::write(tmp.join("crap-manifest.json"), "ours\n").unwrap();
-        git(&tmp, &["commit", "-qam", "ours"]);
-
-        // Merge must succeed (exit 0) and keep "ours" with no conflict markers.
-        let merged = git_at(&tmp)
-            .args(["merge", "-q", "--no-edit", "feature"])
-            .status()
-            .unwrap();
-        assert!(merged.success(), "keep-ours merge must not conflict");
-        let content = std::fs::read_to_string(tmp.join("crap-manifest.json")).unwrap();
-        assert_eq!(content, "ours\n", "keep-ours must retain our side");
-        assert!(!content.contains("<<<<<<<"), "no conflict markers");
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn needs_merge_driver_when_unset_or_wrong() {
-        assert!(needs_merge_driver(None));
-        assert!(needs_merge_driver(Some("")));
-        assert!(needs_merge_driver(Some("false")));
-    }
-
-    #[test]
-    fn no_need_when_merge_driver_already_true() {
-        assert!(!needs_merge_driver(Some("true")));
-        assert!(!needs_merge_driver(Some(" true \n")));
-    }
-
-    #[test]
-    fn ensure_merge_driver_registers_then_is_idempotent() {
-        let tmp = std::env::temp_dir().join(format!("jaunder-ensure-md-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-
-        git(&tmp, &["init", "-q"]);
-        // First call registers and reports a change.
-        assert!(ensure_merge_driver(&tmp).unwrap(), "first call registers");
-        assert_eq!(
-            git_stdout(&tmp, &["config", "--get", "merge.coverage-keepours.driver"]),
-            "true"
-        );
-        // Second call is a no-op (idempotent) — the value already matches.
-        assert!(
-            !ensure_merge_driver(&tmp).unwrap(),
-            "second call is a no-op"
-        );
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

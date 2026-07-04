@@ -52,9 +52,11 @@ pub(crate) async fn export_database(
             sqlx::query("COMMIT").execute(&mut *connection).await?;
             Ok(manifest)
         }
+        // cov:ignore-start
         Err(error) => {
             let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
             Err(error)
+            // cov:ignore-stop
         }
     }
 }
@@ -83,9 +85,11 @@ pub(crate) async fn restore_database(
             sqlx::query("COMMIT").execute(&mut *connection).await?;
             Ok(())
         }
+        // cov:ignore-start
         Err(error) => {
             let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
             Err(error)
+            // cov:ignore-stop
         }
     }
 }
@@ -131,11 +135,13 @@ async fn import_table(
         let mut query = sqlx::query(&insert);
         for column in &column_names {
             let value = row.get(&column.name).ok_or_else(|| {
+                // cov:ignore-start
                 BackupError::InvalidBackup(format!(
                     "table {table} row is missing column {}",
                     column.name
                 ))
             })?;
+            // cov:ignore-stop
             query = query.bind(json_value_as_restore_text(value));
         }
         query.execute(&mut *connection).await?;

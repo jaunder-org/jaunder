@@ -161,6 +161,7 @@ pub fn MediaPage() -> impl IntoView {
 }
 
 #[allow(clippy::needless_pass_by_value)]
+// cov:ignore-start
 fn render_media_row(item: MediaItem, delete_action: ServerAction<DeleteMedia>) -> impl IntoView {
     let url = item.url.clone();
     let filename = item.filename.clone();
@@ -168,7 +169,9 @@ fn render_media_row(item: MediaItem, delete_action: ServerAction<DeleteMedia>) -
     let source = item.source.clone();
     let size_label = format_bytes(item.size_bytes);
     let created_at = item.created_at.clone();
+    // cov:ignore-stop
 
+    // cov:ignore-start
     view! {
         <tr>
             <td>
@@ -197,6 +200,7 @@ fn render_media_row(item: MediaItem, delete_action: ServerAction<DeleteMedia>) -
         </tr>
     }
 }
+// cov:ignore-stop
 
 #[cfg(test)]
 mod tests {

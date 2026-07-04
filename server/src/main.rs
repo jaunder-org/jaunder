@@ -4,21 +4,27 @@ use common::username::Username;
 use jaunder::cli::{Cli, Commands};
 
 #[tokio::main]
+// cov:ignore-start
 async fn main() -> anyhow::Result<()> {
+    // cov:ignore-stop
     // Fail-closed: a production binary must never link a `common` compiled with
     // cheap test KDF params. Feature isolation (resolver 2, dev-deps only) keeps
     // this false in production; if it is ever true, refuse to start rather than
     // hash passwords weakly. main() is never run by the integration tests, so this
     // does not affect the test build.
+    // cov:ignore-start
     if common::CHEAP_KDF_ENABLED {
         eprintln!(
+            // cov:ignore-stop
             "FATAL: jaunder built with cheap-kdf (test-only password hashing); refusing to start"
         );
+        // cov:ignore-start
         std::process::exit(1);
     }
     let cli = Cli::parse();
     run(cli).await
 }
+// cov:ignore-stop
 
 /// Executes the application logic based on the provided CLI arguments.
 ///
@@ -42,17 +48,23 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             // binary.  When present, default to `serve` so that
             // `cargo leptos end-to-end` (and `cargo leptos serve`) work
             // without requiring the user to pass `-- serve`.
+            // cov:ignore-start
             if std::env::var_os("LEPTOS_OUTPUT_NAME").is_some() {
+                // cov:ignore-stop
                 // Re-parse as if the user typed `jaunder serve`, which
                 // picks up env-var overrides and clap defaults for all
                 // StorageArgs / bind / environment fields.
+                // cov:ignore-start
                 let implicit = Cli::parse_from(["jaunder", "serve"]);
                 implicit.command.expect("serve subcommand present")
+                // cov:ignore-stop
             } else {
                 // No subcommand and not under cargo-leptos — re-parse to
                 // trigger clap's built-in "missing subcommand" error/help.
+                // cov:ignore-start
                 Cli::parse_from(["jaunder", "--help"]);
                 unreachable!()
+                // cov:ignore-stop
             }
         }
     };
@@ -133,14 +145,18 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             jaunder::commands::cmd_smtp_test(&storage, &to).await?;
         }
         Commands::Backup {
+            // cov:ignore-start
             storage,
             mode,
             path,
+            // cov:ignore-stop
         } => {
-            jaunder::commands::cmd_backup(&storage, mode.into(), path).await?;
+            jaunder::commands::cmd_backup(&storage, mode.into(), path).await?; // cov:ignore
         }
+        // cov:ignore-start
         Commands::Restore { storage, path } => {
             jaunder::commands::cmd_restore(&storage, &path).await?;
+            // cov:ignore-stop
         }
     }
     Ok(())
@@ -323,7 +339,7 @@ mod tests {
         // test in commands.rs.
         let task = tokio::spawn(async move {
             let _ = run(cli).await;
-        });
+        }); // cov:ignore
 
         // Wait a bit for it to start.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -444,7 +460,7 @@ mod tests {
 
         let task = tokio::spawn(async move {
             let _ = run(cli).await;
-        });
+        }); // cov:ignore
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         task.abort();

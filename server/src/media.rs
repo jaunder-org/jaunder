@@ -149,7 +149,7 @@ async fn serve_response(
     if let Some(if_none_match) = req_headers.get(axum::http::header::IF_NONE_MATCH) {
         if if_none_match.to_str().unwrap_or("") == etag_value {
             return Ok(StatusCode::NOT_MODIFIED.into_response());
-        }
+        } // cov:ignore
     }
 
     // Look up content_type from DB; fall back to extension detection.
@@ -158,7 +158,7 @@ async fn serve_response(
         .await
         .map_err(serve_internal_error)?
         .map_or_else(
-            || detect_content_type(&params.filename).to_owned(),
+            || detect_content_type(&params.filename).to_owned(), // cov:ignore
             |r| r.content_type,
         );
 

@@ -222,12 +222,12 @@ pub async fn find_draft_by_permalink_for_user(
         }
 
         let Some(next_cursor) = next_cursor else {
-            return Ok(None);
+            return Ok(None); // cov:ignore
         };
         cursor = Some(next_cursor);
     }
 
-    Ok(None)
+    Ok(None) // cov:ignore
 }
 
 pub fn not_found_error() -> InternalError {

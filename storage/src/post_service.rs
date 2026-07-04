@@ -398,8 +398,10 @@ pub async fn perform_post_creation(
                 return Ok(record);
             }
             Err(CreatePostError::SlugConflict) => {}
+            // cov:ignore-start
             Err(CreatePostError::Internal(e)) => {
                 return Err(PerformCreationError::Storage(e));
+                // cov:ignore-stop
             }
         }
     }

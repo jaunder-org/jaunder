@@ -258,7 +258,7 @@ mod tests {
             "secret",
         ]);
         let Commands::CreatePgDb { pg } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(pg.bootstrap_db, "postgres://postgres@localhost/postgres");
         assert_eq!(pg.app_db, "postgres://jaunder@localhost/jaunder");
@@ -271,7 +271,7 @@ mod tests {
         std::env::remove_var("JAUNDER_STORAGE_PATH");
         let cli = parse(&["init"]);
         let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(storage.storage_path, PathBuf::from("./data"));
     }
@@ -281,7 +281,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let cli = parse(&["init", "--storage-path", "/tmp/mydata"]);
         let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(storage.storage_path, PathBuf::from("/tmp/mydata"));
     }
@@ -293,7 +293,7 @@ mod tests {
         let cli = parse(&["init", "--storage-path", "/tmp/from_flag"]);
         std::env::remove_var("JAUNDER_STORAGE_PATH");
         let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(storage.storage_path, PathBuf::from("/tmp/from_flag"));
     }
@@ -305,7 +305,7 @@ mod tests {
         let cli = parse(&["init"]);
         std::env::remove_var("JAUNDER_STORAGE_PATH");
         let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(storage.storage_path, PathBuf::from("/tmp/from_env"));
     }
@@ -318,7 +318,7 @@ mod tests {
         std::env::remove_var("JAUNDER_BIND");
         let cli = parse(&["serve"]);
         let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(bind, "127.0.0.1:3000".parse::<SocketAddr>().unwrap());
     }
@@ -328,7 +328,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let cli = parse(&["serve", "--bind", "0.0.0.0:8080"]);
         let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(bind, "0.0.0.0:8080".parse::<SocketAddr>().unwrap());
     }
@@ -340,7 +340,7 @@ mod tests {
         let cli = parse(&["serve", "--bind", "0.0.0.0:8080"]);
         std::env::remove_var("JAUNDER_BIND");
         let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(bind, "0.0.0.0:8080".parse::<SocketAddr>().unwrap());
     }
@@ -352,7 +352,7 @@ mod tests {
         let cli = parse(&["serve"]);
         std::env::remove_var("JAUNDER_BIND");
         let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(bind, "0.0.0.0:9000".parse::<SocketAddr>().unwrap());
     }
@@ -362,7 +362,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let cli = parse(&["serve"]);
         let Commands::Serve { environment, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(environment, DeploymentEnv::Dev);
     }
@@ -372,7 +372,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let cli = parse(&["serve", "--environment", "prod"]);
         let Commands::Serve { environment, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(environment, DeploymentEnv::Prod);
     }
@@ -384,7 +384,7 @@ mod tests {
         let cli = parse(&["serve"]);
         std::env::remove_var("JAUNDER_ENV");
         let Commands::Serve { environment, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(environment, DeploymentEnv::Prod);
     }
@@ -395,7 +395,7 @@ mod tests {
     fn skip_if_exists_defaults_false() {
         let cli = parse(&["init"]);
         let Commands::Init { skip_if_exists, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert!(!skip_if_exists);
     }
@@ -404,7 +404,7 @@ mod tests {
     fn skip_if_exists_flag_sets_true() {
         let cli = parse(&["init", "--skip-if-exists"]);
         let Commands::Init { skip_if_exists, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert!(skip_if_exists);
     }
@@ -417,7 +417,7 @@ mod tests {
         std::env::remove_var("JAUNDER_DB");
         let cli = parse(&["init"]);
         let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(storage.db.to_string(), "sqlite:./data/jaunder.db");
     }
@@ -427,7 +427,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let cli = parse(&["init", "--db", "sqlite:/tmp/test.db"]);
         let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(storage.db.to_string(), "sqlite:/tmp/test.db");
     }
@@ -437,7 +437,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let cli = parse(&["init", "--db", "postgres://jaunder@localhost/testdb"]);
         let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(
             storage.db.to_string(),
@@ -452,7 +452,7 @@ mod tests {
         let cli = parse(&["init", "--db", "sqlite:/tmp/from_flag.db"]);
         std::env::remove_var("JAUNDER_DB");
         let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(storage.db.to_string(), "sqlite:/tmp/from_flag.db");
     }
@@ -464,7 +464,7 @@ mod tests {
         let cli = parse(&["init"]);
         std::env::remove_var("JAUNDER_DB");
         let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(storage.db.to_string(), "sqlite:/tmp/from_env.db");
     }
@@ -488,7 +488,7 @@ mod tests {
             ..
         } = cli.command.expect("subcommand")
         else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(username, "alice");
         assert_eq!(password, Some("secret123".to_owned()));
@@ -508,7 +508,7 @@ mod tests {
             "Alice Smith",
         ]);
         let Commands::UserCreate { display_name, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(display_name, Some("Alice Smith".to_owned()));
     }
@@ -518,7 +518,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let cli = parse(&["user-create", "--username", "alice"]);
         let Commands::UserCreate { password, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(password, None);
     }
@@ -537,7 +537,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let cli = parse(&["user-invite", "--expires-in", "48"]);
         let Commands::UserInvite { expires_in, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(expires_in, Some(48));
     }
@@ -547,7 +547,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let cli = parse(&["user-invite"]);
         let Commands::UserInvite { expires_in, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(expires_in, None);
     }
@@ -559,7 +559,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let cli = parse(&["smtp-test", "--to", "alice@example.com"]);
         let Commands::SmtpTest { to, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(to, "alice@example.com");
     }
@@ -578,7 +578,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let cli = parse(&["backup"]);
         let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(mode, CliBackupMode::Directory);
         assert_eq!(path, None);
@@ -589,7 +589,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let cli = parse(&["backup", "--path", "/tmp/backup"]);
         let Commands::Backup { path, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(path, Some(PathBuf::from("/tmp/backup")));
     }
@@ -605,7 +605,7 @@ mod tests {
             "/tmp/backup.tar.gz",
         ]);
         let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(mode, CliBackupMode::Archive);
         assert_eq!(path, Some(PathBuf::from("/tmp/backup.tar.gz")));
@@ -616,7 +616,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let cli = parse(&["restore", "/tmp/backup"]);
         let Commands::Restore { path, .. } = cli.command.expect("subcommand") else {
-            panic!("wrong variant");
+            panic!("wrong variant"); // cov:ignore
         };
         assert_eq!(path, PathBuf::from("/tmp/backup"));
     }

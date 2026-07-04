@@ -12,7 +12,7 @@ pub async fn require_operator() -> InternalResult<()> {
         .await
         .map_err(InternalError::storage)?
     else {
-        return Err(InternalError::unauthorized("user does not exist"));
+        return Err(InternalError::unauthorized("user does not exist")); // cov:ignore
     };
 
     if !user.is_operator {

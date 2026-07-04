@@ -383,6 +383,7 @@ where
 /// [`scoped_fetcher_future`] so server-fn context survives SSR polling on a worker
 /// thread detached from the owner (issue #124). Raw `Resource::new` is banned in
 /// `web` outside this definition (static guard).
+// cov:ignore-start
 pub fn server_resource<T, S, Fut>(
     source: impl Fn() -> S + Send + Sync + 'static,
     fetcher: impl Fn(S) -> Fut + Send + Sync + 'static,
@@ -391,10 +392,13 @@ where
     T: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
     S: PartialEq + Clone + Send + Sync + 'static,
     Fut: std::future::Future<Output = T> + Send + 'static,
+    // cov:ignore-stop
 {
     #[allow(clippy::disallowed_methods)] // the one sanctioned Resource::new (issue #124)
+    // cov:ignore-start
     leptos::prelude::Resource::new(source, move |s| scoped_fetcher_future(fetcher(s)))
 }
+// cov:ignore-stop
 
 /// Collects strong [`Owner`](leptos::reactive::owner::Owner) handles for every
 /// ancestor of `owner` (parent, grandparent, … up to the root). `Owner::parent()`

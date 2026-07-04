@@ -115,7 +115,9 @@ fn parse_status(s: &str) -> FeedEventStatus {
     match s {
         "pending" => FeedEventStatus::Pending,
         "claimed" => FeedEventStatus::Claimed,
+        // cov:ignore-start
         "done" => FeedEventStatus::Done,
         _ => FeedEventStatus::Failed,
+        // cov:ignore-stop
     }
 }

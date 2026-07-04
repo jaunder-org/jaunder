@@ -8,6 +8,7 @@ use leptos::prelude::*;
 #[allow(clippy::must_use_candidate)]
 #[allow(unused_variables)]
 #[component]
+// cov:ignore-start
 pub fn MediaUploadButton(
     /// Called with the `/media/upload/...` URL when the upload succeeds.
     #[prop(into)]
@@ -15,6 +16,7 @@ pub fn MediaUploadButton(
     /// Called with an error message when the upload fails.
     #[prop(into, optional)]
     on_error: Option<Callback<String>>,
+    // cov:ignore-stop
 ) -> impl IntoView {
     let uploading = RwSignal::new(false);
     let file_input = NodeRef::<leptos::html::Input>::new();

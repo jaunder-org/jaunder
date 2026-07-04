@@ -29,7 +29,7 @@ impl MailSender for FileMailSender {
             "subject": message.subject,
             "body_text": message.body_text,
         });
-        let mut line = serde_json::to_string(&record).map_err(|e| MailError::Send(Box::new(e)))?;
+        let mut line = serde_json::to_string(&record).map_err(|e| MailError::Send(Box::new(e)))?; // cov:ignore
         line.push('\n');
 
         let path = self.path.clone();
@@ -44,7 +44,7 @@ impl MailSender for FileMailSender {
             Ok::<(), MailError>(())
         })
         .await
-        .map_err(|e| MailError::Send(Box::new(e)))?
+        .map_err(|e| MailError::Send(Box::new(e)))? // cov:ignore
     }
 }
 

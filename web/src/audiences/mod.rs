@@ -54,8 +54,10 @@ fn map_audience_error(err: AudienceError) -> InternalError {
         AudienceError::DuplicateName => {
             InternalError::conflict("an audience with that name already exists")
         }
+        // cov:ignore-start
         AudienceError::NotFound => InternalError::not_found("audience"),
         AudienceError::Storage(e) => InternalError::storage(e),
+        // cov:ignore-stop
     }
 }
 
@@ -174,7 +176,7 @@ pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
                     .ok()
                     .flatten()
                     .map_or_else(|| row.subscriber_ref.clone(), |u| u.username.to_string()),
-                Err(_) => row.subscriber_ref.clone(),
+                Err(_) => row.subscriber_ref.clone(), // cov:ignore
             };
             out.push(SubscriberSummary {
                 subscription_id: row.subscription_id,

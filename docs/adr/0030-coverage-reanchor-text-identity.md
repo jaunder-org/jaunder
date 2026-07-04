@@ -1,6 +1,10 @@
 # ADR-0030: Coverage re-anchor by text identity
 
-- Status: accepted
+- Status: superseded
+- Note: superseded by the stateless coverage gate
+  ([ADR-0050](0050-stateless-coverage-gate.md)); the coverage baseline and its
+  text-identity re-anchor no longer exist. The #112 supplement below is retained
+  as history.
 
 ## Context
 

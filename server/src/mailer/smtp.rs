@@ -40,8 +40,10 @@ impl LettreMailSender {
                 .to_string()
                 .parse()
                 .map_err(|e: lettre::address::AddressError| {
+                    // cov:ignore-start
                     BuildMailerError::InvalidSender(e.to_string())
                 })?;
+        // cov:ignore-stop
 
         let builder = match config.tls_mode {
             SmtpTlsMode::Plain => {
@@ -81,9 +83,9 @@ impl MailSender for LettreMailSender {
         let from: Mailbox = message
             .from
             .as_ref()
-            .map(|a| a.to_string().parse())
+            .map(|a| a.to_string().parse()) // cov:ignore
             .transpose()
-            .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))?
+            .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))? // cov:ignore
             .unwrap_or_else(|| self.sender.clone());
 
         let mut builder = Message::builder().from(from);
@@ -92,19 +94,19 @@ impl MailSender for LettreMailSender {
             let mailbox: Mailbox = to_addr
                 .to_string()
                 .parse()
-                .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))?;
+                .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))?; // cov:ignore
             builder = builder.to(mailbox);
         }
 
         let email = builder
             .subject(&message.subject)
             .body(message.body_text.clone())
-            .map_err(|e| MailError::Send(Box::new(e)))?;
+            .map_err(|e| MailError::Send(Box::new(e)))?; // cov:ignore
 
         self.mailer
             .send(email)
             .await
-            .map_err(|e| MailError::Send(Box::new(e)))?;
+            .map_err(|e| MailError::Send(Box::new(e)))?; // cov:ignore
 
         Ok(())
     }

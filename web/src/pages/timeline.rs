@@ -28,6 +28,7 @@ pub(crate) struct TimelineState {
 }
 
 impl Default for TimelineState {
+    // cov:ignore-start
     fn default() -> Self {
         Self {
             rows: RwSignal::new(Vec::new()),
@@ -38,16 +39,19 @@ impl Default for TimelineState {
             error: RwSignal::new(None),
         }
     }
+    // cov:ignore-stop
 }
 
 impl TimelineState {
     /// Adopt the cursors + rows of `page` (a projector seed or a fresh fetch).
+    // cov:ignore-start
     pub fn adopt(&self, page: TimelinePage) {
         self.next_cursor_created_at.set(page.next_cursor_created_at);
         self.next_cursor_post_id.set(page.next_cursor_post_id);
         self.has_more.set(page.has_more);
         self.rows.set(page.posts);
     }
+    // cov:ignore-stop
 
     /// Resolve a re-fetch into the signals, clearing loading + any prior error.
     /// wasm-only: re-fetches resolve on the client, in the page's post-hydration
@@ -106,10 +110,12 @@ where
 /// placeholder) followed by the load-more button.
 #[allow(clippy::must_use_candidate)]
 #[component]
+// cov:ignore-start
 pub(crate) fn TimelineRows(
     state: TimelineState,
     on_mutate: Callback<()>,
     on_load_more: Callback<()>,
+    // cov:ignore-stop
 ) -> impl IntoView {
     let read_rows = move || read_signal!(state.rows);
     let read_has_more = move || read_signal!(state.has_more);

@@ -79,13 +79,11 @@ git config core.hooksPath .githooks
 **`pre-commit`** runs the full **`cargo xtask check`** (Fix mode) on every
 commit — formatting + clippy + the Nix `coverage` check (the SQLite +
 ephemeral-PostgreSQL suites under instrumentation) — so history stays green
-commit-by-commit. `check` auto-fixes formatting and auto-heals the coverage
-baseline / CRAP manifest; those heals are idempotent on a pure line-shift (the
-baseline compares line-independently, the CRAP manifest ignores line
-attribution), so it only changes the tree on a _real_ fix. When it does, the
-hook **fails and asks you to `git add` and re-commit** — so you consciously
-include the change rather than the hook silently folding it in. Bypass with
-`SKIP_PRE_COMMIT=1 git commit` for WIP.
+commit-by-commit. `check` auto-fixes **formatting** (fmt/leptosfmt/prettier);
+the coverage gate is stateless, so there is no baseline or CRAP manifest to
+heal. If the run reformats the tree, the hook **fails and asks you to `git add`
+and re-commit** — so you consciously include the change rather than the hook
+silently folding it in. Bypass with `SKIP_PRE_COMMIT=1 git commit` for WIP.
 
 **`pre-push`** runs `cargo xtask validate --no-e2e` (verify-only): the static
 checks plus the Nix `coverage` check, gating test failures and coverage
@@ -371,76 +369,57 @@ this by discarding the whole cluster.
 - `cargo deny check` verifies dependency policy, advisories, and licensing (run
   as one of the static checks).
 
-The gate does **line-identity** classification against the committed
-`coverage-baseline.json`, which records the accepted-uncovered gaps. A
-previously-covered line going uncovered, or a new uncovered line that is not in
-the baseline, **fails** the gate — a strict ratchet. The CRAP baseline is
-`crap-manifest.json`. Both are committed, ordinary (non-dotted) files.
+The gate is **stateless**: its verdict is a pure function of
+`(coverage report, source tree)` — there is no committed baseline, anchor, or
+manifest. Each run builds a fresh `cargo llvm-cov` report inside the Nix
+`coverage` check and classifies every executable source line. An **uncovered
+line fails the gate** unless one of two things exempts it:
 
-`cargo xtask check` runs in Fix mode: when a change only removes gaps or covers
-previously-uncovered lines, it auto-heals the baseline. `cargo xtask validate`
-is Check-only and never mutates the baseline. A line that is genuinely
-uncoverable can be excluded from the ratchet with a `// cov:ignore` comment.
+- **Structural exemption — `#[component]` bodies.** Leptos CSR UI is exercised
+  by the e2e matrix (browser WASM), not by native host tests, so component
+  function bodies are never covered host-side. The gate recognizes the
+  `#[component]` attribute with `syn` (attribute-anchored, **fail-closed** — an
+  unrecognized component form leaves its body _measured_ and can FAIL, never
+  silently exempts) and drops those body lines from the executable set. The
+  exemption is keyed on the **construct**, not on files or directories, so
+  `#[server]` and plain helper code co-located in `web/src/pages/*` stays
+  measured.
+- **`// cov:ignore` marker.** A line explicitly marked as an accepted gap.
 
-The heal is keyed on **uncovered-text identity**, not line number: a
-line-shifting change that moves an accepted-uncovered gap — the diff removes it
-at the old line and it reappears at a new line with identical source text — is
-recognised as a safe **re-anchor** (`cargo xtask check` re-anchors the baseline
-and passes; `cargo xtask validate` passes without mutating). Only a _new_
-uncovered text with no removed-gap counterpart (a genuine lowering) fails the
-gate. This is what lets benign line-shifts — including those introduced by
-concurrently-merged branches — self-heal instead of forcing manual regeneration
-(ADR-0030). Residual ambiguity: two identical-text lines in one file, where one
-is removed as an accepted gap while an unrelated identical-text line regresses
-in the same change, can be conflated as a safe move — bounded, and the
-line-identity classifier remains the primary signal.
+`cov:ignore` is the **only** manual acceptance path — there is no baseline file
+to edit, and every marker is visible and reviewable in the diff where it lives.
+It has two forms:
 
-When a coverage gate fails on a genuine lowering, run
-`cargo xtask coverage reanchor` (it consumes the report the gate just built
-under `.xtask/gcroots/coverage`). It re-anchors a safe line-shift in place, or —
-if the lowering is real — refuses, writes the would-be baseline to
-`.xtask/coverage-baseline.candidate.json`, and prints the offending
-`file:line: text`. Accepting a genuinely-approved lowering is then a deliberate,
-reviewable step: inspect with
-`git diff --no-index coverage-baseline.json .xtask/coverage-baseline.candidate.json`
-and, if approved per the coverage-baseline policy, `cp` the candidate over the
-committed baseline and commit it. There is no flag that lowers the baseline
-automatically.
+- **Line form** — `// cov:ignore` as the line's _real_ trailing comment. The
+  matcher is anchored to the actual `//` comment, so a marker appearing inside a
+  string or doc comment does **not** suppress.
+- **Block form** — `// cov:ignore-start` … `// cov:ignore-stop` around a
+  contiguous region, for lines that cannot carry a trailing comment
+  (mid-expression lines, inside multi-line/raw string literals). Nesting is not
+  allowed, and an unmatched `-start` or a stray `-stop` is a **hard error** (the
+  gate fails loudly rather than leaving an open-ended blind spot).
 
-`crap-manifest.json` retains a per-function `line` field as a
-**non-authoritative jump-to hint**: it can lag the true line until the next
-change that actually moves a CRAP score (which refreshes every entry's line
-wholesale). The CRAP regression check and the manifest's rewrite trigger both
-ignore `line`, so a pure line-shift neither hides a regression nor churns the
-committed manifest.
+**CRAP** (Change Risk Anti-Patterns — cyclomatic complexity weighted by test
+coverage) is gated by a **per-function threshold, T = 30**: any function whose
+CRAP score exceeds T fails the gate unless it carries a
+`// crap:allow: <reason>` marker somewhere within its line span. Like
+`cov:ignore`, the override is a reviewable in-source marker, not hidden config,
+and the reason is **required** (a `crap:allow` with an empty reason is not a
+valid override). A fully-covered function's CRAP equals its cyclomatic
+complexity, so legitimately complex, well-tested functions can sit near T and
+use the override. There is no `crap-manifest.json`. Progressive tightening of T
+is the remit of the _Code quality improvement_ milestone (#232+), not a
+per-commit knob.
 
-When a coverage gate fails on a **CRAP regression** (a function whose
-complexity-risk score worsened), run `cargo xtask coverage refresh-crap` (it
-consumes the same report under `.xtask/gcroots/coverage`). With no regression it
-refreshes `crap-manifest.json` in place — a no-op when nothing CRAP-relevant
-changed. With a regression it refuses, writes the would-be manifest to
-`.xtask/crap-manifest.candidate.json`, and prints each offending
-`file::fn old → new`. Accepting genuinely-stale drift is then a deliberate,
-reviewable step: inspect with
-`git diff --no-index crap-manifest.json .xtask/crap-manifest.candidate.json`
-and, if approved, `cp` the candidate over the committed manifest and commit it.
-As with the baseline, there is no flag that accepts a regression automatically —
-the symmetric recovery to `cargo xtask coverage reanchor` (#131).
-
-Both committed artifacts use a **keep-ours git merge driver** (`.gitattributes`)
-so overlapping branches do not produce conflict markers; the Fix-mode heal
-restores authoritative content on the next `cargo xtask check`. The driver
-auto-registers on any `cargo xtask` run (self-healing, like `core.hooksPath`),
-so a fresh clone wires itself up on first gate run.
-
-**Working-tree contract.** The gate reflects your _working tree_, not just
-committed state: the Nix coverage build instruments dirty tracked content
-**and** untracked, non-gitignored files. So you do **not** need to commit or
-stage first — line-shifting edits to tracked files are mapped from the baseline
-anchor to the working tree, and a new untracked `.rs` file is measured, with its
-uncovered lines reported as new uncovered code rather than as a regression. (The
-source filter that pulls untracked files into the build is a known purity rough
-edge, tracked in issue #37.)
+**Source contract.** The coverage build measures your **working tree**, bounded
+to cargo sources — there is no stage-first ritual for the normal flow. An
+untracked `.rs` file under an instrumented crate **is** measured (in the normal
+dirty dev flow, and once staged/committed), so its uncovered lines are reported
+like any other code. Untracked non-source junk (e.g. a stray `.txt`) does
+**not** affect the build, because the coverage `src` is filtered to cargo
+sources — with an explicit admission for `csr/index.html`, a compile-time
+`include_str!` — and a `drvPath` probe guards that filter against silent drift
+(#37).
 
 Coverage counts source lines with at least one execution hit across all test
 binaries, deduplicating generic-function instantiations across compile units
@@ -452,26 +431,52 @@ SQLite-backed and PostgreSQL-backed integration tests execute together (no
 instrumented coverage. Reported line coverage is the union of both backends.
 This — and thus backend parity — runs inside the Nix `coverage` check.
 
-Never lower the baseline without user approval; approved baseline changes must
-be committed in the same commit as the file whose coverage changed. Coverage
-improvements are always allowed.
+`cargo xtask check` still runs in Fix mode and auto-formats
+(fmt/leptosfmt/prettier); if a run reformats the tree, the pre-commit hook
+**fails and asks you to restage** rather than silently folding the fix into your
+commit. But Fix mode no longer heals any coverage state — there is none to heal.
+Accepting a gap (`cov:ignore`) or waiving a CRAP score (`crap:allow`) is a
+manual source edit that lands as a reviewable diff; `cargo xtask validate` is
+verify-only.
 
-Some areas have inherent host-side coverage gaps and should not be force-fitted
-with artificial tests:
+**Protection tradeoffs (stated honestly — not "stricter").** The stateless gate
+dissolves a class of fragility — the verdict is identical at any checkout depth,
+with no text-identity guessing after a rebase — but on three axes it is
+**equivalent-or-weaker** than the old baseline ratchet, by deliberate design:
 
-- **WASM entry point** (`hydrate/src/lib.rs`, 0%): runs only in the browser WASM
-  context.
-- **Leptos page components** (`web/src/pages/*.rs`, varied): `#[component]`
-  functions render view trees; correctness is validated by e2e tests in the Nix
-  VM.
-- **A few PostgreSQL storage error branches**
-  (`storage/src/postgres/feed_events.rs` ~91%,
-  `backup.rs`/`bootstrap.rs`/`mod.rs` ~95–99%): the host-PostgreSQL coverage
-  pass now drives the common paths, so most of `storage/src/postgres/*`
-  (`media.rs`, `sessions.rs`, `posts.rs`) is ~100%; only some error branches
-  remain uncovered and should not be force-fitted with artificial tests.
-- **Asset serving** (`server/src/assets.rs`, 0%): compile-time embedded assets
-  are not practical to unit test.
+1. **Component bodies are weaker.** A _new_ uncovered line inside a component
+   body is blanket-exempt and passes silently, where the ratchet would have
+   forced conscious sign-off. New untested component logic becomes invisible. An
+   invariant tripwire bounds this to _uncovered_ component code: if any
+   _covered_ line ever falls inside a `#[component]` span (e.g. someone adds
+   native SSR render tests), the gate fails loudly, forcing a deliberate
+   decision — but it does not re-introduce sign-off.
+2. **CRAP is weaker below T.** A per-function threshold is blind to a function
+   that worsens but stays under T (e.g. 5 → 29); the old manifest
+   regression-check caught that. This argues for keeping T tight (the _Code
+   quality improvement_ grind-down).
+3. **`cov:ignore` is permanent.** Unlike the ratchet — which tracked
+   covered-state and re-flagged a line that went covered → uncovered — a
+   `cov:ignore`'d line that later becomes covered and then regresses is never
+   re-flagged. The migrated markers bake in permanent (but in-source, greppable,
+   reviewable) blind spots.
+
+These are accepted: component UI is covered by e2e, all non-exempt code still
+fails on any uncovered line, and the deleted machinery's fragility outweighed
+the marginal ratchet protection on already-accepted lines. See
+[the stateless-coverage-gate ADR](docs/adr/0050-stateless-coverage-gate.md).
+
+Some areas are inherently uncovered host-side and are accepted rather than
+force-fitted with artificial tests:
+
+- **Leptos page components** (`web/src/pages/*.rs`): `#[component]` bodies
+  render view trees, validated by the e2e matrix — **structurally exempt** (no
+  marker needed).
+- **WASM entry point** (`hydrate/src/lib.rs`): runs only in the browser WASM
+  context — `cov:ignore`'d.
+- **A few PostgreSQL storage error branches** (`storage/src/postgres/*`) and
+  **asset serving** (`server/src/assets.rs`, compile-time embedded assets):
+  unreachable or impractical to exercise host-side — `cov:ignore`'d.
 
 ### Nix VM checks
 

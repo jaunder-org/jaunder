@@ -53,7 +53,9 @@ use leptos::prelude::*;
 /// projector used — coincident, flash-free. On the static SPA shell (no blob,
 /// no `#app`) the seed is `None` and this is an ordinary `mount_to_body`.
 #[cfg(feature = "csr")]
+// cov:ignore-start
 pub fn mount_csr() {
+    // cov:ignore-stop
     // Browser-only: the CSR client only ever runs in wasm, so the DOM adoption +
     // mount live behind `target_arch = "wasm32"`. On the host build (coverage /
     // tests) this is a no-op — which is also why it stays out of the coverage
@@ -75,7 +77,7 @@ pub fn mount_csr() {
             view! { <App /> }
         });
     }
-}
+} // cov:ignore
 
 /// Read and deserialize the projector's `#jaunder-seed` JSON blob, if present.
 #[cfg(all(feature = "csr", target_arch = "wasm32"))]

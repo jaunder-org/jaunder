@@ -256,7 +256,7 @@ pub async fn fetch_posts_by_tag(
                 chrono::Utc::now(),
             )
             .await,
-    )?;
+    )?; // cov:ignore
     Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
 }
 
@@ -302,7 +302,7 @@ pub async fn fetch_user_posts_by_tag(
                 chrono::Utc::now(),
             )
             .await,
-    )?;
+    )?; // cov:ignore
     Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
 }
 

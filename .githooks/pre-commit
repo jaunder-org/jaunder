@@ -4,15 +4,9 @@
 # commit-by-commit — defects are caught at the point of change, when they're
 # cheapest, before a buried bad commit forces history-rewriting later.
 #
-# `check` auto-fixes formatting and auto-heals the coverage baseline / CRAP
-# manifest. Those heals are now idempotent on a pure line-shift — the baseline
-# compares line-independently (#113) and the CRAP manifest ignores line
-# attribution (#7), and benign shifts self-heal via re-anchor (#86) — so `check`
-# only changes the tree when there is a REAL fix to apply: a reformat, or a
-# genuine coverage/CRAP change. When it does, we fail-and-restage: abort so the
-# author consciously `git add`s the change and re-commits, rather than us
-# silently folding it into their commit. (This replaces the earlier two-pass
-# hack that ran `check --no-test` + `validate` to avoid manifest churn.)
+# `check` auto-fixes formatting (fmt/leptosfmt/prettier). When it changes the
+# tree we fail-and-restage: abort so the author consciously `git add`s the change
+# and re-commits, rather than us silently folding it into their commit.
 #
 # SKIP_PRE_COMMIT=1 bypasses for WIP commits.
 set -euo pipefail
@@ -22,13 +16,13 @@ if [ "${SKIP_PRE_COMMIT:-0}" = "1" ]; then
     exit 0
 fi
 
-echo "--- pre-commit: cargo xtask check (full gate + auto-heal) ---"
+echo "--- pre-commit: cargo xtask check (full gate) ---"
 pre=$(git status --porcelain)
 cargo xtask check
 post=$(git status --porcelain)
 
 if [ "$pre" != "$post" ]; then
-    echo "--- pre-commit: check applied fixes (formatting and/or coverage artifacts) — review, git add, and re-commit ---" >&2
+    echo "--- pre-commit: check applied fixes (formatting) — review, git add, and re-commit ---" >&2
     exit 1
 fi
 

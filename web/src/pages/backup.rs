@@ -44,6 +44,7 @@ pub fn BackupSettingsPage() -> impl IntoView {
     }
 }
 
+// cov:ignore-start
 fn backup_settings_form(
     settings: BackupConfig,
     update_action: ServerAction<UpdateBackupSettings>,
@@ -51,7 +52,9 @@ fn backup_settings_form(
     let mode_str = match settings.mode {
         BackupMode::Directory => "directory",
         BackupMode::Archive => "archive",
+        // cov:ignore-stop
     };
+    // cov:ignore-start
     view! {
         <ActionForm action=update_action attr:class="j-card j-backup-form">
             <div class="j-card-head">
@@ -113,3 +116,4 @@ fn backup_settings_form(
         </ActionForm>
     }
 }
+// cov:ignore-stop
