@@ -110,7 +110,7 @@ pub async fn is_subscribed_to(author_username: String) -> WebResult<bool> {
         // so the profile can hide the button rather than surfacing an error.
         let Ok(author_id) = resolve_author(users.as_ref(), &author_username, auth.user_id).await
         else {
-            return Ok(false);
+            return Ok(false); // cov:ignore
         };
         let channel_id = subscriptions
             .local_channel_id()

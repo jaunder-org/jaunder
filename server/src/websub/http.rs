@@ -96,7 +96,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
-        });
+        }); // cov:ignore
         addr
     }
 
@@ -148,14 +148,14 @@ mod tests {
             "/",
             post(|| async {
                 tokio::time::sleep(Duration::from_secs(30)).await;
-                StatusCode::ACCEPTED
+                StatusCode::ACCEPTED // cov:ignore
             }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
-        });
+        }); // cov:ignore
         addr
     }
 

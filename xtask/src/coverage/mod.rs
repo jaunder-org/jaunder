@@ -376,6 +376,25 @@ fn shadow_gate(current: &[FileCoverage], repo_root: &str) {
         verdict.failures.len(),
         verdict.guard_violations.len(),
     );
+    // Dump the FULL failures list (one `path:line` per line, sorted by path then
+    // line) to a side file — aligns with the eventual real gate's reporting and
+    // gives the migration an authoritative, machine-checkable worklist (#231
+    // Task 5). Best-effort: a write error must not perturb the (shadow) run.
+    {
+        let mut lines: Vec<(&str, u32)> = verdict
+            .failures
+            .iter()
+            .map(|f| (f.file.as_str(), f.line))
+            .collect();
+        lines.sort();
+        let mut body = String::new();
+        for (file, line) in &lines {
+            use std::fmt::Write as _;
+            let _ = writeln!(body, "{file}:{line}");
+        }
+        let _ = std::fs::create_dir_all(".xtask");
+        let _ = std::fs::write(".xtask/coverage-shadow-failures.txt", body);
+    }
     const MAX_GUARD: usize = 20;
     for g in verdict.guard_violations.iter().take(MAX_GUARD) {
         eprintln!("SHADOW-GATE: guard {}:{}:{}", g.file, g.line, g.text.trim());

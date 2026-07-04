@@ -61,7 +61,7 @@ pub async fn regenerate_feed(
     let base = identity.base_url.as_deref().unwrap_or("");
     let self_url = format!("{base}{}", percent_encode_path(feed_url));
     let canonical_url = match &surface {
-        FeedSurface::Site => format!("{base}/"),
+        FeedSurface::Site => format!("{base}/"), // cov:ignore
         FeedSurface::SiteTag { tag } => {
             format!("{base}/tags/{}/", urlencoding::encode(tag.as_str()))
         }

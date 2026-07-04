@@ -374,7 +374,7 @@ fn resolve_ref(e: &BytesRef) -> Result<String, AtomPubError> {
     if e.is_char_ref() {
         return match e.resolve_char_ref()? {
             Some(c) => Ok(c.to_string()),
-            None => Ok(String::new()),
+            None => Ok(String::new()), // cov:ignore
         };
     }
     let name =

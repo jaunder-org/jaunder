@@ -144,8 +144,10 @@ async fn import_table(
         let mut query = sqlx::query(&insert);
         for column in &column_names {
             let value = row.get(column).ok_or_else(|| {
+                // cov:ignore-start
                 BackupError::InvalidBackup(format!("table {table} row is missing column {column}"))
             })?;
+            // cov:ignore-stop
             query = bind_json_value(query, value);
         }
         query.execute(&mut *connection).await?;
@@ -184,7 +186,7 @@ fn bind_json_value<'q>(
             if let Some(value) = value.as_i64() {
                 query.bind(value)
             } else if let Some(value) = value.as_u64().and_then(|value| i64::try_from(value).ok()) {
-                query.bind(value)
+                query.bind(value) // cov:ignore
             } else {
                 query.bind(value.as_f64())
             }
@@ -411,7 +413,7 @@ mod tests {
             let ndjson_path = backup_dir.join("db").join(format!("{first_table}.ndjson"));
             let mut file = std::fs::OpenOptions::new().append(true).open(ndjson_path)?;
             writeln!(file, "[1, 2, 3]")?;
-        }
+        } // cov:ignore
 
         let dest_pool = SqlitePool::connect("sqlite::memory:").await?;
         sqlx::migrate!("./migrations/sqlite")

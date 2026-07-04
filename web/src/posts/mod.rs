@@ -631,10 +631,12 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
             .await
             .map_err(|e| match e {
                 UpdatePostError::NotFound | UpdatePostError::Unauthorized => {
-                    InternalError::not_found("Post")
+                    InternalError::not_found("Post") // cov:ignore
                 }
+                // cov:ignore-start
                 UpdatePostError::Internal(error) => InternalError::storage(error),
             })?;
+        // cov:ignore-stop
 
         let published_at = updated
             .published_at

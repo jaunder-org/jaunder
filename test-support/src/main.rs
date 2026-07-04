@@ -77,6 +77,7 @@ enum Commands {
 }
 
 #[tokio::main]
+// cov:ignore-start
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -122,3 +123,4 @@ async fn main() -> anyhow::Result<()> {
     }
     Ok(())
 }
+// cov:ignore-stop

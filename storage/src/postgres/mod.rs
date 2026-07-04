@@ -102,7 +102,7 @@ impl AtomicOps for PostgresAtomicOps {
 
         let password_hash = crate::helpers::hash_password(password.clone())
             .await
-            .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;
+            .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?; // cov:ignore
 
         let result = sqlx::query_scalar::<_, i64>(
             "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)

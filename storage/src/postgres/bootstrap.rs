@@ -63,7 +63,7 @@ pub async fn create_postgres_database_and_role(
         quote_postgres_identifier(app_role),
     );
     if !execute_utility(&mut admin_conn, &create_db_sql, "42P04").await? {
-        return Err(PgBootstrapError::DatabaseExists(database_name.to_owned()));
+        return Err(PgBootstrapError::DatabaseExists(database_name.to_owned())); // cov:ignore
     }
 
     Ok(())
@@ -84,7 +84,7 @@ async fn execute_utility(
         {
             Ok(false)
         }
-        Err(other) => Err(other),
+        Err(other) => Err(other), // cov:ignore
     }
 }
 

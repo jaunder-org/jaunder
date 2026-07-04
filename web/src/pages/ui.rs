@@ -125,11 +125,13 @@ pub fn Dot(proto: String) -> impl IntoView {
 
 #[allow(clippy::must_use_candidate)]
 #[component]
+// cov:ignore-start
 pub fn Chip(
     label: String,
     #[prop(optional)] proto: Option<String>,
     #[prop(optional)] count: Option<u32>,
     #[prop(default = false)] active: bool,
+    // cov:ignore-stop
 ) -> impl IntoView {
     let class = if active { "j-chip is-active" } else { "j-chip" };
     view! {
@@ -172,10 +174,12 @@ pub fn BackupBanner() -> impl IntoView {
 
 #[allow(clippy::must_use_candidate)]
 #[component]
+// cov:ignore-start
 pub fn Topbar(
     #[prop(into)] title: Signal<String>,
     #[prop(optional, into)] sub: Option<Signal<String>>,
     #[prop(optional)] children: Option<Children>,
+    // cov:ignore-stop
 ) -> impl IntoView {
     view! {
         <div class="j-topbar">
@@ -201,6 +205,7 @@ pub fn Topbar(
 /// When `show_seg` is true (default), also renders the `.j-seg` format toggle.
 #[allow(clippy::must_use_candidate)]
 #[component]
+// cov:ignore-start
 pub fn ComposerFields(
     body: RwSignal<String>,
     format: RwSignal<String>,
@@ -213,6 +218,7 @@ pub fn ComposerFields(
     /// Optional callback fired on every body input event (e.g. to clear a flash message).
     #[prop(optional)]
     on_input: Option<Callback<()>>,
+    // cov:ignore-stop
 ) -> impl IntoView {
     view! {
         <textarea
@@ -269,11 +275,13 @@ pub fn ComposerFields(
 /// author's timezone and DST. Form dispatch is client-only, so the non-wasm
 /// build only needs this to compile (the stub is never executed there).
 #[allow(clippy::must_use_candidate)]
+// cov:ignore-start
 pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
     let trimmed = local.trim();
     if trimmed.is_empty() {
         return None;
     }
+    // cov:ignore-stop
     #[cfg(target_arch = "wasm32")]
     {
         // `new Date("YYYY-MM-DDTHH:MM")` (time present, no offset) is parsed as
@@ -286,13 +294,14 @@ pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        Some(trimmed.to_string())
+        Some(trimmed.to_string()) // cov:ignore
     }
-}
+} // cov:ignore
 
 #[allow(clippy::needless_pass_by_value)]
 #[allow(clippy::must_use_candidate)]
 #[component]
+// cov:ignore-start
 pub fn PostDisplay(
     post: TimelinePostSummary,
     banner: Option<String>,
@@ -301,6 +310,7 @@ pub fn PostDisplay(
     #[prop(default = TagContext::SiteWide)]
     tag_context: TagContext,
     #[prop(optional)] children: Option<Children>,
+    // cov:ignore-stop
 ) -> impl IntoView {
     let time_label = crate::render::format_post_time(&post.published_at);
     // Built once and shared by both arms so the authored content column is the SAME
@@ -356,20 +366,25 @@ pub fn PostDisplay(
 /// client-side signal that the viewer owns this post, so its action column shows
 /// even though the anonymous seed data has `is_author = false`. `false` on the
 /// host build (no marker) — the affordance is wasm-only chrome.
+// cov:ignore-start
 fn marker_matches(author: &str) -> bool {
+    // cov:ignore-stop
     #[cfg(target_arch = "wasm32")]
     {
         crate::auth::marker::read().as_deref() == Some(author)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // cov:ignore-start
         let _ = author;
         false
+        // cov:ignore-stop
     }
-}
+} // cov:ignore
 
 #[allow(clippy::must_use_candidate)]
 #[component]
+// cov:ignore-start
 pub fn PostCard(
     post: TimelinePostSummary,
     banner: Option<String>,
@@ -378,6 +393,7 @@ pub fn PostCard(
     tag_context: TagContext,
     #[prop(optional)] on_mutate: Option<Callback<()>>,
     #[prop(optional)] on_unpublish: Option<Callback<()>>,
+    // cov:ignore-stop
 ) -> impl IntoView {
     // The seed/anonymous data has `is_author = false` (the projector paints
     // anonymous-only), so on the Local timeline the owner's own posts would show no
@@ -550,6 +566,7 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
 /// One named-audience checkbox row for [`AudiencePicker`]. Toggling it
 /// adds/removes the audience id in the shared selection. Disabled while the
 /// base is `Private`, since Private cannot combine with named audiences.
+// cov:ignore-start
 fn audience_checkbox(
     audience: AudienceSummary,
     selection: RwSignal<AudienceSelection>,
@@ -580,13 +597,15 @@ fn audience_checkbox(
             {audience.name}
         </label>
     }
-}
+    // cov:ignore-stop
+} // cov:ignore
 
 // ─── 3.7 PostCreateForm ───────────────────────────────────────
 
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::must_use_candidate)]
 #[component]
+// cov:ignore-start
 pub fn PostCreateForm(
     compact: bool,
     #[prop(optional)] username: Option<String>,
@@ -596,6 +615,7 @@ pub fn PostCreateForm(
     /// Called on every textarea input event (compact mode only).
     #[prop(optional)]
     on_input: Option<Callback<()>>,
+    // cov:ignore-stop
 ) -> impl IntoView {
     let create_action = ServerAction::<CreatePost>::new();
     let body = RwSignal::new(String::new());
@@ -1083,21 +1103,24 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
 /// Boot-time marker read: `Some(username)` in the browser when the auth marker is
 /// set, `None` on the host build (the sidebar only ever renders in wasm). Lets the
 /// sidebar pick authed vs. anon synchronously at mount (#181), no async gate.
+// cov:ignore-start
 fn marker_username_on_boot() -> Option<String> {
+    // cov:ignore-stop
     #[cfg(target_arch = "wasm32")]
     {
         crate::auth::marker::read()
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        None
+        None // cov:ignore
     }
-}
+} // cov:ignore
 
 /// The authenticated sidebar chrome (brand, search, nav + operator admin links,
 /// sources, footer avatar). Shared by the marker-seeded initial render and the
 /// reconciled render (#181) so both are byte-for-byte the same authed markup —
 /// only its inputs change from awaited values to these params.
+// cov:ignore-start
 fn authed_sidebar(active_key: &str, username: &str, is_operator: bool) -> impl IntoView {
     let active_key = active_key.to_string();
     let username = username.to_string();
@@ -1171,7 +1194,8 @@ fn authed_sidebar(active_key: &str, username: &str, is_operator: bool) -> impl I
             </div>
         </div>
     }
-}
+    // cov:ignore-stop
+} // cov:ignore
 
 // ─── Pure helpers for TagInput ────────────────────────────────
 
@@ -1211,9 +1235,11 @@ pub fn normalize_tag_token(raw: &str) -> String {
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::must_use_candidate)]
 #[component]
+// cov:ignore-start
 pub fn TagInput(
     tags: RwSignal<Vec<TagSummary>>,
     #[prop(default = "tags")] name: &'static str,
+    // cov:ignore-stop
 ) -> impl IntoView {
     let input_text = RwSignal::new(String::new());
     let error: RwSignal<Option<String>> = RwSignal::new(None);

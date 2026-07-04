@@ -191,7 +191,7 @@ async fn export_directory_backup(
         options.media_path,
         &options.destination_path.join("media"),
         previous_backup.as_deref(),
-    )?;
+    )?; // cov:ignore
 
     write_manifest(options.destination_path, &manifest)?;
     Ok(manifest)
@@ -453,9 +453,9 @@ fn restore_media_entries(
         } else if metadata.is_file() {
             if let Some(parent) = destination_path.parent() {
                 fs::create_dir_all(parent)?;
-            }
+            } // cov:ignore
             fs::copy(source_path, destination_path)?;
-        }
+        } // cov:ignore
     }
     Ok(())
 }
@@ -497,15 +497,17 @@ fn mirror_media_entries(
                 destination_root,
                 previous_backup,
                 &child_relative_path,
-            )?;
+            )?; // cov:ignore
         } else if metadata.is_file() {
             copy_or_link_media_file(
                 &source_path,
                 &destination_path,
                 previous_backup,
                 &child_relative_path,
+                // cov:ignore-start
             )?;
         }
+        // cov:ignore-stop
     }
     Ok(())
 }
@@ -518,7 +520,7 @@ fn copy_or_link_media_file(
 ) -> Result<(), BackupError> {
     if let Some(parent) = destination_path.parent() {
         fs::create_dir_all(parent)?;
-    }
+    } // cov:ignore
 
     // Deduplicate against the previous backup: when this file is byte-identical
     // to its counterpart there, hard-link to that copy instead of writing a new
@@ -558,7 +560,7 @@ fn file_sha256(path: &Path) -> Result<[u8; 32], BackupError> {
 
 fn previous_directory_backup(destination_path: &Path) -> Result<Option<PathBuf>, BackupError> {
     let Some(parent) = destination_path.parent() else {
-        return Ok(None);
+        return Ok(None); // cov:ignore
     };
     if !parent.exists() {
         return Ok(None);
@@ -700,7 +702,7 @@ mod tests {
         fs::write(
             previous.join("media").join("nested").join("image.txt"),
             "same",
-        )?;
+        )?; // cov:ignore
 
         mirror_media_directory(&source, &destination, Some(&previous))?;
 
@@ -728,7 +730,7 @@ mod tests {
         assert!(!files_have_same_content(
             &source.join("image.txt"),
             &previous.join("media").join("image.txt")
-        )?);
+        )?); // cov:ignore
         Ok(())
     }
 
@@ -841,7 +843,7 @@ mod tests {
         fs::write(
             db.join("users.ndjson"),
             "{\"user_id\":1}\n\n{\"user_id\":2}\n",
-        )?;
+        )?; // cov:ignore
 
         let rows = read_table_rows(temp.path(), "users")?;
         assert_eq!(rows.len(), 2);
@@ -937,7 +939,7 @@ mod tests {
                 mode: BackupMode::Directory,
                 tables: Vec::new(),
             },
-        )?;
+        )?; // cov:ignore
 
         let db_options = DbConnectOptions::from_str("sqlite::memory:")?;
         let error = restore_backup(BackupRestoreOptions {

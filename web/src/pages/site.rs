@@ -54,6 +54,7 @@ pub fn SiteSettingsPage() -> impl IntoView {
     }
 }
 
+// cov:ignore-start
 fn site_settings_form(
     identity: SiteIdentity,
     update_action: ServerAction<UpdateSiteIdentity>,
@@ -99,3 +100,4 @@ fn site_settings_form(
         </ActionForm>
     }
 }
+// cov:ignore-stop

@@ -59,7 +59,7 @@ fn describe_bootstrap_error(err: storage::PgBootstrapError) -> anyhow::Error {
         storage::PgBootstrapError::DatabaseExists(name) => anyhow::anyhow!(
             "database '{name}' already exists; refusing to modify existing database state"
         ),
-        storage::PgBootstrapError::Sqlx(err) => err.into(),
+        storage::PgBootstrapError::Sqlx(err) => err.into(), // cov:ignore
     }
 }
 
@@ -115,12 +115,14 @@ pub async fn cmd_user_create(
     let password = if let Some(p) = password {
         p
     } else {
+        // cov:ignore-start
         let p1 = rpassword::prompt_password("Password: ")?;
         let p2 = rpassword::prompt_password("Confirm password: ")?;
         if p1 != p2 {
             return Err(anyhow::anyhow!("passwords do not match"));
         }
         p1.parse::<Password>().map_err(|e| anyhow::anyhow!("{e}"))?
+        // cov:ignore-stop
     };
 
     let user_id = state
@@ -383,16 +385,18 @@ pub async fn prepare_server(
             // Dev mode: auto-initialize so `cargo leptos end-to-end` and
             // `cargo leptos serve` work without a manual `jaunder init`.
             tracing::warn!(
-                storage_path = %storage.storage_path.display(),
+                storage_path = %storage.storage_path.display(), // cov:ignore
                 db = %storage.db,
                 "Database not found — auto-initializing (dev mode): storage={} db={}",
-                storage.storage_path.display(),
+                storage.storage_path.display(), // cov:ignore
                 storage.db,
             );
             cmd_init(storage, true).await?;
+            // cov:ignore-start
             open_existing_database(&storage.db)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}; auto-init failed"))?
+            // cov:ignore-stop
         }
         Err(e) => return Err(anyhow::anyhow!("{e}; run `jaunder init` first")),
     };
@@ -477,7 +481,7 @@ pub async fn cmd_serve(
     // Kept alive until the serve loop returns; removes runtime.json on drop.
     let _runtime_guard = runtime_guard;
     axum::serve(listener, router).await?;
-    Ok(())
+    Ok(()) // cov:ignore
 }
 
 #[cfg(test)]

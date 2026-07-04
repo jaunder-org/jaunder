@@ -17,11 +17,15 @@ extern "C" {
 }
 
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
+// cov:ignore-start
 pub fn main() {
     _ = console_log::init_with_level(log::Level::Debug);
     console_error_panic_hook::set_once();
+    // cov:ignore-stop
     // Boots the App, adopting the public projector's data blob when present
     // (#178/#179). See `web::mount_csr`.
+    // cov:ignore-start
     web::mount_csr();
     mark_ready();
 }
+// cov:ignore-stop

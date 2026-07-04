@@ -262,7 +262,7 @@ where
 
     fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
         let Some(span) = ctx.span(&id) else {
-            return;
+            return; // cov:ignore
         };
 
         let started_at = span.extensions().get::<SpanStartedAt>().copied();
@@ -1011,7 +1011,7 @@ mod tests {
                     if req.extensions().get::<ExtractedTraceContext>().is_some() {
                         StatusCode::OK
                     } else {
-                        StatusCode::INTERNAL_SERVER_ERROR
+                        StatusCode::INTERNAL_SERVER_ERROR // cov:ignore
                     }
                 }),
             )

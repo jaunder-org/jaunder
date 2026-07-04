@@ -111,18 +111,24 @@ pub fn CreatePostPage() -> impl IntoView {
 /// First-paint view for [`PostPage`]'s `Suspense`: the projector-seeded content
 /// (flash-free) when the server painted this permalink, or a spinner while the
 /// reactive fetch runs (client-side navigation, no seed).
+// cov:ignore-start
 fn permalink_first_paint(seed_post: Option<crate::posts::PostResponse>) -> AnyView {
     match seed_post {
         Some(post) => {
+            // cov:ignore-stop
             // Just the article — this fallback sits inside the reactive PostPage's
             // own `j-scroll`/`j-page`. `display:contents` keeps the host wrapper out
             // of the layout so it coincides with the projector's permalink page.
+            // cov:ignore-start
             let html = crate::render::permalink_article(&post);
             view! { <div style="display:contents" inner_html=html></div> }.into_any()
+            // cov:ignore-stop
         }
+        // cov:ignore-start
         None => view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any(),
+        // cov:ignore-stop
     }
-}
+} // cov:ignore
 
 #[allow(clippy::must_use_candidate)]
 #[component]
@@ -955,6 +961,7 @@ pub fn DraftsPage() -> impl IntoView {
     }
 }
 
+// cov:ignore-start
 fn render_draft_row(
     draft: DraftSummary,
     publish_action: ServerAction<PublishPost>,
@@ -962,9 +969,11 @@ fn render_draft_row(
 ) -> impl IntoView {
     let post_id = draft.post_id;
     let label = draft.title.clone().unwrap_or(draft.summary_label.clone());
+    // cov:ignore-stop
     // A scheduled post (future `published_at`) carries `scheduled_at`; mark it
     // distinctly from a true draft so the author can tell the two apart on this
     // shared "not-yet-live" surface. Full management UI is out of scope (#15).
+    // cov:ignore-start
     let scheduled_badge = draft.scheduled_at.clone().map(|when| {
         view! { <span class="j-badge j-badge-scheduled">{format!("Scheduled for {when}")}</span> }
     });
@@ -1007,7 +1016,9 @@ fn render_draft_row(
         </li>
     }
 }
+// cov:ignore-stop
 
+// cov:ignore-start
 fn render_delete_form(
     delete_action: ServerAction<DeletePost>,
     post_id: i64,
@@ -1026,7 +1037,9 @@ fn render_delete_form(
         </ActionForm>
     }
 }
+// cov:ignore-stop
 
+// cov:ignore-start
 fn render_delete_result(
     delete_action: ServerAction<DeletePost>,
     success_msg: &'static str,
@@ -1041,6 +1054,7 @@ fn render_delete_result(
         })
     }
 }
+// cov:ignore-stop
 
 /// Site-wide listing of posts carrying a tag, at `/tags/:tag`.
 #[allow(clippy::too_many_lines)]

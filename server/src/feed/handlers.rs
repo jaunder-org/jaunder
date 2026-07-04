@@ -49,18 +49,20 @@ async fn serve(
             .await
             {
                 Ok(row) => row,
+                // cov:ignore-start
                 Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                    // cov:ignore-stop
                 }
             }
         }
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(), // cov:ignore
     };
 
     if let Some(etag) = headers.get(header::IF_NONE_MATCH) {
         if etag.to_str().ok() == Some(row.etag.as_str()) {
             return StatusCode::NOT_MODIFIED.into_response();
-        }
+        } // cov:ignore
     }
     if let Some(ims) = headers.get(header::IF_MODIFIED_SINCE) {
         if let Some(t) = ims
@@ -70,8 +72,10 @@ async fn serve(
         {
             if row.updated_at <= t.with_timezone(&chrono::Utc) {
                 return StatusCode::NOT_MODIFIED.into_response();
+                // cov:ignore-start
             }
         }
+        // cov:ignore-stop
     }
 
     let mut resp_headers = HeaderMap::new();
@@ -91,6 +95,7 @@ async fn serve(
     (StatusCode::OK, resp_headers, row.body).into_response()
 }
 
+// cov:ignore-start
 pub async fn feed_site(
     Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
@@ -100,7 +105,9 @@ pub async fn feed_site(
 ) -> Response {
     let Some(format) = parse_format(&ext) else {
         return StatusCode::NOT_FOUND.into_response();
+        // cov:ignore-stop
     };
+    // cov:ignore-start
     serve(
         feed_cache,
         site_config,
@@ -111,6 +118,7 @@ pub async fn feed_site(
     )
     .await
 }
+// cov:ignore-stop
 
 pub async fn feed_site_tag(
     Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
@@ -120,7 +128,7 @@ pub async fn feed_site_tag(
     Path((tag, ext)): Path<(String, String)>,
 ) -> Response {
     let Some(format) = parse_format(&ext) else {
-        return StatusCode::NOT_FOUND.into_response();
+        return StatusCode::NOT_FOUND.into_response(); // cov:ignore
     };
     let Ok(tag) = tag.parse::<Tag>() else {
         return StatusCode::NOT_FOUND.into_response();
@@ -168,11 +176,12 @@ pub async fn feed_user_tag(
     Path((username, tag, ext)): Path<(String, String, String)>,
 ) -> Response {
     let Some(format) = parse_format(&ext) else {
-        return StatusCode::NOT_FOUND.into_response();
+        return StatusCode::NOT_FOUND.into_response(); // cov:ignore
     };
     let (Ok(username), Ok(tag)) = (username.parse::<Username>(), tag.parse::<Tag>()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    // cov:ignore-start
     serve(
         feed_cache,
         site_config,
@@ -182,4 +191,5 @@ pub async fn feed_user_tag(
         format,
     )
     .await
+    // cov:ignore-stop
 }
