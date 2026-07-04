@@ -601,8 +601,8 @@ nix build .#checks.x86_64-linux.postgres-integration
   functions or pure transformation functions.
 - API methods are automatically prefixed with `/api`.
 - Define `#[server]` functions in the relevant `web/src/*.rs` module, such as
-  `web/src/auth.rs`. Use `#[cfg(feature = "ssr")]` for server-only imports and
-  logic in those files.
+  `web/src/auth.rs`. Use `#[cfg(feature = "server")]` for server-only imports
+  and logic in those files.
 - Convert storage errors to `leptos::prelude::ServerFnError` using
   `.map_err(|e| ServerFnError::new(e.to_string()))`.
 - Use `require_auth().await?` at the start of any server function that requires
