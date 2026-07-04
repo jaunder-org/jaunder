@@ -17,6 +17,7 @@ pub mod classify;
 pub mod crap;
 pub mod diffmap;
 pub mod exempt;
+pub mod gate;
 pub mod reanchor;
 pub mod report;
 
@@ -284,6 +285,12 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
     let repo_root = git_repo_root()?;
     let current = report::parse_text_report(&report, &repo_root)?;
 
+    // SHADOW: compute the stateless gate verdict alongside the baseline
+    // classifier (#231 Task 3). Observation only — it never touches `gate_fails`
+    // or the authoritative verdict below; the swap happens in a later task. The
+    // guard-violation count is the critical signal (Task 4 go/no-go).
+    shadow_gate(&current, &repo_root);
+
     let (baseline, verdict, safety) = classify_against_anchor(&current)?;
 
     let old_crap_manifest = std::fs::read_to_string(crap::CRAP_MANIFEST_PATH).unwrap_or_default();
@@ -346,6 +353,39 @@ fn run_inner(out_dir: &str, mode: Mode) -> Result<(StepResult, Option<CoverageRe
     };
 
     Ok((step, Some(report)))
+}
+
+/// SHADOW-only: run the stateless gate ([`gate::evaluate`]) over the current
+/// report and print a clearly-labelled verdict to stderr. Observation only — it
+/// does NOT influence the authoritative pass/fail. `exempt_of` reads each
+/// repo-relative source file from `repo_root` and returns its `#[component]`
+/// exempt lines, or an EMPTY set on any read/parse error (fail-closed: unknown →
+/// measured). Guard violations are printed in full detail (capped) because they
+/// are the go/no-go signal for making the gate authoritative (#231 Task 4).
+fn shadow_gate(current: &[FileCoverage], repo_root: &str) {
+    let exempt_of = |path: &str| -> std::collections::BTreeSet<u32> {
+        let full = std::path::Path::new(repo_root).join(path);
+        match std::fs::read_to_string(&full) {
+            Ok(src) => exempt::exempt_lines(&src).unwrap_or_default(),
+            Err(_) => std::collections::BTreeSet::new(),
+        }
+    };
+    let verdict = gate::evaluate(current, exempt_of);
+    eprintln!(
+        "SHADOW-GATE: failures={} guard_violations={}",
+        verdict.failures.len(),
+        verdict.guard_violations.len(),
+    );
+    const MAX_GUARD: usize = 20;
+    for g in verdict.guard_violations.iter().take(MAX_GUARD) {
+        eprintln!("SHADOW-GATE: guard {}:{}:{}", g.file, g.line, g.text.trim());
+    }
+    if verdict.guard_violations.len() > MAX_GUARD {
+        eprintln!(
+            "SHADOW-GATE: … and {} more guard violation(s)",
+            verdict.guard_violations.len() - MAX_GUARD,
+        );
+    }
 }
 
 fn count_lines(buckets: &[FileLines]) -> usize {
