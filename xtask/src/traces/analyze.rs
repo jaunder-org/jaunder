@@ -1124,6 +1124,28 @@ mod tests {
     }
 
     #[test]
+    fn analyze_project_filter_over_fixture() {
+        // §8: exercise a `--project` run — the `Project filter:` header and the
+        // e2e-only filter — end-to-end over the committed fixture.
+        let filters = Filters {
+            trace: None,
+            project: Some("firefox".into()),
+        };
+        let spans = parse_spans(FIXTURE, &filters, "sample").unwrap();
+        let a = analyze_spans(spans, filters.project.clone());
+        // Carried for the render header.
+        assert_eq!(a.project_filter.as_deref(), Some("firefox"));
+        // Only the firefox e2e.test survives; the chromium one is filtered out.
+        assert_eq!(a.slowest_e2e_tests.len(), 1);
+        assert_eq!(a.slowest_e2e_tests[0].project, "firefox");
+        // HTTP spans always pass the project filter (both traces' GET/POST remain).
+        assert!(a.slowest_spans.iter().any(|r| r.name == "GET"));
+        assert!(a.slowest_spans.iter().any(|r| r.name == "POST"));
+        // The report opens with the project-filter header.
+        assert!(crate::traces::render::render(&a, 25).starts_with("Project filter: firefox"));
+    }
+
+    #[test]
     fn analyze_reads_files() {
         let dir = std::env::temp_dir().join(format!("traces-analyze-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

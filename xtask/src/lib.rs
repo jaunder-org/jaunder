@@ -356,16 +356,12 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("traces-analyze");
             let filters = traces::parse::Filters { trace, project };
-            match traces::analyze::analyze(&files, filters) {
-                Ok(analysis) => {
-                    let n = analysis.span_count;
-                    result.traces = Some(traces::render::render(&analysis, top as usize));
-                    result.push(StepResult::ok("traces-analyze").detail(format!("{n} span(s)")));
-                }
-                Err(e) => {
-                    result.push(StepResult::fail("traces-analyze").detail(format!("{e:#}")));
-                }
-            }
+            // A read/parse failure (missing file, malformed JSONL line) propagates
+            // as Err → the exit-2 path in main.rs (spec §6), not a fail step.
+            let analysis = traces::analyze::analyze(&files, filters)?;
+            let n = analysis.span_count;
+            result.traces = Some(traces::render::render(&analysis, top as usize));
+            result.push(StepResult::ok("traces-analyze").detail(format!("{n} span(s)")));
             finalize(&mut result, start);
             Ok(result)
         }
@@ -680,6 +676,21 @@ mod cli_tests {
             err.contains("--json"),
             "error explains the --json rejection: {err}"
         );
+    }
+
+    #[test]
+    fn run_errors_on_missing_trace_file() {
+        // A read failure propagates as Err → the exit-2 path (spec §6).
+        let cli = Cli {
+            json: false,
+            command: Command::Traces(TracesCommand::Analyze {
+                top: 25,
+                trace: None,
+                project: None,
+                files: vec![PathBuf::from("/no/such/trace.jsonl")],
+            }),
+        };
+        assert!(run(cli).is_err(), "missing file must propagate as Err");
     }
 }
 
