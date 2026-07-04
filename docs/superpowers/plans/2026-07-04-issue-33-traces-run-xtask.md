@@ -231,7 +231,7 @@ pub fn build_out_path(attr: &str) -> Result<String>;
   }
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
   ```
   // run.rs #[cfg(test)]
@@ -265,19 +265,19 @@ pub fn build_out_path(attr: &str) -> Result<String>;
   (`E2eBackend`/`E2eBrowser` may need `PartialEq` derive for `==` in tests —
   they already derive it per lib.rs. `browsers` returns `Vec<E2eBrowser>`.)
 
-- [ ] **Step 2: Run, verify fail.** Run:
+- [x] **Step 2: Run, verify fail.** Run:
       `cargo test --manifest-path xtask/Cargo.toml` Expected: FAIL.
 
-- [ ] **Step 3: Implement** `run.rs` (helpers + `collect_trace_files`) and the
+- [x] **Step 3: Implement** `run.rs` (helpers + `collect_trace_files`) and the
       `lib.rs` wiring (variant, `command_name`, widened
       `produces_json_payload` + doc, dispatch arm, `pub mod run;`).
       `E2eBackend`/`E2eBrowser` `as_str` is crate-private and reachable from
       `traces::run` (same crate).
 
-- [ ] **Step 4: Run, verify pass.** Run:
+- [x] **Step 4: Run, verify pass.** Run:
       `cargo test --manifest-path xtask/Cargo.toml` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add xtask/src/traces/run.rs xtask/src/traces/mod.rs xtask/src/lib.rs
