@@ -756,7 +756,7 @@
 
             # OTel trace keeps its directory layout
             # ($out/otel-traces-${backend}.jsonl/otel-traces.jsonl) that
-            # run-e2e-trace-analysis consumes on the success path: copy_from_vm's 2nd
+            # `cargo xtask traces run` consumes on the success path: copy_from_vm's 2nd
             # arg is the target *dir* name (cf. #152). Guarded so an early crash with
             # no trace yet doesn't abort the remaining copies.
             if machine.execute("test -s /var/lib/jaunder/otel-traces.jsonl")[0] == 0:
@@ -1072,7 +1072,7 @@
         # Cold-cache variants (no warmup): same combos as the warm checks but the
         # first navigation of each test pays the full cold WASM download + init.
         # NOT part of the gate — built on demand by
-        # `scripts/run-e2e-trace-analysis --cold` to capture cold-cache OTel
+        # `cargo xtask traces run --cold` to capture cold-cache OTel
         # navigation traces for performance diagnostics (see docs/observability.md).
         # Pinned to workers=1 (overriding the workers=4 gate default): these
         # measure per-navigation cold cost, where worker contention would corrupt

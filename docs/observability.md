@@ -70,17 +70,17 @@ The analyzer reports:
   test and per project)
 - per-trace duration totals
 
-To run both e2e VM checks and immediately analyze the produced traces, use:
+To build both e2e VM checks and immediately analyze the produced traces, use:
 
 ```bash
-scripts/run-e2e-trace-analysis --top 25
+cargo xtask traces run --top 25
 ```
 
 For cold-cache diagnostics (without `JAUNDER_E2E_WARMUP=1` in the VM checks),
 use:
 
 ```bash
-scripts/run-e2e-trace-analysis --cold --top 25
+cargo xtask traces run --cold --top 25
 ```
 
 Optional filters:
@@ -92,10 +92,10 @@ Optional filters:
   warmup e2e checks.
 - `--browser chromium|firefox` restricts the run to one browser (default: both).
   Use this (not `--project`) to focus one browser, e.g. when debugging Firefox
-  timeout pressure: `scripts/run-e2e-trace-analysis --browser firefox`.
+  timeout pressure: `cargo xtask traces run --browser firefox`.
 
-(`--project NAME` is a flag of the underlying `scripts/analyze-otel-traces`, not
-of `run-e2e-trace-analysis`.)
+(`cargo xtask traces analyze` additionally accepts `--project NAME` to focus one
+browser/project when analyzing already-collected trace files directly.)
 
 ## #155 — post-CSR Firefox e2e tax (findings, 2026-07-02)
 
@@ -302,8 +302,8 @@ storage write per post — rather than a sequential loop of
 mitigated with worker-contention timeout headroom (`workerContentionScale` in
 `end2end/tests/fixtures.ts`), so that headroom is now a candidate for reduction
 once `workers>1` is unblocked (`#173`). The before/after measurement is driven
-separately by the `#152` `run-e2e-trace-analysis` harness; the timeouts are not
-re-tuned here.
+separately by the `#152` trace-analysis harness (`cargo xtask traces run`); the
+timeouts are not re-tuned here.
 
 ## WASM Bundle Audit
 

@@ -284,8 +284,10 @@ pub fn build_out_path(attr: &str) -> Result<String>;
   git commit -m "feat(xtask): traces run — nix-orchestrate e2e checks + in-process analysis (#33)"
   ```
 
-- [ ] **Step 6: Manual end-to-end verification** (AC1 — nix I/O, not
-      unit-tested)
+- [x] **Step 6: Manual end-to-end verification** (AC1 — nix I/O, not
+      unit-tested) — `traces run --browser chromium --top 5` built both
+      `e2e-{sqlite,postgres}-chromium` checks, collected the 2 trace files
+      (correct store paths, #224 fix confirmed), and rendered the full report.
 
   Against a warm build (limit to one browser to halve build time):
 
@@ -311,13 +313,13 @@ pub fn build_out_path(attr: &str) -> Result<String>;
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Delete the scripts**
+- [x] **Step 1: Delete the scripts**
 
   ```bash
   git rm scripts/analyze-otel-traces scripts/run-e2e-trace-analysis
   ```
 
-- [ ] **Step 2: Repoint the instructional references** (spec §6 set)
+- [x] **Step 2: Repoint the instructional references** (spec §6 set)
   - `CONTRIBUTING.md` "Run & Analyze" bullet → `cargo xtask traces run` (with
     `--cold`/`--browser` notes preserved).
   - `docs/observability.md`: the usage block (~:73-98) — the two invocation
@@ -332,7 +334,7 @@ pub fn build_out_path(attr: &str) -> Result<String>;
     untouched: the `#155` findings narratives, ADR-0028's table, and the
     `//! Port of …` comments in `xtask/src/traces/*.rs`.
 
-- [ ] **Step 3: Verify no stray instructional references** Run:
+- [x] **Step 3: Verify no stray instructional references** Run:
       `rg -n 'scripts/(analyze-otel-traces|run-e2e-trace-analysis)'` Expected:
       only `docs/archive/**`, `docs/adr/0028-*`, the `#155` findings prose in
       `docs/observability.md`, and the `traces/*.rs` lineage comments remain —

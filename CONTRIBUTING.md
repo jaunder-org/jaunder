@@ -284,8 +284,8 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
   or `--site-path` to reuse a build. Run `cargo xtask audit-wasm --help` for
   details.
 
-- **Run & Analyze**: Use `scripts/run-e2e-trace-analysis` to run the full VM e2e
-  suite and immediately analyze the results.
+- **Run & Analyze**: Use `cargo xtask traces run` to build the full VM e2e suite
+  and immediately analyze the results.
   - Use `--cold` to run against cold caches instead of the default warmup
     checks.
   - Use `--browser chromium|firefox` to restrict the run to one browser

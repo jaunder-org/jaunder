@@ -125,8 +125,10 @@ In E2E VM checks, traces are exported to an in-VM collector and persisted to:
 The project includes specialized tools for analyzing system behavior and
 performance:
 
-- **`scripts/analyze-otel-traces`**: Processes JSONL trace artifacts to report
-  on slowest spans, hydration hotspots, and navigation phase bottlenecks.
+- **`cargo xtask traces analyze`**: Processes JSONL trace artifacts to report on
+  slowest spans, hydration hotspots, and navigation phase bottlenecks.
+- **`cargo xtask traces run`**: Builds the e2e VM checks and runs
+  `traces analyze` on their exported traces in one step.
 - **`cargo xtask audit-wasm`**: Measures deterministic WASM bundle sizes (raw,
   gzip, brotli) from Nix build outputs.
 
