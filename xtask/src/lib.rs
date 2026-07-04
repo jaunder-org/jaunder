@@ -6,6 +6,7 @@ mod audit_wasm;
 mod coverage;
 pub mod git;
 mod ids;
+mod nix_build;
 mod result;
 mod sh;
 mod traces;
@@ -172,6 +173,30 @@ pub enum TracesCommand {
         #[arg(required = true)]
         files: Vec<std::path::PathBuf>,
     },
+    /// Build the `{sqlite,postgres}×{chromium,firefox}` e2e VM checks and analyze
+    /// their exported OTel traces in one step — the `nix build` orchestration that
+    /// feeds `traces analyze`. Faithful Rust port of `scripts/run-e2e-trace-analysis`.
+    /// A manual tool — not part of `check`/`validate`. Prints human tables only;
+    /// `--json` is rejected.
+    #[command(after_help = "EXAMPLES:\n  \
+        cargo xtask traces run\n  \
+        cargo xtask traces run --top 40\n  \
+        cargo xtask traces run --cold\n  \
+        cargo xtask traces run --browser firefox")]
+    Run {
+        /// Rows per ranked table (default 25), forwarded to the analysis.
+        #[arg(long, default_value_t = 25, value_parser = clap::value_parser!(u64).range(1..))]
+        top: u64,
+        /// Restrict the analysis to one trace id.
+        #[arg(long)]
+        trace: Option<String>,
+        /// Build the cold-cache package variants instead of the warm check variants.
+        #[arg(long)]
+        cold: bool,
+        /// Restrict to one browser (default: both). Both backends are always built.
+        #[arg(long, value_enum)]
+        browser: Option<E2eBrowser>,
+    },
 }
 
 /// `coverage` subcommands.
@@ -217,6 +242,7 @@ impl Cli {
             Command::Adr(AdrCommand::SyncReadme) => "adr-sync-readme",
             Command::Adr(AdrCommand::Promote) => "adr-promote",
             Command::Traces(TracesCommand::Analyze { .. }) => "traces-analyze",
+            Command::Traces(TracesCommand::Run { .. }) => "traces-run",
             Command::ElispIntegration => "elisp-integration",
         }
     }
@@ -225,16 +251,19 @@ impl Cli {
 impl Command {
     /// Whether `--json` yields a substantial structured payload for this command.
     /// Commands that answer `false` reject `--json` (there is nothing meaningful to
-    /// serialize beyond the bare envelope). Defaults `true`; only `traces analyze`
-    /// (human tables, no structured output) opts out today.
+    /// serialize beyond the bare envelope). Defaults `true`; the `traces` reporting
+    /// commands (`analyze`/`run`) print human tables only, so they opt out.
     pub fn produces_json_payload(&self) -> bool {
-        !matches!(self, Command::Traces(TracesCommand::Analyze { .. }))
+        !matches!(
+            self,
+            Command::Traces(TracesCommand::Analyze { .. } | TracesCommand::Run { .. })
+        )
     }
 }
 
 pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
-    // Reject --json for commands with no structured payload (only `traces analyze`
-    // today) before doing any work — a hollow envelope is worse than an error.
+    // Reject --json for commands with no structured payload (the `traces` reporting
+    // commands) before doing any work — a hollow envelope is worse than an error.
     if cli.json && !cli.command.produces_json_payload() {
         anyhow::bail!(
             "--json is not supported for `{}` (produces no structured output)",
@@ -362,6 +391,28 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let n = analysis.span_count;
             result.traces = Some(traces::render::render(&analysis, top as usize));
             result.push(StepResult::ok("traces-analyze").detail(format!("{n} span(s)")));
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::Traces(TracesCommand::Run {
+            top,
+            trace,
+            cold,
+            browser,
+        }) => {
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("traces-run");
+            // A nix-build failure or a missing trace file propagates as Err → the
+            // exit-2 path in main.rs (spec §5), not a fail step.
+            let files = traces::run::collect_trace_files(cold, browser)?;
+            let n = files.len();
+            let filters = traces::parse::Filters {
+                trace,
+                project: None,
+            };
+            let analysis = traces::analyze::analyze(&files, filters)?;
+            result.traces = Some(traces::render::render(&analysis, top as usize));
+            result.push(StepResult::ok("traces-run").detail(format!("{n} trace file(s)")));
             finalize(&mut result, start);
             Ok(result)
         }
@@ -648,9 +699,11 @@ mod cli_tests {
     }
 
     #[test]
-    fn produces_json_payload_false_only_for_traces_analyze() {
-        let traces = Cli::try_parse_from(["xtask", "traces", "analyze", "x.jsonl"]).unwrap();
-        assert!(!traces.command.produces_json_payload());
+    fn produces_json_payload_false_for_traces_commands() {
+        let analyze = Cli::try_parse_from(["xtask", "traces", "analyze", "x.jsonl"]).unwrap();
+        assert!(!analyze.command.produces_json_payload());
+        let run = Cli::try_parse_from(["xtask", "traces", "run"]).unwrap();
+        assert!(!run.command.produces_json_payload());
         let check = Cli::try_parse_from(["xtask", "check"]).unwrap();
         assert!(check.command.produces_json_payload());
         let audit = Cli::try_parse_from(["xtask", "audit-wasm"]).unwrap();
@@ -691,6 +744,78 @@ mod cli_tests {
             }),
         };
         assert!(run(cli).is_err(), "missing file must propagate as Err");
+    }
+
+    #[test]
+    fn traces_run_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "xtask",
+            "traces",
+            "run",
+            "--top",
+            "40",
+            "--cold",
+            "--browser",
+            "firefox",
+            "--trace",
+            "aa",
+        ])
+        .unwrap();
+        assert_eq!(cli.command_name(), "traces-run");
+        match cli.command {
+            Command::Traces(TracesCommand::Run {
+                top,
+                trace,
+                cold,
+                browser,
+            }) => {
+                assert_eq!(top, 40);
+                assert_eq!(trace.as_deref(), Some("aa"));
+                assert!(cold);
+                assert_eq!(browser, Some(E2eBrowser::Firefox));
+            }
+            _ => panic!("expected traces run"),
+        }
+    }
+
+    #[test]
+    fn traces_run_defaults() {
+        let cli = Cli::try_parse_from(["xtask", "traces", "run"]).unwrap();
+        match cli.command {
+            Command::Traces(TracesCommand::Run {
+                top,
+                trace,
+                cold,
+                browser,
+            }) => {
+                assert_eq!(top, 25);
+                assert_eq!(trace, None);
+                assert!(!cold);
+                assert_eq!(browser, None);
+            }
+            _ => panic!("expected traces run"),
+        }
+    }
+
+    #[test]
+    fn run_rejects_json_for_traces_run() {
+        let cli = Cli {
+            json: true,
+            command: Command::Traces(TracesCommand::Run {
+                top: 25,
+                trace: None,
+                cold: false,
+                browser: None,
+            }),
+        };
+        let err = match run(cli) {
+            Ok(_) => panic!("expected --json to be rejected for traces run"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("--json"),
+            "error explains the --json rejection: {err}"
+        );
     }
 }
 
