@@ -8,6 +8,7 @@ pub mod git;
 mod ids;
 mod result;
 mod sh;
+mod traces;
 mod steps {
     pub mod adr_check;
     pub mod host_tests;
@@ -112,6 +113,9 @@ pub enum Command {
     /// ADR maintenance.
     #[command(subcommand)]
     Adr(AdrCommand),
+    /// OpenTelemetry trace analysis (host-side; ADR-0028).
+    #[command(subcommand)]
+    Traces(TracesCommand),
     /// Build the hermetic elisp live-integration VM check (ADR-0035) through the
     /// same diagnostic-preserving wrapper. For CI's parallel `elisp-integration`
     /// job; local `validate` realizes it via the `e2e` aggregate. Host only.
@@ -139,6 +143,35 @@ pub enum AdrCommand {
     /// after the final rebase, so the number is collision-free on first commit.
     #[command(after_help = "EXAMPLES:\n  cargo xtask adr promote")]
     Promote,
+}
+
+/// `traces` subcommands.
+#[derive(Subcommand)]
+pub enum TracesCommand {
+    /// Analyze OpenTelemetry JSONL traces exported by the e2e VM collector and
+    /// print the report tables (slowest spans, per-test/-project hotspots, trace
+    /// totals). Faithful Rust port of `scripts/analyze-otel-traces`. A manual
+    /// tool — not part of `check`/`validate`. Prints human tables only;
+    /// `--json` is rejected.
+    #[command(after_help = "EXAMPLES:\n  \
+        cargo xtask traces analyze /nix/store/...-e2e-sqlite-chromium/otel-traces-sqlite.jsonl/otel-traces.jsonl\n  \
+        cargo xtask traces analyze --top 40 --project firefox trace-a.jsonl trace-b.jsonl\n  \
+        cargo xtask traces analyze --trace 1111...1111 traces.jsonl")]
+    Analyze {
+        /// Rows per ranked table (default 25). The cache-warmth, per-project, and
+        /// long-task-by-project tables always print every row.
+        #[arg(long, default_value_t = 25, value_parser = clap::value_parser!(u64).range(1..))]
+        top: u64,
+        /// Restrict analysis to one trace id.
+        #[arg(long)]
+        trace: Option<String>,
+        /// Restrict analysis to one e2e project (filters only `e2e.`-named spans).
+        #[arg(long)]
+        project: Option<String>,
+        /// One or more `otel-traces.jsonl` files.
+        #[arg(required = true)]
+        files: Vec<std::path::PathBuf>,
+    },
 }
 
 /// `coverage` subcommands.
@@ -183,12 +216,31 @@ impl Cli {
             Command::Adr(AdrCommand::Renumber) => "adr-renumber",
             Command::Adr(AdrCommand::SyncReadme) => "adr-sync-readme",
             Command::Adr(AdrCommand::Promote) => "adr-promote",
+            Command::Traces(TracesCommand::Analyze { .. }) => "traces-analyze",
             Command::ElispIntegration => "elisp-integration",
         }
     }
 }
 
+impl Command {
+    /// Whether `--json` yields a substantial structured payload for this command.
+    /// Commands that answer `false` reject `--json` (there is nothing meaningful to
+    /// serialize beyond the bare envelope). Defaults `true`; only `traces analyze`
+    /// (human tables, no structured output) opts out today.
+    pub fn produces_json_payload(&self) -> bool {
+        !matches!(self, Command::Traces(TracesCommand::Analyze { .. }))
+    }
+}
+
 pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
+    // Reject --json for commands with no structured payload (only `traces analyze`
+    // today) before doing any work — a hollow envelope is worse than an error.
+    if cli.json && !cli.command.produces_json_payload() {
+        anyhow::bail!(
+            "--json is not supported for `{}` (produces no structured output)",
+            cli.command_name()
+        );
+    }
     match cli.command {
         Command::Check { no_test } => {
             let sh = xshell::Shell::new()?;
@@ -292,6 +344,24 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("adr-promote");
             result.push(adr::promote());
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::Traces(TracesCommand::Analyze {
+            top,
+            trace,
+            project,
+            files,
+        }) => {
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("traces-analyze");
+            let filters = traces::parse::Filters { trace, project };
+            // A read/parse failure (missing file, malformed JSONL line) propagates
+            // as Err → the exit-2 path in main.rs (spec §6), not a fail step.
+            let analysis = traces::analyze::analyze(&files, filters)?;
+            let n = analysis.span_count;
+            result.traces = Some(traces::render::render(&analysis, top as usize));
+            result.push(StepResult::ok("traces-analyze").detail(format!("{n} span(s)")));
             finalize(&mut result, start);
             Ok(result)
         }
@@ -426,6 +496,7 @@ fn clean_tree_precheck(sh: &xshell::Shell, allow_dirty: bool) -> StepResult {
 mod cli_tests {
     use super::*;
     use clap::Parser;
+    use std::path::PathBuf;
 
     #[test]
     fn validate_allow_dirty_parses() {
@@ -523,6 +594,103 @@ mod cli_tests {
     fn adr_promote_parses() {
         let cli = Cli::try_parse_from(["xtask", "adr", "promote"]).unwrap();
         assert_eq!(cli.command_name(), "adr-promote");
+    }
+
+    #[test]
+    fn traces_analyze_parses_flags_and_files() {
+        let cli = Cli::try_parse_from([
+            "xtask",
+            "traces",
+            "analyze",
+            "--top",
+            "40",
+            "--project",
+            "firefox",
+            "a.jsonl",
+            "b.jsonl",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Traces(TracesCommand::Analyze {
+                top,
+                trace,
+                project,
+                files,
+            }) => {
+                assert_eq!(top, 40);
+                assert_eq!(trace, None);
+                assert_eq!(project.as_deref(), Some("firefox"));
+                assert_eq!(
+                    files,
+                    vec![PathBuf::from("a.jsonl"), PathBuf::from("b.jsonl")]
+                );
+            }
+            _ => panic!("expected traces analyze"),
+        }
+        assert_eq!(
+            Cli::try_parse_from(["xtask", "traces", "analyze", "x.jsonl"])
+                .unwrap()
+                .command_name(),
+            "traces-analyze"
+        );
+    }
+
+    #[test]
+    fn traces_analyze_requires_a_file() {
+        assert!(Cli::try_parse_from(["xtask", "traces", "analyze"]).is_err());
+    }
+
+    #[test]
+    fn traces_analyze_top_must_be_positive() {
+        assert!(
+            Cli::try_parse_from(["xtask", "traces", "analyze", "--top", "0", "x.jsonl"]).is_err()
+        );
+    }
+
+    #[test]
+    fn produces_json_payload_false_only_for_traces_analyze() {
+        let traces = Cli::try_parse_from(["xtask", "traces", "analyze", "x.jsonl"]).unwrap();
+        assert!(!traces.command.produces_json_payload());
+        let check = Cli::try_parse_from(["xtask", "check"]).unwrap();
+        assert!(check.command.produces_json_payload());
+        let audit = Cli::try_parse_from(["xtask", "audit-wasm"]).unwrap();
+        assert!(audit.command.produces_json_payload());
+    }
+
+    #[test]
+    fn run_rejects_json_for_traces_analyze() {
+        let cli = Cli {
+            json: true,
+            command: Command::Traces(TracesCommand::Analyze {
+                top: 25,
+                trace: None,
+                project: None,
+                files: vec![PathBuf::from("x.jsonl")],
+            }),
+        };
+        let err = match run(cli) {
+            Ok(_) => panic!("expected --json to be rejected for traces analyze"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("--json"),
+            "error explains the --json rejection: {err}"
+        );
+    }
+
+    #[test]
+    fn run_errors_on_missing_trace_file() {
+        // A read failure propagates as Err → the exit-2 path (spec §6).
+        let cli = Cli {
+            json: false,
+            command: Command::Traces(TracesCommand::Analyze {
+                top: 25,
+                trace: None,
+                project: None,
+                files: vec![PathBuf::from("/no/such/trace.jsonl")],
+            }),
+        };
+        assert!(run(cli).is_err(), "missing file must propagate as Err");
     }
 }
 
