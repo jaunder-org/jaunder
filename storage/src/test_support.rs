@@ -40,7 +40,8 @@ pub enum Backend {
 ///
 /// The pool isn't otherwise reachable from `AppState`, so tests hold this to
 /// inject a storage fault by [`close`](CloseablePool::close)-ing it (the next
-/// query through any storage handle then errors).
+/// query through any storage handle then errors) or to run raw SQL against the
+/// per-test database ([`postgres`](CloseablePool::postgres)).
 pub enum CloseablePool {
     Sqlite(SqlitePool),
     Postgres(PgPool),
@@ -56,6 +57,20 @@ impl CloseablePool {
         match self {
             CloseablePool::Sqlite(pool) => pool.close().await,
             CloseablePool::Postgres(pool) => pool.close().await,
+        }
+    }
+
+    /// The Postgres pool, for raw-SQL seed/inspect against the per-test database
+    /// (avoids reconnecting a fresh pool via [`recorded_postgres_url`]).
+    ///
+    /// # Panics
+    ///
+    /// If called on a `SQLite` environment.
+    #[must_use]
+    pub fn postgres(&self) -> &PgPool {
+        match self {
+            CloseablePool::Postgres(pool) => pool,
+            CloseablePool::Sqlite(_) => panic!("postgres() on a SQLite CloseablePool"),
         }
     }
 }
@@ -107,6 +122,12 @@ impl TestBase {
     /// so the next query through any storage handle returns an `Internal` error.
     pub async fn close_pool(&self) {
         self.pool.close().await;
+    }
+
+    /// The pool behind this env's [`AppState`], for raw-SQL seed/inspect.
+    #[must_use]
+    pub fn pool(&self) -> &CloseablePool {
+        &self.pool
     }
 }
 
@@ -600,6 +621,13 @@ mod tests {
         let env = Backend::Sqlite.setup().await;
         let id = seed_user(&env.state).await;
         assert!(id > 0);
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "postgres() on a SQLite CloseablePool")]
+    async fn postgres_accessor_rejects_a_sqlite_pool() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let _ = super::CloseablePool::Sqlite(pool).postgres();
     }
 
     #[test]
