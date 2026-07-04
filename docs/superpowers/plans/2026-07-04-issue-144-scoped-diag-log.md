@@ -45,7 +45,10 @@ nix-excerpt companion (all in spec §Out-of-scope).
    (cross-links 0032/0037).
 7. ✅ **DONE** — Docs: `observability.md` (new "look here first" section) +
    `CONTRIBUTING.md` Observability bullet.
-8. Full gate: `cargo xtask validate` green (AC proof across all four combos).
+8. ✅ **DONE** — `cargo xtask validate` fully green (24 steps incl. all four e2e
+   combos). AC spot-check: `jaunder-diag-sqlite.log` = 5.8 KB, 19 JSONL lines,
+   **only WARN (9) + ERROR (10)**, no INFO/kernel noise (journal = 3 MB
+   fallback).
 
 **Key risks / decisions:**
 
