@@ -38,8 +38,8 @@ nix-excerpt companion (all in spec §Out-of-scope).
    `mailCaptureEnv`) + copy-out rename in `e2eRunAndCapture`.
 4. ✅ **DONE** (`d8a12e70`) — `xtask` `copy_e2e_diagnostics_between`: add
    `jaunder-diag-` prefix + doc + unit test (positive + negative-rename cases).
-5. ✅ **DONE** (`7b709113`) — `e2ePanicGate` rewrite: scoped ∪ journal, de-dup by
-   location, scoped precedence, allowlist kept.
+5. ✅ **DONE** (`7b709113`) — `e2ePanicGate` rewrite: scoped ∪ journal, de-dup
+   by location, scoped precedence, allowlist kept.
 6. ✅ **DONE** (draft authored, out of git; numbered/committed at ship) —
    `docs/adr/drafts/app-driven-scoped-server-diagnostics.md` via `jaunder-adr`
    (cross-links 0032/0037).
@@ -90,9 +90,9 @@ nix-excerpt companion (all in spec §Out-of-scope).
   **`jaunder`** (run its tests with `cargo nextest run -p jaunder …`, not
   `-p server`). The `xtask/` crate is package **`maik`** and is **outside the
   workspace** (the flake excludes it), so run its tests with
-  `cargo nextest run --manifest-path xtask/Cargo.toml …` (not `-p xtask`/`-p maik`
-  from the workspace). Task command lines below that say `-p server`/`-p xtask`
-  are shorthand — use these real invocations.
+  `cargo nextest run --manifest-path xtask/Cargo.toml …` (not
+  `-p xtask`/`-p maik` from the workspace). Task command lines below that say
+  `-p server`/`-p xtask` are shorthand — use these real invocations.
 - **Workspace lints deny `unwrap_used` / `expect_used` in non-test code** — use
   `unwrap_or_default`/`unwrap_or_else`/`match` in anything the lib target
   compiles. `.unwrap()`/`.expect()` are fine inside `#[cfg(test)]`.
