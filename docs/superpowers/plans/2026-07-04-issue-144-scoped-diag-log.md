@@ -36,8 +36,8 @@ nix-excerpt companion (all in spec §Out-of-scope).
    flat), wired into `init_tracing_impl` — one commit.
 3. ✅ **DONE** (`6c8c4527`) — `flake.nix` server env (`JAUNDER_DIAG_LOG_FILE` in
    `mailCaptureEnv`) + copy-out rename in `e2eRunAndCapture`.
-4. `xtask` `copy_e2e_diagnostics_between`: add `jaunder-diag-` prefix + doc +
-   unit test.
+4. ✅ **DONE** (`d8a12e70`) — `xtask` `copy_e2e_diagnostics_between`: add
+   `jaunder-diag-` prefix + doc + unit test (positive + negative-rename cases).
 5. `e2ePanicGate` rewrite: scoped ∪ journal, de-dup by location, scoped
    precedence, allowlist kept.
 6. Draft ADR via `jaunder-adr` (cross-link 0032/0037).
@@ -83,6 +83,13 @@ nix-excerpt companion (all in spec §Out-of-scope).
 - **Language:** complete Rust; exact `cargo` commands. Tests are in-file
   `#[cfg(test)]` in `server/src/observability.rs` (crate convention; the module
   already has a `tests` mod with `ENV_LOCK` + `lock_env()`).
+- **Crate names (corrected during execution):** the `server/` crate's package is
+  **`jaunder`** (run its tests with `cargo nextest run -p jaunder …`, not
+  `-p server`). The `xtask/` crate is package **`maik`** and is **outside the
+  workspace** (the flake excludes it), so run its tests with
+  `cargo nextest run --manifest-path xtask/Cargo.toml …` (not `-p xtask`/`-p maik`
+  from the workspace). Task command lines below that say `-p server`/`-p xtask`
+  are shorthand — use these real invocations.
 - **Workspace lints deny `unwrap_used` / `expect_used` in non-test code** — use
   `unwrap_or_default`/`unwrap_or_else`/`match` in anything the lib target
   compiles. `.unwrap()`/`.expect()` are fine inside `#[cfg(test)]`.
