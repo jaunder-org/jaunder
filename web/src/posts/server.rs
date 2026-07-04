@@ -353,7 +353,7 @@ mod tests {
         assert!(internal.is_err());
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn post_response_carries_summary() {
         use crate::posts::server::post_response;

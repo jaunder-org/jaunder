@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::WebResult;
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use {
     crate::auth::require_auth, crate::error::InternalError, std::sync::Arc, storage::SessionStorage,
 };

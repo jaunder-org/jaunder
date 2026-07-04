@@ -4,7 +4,7 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 // All server-only imports in one place
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
     crate::error::InternalError,

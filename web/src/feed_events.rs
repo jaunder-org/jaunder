@@ -1,4 +1,4 @@
-#![cfg(feature = "ssr")]
+#![cfg(feature = "server")]
 
 use std::collections::BTreeSet;
 

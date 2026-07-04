@@ -171,16 +171,16 @@ web/src/feature/
 At the top of `mod.rs`:
 
 ```rust
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 mod server;
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use server::*;   // all server-only helpers come into scope here
 ```
 
 Every `#[server]` body is wrapped with `boundary!("function_name", { ... })`. No
-per-import `#[cfg(feature = "ssr")]` annotations appear inside function bodies —
-the `#[server]` proc-macro already cfg-gates bodies to SSR, and `use server::*`
-covers all server-only imports in one place.
+per-import `#[cfg(feature = "server")]` annotations appear inside function
+bodies — the `#[server]` proc-macro already cfg-gates bodies to SSR, and
+`use server::*` covers all server-only imports in one place.
 
 `server.rs` is only created when the module has genuine private helpers worth
 naming (multi-step transactions, helpers shared across multiple server

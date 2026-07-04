@@ -23,7 +23,7 @@ pub fn InvitesPage() -> impl IntoView {
                     {move || Suspend::new(async move {
                         let policy_str = policy.await.unwrap_or_default();
                         if policy_str != "invite_only" {
-                            #[cfg(feature = "ssr")]
+                            #[cfg(feature = "server")]
                             {
                                 use leptos::context::use_context;
                                 use leptos_axum::ResponseOptions;

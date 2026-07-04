@@ -8,7 +8,7 @@ use thiserror::Error;
 
 pub type WebResult<T> = Result<T, WebError>;
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 pub type InternalResult<T> = Result<T, InternalError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Error)]
@@ -73,7 +73,7 @@ impl FromServerFnError for WebError {
 /// The category of an internal failure, derived at construction. Drives
 /// outward mapping and is emitted as a discrete `error.kind` field at the
 /// boundary for queryable triage.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
     Auth,
@@ -86,7 +86,7 @@ pub enum ErrorKind {
     External,
 }
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 impl ErrorKind {
     /// The bounded `error.kind` attribute value emitted on the `jaunder.errors`
     /// metric — the same stable names logged as the boundary's `error.kind`
@@ -106,7 +106,7 @@ impl ErrorKind {
 
 /// Operational severity, derived at construction so triage (and the
 /// boundary's log level) is mechanical rather than guessed from the message.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorClass {
     /// Expected 4xx (validation, not-found, unauthorized) — never alert.
@@ -121,7 +121,7 @@ pub enum ErrorClass {
     External,
 }
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 impl ErrorClass {
     /// The tracing level the boundary logs this class at.
     #[must_use]
@@ -149,7 +149,7 @@ impl ErrorClass {
 /// Server-side error carrier: an outward `public` view plus structured,
 /// queryable operator data (`kind`, `class`, `context`) and the preserved
 /// `source` cause chain (carried via `anyhow`, never stringified eagerly).
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 #[derive(Debug)]
 pub struct InternalError {
     public: WebError,
@@ -163,25 +163,25 @@ pub struct InternalError {
 /// already-boxed error can be carried as an `anyhow` source (the box itself does
 /// not implement `Error`). Forwards `Display` and `source`, so it is invisible
 /// in the cause chain.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 #[derive(Debug)]
 struct BoxedError(Box<dyn Error + Send + Sync>);
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 impl std::fmt::Display for BoxedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.0, f)
     }
 }
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 impl Error for BoxedError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         self.0.source()
     }
 }
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 impl InternalError {
     pub fn unauthorized(message: impl Into<String>) -> Self {
         Self::masked(WebError::Unauthorized, message)
@@ -322,7 +322,7 @@ impl InternalError {
 /// (`storage`/`server`/`server_message`/`unauthorized`/`external`) keep their
 /// explicit constructors — do not route a `WebError::Storage`/`Server` through
 /// here, which would carry its message unmasked rather than as a generic 500.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 impl From<WebError> for InternalError {
     fn from(public: WebError) -> Self {
         let (kind, class) = kind_class_for(&public);
@@ -338,7 +338,7 @@ impl From<WebError> for InternalError {
 
 /// Infers `(kind, class)` from a public error variant, for `masked` errors
 /// where the operator detail is supplied separately from a typed source.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 fn kind_class_for(public: &WebError) -> (ErrorKind, ErrorClass) {
     match public {
         WebError::Unauthorized => (ErrorKind::Auth, ErrorClass::Client),
@@ -354,7 +354,7 @@ fn kind_class_for(public: &WebError) -> (ErrorKind, ErrorClass) {
 
 /// Renders the operator-facing detail: the preserved cause chain (alternate
 /// `anyhow` formatting) when a source is present, else the public message.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 fn render_operator_message(public: &WebError, source: Option<&anyhow::Error>) -> String {
     match source {
         Some(source) => format!("{source:#}"),
@@ -402,7 +402,7 @@ where
 /// returned vec keeps each ancestor's context map alive. Used by
 /// [`server_boundary`] to preserve contexts provided in an ancestor owner across
 /// an SSR await (#138).
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 fn owner_ancestry_strong(
     owner: &leptos::reactive::owner::Owner,
 ) -> Vec<leptos::reactive::owner::Owner> {
@@ -420,7 +420,7 @@ fn owner_ancestry_strong(
 /// # Errors
 ///
 /// Returns `Err(ServerFnError)` if the wrapped future returns an `InternalError`.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 pub async fn server_boundary<T>(
     server_fn: &'static str,
     future: impl std::future::Future<Output = InternalResult<T>>,
@@ -464,7 +464,7 @@ pub async fn server_boundary<T>(
 /// queryable fields (not one concatenated string), at the level derived from
 /// the error class. `context` is emitted as a single serialized field;
 /// promoting each k/v to a span field is deferred to §4.6 (kq8w.22).
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 fn log_boundary_failure(server_fn: &'static str, error: &InternalError) {
     // Render the preserved cause chain once; empty when there is no source
     // (e.g. pure client errors).
@@ -498,7 +498,7 @@ fn log_boundary_failure(server_fn: &'static str, error: &InternalError) {
 #[cfg(test)]
 mod tests {
     use super::WebError;
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     use super::{server_boundary, InternalError, WebResult};
     use leptos::prelude::FromServerFnError;
     use leptos::server_fn::{codec::JsonEncoding, error::ServerFnErrorErr, Decodes, Encodes};
@@ -575,7 +575,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn masked_internal_errors_never_leak_source_chain_to_public() {
         // §2.4 regression guard: storage/server failures reach the client only
@@ -612,7 +612,7 @@ mod tests {
         assert_eq!(decoded, WebError::Unauthorized);
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[tokio::test]
     async fn server_boundary_logs_and_returns_public_error() {
         let result: Result<(), WebError> = server_boundary("test_fn", async {
@@ -630,7 +630,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn internal_error_preserves_operator_message() {
         let error = InternalError::server(OuterError {
@@ -646,7 +646,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn internal_error_server_message_keeps_operator_detail_and_generic_public_message() {
         let error = InternalError::server_message("operator-only context");
@@ -659,7 +659,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[tokio::test]
     async fn server_boundary_evaluates_tracing_fields_when_subscriber_is_active() {
         use tracing_subscriber::fmt;
@@ -685,7 +685,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn internal_error_constructors_set_correct_public_variants() {
         let unauth = InternalError::unauthorized("not allowed");
@@ -702,21 +702,21 @@ mod tests {
         assert_eq!(conflict.public(), &WebError::conflict("already exists"));
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn into_public_consumes_error_and_returns_public_variant() {
         let error = InternalError::unauthorized("reason");
         assert_eq!(error.into_public(), WebError::Unauthorized);
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[tokio::test]
     async fn server_boundary_passes_through_ok_value() {
         let result: WebResult<u32> = server_boundary("test_fn", async { Ok(42) }).await;
         assert_eq!(result, Ok(42));
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn masked_internal_error_keeps_public_and_operator_messages_separate() {
         let error = InternalError::masked(
@@ -731,7 +731,7 @@ mod tests {
         assert_eq!(error.public(), &WebError::not_found("Post"));
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn error_class_maps_to_log_level() {
         use super::ErrorClass;
@@ -742,7 +742,7 @@ mod tests {
         assert_eq!(ErrorClass::Bug.log_level(), Level::ERROR);
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn error_kind_and_class_metric_strings_are_stable_and_bounded() {
         use super::{ErrorClass, ErrorKind};
@@ -761,7 +761,7 @@ mod tests {
         assert_eq!(ErrorClass::External.as_metric_str(), "external");
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn constructors_set_kind_and_class() {
         use super::{ErrorClass, ErrorKind};
@@ -795,7 +795,7 @@ mod tests {
         assert_eq!(server.class(), ErrorClass::Bug);
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn with_context_accumulates_pairs_in_order() {
         let error = InternalError::server_message("boom")
@@ -807,7 +807,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn storage_error_captures_source_chain_not_stringified() {
         let error = InternalError::storage(OuterError {
@@ -818,7 +818,7 @@ mod tests {
         assert_eq!(error.operator_message(), "outer failure: source context");
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn external_constructor_sets_external_kind_and_class() {
         use super::{ErrorClass, ErrorKind};
@@ -837,7 +837,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn masked_infers_kind_and_class_from_public_variant() {
         use super::{ErrorClass, ErrorKind};
@@ -887,7 +887,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn client_error_operator_message_falls_back_to_public() {
         // A client error carries no source, so the operator rendering falls
@@ -896,7 +896,7 @@ mod tests {
         assert_eq!(error.operator_message(), "Post not found");
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[tokio::test]
     async fn server_boundary_logs_client_at_debug_and_returns_public() {
         let result: WebResult<()> = server_boundary("test_fn", async {
@@ -906,7 +906,7 @@ mod tests {
         assert_eq!(result, Err(WebError::validation("bad input")));
     }
 
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[tokio::test]
     async fn server_boundary_logs_external_at_warn_and_returns_public() {
         let result: WebResult<()> = server_boundary("test_fn", async {
@@ -1115,7 +1115,7 @@ mod owner_lifetime {
 
     /// The actual fix: `server_boundary` must keep context alive across an await,
     /// even when the caller's owner ref is dropped mid-suspension.
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn server_boundary_keeps_context_alive_across_await() {
         let owner = Owner::new();
@@ -1191,7 +1191,7 @@ mod owner_lifetime {
     /// (via `Owner::parent()`) for the future's lifetime makes any post-await
     /// reactive-context read safe, so no per-fn read-before-await discipline is
     /// required. Red before the fix (only the leaf is held), green after.
-    #[cfg(feature = "ssr")]
+    #[cfg(feature = "server")]
     #[test]
     fn server_boundary_keeps_ancestor_context_alive_across_await() {
         let root = Owner::new();

@@ -12,7 +12,7 @@
 use crate::error::WebResult;
 use leptos::prelude::*;
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
     crate::error::InternalError,
@@ -26,7 +26,7 @@ use {
 ///
 /// Takes the `users` handle as a parameter rather than reading it from context,
 /// keeping it a pure helper its callers wire up.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 async fn resolve_author(
     users: &dyn UserStorage,
     author_username: &str,

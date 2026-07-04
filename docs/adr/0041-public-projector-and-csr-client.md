@@ -93,6 +93,5 @@ default; #180 made it the **only** path.
   e2e matrix now exercises the CSR build (the manual `csr-e2e-postgres-chromium`
   check is retired). KEPT: `handle_server_fns_with_context` (the `/api` data
   API), `leptos/ssr` (server-fn impls), `server_boundary`/`server_resource`.
-- The `web` feature still named `ssr` (it now means "the server-side data-API
-  build, no page render"); a cosmetic rename to `server` is a deferred
-  follow-up.
+- The `web` feature is named `server` (it compiles the server-side data-API
+  build, no page render); renamed from `ssr` in #197.

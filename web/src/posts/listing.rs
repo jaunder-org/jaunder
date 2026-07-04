@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::WebResult;
 use crate::tags::TagSummary;
 
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 use {
     super::server::{list_by_tag_rows, parse_post_cursor, timeline_post_summary, to_post_cursor},
     crate::auth::require_auth,
@@ -50,7 +50,7 @@ pub struct TimelinePage {
 
 /// Assemble a cursor-paginated [`TimelinePage`] from one over-fetched row set
 /// (`page_size + 1` rows detect `has_more`). Shared by every `fetch_*` below.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 fn page_from_rows(
     mut rows: Vec<PostRecord>,
     page_size: u32,
@@ -78,7 +78,7 @@ fn page_from_rows(
 ///
 /// Returns a validation error for an unparseable username or cursor, or a
 /// storage error if the listing query fails.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 pub async fn fetch_user_posts(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
@@ -113,7 +113,7 @@ pub async fn fetch_user_posts(
 ///
 /// Returns a validation error for an unparseable cursor, or a storage error if
 /// the listing query fails.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 pub async fn fetch_local_timeline(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
@@ -231,7 +231,7 @@ pub async fn list_home_feed(
 ///
 /// Returns a validation error for an unparseable tag or cursor, or a storage
 /// error if the listing query fails.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 pub async fn fetch_posts_by_tag(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
@@ -267,7 +267,7 @@ pub async fn fetch_posts_by_tag(
 ///
 /// Returns a validation error for an unparseable username/tag/cursor, a
 /// not-found error for an unknown user, or a storage error.
-#[cfg(feature = "ssr")]
+#[cfg(feature = "server")]
 pub async fn fetch_user_posts_by_tag(
     posts: &dyn PostStorage,
     users: &dyn UserStorage,
