@@ -521,7 +521,7 @@ pub hydration_runtime_by_project: Vec<RuntimeProjectRow>,
 }
 ```
 
-- [ ] **Step 1: Write the failing tests** (over the fixture)
+- [x] **Step 1: Write the failing tests** (over the fixture)
 
   ```
   test cache_warmth_by_warmth_and_project:
@@ -539,18 +539,18 @@ pub hydration_runtime_by_project: Vec<RuntimeProjectRow>,
       samples + by-project from e2e.hydration_runtime_json; <0 dropped
   ```
 
-- [ ] **Step 2: Run, verify fail.** → FAIL.
+- [x] **Step 2: Run, verify fail.** → FAIL.
 
-- [ ] **Step 3: Implement** `printE2eNavigationCacheWarmth` (:450-511, all
+- [x] **Step 3: Implement** `printE2eNavigationCacheWarmth` (:450-511, all
       rows), `printE2eHydrationVsApi` (:705-774),
       `printNavigationPhaseComponentHotspots` (:776-922),
       `printHydrationRuntimeComponents` (:924-1015). Preserve field lists and
       guards; fully sort. Extend `render` for these sections (cache-warmth
       prints all rows).
 
-- [ ] **Step 4: Run, verify pass.** → PASS.
+- [x] **Step 4: Run, verify pass.** → PASS.
 
-- [ ] **Step 5: Add a render section-order test** (cheap ordering lock)
+- [x] **Step 5: Add a render section-order test** (cheap ordering lock)
 
   ```
   test render_emits_sections_in_canonical_order:
@@ -562,7 +562,7 @@ pub hydration_runtime_by_project: Vec<RuntimeProjectRow>,
 
   Implement/verify → PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   ```bash
   git add xtask/src/traces/analyze.rs xtask/src/traces/render.rs
   git commit -m "feat(xtask): traces analyze — cache-warmth, hydration, components (#32)"
