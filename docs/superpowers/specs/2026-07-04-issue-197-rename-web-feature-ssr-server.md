@@ -1,7 +1,7 @@
 # Spec — Rename the `web` crate feature `ssr` → `server` (issue #197)
 
-**Issue:** jaunder-org/jaunder#197 (milestone 8, "Off concurrent SSR"). Follow-up
-from #180 / PR #192.
+**Issue:** jaunder-org/jaunder#197 (milestone 8, "Off concurrent SSR").
+Follow-up from #180 / PR #192.
 
 ## Problem
 
@@ -36,9 +36,9 @@ references plus the in-crate `cfg` sites is sufficient for the build.
 ## Non-goals
 
 - **Do not** touch `leptos`'s own `ssr` feature — `leptos/ssr`,
-  `leptos_meta/ssr`, `leptos_router/ssr`, and the `leptos = { features =
-  ["ssr"] }` deps in `server/Cargo.toml` are a different crate's feature and
-  stay verbatim.
+  `leptos_meta/ssr`, `leptos_router/ssr`, and the
+  `leptos = { features = ["ssr"] }` deps in `server/Cargo.toml` are a different
+  crate's feature and stay verbatim.
 - **Do not** touch the `csr`, `hydrate`, or `default` features.
 - **No behavior change** — this is a rename only.
 - **Do not** edit `docs/archive/**`, ADR-0013, or ADR-0017 — historical records
@@ -61,7 +61,7 @@ references plus the in-crate `cfg` sites is sufficient for the build.
    bullet reflects that it is now `server`, renamed in #197.
 6. **`leptos/ssr` / `leptos_meta/ssr` / `leptos_router/ssr`** appear unchanged
    everywhere (grep confirms the leptos feature is untouched).
-7. **ADR-0013, ADR-0017, and `docs/archive/**`** are byte-unchanged.
+7. **ADR-0013, ADR-0017, and `docs/archive/**`\*\* are byte-unchanged.
 8. **Gate green:** `cargo xtask check` passes — the workspace, the `server`
    crate, and the `web` unit tests compile and run under the renamed feature,
    proving no build reference was missed and no behavior changed.
@@ -70,5 +70,5 @@ references plus the in-crate `cfg` sites is sufficient for the build.
 
 `cargo xtask check` (static + clippy + coverage/tests) is the acceptance gate;
 criterion 8 is the load-bearing check. Criteria 1–7 are confirmable by `rg`
-(`rg 'feature = "ssr"' web/src CONTRIBUTING.md docs/web-style-guide.md
-docs/adr/0041*` → no matches) and `git diff wt-base-issue-197..HEAD --stat`.
+(`rg 'feature = "ssr"' web/src CONTRIBUTING.md docs/web-style-guide.md docs/adr/0041*`
+→ no matches) and `git diff wt-base-issue-197..HEAD --stat`.
