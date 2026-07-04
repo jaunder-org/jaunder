@@ -16,3 +16,4 @@ flate2 = "1"
 brotli = "7"
 coverage = { path = "../tools/coverage" }
 tabled = "0.21.0"
+url = "2.5.8"

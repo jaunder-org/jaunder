@@ -438,7 +438,7 @@ pub resource_assets: Vec<AssetRow>,
 }
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
   ```
   // parse.rs
@@ -461,18 +461,18 @@ pub resource_assets: Vec<AssetRow>,
       asset name via to_url_path; negatives dropped; max desc
   ```
 
-- [ ] **Step 2: Run, verify fail.** → FAIL.
+- [x] **Step 2: Run, verify fail.** → FAIL.
 
-- [ ] **Step 3: Implement** `parse_json_attr`/`to_url_path`, then
+- [x] **Step 3: Implement** `parse_json_attr`/`to_url_path`, then
       `printE2eActionHotspots` (:252-304), `printE2eNavigationHotspots`
       (:322-448), `printE2eLongTaskHotspots` (:513-602),
       `printE2eResourceHotspots` (:604-703). Keep every `isFinite`/`<0` guard
       and each section's sort key; fully sort. Extend `render` for these
       sections (long-task-by-project prints all rows).
 
-- [ ] **Step 4: Run, verify pass.** → PASS.
+- [x] **Step 4: Run, verify pass.** → PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   ```bash
   git add xtask/src/traces/parse.rs xtask/src/traces/analyze.rs xtask/src/traces/render.rs
   git commit -m "feat(xtask): traces analyze — action/nav/long-task/resource hotspots (#32)"

@@ -10,6 +10,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
+use url::Url;
 
 /// A single flattened span with the scalar fields the reports read, its e2e
 /// project, and the raw span object for on-demand `e2e.*_json` reads (only
@@ -80,6 +81,34 @@ pub fn parse_duration_ms(span: &Value) -> f64 {
     };
     let delta = nanos("endTimeUnixNano") - nanos("startTimeUnixNano");
     delta as f64 / 1_000_000.0
+}
+
+/// Parse a JSON-string attribute (the `e2e.*_json` blobs) into a `Value`.
+/// `Value::Null` when the attribute is absent or the JSON is malformed — the
+/// silent fallback (Node `parseJsonAttr` :85-95); callers treat `Null` as empty.
+pub fn parse_json_attr(span: &Value, key: &str) -> Value {
+    let raw = get_attr(span, key);
+    if raw.is_empty() {
+        return Value::Null;
+    }
+    serde_json::from_str(&raw).unwrap_or(Value::Null)
+}
+
+/// Normalize a URL to `host[:port]/path`, matching Node `toUrlPath` (:306-316):
+/// a parseable URL → `host_str` + the non-default `:port` + `path` (always at
+/// least `/`); an unparseable value → the raw string; empty → `""`.
+pub fn to_url_path(value: &str) -> String {
+    if value.is_empty() {
+        return String::new();
+    }
+    match Url::parse(value) {
+        Ok(url) => {
+            let host = url.host_str().unwrap_or("");
+            let port = url.port().map(|p| format!(":{p}")).unwrap_or_default();
+            format!("{host}{port}{}", url.path())
+        }
+        Err(_) => value.to_string(),
+    }
 }
 
 /// Whether `span` passes the filters. Trace filter: drop when `traceId` differs.
@@ -190,6 +219,25 @@ mod tests {
         assert_eq!(get_attr(&span, "n"), "42");
         assert_eq!(get_attr(&span, "s"), "99");
         assert_eq!(get_attr(&span, "missing"), "");
+    }
+
+    #[test]
+    fn parse_json_attr_null_on_missing_or_bad() {
+        let with =
+            |s: &str| json!({ "attributes": [{ "key": "e2e.x", "value": { "stringValue": s } }] });
+        // Absent attribute → Null.
+        assert!(parse_json_attr(&json!({}), "e2e.x").is_null());
+        // Present but malformed JSON → Null (silent fallback).
+        assert!(parse_json_attr(&with("{not json"), "e2e.x").is_null());
+        // Valid JSON parses.
+        assert_eq!(parse_json_attr(&with("[1,2]"), "e2e.x"), json!([1, 2]));
+    }
+
+    #[test]
+    fn to_url_path_cases() {
+        assert_eq!(to_url_path("https://h:8080/a/b?q=1"), "h:8080/a/b");
+        assert_eq!(to_url_path("not a url"), "not a url");
+        assert_eq!(to_url_path(""), "");
     }
 
     #[test]

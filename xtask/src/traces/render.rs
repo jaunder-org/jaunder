@@ -8,7 +8,10 @@
 use tabled::settings::Style;
 use tabled::{Table, Tabled};
 
-use super::analyze::{Analysis, ByProjectRow, E2eTestRow, SlowSpanRow, TraceTotalRow};
+use super::analyze::{
+    Analysis, AssetRow, ByProjectRow, E2eTestRow, HotspotRow, LongTaskProjectRow, SlowSpanRow,
+    TargetRow, TraceTotalRow,
+};
 
 /// Format a millisecond value the way the Node reports did — three decimals.
 fn ms(value: f64) -> String {
@@ -136,6 +139,92 @@ impl From<&TraceTotalRow> for TraceTotalDisplay {
     }
 }
 
+#[derive(Tabled)]
+struct HotspotDisplay {
+    max_ms: String,
+    avg_ms: String,
+    total_ms: String,
+    count: usize,
+    name: String,
+}
+
+impl From<&HotspotRow> for HotspotDisplay {
+    fn from(r: &HotspotRow) -> Self {
+        Self {
+            max_ms: ms(r.max_ms),
+            avg_ms: ms(r.avg_ms),
+            total_ms: ms(r.total_ms),
+            count: r.count,
+            name: r.name.clone(),
+        }
+    }
+}
+
+#[derive(Tabled)]
+struct TargetDisplay {
+    max_ms: String,
+    avg_ms: String,
+    total_ms: String,
+    count: usize,
+    target: String,
+}
+
+impl From<&TargetRow> for TargetDisplay {
+    fn from(r: &TargetRow) -> Self {
+        Self {
+            max_ms: ms(r.max_ms),
+            avg_ms: ms(r.avg_ms),
+            total_ms: ms(r.total_ms),
+            count: r.count,
+            target: r.target.clone(),
+        }
+    }
+}
+
+#[derive(Tabled)]
+struct LongTaskProjectDisplay {
+    project: String,
+    tests: usize,
+    tasks: usize,
+    avg_ms_per_test: String,
+    max_task_ms: String,
+}
+
+impl From<&LongTaskProjectRow> for LongTaskProjectDisplay {
+    fn from(r: &LongTaskProjectRow) -> Self {
+        Self {
+            project: r.project.clone(),
+            tests: r.tests,
+            tasks: r.task_count,
+            avg_ms_per_test: ms(r.avg_per_test_ms),
+            max_task_ms: ms(r.max_ms),
+        }
+    }
+}
+
+#[derive(Tabled)]
+struct AssetDisplay {
+    max_ms: String,
+    avg_ms: String,
+    total_ms: String,
+    count: usize,
+    initiator: String,
+    asset: String,
+}
+
+impl From<&AssetRow> for AssetDisplay {
+    fn from(r: &AssetRow) -> Self {
+        Self {
+            max_ms: ms(r.max_ms),
+            avg_ms: ms(r.avg_ms),
+            total_ms: ms(r.total_ms),
+            count: r.count,
+            initiator: r.initiator.clone(),
+            asset: r.name.clone(),
+        }
+    }
+}
+
 /// The full report text for `analysis`, with ranked tables bounded by `top`.
 pub fn render(analysis: &Analysis, top: usize) -> String {
     if analysis.span_count == 0 {
@@ -157,7 +246,44 @@ pub fn render(analysis: &Analysis, top: usize) -> String {
         &format!("Top {top} slowest e2e.test spans"),
         &top_display(&analysis.slowest_e2e_tests, top),
     );
-    // Sections 3–10 (hotspots) are inserted here by Tasks 4–5.
+    section::<HotspotDisplay>(
+        &mut out,
+        &format!("Top {top} e2e action hotspots (from e2e.action_top_json)"),
+        &top_display(&analysis.action_hotspots, top),
+    );
+    section::<HotspotDisplay>(
+        &mut out,
+        &format!("Top {top} navigation phase hotspots (from e2e.navigation_top_json)"),
+        &top_display(&analysis.navigation_phase_hotspots, top),
+    );
+    section::<TargetDisplay>(
+        &mut out,
+        &format!("Top {top} slow navigation targets"),
+        &top_display(&analysis.navigation_targets, top),
+    );
+    // Section 5 (cache-warmth) is inserted here by Task 5.
+    section::<HotspotDisplay>(
+        &mut out,
+        &format!("Top {top} long-task hotspots (from e2e.long_tasks_json)"),
+        &top_display(&analysis.long_task_hotspots, top),
+    );
+    section::<LongTaskProjectDisplay>(
+        &mut out,
+        "Long-task totals by project",
+        &all_display(&analysis.long_task_by_project),
+    );
+    section::<HotspotDisplay>(
+        &mut out,
+        &format!("Top {top} resource initiator hotspots (from e2e.resource_summary_json)"),
+        &top_display(&analysis.resource_initiators, top),
+    );
+    section::<AssetDisplay>(
+        &mut out,
+        &format!("Top {top} slow resource assets"),
+        &top_display(&analysis.resource_assets, top),
+    );
+    // Sections 8–10 (hydration-vs-API, nav-phase components, hydration runtime)
+    // are inserted here by Task 5.
     section::<ByProjectDisplay>(
         &mut out,
         "E2E test duration by project",
