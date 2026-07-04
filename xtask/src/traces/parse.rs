@@ -70,7 +70,10 @@ pub fn get_attr(span: &Value, key: &str) -> String {
 
 /// Span duration in milliseconds from `(endTimeUnixNano - startTimeUnixNano)`.
 /// The nano fields are int64 encoded as JSON strings; parse as `i128` (Node uses
-/// `BigInt`) and divide by 1e6. A missing/unparseable field yields `0.0`.
+/// `BigInt`) and divide by 1e6. A missing/unparseable field yields `0.0` (Node's
+/// `BigInt` throws and aborts the whole run here — we deliberately degrade instead
+/// of aborting). `saturating_sub` guards the subtraction: real u64-range nanos
+/// never saturate, but a crafted ~39-digit value can't panic the tool.
 pub fn parse_duration_ms(span: &Value) -> f64 {
     let nanos = |k: &str| -> i128 {
         span.get(k)
@@ -79,7 +82,7 @@ pub fn parse_duration_ms(span: &Value) -> f64 {
             .or_else(|| span.get(k).and_then(Value::as_i64).map(i128::from))
             .unwrap_or(0)
     };
-    let delta = nanos("endTimeUnixNano") - nanos("startTimeUnixNano");
+    let delta = nanos("endTimeUnixNano").saturating_sub(nanos("startTimeUnixNano"));
     delta as f64 / 1_000_000.0
 }
 
@@ -244,6 +247,18 @@ mod tests {
     fn parse_duration_ms_from_unix_nanos() {
         let span = json!({ "startTimeUnixNano": "1000000", "endTimeUnixNano": "2500000" });
         assert_eq!(parse_duration_ms(&span), 1.5);
+    }
+
+    #[test]
+    fn parse_duration_ms_saturates_instead_of_panicking() {
+        // Crafted extreme nanos (i128::MAX minus i128::MIN) must not overflow-panic;
+        // saturating_sub clamps and we still return a finite ms. Real u64 nanos are
+        // nowhere near this and are unaffected.
+        let span = json!({
+            "endTimeUnixNano": "170141183460469231731687303715884105727",
+            "startTimeUnixNano": "-170141183460469231731687303715884105728",
+        });
+        assert!(parse_duration_ms(&span).is_finite());
     }
 
     #[test]
