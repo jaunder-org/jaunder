@@ -38,10 +38,13 @@ nix-excerpt companion (all in spec §Out-of-scope).
    `mailCaptureEnv`) + copy-out rename in `e2eRunAndCapture`.
 4. ✅ **DONE** (`d8a12e70`) — `xtask` `copy_e2e_diagnostics_between`: add
    `jaunder-diag-` prefix + doc + unit test (positive + negative-rename cases).
-5. `e2ePanicGate` rewrite: scoped ∪ journal, de-dup by location, scoped
-   precedence, allowlist kept.
-6. Draft ADR via `jaunder-adr` (cross-link 0032/0037).
-7. Docs: `observability.md` + `CONTRIBUTING.md` "look here first".
+5. ✅ **DONE** (`7b709113`) — `e2ePanicGate` rewrite: scoped ∪ journal, de-dup by
+   location, scoped precedence, allowlist kept.
+6. ✅ **DONE** (draft authored, out of git; numbered/committed at ship) —
+   `docs/adr/drafts/app-driven-scoped-server-diagnostics.md` via `jaunder-adr`
+   (cross-links 0032/0037).
+7. ✅ **DONE** — Docs: `observability.md` (new "look here first" section) +
+   `CONTRIBUTING.md` Observability bullet.
 8. Full gate: `cargo xtask validate` green (AC proof across all four combos).
 
 **Key risks / decisions:**
