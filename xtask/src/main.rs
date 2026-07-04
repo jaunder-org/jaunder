@@ -5,8 +5,6 @@ fn main() {
     let cli = Cli::parse();
     // Self-healing: wire core.hooksPath -> .githooks on every run (best-effort).
     xtask::ensure_hooks_installed();
-    // Self-healing: register the keep-ours coverage merge driver on every run (best-effort).
-    xtask::ensure_merge_driver_installed();
     let json = cli.json;
     let command = cli.command_name();
     match run(cli) {

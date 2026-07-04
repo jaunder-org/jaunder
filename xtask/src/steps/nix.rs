@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
 
-use crate::result::{CommandResult, Mode, StepResult};
+use crate::result::{CommandResult, StepResult};
 
 /// The flake checks are Linux-only (`optionalAttrs isLinux` in flake.nix);
 /// the project's CI host is x86_64-linux.
@@ -12,7 +12,7 @@ const SYSTEM: &str = "x86_64-linux";
 /// PostgreSQL-backed tests together in one pass under an ephemeral PostgreSQL)
 /// emits the reports; the regression gate + auto-heal then runs host-side over
 /// the check's `$out`.
-pub fn coverage(result: &mut CommandResult, mode: Mode) {
+pub fn coverage(result: &mut CommandResult) {
     // The producer always succeeds and always emits `$out` (reports + status +
     // diagnostics). The consumer (`coverage-gate`) fails iff the in-sandbox
     // sentinel reports a test/infra failure.
@@ -35,7 +35,7 @@ pub fn coverage(result: &mut CommandResult, mode: Mode) {
     result.push(gate);
     // `crate::coverage` is xtask's host-side gate module; `coverage` (no
     // `crate::`) is the shared crate holding the sentinel schema.
-    let (step, report) = crate::coverage::run(".xtask/gcroots/coverage", mode);
+    let (step, report) = crate::coverage::run(".xtask/gcroots/coverage");
     result.push(step);
     result.coverage = report;
 }
