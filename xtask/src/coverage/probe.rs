@@ -16,6 +16,15 @@
 //! dirty tree, so probe files must be `git add`-ed to be measured.
 
 use std::fmt;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+
+use anyhow::{Context, Result};
+
+use crate::git;
+use crate::result::StepResult;
+use crate::steps::nix::eval_coverage_drvpath;
 
 /// The two ways the coverage `src` filter can drift — each a distinct contract break.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +72,106 @@ pub fn probe_verdict(base: &str, junk: &str, rs: &str) -> Result<(), DriftError>
             base: base.to_owned(),
         });
     }
+    Ok(())
+}
+
+/// Removes the ephemeral probe worktree on every exit path (return, error, panic).
+/// The whole point of an RAII guard here is the panic path: a bare cleanup call at
+/// the end of `run_probe` would leak the worktree if any `?` bailed or a panic
+/// unwound through it.
+struct WorktreeGuard {
+    repo_root: PathBuf,
+    path: PathBuf,
+}
+
+impl Drop for WorktreeGuard {
+    fn drop(&mut self) {
+        let _ = git::at(&self.repo_root)
+            .args(["-c", "core.hooksPath="])
+            .args(["worktree", "remove", "--force"])
+            .arg(&self.path)
+            .status();
+    }
+}
+
+/// Run a git subcommand in `dir` with hooks disabled; bail on a non-zero exit.
+/// Hooks are disabled defensively — `worktree add` can fire a `post-checkout` hook,
+/// and we never want the repo's gate hooks running inside the probe.
+fn git_run(dir: &Path, args: &[&str]) -> Result<()> {
+    let ok = git::at(dir)
+        .args(["-c", "core.hooksPath="])
+        .args(args)
+        .status()
+        .with_context(|| format!("running git {args:?} in {}", dir.display()))?
+        .success();
+    if !ok {
+        anyhow::bail!("git {args:?} failed in {}", dir.display());
+    }
+    Ok(())
+}
+
+/// The user-facing step: measure the three coverage drvPaths and apply
+/// [`probe_verdict`]. Any I/O failure (nix/git) or a drift verdict becomes a failing
+/// [`StepResult`] whose detail names the broken invariant.
+pub fn probe_source() -> StepResult {
+    match run_probe() {
+        Ok(()) => StepResult::ok("coverage-probe-source")
+            .detail("coverage src filter contract holds (junk excluded, source measured)"),
+        Err(e) => StepResult::fail("coverage-probe-source").detail(format!("{e:#}")),
+    }
+}
+
+/// Measure `coverage.drvPath` across three tree states in an ephemeral worktree and
+/// return the verdict. The worktree is checked out at `HEAD`, so the probe guards the
+/// *committed* filter (what CI/PRs carry), not local uncommitted edits. Probe files
+/// are `git add`-ed, not left untracked — nix ignores untracked new files even on a
+/// dirty tree (see the module docs / spec).
+fn run_probe() -> Result<()> {
+    let repo_root = std::env::current_dir().context("resolving cwd")?;
+    let tmp = repo_root.join(".xtask/coverage-probe.worktree");
+    fs::create_dir_all(repo_root.join(".xtask")).context("creating .xtask")?;
+    // Clear any leftover from a prior crash (ignore failure — usually nothing there).
+    // Silence output: a "not a working tree" fatal is the normal no-leftover case and
+    // would be misleading noise in the CI log.
+    let _ = git::at(&repo_root)
+        .args(["-c", "core.hooksPath=", "worktree", "remove", "--force"])
+        .arg(&tmp)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    let tmp_str = tmp.to_str().context("worktree path is not UTF-8")?;
+    git_run(
+        &repo_root,
+        &["worktree", "add", "--detach", tmp_str, "HEAD"],
+    )?;
+    let _guard = WorktreeGuard {
+        repo_root: repo_root.clone(),
+        path: tmp.clone(),
+    };
+
+    // State A: clean HEAD.
+    let base = eval_coverage_drvpath(&tmp)?;
+
+    // State B: staged junk (filter-excluded) → drvPath must be unchanged.
+    fs::write(tmp.join("probe.txt"), b"").context("writing probe.txt")?;
+    git_run(&tmp, &["add", "probe.txt"])?;
+    let junk = eval_coverage_drvpath(&tmp)?;
+    git_run(&tmp, &["rm", "--cached", "--quiet", "probe.txt"])?;
+    fs::remove_file(tmp.join("probe.txt")).context("removing probe.txt")?;
+
+    // State C: staged instrumented `.rs` → drvPath must change.
+    let rs_rel = "server/src/__drift_probe.rs";
+    fs::write(
+        tmp.join(rs_rel),
+        b"// coverage source-drift probe (#241); never committed.\n",
+    )
+    .context("writing probe .rs")?;
+    git_run(&tmp, &["add", rs_rel])?;
+    let rs = eval_coverage_drvpath(&tmp)?;
+
+    // `DriftError: std::error::Error`, so `?` lifts it into `anyhow::Error`.
+    probe_verdict(&base, &junk, &rs)?;
     Ok(())
 }
 

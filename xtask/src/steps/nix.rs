@@ -1,6 +1,9 @@
 use std::fs::File;
 use std::io::{self, Write};
+use std::path::Path;
 use std::process::{Command, Stdio};
+
+use anyhow::{bail, Context, Result};
 
 use crate::result::{CommandResult, StepResult};
 
@@ -294,6 +297,35 @@ fn eval_out_path(check: &str) -> Option<String> {
     let path = String::from_utf8(out.stdout).ok()?;
     let path = path.trim();
     (!path.is_empty()).then(|| path.to_owned())
+}
+
+/// Evaluate the coverage check's `.drvPath` for the flake rooted at `flake_dir`.
+/// cwd = `flake_dir` so the `.#` ref resolves *that* worktree's git state
+/// (tracked + staged, per the flake source model), which is what the coverage
+/// source-drift probe (#241) relies on. Unlike [`eval_out_path`] this evaluates
+/// `.drvPath` (the input-addressed identity — no realized output needed) and
+/// surfaces eval failure as an error rather than `None`.
+pub fn eval_coverage_drvpath(flake_dir: &Path) -> Result<String> {
+    let attr = format!(".#checks.{SYSTEM}.coverage.drvPath");
+    let out = Command::new("nix")
+        .current_dir(flake_dir)
+        .args(["eval", "--raw", "--accept-flake-config", &attr])
+        .output()
+        .context("spawning `nix eval` for coverage.drvPath")?;
+    if !out.status.success() {
+        bail!(
+            "`nix eval {attr}` failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let path = String::from_utf8(out.stdout)
+        .context("`nix eval` output was not UTF-8")?
+        .trim()
+        .to_owned();
+    if path.is_empty() {
+        bail!("`nix eval {attr}` returned an empty path");
+    }
+    Ok(path)
 }
 
 /// On a failed `nix build`, best-effort copy any diagnostics bundle from the

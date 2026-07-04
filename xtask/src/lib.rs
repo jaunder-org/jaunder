@@ -114,6 +114,9 @@ pub enum Command {
     /// OpenTelemetry trace analysis (host-side; ADR-0028).
     #[command(subcommand)]
     Traces(TracesCommand),
+    /// Coverage tooling — the source-filter drift probe (#241).
+    #[command(subcommand)]
+    Coverage(CoverageCommand),
     /// Build the hermetic elisp live-integration VM check (ADR-0035) through the
     /// same diagnostic-preserving wrapper. For CI's parallel `elisp-integration`
     /// job; local `validate` realizes it via the `e2e` aggregate. Host only.
@@ -141,6 +144,17 @@ pub enum AdrCommand {
     /// after the final rebase, so the number is collision-free on first commit.
     #[command(after_help = "EXAMPLES:\n  cargo xtask adr promote")]
     Promote,
+}
+
+/// `coverage` subcommands.
+#[derive(Subcommand)]
+pub enum CoverageCommand {
+    /// Guard the Nix coverage derivation's source filter against silent drift:
+    /// assert that staging an excluded file leaves `coverage.drvPath` unchanged and
+    /// staging an instrumented `.rs` changes it. Eval-only (no build); runs in CI and
+    /// on request, NOT in per-commit `check`/`validate` (#241, #37).
+    #[command(after_help = "EXAMPLES:\n  cargo xtask coverage probe-source")]
+    ProbeSource,
 }
 
 /// `traces` subcommands.
@@ -208,6 +222,7 @@ impl Cli {
             Command::Adr(AdrCommand::Promote) => "adr-promote",
             Command::Traces(TracesCommand::Analyze { .. }) => "traces-analyze",
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
+            Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
             Command::ElispIntegration => "elisp-integration",
         }
     }
@@ -303,6 +318,13 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let label = format!("e2e-{}-{}", backend.as_str(), browser.as_str());
             let mut result = CommandResult::new(&label);
             steps::nix::e2e_combo(&mut result, backend.as_str(), browser.as_str());
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::Coverage(CoverageCommand::ProbeSource) => {
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("coverage-probe-source");
+            result.push(coverage::probe::probe_source());
             finalize(&mut result, start);
             Ok(result)
         }
