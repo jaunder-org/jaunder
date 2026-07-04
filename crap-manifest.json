@@ -80,7 +80,7 @@
       "cyclomatic": 15.0,
       "file": "storage/src/sqlite/mod.rs",
       "function": "SqliteAtomicOps::create_user_with_invite",
-      "line": 149
+      "line": 161
     },
     {
       "coverage": 37.5,
@@ -323,7 +323,7 @@
       "cyclomatic": 12.0,
       "file": "storage/src/sqlite/mod.rs",
       "function": "SqliteAtomicOps::confirm_password_reset",
-      "line": 244
+      "line": 256
     },
     {
       "coverage": 86.95652173913044,
@@ -1339,7 +1339,7 @@
       "crate": "storage",
       "cyclomatic": 5.0,
       "file": "storage/src/sqlite/mod.rs",
-      "function": "open_sqlite_database",
+      "function": "open_sqlite_database_with_pool",
       "line": 89
     },
     {
@@ -1583,7 +1583,7 @@
       "cyclomatic": 4.0,
       "file": "storage/src/test_support.rs",
       "function": "report_drop_outcome",
-      "line": 346
+      "line": 386
     },
     {
       "coverage": 83.33333333333334,
@@ -1933,7 +1933,7 @@
       "crate": "storage",
       "cyclomatic": 4.0,
       "file": "storage/src/postgres/mod.rs",
-      "function": "open_postgres_database",
+      "function": "open_postgres_database_with_pool",
       "line": 260
     },
     {
@@ -2117,13 +2117,13 @@
       "line": 208
     },
     {
-      "coverage": 94.44444444444444,
-      "crap": 3.001543209876543,
+      "coverage": 91.66666666666666,
+      "crap": 3.0052083333333335,
       "crate": "storage",
       "cyclomatic": 3.0,
       "file": "storage/src/test_support.rs",
       "function": "Backend::setup",
-      "line": 127
+      "line": 160
     },
     {
       "coverage": 94.73684210526316,
@@ -2456,7 +2456,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/sqlite/mod.rs",
       "function": "database_has_users",
-      "line": 118
+      "line": 130
     },
     {
       "coverage": 100.0,
@@ -2563,8 +2563,17 @@
       "crate": "storage",
       "cyclomatic": 3.0,
       "file": "storage/src/test_support.rs",
+      "function": "CloseablePool::close",
+      "line": 55
+    },
+    {
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "storage",
+      "cyclomatic": 3.0,
+      "file": "storage/src/test_support.rs",
       "function": "splice_db_name",
-      "line": 269
+      "line": 309
     },
     {
       "coverage": 100.0,
@@ -2645,7 +2654,7 @@
       "cyclomatic": 3.0,
       "file": "storage/src/postgres/mod.rs",
       "function": "database_has_users",
-      "line": 270
+      "line": 279
     },
     {
       "coverage": 100.0,
@@ -2888,7 +2897,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/test_support.rs",
       "function": "ensure_template_db",
-      "line": 416
+      "line": 456
     },
     {
       "coverage": 100.0,
@@ -3678,6 +3687,15 @@
       "crap": 2.0,
       "crate": "storage",
       "cyclomatic": 2.0,
+      "file": "storage/src/sqlite/mod.rs",
+      "function": "open_sqlite_database",
+      "line": 120
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
       "file": "storage/src/media.rs",
       "function": "MediaStore::get_media",
       "line": 245
@@ -3878,7 +3896,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/test_support.rs",
       "function": "TestBase::drop",
-      "line": 89
+      "line": 122
     },
     {
       "coverage": 100.0,
@@ -3887,7 +3905,7 @@
       "cyclomatic": 2.0,
       "file": "storage/src/test_support.rs",
       "function": "seed_posts",
-      "line": 554
+      "line": 553
     },
     {
       "coverage": 100.0,
@@ -4068,6 +4086,15 @@
       "file": "storage/src/postgres/mod.rs",
       "function": "postgres_password_from_env",
       "line": 235
+    },
+    {
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "storage",
+      "cyclomatic": 2.0,
+      "file": "storage/src/postgres/mod.rs",
+      "function": "open_postgres_database",
+      "line": 272
     },
     {
       "coverage": 100.0,
@@ -4373,7 +4400,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
       "function": "drop_test_database",
-      "line": 311
+      "line": 351
     },
     {
       "coverage": 94.33962264150944,
@@ -4400,7 +4427,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
       "function": "unique_postgres_url",
-      "line": 376
+      "line": 416
     },
     {
       "coverage": 94.73684210526316,
@@ -4409,7 +4436,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
       "function": "template_postgres_url",
-      "line": 474
+      "line": 514
     },
     {
       "coverage": 95.23809523809524,
@@ -6154,7 +6181,7 @@
       "crate": "storage",
       "cyclomatic": 1.0,
       "file": "storage/src/sqlite/mod.rs",
-      "function": "make_app_state",
+      "function": "make_sqlite_app_state",
       "line": 62
     },
     {
@@ -6164,7 +6191,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/sqlite/mod.rs",
       "function": "SqliteAtomicOps::new",
-      "line": 142
+      "line": 154
     },
     {
       "coverage": 100.0,
@@ -6173,7 +6200,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/sqlite/mod.rs",
       "function": "sqlite_pool",
-      "line": 311
+      "line": 323
     },
     {
       "coverage": 100.0,
@@ -6335,7 +6362,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
       "function": "TestBase::sqlite",
-      "line": 65
+      "line": 90
     },
     {
       "coverage": 100.0,
@@ -6344,7 +6371,16 @@
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
       "function": "TestBase::postgres",
-      "line": 72
+      "line": 98
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "TestBase::close_pool",
+      "line": 108
     },
     {
       "coverage": 100.0,
@@ -6353,7 +6389,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
       "function": "TestBase::deref",
-      "line": 83
+      "line": 116
     },
     {
       "coverage": 100.0,
@@ -6362,7 +6398,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
       "function": "recorded_postgres_url",
-      "line": 113
+      "line": 146
     },
     {
       "coverage": 100.0,
@@ -6371,51 +6407,6 @@
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
       "function": "sqlite_only",
-      "line": 160
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/test_support.rs",
-      "function": "postgres_only",
-      "line": 166
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/test_support.rs",
-      "function": "backends",
-      "line": 178
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/test_support.rs",
-      "function": "backends_matrix",
-      "line": 186
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/test_support.rs",
-      "function": "sqlite_url",
-      "line": 194
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/test_support.rs",
-      "function": "postgres_url",
       "line": 200
     },
     {
@@ -6424,7 +6415,7 @@
       "crate": "storage",
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
-      "function": "postgres_testing_enabled",
+      "function": "postgres_only",
       "line": 206
     },
     {
@@ -6433,43 +6424,52 @@
       "crate": "storage",
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
+      "function": "backends",
+      "line": 218
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "backends_matrix",
+      "line": 226
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "sqlite_url",
+      "line": 234
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "postgres_url",
+      "line": 240
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "postgres_testing_enabled",
+      "line": 246
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
       "function": "postgres_bootstrap_url",
-      "line": 214
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/test_support.rs",
-      "function": "bootstrap_url",
-      "line": 225
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/test_support.rs",
-      "function": "postgres_url_string",
-      "line": 232
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/test_support.rs",
-      "function": "postgres_url_authority",
-      "line": 237
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/test_support.rs",
-      "function": "postgres_test_authority",
       "line": 254
     },
     {
@@ -6478,8 +6478,44 @@
       "crate": "storage",
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
+      "function": "bootstrap_url",
+      "line": 265
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "postgres_url_string",
+      "line": 272
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "postgres_url_authority",
+      "line": 277
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
+      "function": "postgres_test_authority",
+      "line": 294
+    },
+    {
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "storage",
+      "cyclomatic": 1.0,
+      "file": "storage/src/test_support.rs",
       "function": "quote_postgres_identifier",
-      "line": 258
+      "line": 298
     },
     {
       "coverage": 100.0,
@@ -6488,7 +6524,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
       "function": "postgres_url_with_db_name",
-      "line": 262
+      "line": 302
     },
     {
       "coverage": 100.0,
@@ -6497,7 +6533,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
       "function": "unique_postgres_db_name",
-      "line": 282
+      "line": 322
     },
     {
       "coverage": 100.0,
@@ -6506,7 +6542,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
       "function": "nonexistent_postgres_url",
-      "line": 364
+      "line": 404
     },
     {
       "coverage": 100.0,
@@ -6515,16 +6551,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
       "function": "noop_mailer",
-      "line": 500
-    },
-    {
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "storage",
-      "cyclomatic": 1.0,
-      "file": "storage/src/test_support.rs",
-      "function": "test_sqlite_state_with_pool",
-      "line": 510
+      "line": 540
     },
     {
       "coverage": 100.0,
@@ -6533,7 +6560,7 @@
       "cyclomatic": 1.0,
       "file": "storage/src/test_support.rs",
       "function": "seed_user",
-      "line": 582
+      "line": 581
     },
     {
       "coverage": 100.0,

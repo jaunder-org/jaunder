@@ -13,15 +13,9 @@
 // clippy-pedantic flags is fixed in place rather than allowed.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use crate::{
-    open_database, open_existing_database, AppState, DbConnectOptions, SqliteAtomicOps,
-    SqliteAudienceStorage, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
-    SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage,
-    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
-    SqliteUserConfigStorage, SqliteUserStorage,
-};
+use crate::{AppState, DbConnectOptions};
 use common::mailer::{MailSender, NoopMailSender};
-use sqlx::Connection;
+use sqlx::{Connection, PgPool, SqlitePool};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -42,6 +36,30 @@ pub enum Backend {
     Postgres,
 }
 
+/// A backend-tagged handle to the connection pool behind a test's [`AppState`].
+///
+/// The pool isn't otherwise reachable from `AppState`, so tests hold this to
+/// inject a storage fault by [`close`](CloseablePool::close)-ing it (the next
+/// query through any storage handle then errors).
+pub enum CloseablePool {
+    Sqlite(SqlitePool),
+    Postgres(PgPool),
+}
+
+impl CloseablePool {
+    /// Closes the pool. Afterwards the next query through any storage handle
+    /// backed by it returns `sqlx::Error::PoolClosed`, which the storage layer
+    /// maps to its `Internal` error variant — the backend-agnostic
+    /// storage-error-propagation fault. `sqlx::Pool::close` is generic over the
+    /// backend, so the behavior is identical on `SQLite` and Postgres.
+    pub async fn close(&self) {
+        match self {
+            CloseablePool::Sqlite(pool) => pool.close().await,
+            CloseablePool::Postgres(pool) => pool.close().await,
+        }
+    }
+}
+
 /// A ready-to-use [`AppState`] plus the temp dir backing it. `base` doubles as
 /// the media-storage root HTTP tests need on both backends, and on `SQLite` it
 /// also holds the database file alive for the lifetime of the test.
@@ -59,21 +77,36 @@ pub struct TestBase {
     dir: TempDir,
     /// `Some(name)` on Postgres; `None` on `SQLite`.
     postgres_db: Option<String>,
+    /// A clone of the pool behind [`TestEnv::state`], so tests can fault it
+    /// ([`close_pool`](TestBase::close_pool)) or run raw SQL through it
+    /// ([`pool`](TestBase::pool)). Held here (a private field) rather than on
+    /// `TestEnv` so the many `let TestEnv { state, base } = …` destructures keep
+    /// compiling. A live clone at [`Drop`] time is safe because
+    /// [`drop_test_database`] issues `DROP DATABASE … WITH (FORCE)`.
+    pool: CloseablePool,
 }
 
 impl TestBase {
-    fn sqlite(dir: TempDir) -> Self {
+    fn sqlite(dir: TempDir, pool: SqlitePool) -> Self {
         Self {
             dir,
             postgres_db: None,
+            pool: CloseablePool::Sqlite(pool),
         }
     }
 
-    fn postgres(dir: TempDir, db_name: String) -> Self {
+    fn postgres(dir: TempDir, db_name: String, pool: PgPool) -> Self {
         Self {
             dir,
             postgres_db: Some(db_name),
+            pool: CloseablePool::Postgres(pool),
         }
+    }
+
+    /// Injects a storage fault: closes the pool behind this env's [`AppState`],
+    /// so the next query through any storage handle returns an `Internal` error.
+    pub async fn close_pool(&self) {
+        self.pool.close().await;
     }
 }
 
@@ -128,16 +161,23 @@ impl Backend {
         let dir = TempDir::new().unwrap();
         let (state, base) = match self {
             Backend::Sqlite => {
-                let state = open_database(&sqlite_url(&dir)).await.unwrap();
-                (state, TestBase::sqlite(dir))
+                let DbConnectOptions::Sqlite(options) = sqlite_url(&dir) else {
+                    unreachable!() // cov:ignore — sqlite_url always yields SQLite
+                };
+                let (state, pool) = crate::sqlite::open_sqlite_database_with_pool(&options, true)
+                    .await
+                    .unwrap();
+                (state, TestBase::sqlite(dir, pool))
             }
             Backend::Postgres => {
                 let url = template_postgres_url().await;
-                let state = open_existing_database(&url).await.unwrap();
                 // template_postgres_url() always yields Postgres, so unreachable.
                 let DbConnectOptions::Postgres { options, .. } = &url else {
                     unreachable!() // cov:ignore
                 };
+                let (state, pool) = crate::postgres::open_postgres_database_with_pool(options)
+                    .await
+                    .unwrap();
                 let db_name = options
                     .get_database()
                     .expect("per-test database URL includes a name")
@@ -146,7 +186,7 @@ impl Backend {
                 // database rather than minting a fresh (empty) template clone.
                 std::fs::write(dir.path().join(PG_URL_FILE), url.to_string())
                     .expect("write recorded Postgres URL");
-                (state, TestBase::postgres(dir, db_name))
+                (state, TestBase::postgres(dir, db_name, pool))
             }
         };
         TestEnv { state, base }
@@ -499,47 +539,6 @@ pub async fn template_postgres_url() -> DbConnectOptions {
 #[must_use]
 pub fn noop_mailer() -> Arc<dyn MailSender> {
     Arc::new(NoopMailSender)
-}
-
-/// Builds a `SQLite` `AppState` and also returns the underlying pool for raw-SQL
-/// access (the pool isn't otherwise reachable from `AppState`).
-///
-/// # Panics
-///
-/// If the `SQLite` pool cannot be opened or migrated.
-pub async fn test_sqlite_state_with_pool(base: &TempDir) -> (Arc<AppState>, sqlx::SqlitePool) {
-    let pool = sqlx::SqlitePool::connect_with(
-        format!("sqlite:{}", base.path().join("test.db").display())
-            .parse::<sqlx::sqlite::SqliteConnectOptions>()
-            .unwrap()
-            .create_if_missing(true),
-    )
-    .await
-    .unwrap();
-    sqlx::migrate!("../storage/migrations/sqlite")
-        .run(&pool)
-        .await
-        .unwrap();
-    let state = Arc::new(AppState {
-        site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
-        users: Arc::new(SqliteUserStorage::new(pool.clone())),
-        sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
-        invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
-        atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
-        email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
-        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
-        posts: Arc::new(SqlitePostStorage::new(pool.clone())),
-        subscriptions: Arc::new(SqliteSubscriptionStorage::new(
-            pool.clone(),
-            Arc::new(common::visibility::OpenSubscriptionPolicy),
-        )),
-        audiences: Arc::new(SqliteAudienceStorage::new(pool.clone())),
-        media: Arc::new(SqliteMediaStorage::new(pool.clone())),
-        user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
-        feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
-        feed_events: Arc::new(SqliteFeedEventStorage::new(pool.clone())),
-    });
-    (state, pool)
 }
 
 /// Seeds `count` posts for `user_id` directly through the storage service,
