@@ -37,12 +37,23 @@ fn use_json_format() -> bool {
     )
 }
 
-fn otel_exporter_otlp_endpoint() -> Option<String> {
-    std::env::var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT")
-        .ok()
-        .or_else(|| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok())
+/// Trim an optional env value and drop it if it is empty (or whitespace-only) —
+/// the shared tail of the `JAUNDER_*` readers below, so "blank means unset" stays
+/// one rule.
+fn trimmed_non_empty(value: Option<String>) -> Option<String> {
+    value
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
+}
+
+fn otel_exporter_otlp_endpoint() -> Option<String> {
+    // Precedence is by presence: the fallback runs on the raw `.ok()` before the
+    // trim, so a *set* primary var wins even if it later trims to empty.
+    trimmed_non_empty(
+        std::env::var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT")
+            .ok()
+            .or_else(|| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok()),
+    )
 }
 
 /// The scoped diagnostic-log path, if `JAUNDER_DIAG_LOG_FILE` names one. When set
@@ -51,11 +62,7 @@ fn otel_exporter_otlp_endpoint() -> Option<String> {
 /// consumes, demoting the kernel-laden journal to a fallback (issue #144). Unset in
 /// production, so the whole feature is inert there.
 fn diag_log_file() -> Option<std::path::PathBuf> {
-    std::env::var("JAUNDER_DIAG_LOG_FILE")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .map(std::path::PathBuf::from)
+    trimmed_non_empty(std::env::var("JAUNDER_DIAG_LOG_FILE").ok()).map(std::path::PathBuf::from)
 }
 
 /// Build the scoped diagnostic layer: a JSON `fmt` layer writing to `make_writer`,
