@@ -7,10 +7,11 @@
 
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::Serialize;
+
+use crate::nix_build;
 
 #[derive(Debug, Serialize)]
 pub struct AuditReport {
@@ -39,17 +40,6 @@ pub fn format_bytes(bytes: u64) -> String {
     }
     let decimals = if value >= 10.0 || unit == 0 { 0 } else { 1 };
     format!("{value:.decimals$} {}", UNITS[unit])
-}
-
-/// Pull the built store path out of `nix build --print-out-paths` output. Nix
-/// may print warnings interleaved, so we take the *last* `/nix/store/` line
-/// (the realized output), matching the script's `.at(-1)` selection.
-pub fn parse_store_path(nix_output: &str) -> Option<String> {
-    nix_output
-        .lines()
-        .map(str::trim)
-        .rfind(|l| l.starts_with("/nix/store/"))
-        .map(str::to_string)
 }
 
 /// gzip size at level 9 (`Z_BEST_COMPRESSION`), matching the script. Absolute
@@ -104,25 +94,13 @@ pub fn render_table(report: &AuditReport) -> String {
 
 /// Resolve the `.#site` output to audit. Returns `explicit` verbatim when set
 /// (audit a prebuilt store path, e.g. in CI or while iterating); otherwise runs
-/// the deterministic `nix build .#site` and parses its store path.
+/// the deterministic `nix build .#site` and parses its store path (shared
+/// [`nix_build::build_out_path`]).
 pub fn resolve_site_path(explicit: Option<&str>) -> Result<String> {
-    if let Some(p) = explicit {
-        return Ok(p.to_string());
+    match explicit {
+        Some(p) => Ok(p.to_string()),
+        None => nix_build::build_out_path("site"),
     }
-    let out = Command::new("nix")
-        .args(["build", ".#site", "--no-link", "--print-out-paths"])
-        .output()
-        .context("spawning `nix build .#site`")?;
-    if !out.status.success() {
-        bail!(
-            "`nix build .#site` failed ({}):\n{}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    parse_store_path(&stdout)
-        .context("could not parse a /nix/store path from `nix build .#site` output")
 }
 
 /// Resolve the site path, then measure the two frontend artifacts (raw, gzip,
@@ -164,20 +142,6 @@ mod tests {
         assert_eq!(format_bytes(1024 * 1024), "1.0 MiB");
         assert_eq!(format_bytes(10 * 1024 * 1024), "10 MiB");
         assert_eq!(format_bytes(1024_u64.pow(3)), "1.0 GiB");
-    }
-
-    #[test]
-    fn parse_store_path_takes_last_store_line() {
-        let out = "warning: ignoring\n/nix/store/aaa-x\n  /nix/store/bbb-jaunder-site  \n";
-        assert_eq!(
-            parse_store_path(out).as_deref(),
-            Some("/nix/store/bbb-jaunder-site")
-        );
-    }
-
-    #[test]
-    fn parse_store_path_none_when_no_store_line() {
-        assert_eq!(parse_store_path("no paths here\n"), None);
     }
 
     #[test]

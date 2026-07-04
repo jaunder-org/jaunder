@@ -6,6 +6,7 @@ mod audit_wasm;
 mod coverage;
 pub mod git;
 mod ids;
+mod nix_build;
 mod result;
 mod sh;
 mod traces;
