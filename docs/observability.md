@@ -342,7 +342,7 @@ cargo xtask audit-wasm
 
 This reports raw, gzip, and brotli sizes for:
 
-- `pkg/jaunder_bg.wasm`
+- `pkg/jaunder.wasm`
 - `pkg/jaunder.js`
 
 Useful options:

@@ -108,7 +108,7 @@ pub fn resolve_site_path(explicit: Option<&str>) -> Result<String> {
 /// artifact is absent.
 pub fn run(site_path: Option<&str>) -> Result<AuditReport> {
     let site_path = resolve_site_path(site_path)?;
-    let names = ["pkg/jaunder_bg.wasm", "pkg/jaunder.js"];
+    let names = ["pkg/jaunder.wasm", "pkg/jaunder.js"];
     let mut artifacts = Vec::new();
     for name in names {
         let path = Path::new(&site_path).join(name);
@@ -163,7 +163,7 @@ mod tests {
             site_path: "/nix/store/x-jaunder-site".into(),
             artifacts: vec![
                 ArtifactMetrics {
-                    path: "/nix/store/x-jaunder-site/pkg/jaunder_bg.wasm".into(),
+                    path: "/nix/store/x-jaunder-site/pkg/jaunder.wasm".into(),
                     raw_bytes: 2 * 1024 * 1024,
                     gzip_bytes: 700 * 1024,
                     brotli_bytes: 600 * 1024,
@@ -181,9 +181,9 @@ mod tests {
         assert!(t.contains("site output: /nix/store/x-jaunder-site"));
         assert!(t.contains("artifact"));
         // relative paths, not the absolute ones
-        assert!(t.contains("pkg/jaunder_bg.wasm"));
+        assert!(t.contains("pkg/jaunder.wasm"));
         assert!(t.contains("pkg/jaunder.js"));
-        assert!(!t.contains("/nix/store/x-jaunder-site/pkg/jaunder_bg.wasm"));
+        assert!(!t.contains("/nix/store/x-jaunder-site/pkg/jaunder.wasm"));
         // each artifact renders its own row
         assert_eq!(t.lines().filter(|l| l.contains("pkg/")).count(), 2);
         // right-aligned size column, e.g. "2.0 MiB" for the wasm raw size
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn run_errors_when_artifact_missing() {
-        // An explicit empty temp dir has no pkg/jaunder_bg.wasm → run() must Err
+        // An explicit empty temp dir has no pkg/jaunder.wasm → run() must Err
         // (and name the missing artifact), without ever invoking `nix`.
         let dir = std::env::temp_dir().join(format!("audit-wasm-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -200,7 +200,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
         let err = res.unwrap_err().to_string();
         assert!(
-            err.contains("jaunder_bg.wasm"),
+            err.contains("jaunder.wasm"),
             "error names the missing artifact: {err}"
         );
     }

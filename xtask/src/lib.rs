@@ -85,7 +85,7 @@ pub enum Command {
     /// Measure the frontend WASM/JS bundle size — raw, gzip, and brotli.
     ///
     /// Reports the download weight of the deterministic `nix build .#site`
-    /// output (`pkg/jaunder_bg.wasm`, `pkg/jaunder.js`) so you can catch
+    /// output (`pkg/jaunder.wasm`, `pkg/jaunder.js`) so you can catch
     /// bundle-size bloat before it ships and compare a change's effect on what
     /// users download. Run it after a change you expect to move the bundle (a new
     /// dependency, a feature touching the client), or periodically to watch the
