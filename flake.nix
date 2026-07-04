@@ -48,6 +48,11 @@
       mailCaptureEnv = {
         JAUNDER_MAIL_CAPTURE_FILE = "/var/lib/jaunder/mail.jsonl";
         JAUNDER_WEBSUB_CAPTURE_FILE = "/var/lib/jaunder/websub.jsonl";
+        # Scoped server-diagnostics capture (#144): the server appends WARN+ events
+        # and panic records here as JSONL. Spliced into the jaunder.service env below,
+        # so the *server* (not the Playwright process) writes it; copied out per combo
+        # in e2eRunAndCapture. (Name is now a slight misnomer — #227 consolidates.)
+        JAUNDER_DIAG_LOG_FILE = "/var/lib/jaunder/jaunder-diag.log";
       };
 
       jaunderModule =
@@ -770,6 +775,12 @@
 
             machine.execute("journalctl --no-pager -o short-precise > /tmp/system-journal-${backend}.log")
             _grab("/tmp/system-journal-${backend}.log")
+
+            # Scoped diagnostic log (#144): rename to the per-backend basename first so
+            # it flat-copies as jaunder-diag-${backend}.log — the xtask lift filter keys
+            # on the `jaunder-diag-` prefix, so a bare `jaunder-diag.log` would be dropped.
+            machine.execute("test -s /var/lib/jaunder/jaunder-diag.log && cp /var/lib/jaunder/jaunder-diag.log /tmp/jaunder-diag-${backend}.log")
+            _grab("/tmp/jaunder-diag-${backend}.log")
 
             ${e2ePanicGate backend}
 

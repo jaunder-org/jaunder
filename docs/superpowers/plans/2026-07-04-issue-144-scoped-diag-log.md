@@ -30,10 +30,10 @@ nix-excerpt companion (all in spec §Out-of-scope).
    writer + `diag_log_file()` reader, wired into `init_tracing_impl` (layer
    only) — real-registry AND-gate test + env-unset + file-exists + open-error
    coverage.
-2. `DiagPanicRecord` JSONL formatter **and** the panic-hook install (independent
-   `O_APPEND` handle, chains to prev), wired into `init_tracing_impl` — **one
-   commit** (formatter + sole consumer together; TDD the formatter first within
-   it).
+2. ✅ **DONE** (`df87c241`) — `DiagPanicRecord` JSONL formatter **and** the
+   panic-hook install (independent `O_APPEND` handle, chains to prev,
+   `Option<PathBuf>` so the enablement check keeps `init_tracing_impl`'s CRAP
+   flat), wired into `init_tracing_impl` — one commit.
 3. `flake.nix` server env (`JAUNDER_DIAG_LOG_FILE`) + copy-out rename in
    `e2eRunAndCapture`.
 4. `xtask` `copy_e2e_diagnostics_between`: add `jaunder-diag-` prefix + doc +
