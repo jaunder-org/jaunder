@@ -77,7 +77,7 @@ pub fn document(seed: &PageSeed) -> String {
             "<!DOCTYPE html><html lang=\"en\"><head>{prepaint}{head}</head><body>",
             "<div id=\"app\">{body}</div>",
             "<script type=\"application/json\" id=\"jaunder-seed\">{blob}</script>",
-            "<script type=\"module\">import init from \"/pkg/jaunder.js\"; init();</script>",
+            "<script type=\"module\">import init from \"/pkg/jaunder.js\"; init(\"/pkg/jaunder.wasm\");</script>",
             "</body></html>",
         ),
         prepaint = PREPAINT_SCRIPT,
@@ -327,6 +327,26 @@ mod tests {
         assert!(
             doc.contains("<head><script>(function()"),
             "prepaint is first in head: {doc}"
+        );
+    }
+
+    #[test]
+    fn document_boots_wasm_by_emitted_filename() {
+        use super::document;
+        use web::render::PageSeed;
+        // Drift guard (#234): projector anonymous HTML must load the wasm by the
+        // filename cargo-leptos emits (`jaunder.wasm`). Public projector routes use
+        // this shell, so an arg-less init() here 404s hydration on those routes even
+        // when the SPA shell is fixed.
+        let doc = document(&PageSeed::SiteTimeline(web::posts::TimelinePage {
+            posts: vec![],
+            next_cursor_created_at: None,
+            next_cursor_post_id: None,
+            has_more: false,
+        }));
+        assert!(
+            doc.contains(r#"init("/pkg/jaunder.wasm")"#),
+            "projector document() must boot via init(\"/pkg/jaunder.wasm\") (drift guard #234): {doc}"
         );
     }
 }
