@@ -59,7 +59,7 @@ use common::username::Username;
 // Database helpers
 // ---------------------------------------------------------------------------
 
-fn make_app_state(pool: SqlitePool) -> Arc<AppState> {
+fn make_sqlite_app_state(pool: SqlitePool) -> Arc<AppState> {
     Arc::new(AppState {
         site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
         users: Arc::new(SqliteUserStorage::new(pool.clone())),
@@ -86,10 +86,10 @@ fn make_app_state(pool: SqlitePool) -> Arc<AppState> {
     skip(options),
     fields(create_if_missing)
 )]
-pub(super) async fn open_sqlite_database(
+pub(crate) async fn open_sqlite_database_with_pool(
     options: &SqliteConnectOptions,
     create_if_missing: bool,
-) -> sqlx::Result<Arc<AppState>> {
+) -> sqlx::Result<(Arc<AppState>, SqlitePool)> {
     let mut options = options.clone();
     if create_if_missing {
         options = options.create_if_missing(true);
@@ -111,7 +111,19 @@ pub(super) async fn open_sqlite_database(
         .await?;
 
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
-    Ok(make_app_state(pool))
+    Ok((make_sqlite_app_state(pool.clone()), pool))
+}
+
+/// Opens (or creates) the `SQLite` database and returns just the [`AppState`];
+/// the pool is dropped. Tests that need to inject a pool fault use
+/// [`open_sqlite_database_with_pool`] via the `test_support` harness.
+pub(super) async fn open_sqlite_database(
+    options: &SqliteConnectOptions,
+    create_if_missing: bool,
+) -> sqlx::Result<Arc<AppState>> {
+    Ok(open_sqlite_database_with_pool(options, create_if_missing)
+        .await?
+        .0)
 }
 
 /// Returns `true` if the `SQLite` database already contains at least one user.

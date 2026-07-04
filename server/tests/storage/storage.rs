@@ -190,10 +190,8 @@ async fn local_channel_id(backend: Backend, env: &TestEnv) -> i64 {
             .await
             .unwrap(),
         Backend::Postgres => {
-            let pool = PgPool::connect(&recorded_postgres_url(&env.base))
-                .await
-                .unwrap();
-            sqlx::query_scalar(sql).fetch_one(&pool).await.unwrap()
+            let pool = env.base.pool().postgres();
+            sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
         }
     }
 }
@@ -2574,12 +2572,10 @@ async fn post_audience_rows(
             .await
             .unwrap(),
         Backend::Postgres => {
-            let pool = PgPool::connect(&recorded_postgres_url(&env.base))
-                .await
-                .unwrap();
+            let pool = env.base.pool().postgres();
             sqlx::query_as(sql)
                 .bind(post_id)
-                .fetch_all(&pool)
+                .fetch_all(pool)
                 .await
                 .unwrap()
         }
@@ -2604,13 +2600,11 @@ async fn posts_published_at_index_exists(#[case] backend: Backend) {
         .await
         .unwrap(),
         Backend::Postgres => {
-            let pool = PgPool::connect(&recorded_postgres_url(&env.base))
-                .await
-                .unwrap();
+            let pool = env.base.pool().postgres();
             sqlx::query_scalar(
                 "SELECT indexname FROM pg_indexes WHERE indexname = 'idx_posts_published_at'",
             )
-            .fetch_all(&pool)
+            .fetch_all(pool)
             .await
             .unwrap()
         }
@@ -7165,11 +7159,11 @@ async fn raw_try_exec(backend: Backend, env: &TestEnv, sql: &str) -> Result<(), 
             .await
             .map(|_| ()),
         Backend::Postgres => {
-            // Reuse the *per-test* database the state seeded (see
-            // `recorded_postgres_url`); a bare `open_pg_pool()` would mint a
-            // fresh empty clone and never see the user/audience/subscription.
-            let pool = PgPool::connect(&recorded_postgres_url(&env.base)).await?;
-            sqlx::query(sql).execute(&pool).await.map(|_| ())
+            // Reuse the pool behind the per-test `AppState` (the same database
+            // the state seeded), rather than reconnecting a fresh pool via
+            // `recorded_postgres_url`.
+            let pool = env.base.pool().postgres();
+            sqlx::query(sql).execute(pool).await.map(|_| ())
         }
     }
 }

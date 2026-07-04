@@ -180,8 +180,8 @@ mod seed_tests {
 
     #[tokio::test]
     async fn seeds_public_published_posts_visible_to_a_non_author() {
-        let base = tempfile::TempDir::new().unwrap();
-        let (state, _pool) = test_support::test_sqlite_state_with_pool(&base).await;
+        let test_support::TestEnv { state, base: _base } =
+            test_support::Backend::Sqlite.setup().await;
         let _uid = test_support::seed_user(&state).await; // creates "testuser"
 
         let ids = seed_posts_for_user(&state, "testuser", 3, true, "Timeline Post")
@@ -209,8 +209,8 @@ mod seed_tests {
 
     #[tokio::test]
     async fn rejects_a_prefix_that_cannot_form_a_valid_slug() {
-        let base = tempfile::TempDir::new().unwrap();
-        let (state, _pool) = test_support::test_sqlite_state_with_pool(&base).await;
+        let test_support::TestEnv { state, base: _base } =
+            test_support::Backend::Sqlite.setup().await;
         let _uid = test_support::seed_user(&state).await; // creates "testuser"
 
         // A prefix with no alphanumerics collapses to an empty base, so the slug
@@ -234,8 +234,8 @@ mod create_user_tests {
 
     #[tokio::test]
     async fn creates_a_lookupable_operator_and_rejects_duplicates() {
-        let base = tempfile::TempDir::new().unwrap();
-        let (state, _pool) = test_support::test_sqlite_state_with_pool(&base).await;
+        let test_support::TestEnv { state, base: _base } =
+            test_support::Backend::Sqlite.setup().await;
 
         let id = create_user(&state, "testoperator", "testpassword123", None, true)
             .await
@@ -268,8 +268,8 @@ mod set_site_config_tests {
 
     #[tokio::test]
     async fn set_round_trips_and_upserts() {
-        let base = tempfile::TempDir::new().unwrap();
-        let (state, _pool) = test_support::test_sqlite_state_with_pool(&base).await;
+        let test_support::TestEnv { state, base: _base } =
+            test_support::Backend::Sqlite.setup().await;
 
         set_site_config(&state, "site.registration_policy", "open")
             .await

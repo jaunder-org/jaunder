@@ -257,13 +257,22 @@ pub fn resolved_postgres_options(options: &PgConnectOptions) -> sqlx::Result<PgC
 }
 
 #[tracing::instrument(name = "storage.postgres.open_database", skip(options))]
-pub(crate) async fn open_postgres_database(
+pub(crate) async fn open_postgres_database_with_pool(
     options: &PgConnectOptions,
-) -> sqlx::Result<Arc<crate::AppState>> {
+) -> sqlx::Result<(Arc<crate::AppState>, PgPool)> {
     let options = resolved_postgres_options(options)?;
     let pool = PgPool::connect_with(options).await?;
     sqlx::migrate!("./migrations/postgres").run(&pool).await?;
-    Ok(make_postgres_app_state(pool))
+    Ok((make_postgres_app_state(pool.clone()), pool))
+}
+
+/// Opens the `PostgreSQL` database and returns just the [`AppState`]; the pool is
+/// dropped. Tests that need to inject a pool fault use
+/// [`open_postgres_database_with_pool`] via the `test_support` harness.
+pub(crate) async fn open_postgres_database(
+    options: &PgConnectOptions,
+) -> sqlx::Result<Arc<crate::AppState>> {
+    Ok(open_postgres_database_with_pool(options).await?.0)
 }
 
 /// Returns `true` if the `PostgreSQL` database already contains at least one user.
