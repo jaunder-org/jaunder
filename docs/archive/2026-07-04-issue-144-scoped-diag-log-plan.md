@@ -41,7 +41,7 @@ nix-excerpt companion (all in spec §Out-of-scope).
 5. ✅ **DONE** (`7b709113`) — `e2ePanicGate` rewrite: scoped ∪ journal, de-dup
    by location, scoped precedence, allowlist kept.
 6. ✅ **DONE** (draft authored, out of git; numbered/committed at ship) —
-   `docs/adr/drafts/app-driven-scoped-server-diagnostics.md` via `jaunder-adr`
+   `docs/adr/0049-app-driven-scoped-server-diagnostics.md` via `jaunder-adr`
    (cross-links 0032/0037).
 7. ✅ **DONE** — Docs: `observability.md` (new "look here first" section) +
    `CONTRIBUTING.md` Observability bullet.

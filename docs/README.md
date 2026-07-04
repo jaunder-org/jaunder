@@ -76,6 +76,7 @@ convention). All are currently `accepted`.
 | [0046](adr/0046-test-support-seed-binary.md)                       | A `test-support` binary that links `storage` for out-of-process e2e seeding                                  | accepted |
 | [0047](adr/0047-emacs-publish-orchestration.md)                    | The Emacs Publish Orchestration — Multi-Blog Config via Dynamic Specials, ID-First Safe-to-Resume Write-Back | proposed |
 | [0048](adr/0048-adr-out-of-git-draft-workflow.md)                  | ADRs drafted out of git, numbered at ship                                                                    | proposed |
+| [0049](adr/0049-app-driven-scoped-server-diagnostics.md)           | App-driven scoped server-diagnostics capture                                                                 | accepted |
 
 <!-- adr-table:end -->
 
