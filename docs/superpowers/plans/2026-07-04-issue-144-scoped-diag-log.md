@@ -26,9 +26,10 @@ nix-excerpt companion (all in spec §Out-of-scope).
 
 **Tasks (one line each):**
 
-1. WARN+ diag JSON layer + injectable synchronous writer + `diag_log_file()`
-   reader, wired into `init_tracing_impl` (layer only) — real-registry AND-gate
-   test + env-unset + file-exists + open-error coverage.
+1. ✅ **DONE** (`ac1bb2d5`) — WARN+ diag JSON layer + injectable synchronous
+   writer + `diag_log_file()` reader, wired into `init_tracing_impl` (layer
+   only) — real-registry AND-gate test + env-unset + file-exists + open-error
+   coverage.
 2. `DiagPanicRecord` JSONL formatter **and** the panic-hook install (independent
    `O_APPEND` handle, chains to prev), wired into `init_tracing_impl` — **one
    commit** (formatter + sole consumer together; TDD the formatter first within
@@ -300,6 +301,7 @@ Errors are swallowed — the hook must never unwind further.
 3. Write `installed_diag_panic_hook_appends_record_and_restores` (covers
    `from_panic`/`panic_payload_str`/`install_diag_panic_hook`/the `prev(info)`
    chain via a real panic):
+
    ```rust
    #[test]
    fn installed_diag_panic_hook_appends_record_and_restores() {
@@ -319,6 +321,7 @@ Errors are swallowed — the hook must never unwind further.
    ```
 
    - **Run (FAIL):** `cargo nextest run -p server installed_diag_panic_hook`
+
 4. Implement `install_diag_panic_hook`; call it from `init_tracing_impl` (once,
    when `diag_log_file()` is `Some`). Update the
    `init_tracing_impl_creates_diag_file_when_env_set` test from Task 1 to
