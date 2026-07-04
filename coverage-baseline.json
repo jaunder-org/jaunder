@@ -575,11 +575,11 @@
   ],
   "server/src/observability.rs": [
     {
-      "line": 120,
+      "line": 265,
       "text": "            return;"
     },
     {
-      "line": 645,
+      "line": 1014,
       "text": "                        StatusCode::INTERNAL_SERVER_ERROR"
     }
   ],

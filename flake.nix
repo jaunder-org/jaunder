@@ -48,6 +48,11 @@
       mailCaptureEnv = {
         JAUNDER_MAIL_CAPTURE_FILE = "/var/lib/jaunder/mail.jsonl";
         JAUNDER_WEBSUB_CAPTURE_FILE = "/var/lib/jaunder/websub.jsonl";
+        # Scoped server-diagnostics capture (#144): the server appends WARN+ events
+        # and panic records here as JSONL. Spliced into the jaunder.service env below,
+        # so the *server* (not the Playwright process) writes it; copied out per combo
+        # in e2eRunAndCapture. (Name is now a slight misnomer — #227 consolidates.)
+        JAUNDER_DIAG_LOG_FILE = "/var/lib/jaunder/jaunder-diag.log";
       };
 
       jaunderModule =
@@ -693,15 +698,42 @@
         # gets cached green and stays invisible. Dump the service journal, copy it
         # to $out (before the assert, so a failing run is still diagnosable), then
         # fail the check on any `panicked at` line. Default-deny via `allowed_panics`.
+        #
+        # #144: panic detection now sources from the UNION of the scoped diag file
+        # (`/var/lib/jaunder/jaunder-diag.log` — the low-noise primary the app's panic
+        # hook writes) and the journal (the fallback, and the only source for a panic
+        # that fires before the hook is installed). Reports are de-duped by panic
+        # location, the scoped record winning; a location seen only in the journal is
+        # still reported. Raw-substring scan (not JSON parsing) so a rare torn line in
+        # the scoped file can't crash the gate.
         e2ePanicGate = backend: ''
           machine.succeed("journalctl -u jaunder.service --no-pager -o cat > /tmp/jaunder-journal-${backend}.log")
           # copy_from_vm's 2nd arg is a target *directory*; "" lands the file flat at
           # $out/jaunder-journal-${backend}.log (the per-backend name comes from the source).
           machine.copy_from_vm("/tmp/jaunder-journal-${backend}.log", "")
           journal = machine.succeed("cat /tmp/jaunder-journal-${backend}.log")
+          # `cat` tolerates the scoped file being absent (empty output) — a run that
+          # never wrote it still gates on the journal alone.
+          diag = machine.execute("cat /var/lib/jaunder/jaunder-diag.log 2>/dev/null")[1]
           allowed_panics: list[str] = []  # default-deny; add a proven-benign substring + a comment here if one ever appears
-          panics = [l for l in journal.splitlines() if "panicked at" in l and not any(a in l for a in allowed_panics)]
-          assert not panics, "e2e zero-panic gate (${backend}): jaunder.service logged Rust panic(s):\n" + "\n".join(panics)
+
+          def panic_location(line):
+              # Token after "panicked at ", trailing ':' stripped — canonical across BOTH
+              # the scoped JSON record ("...panicked at src/x.rs:12:5: msg") and the default
+              # hook's journal line ("...panicked at src/x.rs:12:5:", payload on the next
+              # line). Both derive the path from the same `Location`, so the stripped tokens
+              # match. Assumes the current toolchain's `panicked at <loc>:` format.
+              return line.split("panicked at ", 1)[1].split()[0].rstrip(":")
+
+          def collect(text):
+              return [l for l in text.splitlines() if "panicked at" in l and not any(a in l for a in allowed_panics)]
+
+          reports: dict[str, str] = {}
+          for line in collect(diag):
+              reports[panic_location(line)] = line       # scoped record is authoritative
+          for line in collect(journal):
+              reports.setdefault(panic_location(line), line)  # journal-only ⇒ pre-hook-install
+          assert not reports, "e2e zero-panic gate (${backend}): jaunder.service logged Rust panic(s):\n" + "\n".join(reports.values())
         '';
 
         # #123/#49: run Playwright capturing its exit (NOT machine.succeed, which
@@ -770,6 +802,12 @@
 
             machine.execute("journalctl --no-pager -o short-precise > /tmp/system-journal-${backend}.log")
             _grab("/tmp/system-journal-${backend}.log")
+
+            # Scoped diagnostic log (#144): rename to the per-backend basename first so
+            # it flat-copies as jaunder-diag-${backend}.log — the xtask lift filter keys
+            # on the `jaunder-diag-` prefix, so a bare `jaunder-diag.log` would be dropped.
+            machine.execute("test -s /var/lib/jaunder/jaunder-diag.log && cp /var/lib/jaunder/jaunder-diag.log /tmp/jaunder-diag-${backend}.log")
+            _grab("/tmp/jaunder-diag-${backend}.log")
 
             ${e2ePanicGate backend}
 

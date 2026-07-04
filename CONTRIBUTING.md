@@ -273,6 +273,17 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
   - `--trace TRACE_ID`: Analyze a specific trace.
   - `--project NAME`: Filter by browser (e.g., `firefox`, `webkit`).
 
+- **Failure logs — look here first (#144)**: on a red e2e combo, read the scoped
+  server-diagnostic log before the journal. It is a small JSONL file of only the
+  server's **WARN+ events and panics** (no kernel/INFO noise), copied per combo
+  to `.xtask/diagnostics/e2e-<backend>-<browser>/jaunder-diag-<backend>.log` (in
+  the VM: `/var/lib/jaunder/jaunder-diag.log`). Panic records carry
+  `"kind": "panic"`. The zero-panic gate
+  ([ADR-0032](docs/adr/0032-e2e-zero-panic-gate.md)) now sources `panicked at`
+  from this file unioned with the journal; the full journal
+  (`jaunder-journal-<backend>.log`) stays captured as the last-resort fallback.
+  See `docs/observability.md` for the JSONL shape.
+
 - **WASM Audit**: Use `cargo xtask audit-wasm` to measure the size of the
   frontend WASM and JS bundles from the deterministic Nix build.
 
