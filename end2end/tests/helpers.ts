@@ -43,7 +43,11 @@ import { SEL } from "./selectors";
 
 export { waitForHydration } from "./hydration";
 
-export const BASE_URL = "http://localhost:3000";
+// The server's base URL. `JAUNDER_E2E_BASE_URL` lets the harness point the suite
+// at an ephemeral-port server (the host e2e loop feeds its discovered
+// `http://ip:port`, #249); the Nix VM feeds nothing and keeps the fixed :3000.
+export const BASE_URL =
+  process.env.JAUNDER_E2E_BASE_URL ?? "http://localhost:3000";
 
 // ---------------------------------------------------------------------------
 // Low-level action wrappers
