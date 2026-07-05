@@ -16,7 +16,7 @@ pub use storage::test_support::{
     backends, backends_matrix, nonexistent_postgres_url, noop_mailer, postgres_bootstrap_url,
     postgres_only, postgres_test_authority, postgres_testing_enabled, recorded_postgres_url,
     seed_posts, sqlite_only, sqlite_url, template_postgres_url, unique_postgres_url, Backend,
-    CloseablePool, TestBase, TestEnv, PG_URL_FILE,
+    CloseablePool, PostgresDbGuard, TestBase, TestEnv, PG_URL_FILE,
 };
 
 mod websub_capturing;
