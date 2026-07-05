@@ -149,8 +149,9 @@ string (e.g. `'.j-app-passwords button[type="submit"]'` in `atompub`) inline.
 - `cargo xtask e2e-local` (full chromium pass) green — this touches many files,
   so run the whole suite, not one spec.
 
-**Done when:** `[ ]` `selectors.ts` created, high-leverage literals migrated,
-suite green.
+**Done when:** `[x]` `selectors.ts` created, high-leverage literals migrated,
+tsc green (behaviour-preserving: SEL strings identical to originals; runtime e2e
+deferred to Task 4 / Task 9). Committed `fadfaf38`.
 
 ---
 
@@ -210,8 +211,9 @@ ambient default, so behaviour is unchanged until Task 4).
 yet; the ambient default is ≥ every existing explicit budget so nothing
 tightens).
 
-**Done when:** `[ ]` fixture surface added, `verifiedUser` line retired + its
-click routed through `click()`, suite green.
+**Done when:** `[x]` fixture surface added, `verifiedUser` line retired + its
+click routed through `click()`, tsc green. Runtime e2e deferred to the Task 4 /
+Task 9 gates (Task 4 builds on this surface).
 
 ---
 
