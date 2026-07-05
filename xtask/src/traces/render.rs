@@ -9,9 +9,8 @@ use tabled::settings::Style;
 use tabled::{Table, Tabled};
 
 use super::analyze::{
-    Analysis, AssetRow, ByProjectRow, CacheWarmthRow, E2eTestRow, HotspotRow, HydrationVsApiRow,
-    LongTaskProjectRow, PhaseProjectRow, PhaseSampleRow, PhaseTargetRow, RuntimeProjectRow,
-    RuntimeSampleRow, SlowSpanRow, TargetRow, TraceTotalRow,
+    Analysis, AssetRow, ByProjectRow, E2eTestRow, HotspotRow, LongTaskProjectRow, SlowSpanRow,
+    TargetRow, TraceTotalRow,
 };
 
 /// Format a millisecond value the way the Node reports did — three decimals.
@@ -226,160 +225,6 @@ impl From<&AssetRow> for AssetDisplay {
     }
 }
 
-#[derive(Tabled)]
-struct CacheWarmthDisplay {
-    warmth: String,
-    project: String,
-    avg_ms: String,
-    max_ms: String,
-    count: usize,
-}
-
-impl From<&CacheWarmthRow> for CacheWarmthDisplay {
-    fn from(r: &CacheWarmthRow) -> Self {
-        Self {
-            warmth: r.cache_warmth.clone(),
-            project: r.project.clone(),
-            avg_ms: ms(r.avg_ms),
-            max_ms: ms(r.max_ms),
-            count: r.count,
-        }
-    }
-}
-
-#[derive(Tabled)]
-struct HydrationVsApiDisplay {
-    hydration_ms: String,
-    api_ms: String,
-    hyd_over_api: String,
-    project: String,
-    trace_id: String,
-    test: String,
-}
-
-impl From<&HydrationVsApiRow> for HydrationVsApiDisplay {
-    fn from(r: &HydrationVsApiRow) -> Self {
-        Self {
-            hydration_ms: ms(r.hydration_ms),
-            api_ms: ms(r.api_ms),
-            hyd_over_api: r
-                .ratio
-                .map(|v| format!("{v:.2}"))
-                .unwrap_or_else(|| "-".to_string()),
-            project: r.project.clone(),
-            trace_id: dash(&r.trace_id),
-            test: r.test.clone(),
-        }
-    }
-}
-
-#[derive(Tabled)]
-struct PhaseSampleDisplay {
-    phase: String,
-    project: String,
-    ms: String,
-    trace_id: String,
-    target: String,
-}
-
-impl From<&PhaseSampleRow> for PhaseSampleDisplay {
-    fn from(r: &PhaseSampleRow) -> Self {
-        Self {
-            phase: r.phase.clone(),
-            project: r.project.clone(),
-            ms: ms(r.ms),
-            trace_id: dash(&r.trace_id),
-            target: r.target.clone(),
-        }
-    }
-}
-
-#[derive(Tabled)]
-struct PhaseTargetDisplay {
-    phase: String,
-    project: String,
-    max_ms: String,
-    avg_ms: String,
-    count: usize,
-    target: String,
-}
-
-impl From<&PhaseTargetRow> for PhaseTargetDisplay {
-    fn from(r: &PhaseTargetRow) -> Self {
-        Self {
-            phase: r.phase.clone(),
-            project: r.project.clone(),
-            max_ms: ms(r.max_ms),
-            avg_ms: ms(r.avg_ms),
-            count: r.count,
-            target: r.target.clone(),
-        }
-    }
-}
-
-#[derive(Tabled)]
-struct PhaseProjectDisplay {
-    phase: String,
-    project: String,
-    avg_ms: String,
-    max_ms: String,
-    count: usize,
-}
-
-impl From<&PhaseProjectRow> for PhaseProjectDisplay {
-    fn from(r: &PhaseProjectRow) -> Self {
-        Self {
-            phase: r.phase.clone(),
-            project: r.project.clone(),
-            avg_ms: ms(r.avg_ms),
-            max_ms: ms(r.max_ms),
-            count: r.count,
-        }
-    }
-}
-
-#[derive(Tabled)]
-struct RuntimeSampleDisplay {
-    component: String,
-    project: String,
-    ms: String,
-    trace_id: String,
-    test: String,
-}
-
-impl From<&RuntimeSampleRow> for RuntimeSampleDisplay {
-    fn from(r: &RuntimeSampleRow) -> Self {
-        Self {
-            component: r.component.clone(),
-            project: r.project.clone(),
-            ms: ms(r.ms),
-            trace_id: dash(&r.trace_id),
-            test: r.test.clone(),
-        }
-    }
-}
-
-#[derive(Tabled)]
-struct RuntimeProjectDisplay {
-    component: String,
-    project: String,
-    avg_ms: String,
-    max_ms: String,
-    count: usize,
-}
-
-impl From<&RuntimeProjectRow> for RuntimeProjectDisplay {
-    fn from(r: &RuntimeProjectRow) -> Self {
-        Self {
-            component: r.component.clone(),
-            project: r.project.clone(),
-            avg_ms: ms(r.avg_ms),
-            max_ms: ms(r.max_ms),
-            count: r.count,
-        }
-    }
-}
-
 /// The full report text for `analysis`, with ranked tables bounded by `top`.
 pub fn render(analysis: &Analysis, top: usize) -> String {
     if analysis.span_count == 0 {
@@ -416,11 +261,6 @@ pub fn render(analysis: &Analysis, top: usize) -> String {
         &format!("Top {top} slow navigation targets"),
         &top_display(&analysis.navigation_targets, top),
     );
-    section::<CacheWarmthDisplay>(
-        &mut out,
-        "Navigation commit->hydration by cache warmth",
-        &all_display(&analysis.cache_warmth),
-    );
     section::<HotspotDisplay>(
         &mut out,
         &format!("Top {top} long-task hotspots (from e2e.long_tasks_json)"),
@@ -440,36 +280,6 @@ pub fn render(analysis: &Analysis, top: usize) -> String {
         &mut out,
         &format!("Top {top} slow resource assets"),
         &top_display(&analysis.resource_assets, top),
-    );
-    section::<HydrationVsApiDisplay>(
-        &mut out,
-        &format!("Top {top} tests by navigation hydration budget vs API budget"),
-        &top_display(&analysis.hydration_vs_api, top),
-    );
-    section::<PhaseSampleDisplay>(
-        &mut out,
-        &format!("Top {top} navigation phase component samples"),
-        &top_display(&analysis.nav_phase_component_samples, top),
-    );
-    section::<PhaseTargetDisplay>(
-        &mut out,
-        &format!("Top {top} navigation phase component targets"),
-        &top_display(&analysis.nav_phase_component_targets, top),
-    );
-    section::<PhaseProjectDisplay>(
-        &mut out,
-        "Navigation phase components by project",
-        &top_display(&analysis.nav_phase_component_by_project, top),
-    );
-    section::<RuntimeSampleDisplay>(
-        &mut out,
-        &format!("Top {top} hydration runtime component samples"),
-        &top_display(&analysis.hydration_runtime_samples, top),
-    );
-    section::<RuntimeProjectDisplay>(
-        &mut out,
-        "Hydration runtime components by project",
-        &top_display(&analysis.hydration_runtime_by_project, top),
     );
     section::<ByProjectDisplay>(
         &mut out,
@@ -548,14 +358,10 @@ mod tests {
             "e2e action hotspots",
             "navigation phase hotspots",
             "slow navigation targets",
-            "commit->hydration by cache warmth",
             "long-task hotspots",
             "Long-task totals by project",
             "resource initiator hotspots",
             "slow resource assets",
-            "hydration budget vs API budget",
-            "navigation phase component samples",
-            "hydration runtime component samples",
             "E2E test duration by project",
             "Trace totals (sum of span durations)",
         ];
