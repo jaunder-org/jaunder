@@ -12,6 +12,7 @@ mod sh;
 mod traces;
 mod steps {
     pub mod adr_check;
+    pub mod build_csr;
     pub mod e2e_local;
     pub mod host_tests;
     pub mod nix;
@@ -118,6 +119,15 @@ pub enum Command {
     E2eLocal {
         /// A spec file or `-g` grep passed through to Playwright (single-test runs).
         test: Option<String>,
+    },
+    /// Build the CSR wasm bundle on the host (`cargo build -p csr` + the shared
+    /// `devtool csr-bundle` post-processing) — the cargo-leptos-free bundle build
+    /// (#236). Output to `target/site/pkg/`. Debug by default; `--release` matches
+    /// CI's optimized wasm. Host only.
+    BuildCsr {
+        /// Build optimized (release) wasm instead of debug.
+        #[arg(long)]
+        release: bool,
     },
     /// ADR maintenance.
     #[command(subcommand)]
@@ -229,6 +239,7 @@ impl Cli {
             Command::AuditWasm { .. } => "audit-wasm",
             Command::E2e { .. } => "e2e",
             Command::E2eLocal { .. } => "e2e-local",
+            Command::BuildCsr { .. } => "build-csr",
             Command::Adr(AdrCommand::Renumber) => "adr-renumber",
             Command::Adr(AdrCommand::SyncReadme) => "adr-sync-readme",
             Command::Adr(AdrCommand::Promote) => "adr-promote",
@@ -345,6 +356,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("e2e-local");
             steps::e2e_local::run(&sh, &mut result, test.as_deref());
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::BuildCsr { release } => {
+            let sh = xshell::Shell::new()?;
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("build-csr");
+            steps::build_csr::run(&sh, &mut result, release);
             finalize(&mut result, start);
             Ok(result)
         }
