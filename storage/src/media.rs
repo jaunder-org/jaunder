@@ -373,6 +373,82 @@ pub const DEFAULT_USER_QUOTA_BYTES: i64 = 1_073_741_824;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{backends, Backend, TestEnv};
+    use rstest::*;
+    use rstest_reuse::*;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn create_media_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        base.close_pool().await;
+        let record = MediaRecord {
+            user_id: 1,
+            sha256: "abc123".to_string(),
+            filename: "test.jpg".to_string(),
+            source: MediaSource::Upload,
+            content_type: "image/jpeg".to_string(),
+            size_bytes: 1024,
+            source_url: None,
+            created_at: chrono::Utc::now(),
+        };
+        let result = state.media.create_media(&record).await;
+        assert!(result.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_media_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        base.close_pool().await;
+        let result = state
+            .media
+            .get_media(1, "abc123", "test.jpg", &MediaSource::Upload)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_media_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        base.close_pool().await;
+        let result = state.media.list_media(1, None, 10, 0).await;
+        assert!(result.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn delete_media_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        base.close_pool().await;
+        let result = state
+            .media
+            .delete_media(1, "abc123", "test.jpg", &MediaSource::Upload)
+            .await;
+        assert!(matches!(result, Err(DeleteMediaError::Internal(_))));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_user_upload_usage_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        base.close_pool().await;
+        let result = state.media.get_user_upload_usage(1).await;
+        assert!(result.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn find_by_hash_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        base.close_pool().await;
+        let result = state
+            .media
+            .find_by_hash("abc123", &MediaSource::Upload)
+            .await;
+        assert!(result.is_err());
+    }
 
     #[test]
     fn media_source_as_str_returns_correct_value_for_each_variant() {
