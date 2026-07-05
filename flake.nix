@@ -723,6 +723,7 @@
                   pkgs.sqlite
                   pkgs.opentelemetry-collector-contrib
                   testSupportBin
+                  devtoolBin
                 ];
                 environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
 
@@ -760,13 +761,10 @@
                 machine.wait_for_unit("jaunder.service", timeout=60)
                 machine.wait_for_open_port(3000, timeout=30)
                 machine.succeed(
-                  "export JAUNDER_DB=sqlite:/var/lib/jaunder/data/jaunder.db; "
-                  + "test-support create-user --username testlogin --password testpassword123 && "
-                  + "test-support create-user --username testnoemail --password testpassword123 && "
-                  + "test-support create-user --username testoperator --password testpassword123 --operator && "
-                  + "test-support set-site-config --key site.registration_policy --value open && "
-                  + "test-support set-site-config --key feeds.websub_hub_url --value https://hub.test.local/ && "
-                  + "test-support reset-mail --path /var/lib/jaunder/mail.jsonl"
+                  "devtool seed-e2e"
+                  + " --db sqlite:/var/lib/jaunder/data/jaunder.db"
+                  + " --mail-file /var/lib/jaunder/mail.jsonl"
+                  + " --test-support-bin test-support"
                 )
 
               machine.start()
@@ -821,6 +819,7 @@
                   pkgs.postgresql_16
                   pkgs.opentelemetry-collector-contrib
                   testSupportBin
+                  devtoolBin
                 ];
                 environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
 
@@ -897,13 +896,10 @@
                   + " END LOOP; END \\$\\$;\""
                 )
                 machine.succeed(
-                  "export JAUNDER_DB=postgres://jaunder:testpassword@127.0.0.1/jaunder; "
-                  + "test-support create-user --username testlogin --password testpassword123 && "
-                  + "test-support create-user --username testnoemail --password testpassword123 && "
-                  + "test-support create-user --username testoperator --password testpassword123 --operator && "
-                  + "test-support set-site-config --key site.registration_policy --value open && "
-                  + "test-support set-site-config --key feeds.websub_hub_url --value https://hub.test.local/ && "
-                  + "test-support reset-mail --path /var/lib/jaunder/mail.jsonl"
+                  "devtool seed-e2e"
+                  + " --db postgres://jaunder:testpassword@127.0.0.1/jaunder"
+                  + " --mail-file /var/lib/jaunder/mail.jsonl"
+                  + " --test-support-bin test-support"
                 )
 
               # Seed a fresh DB and run the one browser this derivation targets.
