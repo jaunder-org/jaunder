@@ -103,38 +103,40 @@ pub struct TestEnv {
     pub base: TestBase,
 }
 
-/// Owns a test's temp dir and, on Postgres, the name of the per-test database
-/// cloned from the template. Dropping it removes that clone so the ephemeral
-/// cluster's data dir does not grow with the suite — the disk-exhaustion fix for
-/// issue #28. `Deref`s to the inner `TempDir`, so existing `base.path()` and
-/// `&base` uses keep compiling unchanged.
+/// Owns a test's temp dir and, on Postgres, a [`PostgresDbGuard`] that drops the
+/// per-test database on teardown so the ephemeral cluster's data dir does not
+/// grow with the suite (the disk-exhaustion fix for issue #28). `Deref`s to the
+/// inner `TempDir`, so existing `base.path()` and `&base` uses keep compiling
+/// unchanged.
 pub struct TestBase {
     dir: TempDir,
-    /// `Some(name)` on Postgres; `None` on `SQLite`.
-    postgres_db: Option<String>,
     /// A clone of the pool behind [`TestEnv::state`], so tests can fault it
     /// ([`close_pool`](TestBase::close_pool)) or run raw SQL through it
     /// ([`pool`](TestBase::pool)). Held here (a private field) rather than on
     /// `TestEnv` so the many `let TestEnv { state, base } = …` destructures keep
-    /// compiling. A live clone at [`Drop`] time is safe because
+    /// compiling. A live clone when the guard below drops is safe because
     /// [`drop_test_database`] issues `DROP DATABASE … WITH (FORCE)`.
     pool: CloseablePool,
+    /// `Some` on Postgres (drops the per-test database on teardown); `None` on
+    /// `SQLite`. Declared after `pool` so the pool drops first (fields drop in
+    /// declaration order); with `WITH (FORCE)` the order is not critical.
+    _pg: Option<PostgresDbGuard>,
 }
 
 impl TestBase {
     fn sqlite(dir: TempDir, pool: SqlitePool) -> Self {
         Self {
             dir,
-            postgres_db: None,
             pool: CloseablePool::Sqlite(pool),
+            _pg: None,
         }
     }
 
-    fn postgres(dir: TempDir, db_name: String, pool: PgPool) -> Self {
+    fn postgres(dir: TempDir, pg: PostgresDbGuard, pool: PgPool) -> Self {
         Self {
             dir,
-            postgres_db: Some(db_name),
             pool: CloseablePool::Postgres(pool),
+            _pg: Some(pg),
         }
     }
 
@@ -156,14 +158,6 @@ impl std::ops::Deref for TestBase {
 
     fn deref(&self) -> &Self::Target {
         &self.dir
-    }
-}
-
-impl Drop for TestBase {
-    fn drop(&mut self) {
-        if let Some(db_name) = self.postgres_db.take() {
-            drop_test_database(&db_name);
-        }
     }
 }
 
@@ -211,7 +205,7 @@ impl Backend {
                 (state, TestBase::sqlite(dir, pool))
             }
             Backend::Postgres => {
-                let url = template_postgres_url().await;
+                let (url, guard) = template_postgres_url().await;
                 // template_postgres_url() always yields Postgres, so unreachable.
                 let DbConnectOptions::Postgres { options, .. } = &url else {
                     unreachable!() // cov:ignore
@@ -219,15 +213,11 @@ impl Backend {
                 let (state, pool) = crate::postgres::open_postgres_database_with_pool(options)
                     .await
                     .unwrap();
-                let db_name = options
-                    .get_database()
-                    .expect("per-test database URL includes a name")
-                    .to_owned();
                 // Record the per-test DB URL so raw-SQL helpers reuse this exact
                 // database rather than minting a fresh (empty) template clone.
                 std::fs::write(dir.path().join(PG_URL_FILE), url.to_string())
                     .expect("write recorded Postgres URL");
-                (state, TestBase::postgres(dir, db_name, pool))
+                (state, TestBase::postgres(dir, guard, pool))
             }
         };
         TestEnv { state, base }
@@ -423,8 +413,8 @@ fn report_drop_outcome(
 ) {
     match outcome {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => eprintln!("issue #28: drop {db_name} failed: {error}"), // cov:ignore
-        Err(_elapsed) => eprintln!("issue #28: drop {db_name} timed out"),        // cov:ignore
+        Ok(Err(error)) => eprintln!("test database drop {db_name} failed: {error}"), // cov:ignore
+        Err(_elapsed) => eprintln!("test database drop {db_name} timed out"),        // cov:ignore
     }
 }
 
@@ -560,7 +550,7 @@ async fn ensure_template_db() {
 /// # Panics
 ///
 /// If template setup, the admin connection, or the `CREATE DATABASE` clone fails.
-pub async fn template_postgres_url() -> DbConnectOptions {
+pub async fn template_postgres_url() -> (DbConnectOptions, PostgresDbGuard) {
     ensure_template_db().await;
 
     let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
@@ -581,7 +571,8 @@ pub async fn template_postgres_url() -> DbConnectOptions {
     .await
     .unwrap();
 
-    postgres_url_with_db_name(&db_name).parse().unwrap()
+    let options = postgres_url_with_db_name(&db_name).parse().unwrap();
+    (options, PostgresDbGuard { db_name })
 }
 
 /// Default mailer for tests that don't care about email sending.
