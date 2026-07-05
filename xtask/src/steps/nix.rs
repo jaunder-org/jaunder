@@ -281,22 +281,41 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
     }
 }
 
+/// Run `nix eval --raw --accept-flake-config <installable>`, optionally with cwd =
+/// `dir` (so a `.#` ref resolves that directory's flake/git state). Returns the
+/// trimmed, non-empty output; errors on spawn/exit/UTF-8/empty. Shared core of
+/// [`eval_out_path`] and [`eval_coverage_drvpath`].
+fn nix_eval_raw(dir: Option<&Path>, installable: &str) -> Result<String> {
+    let mut cmd = Command::new("nix");
+    if let Some(dir) = dir {
+        cmd.current_dir(dir);
+    }
+    let out = cmd
+        .args(["eval", "--raw", "--accept-flake-config", installable])
+        .output()
+        .with_context(|| format!("spawning `nix eval {installable}`"))?;
+    if !out.status.success() {
+        bail!(
+            "`nix eval {installable}` failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let path = String::from_utf8(out.stdout)
+        .with_context(|| format!("`nix eval {installable}` output was not UTF-8"))?
+        .trim()
+        .to_owned();
+    if path.is_empty() {
+        bail!("`nix eval {installable}` returned an empty path");
+    }
+    Ok(path)
+}
+
 /// The check's evaluated output store path. On a failed build `--keep-failed`
 /// leaves this path on disk, world-readable, even though it is unregistered — so
 /// the e2e diagnostics the VM copied into `$out` are recoverable from it (#123/#49).
 /// `None` if the eval fails (e.g. an eval-time error unrelated to the build).
 fn eval_out_path(check: &str) -> Option<String> {
-    let installable = format!(".#checks.{SYSTEM}.{check}.outPath");
-    let out = Command::new("nix")
-        .args(["eval", "--raw", "--accept-flake-config", &installable])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let path = String::from_utf8(out.stdout).ok()?;
-    let path = path.trim();
-    (!path.is_empty()).then(|| path.to_owned())
+    nix_eval_raw(None, &format!(".#checks.{SYSTEM}.{check}.outPath")).ok()
 }
 
 /// Evaluate the coverage check's `.drvPath` for the flake rooted at `flake_dir`.
@@ -306,26 +325,10 @@ fn eval_out_path(check: &str) -> Option<String> {
 /// `.drvPath` (the input-addressed identity — no realized output needed) and
 /// surfaces eval failure as an error rather than `None`.
 pub fn eval_coverage_drvpath(flake_dir: &Path) -> Result<String> {
-    let attr = format!(".#checks.{SYSTEM}.coverage.drvPath");
-    let out = Command::new("nix")
-        .current_dir(flake_dir)
-        .args(["eval", "--raw", "--accept-flake-config", &attr])
-        .output()
-        .context("spawning `nix eval` for coverage.drvPath")?;
-    if !out.status.success() {
-        bail!(
-            "`nix eval {attr}` failed:\n{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-    let path = String::from_utf8(out.stdout)
-        .context("`nix eval` output was not UTF-8")?
-        .trim()
-        .to_owned();
-    if path.is_empty() {
-        bail!("`nix eval {attr}` returned an empty path");
-    }
-    Ok(path)
+    nix_eval_raw(
+        Some(flake_dir),
+        &format!(".#checks.{SYSTEM}.coverage.drvPath"),
+    )
 }
 
 /// On a failed `nix build`, best-effort copy any diagnostics bundle from the
