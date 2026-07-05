@@ -126,13 +126,10 @@ site-addr = "127.0.0.1:3000"
 # The port to use for automatic reload monitoring
 reload-port = 3001
 
-# [Optional] Command to use when running end2end tests. It will run in the end2end dir.
-#   [Windows] for non-WSL use "npx.cmd playwright test"
-#   This binary name can be checked in Powershell with Get-Command npx
-# The `cargo xtask` alias is a cwd-relative manifest path, so it can't run from
-# `end2end/`; invoke the driver via the explicit ../xtask manifest (#153).
-end2end-cmd = "cargo run --manifest-path ../xtask/Cargo.toml -- e2e-local"
-end2end-dir = "end2end"
+# The host e2e loop is now owned by `cargo xtask e2e-local` (it builds + serves +
+# seeds + runs Playwright itself), so cargo-leptos no longer drives end-to-end —
+# `end2end-cmd`/`end2end-dir` are intentionally absent (they would double-serve).
+# cargo-leptos remains for `watch`. See issue #249.
 
 #  The browserlist query used for optimizing the CSS.
 browserquery = "defaults"
