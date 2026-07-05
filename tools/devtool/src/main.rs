@@ -5,6 +5,7 @@
 
 use clap::{Parser, Subcommand};
 
+mod check;
 mod coverage;
 mod pg;
 mod run;
@@ -27,6 +28,20 @@ enum Command {
     /// Run one program (no shell), capturing output to .xtask/run/ and returning
     /// a structured JSON result; exits with the child's exit code.
     Run(RunArgs),
+    /// Run the non-compiling static checks (#188): one by name, or `--all`.
+    Check(CheckArgs),
+}
+
+#[derive(clap::Args)]
+struct CheckArgs {
+    /// Which check to run (omit and pass `--all` to run every check).
+    name: Option<String>,
+    /// Run all the non-compiling static checks.
+    #[arg(long, conflicts_with = "name")]
+    all: bool,
+    /// Auto-fix (the formatters) instead of verifying.
+    #[arg(long)]
+    fix: bool,
 }
 
 #[derive(clap::Args)]
@@ -68,5 +83,6 @@ fn main() -> anyhow::Result<()> {
         Command::Coverage(CoverageCmd::Emit { out }) => coverage::emit::run(&out),
         Command::Pg(PgCmd::Run { cmd }) => pg::run_command(&cmd),
         Command::Run(args) => run::run(&args.cmd, args.cwd, args.timeout),
+        Command::Check(args) => check::run(args.name.as_deref(), args.all, args.fix),
     }
 }
