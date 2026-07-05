@@ -250,22 +250,18 @@ fn action_hotspot_rows(spans: &[Span]) -> Vec<HotspotRow> {
 
 /// The navigation phase fields aggregated as `navigation.<label>` (Node `addPhase`
 /// set, :373-387).
-const NAV_PHASES: [(&str, &str); 9] = [
+const NAV_PHASES: [(&str, &str); 5] = [
     ("navigation.total", "totalMs"),
     ("navigation.request", "requestMs"),
     (
         "navigation.commit_to_domcontentloaded",
         "commitToDomContentLoadedMs",
     ),
-    ("navigation.commit_to_hydration", "commitToHydrationMs"),
+    ("navigation.commit_to_mount", "commitToMountMs"),
     (
         "navigation.domcontentloaded_to_load",
         "domContentLoadedToLoadMs",
     ),
-    ("navigation.load_to_hydration", "loadToHydrationMs"),
-    ("navigation.wasm_init", "wasmInitMs"),
-    ("navigation.leptos_hydrate", "leptosHydrateMs"),
-    ("navigation.post_hydrate_effects", "postHydrateEffectsMs"),
 ];
 
 /// Section 4 — navigation phase totals + slow navigation targets from
@@ -650,12 +646,12 @@ mod tests {
             .expect("navigation.total present");
         assert_eq!(total.count, 2);
         assert_eq!(total.max_ms, 900.0);
-        let hyd = a
+        let mount = a
             .navigation_phase_hotspots
             .iter()
-            .find(|r| r.name == "navigation.commit_to_hydration")
-            .expect("commit_to_hydration present");
-        assert_eq!(hyd.max_ms, 400.0);
+            .find(|r| r.name == "navigation.commit_to_mount")
+            .expect("commit_to_mount present");
+        assert_eq!(mount.max_ms, 400.0);
         // Two navigation targets, feed slowest.
         assert_eq!(a.navigation_targets.len(), 2);
         assert_eq!(a.navigation_targets[0].target, "jaunder.local:8080/feed");
