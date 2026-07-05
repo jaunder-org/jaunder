@@ -2,6 +2,7 @@
 #[path = "../helpers/mod.rs"]
 mod helpers;
 
+mod backup_fixture;
 mod backup_interop;
 mod commands;
 mod media_handlers;

@@ -7,14 +7,12 @@
     clippy::unused_async
 )]
 
-use chrono::Utc;
-use common::password::Password;
-use common::username::Username;
-use common::visibility::AudienceTarget;
 use jaunder::cli::StorageArgs;
 use jaunder::commands::{cmd_backup, cmd_init, cmd_restore};
-use storage::{open_existing_database, BackupMode, CreatePostInput, PostFormat};
+use storage::BackupMode;
 use tempfile::TempDir;
+
+use crate::backup_fixture::{assert_backup_fixture_restored, populate_backup_fixture};
 
 use rstest::*;
 #[allow(clippy::single_component_path_imports)]
@@ -44,93 +42,6 @@ async fn postgres_storage_args(base: &TempDir, name: &str) -> (StorageArgs, Post
         },
         guard,
     )
-}
-
-async fn populate_backup_fixture(args: &StorageArgs) -> i64 {
-    let state = open_existing_database(&args.db)
-        .await
-        .expect("open database");
-    let username: Username = "backupuser".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, Some("Backup User"), true)
-        .await
-        .expect("create user");
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id,
-            title: Some("Restored Post".to_owned()),
-            slug: "restored-post".parse().expect("valid slug"),
-            body: "body text".to_owned(),
-            format: PostFormat::Markdown,
-            rendered_html: "<p>body text</p>".to_owned(),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-        })
-        .await
-        .expect("create post");
-    state
-        .posts
-        .tag_post(post_id, "Backup-Test")
-        .await
-        .expect("tag post");
-    std::fs::write(args.storage_path.join("media").join("avatar.txt"), "media")
-        .expect("write media");
-    post_id
-}
-
-async fn assert_backup_fixture_restored(args: &StorageArgs, post_id: i64) {
-    let state = open_existing_database(&args.db)
-        .await
-        .expect("open restored database");
-    let username: Username = "backupuser".parse().expect("valid username");
-    let user = state
-        .users
-        .get_user_by_username(&username)
-        .await
-        .expect("get user")
-        .expect("restored user");
-    assert!(user.is_operator);
-    assert_eq!(user.display_name.as_deref(), Some("Backup User"));
-
-    // View as the restored post's author. Backup/restore does not yet carry the
-    // `post_audiences` rows (see TABLES_IN_EXPORT_ORDER), so an Anonymous viewer
-    // would be filtered out by the resolution predicate; the owner is always
-    // admitted via the author branch, which is the correct viewer here.
-    let local = state
-        .subscriptions
-        .local_channel_id()
-        .await
-        .expect("local channel id");
-    let post = state
-        .posts
-        .get_post_by_id(
-            post_id,
-            &common::visibility::ViewerIdentity::local(user.user_id, local),
-        )
-        .await
-        .expect("get post")
-        .expect("restored post");
-    assert_eq!(post.title.as_deref(), Some("Restored Post"));
-    assert_eq!(post.slug.as_str(), "restored-post");
-
-    let tags = state
-        .posts
-        .get_tags_for_post(post_id)
-        .await
-        .expect("get tags");
-    assert_eq!(tags.len(), 1);
-    assert_eq!(tags[0].tag_slug.as_str(), "backup-test");
-    assert_eq!(tags[0].tag_display, "Backup-Test");
-
-    assert_eq!(
-        std::fs::read_to_string(args.storage_path.join("media").join("avatar.txt"))
-            .expect("read restored media"),
-        "media"
-    );
 }
 
 #[apply(postgres_only)]
