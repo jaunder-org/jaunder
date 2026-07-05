@@ -270,8 +270,8 @@ const test = base.extend<{
   // context) so it stays instrumented by `_autoPerfSpan`. For tests that discard
   // the register username; tests that need the username/credentials use
   // `register(...)` directly or the `user`/`verifiedUser` fixtures.
-  registeredPage: async ({ page }, use, testInfo) => {
-    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
+  registeredPage: async ({ page, firstNav }, use) => {
+    await register(page, firstNav);
     await use(page);
   },
   // A uniquely-named account, registered in a throwaway context so the test's
