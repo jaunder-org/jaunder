@@ -282,6 +282,15 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
   (`jaunder-journal-<backend>.log`) stays captured as the last-resort fallback.
   See `docs/observability.md` for the JSONL shape.
 
+- **Failed Nix check — read `failure-excerpt.log` first (#145)**: when a
+  `cargo xtask check`/`validate` Nix check fails (`nix-coverage`, an `e2e-*`
+  combo, …), read `.xtask/diagnostics/<check>/failure-excerpt.log` before the
+  full log. It is nix's scoped `error:` block — the failing derivation and its
+  **de-interleaved** last log lines — not the `nix build -L` firehose that
+  interleaves every derivation, the VM console, and app output. The full
+  `.xtask/diagnostics/<check>/build.log` beside it stays as the fallback. Both
+  are uploaded by CI's `validate-diagnostics` artifact.
+
 - **WASM Audit**: Use `cargo xtask audit-wasm` to measure the size of the
   frontend WASM and JS bundles from the deterministic Nix build.
 
