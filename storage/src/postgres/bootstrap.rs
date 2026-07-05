@@ -8,6 +8,8 @@
 use sqlx::postgres::PgConnectOptions;
 use sqlx::{Connection, PgConnection};
 
+use crate::sql::{quote_identifier, quote_literal};
+
 /// Error returned by [`create_postgres_database_and_role`].
 #[derive(Debug, thiserror::Error)]
 pub enum PgBootstrapError {
@@ -48,8 +50,8 @@ pub async fn create_postgres_database_and_role(
     // than query placeholders.
     let role_sql = format!(
         "CREATE ROLE {} WITH LOGIN PASSWORD {}",
-        quote_postgres_identifier(app_role),
-        quote_postgres_literal(app_role_password),
+        quote_identifier(app_role),
+        quote_literal(app_role_password),
     );
     if !execute_utility(&mut admin_conn, &role_sql, "42710").await? {
         return Err(PgBootstrapError::RoleExists(app_role.to_owned()));
@@ -59,8 +61,8 @@ pub async fn create_postgres_database_and_role(
     // statement, so placeholders are not usable here either.
     let create_db_sql = format!(
         "CREATE DATABASE {} OWNER {}",
-        quote_postgres_identifier(database_name),
-        quote_postgres_identifier(app_role),
+        quote_identifier(database_name),
+        quote_identifier(app_role),
     );
     if !execute_utility(&mut admin_conn, &create_db_sql, "42P04").await? {
         return Err(PgBootstrapError::DatabaseExists(database_name.to_owned())); // cov:ignore
@@ -86,21 +88,6 @@ async fn execute_utility(
         }
         Err(other) => Err(other), // cov:ignore
     }
-}
-
-fn quote_postgres_identifier(name: &str) -> String {
-    // PostgreSQL role/database names are identifiers, not data values, so they
-    // cannot be supplied through bind placeholders. Administrative utility
-    // statements such as CREATE ROLE and CREATE DATABASE therefore require
-    // validated identifier quoting when assembling SQL dynamically.
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
-fn quote_postgres_literal(value: &str) -> String {
-    // PostgreSQL also rejects prepared/bound parameters in these utility
-    // statements. Password literals therefore need explicit SQL quoting when
-    // used in CREATE ROLE statements.
-    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn pg_error_code_matches(code: Option<&str>, expected: &str) -> bool {
@@ -140,17 +127,5 @@ mod tests {
     #[test]
     fn pg_error_code_matches_returns_false_when_no_code() {
         assert!(!pg_error_code_matches(None, "42710"));
-    }
-
-    #[test]
-    fn quote_postgres_identifier_wraps_and_escapes() {
-        assert_eq!(quote_postgres_identifier("users"), "\"users\"");
-        assert_eq!(quote_postgres_identifier("user\"name"), "\"user\"\"name\"");
-    }
-
-    #[test]
-    fn quote_postgres_literal_wraps_and_escapes() {
-        assert_eq!(quote_postgres_literal("password"), "'password'");
-        assert_eq!(quote_postgres_literal("can't"), "'can''t'");
     }
 }

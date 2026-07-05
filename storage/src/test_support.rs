@@ -13,6 +13,7 @@
 // clippy-pedantic flags is fixed in place rather than allowed.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use crate::sql::quote_identifier;
 use crate::{AppState, DbConnectOptions};
 use common::mailer::{MailSender, NoopMailSender};
 use sqlx::{Connection, PgPool, SqlitePool};
@@ -316,10 +317,6 @@ pub fn postgres_test_authority() -> String {
     postgres_url_authority(&postgres_bootstrap_url())
 }
 
-fn quote_postgres_identifier(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
 fn postgres_url_with_db_name(db_name: &str) -> String {
     splice_db_name(&postgres_url_string(), db_name)
 }
@@ -371,10 +368,7 @@ fn unique_postgres_db_name() -> String {
 /// regression this guards against.
 fn drop_test_database(db_name: &str) {
     let bootstrap = postgres_bootstrap_url();
-    let statement = format!(
-        "DROP DATABASE {} WITH (FORCE)",
-        quote_postgres_identifier(db_name)
-    );
+    let statement = format!("DROP DATABASE {} WITH (FORCE)", quote_identifier(db_name));
     std::thread::scope(|scope| {
         scope.spawn(|| {
             let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
@@ -450,8 +444,8 @@ pub async fn unique_postgres_url() -> DbConnectOptions {
     let mut admin_conn = sqlx::PgConnection::connect_with(&bootstrap).await.unwrap();
     sqlx::query(&format!(
         "CREATE DATABASE {} OWNER {}",
-        quote_postgres_identifier(&db_name),
-        quote_postgres_identifier(owner),
+        quote_identifier(&db_name),
+        quote_identifier(owner),
     ))
     .execute(&mut admin_conn)
     .await
@@ -498,8 +492,8 @@ async fn ensure_template_db() {
         let owner = options.get_username();
         sqlx::query(&format!(
             "CREATE DATABASE {} OWNER {}",
-            quote_postgres_identifier(TEMPLATE_DB),
-            quote_postgres_identifier(owner),
+            quote_identifier(TEMPLATE_DB),
+            quote_identifier(owner),
         ))
         .execute(&mut admin)
         .await
@@ -545,9 +539,9 @@ pub async fn template_postgres_url() -> DbConnectOptions {
     let mut admin = sqlx::PgConnection::connect_with(&bootstrap).await.unwrap();
     sqlx::query(&format!(
         "CREATE DATABASE {} OWNER {} TEMPLATE {}",
-        quote_postgres_identifier(&db_name),
-        quote_postgres_identifier(owner),
-        quote_postgres_identifier(TEMPLATE_DB),
+        quote_identifier(&db_name),
+        quote_identifier(owner),
+        quote_identifier(TEMPLATE_DB),
     ))
     .execute(&mut admin)
     .await

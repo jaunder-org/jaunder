@@ -13,6 +13,7 @@ use crate::backup::{
     build_manifest, ensure_schema_version, order_by_clause, read_table_rows, BackupError,
     BackupManifest, BackupMode, ColumnInfo, TABLES_IN_EXPORT_ORDER,
 };
+use crate::sql::{quote_identifier, quote_literal};
 
 pub(crate) async fn export_database(
     pool: &SqlitePool,
@@ -304,14 +305,6 @@ async fn schema_checksum(connection: &mut SqliteConnection) -> Result<String, Ba
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn quote_identifier(identifier: &str) -> String {
-    format!("\"{}\"", identifier.replace('"', "\"\""))
-}
-
-fn quote_literal(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,12 +329,6 @@ mod tests {
 
         assert!(sql.contains("json('true')"));
         assert!(sql.contains("ORDER BY \"user_id\""));
-    }
-
-    #[test]
-    fn quoting_escapes_identifiers_and_literals() {
-        assert_eq!(quote_identifier("a\"b"), "\"a\"\"b\"");
-        assert_eq!(quote_literal("a'b"), "'a''b'");
     }
 
     #[test]
