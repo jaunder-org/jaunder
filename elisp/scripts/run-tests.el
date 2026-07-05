@@ -3,7 +3,8 @@
 ;;; Commentary:
 ;; Loads the jaunder package and every test/*-test.el, then runs ERT in
 ;; batch mode.  Self-locating via `load-file-name' so it works both from the
-;; repo root (xtask StepSpec) and from the nix store (hermetic ert-check).
+;; repo root (the `ert' step, run via `devtool check ert') and from the nix
+;; store (the `static-checks' derivation, via `devtool check --all').
 
 ;;; Code:
 
