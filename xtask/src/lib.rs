@@ -118,7 +118,8 @@ pub enum Command {
     /// and no `:3000` conflict. Loads the same `playwright.config.ts` the CI VM
     /// loads. Host only.
     E2eLocal {
-        /// A spec file or `-g` grep passed through to Playwright (single-test runs).
+        /// A spec path or `file:line` filter passed through to Playwright as a
+        /// positional arg (single-test runs).
         test: Option<String>,
     },
     /// Build the CSR wasm bundle on the host (`cargo build -p csr` + the shared

@@ -8,11 +8,13 @@
 //! `playwright.config.ts` the CI VM loads, so "passes locally" == "passes in CI".
 //! Host only.
 //!
-//! Canonical e2e-server env-var set (this host driver and the flake systemd unit
-//! both source it; see also `flake.nix` `mailCaptureEnv`): `JAUNDER_BIND`,
-//! `JAUNDER_DB`, `JAUNDER_STORAGE_PATH`, `JAUNDER_RUNTIME_FILE`,
+//! Canonical e2e-server env-var set the host driver and the flake both provide
+//! (names shared, values per-environment; see also `flake.nix` `mailCaptureEnv`):
+//! `JAUNDER_BIND`, `JAUNDER_DB`, `JAUNDER_RUNTIME_FILE`,
 //! `JAUNDER_MAIL_CAPTURE_FILE`, `JAUNDER_WEBSUB_CAPTURE_FILE`,
-//! `JAUNDER_DIAG_LOG_FILE`. Names are shared; only values differ per environment
+//! `JAUNDER_DIAG_LOG_FILE` — plus `JAUNDER_STORAGE_PATH` host-side only (the VM
+//! instead relies on systemd `WorkingDirectory=/var/lib/jaunder` + the `./data`
+//! default). Values differ per environment
 //! (host: a temp dir + ephemeral port; VM: `/var/lib/jaunder` + `:3000`). The
 //! DB + capture-file vars are ALSO set on the Playwright process (with
 //! `target/debug` prepended to PATH) so `mail.ts`/`websub.ts` read the same files
