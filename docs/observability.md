@@ -22,7 +22,7 @@ E2E tracing currently has two complementary layers:
   - navigation lifecycle summary (`e2e.navigation_top_json`)
   - each navigation record includes `cacheWarmth` (`cold` for first document
     navigation in the test, `warm` for subsequent ones)
-  - includes `commit -> hydration` timing when hydration is observed
+  - includes `commit -> mount` timing (commit → CSR mount-ready)
   - resource summary
   - timed action summary (`e2e.action_top_json`)
 - `e2e.flow.*` (manual semantic phases, from `end2end/tests/perf.ts`)
@@ -87,13 +87,9 @@ The analyzer reports:
 - slowest spans overall
 - slowest `e2e.test` spans
 - top e2e action hotspots
-- top navigation phase hotspots and slow targets
-- navigation `commit -> hydration` split by `cacheWarmth`
+- top navigation phase hotspots and slow targets (including
+  `navigation.commit_to_mount`, the commit → CSR mount-ready phase)
 - per-project/browser e2e duration breakdown
-- per-navigation hydration component hotspots (`wasm_init`, `leptos_hydrate`,
-  `post_hydrate_effects`, `commit_to_hydration`) by sample, target, and project
-- hydration runtime component hotspots from `e2e.hydration_runtime_json` (per
-  test and per project)
 - per-trace duration totals
 
 To build both e2e VM checks and immediately analyze the produced traces, use:
@@ -150,10 +146,10 @@ few hot tests. Attribution (sqlite chromium vs firefox traces):
 - `e2e.test` avg: firefox 6813ms vs chromium 3802ms (1.79×), with **identical**
   avg actions (13.78) and firefox making **fewer** requests (31 vs 37) — so it
   is not doing more server work.
-- The delta lives in **`navigation.commit_to_hydration`** (post-CSR this phase
-  measures commit → CSR mount-ready, _not_ hydration): firefox 1123ms vs
-  chromium 559ms = **2.01×**. The `wait.hydration` action (the mount-ready wait)
-  is the single largest action bucket (655ms avg × 302 = 198s).
+- The delta lives in **`navigation.commit_to_mount`** (the commit → CSR
+  mount-ready phase): firefox 1123ms vs chromium 559ms = **2.01×**. The
+  `wait.hydration` action (the mount-ready wait) is the single largest action
+  bucket (655ms avg × 302 = 198s).
 - Server-side phases are browser-invariant and small: `navigation.request` ~88ms
   avg; API fetches (`/api/current_user` 27ms, etc.) are browser-independent.
 
