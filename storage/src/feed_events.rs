@@ -246,6 +246,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{backends, Backend};
+    use rstest::*;
+    use rstest_reuse::*;
 
     #[test]
     fn parse_status_handles_all_statuses() {
@@ -255,5 +258,159 @@ mod tests {
         assert_eq!(parse_status("failed"), FeedEventStatus::Failed);
         // Defensive fallback for unknown status strings.
         assert_eq!(parse_status("???"), FeedEventStatus::Failed);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn enqueue_creates_pending_row(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let id = env.state.feed_events.enqueue("/feed.rss").await.unwrap();
+        assert!(id > 0);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn claim_returns_eligible_pending_row(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.state.feed_events.enqueue("/feed.rss").await.unwrap();
+        let claimed = env
+            .state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].status, FeedEventStatus::Claimed);
+        assert!(claimed[0].claimed_at.is_some());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn double_claim_returns_no_rows_within_lease(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.state.feed_events.enqueue("/feed.rss").await.unwrap();
+        let first = env
+            .state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+        let second = env
+            .state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 0);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn lease_expired_rows_are_reclaimable(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.state.feed_events.enqueue("/feed.rss").await.unwrap();
+        let _first = env
+            .state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+        // With a zero lease, the just-claimed row is immediately re-eligible.
+        let second = env
+            .state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::zero())
+            .await
+            .unwrap();
+        assert_eq!(second.len(), 1);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn mark_pinged_marks_done_and_removes_from_queue(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.state.feed_events.enqueue("/feed.rss").await.unwrap();
+        let claimed = env
+            .state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+        let ids: Vec<i64> = claimed.iter().map(|r| r.id).collect();
+        env.state.feed_events.mark_regenerated(&ids).await.unwrap();
+        env.state.feed_events.mark_pinged(&ids).await.unwrap();
+        let next = env
+            .state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+        assert!(next.is_empty());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn mark_failed_increments_attempts_and_reschedules(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let id = env.state.feed_events.enqueue("/feed.rss").await.unwrap();
+        let _ = env
+            .state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+        let future = Utc::now() + chrono::Duration::minutes(1);
+        env.state
+            .feed_events
+            .mark_failed(&[id], "boom", future)
+            .await
+            .unwrap();
+        // Not eligible until `future`.
+        let now = env
+            .state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+        assert!(now.is_empty());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn mark_exhausted_marks_failed_terminal(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let id = env.state.feed_events.enqueue("/feed.rss").await.unwrap();
+        env.state
+            .feed_events
+            .mark_exhausted(&[id], "gave up")
+            .await
+            .unwrap();
+        // Failed rows are never eligible.
+        let next = env
+            .state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+        assert!(next.is_empty());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn empty_id_arrays_are_noops(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.state.feed_events.mark_regenerated(&[]).await.unwrap();
+        env.state.feed_events.mark_pinged(&[]).await.unwrap();
+        env.state
+            .feed_events
+            .mark_failed(&[], "x", Utc::now())
+            .await
+            .unwrap();
+        env.state
+            .feed_events
+            .mark_exhausted(&[], "x")
+            .await
+            .unwrap();
     }
 }
