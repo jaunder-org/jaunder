@@ -682,7 +682,7 @@ Run `cargo xtask check` first.
   `populate_backup_fixture`/`assert_backup_fixture_restored` (Task 2),
   `postgres_testing_enabled`, `Backend`, `serde_json`.
 
-- [ ] **Step 1: Add the dump-equality helpers** (module scope in
+- [x] **Step 1: Add the dump-equality helpers** (module scope in
       `backup_interop.rs`):
 
 ```rust
@@ -725,7 +725,7 @@ fn manifest_without_timestamp(dir: &Path) -> serde_json::Value {
 }
 ```
 
-- [ ] **Step 2: Add the cycle test:**
+- [x] **Step 2: Add the cycle test:**
 
 ```rust
 #[apply(postgres_only)]
@@ -786,13 +786,13 @@ async fn backup_round_trips_full_cycle_across_backends(#[case] backend: Backend)
 }
 ```
 
-- [ ] **Step 3: Run it**
+- [x] **Step 3: Run it**
 
 Run:
 `devtool pg run -- cargo nextest run -p jaunder --test misc backup_round_trips_full_cycle_across_backends`
 Expected: the four functional asserts and `E_B₁==E_B₂` PASS.
 
-- [ ] **Step 4: Resolve the empirical `E_A₁==E_A₂` assertion.** If Step 3 passed
+- [x] **Step 4: Resolve the empirical `E_A₁==E_A₂` assertion.** If Step 3 passed
       entirely, keep the `assert_backups_equal(&dir_a1, &dir_a2)` line. If
       **only** that line failed (SQLite dumps differ across the Postgres
       round-trip — a timestamp reserialization difference, DEC-D), replace it
@@ -806,7 +806,7 @@ Expected: the four functional asserts and `E_B₁==E_B₂` PASS.
 
 Re-run Step 3 and confirm PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add server/tests/misc/backup_interop.rs
