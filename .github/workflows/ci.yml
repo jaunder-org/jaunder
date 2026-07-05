@@ -39,6 +39,12 @@ jobs:
             xtask-${{ runner.os }}-
       - name: Validate (static + clippy + coverage, via xtask)
         run: nix develop .#ci --accept-flake-config -c cargo xtask validate --no-e2e
+      # Drift guard for the Nix coverage `src` filter (#241/#37): eval-only, so it
+      # reuses this job's nix + cachix + xtask cache for ~seconds. `if: always()` so a
+      # filter-drift signal is not masked by an unrelated `validate` failure.
+      - name: Coverage source-drift probe (#241)
+        if: always()
+        run: nix develop .#ci --accept-flake-config -c cargo xtask coverage probe-source
       - name: Upload coverage diagnostics
         if: always()
         uses: actions/upload-artifact@v7
