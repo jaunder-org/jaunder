@@ -2,8 +2,15 @@
  * Auto-applied Playwright fixture (`_autoPerfSpan`, `auto: true`) that wraps every
  * test in OTel capture: it instruments page requests, navigations, and hydration,
  * folds in the action records from actions.ts, and emits a single `e2e.test` span
- * on teardown. Also exports the slow-browser / worker-contention timeout scalers
- * tests use to size their per-browser budgets.
+ * on teardown.
+ *
+ * Timeout scaling is ambient (#261): a second auto fixture (`_autoTestTimeout`)
+ * gives every test a scaled `DEFAULT_TEST_BUDGET_MS` whole-test budget, so tests
+ * no longer name `testInfo` or a raw budget just to set a timeout. Tests needing
+ * more call `setTestBudget(ms)`; the `firstNav` fixture value and `registeredPage`
+ * fixture supply the scaled cold-WASM first-nav budget and a pre-registered page.
+ * This module also exports the underlying slow-browser / worker-contention scalers
+ * (`slowBrowser*`) for the sites that still size a budget explicitly.
  */
 
 import {
@@ -21,8 +28,9 @@ import {
   otlpAttribute,
   traceContextFromEnvironment,
 } from "./otel";
-import { goto, login, register } from "./helpers";
-import { readEmailLines, type CapturedEmail } from "./mail";
+import { click, expectFlash, goto, login, register } from "./helpers";
+import { extractToken, readEmailLines, type CapturedEmail } from "./mail";
+import { SEL } from "./selectors";
 
 type RequestRecord = {
   method: string;
@@ -195,6 +203,23 @@ export function slowBrowserFirstNavigationTimeoutMs(
   );
 }
 
+/** The ambient whole-test budget every test receives via the `_autoTestTimeout`
+ *  auto fixture (scaled per browser / worker contention). Tests needing more
+ *  call `setTestBudget(ms)`; tests needing less simply inherit this. 30_000 is
+ *  the largest whole-test budget the suite used before scaling was made ambient,
+ *  so the default only ever raises a test's budget, never tightens it. */
+export const DEFAULT_TEST_BUDGET_MS = 30_000;
+
+/** Raise the current test's whole-test budget to a scaled `chromiumBudgetMs`.
+ *  Call as the FIRST line of a test body, before any awaited setup, so that
+ *  setup runs under the raised budget rather than the ambient default. Reads
+ *  `test.info()` internally, so the call site names neither `testInfo` nor the
+ *  scaler. Only tests whose budget exceeds `DEFAULT_TEST_BUDGET_MS` need it. */
+export function setTestBudget(chromiumBudgetMs: number): void {
+  const info = test.info();
+  info.setTimeout(slowBrowserTimeoutMs(info, chromiumBudgetMs));
+}
+
 /** A uniquely-named account provisioned per test. `password` is the literal
  *  `register()` password; `email` is the deterministic unique address this
  *  account uses when it sets/verifies email. */
@@ -208,11 +233,47 @@ export type Mailbox = {
 };
 
 const test = base.extend<{
+  _autoTestTimeout: void;
   _autoPerfSpan: void;
+  firstNav: number;
+  registeredPage: Page;
   user: TestUser;
   mailbox: Mailbox;
   verifiedUser: TestUser;
 }>({
+  // Ambient whole-test timeout. `auto`, so it applies to EVERY test; Playwright
+  // sets up auto fixtures before any requested fixture, so this budget is in
+  // force before `user`/`verifiedUser`/`registeredPage` setup runs (covering the
+  // out-of-band flows that used to hand-roll their own `setTimeout`). Tests
+  // needing more than the default call `setTestBudget(ms)` in their body.
+  _autoTestTimeout: [
+    async ({}, use, testInfo) => {
+      testInfo.setTimeout(
+        slowBrowserTimeoutMs(testInfo, DEFAULT_TEST_BUDGET_MS),
+      );
+      await use();
+    },
+    { auto: true },
+  ],
+
+  // The scaled first-navigation (cold-WASM) budget for the modal 10_000 sites,
+  // so tests consume `{ firstNav }` instead of recomputing it. Sites that need a
+  // larger first-nav budget keep an explicit
+  // `slowBrowserFirstNavigationTimeoutMs(testInfo, N)` call.
+  firstNav: async ({}, use, testInfo) => {
+    await use(slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
+  },
+
+  // The test's own `page`, already registered with a fresh unique account using
+  // the scaled 10_000 first-nav budget — collapsing the
+  // `register(page, firstNav)` preamble. Registers the DEFAULT page (not a new
+  // context) so it stays instrumented by `_autoPerfSpan`. For tests that discard
+  // the register username; tests that need the username/credentials use
+  // `register(...)` directly or the `user`/`verifiedUser` fixtures.
+  registeredPage: async ({ page, firstNav }, use) => {
+    await register(page, firstNav);
+    await use(page);
+  },
   // A uniquely-named account, registered in a throwaway context so the test's
   // own `page` stays logged out. Lazy: only provisioned for tests that
   // destructure `user`.
@@ -263,27 +324,22 @@ const test = base.extend<{
   // out-of-band so the test's `page` stays logged out. Yields the same
   // credentials; the account now has a verified email.
   verifiedUser: async ({ browser, user, mailbox }, use, testInfo) => {
-    // Fixture setup (newContext + login + set-email + verify) runs BEFORE the
-    // test body, so a `test.setTimeout(...)` in the body is too late to cover
-    // it — this expensive out-of-band flow would run under the un-scaled 30s
-    // default and time out under worker CPU contention (#155, workers=4). Scale
-    // the whole test's budget here, at the fixture's start, so setup is covered.
-    testInfo.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
+    // The expensive out-of-band setup below (newContext + login + set-email +
+    // verify) runs before the test body; the ambient `_autoTestTimeout` auto
+    // fixture (which runs before this one) has already scaled the whole-test
+    // budget, so this setup is covered without a hand-rolled `setTimeout` here.
     const context = await browser.newContext();
     const page = await context.newPage();
     const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 15_000);
     await login(page, user.username, user.password, firstNav);
     await goto(page, "/profile/email");
     await page.fill('input[name="email"]', user.email);
-    await page.click('button[type="submit"]');
-    await expect(page.locator('p:has-text("Check your email")')).toBeVisible({
-      timeout: 10_000,
-    });
+    await click(page, SEL.submit);
+    await expectFlash(page, "Check your email", 10_000);
     const mail = await mailbox.waitForNewEmail();
-    const tokenMatch = mail.body_text.match(/token=([^\s]+)/);
-    if (!tokenMatch) throw new Error("no verification token in captured email");
-    await goto(page, `/verify-email?token=${tokenMatch[1]}`);
-    await expect(page.locator('p:has-text("verified")')).toBeVisible();
+    const token = extractToken(mail);
+    await goto(page, `/verify-email?token=${token}`);
+    await expectFlash(page, "verified");
     await context.close();
     await use(user);
   },

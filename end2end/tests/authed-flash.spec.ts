@@ -9,41 +9,17 @@
  * `/login`). The strict empirical layout-shift assertion is the follow-up #202.
  */
 
-import {
-  test,
-  expect,
-  slowBrowserFirstNavigationTimeoutMs,
-  slowBrowserTimeoutMs,
-} from "./fixtures";
-import type { Page } from "@playwright/test";
-import { withTimedAction } from "./actions";
+import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
 import { BASE_URL, goto, register } from "./helpers";
-
-async function createPublishedPostViaApi(
-  page: Page,
-  title: string,
-): Promise<void> {
-  const response = await withTimedAction(page, "api.create_post", () =>
-    page.request.post(`${BASE_URL}/api/create_post`, {
-      data: {
-        body: `# ${title}\n\nBody for ${title}`,
-        format: "markdown",
-        slug_override: null,
-        publish: true,
-      },
-    }),
-  );
-  expect(response.ok()).toBeTruthy();
-}
+import { SEL } from "./selectors";
+import { createPostViaApi } from "./posts";
 
 test("owner: pre-paint auth marks html.authed and / stays the enhanced public timeline", async ({
   page,
+  firstNav,
 }, testInfo) => {
-  const username = await register(
-    page,
-    slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
-  await createPublishedPostViaApi(page, "Owner Post");
+  const username = await register(page, firstNav);
+  await createPostViaApi(page, { body: "# Owner Post\n\nBody for Owner Post" });
 
   await goto(page, "/");
 
@@ -53,7 +29,7 @@ test("owner: pre-paint auth marks html.authed and / stays the enhanced public ti
   await expect(page.locator("html")).toHaveAttribute("data-user", username);
 
   // `/` stays the public Local timeline (D10) — NOT the personal "Your home feed".
-  await expect(page.locator(".j-topbar h1")).toHaveText("jaunder.local");
+  await expect(page.locator(SEL.topbarHeading)).toHaveText("jaunder.local");
 
   // The owner's own post gains the client-side action column (D4) — its Edit
   // affordance is absent from the anonymous seed data (is_author = false).
@@ -67,42 +43,41 @@ test("owner: pre-paint auth marks html.authed and / stays the enhanced public ti
 });
 
 test("owner: /app cockpit boots straight into the personalized feed", async ({
-  page,
-}, testInfo) => {
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
+  registeredPage: page,
+}) => {
   // Directly bookmarkable (D6): a direct hit to /app boots into the feed + composer
   // with zero intermediate clicks (pre-paint html.authed → the client boots authed).
   await goto(page, "/app");
 
   await expect(page.locator(".j-topbar .j-sub")).toHaveText("Your home feed");
-  await expect(page.locator('textarea[name="body"]')).toBeVisible();
+  await expect(page.locator(SEL.postBody)).toBeVisible();
 });
 
 test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app", async ({
   page,
-}, testInfo) => {
+  firstNav,
+}) => {
   // D7 / acceptance-#3: the redirect-pref read path exists in PREPAINT_SCRIPT with a
   // safe stay-default (nothing writes the key yet). Writing it exercises that path:
   // an authed owner (marker set) with the key = "app" is redirected off / to /app
   // before first paint. Requires BOTH the marker and the key.
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
+  await register(page, firstNav);
   await page.evaluate(() =>
     localStorage.setItem("jaunder_home_redirect", "app"),
   );
 
   await page.goto(`${BASE_URL}/`, { waitUntil: "commit" });
   await page.waitForURL(/\/app$/, {
-    timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000),
+    timeout: firstNav,
   });
 });
 
-test("anonymous: /app bounces to /login", async ({ page }, testInfo) => {
+test("anonymous: /app bounces to /login", async ({ page, firstNav }) => {
   // No session and no marker → CockpitPage's current_user() gate resolves anon and
   // redirects to /login (D6).
   await page.goto(`${BASE_URL}/app`, { waitUntil: "domcontentloaded" });
   await page.waitForURL(/\/login$/, {
-    timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000),
+    timeout: firstNav,
   });
 });
 
@@ -110,6 +85,6 @@ test("anonymous: / has no authed sidebar chrome", async ({ page }) => {
   await goto(page, "/");
 
   await expect(page.locator("html")).not.toHaveClass(/\bauthed\b/);
-  await expect(page.locator("a[href='/logout']")).toHaveCount(0);
+  await expect(page.locator(SEL.logoutLink)).toHaveCount(0);
   await expect(page.locator(".j-sidebar a[href='/drafts']")).toHaveCount(0);
 });

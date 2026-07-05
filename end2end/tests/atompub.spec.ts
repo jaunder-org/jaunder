@@ -1,10 +1,7 @@
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { goto, register, click, BASE_URL } from "./helpers";
-import {
-  slowBrowserTimeoutMs,
-  slowBrowserFirstNavigationTimeoutMs,
-} from "./fixtures";
+import { setTestBudget, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
 
 /// Mints an app password via the Sessions UI and returns the raw token.
 async function mintAppPassword(page: Page, label: string): Promise<string> {
@@ -41,7 +38,7 @@ function onServer(url: string): string {
 test("RSD autodiscovery link is present on the user page and resolves", async ({
   page,
 }, info) => {
-  info.setTimeout(slowBrowserTimeoutMs(info, 60_000));
+  setTestBudget(60_000);
   const username = await register(
     page,
     slowBrowserFirstNavigationTimeoutMs(info, 30_000),
@@ -75,7 +72,7 @@ test("RSD autodiscovery link is present on the user page and resolves", async ({
 test("an app password can be minted from the sessions page", async ({
   page,
 }, info) => {
-  info.setTimeout(slowBrowserTimeoutMs(info, 60_000));
+  setTestBudget(60_000);
   await register(page, slowBrowserFirstNavigationTimeoutMs(info, 30_000));
 
   await goto(page, "/sessions");
@@ -98,7 +95,7 @@ test("full AtomPub publishing flow over HTTP with an app password", async ({
   page,
   request,
 }, info) => {
-  info.setTimeout(slowBrowserTimeoutMs(info, 90_000));
+  setTestBudget(90_000);
   const username = await register(
     page,
     slowBrowserFirstNavigationTimeoutMs(info, 30_000),

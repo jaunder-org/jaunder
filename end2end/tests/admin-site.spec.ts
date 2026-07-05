@@ -1,12 +1,11 @@
-import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
-import { goto, login, waitForSelector } from "./helpers";
+import { test, expect } from "./fixtures";
+import { goto, login, waitForSelector, click } from "./helpers";
+import { SEL } from "./selectors";
 
 // M8.5: Site settings admin page allows operators to configure site identity.
 test("admin site settings page loads and allows updating title and base_url", async ({
   page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 15_000));
-
+}) => {
   // Log in as operator user
   await login(page, "testoperator", "testpassword123");
 
@@ -26,7 +25,7 @@ test("admin site settings page loads and allows updating title and base_url", as
   await page.fill('input[name="base_url"]', "https://example.com");
 
   // Submit the form and wait for the success status to confirm the write committed
-  await page.click('button[type="submit"]');
+  await click(page, SEL.submit);
   await waitForSelector(page, ".j-settings-saved");
 
   // Reload the page and verify values are persisted
@@ -41,11 +40,7 @@ test("admin site settings page loads and allows updating title and base_url", as
 });
 
 // M8.5: Non-operators cannot access the site settings page.
-test("non-operator user is denied access to /admin/site", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 10_000));
-
+test("non-operator user is denied access to /admin/site", async ({ page }) => {
   // Log in as non-operator user
   await login(page, "testlogin", "testpassword123");
 
@@ -54,5 +49,5 @@ test("non-operator user is denied access to /admin/site", async ({
 
   // The page should show an error or redirect
   // Expect to see an error message or be redirected
-  await expect(page.locator(".error")).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator(SEL.error)).toBeVisible({ timeout: 5_000 });
 });
