@@ -1,5 +1,11 @@
 import { test, expect } from "./fixtures";
-import { goto, click, waitForSelector, waitForHydration } from "./helpers";
+import {
+  goto,
+  click,
+  waitForSelector,
+  waitForHydration,
+  fillLoginForm,
+} from "./helpers";
 import { SEL } from "./selectors";
 
 // M3.11.13: Full password reset flow.
@@ -34,17 +40,13 @@ test("password reset flow completes successfully", async ({
 
   // Login with the OLD password should fail
   await goto(page, "/login");
-  await page.fill(SEL.username, verifiedUser.username);
-  await page.fill(SEL.password, verifiedUser.password);
-  await click(page, SEL.submit);
+  await fillLoginForm(page, verifiedUser.username, verifiedUser.password);
   await expect(page.locator(SEL.error)).toBeVisible({ timeout: 10_000 });
 
   // Login with new password should succeed from the same hydrated login page.
   await page.fill(SEL.username, "");
   await page.fill(SEL.password, "");
-  await page.fill(SEL.username, verifiedUser.username);
-  await page.fill(SEL.password, "resetpassword789");
-  await click(page, SEL.submit);
+  await fillLoginForm(page, verifiedUser.username, "resetpassword789");
   await waitForSelector(page, SEL.logoutLink, { timeout: 10_000 });
   await waitForHydration(page);
   // Login redirects to `/`, now the enhanced public Local timeline (#181, D10).

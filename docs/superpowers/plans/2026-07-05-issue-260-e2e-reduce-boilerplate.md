@@ -348,8 +348,11 @@ doc-comment example, not code — excluded, not removed); `fillLoginForm` export
 and used by the error-path tests; `cargo xtask e2e-local` on `auth.spec.ts`,
 `password_reset.spec.ts`, `admin-site.spec.ts`, `email.spec.ts` green.
 
-**Done when:** `[ ]` `fillLoginForm` extracted, `login` rebuilt on it,
-error-path + raw-click sites migrated, affected specs green.
+**Done when:** `[x]` `fillLoginForm` extracted, `login` rebuilt on it (+
+`register`/helpers selectors migrated to `SEL`), error-path blocks in auth
+(wrong-password) and password_reset (2 login blocks) migrated to
+`fillLoginForm`, admin-site + email raw submit clicks routed through `click()`,
+tsc green.
 
 ---
 

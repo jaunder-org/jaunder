@@ -21,12 +21,15 @@
  *   Firefox's `location.replace()` navigation and before ActionForm AJAX
  *   responses arrive under load.  Wait for a specific element instead.
  *
- * - Use `slowBrowserTimeoutMs(testInfo, ms)` (from fixtures) for all test
- *   timeouts so Firefox gets a scaled budget.  Do not combine it with
- *   `test.slow()` — the explicit timeout wins and `test.slow()` is redundant.
+ * - Whole-test timeout scaling is ambient (see `fixtures.ts`): every test gets a
+ *   scaled `DEFAULT_TEST_BUDGET_MS` automatically, so tests no longer hand-roll
+ *   `test.setTimeout(slowBrowserTimeoutMs(...))`.  A test needing a larger budget
+ *   calls `setTestBudget(ms)` as its first line.  Do not combine with
+ *   `test.slow()` — the scaled budget already covers Firefox.
  *
  * - Use `login(page, username, password)` for any test that needs an
- *   authenticated session.
+ *   authenticated session; use `fillLoginForm(...)` (fill + submit, no wait)
+ *   directly when exercising the login/error path.
  *
  * - Use `register(page, firstNavigationTimeoutMs)` whenever a test needs a
  *   fresh user account.  Pass `slowBrowserFirstNavigationTimeoutMs(...)` as
@@ -36,6 +39,7 @@
 import type { Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
 import { waitForHydration } from "./hydration";
+import { SEL } from "./selectors";
 
 export { waitForHydration } from "./hydration";
 
@@ -86,11 +90,26 @@ export async function waitForSelector(
 // ---------------------------------------------------------------------------
 
 /**
+ * Fill the login form (`username` / `password`) and submit — no navigation and
+ * no success wait.  `login` builds on this after its `goto("/login")`; error-path
+ * tests call it directly (after their own `goto`) and then assert on `SEL.error`.
+ */
+export async function fillLoginForm(
+  page: Page,
+  username: string,
+  password: string,
+): Promise<void> {
+  await page.fill(SEL.username, username);
+  await page.fill(SEL.password, password);
+  await click(page, SEL.submit);
+}
+
+/**
  * Log in as `username` / `password` and wait until the sidebar logout link is
  * visible (confirming the authenticated Suspense has resolved).
  *
  * Do NOT use `waitForURL` here — it is unreliable in Firefox for
- * `location.replace()` navigations.  Waiting for `a[href='/logout']` is the
+ * `location.replace()` navigations.  Waiting for `SEL.logoutLink` is the
  * correct signal because it is only rendered once auth state is confirmed.
  */
 export async function login(
@@ -100,10 +119,8 @@ export async function login(
   firstNavigationTimeoutMs?: number,
 ): Promise<void> {
   await goto(page, "/login", { timeout: firstNavigationTimeoutMs });
-  await page.fill('input[name="username"]', username);
-  await page.fill('input[name="password"]', password);
-  await click(page, 'button[type="submit"]');
-  await waitForSelector(page, "a[href='/logout']");
+  await fillLoginForm(page, username, password);
+  await waitForSelector(page, SEL.logoutLink);
 }
 
 /**
@@ -126,24 +143,24 @@ export async function register(
   await withTimedAction(page, "flow.register", async () => {
     await goto(page, "/register", { timeout: firstNavigationTimeoutMs });
     await withTimedAction(page, "ui.fill.username", () =>
-      page.fill('input[name="username"]', username),
+      page.fill(SEL.username, username),
     );
     await withTimedAction(page, "ui.fill.password", () =>
-      page.fill('input[name="password"]', "testpassword123"),
+      page.fill(SEL.password, "testpassword123"),
     );
-    await click(page, 'button[type="submit"]');
+    await click(page, SEL.submit);
 
     // Race success marker vs explicit server error so we fail fast on
     // misconfiguration rather than burning the full test timeout.
     const outcome = await Promise.race([
       page
-        .waitForSelector("a[href='/logout']", { timeout: 10_000 })
+        .waitForSelector(SEL.logoutLink, { timeout: 10_000 })
         .then(() => "ok"),
-      page.waitForSelector(".error", { timeout: 10_000 }).then(() => "error"),
+      page.waitForSelector(SEL.error, { timeout: 10_000 }).then(() => "error"),
     ]);
     if (outcome === "error") {
       const errorText = (
-        await page.locator(".error").first().textContent()
+        await page.locator(SEL.error).first().textContent()
       )?.trim();
       throw new Error(`registration failed: ${errorText ?? "unknown error"}`);
     }

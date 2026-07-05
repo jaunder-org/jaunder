@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { goto, login, waitForSelector } from "./helpers";
+import { goto, login, waitForSelector, click } from "./helpers";
 import { SEL } from "./selectors";
 
 // M8.5: Site settings admin page allows operators to configure site identity.
@@ -25,7 +25,7 @@ test("admin site settings page loads and allows updating title and base_url", as
   await page.fill('input[name="base_url"]', "https://example.com");
 
   // Submit the form and wait for the success status to confirm the write committed
-  await page.click(SEL.submit);
+  await click(page, SEL.submit);
   await waitForSelector(page, ".j-settings-saved");
 
   // Reload the page and verify values are persisted

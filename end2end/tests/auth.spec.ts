@@ -7,6 +7,7 @@ import {
   waitForSelector,
   waitForHydration,
   login,
+  fillLoginForm,
 } from "./helpers";
 import { SEL } from "./selectors";
 
@@ -67,9 +68,7 @@ test("login with valid credentials succeeds", async ({
 test("login with wrong password shows error", async ({ page }) => {
   await goto(page, "/login");
 
-  await page.fill(SEL.username, "testlogin");
-  await page.fill(SEL.password, "wrongpassword!");
-  await click(page, SEL.submit);
+  await fillLoginForm(page, "testlogin", "wrongpassword!");
   await waitForSelector(page, SEL.error);
 
   await expect(page.locator(SEL.error)).toBeVisible();

@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { goto, login } from "./helpers";
+import { goto, login, click } from "./helpers";
 import { SEL } from "./selectors";
 
 // M3.10.11: Full email verification flow.
@@ -13,7 +13,7 @@ test("email verification flow completes successfully", async ({
   // Navigate to email settings and submit this user's unique address.
   await goto(page, "/profile/email");
   await page.fill('input[name="email"]', user.email);
-  await page.click(SEL.submit);
+  await click(page, SEL.submit);
 
   await expect(page.locator('p:has-text("Check your email")')).toBeVisible({
     timeout: 10_000,
