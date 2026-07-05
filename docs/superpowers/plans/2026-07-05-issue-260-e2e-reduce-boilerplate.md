@@ -315,8 +315,10 @@ adoptions), tsc green. Runtime validation via `cargo xtask e2e sqlite chromium`
 `cargo xtask e2e-local posts.spec.ts` and `feeds.spec.ts` +
 `authed-flash.spec.ts` green.
 
-**Done when:** `[ ]` `posts.ts` created, API copies + local publish helpers
-replaced, `composePost` adopted, affected specs green.
+**Done when:** `[x]` `posts.ts` created, 7 API copies + the feeds `publishPost`
+and authed-flash `createPublishedPostViaApi` locals replaced by
+`createPostViaApi`, `composePost` adopted at posts "published post renders at
+permalink", tsc green. Runtime via Task 9 `validate`.
 
 ---
 

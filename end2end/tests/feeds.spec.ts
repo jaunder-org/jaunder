@@ -4,28 +4,13 @@ import { goto, register, click, waitForHydration, BASE_URL } from "./helpers";
 import { setTestBudget, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
 import { readPingLines, waitForPingMatching } from "./websub";
 import { SEL } from "./selectors";
+import { createPostViaApi } from "./posts";
 
 const FORMATS: { ext: string; mime: string }[] = [
   { ext: "rss", mime: "application/rss+xml" },
   { ext: "atom", mime: "application/atom+xml" },
   { ext: "json", mime: "application/feed+json" },
 ];
-
-async function publishPost(
-  page: Page,
-  title: string,
-): Promise<{ post_id: number; permalink: string }> {
-  const res = await page.request.post(`${BASE_URL}/api/create_post`, {
-    data: {
-      body: `# ${title}\n\nBody for ${title}`,
-      format: "markdown",
-      slug_override: null,
-      publish: true,
-    },
-  });
-  expect(res.ok(), `create_post for "${title}"`).toBeTruthy();
-  return (await res.json()) as { post_id: number; permalink: string };
-}
 
 // The feed cache is eventually consistent: a published post is visible
 // immediately on a cache miss, but the background worker can cache an earlier
@@ -118,8 +103,12 @@ test("per-user feeds contain only that user's posts, newest first, in all format
   );
   // Alice publishes two posts; the second is newer (higher post_id) and must
   // appear first in her feed.
-  await publishPost(page, "Alice Older");
-  await publishPost(page, "Alice Newer");
+  await createPostViaApi(page, {
+    body: "# Alice Older\n\nBody for Alice Older",
+  });
+  await createPostViaApi(page, {
+    body: "# Alice Newer\n\nBody for Alice Newer",
+  });
 
   // Log Alice out before registering Bob. Without this, register()'s
   // success-wait (a[href='/logout']) resolves instantly against Alice's
@@ -133,7 +122,7 @@ test("per-user feeds contain only that user's posts, newest first, in all format
     page,
     slowBrowserFirstNavigationTimeoutMs(info, 30_000),
   );
-  await publishPost(page, "Bob Solo");
+  await createPostViaApi(page, { body: "# Bob Solo\n\nBody for Bob Solo" });
 
   for (const fmt of FORMATS) {
     // Poll until the worker has regenerated Alice's feed with her full post
@@ -182,7 +171,9 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
     feedUrl.includes(`/~${username}/feed`);
 
   const beforePublish = readPingLines().length;
-  const { post_id } = await publishPost(page, "Ping On Publish");
+  const { post_id } = await createPostViaApi(page, {
+    body: "# Ping On Publish\n\nBody for Ping On Publish",
+  });
   const firstPing = await waitForPingMatching(
     beforePublish,
     isUserFeed,
@@ -221,7 +212,9 @@ test("feed honors If-None-Match with a 304 and empty body", async ({
     page,
     slowBrowserFirstNavigationTimeoutMs(info, 30_000),
   );
-  await publishPost(page, "Conditional Get Post");
+  await createPostViaApi(page, {
+    body: "# Conditional Get Post\n\nBody for Conditional Get Post",
+  });
 
   const feedUrl = `${BASE_URL}/~${username}/feed.rss`;
   const first = await page.request.get(feedUrl);

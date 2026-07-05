@@ -10,34 +10,16 @@
  */
 
 import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
-import type { Page } from "@playwright/test";
-import { withTimedAction } from "./actions";
 import { BASE_URL, goto, register } from "./helpers";
 import { SEL } from "./selectors";
-
-async function createPublishedPostViaApi(
-  page: Page,
-  title: string,
-): Promise<void> {
-  const response = await withTimedAction(page, "api.create_post", () =>
-    page.request.post(`${BASE_URL}/api/create_post`, {
-      data: {
-        body: `# ${title}\n\nBody for ${title}`,
-        format: "markdown",
-        slug_override: null,
-        publish: true,
-      },
-    }),
-  );
-  expect(response.ok()).toBeTruthy();
-}
+import { createPostViaApi } from "./posts";
 
 test("owner: pre-paint auth marks html.authed and / stays the enhanced public timeline", async ({
   page,
   firstNav,
 }, testInfo) => {
   const username = await register(page, firstNav);
-  await createPublishedPostViaApi(page, "Owner Post");
+  await createPostViaApi(page, { body: "# Owner Post\n\nBody for Owner Post" });
 
   await goto(page, "/");
 

@@ -5,10 +5,11 @@ import {
   slowBrowserFirstNavigationTimeoutMs,
   slowBrowserTimeoutMs,
 } from "./fixtures";
-import { BASE_URL, goto, click, waitForSelector, register } from "./helpers";
+import { goto, click, waitForSelector, register } from "./helpers";
 import { createPerfProbe } from "./perf";
 import { seedPostsViaTool } from "./seed";
 import { SEL } from "./selectors";
+import { composePost, createPostViaApi } from "./posts";
 
 const TIMELINE_PAGE_SIZE = 50;
 const TIMELINE_OVERFLOW_COUNT = 1;
@@ -74,12 +75,10 @@ test("published post renders at permalink", async ({
   registeredPage: page,
 }) => {
   test.slow();
-  await goto(page, "/posts/new");
-  await page.fill(SEL.postBody, "# Permalink Story\n\n**hello permalink**");
-  await click(page, SEL.publishButton("true"));
-  await waitForSelector(page, SEL.saveSummary);
-
-  const summary = page.locator(SEL.saveSummary);
+  const summary = await composePost(page, {
+    body: "# Permalink Story\n\n**hello permalink**",
+    publish: true,
+  });
   await expect(summary).toContainText("Post published.");
 
   const slugAttr = await summary
@@ -583,17 +582,10 @@ test("tag chip on permalink navigates to site tag listing", async ({
   registeredPage: page,
 }) => {
   // Create a published post with two tags via the API
-  const res = await page.request.post(`${BASE_URL}/api/create_post`, {
-    data: {
-      body: "# Chip Nav Post\n\ncontent",
-      format: "markdown",
-      slug_override: null,
-      publish: true,
-      tags: ["rustlang", "nix"],
-    },
+  const { permalink } = await createPostViaApi(page, {
+    body: "# Chip Nav Post\n\ncontent",
+    tags: ["rustlang", "nix"],
   });
-  expect(res.ok()).toBeTruthy();
-  const { permalink } = (await res.json()) as { permalink: string };
   expect(permalink).toBeTruthy();
 
   // Visit permalink; wait for tag chips to render
@@ -614,20 +606,10 @@ test("editing a post updates tag chips and tag listing pages", async ({
   setTestBudget(60_000);
   // Use tags unique to this test so cross-test pollution can't affect the
   // /tags/:tag listing checks below.
-  const res = await page.request.post(`${BASE_URL}/api/create_post`, {
-    data: {
-      body: "# Tag Edit Post\n\ncontent",
-      format: "markdown",
-      slug_override: null,
-      publish: true,
-      tags: ["xedita", "xeditb", "xeditc"],
-    },
+  const { permalink, post_id } = await createPostViaApi(page, {
+    body: "# Tag Edit Post\n\ncontent",
+    tags: ["xedita", "xeditb", "xeditc"],
   });
-  expect(res.ok()).toBeTruthy();
-  const { permalink, post_id } = (await res.json()) as {
-    permalink: string;
-    post_id: number;
-  };
 
   // Open the edit page directly
   await goto(page, `/posts/${post_id}/edit`);
@@ -684,16 +666,7 @@ test("TagInput autocomplete suggests existing tags", async ({
   registeredPage: page,
 }) => {
   // Seed the tag corpus with a known tag
-  const res = await page.request.post(`${BASE_URL}/api/create_post`, {
-    data: {
-      body: "seed post",
-      format: "markdown",
-      slug_override: null,
-      publish: true,
-      tags: ["rustlang"],
-    },
-  });
-  expect(res.ok()).toBeTruthy();
+  await createPostViaApi(page, { body: "seed post", tags: ["rustlang"] });
 
   // Open the create form and type a prefix that matches "rustlang"
   await goto(page, "/posts/new");
@@ -735,16 +708,7 @@ test("TagInput: keyboard navigation selects autocomplete item", async ({
   registeredPage: page,
 }) => {
   // Seed a known tag
-  const res = await page.request.post(`${BASE_URL}/api/create_post`, {
-    data: {
-      body: "seed post",
-      format: "markdown",
-      slug_override: null,
-      publish: true,
-      tags: ["kbdnav"],
-    },
-  });
-  expect(res.ok()).toBeTruthy();
+  await createPostViaApi(page, { body: "seed post", tags: ["kbdnav"] });
 
   await goto(page, "/posts/new");
   await page.fill(".j-tag-text", "kbd");
@@ -764,16 +728,7 @@ test("TagInput: keyboard navigation selects autocomplete item", async ({
 test("TagInput: Escape dismisses autocomplete without adding a chip", async ({
   registeredPage: page,
 }) => {
-  const res = await page.request.post(`${BASE_URL}/api/create_post`, {
-    data: {
-      body: "seed post",
-      format: "markdown",
-      slug_override: null,
-      publish: true,
-      tags: ["esctest"],
-    },
-  });
-  expect(res.ok()).toBeTruthy();
+  await createPostViaApi(page, { body: "seed post", tags: ["esctest"] });
 
   await goto(page, "/posts/new");
   await page.fill(".j-tag-text", "esc");
