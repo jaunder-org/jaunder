@@ -18,6 +18,7 @@ use crate::result::StepResult;
 pub mod crap;
 pub mod exempt;
 pub mod gate;
+pub mod probe;
 pub mod report;
 
 #[derive(Clone, Debug, PartialEq)]

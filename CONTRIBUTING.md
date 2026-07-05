@@ -478,6 +478,21 @@ force-fitted with artificial tests:
   **asset serving** (`server/src/assets.rs`, compile-time embedded assets):
   unreachable or impractical to exercise host-side — `cov:ignore`'d.
 
+**Source-filter drift guard (`cargo xtask coverage probe-source`).** The Nix
+`coverage` derivation's `src` is filtered to cargo sources (plus an explicit
+`csr/index.html`), so untracked junk can't bust its hash (#37/#231). This
+on-demand probe guards that filter against silent drift: in an ephemeral
+worktree it asserts that staging a filter-**excluded** file leaves
+`coverage.drvPath` unchanged (else the filter re-admits junk — the #37 impurity)
+and that staging an **instrumented** `.rs` changes it (else the filter drops
+source — a coverage hole the stateless gate can never see, because those lines
+aren't in the report). It evaluates the **committed (HEAD)** filter, so it
+guards what CI/PRs carry, not local uncommitted edits. Subtlety worth knowing: a
+_new_ file must be `git add`-ed to be measured — nix ignores untracked files
+even on a dirty tree. The probe runs in CI (the `validate-no-e2e` job) and on
+request; it is deliberately **not** part of per-commit `check`/`validate`
+(#241).
+
 ### Nix VM checks
 
 `nix flake check` runs the full Nix-backed validation matrix, including:
