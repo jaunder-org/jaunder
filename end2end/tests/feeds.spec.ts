@@ -6,6 +6,7 @@ import {
   slowBrowserFirstNavigationTimeoutMs,
 } from "./fixtures";
 import { readPingLines, waitForPingMatching } from "./websub";
+import { SEL } from "./selectors";
 
 const FORMATS: { ext: string; mime: string }[] = [
   { ext: "rss", mime: "application/rss+xml" },
@@ -127,7 +128,7 @@ test("per-user feeds contain only that user's posts, newest first, in all format
   // success-wait (a[href='/logout']) resolves instantly against Alice's
   // still-present link, so Bob's session may not be active when we publish —
   // and Bob's post would be authored by Alice.
-  await click(page, "a[href='/logout']");
+  await click(page, SEL.logoutLink);
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
   await waitForHydration(page);
 

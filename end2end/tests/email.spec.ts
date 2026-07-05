@@ -1,5 +1,6 @@
 import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
 import { goto, login } from "./helpers";
+import { SEL } from "./selectors";
 
 // M3.10.11: Full email verification flow.
 test("email verification flow completes successfully", async ({
@@ -14,7 +15,7 @@ test("email verification flow completes successfully", async ({
   // Navigate to email settings and submit this user's unique address.
   await goto(page, "/profile/email");
   await page.fill('input[name="email"]', user.email);
-  await page.click('button[type="submit"]');
+  await page.click(SEL.submit);
 
   await expect(page.locator('p:has-text("Check your email")')).toBeVisible({
     timeout: 10_000,
@@ -41,5 +42,5 @@ test("visiting verify-email with invalid token shows error", async ({
 }, testInfo) => {
   test.setTimeout(slowBrowserTimeoutMs(testInfo, 10_000));
   await goto(page, "/verify-email?token=totally_invalid_token");
-  await expect(page.locator(".error")).toBeVisible();
+  await expect(page.locator(SEL.error)).toBeVisible();
 });

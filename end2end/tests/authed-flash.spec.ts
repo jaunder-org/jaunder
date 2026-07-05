@@ -18,6 +18,7 @@ import {
 import type { Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
 import { BASE_URL, goto, register } from "./helpers";
+import { SEL } from "./selectors";
 
 async function createPublishedPostViaApi(
   page: Page,
@@ -53,7 +54,7 @@ test("owner: pre-paint auth marks html.authed and / stays the enhanced public ti
   await expect(page.locator("html")).toHaveAttribute("data-user", username);
 
   // `/` stays the public Local timeline (D10) — NOT the personal "Your home feed".
-  await expect(page.locator(".j-topbar h1")).toHaveText("jaunder.local");
+  await expect(page.locator(SEL.topbarHeading)).toHaveText("jaunder.local");
 
   // The owner's own post gains the client-side action column (D4) — its Edit
   // affordance is absent from the anonymous seed data (is_author = false).
@@ -76,7 +77,7 @@ test("owner: /app cockpit boots straight into the personalized feed", async ({
   await goto(page, "/app");
 
   await expect(page.locator(".j-topbar .j-sub")).toHaveText("Your home feed");
-  await expect(page.locator('textarea[name="body"]')).toBeVisible();
+  await expect(page.locator(SEL.postBody)).toBeVisible();
 });
 
 test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app", async ({
@@ -110,6 +111,6 @@ test("anonymous: / has no authed sidebar chrome", async ({ page }) => {
   await goto(page, "/");
 
   await expect(page.locator("html")).not.toHaveClass(/\bauthed\b/);
-  await expect(page.locator("a[href='/logout']")).toHaveCount(0);
+  await expect(page.locator(SEL.logoutLink)).toHaveCount(0);
   await expect(page.locator(".j-sidebar a[href='/drafts']")).toHaveCount(0);
 });

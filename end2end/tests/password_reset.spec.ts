@@ -1,5 +1,6 @@
 import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
 import { goto, click, waitForSelector, waitForHydration } from "./helpers";
+import { SEL } from "./selectors";
 
 // M3.11.13: Full password reset flow.
 test("password reset flow completes successfully", async ({
@@ -15,8 +16,8 @@ test("password reset flow completes successfully", async ({
 
   // Request a password reset for this test's own verified user.
   await goto(page, "/forgot-password");
-  await page.fill('input[name="username"]', verifiedUser.username);
-  await click(page, 'button[type="submit"]');
+  await page.fill(SEL.username, verifiedUser.username);
+  await click(page, SEL.submit);
 
   // Page should show a neutral confirmation (not confirm whether user exists).
   await expect(page.locator("p")).toContainText(/check|sent|email/i, {
@@ -32,28 +33,28 @@ test("password reset flow completes successfully", async ({
   // Visit the reset link and submit a new password
   await goto(page, `/reset-password?token=${token}`);
   await page.fill('input[name="new_password"]', "resetpassword789");
-  await click(page, 'button[type="submit"]');
+  await click(page, SEL.submit);
   // Wait for the router redirect to /login — ensures the password change has
   // persisted before testing the old credential below.
   await page.waitForURL("**/login");
 
   // Login with the OLD password should fail
   await goto(page, "/login");
-  await page.fill('input[name="username"]', verifiedUser.username);
-  await page.fill('input[name="password"]', verifiedUser.password);
-  await click(page, 'button[type="submit"]');
-  await expect(page.locator(".error")).toBeVisible({ timeout: 10_000 });
+  await page.fill(SEL.username, verifiedUser.username);
+  await page.fill(SEL.password, verifiedUser.password);
+  await click(page, SEL.submit);
+  await expect(page.locator(SEL.error)).toBeVisible({ timeout: 10_000 });
 
   // Login with new password should succeed from the same hydrated login page.
-  await page.fill('input[name="username"]', "");
-  await page.fill('input[name="password"]', "");
-  await page.fill('input[name="username"]', verifiedUser.username);
-  await page.fill('input[name="password"]', "resetpassword789");
-  await click(page, 'button[type="submit"]');
-  await waitForSelector(page, "a[href='/logout']", { timeout: 10_000 });
+  await page.fill(SEL.username, "");
+  await page.fill(SEL.password, "");
+  await page.fill(SEL.username, verifiedUser.username);
+  await page.fill(SEL.password, "resetpassword789");
+  await click(page, SEL.submit);
+  await waitForSelector(page, SEL.logoutLink, { timeout: 10_000 });
   await waitForHydration(page);
   // Login redirects to `/`, now the enhanced public Local timeline (#181, D10).
-  await expect(page.locator(".j-topbar h1")).toHaveText("jaunder.local");
+  await expect(page.locator(SEL.topbarHeading)).toHaveText("jaunder.local");
 });
 
 // M3.11.14: visiting /reset-password with an invalid token shows an error.
@@ -63,9 +64,9 @@ test("visiting reset-password with invalid token shows error", async ({
   test.setTimeout(slowBrowserTimeoutMs(testInfo, 12_000));
   await goto(page, "/reset-password?token=totally_invalid_token");
   await page.fill('input[name="new_password"]', "somepassword123");
-  await click(page, 'button[type="submit"]');
-  await waitForSelector(page, ".error");
-  await expect(page.locator(".error")).toBeVisible();
+  await click(page, SEL.submit);
+  await waitForSelector(page, SEL.error);
+  await expect(page.locator(SEL.error)).toBeVisible();
 });
 
 // M3.11.15: /forgot-password for a user with no verified email shows the
@@ -77,8 +78,8 @@ test("forgot-password for user without verified email shows contact operator err
   test.setTimeout(slowBrowserTimeoutMs(testInfo, 12_000));
   await goto(page, "/forgot-password");
   // A freshly-registered user exists but has no verified email.
-  await page.fill('input[name="username"]', user.username);
-  await click(page, 'button[type="submit"]');
-  await waitForSelector(page, ".error");
-  await expect(page.locator(".error")).toBeVisible();
+  await page.fill(SEL.username, user.username);
+  await click(page, SEL.submit);
+  await waitForSelector(page, SEL.error);
+  await expect(page.locator(SEL.error)).toBeVisible();
 });

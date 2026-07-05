@@ -13,6 +13,7 @@ import {
   login,
   register,
 } from "./helpers";
+import { SEL } from "./selectors";
 
 // Content Visibility — Layer A end-to-end (Task 22).
 //
@@ -49,13 +50,11 @@ async function publishWithBaseAudience(
 ): Promise<string> {
   await goto(page, "/posts/new");
   await waitForSelector(page, "#audience-base");
-  await page.fill('textarea[name="body"]', `# ${title}\n\nBody for ${title}`);
+  await page.fill(SEL.postBody, `# ${title}\n\nBody for ${title}`);
   await page.selectOption("#audience-base", base);
-  await click(page, 'button[name="publish"][value="true"]');
-  await waitForSelector(page, ".j-save-summary");
-  await expect(page.locator(".j-save-summary")).toContainText(
-    "Post published.",
-  );
+  await click(page, SEL.publishButton("true"));
+  await waitForSelector(page, SEL.saveSummary);
+  await expect(page.locator(SEL.saveSummary)).toContainText("Post published.");
   const href = await page
     .locator('[data-test="permalink-link"]')
     .getAttribute("href");
@@ -109,7 +108,7 @@ async function expectPostHidden(
       );
     }
     await goto(page, permalink, { timeout: firstNavigationTimeoutMs });
-    await expect(page.locator(".error")).toContainText("Post not found");
+    await expect(page.locator(SEL.error)).toContainText("Post not found");
     await expect(page.locator("body")).not.toContainText(title);
   } finally {
     await ctx.close();
@@ -183,7 +182,7 @@ test("Subscribers post: visible after Subscribe, hidden again after Unsubscribe"
 
     // Before subscribing: cannot see the post.
     await goto(viewerPage, permalink, { timeout: firstNav });
-    await expect(viewerPage.locator(".error")).toContainText("Post not found");
+    await expect(viewerPage.locator(SEL.error)).toContainText("Post not found");
 
     // Subscribe via the author's profile page.
     await goto(viewerPage, `/~${author.username}`);
@@ -203,7 +202,7 @@ test("Subscribers post: visible after Subscribe, hidden again after Unsubscribe"
 
     // After unsubscribing the post is hidden again.
     await goto(viewerPage, permalink);
-    await expect(viewerPage.locator(".error")).toContainText("Post not found");
+    await expect(viewerPage.locator(SEL.error)).toContainText("Post not found");
   } finally {
     await viewerCtx.close();
   }
@@ -265,20 +264,15 @@ test("Named audience: assigned member sees a Friends post; an unassigned non-mem
   // Author publishes a post targeted to subscribers + the Friends audience.
   await goto(page, "/posts/new");
   await waitForSelector(page, "#audience-base");
-  await page.fill(
-    'textarea[name="body"]',
-    "# Friends Post\n\nBody for Friends Post",
-  );
+  await page.fill(SEL.postBody, "# Friends Post\n\nBody for Friends Post");
   await page.selectOption("#audience-base", "subscribers");
   await page
     .locator("label", { hasText: "Friends" })
     .locator('input[type="checkbox"]')
     .check();
-  await click(page, 'button[name="publish"][value="true"]');
-  await waitForSelector(page, ".j-save-summary");
-  await expect(page.locator(".j-save-summary")).toContainText(
-    "Post published.",
-  );
+  await click(page, SEL.publishButton("true"));
+  await waitForSelector(page, SEL.saveSummary);
+  await expect(page.locator(SEL.saveSummary)).toContainText("Post published.");
   const friendsPermalink = await page
     .locator('[data-test="permalink-link"]')
     .getAttribute("href");
@@ -290,7 +284,7 @@ test("Named audience: assigned member sees a Friends post; an unassigned non-mem
 
   // Y (not subscribed, not in Friends) cannot.
   await goto(yPage, friendsPermalink!);
-  await expect(yPage.locator(".error")).toContainText("Post not found");
+  await expect(yPage.locator(SEL.error)).toContainText("Post not found");
   await expect(yPage.locator("body")).not.toContainText("Friends Post");
 
   expect(userY.username).not.toEqual(userX.username);

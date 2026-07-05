@@ -1,5 +1,6 @@
 import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
 import { goto, click, waitForSelector, register } from "./helpers";
+import { SEL } from "./selectors";
 
 // Acceptance test for issue #72: slug generation is Unicode-preserving and
 // never-fail. A Unicode title round-trips to its (percent-encoded) permalink,
@@ -13,12 +14,10 @@ test("a Unicode-titled post is reachable at its permalink", async ({
   await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   await goto(page, "/posts/new");
-  await page.fill('textarea[name="body"]', "# Café 日本語\n\nunicode body");
-  await click(page, 'button[name="publish"][value="true"]');
-  await waitForSelector(page, ".j-save-summary");
-  await expect(page.locator(".j-save-summary")).toContainText(
-    "Post published.",
-  );
+  await page.fill(SEL.postBody, "# Café 日本語\n\nunicode body");
+  await click(page, SEL.publishButton("true"));
+  await waitForSelector(page, SEL.saveSummary);
+  await expect(page.locator(SEL.saveSummary)).toContainText("Post published.");
 
   // The server generated the slug; read it rather than constructing it.
   const slug = await page
@@ -43,12 +42,10 @@ test("an emoji-only title falls back to the 'post' slug and is reachable", async
   await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   await goto(page, "/posts/new");
-  await page.fill('textarea[name="body"]', "# 🚀🎉\n\nemoji body");
-  await click(page, 'button[name="publish"][value="true"]');
-  await waitForSelector(page, ".j-save-summary");
-  await expect(page.locator(".j-save-summary")).toContainText(
-    "Post published.",
-  );
+  await page.fill(SEL.postBody, "# 🚀🎉\n\nemoji body");
+  await click(page, SEL.publishButton("true"));
+  await waitForSelector(page, SEL.saveSummary);
+  await expect(page.locator(SEL.saveSummary)).toContainText("Post published.");
 
   const slug = await page
     .locator('.j-save-summary [data-test="slug-value"]')
