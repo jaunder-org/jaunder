@@ -237,6 +237,7 @@ mod tests {
         assert!(invalid.is_err());
     }
 
+    // guard:no-backend — asserts DbConnectOptions→backend routing; connects lazily, no live pool
     #[tokio::test]
     async fn open_database_routes_to_postgres_backend() {
         let opts = "postgres://localhost:1/db"
@@ -246,6 +247,7 @@ mod tests {
             tokio::time::timeout(std::time::Duration::from_millis(50), open_database(&opts)).await;
     }
 
+    // guard:no-backend — asserts DbConnectOptions→backend routing; connects lazily, no live pool
     #[tokio::test]
     async fn open_existing_database_routes_to_postgres_backend() {
         let opts = "postgres://localhost:1/db"
@@ -258,6 +260,7 @@ mod tests {
         .await;
     }
 
+    // guard:no-backend — asserts DbConnectOptions→backend routing; connects lazily, no live pool
     #[tokio::test]
     async fn database_has_users_routes_to_postgres_backend() {
         let opts = "postgres://localhost:1/db"

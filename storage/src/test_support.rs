@@ -639,6 +639,7 @@ mod tests {
         assert!(id > 0);
     }
 
+    // guard:no-backend — harness type-guard on the SQLite CloseablePool variant; no database ops
     #[tokio::test]
     #[should_panic(expected = "postgres() on a SQLite CloseablePool")]
     async fn postgres_accessor_rejects_a_sqlite_pool() {

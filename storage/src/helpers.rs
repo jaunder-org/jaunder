@@ -569,6 +569,7 @@ mod tests {
         assert!(matches!(err, sqlx::Error::Decode(_)));
     }
 
+    // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
     async fn test_hash_and_verify_password() {
         let password: common::password::Password = "password123".parse().unwrap();
@@ -582,6 +583,7 @@ mod tests {
             .unwrap());
     }
 
+    // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
     async fn test_verify_password_rejects_invalid_hash() {
         let err = verify_password("password123".parse().unwrap(), "not-a-hash".to_string())
@@ -849,6 +851,7 @@ mod tests {
         assert_ne!(raw, hash);
     }
 
+    // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
     async fn dummy_password_hash_is_a_valid_verifiable_hash() {
         // The absent-user authentication path verifies against this hash to

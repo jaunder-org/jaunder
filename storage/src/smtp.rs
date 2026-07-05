@@ -213,18 +213,21 @@ mod tests {
         }
     }
 
+    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
     #[tokio::test]
     async fn map_config_store_set_returns_ok() {
         let store = MapConfigStore(HashMap::new());
         store.set("smtp.host", "mail.example.com").await.unwrap();
     }
 
+    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
     #[tokio::test]
     async fn load_smtp_config_returns_none_when_host_absent() {
         let store = MapConfigStore(HashMap::new());
         assert!(load_smtp_config(&store).await.unwrap().is_none());
     }
 
+    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
     #[tokio::test]
     async fn load_smtp_config_returns_some_with_all_keys_present() {
         let store = MapConfigStore(HashMap::from([
@@ -254,6 +257,7 @@ mod tests {
         );
     }
 
+    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
     #[tokio::test]
     async fn load_smtp_config_uses_defaults_for_missing_optional_fields() {
         let store = MapConfigStore(HashMap::from([("smtp.host", "relay.example.com")]));
@@ -276,6 +280,7 @@ mod tests {
         );
     }
 
+    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_invalid_sender() {
         let store = MapConfigStore(HashMap::from([
@@ -287,6 +292,7 @@ mod tests {
         assert!(matches!(err, SmtpConfigError::InvalidSender(_)));
     }
 
+    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_invalid_port() {
         let store = MapConfigStore(HashMap::from([
@@ -298,6 +304,7 @@ mod tests {
         assert!(matches!(err, SmtpConfigError::InvalidPort(_)));
     }
 
+    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_invalid_tls_mode() {
         let store = MapConfigStore(HashMap::from([

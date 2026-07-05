@@ -97,10 +97,16 @@ fn pg_error_code_matches(code: Option<&str>, expected: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{postgres_only, Backend};
+    use rstest::*;
+    use rstest_reuse::*;
     use std::time::Duration;
 
+    // reason: exercises CREATE ROLE/CREATE DATABASE admin DDL; no SQLite analog
+    #[apply(postgres_only)]
     #[tokio::test]
-    async fn create_postgres_database_and_role_attempts_admin_connection() {
+    async fn create_postgres_database_and_role_attempts_admin_connection(#[case] backend: Backend) {
+        let _ = backend;
         // Drives the bootstrap routine far enough to exercise the admin
         // connection attempt; the connection itself fails fast against an
         // unused port. The DDL execution past the connection requires a live

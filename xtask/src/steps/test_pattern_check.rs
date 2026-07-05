@@ -1,6 +1,7 @@
 //! The `test-backend-pattern` static check: scans every Rust file under
-//! `server/tests/` for any `#[tokio::test]` (including parameterized
-//! `#[tokio::test(...)]` forms) that is not declared backend-explicit.
+//! `server/tests/` and `storage/src/` for any `#[tokio::test]` (including
+//! parameterized `#[tokio::test(...)]` forms) that is not declared
+//! backend-explicit.
 //!
 //! A test is backend-explicit when its attribute block carries one of the
 //! backend-selecting rstest templates — `#[apply(backends)]`,
@@ -12,15 +13,16 @@
 //! never flagged.
 //!
 //! This guard (introduced in #54 for `storage.rs`) is widened here (#127) to
-//! the whole `server/tests` tree; #135 reuses the same scanner for the storage
-//! crate.
+//! the whole `server/tests` tree; #135 widened it again to the `storage/src`
+//! crate so the storage crate's own in-file tests are policed by the same
+//! scanner.
 
 use std::path::{Path, PathBuf};
 
 use crate::result::{CommandResult, StepResult};
 
-/// Root directory this guard polices, scanned recursively for `.rs` files.
-const TEST_ROOT: &str = "server/tests";
+/// Root directories this guard polices, each scanned recursively for `.rs` files.
+const TEST_ROOTS: &[&str] = &["server/tests", "storage/src"];
 
 /// True when a trimmed line applies one of the accepted backend templates.
 /// `backends_matrix` is listed explicitly — it is NOT a substring of
@@ -119,29 +121,30 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Scan every Rust file under `server/tests` and push the result step. A missing
-/// test root is a hard failure (not a silent pass), so a moved/renamed tree can
-/// never quietly disable the guard.
+/// Scan every Rust file under each of [`TEST_ROOTS`] and push the result step. A
+/// missing test root is a hard failure (not a silent pass), so a moved/renamed
+/// tree can never quietly disable the guard.
 pub fn run(result: &mut CommandResult) {
     let mut files = Vec::new();
-    let step = match rust_files(Path::new(TEST_ROOT), &mut files) {
-        Err(e) => {
-            StepResult::fail("test-backend-pattern").detail(format!("cannot scan {TEST_ROOT}: {e}"))
+    for root in TEST_ROOTS {
+        if let Err(e) = rust_files(Path::new(root), &mut files) {
+            result.push(
+                StepResult::fail("test-backend-pattern").detail(format!("cannot scan {root}: {e}")),
+            );
+            return;
         }
-        Ok(()) => {
-            let scanned: Vec<(String, String)> = files
-                .iter()
-                .filter_map(|p| {
-                    std::fs::read_to_string(p)
-                        .ok()
-                        .map(|s| (p.display().to_string(), s))
-                })
-                .collect();
-            match problems(&scanned) {
-                None => StepResult::ok("test-backend-pattern"),
-                Some(detail) => StepResult::fail("test-backend-pattern").detail(detail),
-            }
-        }
+    }
+    let scanned: Vec<(String, String)> = files
+        .iter()
+        .filter_map(|p| {
+            std::fs::read_to_string(p)
+                .ok()
+                .map(|s| (p.display().to_string(), s))
+        })
+        .collect();
+    let step = match problems(&scanned) {
+        None => StepResult::ok("test-backend-pattern"),
+        Some(detail) => StepResult::fail("test-backend-pattern").detail(detail),
     };
     result.push(step);
 }
@@ -271,5 +274,15 @@ async fn good_multiline(backend: Backend, #[case] a: &str, #[case] b: &str) {}
             problems(&[("f.rs".to_string(), ANNOTATED.to_string())]),
             None
         );
+    }
+
+    #[test]
+    fn storage_dialect_bare_tokio_test_is_flagged() {
+        assert!(problems(&[("storage/src/sqlite/foo.rs".to_string(), BARE.to_string())]).is_some());
+    }
+
+    #[test]
+    fn test_roots_includes_storage_src() {
+        assert!(TEST_ROOTS.contains(&"storage/src"));
     }
 }
