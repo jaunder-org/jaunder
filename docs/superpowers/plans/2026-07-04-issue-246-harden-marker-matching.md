@@ -197,7 +197,7 @@ Run `cargo xtask check` first (**jaunder-commit**).
   - `fn allow_overrides(src: &str, line: i64, file: &str) -> bool` (rewritten;
     gains `file` for the warning).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 // helper: run evaluate_crap over one over-threshold entry with injected source,
@@ -326,13 +326,13 @@ fn resolve_span_picks_innermost() {
 }
 ```
 
-- [ ] **Step 2: Run, verify FAIL**
+- [x] **Step 2: Run, verify FAIL**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml coverage::crap`
 Expected: FAIL — `fn_spans`/`resolve_span` undefined; the
 nested/brace/fail-closed cases fail under today's window+brace logic.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add the visitor + resolver and rewrite `allow_overrides`; delete
 `function_body_end` and the two `CRAP_SPAN_*` constants. Signatures pinned by
@@ -426,13 +426,13 @@ fn allow_overrides(src: &str, line: i64, file: &str) -> bool {
 Update the `evaluate_crap` call site (`crap.rs:101-103`):
 `allow_overrides(&src, e.line)` → `allow_overrides(&src, e.line, &e.file)`.
 
-- [ ] **Step 4: Run, verify PASS**
+- [x] **Step 4: Run, verify PASS**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml coverage::crap`
 Expected: PASS (new tests + existing crap tests, incl. the empty-reason and
 existing-marker cases).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/coverage/crap.rs
