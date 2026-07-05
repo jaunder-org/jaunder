@@ -116,8 +116,8 @@ pub fn create_router(
         }
         let site_root = leptos_options.site_root.to_string();
         // The CSR SPA shell is embedded (#239): the server owns it, the same way the
-        // projector renders its routes from constants. The host `cargo leptos` build
-        // never writes index.html to site_root, so we don't read it from disk — only
+        // projector renders its routes from constants. The `cargo xtask build-csr`
+        // build never writes index.html to site_root, so we don't read it from disk — only
         // the wasm bundle (`pkg/*`) and public assets are served from `site_root`.
         // Non-reactive HTML for the public discoverability routes (the projector,
         // #178) sits ahead of this fallback; everything else boots the CSR client via

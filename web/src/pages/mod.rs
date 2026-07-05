@@ -43,7 +43,7 @@ use crate::pages::profile::ProfilePage;
 use crate::pages::sessions::SessionsPage;
 use crate::pages::site::SiteSettingsPage;
 use leptos::prelude::*;
-use leptos_meta::{provide_meta_context, Stylesheet, Title};
+use leptos_meta::{provide_meta_context, Title};
 use leptos_router::{
     components::{Outlet, ParentRoute, Route, Router, Routes},
     ParamSegment, StaticSegment,
@@ -119,8 +119,6 @@ pub fn App() -> impl IntoView {
     }
 
     view! {
-        <Stylesheet id="leptos" href="/pkg/jaunder.css" />
-
         // sets the document title
         <Title text="Jaunder" />
 

@@ -756,9 +756,9 @@
               def seed_db():
                 # Wipe the SQLite data dir wholesale and let jaunder's auto-init
                 # recreate the schema. Avoids hardcoding a table list (which
-                # would silently drift as the schema grows); mirrors the local
-                # `scripts/e2e-local.sh` flow where each run gets a fresh
-                # temp storage dir.
+                # would silently drift as the schema grows). The host driver
+                # (`cargo xtask e2e-local`) gets the same fresh-state guarantee a
+                # different way: a per-run temp storage dir + DB (#249).
                 machine.succeed("systemctl stop jaunder.service")
                 machine.succeed("rm -rf /var/lib/jaunder/data")
                 machine.succeed("systemctl start jaunder.service")
@@ -1248,11 +1248,9 @@
               pkgs.cachix
               cargo-crap
               pkgs.cargo-deny
-              pkgs.cargo-leptos
               pkgs.cargo-llvm-cov
               pkgs.cargo-nextest
               pkgs.curl
-              pkgs.dart-sass
               emacsForCi
               pkgs.jq
               pkgs.leptosfmt

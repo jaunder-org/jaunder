@@ -187,17 +187,17 @@ The host and the CI VM load the **same** `end2end/playwright.config.ts`, so
 "passes locally" now equals "passes in CI" — the difference is only how you
 invoke it.
 
-- **Fast local loop** — `cargo leptos end-to-end` builds the app, starts a dev
-  server, seeds fixtures, and runs the Playwright suite (chromium +
-  `chromium-admin`) against it via `cargo xtask e2e-local`. Use this while
-  iterating on the web UI; it uses the HTML reporter for interactive debugging.
-- **A single test** — with a dev server already running,
-  `cargo xtask e2e-local <spec>` runs just that spec (e.g.
-  `cargo xtask e2e-local auth-flow.spec.ts`), for the tightest edit→run loop.
-  Standalone `cargo xtask e2e-local` assumes a server is already serving on
-  `:3000` (cargo-leptos owns the server lifecycle; the driver just seeds + runs
-  Playwright). The host runs serial (`JAUNDER_E2E_WORKERS=1`) because it serves
-  an unoptimized debug wasm build; the CI VM runs at 2 workers on release wasm.
+- **Fast local loop** — `cargo xtask e2e-local` owns the whole loop: it builds
+  the CSR bundle + server, starts its own `jaunder serve` on an ephemeral port
+  with a fresh per-run temp DB, seeds fixtures, and runs the Playwright suite
+  (chromium + `chromium-admin`) against it, tearing the server down after. No
+  pre-existing server needed. Use this while iterating on the web UI; it uses
+  the HTML reporter for interactive debugging.
+- **A single test** — `cargo xtask e2e-local <spec>` runs just that spec (e.g.
+  `cargo xtask e2e-local auth.spec.ts`), fully self-contained (its own ephemeral
+  server + temp DB), for the tightest edit→run loop. The host runs serial
+  (`JAUNDER_E2E_WORKERS=1`) because it serves an unoptimized debug wasm build;
+  the CI VM runs at 2 workers on release wasm.
 - **The authoritative gate** — `cargo xtask e2e <backend> <browser>` runs one
   combo through the hermetic Nix VM (release build, the same derivation CI
   runs); `cargo xtask validate` runs all four
@@ -647,7 +647,9 @@ nix build .#checks.x86_64-linux.postgres-integration
   a subsystem (that would be a service locator). Services (mailer, WebSub
   client, background workers) are constructed at the root and injected
   per-consumer; there is no "services bundle."
-- The web framework is Leptos with SSR via `cargo-leptos`.
+- The web framework is Leptos in CSR (client-side-rendering) mode (ADR-0040);
+  the wasm bundle is built by `cargo xtask build-csr` and served by
+  `jaunder serve` (no cargo-leptos).
 - Leptos components should only render data; business logic belongs in server
   functions or pure transformation functions.
 - API methods are automatically prefixed with `/api`.
