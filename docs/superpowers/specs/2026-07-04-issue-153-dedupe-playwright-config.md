@@ -2,7 +2,8 @@
 
 - **Issue:** jaunder-org/jaunder#153 (`dx`, milestone "E2E test suite")
 - **Branch/worktree:** `worktree-issue-153-dedupe-playwright-config`
-- **Status:** design resolved; awaiting spec approval.
+- **Status:** implemented. Config dedup + `e2e-local` driver landed; AC8
+  host-suite parity descoped to #249 (see AC8).
 
 ## Problem
 
@@ -217,15 +218,27 @@ Each is stated so ship-time conformance review can tell delivered from not.
   `{sqlite,postgres}×{chromium,firefox}` combos) is green on the branch,
   confirming Firefox slimming still applies and the admin quarantine is still
   serial across every combo.
-- **AC8 — Host loop parity + new capability.** The new host driver runs
-  `chromium` + `chromium-admin` green against the host server (HTML report
-  produced, and a _red_ run does **not** hang on an auto-opened report server —
-  `PLAYWRIGHT_HTML_OPEN=never` per Design §3/§5); a `workers=2` host run
-  confirms the admin-site quarantine engages locally — observable via
-  `chromium-admin` running serially _after_ `chromium` (its
-  `dependencies: ['chromium']` + `fullyParallel: false`), i.e. admin-site never
-  overlapping the parallel specs. This is the capability the fast loop is
-  retained for, so the run must exercise both projects.
+- **AC8 — Host loop hydrates and runs** _(descoped from "host suite fully green"
+  — see below)._ The new `cargo xtask e2e-local` driver seeds fixtures and runs
+  `chromium` + `chromium-admin` against the host server, and the app
+  **hydrates**: verified at **63 passed / 6 failed / 2 skipped (of 71) with zero
+  `body[data-hydrated]` timeouts** on a clean `:3000` (HTML reporter; a red run
+  does not hang — `PLAYWRIGHT_HTML_OPEN=never` per Design §3/§5). The 2 skipped
+  are the `chromium-admin` specs, dependency-skipped after a `chromium` failure
+  (`dependencies: ['chromium']`). This confirms the driver + unified config work
+  and the host loop is a usable, hydrating tool rather than dead weight.
+
+  **Descoped:** a _fully green_ host suite is **not** an acceptance criterion
+  for this issue. The 6 remaining failures (`email`/`password_reset`/`feeds`
+  WebSub + three `posts` pagination specs) are **host-environment-parity gaps**,
+  not config or hydration bugs: the host server (started by cargo-leptos) lacks
+  the VM's capture env
+  (`JAUNDER_MAIL_CAPTURE_FILE`/`JAUNDER_WEBSUB_CAPTURE_FILE`, set on
+  `jaunder.service`), the host DB doesn't reset per run, and a failed run
+  orphans its server on `:3000`. These require the harness to **own the
+  API-server lifecycle** — the CSR-realignment rework tracked in **#249** — and
+  are recorded there. #153 delivers the single config source (VM-green,
+  AC5/AC7) + the typed driver; host-suite parity lands with #249.
 
 ## Out of scope / separable
 

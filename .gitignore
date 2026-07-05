@@ -35,8 +35,10 @@ mutants.out.old/
 
 /coverage-report.txt
 
-# xtask sidecar / GC roots
-/.xtask/
+# xtask sidecar / GC roots — unanchored: `cargo xtask e2e-local` runs as
+# cargo-leptos's `end2end-cmd` from `end2end/`, so the sidecar can also land in
+# `end2end/.xtask/` (not just the repo root).
+.xtask/
 
 # Subagent-driven-development scratch (briefs, ledger, review packages)
 /.superpowers/
