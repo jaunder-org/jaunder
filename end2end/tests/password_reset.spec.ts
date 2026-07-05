@@ -7,6 +7,7 @@ import {
   fillLoginForm,
 } from "./helpers";
 import { SEL } from "./selectors";
+import { extractToken } from "./mail";
 
 // M3.11.13: Full password reset flow.
 test("password reset flow completes successfully", async ({
@@ -26,9 +27,7 @@ test("password reset flow completes successfully", async ({
 
   // Read this recipient's reset mail (recipient-scoped, parallel-safe).
   const email = await mailbox.waitForNewEmail();
-  const tokenMatch = email.body_text.match(/token=([^\s]+)/);
-  expect(tokenMatch).not.toBeNull();
-  const token = tokenMatch![1];
+  const token = extractToken(email);
 
   // Visit the reset link and submit a new password
   await goto(page, `/reset-password?token=${token}`);

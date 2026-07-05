@@ -66,3 +66,14 @@ export async function waitForNewEmail(
     `timed out waiting for new captured email at ${MAIL_CAPTURE_FILE}`,
   );
 }
+
+/**
+ * Extract the `token=...` value from a captured email body (verification and
+ * password-reset links always carry one).  Throws if absent, so callers get a
+ * clear failure instead of an opaque `undefined` downstream.
+ */
+export function extractToken(email: CapturedEmail): string {
+  const match = email.body_text.match(/token=([^\s]+)/);
+  if (!match) throw new Error("no token in captured email");
+  return match[1];
+}

@@ -371,7 +371,8 @@ tsc green.
 at the 3 sites; `cargo xtask e2e-local` on `email.spec.ts` +
 `password_reset.spec.ts` green (verifiedUser exercised by any test using it).
 
-**Done when:** `[ ]` `extractToken` added, 3 sites collapsed, affected specs
+**Done when:** `[x]` `extractToken` added to `mail.ts`, the 3 parse sites
+(`verifiedUser` fixture, email, password_reset) collapsed to `extractToken`, tsc
 green.
 
 ---
@@ -390,8 +391,10 @@ Attempt only if it falls out cleanly (~4 explicit-timeout sites).
 
 **Verify:** if adopted, `cargo xtask e2e-local` on affected specs green.
 
-**Done when:** `[ ]` `expectFlash` adopted, **or** #266 explicitly left open
-with a recorded note.
+**Done when:** `[x]` `expectFlash` added to `helpers.ts` and adopted at the 4
+uniform `p:has-text(...)` visibility sites (fixtures ×2, email ×2); tsc green.
+The other `:has-text` sites (admin-site/authed-flash/password_reset) use
+different shapes (toContainText on generic `p`) and were left inline.
 
 ---
 

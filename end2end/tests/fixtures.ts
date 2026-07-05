@@ -28,8 +28,8 @@ import {
   otlpAttribute,
   traceContextFromEnvironment,
 } from "./otel";
-import { click, goto, login, register } from "./helpers";
-import { readEmailLines, type CapturedEmail } from "./mail";
+import { click, expectFlash, goto, login, register } from "./helpers";
+import { extractToken, readEmailLines, type CapturedEmail } from "./mail";
 import { SEL } from "./selectors";
 
 type RequestRecord = {
@@ -335,14 +335,11 @@ const test = base.extend<{
     await goto(page, "/profile/email");
     await page.fill('input[name="email"]', user.email);
     await click(page, SEL.submit);
-    await expect(page.locator('p:has-text("Check your email")')).toBeVisible({
-      timeout: 10_000,
-    });
+    await expectFlash(page, "Check your email", 10_000);
     const mail = await mailbox.waitForNewEmail();
-    const tokenMatch = mail.body_text.match(/token=([^\s]+)/);
-    if (!tokenMatch) throw new Error("no verification token in captured email");
-    await goto(page, `/verify-email?token=${tokenMatch[1]}`);
-    await expect(page.locator('p:has-text("verified")')).toBeVisible();
+    const token = extractToken(mail);
+    await goto(page, `/verify-email?token=${token}`);
+    await expectFlash(page, "verified");
     await context.close();
     await use(user);
   },

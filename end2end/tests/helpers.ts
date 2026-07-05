@@ -36,7 +36,7 @@
  *   the timeout so the cold WASM load gets enough budget across all browsers.
  */
 
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
 import { waitForHydration } from "./hydration";
 import { SEL } from "./selectors";
@@ -167,4 +167,18 @@ export async function register(
   });
 
   return username;
+}
+
+/**
+ * Assert that a confirmation flash `<p>` containing `text` becomes visible,
+ * standardising the `expect(locator('p:has-text(...)')).toBeVisible()` idiom and
+ * its ad-hoc timeout.
+ */
+export async function expectFlash(
+  page: Page,
+  text: string,
+  timeout?: number,
+): Promise<void> {
+  const options = timeout === undefined ? {} : { timeout };
+  await expect(page.locator(`p:has-text("${text}")`)).toBeVisible(options);
 }
