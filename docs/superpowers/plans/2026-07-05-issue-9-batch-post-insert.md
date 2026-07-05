@@ -34,7 +34,8 @@ and input-building so a single and a batch path share them.
      `Vec<CreatePostInput>` and call `create_posts` once; **delete the
      now-orphaned `seed_rendered_post`** + repoint its stale doc/manifest refs.
      _(commit 39f5e999; net −16 lines)_
-- [ ] 5. Full pre-push gate green.
+- [x] 5. Full gate green — `cargo xtask validate` (incl. all four e2e combos)
+     passed; code review APPROVE (nits only).
 
 **Key risks / decisions.**
 
