@@ -272,12 +272,6 @@ pub(crate) fn postgres_url() -> DbConnectOptions {
     postgres_url_string().parse().unwrap()
 }
 
-/// Whether Postgres-backed tests are enabled (i.e. `JAUNDER_PG_TEST_URL` is set).
-#[must_use]
-pub fn postgres_testing_enabled() -> bool {
-    std::env::var("JAUNDER_PG_TEST_URL").is_ok()
-}
-
 /// The superuser bootstrap URL used to create/drop per-test databases —
 /// `JAUNDER_PG_BOOTSTRAP_TEST_URL` if set, else a `postgres` URL derived from the
 /// test URL's authority.
