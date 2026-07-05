@@ -5,11 +5,11 @@
 - Date: 2026-06-27
 - Note (#188): the hermetic `ert-check` / `elisp-fmt-check` nix siblings of
   decisions #2–#3 are retired by
-  [devtool-unifies-static-checks](drafts/devtool-unifies-static-checks.md) —
-  those checks now run via `devtool check` (host + `nix flake check`'s
-  `static-checks` derivation); the host `ert`/`elisp-fmt` StepSpecs stand. The
-  Consequences line "…and by `nix flake check`; 'green' now covers elisp" now
-  holds **through `devtool`**, not a hermetic sibling.
+  [devtool-unifies-static-checks](0052-devtool-unifies-static-checks.md) — those
+  checks now run via `devtool check` (host + `nix flake check`'s `static-checks`
+  derivation); the host `ert`/`elisp-fmt` StepSpecs stand. The Consequences line
+  "…and by `nix flake check`; 'green' now covers elisp" now holds **through
+  `devtool`**, not a hermetic sibling.
 
 ## Context and Problem Statement
 

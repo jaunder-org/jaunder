@@ -443,7 +443,7 @@ Run `cargo xtask check` first (**jaunder-commit**).
 
 **Files:**
 
-- Create: `docs/adr/drafts/devtool-unifies-static-checks.md` (numberless)
+- Create: `docs/adr/0052-devtool-unifies-static-checks.md` (numberless)
 - Modify: `docs/adr/0031-elisp-separately-tested-subproject.md` (add a Note)
 
 **Interfaces:** the **jaunder-adr** draft-out-of-git flow
@@ -459,7 +459,7 @@ Run `cargo xtask check` first (**jaunder-commit**).
 
 - [x] **Step 2: Amend ADR-0031** — keep `- Status: accepted`; add under the
       status:
-      `- Note: decisions #2–#3's hermetic `ert-check`/`elisp-fmt-check`nix siblings are retired by [ADR-DRAFT](drafts/devtool-unifies-static-checks.md) (#188) — those checks now run via`devtool
+      `- Note: decisions #2–#3's hermetic `ert-check`/`elisp-fmt-check`nix siblings are retired by [ADR-DRAFT](0052-devtool-unifies-static-checks.md) (#188) — those checks now run via`devtool
       check`(host + nix); the host StepSpecs stand. The Consequences line "…and by`nix
       flake check`" now holds *through `devtool`*, not a hermetic sibling.`
       (Path-form reference so `adr promote` renumbers it at ship.)
@@ -471,7 +471,7 @@ Run `cargo xtask check` first (**jaunder-commit**).
 - [x] **Step 4: Commit**
 
 ```bash
-git add docs/adr/drafts/devtool-unifies-static-checks.md docs/adr/0031-elisp-separately-tested-subproject.md
+git add docs/adr/0052-devtool-unifies-static-checks.md docs/adr/0031-elisp-separately-tested-subproject.md
 git commit -m "docs(adr): devtool unifies the non-compiling static checks; amend ADR-0031 (#188)"
 ```
 
