@@ -17,6 +17,18 @@ pub enum FeedEventStatus {
     Failed,
 }
 
+/// Parses a persisted status string into a [`FeedEventStatus`], falling back to
+/// `Failed` for any unrecognized value (defensive against schema drift). Shared
+/// by both dialects' row mappers.
+pub(crate) fn parse_status(s: &str) -> FeedEventStatus {
+    match s {
+        "pending" => FeedEventStatus::Pending,
+        "claimed" => FeedEventStatus::Claimed,
+        "done" => FeedEventStatus::Done,
+        _ => FeedEventStatus::Failed,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedEventRecord {
     pub id: i64,
@@ -228,5 +240,20 @@ where
             return Ok(());
         }
         DB::mark_exhausted(&self.pool, ids, error).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_status_handles_all_statuses() {
+        assert_eq!(parse_status("pending"), FeedEventStatus::Pending);
+        assert_eq!(parse_status("claimed"), FeedEventStatus::Claimed);
+        assert_eq!(parse_status("done"), FeedEventStatus::Done);
+        assert_eq!(parse_status("failed"), FeedEventStatus::Failed);
+        // Defensive fallback for unknown status strings.
+        assert_eq!(parse_status("???"), FeedEventStatus::Failed);
     }
 }

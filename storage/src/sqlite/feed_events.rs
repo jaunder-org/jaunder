@@ -3,20 +3,11 @@ use chrono::{DateTime, Utc};
 use sqlx::{Pool, Row, Sqlite};
 
 use crate::feed_events::{
-    FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStatus, FeedEventStore,
+    parse_status, FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStore,
 };
 
 /// SQLite-backed feed-event storage.
 pub type SqliteFeedEventStorage = FeedEventStore<Sqlite>;
-
-fn parse_status(s: &str) -> FeedEventStatus {
-    match s {
-        "pending" => FeedEventStatus::Pending,
-        "claimed" => FeedEventStatus::Claimed,
-        "done" => FeedEventStatus::Done,
-        _ => FeedEventStatus::Failed,
-    }
-}
 
 fn placeholders(n: usize) -> String {
     std::iter::repeat_n("?", n).collect::<Vec<_>>().join(",")
@@ -140,6 +131,7 @@ mod tests {
     use sqlx::SqlitePool;
 
     use super::*;
+    use crate::feed_events::FeedEventStatus;
 
     async fn pool() -> SqlitePool {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -148,16 +140,6 @@ mod tests {
             .await
             .unwrap();
         pool
-    }
-
-    #[test]
-    fn parse_status_handles_all_statuses() {
-        assert_eq!(parse_status("pending"), FeedEventStatus::Pending);
-        assert_eq!(parse_status("claimed"), FeedEventStatus::Claimed);
-        assert_eq!(parse_status("done"), FeedEventStatus::Done);
-        assert_eq!(parse_status("failed"), FeedEventStatus::Failed);
-        // Defensive fallback for unknown status strings.
-        assert_eq!(parse_status("???"), FeedEventStatus::Failed);
     }
 
     #[tokio::test]
