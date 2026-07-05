@@ -88,7 +88,7 @@ rebuilds coverage once).
   pure
   `check::spec(name: &str, fix: bool) -> Result<(&'static str, Vec<String>)>`.
 
-- [ ] **Step 1: Write the failing tests** (in-file `#[cfg(test)]` in `check.rs`,
+- [x] **Step 1: Write the failing tests** (in-file `#[cfg(test)]` in `check.rs`,
       mirroring `pg.rs`'s pure-arg tests)
 
 ```rust
@@ -136,12 +136,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run, verify FAIL**
+- [x] **Step 2: Run, verify FAIL**
 
 Run: `cargo nextest run --manifest-path tools/Cargo.toml -p devtool check::`
 Expected: FAIL — `check` module / `spec` undefined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `check.rs` — move the 7 checks' tool+args from `static_checks.rs::specs`
 (verbatim, incl. the mode switch on the 5 formatters); `spec` is pure (tested);
@@ -213,16 +213,16 @@ pub fn run(name: Option<&str>, all: bool, fix: bool) -> Result<()> {
 (`#[derive(clap::Args)] struct CheckArgs { name: Option<String>, #[arg(long)] all: bool, #[arg(long)] fix: bool }`),
 dispatch `Command::Check(a) => check::run(a.name.as_deref(), a.all, a.fix)`.
 
-- [ ] **Step 4: Run, verify PASS** —
+- [x] **Step 4: Run, verify PASS** —
       `cargo nextest run --manifest-path tools/Cargo.toml -p devtool check::` →
       PASS.
 
-- [ ] **Step 5: Smoke-test the CLI** —
+- [x] **Step 5: Smoke-test the CLI** —
       `cargo run --manifest-path tools/Cargo.toml -p devtool -- check fmt` runs
       `cargo fmt --check` (exit 0 on a formatted tree); `devtool check --all`
       runs all 7.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add tools/devtool/src/check.rs tools/devtool/src/main.rs
@@ -247,7 +247,7 @@ Run `cargo xtask check` first (**jaunder-commit**). Note: this commit changes
 - Produces: `fn devtool_check(name: &'static str, mode: Mode) -> StepSpec`
   (private).
 
-- [ ] **Step 1: Adjust the tests**
+- [x] **Step 1: Adjust the tests**
 
 First **delete/update the existing tests that assert the migrated checks' args
 or the dropped `tsc-deps`** (they move to `devtool`):
@@ -287,10 +287,10 @@ fn native_checks_stay_native() {
 (Keep the existing `xtask_fmt_checks_in_check_mode` test — xtask-fmt stays
 native.)
 
-- [ ] **Step 2: Run, verify FAIL** — `cargo nextest run -p xtask static_checks`
+- [x] **Step 2: Run, verify FAIL** — `cargo nextest run -p xtask static_checks`
       → FAIL (fmt still runs cargo directly; tsc-deps still present).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add the helper; replace the 7 migrated `StepSpec`s with
 `devtool_check(name, mode)`; delete the `tsc-deps` step and the now-unused arg
@@ -321,14 +321,14 @@ New `specs(mode)` vec order (unchanged relative order; tsc-deps removed):
 native `clippy`, `devtool_check("tools-fmt")`, native `tools-clippy`, native
 `xtask-fmt`, native `xtask-clippy`.
 
-- [ ] **Step 4: Run, verify PASS** — `cargo nextest run -p xtask static_checks`
+- [x] **Step 4: Run, verify PASS** — `cargo nextest run -p xtask static_checks`
       → PASS.
 
-- [ ] **Step 5: Verify the host gate end-to-end** —
+- [x] **Step 5: Verify the host gate end-to-end** —
       `cargo xtask check --no-test` runs green (the migrated steps now shell
       `devtool check`; first run builds devtool). Confirms AC2 on the host.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/src/steps/static_checks.rs
@@ -351,7 +351,7 @@ Run `cargo xtask check` first (**jaunder-commit**).
   crane derivations use (cargo + rustfmt),
   `pkgs.{leptosfmt,prettier,nodejs,typescript,tzdata}`.
 
-- [ ] **Step 1: Add `static-checks`, delete the 5 siblings**
+- [x] **Step 1: Add `static-checks`, delete the 5 siblings**
 
 In the `checks` attrset: **delete** `rustfmt` (1225), `leptosfmt-check` (1230),
 `prettier-check` (1342), `ert-check` (1351), `elisp-fmt-check` (1365). **Keep**
@@ -413,14 +413,14 @@ Confirm `.prettierrc.json` + `.prettierignore` (tracked root files) land in
 `staticCheckSrc` (the exclusion filter keeps them) so the sandbox prettier
 checks the same file set / `proseWrap` as the host.
 
-- [ ] **Step 2: Verify the attr-set delta (AC3/AC5)**
+- [x] **Step 2: Verify the attr-set delta (AC3/AC5)**
 
 Run: `devtool run -- nix eval .#checks.x86_64-linux --apply builtins.attrNames`
 Expected: contains `static-checks`, `clippy`, `deny`, `coverage`, `e2e-*`; NOT
 `rustfmt`/`leptosfmt-check`/`prettier-check`/`ert-check`/`elisp-fmt-check`. Run:
 `devtool run -- nix flake check --no-build` → clean eval (no dangling ref).
 
-- [ ] **Step 3: Build it (AC3)**
+- [x] **Step 3: Build it (AC3)**
 
 Run (background — first build compiles nothing but provisions tools):
 `devtool run -- nix build .#checks.x86_64-linux.static-checks -L` Expected:
@@ -428,7 +428,7 @@ passes; the log shows `devtool check --all` running
 fmt/leptosfmt/prettier/tsc/elisp-fmt/ert/tools-fmt. If `tsc` can't find types →
 `E2E_TYPES_NODE_MODULES`/provision wiring; if `ert` zone errors → `TZDIR`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add flake.nix
@@ -450,25 +450,25 @@ Run `cargo xtask check` first (**jaunder-commit**).
 (`docs/adr/template.md`; `# ADR-DRAFT:` heading; numbered at ship by
 `cargo xtask adr promote`, which rewrites the draft-path references repo-wide).
 
-- [ ] **Step 1: Write the draft** — from `docs/adr/template.md`, heading
+- [x] **Step 1: Write the draft** — from `docs/adr/template.md`, heading
       `# ADR-DRAFT: devtool is the single implementation of the non-compiling static checks`.
       Record the **compile/non-compile cleave** (per spec Decision 6):
       non-compiling checks unified in `devtool` (host + `nix flake check`);
       `clippy`/`deny` stay crane; `tools-clippy`/`xtask-*` host-only; the
       `devtoolBin`↔coverage cache tradeoff (accepted). Amends ADR-0031.
 
-- [ ] **Step 2: Amend ADR-0031** — keep `- Status: accepted`; add under the
+- [x] **Step 2: Amend ADR-0031** — keep `- Status: accepted`; add under the
       status:
       `- Note: decisions #2–#3's hermetic `ert-check`/`elisp-fmt-check`nix siblings are retired by [ADR-DRAFT](drafts/devtool-unifies-static-checks.md) (#188) — those checks now run via`devtool
       check`(host + nix); the host StepSpecs stand. The Consequences line "…and by`nix
       flake check`" now holds *through `devtool`*, not a hermetic sibling.`
       (Path-form reference so `adr promote` renumbers it at ship.)
 
-- [ ] **Step 3: Verify** — `cargo xtask check --no-test` →
+- [x] **Step 3: Verify** — `cargo xtask check --no-test` →
       `adr-format`/`adr-readme-parity` green (a numberless draft is invisible to
       the gates; the 0031 edit keeps its canonical heading/status).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/adr/drafts/devtool-unifies-static-checks.md docs/adr/0031-elisp-separately-tested-subproject.md
@@ -485,7 +485,7 @@ Run `cargo xtask check` first.
 
 - Modify: `CONTRIBUTING.md`, `elisp/README.md`, `elisp/scripts/run-tests.el`
 
-- [ ] **Step 1: Update the prose**
+- [x] **Step 1: Update the prose**
   - `CONTRIBUTING.md` "Nix VM checks" list: replace the
     `rustfmt`/`leptosfmt-check`/`prettier-check`/`ert-check`/`elisp-fmt-check`
     entries with a single `static-checks` (`devtool check --all`); keep
@@ -497,10 +497,10 @@ Run `cargo xtask check` first.
   - `elisp/scripts/run-tests.el`: fix the comment that references the hermetic
     nix check.
 
-- [ ] **Step 2: Verify** — `cargo xtask check --no-test` → `prettier`/`adr-*`
+- [x] **Step 2: Verify** — `cargo xtask check --no-test` → `prettier`/`adr-*`
       green.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add CONTRIBUTING.md elisp/README.md elisp/scripts/run-tests.el
