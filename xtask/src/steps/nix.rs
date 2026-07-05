@@ -213,9 +213,15 @@ impl<A: Write, B: Write> Write for MultiWriter<A, B> {
 }
 
 /// Lines of `build.log` kept in the fallback excerpt when the log carries no nix
-/// `error:` block (an unusual failure). Distinct from the `--log-lines 50` that sizes
-/// nix's in-block builder tail on the normal path.
+/// `error:` block (an unusual failure). Distinct from [`NIX_ERROR_TAIL_LINES`], which
+/// sizes nix's in-block builder tail on the normal path — they happen to share a value.
 const EXCERPT_FALLBACK_LINES: usize = 50;
+
+/// `--log-lines` value passed to `nix build`: how many lines of the failing builder's
+/// (de-interleaved) tail nix includes in its `error:` summary block, which
+/// [`write_failure_excerpt`] then carves out (#145). Independent of
+/// [`EXCERPT_FALLBACK_LINES`].
+const NIX_ERROR_TAIL_LINES: &str = "50";
 
 /// Carve a scoped failure excerpt from a captured `nix build -L` log. Nix's own error
 /// summary is a self-contained block at column 0 (`error: …` through EOF) that names the
@@ -288,9 +294,9 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
             // the failing dependency's output is in the stream we capture below.
             "-L",
             // Widen nix's own de-interleaved failing-builder tail in the `error:`
-            // summary block to 50 lines, which `write_failure_excerpt` carves out (#145).
+            // summary block, which `write_failure_excerpt` carves out (#145).
             "--log-lines",
-            "50",
+            NIX_ERROR_TAIL_LINES,
             // Retain the failed build dir so a catastrophic in-sandbox failure
             // (e.g. ENOSPC that prevented writing `$out`) still leaves first-hand
             // data; `rescue_diagnostics` then copies it out.
