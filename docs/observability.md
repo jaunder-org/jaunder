@@ -161,9 +161,9 @@ parallelism is the only lever on Firefox e2e wall-clock** (see #182, folded into
 
 **Per-browser floor (for the Task-6 timeout reconciliation):** at workers:1,
 firefox `e2e.test` avg 6.8s / max 21.2s, chromium avg 3.8s / max 11.9s; measured
-ratio ~1.7–1.83× vs the current `hydrationHeavyTimeoutScale = 2.2` — the scale
-is in the right ballpark (a modest trim, not removal), but the `hydrationHeavy*`
-naming is a misnomer post-CSR (the phase is CSR mount, not hydration).
+ratio ~1.7–1.83× vs the `slowBrowserTimeoutScale = 2.2` — the scale is in the
+right ballpark (a modest trim, not removal). The phase these budgets cover is
+the CSR mount, not hydration; the scalers were renamed accordingly in #224.
 
 ## #155 — worker-parallelism safety probes (AC3, 2026-07-02)
 
@@ -288,14 +288,13 @@ scales the post-navigation `.j-post-body` assertion (it used the global 5 s
 
 ## Timeout Budgeting
 
-E2E tests that are hydration-heavy should use
-`hydrationHeavyTimeoutMs(testInfo, chromiumBudgetMs)` from
+E2E tests should use `slowBrowserTimeoutMs(testInfo, chromiumBudgetMs)` from
 `end2end/tests/fixtures.ts` instead of hard-coded timeout numbers.
 
 For first document navigation in a test (typically the coldest path), use
-`hydrationHeavyFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)`.
+`slowBrowserFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)`.
 
-This applies a project-aware multiplier derived from observed p90 hydration
+This applies a project-aware multiplier derived from observed p90 CSR-mount
 latency so Firefox/WebKit runs get realistic budgets without increasing Chromium
 timeouts unnecessarily.
 

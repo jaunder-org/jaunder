@@ -1,4 +1,4 @@
-import { test, expect, hydrationHeavyTimeoutMs } from "./fixtures";
+import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
 import { goto, login } from "./helpers";
 
 // M3.10.11: Full email verification flow.
@@ -7,7 +7,7 @@ test("email verification flow completes successfully", async ({
   user,
   mailbox,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 15_000));
 
   await login(page, user.username, user.password);
 
@@ -39,7 +39,7 @@ test("email verification flow completes successfully", async ({
 test("visiting verify-email with invalid token shows error", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 10_000));
   await goto(page, "/verify-email?token=totally_invalid_token");
   await expect(page.locator(".error")).toBeVisible();
 });

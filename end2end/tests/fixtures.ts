@@ -2,8 +2,8 @@
  * Auto-applied Playwright fixture (`_autoPerfSpan`, `auto: true`) that wraps every
  * test in OTel capture: it instruments page requests, navigations, and hydration,
  * folds in the action records from actions.ts, and emits a single `e2e.test` span
- * on teardown. Also exports the hydration-aware timeout scalers tests use to size
- * their per-browser budgets.
+ * on teardown. Also exports the slow-browser / worker-contention timeout scalers
+ * tests use to size their per-browser budgets.
  */
 
 import {
@@ -86,10 +86,8 @@ type NavigationSummary = {
 // browser scale already absorbs 4-worker contention empirically (66/66 green at
 // workers=4, #155 AC3), while Chromium — which has no browser scale — would
 // otherwise have zero headroom and its heavy tests time out under parallelism.
-// (Name kept as `hydrationHeavy*` for now; there is no hydration on CSR — the
-// rename is a follow-up in this cycle.)
-const hydrationHeavyTimeoutScale = 2.2;
-const hydrationHeavyFirstNavigationScale = 2.6;
+const slowBrowserTimeoutScale = 2.2;
+const slowBrowserFirstNavigationScale = 2.6;
 
 // CPU-contention headroom as a function of the Playwright worker count.
 // Calibrated so 4 workers reaches Firefox's proven 2.2x; intermediate counts
@@ -173,25 +171,25 @@ export async function maybeWarmupPage(
   await warmupPageContext(page, testInfo);
 }
 
-export function hydrationHeavyTimeoutMs(
+export function slowBrowserTimeoutMs(
   testInfo: TestInfo,
   chromiumBudgetMs: number,
 ): number {
   const browserScale =
-    testInfo.project.name === "chromium" ? 1.0 : hydrationHeavyTimeoutScale;
+    testInfo.project.name === "chromium" ? 1.0 : slowBrowserTimeoutScale;
   return Math.ceil(
     chromiumBudgetMs * Math.max(browserScale, workerContentionScale(testInfo)),
   );
 }
 
-export function hydrationHeavyFirstNavigationTimeoutMs(
+export function slowBrowserFirstNavigationTimeoutMs(
   testInfo: TestInfo,
   chromiumBudgetMs: number,
 ): number {
   const browserScale =
     testInfo.project.name === "chromium"
       ? 1.0
-      : hydrationHeavyFirstNavigationScale;
+      : slowBrowserFirstNavigationScale;
   return Math.ceil(
     chromiumBudgetMs * Math.max(browserScale, workerContentionScale(testInfo)),
   );
@@ -223,7 +221,7 @@ const test = base.extend<{
     const page = await context.newPage();
     const username = await register(
       page,
-      hydrationHeavyFirstNavigationTimeoutMs(testInfo, 15_000),
+      slowBrowserFirstNavigationTimeoutMs(testInfo, 15_000),
     );
     await context.close();
     await use({
@@ -270,10 +268,10 @@ const test = base.extend<{
     // it — this expensive out-of-band flow would run under the un-scaled 30s
     // default and time out under worker CPU contention (#155, workers=4). Scale
     // the whole test's budget here, at the fixture's start, so setup is covered.
-    testInfo.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
+    testInfo.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
     const context = await browser.newContext();
     const page = await context.newPage();
-    const firstNav = hydrationHeavyFirstNavigationTimeoutMs(testInfo, 15_000);
+    const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 15_000);
     await login(page, user.username, user.password, firstNav);
     await goto(page, "/profile/email");
     await page.fill('input[name="email"]', user.email);

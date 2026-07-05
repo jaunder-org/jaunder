@@ -21,7 +21,7 @@
  *   Firefox's `location.replace()` navigation and before ActionForm AJAX
  *   responses arrive under load.  Wait for a specific element instead.
  *
- * - Use `hydrationHeavyTimeoutMs(testInfo, ms)` (from fixtures) for all test
+ * - Use `slowBrowserTimeoutMs(testInfo, ms)` (from fixtures) for all test
  *   timeouts so Firefox gets a scaled budget.  Do not combine it with
  *   `test.slow()` — the explicit timeout wins and `test.slow()` is redundant.
  *
@@ -29,7 +29,7 @@
  *   authenticated session.
  *
  * - Use `register(page, firstNavigationTimeoutMs)` whenever a test needs a
- *   fresh user account.  Pass `hydrationHeavyFirstNavigationTimeoutMs(...)` as
+ *   fresh user account.  Pass `slowBrowserFirstNavigationTimeoutMs(...)` as
  *   the timeout so the cold WASM load gets enough budget across all browsers.
  */
 
@@ -110,7 +110,7 @@ export async function login(
  * Register a new user with a unique generated username, wait for the login
  * redirect to settle, and return the username.
  *
- * Pass `hydrationHeavyFirstNavigationTimeoutMs(testInfo, ms)` as
+ * Pass `slowBrowserFirstNavigationTimeoutMs(testInfo, ms)` as
  * `firstNavigationTimeoutMs` to give the cold WASM load enough budget on all
  * browsers.
  *

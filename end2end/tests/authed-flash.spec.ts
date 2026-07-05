@@ -12,8 +12,8 @@
 import {
   test,
   expect,
-  hydrationHeavyFirstNavigationTimeoutMs,
-  hydrationHeavyTimeoutMs,
+  slowBrowserFirstNavigationTimeoutMs,
+  slowBrowserTimeoutMs,
 } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
@@ -41,7 +41,7 @@ test("owner: pre-paint auth marks html.authed and / stays the enhanced public ti
 }, testInfo) => {
   const username = await register(
     page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+    slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000),
   );
   await createPublishedPostViaApi(page, "Owner Post");
 
@@ -59,7 +59,7 @@ test("owner: pre-paint auth marks html.authed and / stays the enhanced public ti
   // affordance is absent from the anonymous seed data (is_author = false).
   await expect(
     page.locator('.j-post-acts a[href$="/edit"]').first(),
-  ).toBeVisible({ timeout: hydrationHeavyTimeoutMs(testInfo, 10_000) });
+  ).toBeVisible({ timeout: slowBrowserTimeoutMs(testInfo, 10_000) });
 
   // Authed sidebar chrome is present (footer logout + an authed-only nav link).
   await expect(page.locator(".j-sb-foot a[href='/logout']")).toBeVisible();
@@ -69,10 +69,7 @@ test("owner: pre-paint auth marks html.authed and / stays the enhanced public ti
 test("owner: /app cockpit boots straight into the personalized feed", async ({
   page,
 }, testInfo) => {
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   // Directly bookmarkable (D6): a direct hit to /app boots into the feed + composer
   // with zero intermediate clicks (pre-paint html.authed â†’ the client boots authed).
@@ -89,17 +86,14 @@ test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / â
   // safe stay-default (nothing writes the key yet). Writing it exercises that path:
   // an authed owner (marker set) with the key = "app" is redirected off / to /app
   // before first paint. Requires BOTH the marker and the key.
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
   await page.evaluate(() =>
     localStorage.setItem("jaunder_home_redirect", "app"),
   );
 
   await page.goto(`${BASE_URL}/`, { waitUntil: "commit" });
   await page.waitForURL(/\/app$/, {
-    timeout: hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+    timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000),
   });
 });
 
@@ -108,7 +102,7 @@ test("anonymous: /app bounces to /login", async ({ page }, testInfo) => {
   // redirects to /login (D6).
   await page.goto(`${BASE_URL}/app`, { waitUntil: "domcontentloaded" });
   await page.waitForURL(/\/login$/, {
-    timeout: hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
+    timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000),
   });
 });
 

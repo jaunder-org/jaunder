@@ -1,4 +1,4 @@
-import { test, expect, hydrationHeavyTimeoutMs } from "./fixtures";
+import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
 import { goto, click, waitForSelector, waitForHydration } from "./helpers";
 
 // M3.11.13: Full password reset flow.
@@ -11,7 +11,7 @@ test("password reset flow completes successfully", async ({
   // provisions a verified account out-of-band (register → login → set-email →
   // verify) before this body's forgot → reset → login-twice flow — roughly
   // double the page ops of the original pre-seeded test.
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
 
   // Request a password reset for this test's own verified user.
   await goto(page, "/forgot-password");
@@ -60,7 +60,7 @@ test("password reset flow completes successfully", async ({
 test("visiting reset-password with invalid token shows error", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 12_000));
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 12_000));
   await goto(page, "/reset-password?token=totally_invalid_token");
   await page.fill('input[name="new_password"]', "somepassword123");
   await click(page, 'button[type="submit"]');
@@ -74,7 +74,7 @@ test("forgot-password for user without verified email shows contact operator err
   page,
   user,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 12_000));
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 12_000));
   await goto(page, "/forgot-password");
   // A freshly-registered user exists but has no verified email.
   await page.fill('input[name="username"]', user.username);

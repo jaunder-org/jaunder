@@ -27,10 +27,9 @@ based on the observed performance characteristics of the target browser.
 - Timeouts are calculated using multipliers derived from observed p90 hydration
   latency for each browser.
 - Helper functions in `end2end/tests/fixtures.ts`:
-  - `hydrationHeavyTimeoutMs(testInfo, chromiumBudgetMs)`: For whole-test
-    budgets.
-  - `hydrationHeavyFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)`: For
-    the initial (coldest) navigation.
+  - `slowBrowserTimeoutMs(testInfo, chromiumBudgetMs)`: For whole-test budgets.
+  - `slowBrowserFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)`: For the
+    initial (coldest) navigation.
 - Tests specify a "base" budget (for Chromium), which is then scaled for other
   projects based on known performance differentials.
 

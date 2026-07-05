@@ -1,11 +1,11 @@
-import { test, expect, hydrationHeavyTimeoutMs } from "./fixtures";
+import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
 import { goto, login, waitForSelector } from "./helpers";
 
 // M8.5: Site settings admin page allows operators to configure site identity.
 test("admin site settings page loads and allows updating title and base_url", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 15_000));
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 15_000));
 
   // Log in as operator user
   await login(page, "testoperator", "testpassword123");
@@ -44,7 +44,7 @@ test("admin site settings page loads and allows updating title and base_url", as
 test("non-operator user is denied access to /admin/site", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 10_000));
 
   // Log in as non-operator user
   await login(page, "testlogin", "testpassword123");

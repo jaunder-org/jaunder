@@ -1,8 +1,8 @@
 import {
   test,
   expect,
-  hydrationHeavyFirstNavigationTimeoutMs,
-  hydrationHeavyTimeoutMs,
+  slowBrowserFirstNavigationTimeoutMs,
+  slowBrowserTimeoutMs,
 } from "./fixtures";
 import { BASE_URL, goto, register, click, waitForSelector } from "./helpers";
 
@@ -10,10 +10,7 @@ test.describe("Media upload and serving", () => {
   test("authenticated user can upload and access media", async ({
     page,
   }, testInfo) => {
-    await register(
-      page,
-      hydrationHeavyFirstNavigationTimeoutMs(testInfo, 30000),
-    );
+    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
 
     // Upload via the API directly — session cookie is in page's cookie jar
     const fileContent = Buffer.from("fake image content for testing");
@@ -57,22 +54,16 @@ test.describe("Media upload and serving", () => {
   test("media nav link appears for authenticated users", async ({
     page,
   }, testInfo) => {
-    test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
-    await register(
-      page,
-      hydrationHeavyFirstNavigationTimeoutMs(testInfo, 30000),
-    );
+    test.setTimeout(slowBrowserTimeoutMs(testInfo, 10_000));
+    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
     await waitForSelector(page, "a[href='/media']");
   });
 
   test("media manage page is reachable via nav link", async ({
     page,
   }, testInfo) => {
-    test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
-    await register(
-      page,
-      hydrationHeavyFirstNavigationTimeoutMs(testInfo, 30000),
-    );
+    test.setTimeout(slowBrowserTimeoutMs(testInfo, 10_000));
+    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
     await click(page, "a[href='/media']");
     await waitForSelector(page, "button:has-text('Attach media')");
   });
@@ -80,11 +71,8 @@ test.describe("Media upload and serving", () => {
   test("upload widget on create-post page uploads file and shows URL", async ({
     page,
   }, testInfo) => {
-    test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
-    await register(
-      page,
-      hydrationHeavyFirstNavigationTimeoutMs(testInfo, 30000),
-    );
+    test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
+    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
     await goto(page, "/posts/new");
 
     // Use setInputFiles on the hidden file input to bypass the OS dialog.
@@ -106,11 +94,8 @@ test.describe("Media upload and serving", () => {
   test("upload widget on the /app cockpit uploads file and shows URL", async ({
     page,
   }, testInfo) => {
-    test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
-    await register(
-      page,
-      hydrationHeavyFirstNavigationTimeoutMs(testInfo, 30000),
-    );
+    test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
+    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
     // The /app cockpit shows the InlineComposer (#181), which includes MediaPanel.
     await goto(page, "/app");
     await waitForSelector(page, ".j-composer");

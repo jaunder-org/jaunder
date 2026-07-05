@@ -1,8 +1,8 @@
 import {
   test,
   expect,
-  hydrationHeavyFirstNavigationTimeoutMs,
-  hydrationHeavyTimeoutMs,
+  slowBrowserFirstNavigationTimeoutMs,
+  slowBrowserTimeoutMs,
 } from "./fixtures";
 import type { Browser, Page } from "@playwright/test";
 import {
@@ -122,8 +122,8 @@ test("Private post: hidden from anonymous and non-subscriber, visible to author"
   page,
   browser,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 60_000));
-  const firstNav = hydrationHeavyFirstNavigationTimeoutMs(testInfo, 20_000);
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 60_000));
+  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
 
   const author = await registerKnown(page, firstNav);
   const permalink = await publishWithBaseAudience(
@@ -165,8 +165,8 @@ test("Subscribers post: visible after Subscribe, hidden again after Unsubscribe"
   page,
   browser,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 60_000));
-  const firstNav = hydrationHeavyFirstNavigationTimeoutMs(testInfo, 20_000);
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 60_000));
+  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
 
   const author = await registerKnown(page, firstNav);
   const permalink = await publishWithBaseAudience(
@@ -225,8 +225,8 @@ test("Named audience: assigned member sees a Friends post; an unassigned non-mem
   page,
   browser,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 90_000));
-  const firstNav = hydrationHeavyFirstNavigationTimeoutMs(testInfo, 20_000);
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 90_000));
+  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
 
   const author = await registerKnown(page, firstNav);
 
@@ -305,8 +305,8 @@ test("Public post is visible to anonymous and appears in the feed; Subscribers p
   page,
   browser,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 90_000));
-  const firstNav = hydrationHeavyFirstNavigationTimeoutMs(testInfo, 20_000);
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 90_000));
+  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
 
   const author = await registerKnown(page, firstNav);
 
