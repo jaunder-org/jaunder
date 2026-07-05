@@ -494,20 +494,17 @@
           pkgs.runCommand "jaunder-csr-wasm-bundle"
             {
               nativeBuildInputs = [
+                devtoolBin
                 wasm-bindgen-cli
-                pkgs.gnused
               ];
             }
             ''
-              mkdir -p $out
-              wasm-bindgen \
-                --target web \
-                --out-dir $out \
-                ${csrWasm}/lib/csr.wasm
-              # Rename to the "jaunder" output-name the CSR shell's <script> imports.
-              mv $out/csr.js $out/jaunder.js
-              mv $out/csr_bg.wasm $out/jaunder.wasm
-              sed -i 's/csr_bg\.wasm/jaunder.wasm/g' $out/jaunder.js
+              # Post-process the crane-built csr.wasm into the served bundle
+              # (pkg/jaunder.{js,wasm}) via the shared `devtool csr-bundle` — the
+              # SAME implementation the host build (`cargo xtask build-csr`) runs, so
+              # host and Nix can no longer drift (#236). devtool shells out to
+              # `wasm-bindgen` (on PATH here) and does the rename + js wasm-ref fix.
+              devtool csr-bundle --wasm ${csrWasm}/lib/csr.wasm --out $out
             '';
 
         e2eOtelCollectorConfig = pkgs.writeText "jaunder-otel-collector.yaml" ''

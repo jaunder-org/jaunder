@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 
 mod check;
 mod coverage;
+mod csr_bundle;
 mod pg;
 mod run;
 
@@ -30,6 +31,10 @@ enum Command {
     Run(RunArgs),
     /// Run the non-compiling static checks (#188): one by name, or `--all`.
     Check(CheckArgs),
+    /// Post-process a built `csr.wasm` into the served CSR bundle
+    /// (`pkg/jaunder.{js,wasm}`): wasm-bindgen + rename + js wasm-ref fix. Shared
+    /// by the host build and the Nix `csrWasmBundle` derivation (#236).
+    CsrBundle(CsrBundleArgs),
 }
 
 #[derive(clap::Args)]
@@ -42,6 +47,16 @@ struct CheckArgs {
     /// Auto-fix (the formatters) instead of verifying.
     #[arg(long)]
     fix: bool,
+}
+
+#[derive(clap::Args)]
+struct CsrBundleArgs {
+    /// Path to the built `csr.wasm` (crane output or `target/.../csr.wasm`).
+    #[arg(long)]
+    wasm: std::path::PathBuf,
+    /// Output directory for the bundle (the site `pkg` dir).
+    #[arg(long)]
+    out: std::path::PathBuf,
 }
 
 #[derive(clap::Args)]
@@ -84,5 +99,6 @@ fn main() -> anyhow::Result<()> {
         Command::Pg(PgCmd::Run { cmd }) => pg::run_command(&cmd),
         Command::Run(args) => run::run(&args.cmd, args.cwd, args.timeout),
         Command::Check(args) => check::run(args.name.as_deref(), args.all, args.fix),
+        Command::CsrBundle(args) => csr_bundle::run(&args.wasm, &args.out),
     }
 }
