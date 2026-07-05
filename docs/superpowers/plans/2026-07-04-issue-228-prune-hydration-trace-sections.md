@@ -231,26 +231,26 @@ git commit -m "refactor(xtask/traces): remove CSR-OBE hydration report sections 
   The renamed tuple is `("navigation.commit_to_mount", "commitToMountMs")`. Task
   4 produces the matching emitter key.
 
-- [ ] **Step 1: Update the section-4 test to the new phase name (red).** In
+- [x] **Step 1: Update the section-4 test to the new phase name (red).** In
       `analyze.rs` `navigation_phase_and_targets` (:990-995), change the lookup
       `r.name == "navigation.commit_to_hydration"` →
       `"navigation.commit_to_mount"` and the
       `.expect("commit_to_hydration present")` message →
       `"commit_to_mount present"`. Leave the `max_ms == 400.0` assertion.
 
-- [ ] **Step 2: Run the test, verify it fails.** Run:
+- [x] **Step 2: Run the test, verify it fails.** Run:
       `cargo nextest run -p xtask navigation_phase_and_targets` Expected: FAIL —
       no phase named `navigation.commit_to_mount` yet (fixture still carries
       `commitToHydrationMs`, `NAV_PHASES` still says `commit_to_hydration`).
 
-- [ ] **Step 3: Prune + rename `NAV_PHASES`.** Edit the array (`analyze.rs:339`)
+- [x] **Step 3: Prune + rename `NAV_PHASES`.** Edit the array (`analyze.rs:339`)
       to the 5 entries above: delete the `load_to_hydration`, `wasm_init`,
       `leptos_hydrate`, `post_hydrate_effects` tuples; rename the
       `("navigation.commit_to_hydration", "commitToHydrationMs")` tuple to
       `("navigation.commit_to_mount", "commitToMountMs")`. Update the array
       length annotation `[(&str, &str); 9]` → `; 5]`.
 
-- [ ] **Step 4: Rename + trim the fixture JSONL.** In
+- [x] **Step 4: Rename + trim the fixture JSONL.** In
       `testdata/otel-traces-sample.jsonl`, within every
       `e2e.navigation_top_json` value: rename the field `commitToHydrationMs` →
       `commitToMountMs` (leave the value — the firefox nav's 400 is what the
@@ -258,17 +258,17 @@ git commit -m "refactor(xtask/traces): remove CSR-OBE hydration report sections 
       `wasmInitMs`, `leptosHydrateMs`, `postHydrateEffectsMs` (no longer read by
       the reduced `NAV_PHASES`).
 
-- [ ] **Step 5: Run the test, verify it passes.** Run:
+- [x] **Step 5: Run the test, verify it passes.** Run:
       `cargo nextest run -p xtask navigation_phase_and_targets` Expected: PASS.
 
-- [ ] **Step 6: Residue grep + full output check (spec AC2/AC3).** Run:
+- [x] **Step 6: Residue grep + full output check (spec AC2/AC3).** Run:
       `rg -n "commit_to_hydration|commitToHydration|load_to_hydration|loadToHydration|leptos_hydrate|post_hydrate|wasm_init" xtask/src/traces/`
       Expected: no matches. Then
       `cargo run -p xtask -- traces analyze xtask/src/traces/testdata/otel-traces-sample.jsonl`
       — section 4 lists phase `commit_to_mount` and none of the four pruned
       phases.
 
-- [ ] **Step 7: Commit** (**jaunder-commit** — run `cargo xtask check` first).
+- [x] **Step 7: Commit** — committed `83954835`, full gate green.
 
 ```bash
 git add xtask/src/traces/analyze.rs xtask/src/traces/testdata/otel-traces-sample.jsonl
@@ -304,26 +304,26 @@ _No unit test exercises the emitter; its contract is TypeScript type-checking
 `cargo xtask check`). `end2end/package.json` has no `lint`/`typecheck` scripts,
 so invoke `tsc` directly. Keep the change mechanical and type-driven._
 
-- [ ] **Step 1: Rename the load-bearing camelCase field.** In `fixtures.ts`,
+- [x] **Step 1: Rename the load-bearing camelCase field.** In `fixtures.ts`,
       rename `commitToHydrationMs` → `commitToMountMs` at the
       `NavigationSummary` **type** field (:94), its `const` declaration
       (:703-706), and the returned navigation-summary object (:722). This is the
       field the xtask parser reads via `NAV_PHASES` (Task 3) — must match
       `commitToMountMs` exactly.
 
-- [ ] **Step 2: Rename the OTLP span attribute (cosmetic).** Change
+- [x] **Step 2: Rename the OTLP span attribute (cosmetic).** Change
       `otlpAttribute("navigation.commit_to_hydration_ms", navigation.commitToMountMs)`
       (:828-831) → `"navigation.commit_to_mount_ms"`, updating the field
       reference to `commitToMountMs`.
 
-- [ ] **Step 3: Remove the dead attribute emissions.** Delete from the
+- [x] **Step 3: Remove the dead attribute emissions.** Delete from the
       attribute/event lists: the `e2e.hydration_runtime_json` attribute
       (:765-768); and the `navigation.load_to_hydration_ms` (:836-839),
       `navigation.wasm_init_ms` (:840), `navigation.leptos_hydrate_ms`
       (:841-844), `navigation.post_hydrate_effects_ms` (:845-848) span
       attributes.
 
-- [ ] **Step 4: Remove the dead plumbing + types.** Delete, in `fixtures.ts`: -
+- [x] **Step 4: Remove the dead plumbing + types.** Delete, in `fixtures.ts`: -
       the summary object's `loadToHydrationMs` (:711-714 compute, :724 field)
       and `wasmInitMs` / `leptosHydrateMs` / `postHydrateEffectsMs` fields
       (:726-728), and their `NavigationSummary` **type** fields (:96,
@@ -340,16 +340,16 @@ so invoke `tsc` directly. Keep the change mechanical and type-driven._
       `commitToMountMs` depends on `hydratedMs` (spec: marker stays, only its name
       is deferred to the Task 1 follow-on).
 
-- [ ] **Step 5: Type-check, verify clean (spec AC4).** Run:
+- [x] **Step 5: Type-check, verify clean (spec AC4).** Run:
       `cd end2end && npx tsc --noEmit` Expected: PASS — no unused-symbol / type
       errors; no residual reference to the removed fields. (Formatting/lint is
       enforced by `cargo xtask check` in Task 6.)
 
-- [ ] **Step 6: Grep for residue.** Run:
+- [x] **Step 6: Grep for residue.** Run:
       `rg -n "hydration_runtime|commitToHydration|commit_to_hydration|load_to_hydration|loadToHydration|wasmInitMs|leptosHydrateMs|postHydrateEffectsMs|__jaunder_perf|HydrationPerfPayload|hydrationRuntime" end2end/tests/fixtures.ts`
       Expected: no matches.
 
-- [ ] **Step 7: Commit** (**jaunder-commit** — `cargo xtask check` first).
+- [x] **Step 7: Commit** — committed `b60ad1dd`, full gate green.
 
 ```bash
 git add end2end/tests/fixtures.ts
@@ -368,7 +368,7 @@ git commit -m "refactor(e2e): drop dead hydration span attributes, rename commit
 
 **Interfaces:** none (docs only).
 
-- [ ] **Step 1: Remove the four removed sections from the section list.** Delete
+- [x] **Step 1: Remove the four removed sections from the section list.** Delete
       the bullets describing: "navigation `commit -> hydration` split by
       `cacheWarmth`" (:91), the per-navigation hydration component hotspots
       (`wasm_init`/`leptos_hydrate`/`post_hydrate_effects`/`commit_to_hydration`)
@@ -376,17 +376,17 @@ git commit -m "refactor(e2e): drop dead hydration span attributes, rename commit
       `e2e.hydration_runtime_json` (:95). Also remove any "hydration budget vs
       API budget" line if present.
 
-- [ ] **Step 2: Rename surviving `commit -> hydration` references to
+- [x] **Step 2: Rename surviving `commit -> hydration` references to
       `commit -> mount`.** Update the navigation-summary line (:22-25, "includes
       `commit -> hydration` timing…") and the phase reference at :153 to
       `commit -> mount` / `commit_to_mount`, consistent with ADR-0040. Leave the
       `hydrationHeavy*` (:168-170, :296-300) and `data-hydrated` (:319)
       references untouched — those renames are the Task 1 follow-ons.
 
-- [ ] **Step 3: Re-read the edited regions** to confirm no dangling reference
+- [x] **Step 3: Re-read the edited regions** to confirm no dangling reference
       implies a removed section still prints (spec AC6).
 
-- [ ] **Step 4: Commit** (docs-only; `cargo xtask check` still runs via hook).
+- [x] **Step 4: Commit** — committed `76162edd` (prettier reflowed; re-staged).
 
 ```bash
 git add docs/observability.md
