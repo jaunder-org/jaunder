@@ -595,7 +595,7 @@ fn storage_root_list_includes_storage_src() {
 
 ## Task 15: ADR — record the storage-test convention
 
-**Files:** Create `docs/adr/drafts/storage-test-homing-and-dual-backend.md`
+**Files:** Create `docs/adr/0053-storage-test-homing-and-dual-backend.md`
 (numberless draft, via **jaunder-adr**).
 
 - [ ] **Step 1:** Draft the ADR per spec Component 6: _home a test by what it

@@ -80,6 +80,7 @@ convention). See the Status column below for each ADR's current status.
 | [0050](adr/0050-stateless-coverage-gate.md)                        | Stateless coverage gate — `cov:ignore` + `#[component]` exemption + CRAP threshold                           | accepted   |
 | [0051](adr/0051-single-playwright-config.md)                       | One Playwright config for host and CI                                                                        | proposed   |
 | [0052](adr/0052-devtool-unifies-static-checks.md)                  | devtool is the single implementation of the non-compiling static checks                                      | accepted   |
+| [0053](adr/0053-storage-test-homing-and-dual-backend.md)           | Storage test homing and the dual-backend presumption                                                         | proposed   |
 
 <!-- adr-table:end -->
 
