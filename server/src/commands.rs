@@ -382,8 +382,8 @@ pub async fn prepare_server(
     let db = match open_existing_database(&storage.db).await {
         Ok(db) => db,
         Err(_) if !prod => {
-            // Dev mode: auto-initialize so `cargo leptos end-to-end` and
-            // `cargo leptos serve` work without a manual `jaunder init`.
+            // Dev mode: auto-initialize on first `jaunder serve` so the host e2e
+            // loop (and any dev run) works without a manual `jaunder init`.
             tracing::warn!(
                 storage_path = %storage.storage_path.display(), // cov:ignore
                 db = %storage.db,

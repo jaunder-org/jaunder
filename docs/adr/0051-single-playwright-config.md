@@ -33,9 +33,9 @@ driver**, not branches inside the config:
   `--reporter=html,line` for interactive use.
 - `PLAYWRIGHT_HTML_OPEN=never` — so a red host run doesn't spawn a blocking
   report server.
-- `JAUNDER_E2E_WORKERS=1` on the host — the host `cargo leptos end-to-end`
-  serves a _debug_ CSR build whose hydration wants full CPU per test; the CI VM
-  keeps the config default of 2 (release wasm).
+- `JAUNDER_E2E_WORKERS=1` on the host — the host `cargo xtask e2e-local` serves
+  a _debug_ CSR build whose hydration wants full CPU per test; the CI VM keeps
+  the config default of 2 (release wasm).
 
 Everything else — admin-site quarantine (ADR-0039), Firefox process-slimming,
 chromium `--no-sandbox` launch args (applied always; benign on the host),
@@ -49,6 +49,13 @@ The host e2e loop is promoted from `end2end/run-e2e.sh` to
 Playwright against an already-running dev server. cargo-leptos owns the server
 lifecycle (it invokes the driver as `end2end-cmd`); a standalone
 `cargo xtask e2e-local` assumes a server is already serving (fast re-runs).
+
+> **Update (#249 / #268):** the server-ownership described in the paragraph
+> above no longer holds. `cargo xtask e2e-local` now owns the whole loop — it
+> builds the bundle, spawns its own `jaunder serve` on an ephemeral port, seeds,
+> runs Playwright, and tears the server down; `end2end-cmd` and cargo-leptos
+> have been removed entirely. The single-Playwright-config decision this ADR
+> records is unaffected.
 
 ## Consequences
 

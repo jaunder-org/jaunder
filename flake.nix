@@ -45,6 +45,10 @@
     let
       interactiveTestingVmSystem = "x86_64-linux";
       postgresTestingVmSystem = "x86_64-linux";
+      # Part of the canonical e2e-server env-var set that the VM systemd unit and
+      # the host `cargo xtask e2e-local` driver both source (names shared, values
+      # per-environment). The full documented list lives in
+      # `xtask/src/steps/e2e_local.rs` (module docs). See issue #249.
       mailCaptureEnv = {
         JAUNDER_MAIL_CAPTURE_FILE = "/var/lib/jaunder/mail.jsonl";
         JAUNDER_WEBSUB_CAPTURE_FILE = "/var/lib/jaunder/websub.jsonl";
@@ -723,6 +727,7 @@
                   pkgs.sqlite
                   pkgs.opentelemetry-collector-contrib
                   testSupportBin
+                  devtoolBin
                 ];
                 environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
 
@@ -751,22 +756,19 @@
               def seed_db():
                 # Wipe the SQLite data dir wholesale and let jaunder's auto-init
                 # recreate the schema. Avoids hardcoding a table list (which
-                # would silently drift as the schema grows); mirrors the local
-                # `scripts/e2e-local.sh` flow where each run gets a fresh
-                # temp storage dir.
+                # would silently drift as the schema grows). The host driver
+                # (`cargo xtask e2e-local`) gets the same fresh-state guarantee a
+                # different way: a per-run temp storage dir + DB (#249).
                 machine.succeed("systemctl stop jaunder.service")
                 machine.succeed("rm -rf /var/lib/jaunder/data")
                 machine.succeed("systemctl start jaunder.service")
                 machine.wait_for_unit("jaunder.service", timeout=60)
                 machine.wait_for_open_port(3000, timeout=30)
                 machine.succeed(
-                  "export JAUNDER_DB=sqlite:/var/lib/jaunder/data/jaunder.db; "
-                  + "test-support create-user --username testlogin --password testpassword123 && "
-                  + "test-support create-user --username testnoemail --password testpassword123 && "
-                  + "test-support create-user --username testoperator --password testpassword123 --operator && "
-                  + "test-support set-site-config --key site.registration_policy --value open && "
-                  + "test-support set-site-config --key feeds.websub_hub_url --value https://hub.test.local/ && "
-                  + "test-support reset-mail --path /var/lib/jaunder/mail.jsonl"
+                  "devtool seed-e2e"
+                  + " --db sqlite:/var/lib/jaunder/data/jaunder.db"
+                  + " --mail-file /var/lib/jaunder/mail.jsonl"
+                  + " --test-support-bin test-support"
                 )
 
               machine.start()
@@ -821,6 +823,7 @@
                   pkgs.postgresql_16
                   pkgs.opentelemetry-collector-contrib
                   testSupportBin
+                  devtoolBin
                 ];
                 environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
 
@@ -897,13 +900,10 @@
                   + " END LOOP; END \\$\\$;\""
                 )
                 machine.succeed(
-                  "export JAUNDER_DB=postgres://jaunder:testpassword@127.0.0.1/jaunder; "
-                  + "test-support create-user --username testlogin --password testpassword123 && "
-                  + "test-support create-user --username testnoemail --password testpassword123 && "
-                  + "test-support create-user --username testoperator --password testpassword123 --operator && "
-                  + "test-support set-site-config --key site.registration_policy --value open && "
-                  + "test-support set-site-config --key feeds.websub_hub_url --value https://hub.test.local/ && "
-                  + "test-support reset-mail --path /var/lib/jaunder/mail.jsonl"
+                  "devtool seed-e2e"
+                  + " --db postgres://jaunder:testpassword@127.0.0.1/jaunder"
+                  + " --mail-file /var/lib/jaunder/mail.jsonl"
+                  + " --test-support-bin test-support"
                 )
 
               # Seed a fresh DB and run the one browser this derivation targets.
@@ -1248,11 +1248,9 @@
               pkgs.cachix
               cargo-crap
               pkgs.cargo-deny
-              pkgs.cargo-leptos
               pkgs.cargo-llvm-cov
               pkgs.cargo-nextest
               pkgs.curl
-              pkgs.dart-sass
               emacsForCi
               pkgs.jq
               pkgs.leptosfmt

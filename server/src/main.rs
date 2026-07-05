@@ -31,42 +31,14 @@ async fn main() -> anyhow::Result<()> {
 /// # Errors
 ///
 /// Returns an error if the command execution fails.
-///
-/// # Panics
-///
-/// Panics if the implicitly re-parsed `serve` subcommand is absent, which is
-/// unreachable: `Cli::parse_from(["jaunder", "serve"])` always yields one.
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
-    let command = match cli.command {
-        Some(cmd) => cmd,
-        // The re-parsed `serve` invocation below always yields a subcommand, so
-        // the `.expect()` is provably unreachable; a panic is the honest choice
-        // here, hence a scoped exception to the no-`expect` rule.
-        #[allow(clippy::expect_used)]
-        None => {
-            // cargo-leptos sets LEPTOS_OUTPUT_NAME when running the server
-            // binary.  When present, default to `serve` so that
-            // `cargo leptos end-to-end` (and `cargo leptos serve`) work
-            // without requiring the user to pass `-- serve`.
-            // cov:ignore-start
-            if std::env::var_os("LEPTOS_OUTPUT_NAME").is_some() {
-                // cov:ignore-stop
-                // Re-parse as if the user typed `jaunder serve`, which
-                // picks up env-var overrides and clap defaults for all
-                // StorageArgs / bind / environment fields.
-                // cov:ignore-start
-                let implicit = Cli::parse_from(["jaunder", "serve"]);
-                implicit.command.expect("serve subcommand present")
-                // cov:ignore-stop
-            } else {
-                // No subcommand and not under cargo-leptos — re-parse to
-                // trigger clap's built-in "missing subcommand" error/help.
-                // cov:ignore-start
-                Cli::parse_from(["jaunder", "--help"]);
-                unreachable!()
-                // cov:ignore-stop
-            }
-        }
+    let Some(command) = cli.command else {
+        // `jaunder` with no subcommand is not runnable — re-parse to trigger
+        // clap's built-in help/usage, which prints and exits.
+        // cov:ignore-start
+        Cli::parse_from(["jaunder", "--help"]);
+        unreachable!()
+        // cov:ignore-stop
     };
     // `run` owns telemetry for *every* command, `serve` included: one guard,
     // held across the whole dispatch, whose Drop flushes the OTLP exporters

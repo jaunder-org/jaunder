@@ -28,7 +28,7 @@ import {
   otlpAttribute,
   traceContextFromEnvironment,
 } from "./otel";
-import { click, expectFlash, goto, login, register } from "./helpers";
+import { BASE_URL, click, expectFlash, goto, login, register } from "./helpers";
 import { extractToken, readEmailLines, type CapturedEmail } from "./mail";
 import { SEL } from "./selectors";
 
@@ -116,7 +116,9 @@ function workerContentionScale(testInfo: TestInfo): number {
   if (workers === 3) return 2.0;
   return 2.5; // 4+ workers: heaviest oversubscription on a ~4-vCPU runner
 }
-const defaultWarmupUrl = "http://localhost:3000/";
+// Default the warmup URL to BASE_URL (env-aware, #249) rather than a second
+// hardcoded :3000; the explicit JAUNDER_E2E_WARMUP_URL override still wins below.
+const defaultWarmupUrl = `${BASE_URL}/`;
 const defaultWarmupTimeoutMs = 10_000;
 
 function parseBooleanFlag(raw: string | undefined): boolean {

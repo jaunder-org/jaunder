@@ -40,8 +40,8 @@ if(u){var e=document.documentElement;e.classList.add('authed');e.setAttribute('d
 if(localStorage.getItem('jaunder_home_redirect')==='app'&&location.pathname==='/'){location.replace('/app');}}}\
 }catch(_){}})();</script>";
 
-/// The CSR SPA shell, embedded at compile time. The host `cargo leptos` build never
-/// writes `index.html` to `site_root` (#239); the server owns it and serves it — the
+/// The CSR SPA shell, embedded at compile time. The `cargo xtask build-csr` build
+/// never writes `index.html` to `site_root` (#239); the server owns it and serves it — the
 /// same way the projector renders its routes from constants. Single source of the
 /// shell; copied to no build output.
 pub const SPA_SHELL: &str = include_str!("../../../csr/index.html");

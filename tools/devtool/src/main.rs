@@ -1,7 +1,7 @@
 //! Internal in-sandbox dev tool. Runs inside the Nix coverage/e2e build
 //! sandboxes where `xtask` (host-only) is unavailable. Subcommand tree is
-//! deliberately extensible: `coverage emit` exists today; `pg`/`seed-e2e` are
-//! planned migrations of the remaining shell scripts (tracked separately).
+//! deliberately extensible: `coverage emit`, `csr-bundle`, and `seed-e2e` exist
+//! today; `pg`-migration of the remaining shell scripts is tracked separately.
 
 use clap::{Parser, Subcommand};
 
@@ -10,6 +10,7 @@ mod coverage;
 mod csr_bundle;
 mod pg;
 mod run;
+mod seed_e2e;
 
 #[derive(Parser)]
 #[command(name = "devtool", about = "Jaunder in-sandbox dev tooling", version)]
@@ -35,6 +36,10 @@ enum Command {
     /// (`pkg/jaunder.{js,wasm}`): wasm-bindgen + rename + js wasm-ref fix. Shared
     /// by the host build and the Nix `csrWasmBundle` derivation (#236).
     CsrBundle(CsrBundleArgs),
+    /// Seed the canonical e2e fixtures (users + site-config + mail-reset) by
+    /// shelling out to `test-support`. The single fixture list shared by the
+    /// host loop and the flake VM `seed_db()` (#249).
+    SeedE2e(SeedE2eArgs),
 }
 
 #[derive(clap::Args)]
@@ -57,6 +62,20 @@ struct CsrBundleArgs {
     /// Output directory for the bundle (the site `pkg` dir).
     #[arg(long)]
     out: std::path::PathBuf,
+}
+
+#[derive(clap::Args)]
+struct SeedE2eArgs {
+    /// Target database URL (passed to test-support as JAUNDER_DB).
+    #[arg(long)]
+    db: String,
+    /// Mail-capture file to reset.
+    #[arg(long)]
+    mail_file: String,
+    /// Path to the `test-support` binary — the on-PATH name on the VM guest, the
+    /// built `target/debug/test-support` on the host.
+    #[arg(long)]
+    test_support_bin: std::path::PathBuf,
 }
 
 #[derive(clap::Args)]
@@ -100,5 +119,6 @@ fn main() -> anyhow::Result<()> {
         Command::Run(args) => run::run(&args.cmd, args.cwd, args.timeout),
         Command::Check(args) => check::run(args.name.as_deref(), args.all, args.fix),
         Command::CsrBundle(args) => csr_bundle::run(&args.wasm, &args.out),
+        Command::SeedE2e(args) => seed_e2e::run(&args.db, &args.mail_file, &args.test_support_bin),
     }
 }
