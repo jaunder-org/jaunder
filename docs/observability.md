@@ -168,7 +168,7 @@ naming is a misnomer post-CSR (the phase is CSR mount, not hydration).
 ## #155 — worker-parallelism safety probes (AC3, 2026-07-02)
 
 Probed `JAUNDER_E2E_WORKERS>1` on CSR (env-driven worker count threaded through
-`nixPlaywrightConfig`), each failure mode at its worst case. **CI
+`playwright.config.ts`), each failure mode at its worst case. **CI
 `ubuntu-latest` is ~4 vCPU, so the CI-representative probes cap
 `virtualisation.cores` at 4** (a 6-core guest oversubscribes a 4-core runner).
 Results (sqlite+chromium unless noted):

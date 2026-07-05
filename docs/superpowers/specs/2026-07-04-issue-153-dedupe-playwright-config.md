@@ -195,10 +195,11 @@ Each is stated so ship-time conformance review can tell delivered from not.
   server, with server-lifecycle ownership resolved per Design §5.
   `end2end/run-e2e.sh` is removed and `Cargo.toml`'s e2e wiring points at the
   new driver.
-- **AC4 — Host loop is documented and directed.** jaunder skill guidance
-  instructs contributors to use the host fast loop, including how to run a
-  single e2e test. (Grep for `cargo xtask e2e-local` — the concrete command name
-  — in `.claude/skills/` / `docs/agents/` returns the guidance.)
+- **AC4 — Host loop is documented and directed.** Contributor guidance instructs
+  contributors to use the host fast loop, including how to run a single e2e
+  test, in **CONTRIBUTING.md** (the definitive contributor guide; `docs/agents/`
+  is not present in this branch). (Grep for `cargo xtask e2e-local` — the
+  concrete command name — in `CONTRIBUTING.md` returns the guidance.)
 - **AC5 — VM loads the unified config.** `cargo xtask e2e sqlite chromium` runs
   green on the branch with the unified config (proves risk #1 dead).
 - **AC6 — Red-run diagnostics survive.** With a deliberately-failed test in a VM

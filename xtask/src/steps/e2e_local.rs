@@ -60,9 +60,11 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
     // run-e2e.sh (30 * 0.5s).
     let mut up = false;
     for _ in 0..30 {
+        // No `.ignore_status()`: `curl -sf` exits non-zero until the server answers,
+        // so `run()` returns Err and the poll actually waits (with it, run() is always
+        // Ok and the loop would break on the first iteration — a no-op wait).
         if cmd!(sh, "curl -sf http://localhost:3000/")
             .quiet()
-            .ignore_status()
             .run()
             .is_ok()
         {

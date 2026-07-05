@@ -181,6 +181,29 @@ production helper it calls) through a constructor that `env_remove`s those vars
 (`rev-parse`/`log`/`diff`/`ls-files`) are safe unscrubbed since they don't
 mutate.
 
+### Running e2e tests locally
+
+The host and the CI VM load the **same** `end2end/playwright.config.ts`, so
+"passes locally" now equals "passes in CI" — the difference is only how you
+invoke it.
+
+- **Fast local loop** — `cargo leptos end-to-end` builds the app, starts a dev
+  server, seeds fixtures, and runs the Playwright suite (chromium +
+  `chromium-admin`) against it via `cargo xtask e2e-local`. Use this while
+  iterating on the web UI; it uses the HTML reporter for interactive debugging.
+- **A single test** — with a dev server already running,
+  `cargo xtask e2e-local <spec>` runs just that spec (e.g.
+  `cargo xtask e2e-local auth-flow.spec.ts`), for the tightest edit→run loop.
+  Standalone `cargo xtask e2e-local` assumes a server is already serving on
+  `:3000` (cargo-leptos owns the server lifecycle; the driver just seeds + runs
+  Playwright). The host runs serial (`JAUNDER_E2E_WORKERS=1`) because it serves
+  an unoptimized debug wasm build; the CI VM runs at 2 workers on release wasm.
+- **The authoritative gate** — `cargo xtask e2e <backend> <browser>` runs one
+  combo through the hermetic Nix VM (release build, the same derivation CI
+  runs); `cargo xtask validate` runs all four
+  `{sqlite,postgres}×{chromium,firefox}` combos. The VM path is what green means
+  before you push.
+
 ### Local checks: `cargo xtask`
 
 The driver for all checks is `cargo xtask`. The host runs only the static
