@@ -78,6 +78,7 @@ convention). See the Status column below for each ADR's current status.
 | [0048](adr/0048-adr-out-of-git-draft-workflow.md)                  | ADRs drafted out of git, numbered at ship                                                                    | proposed   |
 | [0049](adr/0049-app-driven-scoped-server-diagnostics.md)           | App-driven scoped server-diagnostics capture                                                                 | accepted   |
 | [0050](adr/0050-stateless-coverage-gate.md)                        | Stateless coverage gate — `cov:ignore` + `#[component]` exemption + CRAP threshold                           | accepted   |
+| [0051](adr/0051-single-playwright-config.md)                       | One Playwright config for host and CI                                                                        | proposed   |
 
 <!-- adr-table:end -->
 
