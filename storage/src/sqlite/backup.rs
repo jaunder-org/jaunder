@@ -314,6 +314,34 @@ mod tests {
     use sqlx::Connection;
     use tempfile::TempDir;
 
+    /// An in-memory `SQLite` pool with the app migrations applied. Shared setup for
+    /// the backup tests (they exercise `SQLite`-specific dialect internals against a
+    /// real schema). `expect`s rather than `?`-propagates: a migration failure is
+    /// a broken build, not a case under test, so there is no error path to cover.
+    async fn migrated_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite pool");
+        sqlx::migrate!("./migrations/sqlite")
+            .run(&pool)
+            .await
+            .expect("run sqlite migrations");
+        pool
+    }
+
+    /// An in-memory `SQLite` connection with the app migrations applied (for tests
+    /// that take a `&mut SqliteConnection` rather than a pool). See [`migrated_pool`].
+    async fn migrated_conn() -> sqlx::SqliteConnection {
+        let mut conn = sqlx::SqliteConnection::connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite connection");
+        sqlx::migrate!("./migrations/sqlite")
+            .run(&mut conn)
+            .await
+            .expect("run sqlite migrations");
+        conn
+    }
+
     #[test]
     fn json_select_marks_boolean_values_as_json_booleans() {
         let sql = json_select(
@@ -368,18 +396,14 @@ mod tests {
         }
     }
 
-    // reason: SQLite backup dialect internals (PRAGMA table_info/foreign_key_check, sqlite_master); Postgres backup is a separate module
+    // reason: interim single-backend; backup is a cross-backend contract to be reconceived at the contract level (round-trip + cross-backend fidelity) in #136
     #[apply(sqlite_only)]
     #[tokio::test]
     async fn export_database_triggers_rollback_on_write_failure(
         #[case] backend: Backend,
     ) -> Result<(), BackupError> {
         let _ = backend;
-        let pool = SqlitePool::connect("sqlite::memory:").await?;
-        sqlx::migrate!("./migrations/sqlite")
-            .run(&pool)
-            .await
-            .map_err(|e| BackupError::Io(std::io::Error::other(e.to_string())))?; // cov:ignore
+        let pool = migrated_pool().await;
         let temp = TempDir::new()?;
         // No "db" subdirectory — File::create in export_table will fail
         let result = export_database(&pool, temp.path(), BackupMode::Directory).await;
@@ -390,18 +414,14 @@ mod tests {
         Ok(())
     }
 
-    // reason: SQLite backup dialect internals (PRAGMA table_info/foreign_key_check, sqlite_master); Postgres backup is a separate module
+    // reason: interim single-backend; backup is a cross-backend contract to be reconceived at the contract level (round-trip + cross-backend fidelity) in #136
     #[apply(sqlite_only)]
     #[tokio::test]
     async fn restore_database_triggers_rollback_on_import_failure(
         #[case] backend: Backend,
     ) -> Result<(), BackupError> {
         let _ = backend;
-        let pool = SqlitePool::connect("sqlite::memory:").await?;
-        sqlx::migrate!("./migrations/sqlite")
-            .run(&pool)
-            .await
-            .map_err(|e| BackupError::Io(std::io::Error::other(e.to_string())))?; // cov:ignore
+        let pool = migrated_pool().await;
         let temp = TempDir::new()?;
         let backup_dir = temp.path().join("backup");
         std::fs::create_dir_all(backup_dir.join("db"))?;
@@ -415,17 +435,13 @@ mod tests {
             writeln!(file, "[1, 2, 3]")?;
         } // cov:ignore
 
-        let dest_pool = SqlitePool::connect("sqlite::memory:").await?;
-        sqlx::migrate!("./migrations/sqlite")
-            .run(&dest_pool)
-            .await
-            .map_err(|e| BackupError::Io(std::io::Error::other(e.to_string())))?; // cov:ignore
+        let dest_pool = migrated_pool().await;
         let result = restore_database(&dest_pool, &backup_dir, &manifest).await;
         assert!(result.is_err(), "restore should fail on corrupted backup");
         Ok(())
     }
 
-    // reason: SQLite backup dialect internals (PRAGMA table_info/foreign_key_check, sqlite_master); Postgres backup is a separate module
+    // reason: interim single-backend; backup is a cross-backend contract to be reconceived at the contract level (round-trip + cross-backend fidelity) in #136
     #[apply(sqlite_only)]
     #[tokio::test]
     async fn validate_foreign_keys_reports_violations(
@@ -456,35 +472,27 @@ mod tests {
         Ok(())
     }
 
-    // reason: SQLite backup dialect internals (PRAGMA table_info/foreign_key_check, sqlite_master); Postgres backup is a separate module
+    // reason: interim single-backend; backup is a cross-backend contract to be reconceived at the contract level (round-trip + cross-backend fidelity) in #136
     #[apply(sqlite_only)]
     #[tokio::test]
     async fn schema_version_returns_migration_count(
         #[case] backend: Backend,
     ) -> Result<(), BackupError> {
         let _ = backend;
-        let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:").await?;
-        sqlx::migrate!("./migrations/sqlite")
-            .run(&mut connection)
-            .await
-            .map_err(|e| BackupError::Io(std::io::Error::other(e.to_string())))?; // cov:ignore
+        let mut connection = migrated_conn().await;
         let version = schema_version(&mut connection).await?;
         assert_eq!(version, 22, "expected one entry per migration file");
         Ok(())
     }
 
-    // reason: SQLite backup dialect internals (PRAGMA table_info/foreign_key_check, sqlite_master); Postgres backup is a separate module
+    // reason: interim single-backend; backup is a cross-backend contract to be reconceived at the contract level (round-trip + cross-backend fidelity) in #136
     #[apply(sqlite_only)]
     #[tokio::test]
     async fn schema_checksum_returns_nonempty_hex_string(
         #[case] backend: Backend,
     ) -> Result<(), BackupError> {
         let _ = backend;
-        let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:").await?;
-        sqlx::migrate!("./migrations/sqlite")
-            .run(&mut connection)
-            .await
-            .map_err(|e| BackupError::Io(std::io::Error::other(e.to_string())))?; // cov:ignore
+        let mut connection = migrated_conn().await;
         let checksum = schema_checksum(&mut connection).await?;
         assert_eq!(checksum.len(), 64, "SHA-256 hex string must be 64 chars");
         assert!(
