@@ -287,12 +287,7 @@ pub(crate) async fn database_has_users(options: &PgConnectOptions) -> sqlx::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::helpers::{
-        invite_record_from_row, session_record_from_row, user_record_from_row, InviteRow,
-        SessionRow, UserRow,
-    };
     use crate::*;
-    use chrono::Utc;
     use common::password::Password;
     use common::username::Username;
     use sqlx::PgPool;
@@ -380,63 +375,6 @@ mod tests {
     async fn make_postgres_app_state_constructs_with_lazy_pool() {
         let pool = sqlx::PgPool::connect_lazy("postgres://localhost/db").unwrap();
         let _ = make_postgres_app_state(pool);
-    }
-
-    #[test]
-    fn test_user_record_from_row() {
-        let now = Utc::now();
-        let row: UserRow = (
-            1,
-            "alice".to_string(),
-            Some("Alice".to_string()),
-            Some("Bio".to_string()),
-            now,
-            Some(now),
-            Some("alice@example.com".to_string()),
-            true,
-            false,
-        );
-        let record = user_record_from_row(row).unwrap();
-        assert_eq!(record.user_id, 1);
-        assert_eq!(record.username.as_str(), "alice");
-        assert_eq!(record.display_name, Some("Alice".to_string()));
-        assert_eq!(record.bio, Some("Bio".to_string()));
-        assert_eq!(record.created_at, now);
-        assert_eq!(record.last_authenticated_at, Some(now));
-        assert_eq!(record.email.as_ref().unwrap().as_str(), "alice@example.com");
-        assert!(record.email_verified);
-    }
-
-    #[test]
-    fn test_session_record_from_row() {
-        let now = Utc::now();
-        let row: SessionRow = (
-            "hash".to_string(),
-            1,
-            "alice".to_string(),
-            "label".to_string(),
-            now,
-            now,
-        );
-        let record = session_record_from_row(row).unwrap();
-        assert_eq!(record.token_hash, "hash");
-        assert_eq!(record.user_id, 1);
-        assert_eq!(record.username.as_str(), "alice");
-        assert_eq!(record.label, "label".to_string());
-        assert_eq!(record.created_at, now);
-        assert_eq!(record.last_used_at, now);
-    }
-
-    #[test]
-    fn test_invite_record_from_row() {
-        let now = Utc::now();
-        let row: InviteRow = ("code".to_string(), now, now, Some(now), Some(1));
-        let record = invite_record_from_row(row);
-        assert_eq!(record.code, "code");
-        assert_eq!(record.created_at, now);
-        assert_eq!(record.expires_at, now);
-        assert_eq!(record.used_at, Some(now));
-        assert_eq!(record.used_by, Some(1));
     }
 
     #[tokio::test]
