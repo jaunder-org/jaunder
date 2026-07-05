@@ -245,10 +245,10 @@ job. Running every combo in parallel across runners cuts e2e wall-clock;
 - For e2e perf diagnostics, set `JAUNDER_E2E_WARMUP=1` before `playwright test`
   to warm each test page context before test instrumentation; tune with
   `JAUNDER_E2E_WARMUP_URL` and `JAUNDER_E2E_WARMUP_TIMEOUT_MS`.
-- In hydration-heavy e2e tests, use
-  `hydrationHeavyTimeoutMs(testInfo, chromiumBudgetMs)` for whole-test budgets
-  and `hydrationHeavyFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)` for
-  first navigation waits (see
+- For e2e tests on slow browsers, use
+  `slowBrowserTimeoutMs(testInfo, chromiumBudgetMs)` for whole-test budgets and
+  `slowBrowserFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)` for first
+  navigation waits (see
   [ADR-0012](docs/adr/0012-environment-aware-timeouts.md)).
 
 ### Elisp subproject (`elisp/`)

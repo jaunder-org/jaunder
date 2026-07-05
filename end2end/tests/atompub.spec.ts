@@ -2,8 +2,8 @@ import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { goto, register, click, BASE_URL } from "./helpers";
 import {
-  hydrationHeavyTimeoutMs,
-  hydrationHeavyFirstNavigationTimeoutMs,
+  slowBrowserTimeoutMs,
+  slowBrowserFirstNavigationTimeoutMs,
 } from "./fixtures";
 
 /// Mints an app password via the Sessions UI and returns the raw token.
@@ -41,10 +41,10 @@ function onServer(url: string): string {
 test("RSD autodiscovery link is present on the user page and resolves", async ({
   page,
 }, info) => {
-  info.setTimeout(hydrationHeavyTimeoutMs(info, 60_000));
+  info.setTimeout(slowBrowserTimeoutMs(info, 60_000));
   const username = await register(
     page,
-    hydrationHeavyFirstNavigationTimeoutMs(info, 30_000),
+    slowBrowserFirstNavigationTimeoutMs(info, 30_000),
   );
 
   // The canonical user URL is ~-prefixed.
@@ -75,8 +75,8 @@ test("RSD autodiscovery link is present on the user page and resolves", async ({
 test("an app password can be minted from the sessions page", async ({
   page,
 }, info) => {
-  info.setTimeout(hydrationHeavyTimeoutMs(info, 60_000));
-  await register(page, hydrationHeavyFirstNavigationTimeoutMs(info, 30_000));
+  info.setTimeout(slowBrowserTimeoutMs(info, 60_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(info, 30_000));
 
   await goto(page, "/sessions");
 
@@ -98,10 +98,10 @@ test("full AtomPub publishing flow over HTTP with an app password", async ({
   page,
   request,
 }, info) => {
-  info.setTimeout(hydrationHeavyTimeoutMs(info, 90_000));
+  info.setTimeout(slowBrowserTimeoutMs(info, 90_000));
   const username = await register(
     page,
-    hydrationHeavyFirstNavigationTimeoutMs(info, 30_000),
+    slowBrowserFirstNavigationTimeoutMs(info, 30_000),
   );
 
   const token = await mintAppPassword(page, "AtomPub e2e");

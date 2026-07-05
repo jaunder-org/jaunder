@@ -1,8 +1,8 @@
 import {
   test,
   expect,
-  hydrationHeavyFirstNavigationTimeoutMs,
-  hydrationHeavyTimeoutMs,
+  slowBrowserFirstNavigationTimeoutMs,
+  slowBrowserTimeoutMs,
 } from "./fixtures";
 import { BASE_URL, goto, click, waitForSelector, register } from "./helpers";
 import { createPerfProbe } from "./perf";
@@ -17,10 +17,7 @@ const HOME_FEED_OTHER_COUNT = 2;
 test("authenticated user can create a post through the UI", async ({
   page,
 }, testInfo) => {
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   await goto(page, "/posts/new");
 
@@ -40,10 +37,7 @@ test("authenticated user can create a post through the UI", async ({
 test("authenticated user can create a post with a summary", async ({
   page,
 }, testInfo) => {
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   await goto(page, "/posts/new");
 
@@ -70,10 +64,7 @@ test("authenticated user can create a post with a summary", async ({
 test("authenticated user can save a draft through the UI", async ({
   page,
 }, testInfo) => {
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   await goto(page, "/posts/new");
 
@@ -91,10 +82,7 @@ test("authenticated user can save a draft through the UI", async ({
 
 test("published post renders at permalink", async ({ page }, testInfo) => {
   test.slow();
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   await goto(page, "/posts/new");
   await page.fill(
@@ -132,10 +120,7 @@ test("published post renders at permalink", async ({ page }, testInfo) => {
 
 test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
   test.slow();
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   // Create a draft; title embedded as # heading
   await goto(page, "/posts/new");
@@ -173,10 +158,7 @@ test("editing a published post freezes the slug", async ({
   page,
 }, testInfo) => {
   test.slow();
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   // Create and publish a post; title embedded as # heading
   await goto(page, "/posts/new");
@@ -216,8 +198,8 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   page,
   context,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
-  const firstNavigationTimeoutMs = hydrationHeavyFirstNavigationTimeoutMs(
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
+  const firstNavigationTimeoutMs = slowBrowserFirstNavigationTimeoutMs(
     testInfo,
     12_000,
   );
@@ -263,7 +245,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   // workers=4) its render can exceed the global 5s expect timeout, so scale
   // these post-navigation assertions with the same contention factor the
   // test-level budget uses.
-  const bodyRenderTimeoutMs = hydrationHeavyTimeoutMs(testInfo, 5_000);
+  const bodyRenderTimeoutMs = slowBrowserTimeoutMs(testInfo, 5_000);
   await expect(page.locator(".j-post-body")).toContainText(
     "edited draft body",
     {
@@ -298,9 +280,9 @@ test("draft lifecycle: create, view, edit, and publish", async ({
 test("per-user timeline lists published posts with pagination", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
   const perf = createPerfProbe(testInfo, "user_timeline_pagination");
-  const firstNavigationTimeoutMs = hydrationHeavyFirstNavigationTimeoutMs(
+  const firstNavigationTimeoutMs = slowBrowserFirstNavigationTimeoutMs(
     testInfo,
     10_000,
   );
@@ -345,9 +327,9 @@ test("home page shows local timeline for unauthenticated users", async ({
   page,
   browser,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
   const perf = createPerfProbe(testInfo, "home_local_timeline");
-  const firstNavigationTimeoutMs = hydrationHeavyFirstNavigationTimeoutMs(
+  const firstNavigationTimeoutMs = slowBrowserFirstNavigationTimeoutMs(
     testInfo,
     10_000,
   );
@@ -402,9 +384,9 @@ test("cockpit /app shows the authenticated home feed with pagination", async ({
   page,
   browser,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
   const perf = createPerfProbe(testInfo, "home_authenticated_feed");
-  const firstNavigationTimeoutMs = hydrationHeavyFirstNavigationTimeoutMs(
+  const firstNavigationTimeoutMs = slowBrowserFirstNavigationTimeoutMs(
     testInfo,
     10_000,
   );
@@ -449,10 +431,7 @@ test("authenticated user can delete a published post", async ({
   page,
 }, testInfo) => {
   test.slow();
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   // Create a published post; title embedded as # heading (title input is removed from UI)
   await goto(page, "/posts/new");
@@ -495,11 +474,8 @@ test("authenticated user can delete a published post", async ({
 test("inline composer: published post appears in timeline without page reload", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   // The /app cockpit must already show the feed with the composer.
   await goto(page, "/app");
@@ -513,18 +489,15 @@ test("inline composer: published post appears in timeline without page reload", 
 
   // The new post should appear without a page reload.
   await expect(page.locator("article.j-post")).toHaveCount(initialCount + 1, {
-    timeout: hydrationHeavyTimeoutMs(testInfo, 8_000),
+    timeout: slowBrowserTimeoutMs(testInfo, 8_000),
   });
 });
 
 test("inline composer: plain body publishes titleless note", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
   await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
@@ -540,11 +513,8 @@ test("inline composer: plain body publishes titleless note", async ({
 test("inline composer: markdown heading becomes article title", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
   await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
@@ -565,11 +535,8 @@ test("inline composer: markdown heading becomes article title", async ({
 test("inline composer: publish flash is a link to the post permalink", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
   await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
@@ -587,11 +554,8 @@ test("inline composer: publish flash is a link to the post permalink", async ({
 test("inline composer: draft flash is a link to the draft preview URL", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
   await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
@@ -608,11 +572,8 @@ test("inline composer: draft flash is a link to the draft preview URL", async ({
 test("inline composer: flash clears when user starts typing", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 20_000));
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
   await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
@@ -628,11 +589,8 @@ test("inline composer: flash clears when user starts typing", async ({
 test("inline composer: format toggle switches active button", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 10_000));
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 10_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
   await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
@@ -651,11 +609,8 @@ test("inline composer: format toggle switches active button", async ({
 test("create post with tags via UI: tags persist and appear on the post", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   await goto(page, "/posts/new");
 
@@ -690,11 +645,8 @@ test("create post with tags via UI: tags persist and appear on the post", async 
 test("tag chip on permalink navigates to site tag listing", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   // Create a published post with two tags via the API
   const res = await page.request.post(`${BASE_URL}/api/create_post`, {
@@ -725,11 +677,8 @@ test("tag chip on permalink navigates to site tag listing", async ({
 test("editing a post updates tag chips and tag listing pages", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 60_000));
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 60_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   // Use tags unique to this test so cross-test pollution can't affect the
   // /tags/:tag listing checks below.
@@ -802,11 +751,8 @@ test("editing a post updates tag chips and tag listing pages", async ({
 test("TagInput autocomplete suggests existing tags", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   // Seed the tag corpus with a known tag
   const res = await page.request.post(`${BASE_URL}/api/create_post`, {
@@ -836,11 +782,8 @@ test("TagInput autocomplete suggests existing tags", async ({
 test("TagInput: Backspace on empty input removes last chip", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   await goto(page, "/posts/new");
 
@@ -865,11 +808,8 @@ test("TagInput: Backspace on empty input removes last chip", async ({
 test("TagInput: keyboard navigation selects autocomplete item", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   // Seed a known tag
   const res = await page.request.post(`${BASE_URL}/api/create_post`, {
@@ -901,11 +841,8 @@ test("TagInput: keyboard navigation selects autocomplete item", async ({
 test("TagInput: Escape dismisses autocomplete without adding a chip", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   const res = await page.request.post(`${BASE_URL}/api/create_post`, {
     data: {
@@ -931,11 +868,8 @@ test("TagInput: Escape dismisses autocomplete without adding a chip", async ({
 test("TagInput: invalid tag text shows an error", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(hydrationHeavyTimeoutMs(testInfo, 30_000));
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   await goto(page, "/posts/new");
   // "bad tag" has a space — invalid after normalize
@@ -952,10 +886,7 @@ test("authenticated user can delete a draft from the drafts page", async ({
   page,
 }, testInfo) => {
   test.slow();
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   // Create a draft; title embedded as # heading (title input is removed from UI)
   await goto(page, "/posts/new");

@@ -1,8 +1,4 @@
-import {
-  test,
-  expect,
-  hydrationHeavyFirstNavigationTimeoutMs,
-} from "./fixtures";
+import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
 import { goto, click, waitForSelector, register } from "./helpers";
 
 // Acceptance test for issue #72: slug generation is Unicode-preserving and
@@ -14,10 +10,7 @@ test("a Unicode-titled post is reachable at its permalink", async ({
   page,
 }, testInfo) => {
   test.slow();
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   await goto(page, "/posts/new");
   await page.fill('textarea[name="body"]', "# Café 日本語\n\nunicode body");
@@ -47,10 +40,7 @@ test("an emoji-only title falls back to the 'post' slug and is reachable", async
   page,
 }, testInfo) => {
   test.slow();
-  await register(
-    page,
-    hydrationHeavyFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
 
   await goto(page, "/posts/new");
   await page.fill('textarea[name="body"]', "# 🚀🎉\n\nemoji body");
