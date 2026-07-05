@@ -706,6 +706,121 @@ async fn cmd_restore_rejects_dangling_foreign_key(#[case] backend: Backend) {
     );
 }
 
+// #136: a backup with a malformed row is rejected and rolls back cleanly on both backends.
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_rolls_back_on_malformed_row(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let source_args = storage_args(backend, &base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    populate_backup_fixture(&source_args).await;
+
+    let backup_path = base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    // Corrupt a NON-first table (posts, export index 6) with a non-object row, so an
+    // earlier table (users, index 1) is inserted before the read fails — proving the
+    // transaction rolls the earlier inserts back.
+    let posts = backup_path.join("db").join("posts.ndjson");
+    let mut contents = std::fs::read_to_string(&posts).expect("read posts");
+    contents.push_str("[1, 2, 3]\n");
+    std::fs::write(&posts, contents).expect("write tampered posts");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let target_args = storage_args(backend, &target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+
+    let err = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect_err("restore rejects malformed row");
+    assert!(
+        err.to_string().contains("non-object row"),
+        "expected InvalidBackup, got: {err}"
+    );
+
+    let state = open_existing_database(&target_args.db)
+        .await
+        .expect("open target");
+    let username: Username = "backupuser".parse().expect("valid username");
+    assert!(
+        state
+            .users
+            .get_user_by_username(&username)
+            .await
+            .expect("get user")
+            .is_none(),
+        "target must be unmodified after a rejected restore"
+    );
+}
+
+// #136: a backup missing its db/ directory is rejected (InvalidBackup) on both backends.
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_rejects_missing_db_directory(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let source_args = storage_args(backend, &base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    populate_backup_fixture(&source_args).await;
+
+    let backup_path = base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    std::fs::remove_dir_all(backup_path.join("db")).expect("remove db dir");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let target_args = storage_args(backend, &target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+
+    let err = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect_err("restore rejects missing db dir");
+    assert!(
+        err.to_string().contains("missing db directory"),
+        "expected InvalidBackup, got: {err}"
+    );
+}
+
+// #136: backup/restore round-trips in Archive mode on both backends.
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_restores_archive_backup(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let source_args = storage_args(backend, &base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    let post_id = populate_backup_fixture(&source_args).await;
+
+    let archive_path = base.path().join("backup.tar.gz");
+    cmd_backup(
+        &source_args,
+        BackupMode::Archive,
+        Some(archive_path.clone()),
+    )
+    .await
+    .expect("backup");
+    assert!(archive_path.is_file(), "archive backup is a single file");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let target_args = storage_args(backend, &target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+    cmd_restore(&target_args, &archive_path)
+        .await
+        .expect("restore");
+
+    assert_backup_fixture_restored(&target_args, post_id).await;
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_smtp_test_fails_when_not_initialized(#[case] backend: Backend) {
