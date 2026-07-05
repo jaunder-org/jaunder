@@ -78,35 +78,16 @@ pub fn render_post_input(
     }
 }
 
-/// The single definition of "a timeline-visible seeded post": a public,
-/// Markdown-rendered post, published now iff `published`. Shared by
-/// `storage::test_support::seed_posts` (in-process) and the `test-support`
-/// binary's `seed_posts_for_user` (out-of-process), so the recipe — not just a
-/// row, but the Public audience + rendered HTML that make it timeline-visible —
-/// lives in one place. Gated so a normal `storage` build never compiles it, yet
-/// the `test-support` binary reaches it via the lightweight `seed-posts` feature
-/// (no `tempfile`/`rstest_reuse`).
-///
-/// # Errors
-///
-/// Returns `Err(CreatePostError)` if the storage write fails.
-#[cfg(any(test, feature = "seed-posts"))]
-pub async fn seed_rendered_post(
-    storage: &dyn PostStorage,
-    user_id: i64,
-    slug: Slug,
-    body: String,
-    published: bool,
-) -> Result<i64, CreatePostError> {
-    storage
-        .create_post(&seed_post_input(user_id, slug, body, published))
-        .await
-}
-
-/// The timeline-visible seed recipe as data: Public audience + Markdown render,
-/// published-now iff `published`. Returns the input instead of writing it, so
-/// both seeders can batch a `Vec` of these through
-/// [`PostStorage::create_posts`]. See [`seed_rendered_post`].
+/// The single definition of "a timeline-visible seeded post", as data: a public,
+/// Markdown-rendered post, published now iff `published` — the Public audience
+/// plus rendered HTML that make it timeline-visible. Returns the
+/// [`CreatePostInput`] instead of writing it, so both seeders
+/// (`storage::test_support::seed_posts` in-process and the `test-support`
+/// binary's `seed_posts_for_user` out-of-process) build a `Vec` and write them
+/// in one batched transaction via [`PostStorage::create_posts`]. Gated so a
+/// normal `storage` build never compiles it, yet the `test-support` binary
+/// reaches it via the lightweight `seed-posts` feature (no
+/// `tempfile`/`rstest_reuse`).
 #[cfg(any(test, feature = "seed-posts"))]
 #[must_use]
 pub fn seed_post_input(user_id: i64, slug: Slug, body: String, published: bool) -> CreatePostInput {

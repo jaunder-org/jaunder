@@ -4,16 +4,17 @@
 //! sibling of the in-process `storage::test_support` module and is never linked
 //! into the `jaunder` production binary (see ADR-0046, `test-support-seed-binary`).
 //!
-//! The seed core drives the shared `storage::seed_rendered_post` recipe rather
-//! than the `storage::test_support::seed_posts` module helper: the e2e suite
-//! shares one database across all tests, so seeds need per-user-unique,
+//! The seed core builds inputs from the shared `storage::seed_post_input` recipe
+//! and writes them in one batched transaction (`PostStorage::create_posts`),
+//! rather than the `storage::test_support::seed_posts` module helper: the e2e
+//! suite shares one database across all tests, so seeds need per-user-unique,
 //! content-shaped slugs/bodies that the module helper's fixed `seed-{i}` /
 //! `# Post {i}` scheme cannot give.
 
 use std::sync::Arc;
 
 use common::username::Username;
-use storage::{seed_rendered_post, AppState};
+use storage::{seed_post_input, AppState};
 
 /// The rendered-body source for seeded post `i` under `prefix`. Its Markdown H1
 /// renders the text `"{prefix} {i}"`, which the heavy e2e timeline tests assert
@@ -39,9 +40,10 @@ pub fn seed_slug(prefix: &str, i: usize) -> String {
     format!("{base}-{i}")
 }
 
-/// Seed `count` posts for `username` through the shared `seed_rendered_post`
-/// recipe — the same `create_rendered_post` path the server runs, so audience
-/// rows, rendered HTML, and both SQL dialects come for free. `published` sets
+/// Seed `count` posts for `username` through the shared `seed_post_input`
+/// recipe, written in one batched transaction — the same `create_post` write
+/// path the server runs, so audience rows, rendered HTML, and both SQL dialects
+/// come for free. `published` sets
 /// `published_at = now` and a Public audience so the posts surface on the
 /// timeline; otherwise they are drafts. Returns the created ids oldest-to-newest.
 ///
@@ -70,23 +72,23 @@ pub async fn seed_posts_for_user(
         .await?
         .ok_or_else(|| anyhow::anyhow!("no such user: {username}"))?;
 
-    let mut ids = Vec::with_capacity(count);
+    let mut inputs = Vec::with_capacity(count);
     for i in 0..count {
         let slug = seed_slug(prefix, i).parse().map_err(|_| {
             anyhow::anyhow!("generated slug invalid for prefix {prefix:?} index {i}")
         })?;
-        let id = seed_rendered_post(
-            &*state.posts,
+        inputs.push(seed_post_input(
             user.user_id,
             slug,
             seed_body(prefix, i),
             published,
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("seed post {i} failed: {e:?}"))?;
-        ids.push(id);
+        ));
     }
-    Ok(ids)
+    state
+        .posts
+        .create_posts(&inputs)
+        .await
+        .map_err(|e| anyhow::anyhow!("batch seed of {count} posts failed: {e:?}"))
 }
 
 /// Create a fixture user through the real `UserStorage::create_user` path — the

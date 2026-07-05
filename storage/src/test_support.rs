@@ -596,20 +596,21 @@ pub async fn seed_posts(
     count: usize,
     published: bool,
 ) -> Vec<i64> {
-    let mut ids = Vec::with_capacity(count);
-    for i in 0..count {
-        let id = crate::seed_rendered_post(
-            &*state.posts,
-            user_id,
-            format!("seed-{i}").parse().expect("valid slug"),
-            format!("# Post {i}\n\nbody"),
-            published,
-        )
+    let inputs: Vec<_> = (0..count)
+        .map(|i| {
+            crate::seed_post_input(
+                user_id,
+                format!("seed-{i}").parse().expect("valid slug"),
+                format!("# Post {i}\n\nbody"),
+                published,
+            )
+        })
+        .collect();
+    state
+        .posts
+        .create_posts(&inputs)
         .await
-        .expect("seed post should be created");
-        ids.push(id);
-    }
-    ids
+        .expect("seed posts should be created")
 }
 
 /// Creates a throwaway user and returns its id, for tests that need a user to

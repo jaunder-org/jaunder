@@ -20,7 +20,7 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 
-# The binary shares storage's `seed_rendered_post` recipe via the lightweight
+# The binary shares storage's `seed_post_input` recipe via the lightweight
 # `seed-posts` feature above (no extra deps). The heavy `test-support`
 # scaffolding (`storage::test_support`, tempfile, rstest_reuse) is a
 # dev-dependency ONLY, for the smoke tests below — the shipped binary never
