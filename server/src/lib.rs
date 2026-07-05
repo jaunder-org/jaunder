@@ -106,18 +106,25 @@ pub fn create_router(
     //     atompub, style) above are untouched, so server fns remain the data API;
     //     only the page render leaves the request path. ---
     let app = {
-        use tower_http::services::{ServeDir, ServeFile};
+        use axum::handler::HandlerWithoutStateExt;
+        use axum::response::Html;
+        use tower_http::services::ServeDir;
+        // The embedded SPA-shell handler — declared before the statements below so it
+        // stays an item at the top of the block (clippy::items_after_statements).
+        async fn spa_shell() -> Html<&'static str> {
+            Html(web::render::SPA_SHELL)
+        }
         let site_root = leptos_options.site_root.to_string();
-        let index_html = format!("{site_root}/index.html");
-        // Non-reactive HTML for the public discoverability routes, ahead of the
-        // static-SPA fallback (#178). Everything else — and any public URL with
-        // no anonymous-public content — falls through to the SPA shell, which
-        // boots the CSR client; the projector serves that same shell itself for
-        // the routes it owns, so drafts / client 404s / authed affordances keep
-        // working.
-        let shell = std::fs::read_to_string(&index_html).unwrap_or_default();
-        let app = crate::projector::register(app, crate::projector::Shell(shell.into()));
-        app.fallback_service(ServeDir::new(&site_root).fallback(ServeFile::new(index_html)))
+        // The CSR SPA shell is embedded (#239): the server owns it, the same way the
+        // projector renders its routes from constants. The host `cargo leptos` build
+        // never writes index.html to site_root, so we don't read it from disk — only
+        // the wasm bundle (`pkg/*`) and public assets are served from `site_root`.
+        // Non-reactive HTML for the public discoverability routes (the projector,
+        // #178) sits ahead of this fallback; everything else boots the CSR client via
+        // the shell.
+        let app =
+            crate::projector::register(app, crate::projector::Shell(web::render::SPA_SHELL.into()));
+        app.fallback_service(ServeDir::new(&site_root).fallback(spa_shell.into_service()))
     };
 
     let app = app
@@ -189,6 +196,53 @@ mod tests {
                     .await
                     .unwrap();
                 assert_eq!(response.status(), StatusCode::OK);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn spa_fallback_serves_embedded_shell_without_disk_index_html() {
+        use axum::http::header::CONTENT_TYPE;
+        // A site_root with no index.html on disk (the host reality, #239). The SPA
+        // fallback must still serve the embedded shell — 200, text/html, boots wasm.
+        let options = LeptosOptions::builder()
+            .output_name("test")
+            .site_root("/tmp/jaunder-nonexistent-site-239")
+            .build();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                ensure_server_fns_registered();
+                let app = create_router(
+                    options,
+                    test_state().await,
+                    test_mailer(),
+                    true,
+                    test_storage_path(),
+                );
+                // `/login` is a client route → not a projector route → SPA fallback.
+                let response = app
+                    .oneshot(
+                        Request::builder()
+                            .uri("/login")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                assert_eq!(
+                    response.headers().get(CONTENT_TYPE).unwrap(),
+                    "text/html; charset=utf-8"
+                );
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let body = String::from_utf8(body.to_vec()).unwrap();
+                assert!(
+                    body.contains(r#"init("/pkg/jaunder.wasm")"#),
+                    "SPA fallback serves the embedded shell that boots the wasm: {body}"
+                );
             })
             .await;
     }

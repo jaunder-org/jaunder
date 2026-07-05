@@ -288,6 +288,9 @@
             && (
               (pkgs.lib.hasSuffix ".sql" path)
               || (pkgs.lib.hasSuffix ".css" path)
+              # The CSR SPA shell the server embeds via include_str! (#239). Specific
+              # (not a broad .html suffix) to keep stray HTML out of the crane src.
+              || (pkgs.lib.hasSuffix "csr/index.html" path)
               || (builtins.match "scripts/.*" path != null)
               || (craneLib.filterCargoSources path type)
             );
@@ -452,14 +455,14 @@
           };
         });
 
-        # The site the server serves: the CSR client's wasm bundle + public assets
-        # + the CSR SPA shell (`csr/index.html`). CSR is the only client (#180); the
-        # projector serves this same `index.html` as its SPA fallback.
+        # The site the server serves: the CSR client's wasm bundle (`pkg/*`) + public
+        # assets. The SPA shell (`csr/index.html`) is NOT staged here — the server
+        # embeds it (#239) and serves it from a compile-time constant on host and Nix
+        # alike, so no disk `index.html` is needed.
         site = pkgs.runCommand "jaunder-site" { } ''
           mkdir -p $out/pkg
           cp -r ${csrWasmBundle}/. $out/pkg/
           cp -r ${./public}/. $out/
-          cp ${./csr/index.html} $out/index.html
         '';
 
         # --- leptos-CSR client (#177/#180) --------------------------------------
