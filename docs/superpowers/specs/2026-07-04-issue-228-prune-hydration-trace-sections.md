@@ -37,8 +37,14 @@ removed, along with the now-dead span attributes that only exist to feed them.
   add no _unique_ signal — they only reslice a phase section 4 already prints
   (by a hardcoded `cacheWarmth` flag, `nav.id===1 ? 'cold':'warm'`, and vs API
   request time).
-- `NAV_PHASES` itself lists four now-always-null hydration phases:
-  `load_to_hydration`, `wasm_init`, `leptos_hydrate`, `post_hydrate_effects`.
+- `NAV_PHASES` itself lists four dead-or-redundant hydration phases:
+  `wasm_init`, `leptos_hydrate`, `post_hydrate_effects` are **always-null** (fed
+  by the never-set `__jaunder_perf`); `load_to_hydration` is **live but
+  redundant** — computed as `hydratedMs - loadMs` (both live), it is a real
+  page-load→mount interval, but recoverable by arithmetic from the surviving
+  phases
+  (`commit_to_mount − commit_to_domcontentloaded − domcontentloaded_to_load`)
+  and, like the other three, hydration-framed (OBE naming per ADR-0040).
 
 ## Decisions (from the design interview)
 
@@ -49,9 +55,10 @@ removed, along with the now-dead span attributes that only exist to feed them.
    in `xtask/src/traces/` **and** the now-dead attribute emission in
    `end2end/tests/fixtures.ts`, including the `__jaunder_perf` plumbing that
    only fed them. No orphaned data path left behind.
-3. **Prune section 4's four null phases** (`load_to_hydration`, `wasm_init`,
-   `leptos_hydrate`, `post_hydrate_effects`) from `NAV_PHASES` and their emitter
-   attributes.
+3. **Prune section 4's four dead-or-redundant hydration phases**
+   (`load_to_hydration` — live but arithmetically redundant; `wasm_init`,
+   `leptos_hydrate`, `post_hydrate_effects` — always-null) from `NAV_PHASES` and
+   their emitter attributes.
 4. **Rename the surviving live phase** `commit_to_hydration` → `commit_to_mount`
    across emitter (`fixtures.ts`), parser (`NAV_PHASES` + the JSON field the
    navigation summary carries), section 4 label, tests, and docs — dropping the
@@ -144,8 +151,9 @@ deferred.
   across all `{sqlite,postgres}×{chromium,firefox}` combos) — the e2e run proves
   the `fixtures.ts` capture changes don't break OTel capture or any test. (It
   does _not_ exercise the analyze parser; that guarantee is AC5's.)
-- **AC8** Two follow-on issues are filed (the `hydrationHeavy*` rename and the
-  `data-hydrated`-marker rename) before the removal work lands.
+- **AC8** Both separable renames are tracked as issues before the removal work
+  lands: the `hydrationHeavy*` rename (**#224**, pre-existing) and the
+  `data-hydrated`-marker rename (**#251**, filed this cycle).
 
 ## Non-goals
 

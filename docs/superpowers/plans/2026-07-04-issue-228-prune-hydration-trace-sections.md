@@ -7,7 +7,8 @@
 
 **Goal:** Remove the four CSR-obsolete hydration-framed sections from
 `xtask traces analyze` and the now-dead span attributes that only feed them,
-prune section 4's four always-null hydration phases, and rename the surviving
+prune section 4's four dead-or-redundant hydration phases (three always-null,
+`load_to_hydration` live-but-arithmetically-redundant), and rename the surviving
 live phase `commit_to_hydration` → `commit_to_mount`.
 
 **Architecture:** Pure deletion + rename across four surfaces — the xtask
@@ -47,8 +48,10 @@ acceptance criteria (AC1–AC8) live in the spec. Reference by AC number.
 
 - Remove report sections #5 (cache-warmth), #8 (hydration-vs-API), #9 (nav phase
   components), #10 (hydration runtime) from the xtask consumer + their tests.
-- Prune section 4's four null `NAV_PHASES` phases; rename `commit_to_hydration`
-  → `commit_to_mount` across parser, xtask test fixture, and the live emitter.
+- Prune section 4's four dead-or-redundant `NAV_PHASES` hydration phases (three
+  always-null, `load_to_hydration` live-but-redundant); rename
+  `commit_to_hydration` → `commit_to_mount` across parser, xtask test fixture,
+  and the live emitter.
 - Remove the dead attribute emission + `__jaunder_perf` plumbing from
   `fixtures.ts`.
 - Update `docs/observability.md`.
@@ -64,9 +67,11 @@ acceptance criteria (AC1–AC8) live in the spec. Reference by AC number.
 1. File the two out-of-scope renames as follow-on issues (jaunder-issues).
 2. xtask: remove the four sections (structs, fns, constants, `Analysis` fields,
    render dispatch, Display structs, and the four section tests + order test).
-3. xtask: prune the four null `NAV_PHASES` phases + rename `commit_to_hydration`
-   → `commit_to_mount` (parser + section-4 test + xtask fixture JSONL). Runs
-   **after** Task 2 so no still-present section test reads the renamed key.
+3. xtask: prune the four dead-or-redundant `NAV_PHASES` hydration phases (three
+   always-null, `load_to_hydration` live-but-redundant) + rename
+   `commit_to_hydration` → `commit_to_mount` (parser + section-4 test + xtask
+   fixture JSONL). Runs **after** Task 2 so no still-present section test reads
+   the renamed key.
 4. e2e emitter: strip dead attributes + `__jaunder_perf` plumbing from
    `fixtures.ts`; rename `commit_to_hydration_ms` → `commit_to_mount_ms`.
 5. Docs: update `docs/observability.md`.
@@ -98,14 +103,15 @@ acceptance criteria (AC1–AC8) live in the spec. Reference by AC number.
   separable concerns aren't lost (spec AC8).
 
 - [x] **Step 1: File issue A — `hydrationHeavy*` timeout-helper rename.** →
-      filed as **#250** (type Task, label `tooling`, milestone "Devtool
-      migration", in Backlog project #1).
+      filed as #250 but **closed as a duplicate of pre-existing #224** (the
+      canonical issue for this rename, milestone "E2E test suite"). Use
+      **#224**.
 
 - [x] **Step 2: File issue B — `data-hydrated` marker rename.** → filed as
       **#251** (type Task, label `tooling`, milestone "Devtool migration", in
       Backlog project #1).
 
-- [x] **Step 3: Record the two issue numbers** (#250, #251) — to be referenced
+- [x] **Step 3: Record the two issue numbers** (#224, #251) — to be referenced
       in the PR description at ship time.
 
 ---
