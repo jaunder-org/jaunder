@@ -1,13 +1,24 @@
-//! Host e2e loop driver (#153): seed fixtures via `test-support`, then run
-//! Playwright (`chromium` + `chromium-admin`) against an ALREADY-RUNNING dev
-//! server on `:3000`.
+//! Host e2e loop driver (#249): `cargo xtask e2e-local` OWNS the whole loop —
+//! build the CSR bundle + server, start `jaunder serve` on an ephemeral port with
+//! the VM's capture env, discover the port from the runtime file, seed via the
+//! shared `devtool seed-e2e`, run Playwright against the discovered URL, and tear
+//! the server down on every exit path. Each run gets a fresh temp storage dir + DB
+//! (distinct ephemeral port + DB ⇒ concurrent runs don't collide at the server/DB
+//! layer, and the dev `data/jaunder.db` is never touched). Loads the same
+//! `playwright.config.ts` the CI VM loads, so "passes locally" == "passes in CI".
+//! Host only.
 //!
-//! cargo-leptos invokes this as its `end2end-cmd`, so the full loop (build +
-//! serve + this) is `cargo leptos end-to-end`. A standalone `cargo xtask
-//! e2e-local` assumes a server is already serving — handy for fast re-runs while
-//! iterating. Server lifecycle stays with cargo-leptos, not us. This loads the
-//! same `playwright.config.ts` the CI VM loads, so "passes locally" == "passes in
-//! CI". Host only.
+//! Canonical e2e-server env-var set (this host driver and the flake systemd unit
+//! both source it; see also `flake.nix` `mailCaptureEnv`): `JAUNDER_BIND`,
+//! `JAUNDER_DB`, `JAUNDER_STORAGE_PATH`, `JAUNDER_RUNTIME_FILE`,
+//! `JAUNDER_MAIL_CAPTURE_FILE`, `JAUNDER_WEBSUB_CAPTURE_FILE`,
+//! `JAUNDER_DIAG_LOG_FILE`. Names are shared; only values differ per environment
+//! (host: a temp dir + ephemeral port; VM: `/var/lib/jaunder` + `:3000`). The
+//! DB + capture-file vars are ALSO set on the Playwright process (with
+//! `target/debug` prepended to PATH) so `mail.ts`/`websub.ts` read the same files
+//! the server writes and `seed.ts`'s bare-`test-support` `seedPostsViaTool`
+//! resolves the same binary + DB — VM parity for the mail/websub/pagination specs.
+use std::process::{Child, Command};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -15,148 +26,151 @@ use xshell::{cmd, Shell};
 
 use crate::result::{CommandResult, StepResult};
 
-/// Seed users/config, then run Playwright. See the module docs for the
-/// server-lifecycle contract. `test_filter`, when set, is passed through to
-/// Playwright (a spec path or `-g` grep) for single-test runs.
+/// Parse the server's `runtime.json` (`{"ip","port"}`, ADR-0035) into a base URL.
+/// `None` on malformed JSON or a missing field — the caller keeps polling.
+fn base_url_from_runtime(json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let ip = v.get("ip")?.as_str()?;
+    let port = v.get("port")?.as_u64()?;
+    Some(format!("http://{ip}:{port}"))
+}
+
+/// Owns the spawned `jaunder serve` child and reaps it on `Drop`, so no exit path
+/// (early return, panic-unwind) leaks the server (#249 G1). `SIGKILL` is fine — the
+/// child holds no state we need flushed; the per-run temp storage dir is dropped
+/// separately.
+struct ServerChild(Child);
+
+impl Drop for ServerChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Build, own a `jaunder serve` on an ephemeral port, seed, run Playwright, tear
+/// down. `test_filter`, when set, passes through to Playwright (a spec path or
+/// `-g` grep) for single-test runs.
 pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
-    // Resolve the repo root so both entry points behave identically: cargo-leptos
-    // runs `end2end-cmd` from `end2end/`, while a standalone invocation runs from
-    // wherever the user is.
+    // 1. Build the served CSR bundle via the shared devtool path (#236); this also
+    // leaves the shell's cwd at the repo root.
+    super::build_csr::run(sh, result, false);
+    if !result.ok {
+        return; // build_csr already recorded the failing step
+    }
     let Ok(root) = cmd!(sh, "git rev-parse --show-toplevel").quiet().read() else {
         result.push(StepResult::fail("e2e-local").detail("cannot locate repo root".to_owned()));
         return;
     };
     let root = root.trim().to_owned();
 
-    // Build test-support here (links storage — the same seed code path as the flake
-    // VM's seed_db); cargo-leptos builds only the server.
-    if cmd!(sh, "cargo build -p test-support").run().is_err() {
+    // The server bin and the out-of-process seed impl.
+    for (pkg, label) in [
+        ("jaunder", "e2e-local-build-server"),
+        ("test-support", "e2e-local-build-support"),
+    ] {
+        if cmd!(sh, "cargo build -p {pkg}").run().is_err() {
+            result.push(StepResult::fail(label).detail(format!("cargo build -p {pkg} failed")));
+            return;
+        }
+        result.push(StepResult::ok(label));
+    }
+
+    // 2. Per-run temp storage dir → fresh DB (no reset needed) + concurrency
+    // isolation. Removed when this fn returns, after the server is torn down.
+    let Ok(storage) = tempfile::tempdir() else {
         result.push(
-            StepResult::fail("e2e-local-build-support")
-                .detail("cargo build -p test-support failed".to_owned()),
+            StepResult::fail("e2e-local-tmpdir")
+                .detail("cannot create temp storage dir".to_owned()),
         );
         return;
-    }
-    result.push(StepResult::ok("e2e-local-build-support"));
-    let test_support = format!("{root}/target/debug/test-support");
+    };
+    let sp = storage.path().display();
+    let db = format!("sqlite:{sp}/jaunder.db");
+    let runtime = storage.path().join("runtime.json");
+    let mail = format!("{sp}/mail.jsonl");
+    let websub = format!("{sp}/websub.jsonl");
+    let diag = format!("{sp}/jaunder-diag.log");
 
-    // Seed + Playwright run from end2end/ (the config, node_modules, tests, and the
-    // `../data/jaunder.db` relative default all resolve there).
-    sh.change_dir(format!("{root}/end2end"));
-
-    // Fixture env, defaulted like the retired run-e2e.sh so a standalone run works.
-    let db_path =
-        std::env::var("JAUNDER_DB_PATH").unwrap_or_else(|_| "../data/jaunder.db".to_owned());
-    let db = format!("sqlite:{db_path}");
-    let mail = std::env::var("JAUNDER_MAIL_CAPTURE_FILE")
-        .unwrap_or_else(|_| "/tmp/jaunder-mail.jsonl".to_owned());
-    // The host `cargo leptos end-to-end` serves an unoptimized *debug* CSR wasm
-    // bundle whose hydration is slow, so run serial by default (workers=1, like the
-    // retired run-e2e.sh) — each test gets full CPU. Overridable via
-    // JAUNDER_E2E_WORKERS; the CI VM keeps the config default of 2 (release wasm).
-    let workers = std::env::var("JAUNDER_E2E_WORKERS").unwrap_or_else(|_| "1".to_owned());
-
-    // Wait for the dev server (cargo-leptos may still be starting it): ~15s, matching
-    // run-e2e.sh (30 * 0.5s).
-    let mut up = false;
-    for _ in 0..30 {
-        // No `.ignore_status()`: `curl -sf` exits non-zero until the server answers,
-        // so `run()` returns Err and the poll actually waits (with it, run() is always
-        // Ok and the loop would break on the first iteration — a no-op wait).
-        if cmd!(sh, "curl -sf http://localhost:3000/")
-            .quiet()
-            .run()
-            .is_ok()
-        {
-            up = true;
-            break;
-        }
-        sleep(Duration::from_millis(500));
-    }
-    if !up {
-        result.push(StepResult::fail("e2e-local-server").detail(
-            "dev server not reachable on :3000 after 15s (start it with `cargo leptos end-to-end`)".to_owned(),
-        ));
-        return;
-    }
-    result.push(StepResult::ok("e2e-local-server"));
-
-    // create-user is non-fatal: on a standalone re-run against a persistent DB the
-    // user already exists (UNIQUE violation → non-zero exit), which must not abort.
-    let users: [&[&str]; 3] = [
-        &[
-            "create-user",
-            "--username",
-            "testlogin",
-            "--password",
-            "testpassword123",
-        ],
-        &[
-            "create-user",
-            "--username",
-            "testnoemail",
-            "--password",
-            "testpassword123",
-        ],
-        &[
-            "create-user",
-            "--username",
-            "testoperator",
-            "--password",
-            "testpassword123",
-            "--operator",
-        ],
-    ];
-    for args in users {
-        let _ = cmd!(sh, "{test_support}")
-            .args(args.iter().copied())
-            .env("JAUNDER_DB", &db)
-            .quiet()
-            .ignore_status()
-            .run();
-    }
-
-    // set-site-config / reset-mail are fatal — a run against an unseeded site config
-    // is meaningless.
-    let seeds: [&[&str]; 3] = [
-        &[
-            "set-site-config",
-            "--key",
-            "site.registration_policy",
-            "--value",
-            "open",
-        ],
-        &[
-            "set-site-config",
-            "--key",
-            "feeds.websub_hub_url",
-            "--value",
-            "https://hub.test.local/",
-        ],
-        &["reset-mail", "--path", mail.as_str()],
-    ];
-    for args in seeds {
-        if cmd!(sh, "{test_support}")
-            .args(args.iter().copied())
-            .env("JAUNDER_DB", &db)
-            .quiet()
-            .run()
-            .is_err()
-        {
+    // 3. Start `jaunder serve` on an EPHEMERAL port (:0) with the canonical capture
+    // env, in the dev environment (default) so the schema auto-inits on start.
+    // ServerChild reaps it on every exit path below (#249 AC 2).
+    let child = match Command::new(format!("{root}/target/debug/jaunder"))
+        .arg("serve")
+        .env("JAUNDER_BIND", "127.0.0.1:0")
+        .env("JAUNDER_STORAGE_PATH", storage.path())
+        .env("JAUNDER_DB", &db)
+        .env("JAUNDER_RUNTIME_FILE", &runtime)
+        .env("JAUNDER_MAIL_CAPTURE_FILE", &mail)
+        .env("JAUNDER_WEBSUB_CAPTURE_FILE", &websub)
+        .env("JAUNDER_DIAG_LOG_FILE", &diag)
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
             result.push(
-                StepResult::fail("e2e-local-seed")
-                    .detail(format!("test-support {} failed", args[0])),
+                StepResult::fail("e2e-local-server")
+                    .detail(format!("failed to spawn jaunder serve: {e}")),
             );
             return;
         }
+    };
+    let _server = ServerChild(child);
+
+    // 4. Discover the OS-assigned port from the runtime file, then wait for the
+    // server to answer (~15s: 30 × 0.5s).
+    let mut discovered = None;
+    for _ in 0..30 {
+        if let Ok(contents) = std::fs::read_to_string(&runtime) {
+            if let Some(url) = base_url_from_runtime(&contents) {
+                if cmd!(sh, "curl -sf {url}/").quiet().run().is_ok() {
+                    discovered = Some(url);
+                    break;
+                }
+            }
+        }
+        sleep(Duration::from_millis(500));
+    }
+    let Some(base_url) = discovered else {
+        result.push(
+            StepResult::fail("e2e-local-server")
+                .detail("server not reachable via runtime.json within 15s".to_owned()),
+        );
+        return;
+    };
+    result.push(StepResult::ok("e2e-local-server"));
+
+    // 5. Seed the canonical fixtures via the SHARED devtool subcommand (the same
+    // list the flake VM's seed_db uses). Source-run devtool: its `seed-e2e`
+    // subcommand may post-date the host's on-PATH binary. The temp DB is fresh, so
+    // no reset is needed.
+    let tools = format!("{root}/tools/Cargo.toml");
+    let test_support = format!("{root}/target/debug/test-support");
+    if cmd!(
+        sh,
+        "cargo run --manifest-path {tools} -- seed-e2e --db {db} --mail-file {mail} --test-support-bin {test_support}"
+    )
+    .run()
+    .is_err()
+    {
+        result
+            .push(StepResult::fail("e2e-local-seed").detail("devtool seed-e2e failed".to_owned()));
+        return;
     }
     result.push(StepResult::ok("e2e-local-seed"));
 
-    // Playwright: the same unified config the CI VM loads. The host overrides the
-    // reporter for interactive use; PLAYWRIGHT_HTML_OPEN=never keeps a red run from
-    // spawning a blocking `show-report` server (the fast loop's iterate-on-failure
-    // case). chromium + chromium-admin mirror the VM so the admin-site quarantine
-    // is exercised locally too.
+    // 6. Playwright against the discovered baseURL, from end2end/. The host serves a
+    // slow debug wasm bundle, so run serial by default (workers=1, overridable via
+    // JAUNDER_E2E_WORKERS; the VM keeps the config default of 2). The DB + capture
+    // vars and a target/debug-prefixed PATH match the VM's Playwright env so
+    // mail/websub readers and `seedPostsViaTool` (bare `test-support`) see the same
+    // files/DB/binary.
+    let workers = std::env::var("JAUNDER_E2E_WORKERS").unwrap_or_else(|_| "1".to_owned());
+    let path = format!(
+        "{root}/target/debug:{}",
+        std::env::var("PATH").unwrap_or_default()
+    );
+    sh.change_dir(format!("{root}/end2end"));
     let mut pw: Vec<&str> = vec![
         "test",
         "--project",
@@ -170,8 +184,13 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
     }
     if cmd!(sh, "playwright")
         .args(pw)
+        .env("JAUNDER_E2E_BASE_URL", &base_url)
+        .env("JAUNDER_DB", &db)
+        .env("JAUNDER_MAIL_CAPTURE_FILE", &mail)
+        .env("JAUNDER_WEBSUB_CAPTURE_FILE", &websub)
         .env("JAUNDER_E2E_WORKERS", &workers)
         .env("PLAYWRIGHT_HTML_OPEN", "never")
+        .env("PATH", &path)
         .run()
         .is_err()
     {
@@ -182,4 +201,43 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
         return;
     }
     result.push(StepResult::ok("e2e-local-playwright"));
+    // `_server` (ServerChild) and `storage` (TempDir) drop here: server killed and
+    // reaped, temp storage removed.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn base_url_from_runtime_reads_ip_and_port() {
+        assert_eq!(
+            base_url_from_runtime(r#"{"ip":"127.0.0.1","port":54312}"#).as_deref(),
+            Some("http://127.0.0.1:54312"),
+        );
+    }
+
+    #[test]
+    fn base_url_from_runtime_rejects_malformed() {
+        assert_eq!(base_url_from_runtime("not json"), None);
+        assert_eq!(base_url_from_runtime(r#"{"ip":"127.0.0.1"}"#), None); // no port
+    }
+
+    #[test]
+    fn server_child_kills_on_drop() {
+        // A long-lived child stands in for `jaunder serve`.
+        let child = Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+        let proc = std::path::PathBuf::from(format!("/proc/{pid}"));
+        let guard = ServerChild(child);
+        assert!(proc.exists(), "child should be alive before drop");
+        drop(guard); // Drop kills AND waits (reaps the zombie so /proc/<pid> clears)
+                     // Linux-only (xtask is host-only Linux): once killed + reaped, /proc/<pid>
+                     // is gone. Zero-dependency liveness check — no external `kill` binary.
+        assert!(!proc.exists(), "child must be reaped after drop");
+    }
 }

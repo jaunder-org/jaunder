@@ -110,12 +110,13 @@ pub enum Command {
         #[arg(value_enum)]
         browser: E2eBrowser,
     },
-    /// Run the host e2e loop (seed + Playwright chromium) against an
-    /// ALREADY-RUNNING dev server. cargo-leptos invokes this as its
-    /// `end2end-cmd`; run the full loop (build + serve + this) with
-    /// `cargo leptos end-to-end`. Standalone runs assume a server is already
-    /// serving on :3000 (fast re-runs). Loads the same `playwright.config.ts`
-    /// the CI VM loads. Host only.
+    /// Run the host e2e loop, owning the whole lifecycle: build the CSR bundle +
+    /// server, start `jaunder serve` on an ephemeral port with the VM's capture
+    /// env + a per-run temp DB, seed via the shared `devtool seed-e2e`, run
+    /// Playwright (chromium + chromium-admin) against the discovered URL, and tear
+    /// the server down on every exit path. Self-contained — no pre-existing server
+    /// and no `:3000` conflict. Loads the same `playwright.config.ts` the CI VM
+    /// loads. Host only.
     E2eLocal {
         /// A spec file or `-g` grep passed through to Playwright (single-test runs).
         test: Option<String>,

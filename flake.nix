@@ -45,6 +45,10 @@
     let
       interactiveTestingVmSystem = "x86_64-linux";
       postgresTestingVmSystem = "x86_64-linux";
+      # Part of the canonical e2e-server env-var set that the VM systemd unit and
+      # the host `cargo xtask e2e-local` driver both source (names shared, values
+      # per-environment). The full documented list lives in
+      # `xtask/src/steps/e2e_local.rs` (module docs). See issue #249.
       mailCaptureEnv = {
         JAUNDER_MAIL_CAPTURE_FILE = "/var/lib/jaunder/mail.jsonl";
         JAUNDER_WEBSUB_CAPTURE_FILE = "/var/lib/jaunder/websub.jsonl";
