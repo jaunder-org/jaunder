@@ -61,6 +61,25 @@ impl CloseablePool {
         }
     }
 
+    /// Runs a raw statement against whichever backend this env uses — the seed
+    /// counterpart to [`close`](CloseablePool::close), dispatched internally so
+    /// callers stay backend-agnostic. (The SQL string may still be dialect-specific.)
+    ///
+    /// # Errors
+    ///
+    /// Returns the `sqlx::Error` if the statement fails to execute.
+    pub async fn execute(&self, sql: &str) -> Result<(), sqlx::Error> {
+        match self {
+            CloseablePool::Sqlite(pool) => {
+                sqlx::query(sql).execute(pool).await?;
+            }
+            CloseablePool::Postgres(pool) => {
+                sqlx::query(sql).execute(pool).await?;
+            }
+        }
+        Ok(())
+    }
+
     /// The Postgres pool, for raw-SQL seed/inspect against the per-test database
     /// (avoids reconnecting a fresh pool via [`recorded_postgres_url`]).
     ///

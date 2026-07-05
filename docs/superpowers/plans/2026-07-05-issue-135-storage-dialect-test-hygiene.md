@@ -62,12 +62,21 @@ here with a symmetric `CloseablePool::sqlite()` seed accessor.
   #[apply(backends)]
   #[tokio::test]
   async fn <name>(#[case] backend: Backend) {
-      let TestEnv { state, base } = backend.setup().await;
-      base.close_pool().await;                  // fault via the harness
-      let result = state.<handle>.<method>(...).await;   // reach handle from AppState
+      let env = backend.setup().await;          // bind the WHOLE env — see hazard below
+      env.base.close_pool().await;              // fault via the harness
+      let result = env.state.<handle>.<method>(...).await;   // reach handle from AppState
       assert!(result.is_err());
   }
   ```
+
+  **TempDir hazard — never drop `base`.** `TestEnv.base` owns the `TempDir`
+  holding the SQLite `test.db`; if you `let TestEnv { state, .. } = …` and drop
+  `base`, the file is unlinked and the next pooled connection (pool has
+  `create_if_missing`) opens a fresh empty DB → every call fails
+  `no such table`. So bind the whole env (`let env = backend.setup().await;`)
+  and use `env.state` / `env.base` — matching the `site_config.rs` exemplar.
+  (Close-pool tests that destructure `let TestEnv { state, base }` are fine
+  because they keep `base`.)
 
   Each home module's `#[cfg(test)] mod tests` **must import the rstest macros**
   exactly as #126's exemplar (`storage/src/site_config.rs:312`) does —
