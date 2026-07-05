@@ -316,7 +316,7 @@ Run `cargo xtask check` first (jaunder-commit).
   constraint-violating backup with `BackupError::ConstraintViolation` and leaves
   the target unmodified.
 
-- [ ] **Step 1: Write the failing test** in `commands.rs` (near the other
+- [x] **Step 1: Write the failing test** in `commands.rs` (near the other
       `cmd_restore_*` tests):
 
 ```rust
@@ -376,7 +376,7 @@ async fn cmd_restore_rejects_dangling_foreign_key(#[case] backend: Backend) {
 }
 ```
 
-- [ ] **Step 2: Run it, verify it FAILS on both backends**
+- [x] **Step 2: Run it, verify it FAILS on both backends**
 
 Run:
 `devtool pg run -- cargo nextest run -p jaunder --test misc cmd_restore_rejects_dangling_foreign_key`
@@ -384,7 +384,7 @@ Expected: FAIL — SQLite commits before checking (target IS modified → the
 `is_none()` assertion fails); Postgres returns `Sqlx` not `ConstraintViolation`
 (the message assertion fails).
 
-- [ ] **Step 3: Implement the SQLite change** — in
+- [x] **Step 3: Implement the SQLite change** — in
       `storage/src/sqlite/backup.rs`, `restore_database`, move
       `validate_foreign_keys` inside the transaction (before `COMMIT`) so a
       violation rolls back. Replace the body from
@@ -421,7 +421,7 @@ Expected: FAIL — SQLite commits before checking (target IS modified → the
     }
 ```
 
-- [ ] **Step 4: Implement the Postgres change** — in
+- [x] **Step 4: Implement the Postgres change** — in
       `storage/src/postgres/backup.rs`: add `use sqlx::error::DatabaseError;` to
       the imports, add a mapping helper, apply it at the insert site, and remove
       the now-covered restore-`Err` `cov:ignore`.
@@ -456,19 +456,19 @@ In `restore_database`, delete the two `// cov:ignore-start` /
 `// cov:ignore-stop` comment lines around the `Err(error)` arm (lines ~89 and
 ~93) — the dangling-FK negative now reaches it.
 
-- [ ] **Step 5: Run the test, verify it PASSES on both backends**
+- [x] **Step 5: Run the test, verify it PASSES on both backends**
 
 Run:
 `devtool pg run -- cargo nextest run -p jaunder --test misc cmd_restore_rejects_dangling_foreign_key`
 Expected: PASS — both backends return `ConstraintViolation` and leave the target
 empty.
 
-- [ ] **Step 6: Confirm no regression** in the existing SQLite dialect tests
+- [x] **Step 6: Confirm no regression** in the existing SQLite dialect tests
       (still present until Task 8):
 
 Run: `cargo nextest run -p storage backup` Expected: PASS.
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add storage/src/sqlite/backup.rs storage/src/postgres/backup.rs server/tests/misc/commands.rs
@@ -487,7 +487,7 @@ already exists; this test pins it on both backends.
 
 **Files:** Test: `server/tests/misc/commands.rs`
 
-- [ ] **Step 1: Write the test:**
+- [x] **Step 1: Write the test:**
 
 ```rust
 // #136: a backup with a malformed row is rejected and rolls back cleanly on both backends.
@@ -540,14 +540,14 @@ async fn cmd_restore_rolls_back_on_malformed_row(#[case] backend: Backend) {
 }
 ```
 
-- [ ] **Step 2: Run it, verify PASS on both backends**
+- [x] **Step 2: Run it, verify PASS on both backends**
 
 Run:
 `devtool pg run -- cargo nextest run -p jaunder --test misc cmd_restore_rolls_back_on_malformed_row`
 Expected: PASS — `read_table_rows` rejects the non-object row (`InvalidBackup`)
 and the transaction rolls back, so `users` is absent from the target.
 
-- [ ] **Step 3: Commit.**
+- [x] **Step 3: Commit.**
 
 ```bash
 git add server/tests/misc/commands.rs
@@ -566,7 +566,7 @@ The contract-level replacement for the deleted
 
 **Files:** Test: `server/tests/misc/commands.rs`
 
-- [ ] **Step 1: Write the test:**
+- [x] **Step 1: Write the test:**
 
 ```rust
 // #136: a backup missing its db/ directory is rejected (InvalidBackup) on both backends.
@@ -599,14 +599,14 @@ async fn cmd_restore_rejects_missing_db_directory(#[case] backend: Backend) {
 }
 ```
 
-- [ ] **Step 2: Run it, verify PASS on both backends**
+- [x] **Step 2: Run it, verify PASS on both backends**
 
 Run:
 `devtool pg run -- cargo nextest run -p jaunder --test misc cmd_restore_rejects_missing_db_directory`
 Expected: PASS — manifest reads OK, then `restore_directory_backup` finds no
 `db/` and returns `InvalidBackup("missing db directory: …")`.
 
-- [ ] **Step 3: Commit.**
+- [x] **Step 3: Commit.**
 
 ```bash
 git add server/tests/misc/commands.rs
@@ -625,7 +625,7 @@ Directory-only). Covers archive export + extraction on restore.
 
 **Files:** Test: `server/tests/misc/commands.rs`
 
-- [ ] **Step 1: Write the test:**
+- [x] **Step 1: Write the test:**
 
 ```rust
 // #136: backup/restore round-trips in Archive mode on both backends.
@@ -654,13 +654,13 @@ async fn cmd_restore_restores_archive_backup(#[case] backend: Backend) {
 }
 ```
 
-- [ ] **Step 2: Run it, verify PASS on both backends**
+- [x] **Step 2: Run it, verify PASS on both backends**
 
 Run:
 `devtool pg run -- cargo nextest run -p jaunder --test misc cmd_restore_restores_archive_backup`
 Expected: PASS.
 
-- [ ] **Step 3: Commit.**
+- [x] **Step 3: Commit.**
 
 ```bash
 git add server/tests/misc/commands.rs
