@@ -212,10 +212,57 @@ impl<A: Write, B: Write> Write for MultiWriter<A, B> {
     }
 }
 
-/// The failure `detail` for a Nix check, naming the installable, the exit status,
-/// and the captured build-log path. Pure so it can be unit-tested.
-fn failure_detail(installable: &str, status: &std::process::ExitStatus, log_path: &str) -> String {
-    format!("nix build {installable} exited with {status}; full build log: {log_path}")
+/// Lines of `build.log` kept in the fallback excerpt when the log carries no nix
+/// `error:` block (an unusual failure). Distinct from the `--log-lines 50` that sizes
+/// nix's in-block builder tail on the normal path.
+const EXCERPT_FALLBACK_LINES: usize = 50;
+
+/// Carve a scoped failure excerpt from a captured `nix build -L` log. Nix's own error
+/// summary is a self-contained block at column 0 (`error: …` through EOF) that names the
+/// failing derivation and includes its *de-interleaved* `Last N log lines` tail — exactly
+/// the scoped content we want, no drv/prefix parsing needed (builder output streams
+/// prefixed `<name>> …`, so it never matches at column 0). If there is no such block,
+/// fall back to the log's last [`EXCERPT_FALLBACK_LINES`] lines behind a marker so the
+/// excerpt is never empty.
+fn failure_excerpt(build_log: &str) -> String {
+    let lines: Vec<&str> = build_log.lines().collect();
+    if let Some(i) = lines.iter().position(|l| l.starts_with("error:")) {
+        return lines[i..].join("\n");
+    }
+    let start = lines.len().saturating_sub(EXCERPT_FALLBACK_LINES);
+    // Interpolate the const so the marker text can't silently desync from the slice.
+    let mut out =
+        format!("=== no `error:` block in build log; last {EXCERPT_FALLBACK_LINES} lines: ===\n");
+    out.push_str(&lines[start..].join("\n"));
+    out
+}
+
+/// On a failed check, write the scoped [`failure_excerpt`] of the captured build log to
+/// `failure-excerpt.log` beside it (`.xtask/diagnostics/<check>/`). Best-effort: `None`
+/// if the log is unreadable (then only the full log is named).
+fn write_failure_excerpt(log_path: &str) -> Option<String> {
+    let log = std::fs::read_to_string(log_path).ok()?;
+    let dir = Path::new(log_path).parent().unwrap_or(Path::new("."));
+    let excerpt_path = dir.join("failure-excerpt.log");
+    std::fs::write(&excerpt_path, format!("{}\n", failure_excerpt(&log))).ok()?;
+    Some(excerpt_path.to_string_lossy().into_owned())
+}
+
+/// The failure `detail` for a Nix check, naming the installable, the exit status, the
+/// scoped excerpt (read first) when one was written, and the full build-log path. Pure
+/// so it can be unit-tested.
+fn failure_detail(
+    installable: &str,
+    status: &std::process::ExitStatus,
+    excerpt_path: Option<&str>,
+    log_path: &str,
+) -> String {
+    match excerpt_path {
+        Some(e) => format!(
+            "nix build {installable} exited with {status}; scoped excerpt (read first): {e}; full build log: {log_path}"
+        ),
+        None => format!("nix build {installable} exited with {status}; full build log: {log_path}"),
+    }
 }
 
 /// `nix build -L --keep-failed --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.<system>.<check>`,
@@ -240,6 +287,10 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
             // -L streams every (transitive) derivation's build log to stderr, so
             // the failing dependency's output is in the stream we capture below.
             "-L",
+            // Widen nix's own de-interleaved failing-builder tail in the `error:`
+            // summary block to 50 lines, which `write_failure_excerpt` carves out (#145).
+            "--log-lines",
+            "50",
             // Retain the failed build dir so a catastrophic in-sandbox failure
             // (e.g. ENOSPC that prevented writing `$out`) still leaves first-hand
             // data; `rescue_diagnostics` then copies it out.
@@ -275,7 +326,13 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
         Ok(s) if s.success() => StepResult::ok(step_name),
         Ok(s) => {
             rescue_diagnostics(check);
-            StepResult::fail(step_name).detail(failure_detail(&installable, &s, &log_path))
+            let excerpt = write_failure_excerpt(&log_path);
+            StepResult::fail(step_name).detail(failure_detail(
+                &installable,
+                &s,
+                excerpt.as_deref(),
+                &log_path,
+            ))
         }
         Err(e) => StepResult::fail(step_name).detail(e.to_string()),
     }
@@ -397,7 +454,57 @@ mod tests {
         assert!(d.contains("web_posts::case_3"));
     }
 
-    use super::{failure_detail, MultiWriter};
+    use super::{failure_detail, failure_excerpt, write_failure_excerpt, MultiWriter};
+
+    const SAMPLE_LOG: &str = "\
+fail-probe> build-output-line-1
+other-drv> interleaved noise from a parallel derivation
+fail-probe> build-output-line-2
+fail-probe> FATAL_ERROR_MARKER
+error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
+       Reason: builder failed with exit code 3.
+       Last 3 log lines:
+       > build-output-line-58
+       > build-output-line-59
+       > FATAL_ERROR_MARKER
+       For full logs, run:
+         nix log /nix/store/xxx-fail-probe-0.1.0.drv
+";
+
+    #[test]
+    fn failure_excerpt_carves_error_block_dropping_interleaved_head() {
+        let e = failure_excerpt(SAMPLE_LOG);
+        assert!(
+            e.starts_with("error: Cannot build"),
+            "starts at the error block: {e:?}"
+        );
+        assert!(e.contains("Last 3 log lines"));
+        assert!(e.contains("FATAL_ERROR_MARKER"));
+        // The interleaved -L head (prefixed builder lines) is excluded.
+        assert!(!e.contains("interleaved noise"));
+        assert!(!e.contains("fail-probe> build-output-line-1"));
+    }
+
+    #[test]
+    fn failure_excerpt_falls_back_to_tail_when_no_error_block() {
+        // 60 numbered lines, no column-0 `error:` line.
+        let log: String = (1..=60).map(|i| format!("plain-line-{i}\n")).collect();
+        let e = failure_excerpt(&log);
+        assert!(e.contains("no `error:` block"), "marker present: {e:?}");
+        assert!(e.contains("plain-line-60")); // last line kept
+        assert!(e.contains("plain-line-11")); // first kept line (last 50 of 60)
+        assert!(!e.contains("plain-line-10")); // trimmed head
+    }
+
+    #[test]
+    fn failure_excerpt_ignores_error_prefixed_by_a_builder() {
+        // A builder printing its own `error:` streams as `<name>> error:` — NOT column 0,
+        // so it must not be treated as nix's error block.
+        let log = "drv> error: cargo test failed\ndrv> more\nerror: builder for 'x' failed\n";
+        let e = failure_excerpt(log);
+        assert!(e.starts_with("error: builder for 'x' failed"));
+        assert!(!e.contains("drv> error"));
+    }
 
     #[test]
     fn multiwriter_fans_full_input_out_to_both_sinks() {
@@ -441,17 +548,44 @@ mod tests {
     }
 
     #[test]
-    fn failure_detail_names_installable_status_and_log_path() {
+    fn failure_detail_names_excerpt_first_then_full_log() {
         // `false` exits non-zero, giving a real failed ExitStatus to format.
         let status = std::process::Command::new("false").status().unwrap();
-        let d = failure_detail(
+        let with = failure_detail(
             ".#checks.x86_64-linux.e2e",
             &status,
+            Some(".xtask/diagnostics/e2e/failure-excerpt.log"),
             ".xtask/diagnostics/e2e/build.log",
         );
-        assert!(d.contains(".#checks.x86_64-linux.e2e"));
-        assert!(d.contains("exited with"));
-        assert!(d.contains("full build log: .xtask/diagnostics/e2e/build.log"));
+        assert!(with.contains(".#checks.x86_64-linux.e2e"));
+        assert!(with.contains("exited with"));
+        assert!(with.contains("failure-excerpt.log"));
+        assert!(with.contains("full build log: .xtask/diagnostics/e2e/build.log"));
+        // Excerpt named before the full log.
+        assert!(with.find("failure-excerpt.log").unwrap() < with.find("full build log").unwrap());
+
+        let without = failure_detail(
+            ".#checks.x86_64-linux.e2e",
+            &status,
+            None,
+            ".xtask/diagnostics/e2e/build.log",
+        );
+        assert!(without.contains("full build log: .xtask/diagnostics/e2e/build.log"));
+        assert!(!without.contains("failure-excerpt.log"));
+    }
+
+    #[test]
+    fn write_failure_excerpt_writes_sibling_carved_file() {
+        let dir = std::env::temp_dir().join(format!("xtask-excerpt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("build.log");
+        std::fs::write(&log, SAMPLE_LOG).unwrap();
+        let path = write_failure_excerpt(log.to_str().unwrap()).unwrap();
+        assert!(path.ends_with("failure-excerpt.log"));
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(body.starts_with("error: Cannot build"));
+        assert!(!body.contains("interleaved noise"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
