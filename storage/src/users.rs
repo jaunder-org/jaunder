@@ -391,3 +391,169 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{backends, seed_user, Backend};
+    use rstest::*;
+    use rstest_reuse::*;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn authenticate_with_closed_pool_returns_internal_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.base.close_pool().await;
+        let result = env
+            .state
+            .users
+            .authenticate(&"alice".parse().unwrap(), &"password123".parse().unwrap())
+            .await;
+        // §3.1a: the underlying sqlx::Error is preserved as a typed source
+        // (not stringified), so the boundary can classify it.
+        assert!(
+            matches!(
+                result,
+                Err(UserAuthError::Internal(ref source))
+                    if source.downcast_ref::<sqlx::Error>().is_some()
+            ),
+            "expected Internal carrying a sqlx::Error source"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn authenticate_with_corrupted_hash_returns_internal_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        seed_user(&env.state).await;
+        env.base
+            .pool()
+            .execute("UPDATE users SET password_hash='not-a-bcrypt-hash' WHERE username='testuser'")
+            .await
+            .unwrap();
+        let result = env
+            .state
+            .users
+            .authenticate(
+                &"testuser".parse().unwrap(),
+                &"password123".parse().unwrap(),
+            )
+            .await;
+        assert!(matches!(result, Err(UserAuthError::Internal(_))));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn authenticate_with_invalid_email_in_db_returns_internal_error(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        seed_user(&env.state).await;
+        env.base
+            .pool()
+            .execute("UPDATE users SET email='not-an-email' WHERE username='testuser'")
+            .await
+            .unwrap();
+        let result = env
+            .state
+            .users
+            .authenticate(
+                &"testuser".parse().unwrap(),
+                &"password123".parse().unwrap(),
+            )
+            .await;
+        assert!(matches!(result, Err(UserAuthError::Internal(_))));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn authenticate_with_blocked_update_returns_internal_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        seed_user(&env.state).await;
+        // Block the `last_authenticated_at` UPDATE the successful-auth path runs,
+        // so authentication fails with `Internal` after the password verifies.
+        match backend {
+            Backend::Sqlite => {
+                env.base
+                    .pool()
+                    .execute(
+                        "CREATE TRIGGER block_auth_update \
+                         BEFORE UPDATE OF last_authenticated_at ON users \
+                         BEGIN SELECT RAISE(FAIL, 'blocked'); END",
+                    )
+                    .await
+                    .unwrap();
+            }
+            Backend::Postgres => {
+                env.base
+                    .pool()
+                    .execute(
+                        "CREATE FUNCTION block_auth() RETURNS trigger AS $$ \
+                         BEGIN RAISE EXCEPTION 'blocked'; END; $$ LANGUAGE plpgsql",
+                    )
+                    .await
+                    .unwrap();
+                env.base
+                    .pool()
+                    .execute(
+                        "CREATE TRIGGER block_auth_update \
+                         BEFORE UPDATE OF last_authenticated_at ON users \
+                         FOR EACH ROW EXECUTE FUNCTION block_auth()",
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        let result = env
+            .state
+            .users
+            .authenticate(
+                &"testuser".parse().unwrap(),
+                &"password123".parse().unwrap(),
+            )
+            .await;
+        assert!(matches!(result, Err(UserAuthError::Internal(_))));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn create_user_with_hash_error_returns_internal_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let result = env
+            .state
+            .users
+            .create_user(
+                &"alice".parse().unwrap(),
+                &"force-hash-error-for-test-coverage".parse().unwrap(),
+                None,
+                false,
+            )
+            .await;
+        assert!(matches!(result, Err(CreateUserError::Internal(_))));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn authenticate_with_verify_error_returns_internal_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.state
+            .users
+            .create_user(
+                &"alice".parse().unwrap(),
+                &"password123".parse().unwrap(),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        let result = env
+            .state
+            .users
+            .authenticate(
+                &"alice".parse().unwrap(),
+                &"force-verify-error-for-test-coverage".parse().unwrap(),
+            )
+            .await;
+        assert!(matches!(result, Err(UserAuthError::Internal(_))));
+    }
+}

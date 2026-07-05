@@ -889,33 +889,6 @@ async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db(
 
 #[apply(postgres_only)]
 #[tokio::test]
-async fn authenticate_with_corrupted_hash_returns_internal_error(#[case] backend: Backend) {
-    // Backend-specific: exercises raw PostgreSQL storage with a deliberately
-    // corrupted hash, so it builds its own pool rather than using `env.state`.
-    let _ = backend;
-    use storage::{PostgresUserStorage, UserAuthError, UserStorage};
-    let DbConnectOptions::Postgres { options, .. } = template_postgres_url().await else {
-        panic!("expected postgres options");
-    };
-    let pool = sqlx::PgPool::connect_with(options).await.unwrap();
-    sqlx::query(
-        "INSERT INTO users (username, password_hash, created_at, is_operator)
-         VALUES ($1, $2, now(), false)",
-    )
-    .bind("alice_bad_hash")
-    .bind("not-a-bcrypt-hash")
-    .execute(&pool)
-    .await
-    .unwrap();
-    let storage = PostgresUserStorage::new(pool);
-    let username: common::username::Username = "alice_bad_hash".parse().unwrap();
-    let password: common::password::Password = "password123".parse().unwrap();
-    let result = storage.authenticate(&username, &password).await;
-    assert!(matches!(result, Err(UserAuthError::Internal(_))));
-}
-
-#[apply(postgres_only)]
-#[tokio::test]
 async fn feed_events_marks_run(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;

@@ -81,3 +81,94 @@ pub trait AtomicOps: Send + Sync {
         new_password: &Password,
     ) -> Result<(), ConfirmPasswordResetError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{backends, Backend};
+    use rstest::*;
+    use rstest_reuse::*;
+
+    async fn seed_invite(state: &std::sync::Arc<crate::AppState>) -> String {
+        state
+            .invites
+            .create_invite(chrono::Utc::now() + chrono::Duration::hours(1))
+            .await
+            .unwrap()
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn create_user_with_invite_hash_failure_returns_internal_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let code = seed_invite(&env.state).await;
+        let username: Username = "alice".parse().unwrap();
+        let password: Password = "force-hash-error-for-test-coverage".parse().unwrap();
+        let result = env
+            .state
+            .atomic
+            .create_user_with_invite(&username, &password, None, false, &code)
+            .await;
+        assert!(matches!(result, Err(RegisterWithInviteError::Internal(_))));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn create_user_with_invite_insert_error_returns_internal(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let code = seed_invite(&env.state).await;
+        // Break the users INSERT (but not the invite SELECT) so the user insert
+        // returns a non-unique Database error, exercising the catch-all `Internal`
+        // arm and the transaction rollback path on an unexpected failure.
+        env.base
+            .pool()
+            .execute("ALTER TABLE users RENAME COLUMN username TO username_renamed")
+            .await
+            .unwrap();
+        let username: Username = "alice".parse().unwrap();
+        let password: Password = "password123".parse().unwrap();
+        let result = env
+            .state
+            .atomic
+            .create_user_with_invite(&username, &password, None, false, &code)
+            .await;
+        assert!(matches!(result, Err(RegisterWithInviteError::Internal(_))));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn storage_methods_on_closed_pool_return_errors(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.base.close_pool().await;
+        let username: Username = "alice".parse().unwrap();
+        let password: Password = "password123".parse().unwrap();
+
+        assert!(env
+            .state
+            .site_config
+            .get("site.registration_policy")
+            .await
+            .is_err());
+        assert!(env
+            .state
+            .site_config
+            .set("site.registration_policy", "open")
+            .await
+            .is_err());
+        assert!(env
+            .state
+            .atomic
+            .create_user_with_invite(&username, &password, Some("Alice"), false, "code")
+            .await
+            .is_err());
+        // `not-base64` fails token hashing before touching the pool, so the
+        // classification is `NotFound` on both backends regardless of pool state.
+        assert!(matches!(
+            env.state
+                .atomic
+                .confirm_password_reset("not-base64", &password)
+                .await,
+            Err(ConfirmPasswordResetError::NotFound)
+        ));
+    }
+}

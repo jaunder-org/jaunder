@@ -287,19 +287,6 @@ pub(crate) async fn database_has_users(options: &PgConnectOptions) -> sqlx::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::*;
-    use common::password::Password;
-    use common::username::Username;
-    use sqlx::PgPool;
-    use std::{future::Future, time::Duration};
-
-    fn lazy_pool() -> PgPool {
-        sqlx::PgPool::connect_lazy("postgres://localhost:1/jaunder").unwrap()
-    }
-
-    async fn exercise<F: Future>(future: F) {
-        let _ = tokio::time::timeout(Duration::from_millis(50), future).await;
-    }
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -369,48 +356,5 @@ mod tests {
 
         std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
         assert!(matches!(result, Err(sqlx::Error::Io(_))));
-    }
-
-    #[tokio::test]
-    async fn make_postgres_app_state_constructs_with_lazy_pool() {
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/db").unwrap();
-        let _ = make_postgres_app_state(pool);
-    }
-
-    #[tokio::test]
-    async fn test_storage_constructors() {
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/db").unwrap();
-        let _ = PostgresSiteConfigStorage::new(pool.clone());
-        let _ = PostgresSessionStorage::new(pool.clone());
-        let _ = PostgresInviteStorage::new(pool.clone());
-        let _ = PostgresEmailVerificationStorage::new(pool.clone());
-        let _ = PostgresPasswordResetStorage::new(pool.clone());
-        let _ = PostgresAtomicOps::new(pool.clone());
-        let _ = PostgresPostStorage::new(pool);
-    }
-
-    #[tokio::test]
-    async fn test_storage_methods_with_lazy_pool_cover_error_paths() {
-        let pool = lazy_pool();
-        let username: Username = "alice".parse().unwrap();
-        let password: Password = "password123".parse().unwrap();
-
-        let site_config = PostgresSiteConfigStorage::new(pool.clone());
-        exercise(site_config.get("site.registration_policy")).await;
-        exercise(site_config.set("site.registration_policy", "open")).await;
-
-        let atomic = PostgresAtomicOps::new(pool.clone());
-        exercise(atomic.create_user_with_invite(
-            &username,
-            &password,
-            Some("Alice"),
-            false,
-            "code",
-        ))
-        .await;
-        assert!(matches!(
-            atomic.confirm_password_reset("not-base64", &password).await,
-            Err(ConfirmPasswordResetError::NotFound)
-        ));
     }
 }
