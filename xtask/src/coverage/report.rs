@@ -51,7 +51,7 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
         // is matched only against the line's real trailing comment.
         let comment = line_comment(text);
         if let Some(c) = comment {
-            if c.contains("cov:ignore-start") {
+            if comment_marker_is(c, "cov:ignore-start") {
                 if let Some(start) = block_start {
                     bail!(
                         "nested cov:ignore-start at line {lineno} (a block is \
@@ -61,7 +61,7 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
                 block_start = Some(lineno);
                 continue; // the marker line itself is dropped
             }
-            if c.contains("cov:ignore-stop") {
+            if comment_marker_is(c, "cov:ignore-stop") {
                 if block_start.is_none() {
                     bail!("cov:ignore-stop at line {lineno} with no open cov:ignore-start");
                 }
@@ -83,7 +83,7 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
             continue; // non-executable
         }
         if let Some(c) = comment {
-            if c.contains("cov:ignore") {
+            if comment_marker_is(c, "cov:ignore") {
                 continue; // line-form exclusion marker — drop from the executable set
             }
         }
@@ -103,6 +103,15 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
 /// A count column is "zero" only if it is literally 0 (covered iff non-zero).
 fn is_zero_count(count: &str) -> bool {
     count == "0"
+}
+
+/// True iff `marker` is the first whitespace-delimited token of `comment` (the text
+/// after `//`, as returned by [`line_comment`]). Anchoring marker recognition to the
+/// first token keeps an incidental mention in prose (`// unlike the cov:ignore path`)
+/// inert, while still honoring `// cov:ignore` and `// cov:ignore <trailing note>`
+/// (#246).
+fn comment_marker_is(comment: &str, marker: &str) -> bool {
+    comment.split_whitespace().next() == Some(marker)
 }
 
 /// Return the text of the first real trailing line comment in `src` — the slice
@@ -351,5 +360,79 @@ mod tests {
         let files = parse_text_report(report, "/repo").unwrap();
         let lines: Vec<u32> = files[0].lines.iter().map(|l| l.line).collect();
         assert_eq!(lines, vec![2]);
+    }
+
+    #[test]
+    fn incidental_mention_in_real_comment_is_kept() {
+        // An executable line whose GENUINE trailing comment merely mentions the token
+        // must NOT be dropped (the #246 footgun).
+        let report = "\
+/repo/a.rs:
+    1|     0|    do_work() // unlike the cov:ignore path
+    2|     0|    boom() // cov:ignore
+";
+        let files = parse_text_report(report, "/repo").unwrap();
+        let lines: Vec<u32> = files[0].lines.iter().map(|l| l.line).collect();
+        assert_eq!(lines, vec![1]); // line 2 dropped (anchored marker), line 1 kept
+    }
+
+    #[test]
+    fn line_marker_with_trailing_note_is_dropped() {
+        let report = "\
+/repo/a.rs:
+    1|     0|    boom() // cov:ignore reason here
+";
+        let files = parse_text_report(report, "/repo").unwrap();
+        assert!(files[0].lines.is_empty()); // first token is the marker → dropped
+    }
+
+    #[test]
+    fn block_markers_are_anchored_not_incidental() {
+        // A comment mentioning cov:ignore-start as non-first-token must NOT open a block.
+        let report = "\
+/repo/a.rs:
+    1|     0|    keep() // see the cov:ignore-start docs
+    2|     0|    also_keep()
+";
+        let files = parse_text_report(report, "/repo").unwrap();
+        let lines: Vec<u32> = files[0].lines.iter().map(|l| l.line).collect();
+        assert_eq!(lines, vec![1, 2]); // no block opened; both lines measured
+    }
+
+    #[test]
+    fn block_stop_is_anchored_not_incidental() {
+        // Inside an OPEN block, an incidental mention of cov:ignore-stop must NOT close
+        // it — only a real anchored `// cov:ignore-stop` does (the -stop side of AC2).
+        // Under the old bare-`contains`, line 2 would spuriously close the block, then
+        // line 4's real `-stop` would `bail!` (no open block).
+        let report = "\
+/repo/a.rs:
+    1|      |    // cov:ignore-start
+    2|     0|    dropped() // mentions cov:ignore-stop but not as a marker
+    3|     0|    still_dropped()
+    4|      |    // cov:ignore-stop
+    5|     0|    measured()
+";
+        let files = parse_text_report(report, "/repo").unwrap();
+        let lines: Vec<u32> = files[0].lines.iter().map(|l| l.line).collect();
+        assert_eq!(lines, vec![5]); // block stayed open past the incidental mention
+    }
+
+    #[test]
+    fn comment_marker_is_matches_first_token_only() {
+        assert!(comment_marker_is(" cov:ignore", "cov:ignore"));
+        assert!(comment_marker_is(" cov:ignore trailing", "cov:ignore"));
+        assert!(comment_marker_is("cov:ignore", "cov:ignore")); // no leading space
+        assert!(!comment_marker_is(
+            " unlike the cov:ignore path",
+            "cov:ignore"
+        ));
+        assert!(comment_marker_is(" cov:ignore-start", "cov:ignore-start"));
+        assert!(!comment_marker_is(" cov:ignore-start", "cov:ignore")); // distinct token
+        assert!(comment_marker_is(" cov:ignore-stop", "cov:ignore-stop"));
+        assert!(!comment_marker_is(
+            " closes the cov:ignore-stop block",
+            "cov:ignore-stop"
+        ));
     }
 }
