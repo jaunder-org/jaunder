@@ -229,16 +229,15 @@ not by dependency. Any phase could land alone.
 
 ### A5 — Parity verification
 
-- [ ] **Nix path — byte parity:** `devtool csr-bundle` over the same **release**
-      `csr.wasm` produces `pkg/jaunder.{js,wasm}` **byte-identical** to today's
-      inline `csrWasmBundle` (same input, same wasm-bindgen — the achievable
-      invariant).
-- [ ] **Host path — functional parity only:** the host builds **debug**
-      `csr.wasm` (`cargo build -p csr`, no `--release`), so its bytes never
-      matched Nix's release output; assert it _hydrates_ and serves, not
-      byte-equality.
-- [ ] `/pkg/*` URLs + `SPA_SHELL` + #181/#234 guards still pass;
-      `devtool run -- cargo xtask validate` → green.
+- [x] **Nix path — byte parity:** built the new `devtool`-based `site` and the
+      old inline one from `origin/main`; `diff -r` of `pkg/` → **IDENTICAL**.
+- [x] **Host path — functional parity:** `cargo xtask build-csr` produces
+      `target/site/pkg/jaunder.{js,wasm}` (debug; 0 `csr_bg.wasm` refs in the
+      js). (Note: the `cargo xtask build-csr` wrapper needs a devShell whose
+      `devtool` post-dates A2 — a fresh checkout/CI rebuilds it; verified via
+      source-run.)
+- [x] `/pkg/*` URLs + `SPA_SHELL` + guards still pass; `cargo xtask validate` →
+      **green** (all `{sqlite,postgres}×{chromium,firefox}` combos + coverage).
 - **Commit** (`#236`, if fixups):
   `test(nix): confirm devtool csr-bundle byte-parity (Nix) + functional (host)`.
 
