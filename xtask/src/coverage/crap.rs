@@ -4,7 +4,9 @@
 //! — there is no committed manifest or history comparison.
 
 use anyhow::Result;
+use proc_macro2::Span;
 use serde::{Deserialize, Serialize};
+use syn::spanned::Spanned;
 
 #[derive(Debug, Deserialize)]
 struct Report {
@@ -34,19 +36,6 @@ const CRAP_THRESHOLD: f64 = 30.0;
 /// reason is not a valid override (the reason is required so the waiver is
 /// self-documenting and reviewable).
 const CRAP_ALLOW_MARKER: &str = "// crap:allow:";
-
-/// Lines scanned ABOVE cargo-crap's reported line when locating a function's
-/// span. That line is only *approximately* the signature: for
-/// `test-support/src/main.rs::main` it is the `// cov:ignore-start` comment (the
-/// `async fn` signature is one line below, the `#[tokio::main]` attribute one
-/// above); for `server/src/main.rs::run` it lands inside the doc comment, six
-/// lines above the signature. Scanning a window above absorbs the attribute /
-/// doc-comment / signature line that may carry the marker.
-const CRAP_SPAN_ABOVE: usize = 12;
-
-/// Fallback body length (in lines) when no opening brace is found at/below the
-/// reported line — keeps the span bounded rather than running to end-of-file.
-const CRAP_SPAN_FALLBACK: usize = 40;
 
 /// A function whose CRAP score exceeds [`CRAP_THRESHOLD`] with no in-source
 /// `crap:allow` override.
@@ -100,7 +89,7 @@ pub fn evaluate_crap(entries: &[Entry], allow: &AllowSet<'_>) -> Vec<CrapFail> {
         }
         let overridden = allow
             .source(&e.file)
-            .is_some_and(|src| allow_overrides(&src, e.line));
+            .is_some_and(|src| allow_overrides(&src, e.line, &e.file));
         if overridden {
             continue;
         }
@@ -114,20 +103,87 @@ pub fn evaluate_crap(entries: &[Entry], allow: &AllowSet<'_>) -> Vec<CrapFail> {
     fails
 }
 
-/// Does `src` carry a valid `crap:allow` override within the span of the function
-/// cargo-crap reported at (1-based) `line`? The span runs from a few lines above
-/// that line (to cover an attribute / doc comment / signature) through the
-/// brace-matched end of the function body — so it is robust to `line` pointing at
-/// any of those, not just the exact signature.
-fn allow_overrides(src: &str, line: i64) -> bool {
-    let lines: Vec<&str> = src.lines().collect();
-    if lines.is_empty() {
-        return false;
+/// 1-based `(start_line, end_line)` — attributes/doc through the closing brace — for
+/// every function in `src` (free fns, impl methods, trait default methods), including
+/// nested fns (the visitor recurses). Mirrors `exempt.rs`'s syn visitor. An
+/// over-threshold function is guaranteed to have a body, so it always yields a span.
+fn fn_spans(src: &str) -> syn::Result<Vec<(usize, usize)>> {
+    let file = syn::parse_file(src)?;
+    let mut out = Vec::new();
+    let mut v = FnSpanVisitor { out: &mut out };
+    syn::visit::visit_file(&mut v, &file);
+    Ok(out)
+}
+
+struct FnSpanVisitor<'a> {
+    out: &'a mut Vec<(usize, usize)>,
+}
+
+/// `(start_line, end_line)`: the min of the fn's attribute + signature span starts
+/// (so an outer doc/attribute header is included) through the block's closing brace.
+fn bounds(attrs: &[syn::Attribute], sig: Span, block: Span) -> (usize, usize) {
+    let start = attrs
+        .iter()
+        .map(|a| a.span().start().line)
+        .chain(std::iter::once(sig.start().line))
+        .min()
+        .unwrap_or_else(|| sig.start().line);
+    (start, block.end().line)
+}
+
+impl<'ast> syn::visit::Visit<'ast> for FnSpanVisitor<'_> {
+    fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
+        self.out
+            .push(bounds(&f.attrs, f.sig.span(), f.block.span()));
+        syn::visit::visit_item_fn(self, f);
     }
-    let anchor = (line.max(1) as usize - 1).min(lines.len() - 1); // 0-based
-    let start = anchor.saturating_sub(CRAP_SPAN_ABOVE);
-    let end = function_body_end(&lines, anchor);
-    lines[start..=end].iter().any(|l| is_allow_marker(l))
+    fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
+        self.out
+            .push(bounds(&f.attrs, f.sig.span(), f.block.span()));
+        syn::visit::visit_impl_item_fn(self, f);
+    }
+    fn visit_trait_item_fn(&mut self, f: &'ast syn::TraitItemFn) {
+        if let Some(block) = &f.default {
+            self.out.push(bounds(&f.attrs, f.sig.span(), block.span()));
+        }
+        syn::visit::visit_trait_item_fn(self, f);
+    }
+}
+
+/// The innermost (smallest) span containing 1-based `line`, or `None`.
+fn resolve_span(spans: &[(usize, usize)], line: usize) -> Option<(usize, usize)> {
+    spans
+        .iter()
+        .filter(|&&(s, e)| s <= line && line <= e)
+        .min_by_key(|&&(s, e)| e - s)
+        .copied()
+}
+
+/// Does `src` carry a valid `crap:allow` override for the function that contains
+/// cargo-crap's reported (1-based) `line`? The function is the innermost parsed span
+/// containing that line; the marker is searched only among lines that belong to *that*
+/// function (excluding the interior of any nested fn, so a nested marker cannot leak
+/// out). Fail-closed (no override) with a warning on a parse failure or a line no
+/// function span contains — neither happens for the project's own compiling sources.
+fn allow_overrides(src: &str, line: i64, file: &str) -> bool {
+    let line = line.max(1) as usize;
+    let spans = match fn_spans(src) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("xtask: coverage: crap:allow span skipped — {file} did not parse: {e}");
+            return false;
+        }
+    };
+    let Some((start, end)) = resolve_span(&spans, line) else {
+        eprintln!("xtask: coverage: crap:allow — no function span contains {file}:{line}");
+        return false;
+    };
+    let lines: Vec<&str> = src.lines().collect();
+    // Scan only lines whose own innermost span is this function — excludes nested-fn
+    // interiors, so a nested fn's marker cannot waive its enclosing fn (and vice versa).
+    (start..=end.min(lines.len()))
+        .filter(|&ln| resolve_span(&spans, ln) == Some((start, end)))
+        .any(|ln| is_allow_marker(lines[ln - 1]))
 }
 
 /// A line is a valid override marker iff it contains `// crap:allow:` followed by
@@ -137,33 +193,6 @@ fn is_allow_marker(line: &str) -> bool {
         Some(pos) => !line[pos + CRAP_ALLOW_MARKER.len()..].trim().is_empty(),
         None => false,
     }
-}
-
-/// The 0-based index of the line closing the function body that opens at or below
-/// `anchor`: find the first `{` at/after `anchor` and brace-match to its close.
-/// Falls back to a bounded window when there is no brace (defensive — a reported
-/// function should always have a body).
-fn function_body_end(lines: &[&str], anchor: usize) -> usize {
-    let n = lines.len();
-    let Some(open) = (anchor..n).find(|&i| lines[i].contains('{')) else {
-        return (anchor + CRAP_SPAN_FALLBACK).min(n - 1);
-    };
-    let mut depth = 0i32;
-    for (i, l) in lines.iter().enumerate().skip(open) {
-        for ch in l.chars() {
-            match ch {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return i;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    n - 1
 }
 
 #[cfg(test)]
@@ -269,5 +298,105 @@ async fn main() -> Result<()> {
             fails.is_empty(),
             "a marker within the function span overrides even when a few lines from the reported line"
         );
+    }
+
+    /// Run `evaluate_crap` over one over-threshold entry with `src` injected, and
+    /// return whether it was WAIVED (absent from the fail list).
+    fn waived(src: &'static str, line: i64) -> bool {
+        let entries = vec![ent("a.rs", "f", line, 99.0)];
+        let allow = AllowSet::new(move |_| Some(src.to_string()));
+        evaluate_crap(&entries, &allow).is_empty()
+    }
+
+    #[test]
+    fn no_bleed_from_preceding_function() {
+        // crap:allow belongs to g (above); it must NOT waive f. Within the old 12-line window.
+        let src = "\
+fn g() {
+    // crap:allow: for g only
+}
+fn f() {
+    body();
+}
+";
+        assert!(!waived(src, 4)); // f starts at line 4; g's marker must not reach it
+    }
+
+    #[test]
+    fn no_bleed_across_nested_functions() {
+        // marker in inner must not waive outer, and vice versa (innermost-containing rule).
+        let src = "\
+fn outer() {
+    fn inner() {
+        // crap:allow: inner only
+        x();
+    }
+    y();
+}
+";
+        assert!(!waived(src, 1)); // outer (line 1) not waived by inner's marker
+        assert!(waived(src, 2)); // inner (line 2) IS waived by its own marker
+
+        // Reverse direction (AC3b): a marker in OUTER's body must not waive INNER.
+        let src2 = "\
+fn outer() {
+    fn inner() {
+        x();
+    }
+    // crap:allow: outer only
+    y();
+}
+";
+        assert!(!waived(src2, 2)); // inner (line 2) not waived by outer's marker
+        assert!(waived(src2, 1)); // outer (line 1) waived by its own marker
+    }
+
+    #[test]
+    fn brace_in_string_or_comment_does_not_misbound() {
+        // A `}` in a string/comment must not end the span early; a marker AFTER the real
+        // body must not waive; syn spans make this automatic.
+        let src = "\
+fn f() {
+    let s = \"}\";
+    body();
+}
+// crap:allow: this is OUTSIDE f
+fn g() { z(); }
+";
+        assert!(!waived(src, 1)); // f not waived by the marker below its real close
+    }
+
+    #[test]
+    fn reported_line_inside_doc_header_resolves() {
+        // AC5(i): cargo-crap points into the doc-comment header (contained via #[doc]).
+        let src = "\
+/// doc line one
+/// doc line two
+/// doc line three
+fn run() {
+    // crap:allow: reason
+    a();
+}
+";
+        assert!(waived(src, 2)); // reported inside the doc header → contained → waived
+    }
+
+    #[test]
+    fn no_containing_span_is_fail_closed() {
+        // AC5(iii): a reported line outside every function span → no override (fails).
+        let src = "\
+const X: u32 = 1;
+fn f() { a(); }
+";
+        assert!(!waived(src, 1)); // line 1 is in no fn span → fail-closed
+    }
+
+    #[test]
+    fn resolve_span_picks_innermost() {
+        // outer [1..7], inner [2..5]; line 3 → inner.
+        let spans = vec![(1usize, 7usize), (2, 5)];
+        assert_eq!(resolve_span(&spans, 3), Some((2, 5)));
+        assert_eq!(resolve_span(&spans, 6), Some((1, 7)));
+        assert_eq!(resolve_span(&spans, 9), None);
     }
 }
