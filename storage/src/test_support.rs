@@ -614,11 +614,14 @@ pub async fn seed_user(state: &Arc<AppState>) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{bootstrap_url, seed_user, splice_db_name, Backend};
+    use super::{backends, bootstrap_url, seed_user, splice_db_name, Backend};
+    use rstest::*;
+    use rstest_reuse::*;
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn seed_user_creates_a_user() {
-        let env = Backend::Sqlite.setup().await;
+    async fn seed_user_creates_a_user(#[case] backend: Backend) {
+        let env = backend.setup().await;
         let id = seed_user(&env.state).await;
         assert!(id > 0);
     }
