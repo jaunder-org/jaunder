@@ -1,9 +1,4 @@
-import {
-  test,
-  expect,
-  slowBrowserTimeoutMs,
-  slowBrowserFirstNavigationTimeoutMs,
-} from "./fixtures";
+import { test, expect } from "./fixtures";
 import { createPerfProbe } from "./perf";
 import {
   BASE_URL,
@@ -12,12 +7,10 @@ import {
   waitForSelector,
   waitForHydration,
   login,
-  register,
 } from "./helpers";
 import { SEL } from "./selectors";
 
-test("register page shows form", async ({ page }, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 10_000));
+test("register page shows form", async ({ page }) => {
   await goto(page, "/register");
 
   await expect(page.locator("h1")).toHaveText("Register");
@@ -25,8 +18,7 @@ test("register page shows form", async ({ page }, testInfo) => {
   await expect(page.locator(SEL.password)).toBeVisible();
 });
 
-test("register with open policy succeeds", async ({ page }, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 15_000));
+test("register with open policy succeeds", async ({ page }) => {
   const username = `newuser${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
   await goto(page, "/register");
 
@@ -38,8 +30,7 @@ test("register with open policy succeeds", async ({ page }, testInfo) => {
   await expect(page.locator(SEL.error)).not.toBeVisible();
 });
 
-test("login page shows form", async ({ page }, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 10_000));
+test("login page shows form", async ({ page }) => {
   await goto(page, "/login");
 
   await expect(page.locator("h1")).toHaveText("Login");
@@ -51,7 +42,6 @@ test("login with valid credentials succeeds", async ({
   page,
   user,
 }, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 15_000));
   const perf = createPerfProbe(testInfo, "auth_login_success");
 
   await goto(page, "/login");
@@ -74,8 +64,7 @@ test("login with valid credentials succeeds", async ({
   await perf.log();
 });
 
-test("login with wrong password shows error", async ({ page }, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 12_000));
+test("login with wrong password shows error", async ({ page }) => {
   await goto(page, "/login");
 
   await page.fill(SEL.username, "testlogin");
@@ -86,8 +75,7 @@ test("login with wrong password shows error", async ({ page }, testInfo) => {
   await expect(page.locator(SEL.error)).toBeVisible();
 });
 
-test("logout page logs out", async ({ page, user }, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 12_000));
+test("logout page logs out", async ({ page, user }) => {
   await login(page, user.username, user.password);
 
   // Use the rendered logout link to avoid Firefox navigation abort races.
@@ -105,8 +93,7 @@ test("logout page logs out", async ({ page, user }, testInfo) => {
 test("sidebar reverts to signed-out state after logout", async ({
   page,
   user,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 15_000));
+}) => {
   await login(page, user.username, user.password);
   // a[href='/logout'] only renders when auth Suspense resolves, confirming the
   // user is shown.
@@ -124,10 +111,10 @@ test("sidebar reverts to signed-out state after logout", async ({
 
 test("sidebar shows only Home nav link when not logged in", async ({
   page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 10_000));
+  firstNav,
+}) => {
   await goto(page, "/", {
-    timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000),
+    timeout: firstNav,
   });
 
   // Wait for the nav Suspense to resolve.
@@ -143,11 +130,8 @@ test("sidebar shows only Home nav link when not logged in", async ({
 });
 
 test("sidebar footer shows Sign out link when logged in", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 10_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
+  registeredPage: page,
+}) => {
   // Wait for the authenticated nav to render from the marker (#181 — synchronous,
   // no Suspense swap).
   await waitForSelector(page, ".j-nav a[href='/drafts']");

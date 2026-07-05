@@ -9,12 +9,7 @@
  * `/login`). The strict empirical layout-shift assertion is the follow-up #202.
  */
 
-import {
-  test,
-  expect,
-  slowBrowserFirstNavigationTimeoutMs,
-  slowBrowserTimeoutMs,
-} from "./fixtures";
+import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
 import { BASE_URL, goto, register } from "./helpers";
@@ -39,11 +34,9 @@ async function createPublishedPostViaApi(
 
 test("owner: pre-paint auth marks html.authed and / stays the enhanced public timeline", async ({
   page,
+  firstNav,
 }, testInfo) => {
-  const username = await register(
-    page,
-    slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000),
-  );
+  const username = await register(page, firstNav);
   await createPublishedPostViaApi(page, "Owner Post");
 
   await goto(page, "/");
@@ -68,10 +61,8 @@ test("owner: pre-paint auth marks html.authed and / stays the enhanced public ti
 });
 
 test("owner: /app cockpit boots straight into the personalized feed", async ({
-  page,
-}, testInfo) => {
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
+  registeredPage: page,
+}) => {
   // Directly bookmarkable (D6): a direct hit to /app boots into the feed + composer
   // with zero intermediate clicks (pre-paint html.authed → the client boots authed).
   await goto(page, "/app");
@@ -82,28 +73,29 @@ test("owner: /app cockpit boots straight into the personalized feed", async ({
 
 test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app", async ({
   page,
-}, testInfo) => {
+  firstNav,
+}) => {
   // D7 / acceptance-#3: the redirect-pref read path exists in PREPAINT_SCRIPT with a
   // safe stay-default (nothing writes the key yet). Writing it exercises that path:
   // an authed owner (marker set) with the key = "app" is redirected off / to /app
   // before first paint. Requires BOTH the marker and the key.
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
+  await register(page, firstNav);
   await page.evaluate(() =>
     localStorage.setItem("jaunder_home_redirect", "app"),
   );
 
   await page.goto(`${BASE_URL}/`, { waitUntil: "commit" });
   await page.waitForURL(/\/app$/, {
-    timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000),
+    timeout: firstNav,
   });
 });
 
-test("anonymous: /app bounces to /login", async ({ page }, testInfo) => {
+test("anonymous: /app bounces to /login", async ({ page, firstNav }) => {
   // No session and no marker → CockpitPage's current_user() gate resolves anon and
   // redirects to /login (D6).
   await page.goto(`${BASE_URL}/app`, { waitUntil: "domcontentloaded" });
   await page.waitForURL(/\/login$/, {
-    timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000),
+    timeout: firstNav,
   });
 });
 

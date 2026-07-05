@@ -1,10 +1,7 @@
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { goto, register, click, waitForHydration, BASE_URL } from "./helpers";
-import {
-  slowBrowserTimeoutMs,
-  slowBrowserFirstNavigationTimeoutMs,
-} from "./fixtures";
+import { setTestBudget, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
 import { readPingLines, waitForPingMatching } from "./websub";
 import { SEL } from "./selectors";
 
@@ -64,7 +61,7 @@ async function fetchFeedContaining(
 test("auto-discovery links are present on site home and user timeline, and resolve", async ({
   page,
 }, info) => {
-  info.setTimeout(slowBrowserTimeoutMs(info, 60_000));
+  setTestBudget(60_000);
   const username = await register(
     page,
     slowBrowserFirstNavigationTimeoutMs(info, 30_000),
@@ -113,7 +110,7 @@ test("auto-discovery links are present on site home and user timeline, and resol
 test("per-user feeds contain only that user's posts, newest first, in all formats", async ({
   page,
 }, info) => {
-  info.setTimeout(slowBrowserTimeoutMs(info, 150_000));
+  setTestBudget(150_000);
 
   const alice = await register(
     page,
@@ -175,7 +172,7 @@ test("per-user feeds contain only that user's posts, newest first, in all format
 test("publishing and editing a post each trigger a WebSub hub ping", async ({
   page,
 }, info) => {
-  info.setTimeout(slowBrowserTimeoutMs(info, 90_000));
+  setTestBudget(90_000);
 
   const username = await register(
     page,
@@ -218,7 +215,7 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
 test("feed honors If-None-Match with a 304 and empty body", async ({
   page,
 }, info) => {
-  info.setTimeout(slowBrowserTimeoutMs(info, 60_000));
+  setTestBudget(60_000);
 
   const username = await register(
     page,
@@ -244,7 +241,7 @@ test("feed honors If-None-Match with a 304 and empty body", async ({
 test("user with no posts serves a valid empty feed in each format", async ({
   page,
 }, info) => {
-  info.setTimeout(slowBrowserTimeoutMs(info, 60_000));
+  setTestBudget(60_000);
 
   const username = await register(
     page,

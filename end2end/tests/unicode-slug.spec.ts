@@ -1,5 +1,5 @@
-import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
-import { goto, click, waitForSelector, register } from "./helpers";
+import { test, expect } from "./fixtures";
+import { goto, click, waitForSelector } from "./helpers";
 import { SEL } from "./selectors";
 
 // Acceptance test for issue #72: slug generation is Unicode-preserving and
@@ -8,11 +8,9 @@ import { SEL } from "./selectors";
 // run against SQLite and Postgres (the e2e-sqlite / e2e-postgres VMs).
 
 test("a Unicode-titled post is reachable at its permalink", async ({
-  page,
-}, testInfo) => {
+  registeredPage: page,
+}) => {
   test.slow();
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
   await goto(page, "/posts/new");
   await page.fill(SEL.postBody, "# Café 日本語\n\nunicode body");
   await click(page, SEL.publishButton("true"));
@@ -36,11 +34,9 @@ test("a Unicode-titled post is reachable at its permalink", async ({
 });
 
 test("an emoji-only title falls back to the 'post' slug and is reachable", async ({
-  page,
-}, testInfo) => {
+  registeredPage: page,
+}) => {
   test.slow();
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
   await goto(page, "/posts/new");
   await page.fill(SEL.postBody, "# 🚀🎉\n\nemoji body");
   await click(page, SEL.publishButton("true"));

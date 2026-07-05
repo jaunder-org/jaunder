@@ -1,6 +1,7 @@
 import {
   test,
   expect,
+  setTestBudget,
   slowBrowserFirstNavigationTimeoutMs,
   slowBrowserTimeoutMs,
 } from "./fixtures";
@@ -16,10 +17,8 @@ const HOME_FEED_SELF_COUNT = 51;
 const HOME_FEED_OTHER_COUNT = 2;
 
 test("authenticated user can create a post through the UI", async ({
-  page,
-}, testInfo) => {
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
+  registeredPage: page,
+}) => {
   await goto(page, "/posts/new");
 
   await expect(page.locator(SEL.topbarHeading)).toHaveText("New post");
@@ -34,10 +33,8 @@ test("authenticated user can create a post through the UI", async ({
 });
 
 test("authenticated user can create a post with a summary", async ({
-  page,
-}, testInfo) => {
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
+  registeredPage: page,
+}) => {
   await goto(page, "/posts/new");
 
   await expect(page.locator(SEL.topbarHeading)).toHaveText("New post");
@@ -59,10 +56,8 @@ test("authenticated user can create a post with a summary", async ({
 });
 
 test("authenticated user can save a draft through the UI", async ({
-  page,
-}, testInfo) => {
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
+  registeredPage: page,
+}) => {
   await goto(page, "/posts/new");
 
   await page.fill(SEL.postBody, "*draft*");
@@ -75,10 +70,10 @@ test("authenticated user can save a draft through the UI", async ({
   await expect(page.locator(SEL.saveSummary)).toContainText("Slug: draft-slug");
 });
 
-test("published post renders at permalink", async ({ page }, testInfo) => {
+test("published post renders at permalink", async ({
+  registeredPage: page,
+}) => {
   test.slow();
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
   await goto(page, "/posts/new");
   await page.fill(SEL.postBody, "# Permalink Story\n\n**hello permalink**");
   await click(page, SEL.publishButton("true"));
@@ -110,10 +105,10 @@ test("published post renders at permalink", async ({ page }, testInfo) => {
   await expect(page.locator(".j-post-body")).toContainText("hello permalink");
 });
 
-test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
+test("authenticated user can edit a draft post", async ({
+  registeredPage: page,
+}) => {
   test.slow();
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
   // Create a draft; title embedded as # heading
   await goto(page, "/posts/new");
   await page.fill(SEL.postBody, "# Original Draft\n\noriginal body");
@@ -144,11 +139,9 @@ test("authenticated user can edit a draft post", async ({ page }, testInfo) => {
 });
 
 test("editing a published post freezes the slug", async ({
-  page,
-}, testInfo) => {
+  registeredPage: page,
+}) => {
   test.slow();
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
   // Create and publish a post; title embedded as # heading
   await goto(page, "/posts/new");
   await page.fill(SEL.postBody, "# Published Article\n\noriginal content");
@@ -184,7 +177,6 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   page,
   context,
 }, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
   const firstNavigationTimeoutMs = slowBrowserFirstNavigationTimeoutMs(
     testInfo,
     12_000,
@@ -259,15 +251,11 @@ test("draft lifecycle: create, view, edit, and publish", async ({
 
 test("per-user timeline lists published posts with pagination", async ({
   page,
+  firstNav,
 }, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
   const perf = createPerfProbe(testInfo, "user_timeline_pagination");
-  const firstNavigationTimeoutMs = slowBrowserFirstNavigationTimeoutMs(
-    testInfo,
-    10_000,
-  );
 
-  const username = await register(page, firstNavigationTimeoutMs);
+  const username = await register(page, firstNav);
 
   await perf.timed("seed_posts", async () => {
     seedPostsViaTool(
@@ -277,7 +265,7 @@ test("per-user timeline lists published posts with pagination", async ({
     );
   });
 
-  await goto(page, `/~${username}`, { timeout: firstNavigationTimeoutMs });
+  await goto(page, `/~${username}`, { timeout: firstNav });
 
   await expect(page.locator("h1", { hasText: /^Posts by / })).toContainText(
     `Posts by ${username}`,
@@ -306,29 +294,25 @@ test("per-user timeline lists published posts with pagination", async ({
 test("home page shows local timeline for unauthenticated users", async ({
   page,
   browser,
+  firstNav,
 }, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
   const perf = createPerfProbe(testInfo, "home_local_timeline");
-  const firstNavigationTimeoutMs = slowBrowserFirstNavigationTimeoutMs(
-    testInfo,
-    10_000,
-  );
 
   await perf.timed("seed_author_one", async () => {
-    const u1 = await register(page, firstNavigationTimeoutMs);
+    const u1 = await register(page, firstNav);
     seedPostsViaTool(u1, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author One");
   });
 
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
   await perf.timed("seed_author_two", async () => {
-    const u2 = await register(secondPage, firstNavigationTimeoutMs);
+    const u2 = await register(secondPage, firstNav);
     seedPostsViaTool(u2, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author Two");
   });
 
   const guestContext = await browser.newContext();
   const guestPage = await guestContext.newPage();
-  await goto(guestPage, "/", { timeout: firstNavigationTimeoutMs });
+  await goto(guestPage, "/", { timeout: firstNav });
 
   // Site title is still the seeded value: admin-site (the only mutator) runs in
   // the serial Playwright project and never overlaps this test.
@@ -365,27 +349,23 @@ test("home page shows local timeline for unauthenticated users", async ({
 test("cockpit /app shows the authenticated home feed with pagination", async ({
   page,
   browser,
+  firstNav,
 }, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
   const perf = createPerfProbe(testInfo, "home_authenticated_feed");
-  const firstNavigationTimeoutMs = slowBrowserFirstNavigationTimeoutMs(
-    testInfo,
-    10_000,
-  );
 
   await perf.timed("seed_self", async () => {
-    const me = await register(page, firstNavigationTimeoutMs);
+    const me = await register(page, firstNav);
     seedPostsViaTool(me, HOME_FEED_SELF_COUNT, "Home Feed Mine");
   });
 
   const secondContext = await browser.newContext();
   const secondPage = await secondContext.newPage();
   await perf.timed("seed_other", async () => {
-    const other = await register(secondPage, firstNavigationTimeoutMs);
+    const other = await register(secondPage, firstNav);
     seedPostsViaTool(other, HOME_FEED_OTHER_COUNT, "Home Feed Other");
   });
 
-  await goto(page, "/app", { timeout: firstNavigationTimeoutMs });
+  await goto(page, "/app", { timeout: firstNav });
 
   await expect(page.locator(SEL.topbarHeading)).toHaveText("Home");
   await expect(page.locator("article.j-post")).toHaveCount(TIMELINE_PAGE_SIZE);
@@ -410,11 +390,9 @@ test("cockpit /app shows the authenticated home feed with pagination", async ({
 });
 
 test("authenticated user can delete a published post", async ({
-  page,
-}, testInfo) => {
+  registeredPage: page,
+}) => {
   test.slow();
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
   // Create a published post; title embedded as # heading (title input is removed from UI)
   await goto(page, "/posts/new");
   await page.fill(SEL.postBody, "# Post To Delete\n\nthis will be deleted");
@@ -451,11 +429,8 @@ test("authenticated user can delete a published post", async ({
 });
 
 test("inline composer: published post appears in timeline without page reload", async ({
-  page,
+  registeredPage: page,
 }, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
   // The /app cockpit must already show the feed with the composer.
   await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
@@ -473,10 +448,8 @@ test("inline composer: published post appears in timeline without page reload", 
 });
 
 test("inline composer: plain body publishes titleless note", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
+  registeredPage: page,
+}) => {
   await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
@@ -490,10 +463,8 @@ test("inline composer: plain body publishes titleless note", async ({
 });
 
 test("inline composer: markdown heading becomes article title", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
+  registeredPage: page,
+}) => {
   await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
@@ -512,10 +483,8 @@ test("inline composer: markdown heading becomes article title", async ({
 });
 
 test("inline composer: publish flash is a link to the post permalink", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
+  registeredPage: page,
+}) => {
   await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
@@ -531,10 +500,8 @@ test("inline composer: publish flash is a link to the post permalink", async ({
 });
 
 test("inline composer: draft flash is a link to the draft preview URL", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
+  registeredPage: page,
+}) => {
   await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
@@ -549,10 +516,8 @@ test("inline composer: draft flash is a link to the draft preview URL", async ({
 });
 
 test("inline composer: flash clears when user starts typing", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 20_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
+  registeredPage: page,
+}) => {
   await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
@@ -566,10 +531,8 @@ test("inline composer: flash clears when user starts typing", async ({
 });
 
 test("inline composer: format toggle switches active button", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 10_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
+  registeredPage: page,
+}) => {
   await goto(page, "/app");
   await waitForSelector(page, ".j-composer");
 
@@ -586,11 +549,8 @@ test("inline composer: format toggle switches active button", async ({
 });
 
 test("create post with tags via UI: tags persist and appear on the post", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
+  registeredPage: page,
+}) => {
   await goto(page, "/posts/new");
 
   await page.fill(SEL.postBody, "# Tagged Post\n\ncontent");
@@ -620,11 +580,8 @@ test("create post with tags via UI: tags persist and appear on the post", async 
 });
 
 test("tag chip on permalink navigates to site tag listing", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
+  registeredPage: page,
+}) => {
   // Create a published post with two tags via the API
   const res = await page.request.post(`${BASE_URL}/api/create_post`, {
     data: {
@@ -652,11 +609,9 @@ test("tag chip on permalink navigates to site tag listing", async ({
 });
 
 test("editing a post updates tag chips and tag listing pages", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 60_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
+  registeredPage: page,
+}) => {
+  setTestBudget(60_000);
   // Use tags unique to this test so cross-test pollution can't affect the
   // /tags/:tag listing checks below.
   const res = await page.request.post(`${BASE_URL}/api/create_post`, {
@@ -726,11 +681,8 @@ test("editing a post updates tag chips and tag listing pages", async ({
 });
 
 test("TagInput autocomplete suggests existing tags", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
+  registeredPage: page,
+}) => {
   // Seed the tag corpus with a known tag
   const res = await page.request.post(`${BASE_URL}/api/create_post`, {
     data: {
@@ -757,11 +709,8 @@ test("TagInput autocomplete suggests existing tags", async ({
 });
 
 test("TagInput: Backspace on empty input removes last chip", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
+  registeredPage: page,
+}) => {
   await goto(page, "/posts/new");
 
   // Add two chips
@@ -783,11 +732,8 @@ test("TagInput: Backspace on empty input removes last chip", async ({
 });
 
 test("TagInput: keyboard navigation selects autocomplete item", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
+  registeredPage: page,
+}) => {
   // Seed a known tag
   const res = await page.request.post(`${BASE_URL}/api/create_post`, {
     data: {
@@ -816,11 +762,8 @@ test("TagInput: keyboard navigation selects autocomplete item", async ({
 });
 
 test("TagInput: Escape dismisses autocomplete without adding a chip", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
+  registeredPage: page,
+}) => {
   const res = await page.request.post(`${BASE_URL}/api/create_post`, {
     data: {
       body: "seed post",
@@ -843,11 +786,8 @@ test("TagInput: Escape dismisses autocomplete without adding a chip", async ({
 });
 
 test("TagInput: invalid tag text shows an error", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
+  registeredPage: page,
+}) => {
   await goto(page, "/posts/new");
   // "bad tag" has a space — invalid after normalize
   await page.fill(".j-tag-text", "bad tag");
@@ -860,11 +800,9 @@ test("TagInput: invalid tag text shows an error", async ({
 });
 
 test("authenticated user can delete a draft from the drafts page", async ({
-  page,
-}, testInfo) => {
+  registeredPage: page,
+}) => {
   test.slow();
-  await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
-
   // Create a draft; title embedded as # heading (title input is removed from UI)
   await goto(page, "/posts/new");
   await page.fill(SEL.postBody, "# Draft To Delete\n\ndraft content");

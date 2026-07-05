@@ -1,9 +1,4 @@
-import {
-  test,
-  expect,
-  slowBrowserFirstNavigationTimeoutMs,
-  slowBrowserTimeoutMs,
-} from "./fixtures";
+import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
 import { BASE_URL, goto, register, click, waitForSelector } from "./helpers";
 
 test.describe("Media upload and serving", () => {
@@ -54,7 +49,6 @@ test.describe("Media upload and serving", () => {
   test("media nav link appears for authenticated users", async ({
     page,
   }, testInfo) => {
-    test.setTimeout(slowBrowserTimeoutMs(testInfo, 10_000));
     await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
     await waitForSelector(page, "a[href='/media']");
   });
@@ -62,7 +56,6 @@ test.describe("Media upload and serving", () => {
   test("media manage page is reachable via nav link", async ({
     page,
   }, testInfo) => {
-    test.setTimeout(slowBrowserTimeoutMs(testInfo, 10_000));
     await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
     await click(page, "a[href='/media']");
     await waitForSelector(page, "button:has-text('Attach media')");
@@ -71,7 +64,6 @@ test.describe("Media upload and serving", () => {
   test("upload widget on create-post page uploads file and shows URL", async ({
     page,
   }, testInfo) => {
-    test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
     await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
     await goto(page, "/posts/new");
 
@@ -94,7 +86,6 @@ test.describe("Media upload and serving", () => {
   test("upload widget on the /app cockpit uploads file and shows URL", async ({
     page,
   }, testInfo) => {
-    test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
     await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
     // The /app cockpit shows the InlineComposer (#181), which includes MediaPanel.
     await goto(page, "/app");

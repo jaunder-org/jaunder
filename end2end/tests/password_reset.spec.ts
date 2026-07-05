@@ -1,4 +1,4 @@
-import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
+import { test, expect } from "./fixtures";
 import { goto, click, waitForSelector, waitForHydration } from "./helpers";
 import { SEL } from "./selectors";
 
@@ -7,13 +7,7 @@ test("password reset flow completes successfully", async ({
   page,
   verifiedUser,
   mailbox,
-}, testInfo) => {
-  // Larger budget than the old seeded-account flow: `verifiedUser` self-
-  // provisions a verified account out-of-band (register → login → set-email →
-  // verify) before this body's forgot → reset → login-twice flow — roughly
-  // double the page ops of the original pre-seeded test.
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 30_000));
-
+}) => {
   // Request a password reset for this test's own verified user.
   await goto(page, "/forgot-password");
   await page.fill(SEL.username, verifiedUser.username);
@@ -60,8 +54,7 @@ test("password reset flow completes successfully", async ({
 // M3.11.14: visiting /reset-password with an invalid token shows an error.
 test("visiting reset-password with invalid token shows error", async ({
   page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 12_000));
+}) => {
   await goto(page, "/reset-password?token=totally_invalid_token");
   await page.fill('input[name="new_password"]', "somepassword123");
   await click(page, SEL.submit);
@@ -74,8 +67,7 @@ test("visiting reset-password with invalid token shows error", async ({
 test("forgot-password for user without verified email shows contact operator error", async ({
   page,
   user,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 12_000));
+}) => {
   await goto(page, "/forgot-password");
   // A freshly-registered user exists but has no verified email.
   await page.fill(SEL.username, user.username);

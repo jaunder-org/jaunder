@@ -256,7 +256,12 @@ Task 9 gates (Task 4 builds on this surface).
   variable, not `testInfo`).
 - `cargo xtask e2e-local` full chromium pass green.
 
-**Done when:** `[ ]` all timeout sites migrated per the greps, suite green.
+**Done when:** `[x]` all timeout sites migrated per the greps (38 setTimeout
+drops, 13 setTestBudget, 40 firstNav substitutions, 27 registeredPage
+adoptions), tsc green. Runtime validation via `cargo xtask e2e sqlite chromium`
+(checkpoint)
+
+- Task 9 full `validate`.
 
 ---
 

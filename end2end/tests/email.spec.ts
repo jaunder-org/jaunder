@@ -1,4 +1,4 @@
-import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
+import { test, expect } from "./fixtures";
 import { goto, login } from "./helpers";
 import { SEL } from "./selectors";
 
@@ -7,9 +7,7 @@ test("email verification flow completes successfully", async ({
   page,
   user,
   mailbox,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 15_000));
-
+}) => {
   await login(page, user.username, user.password);
 
   // Navigate to email settings and submit this user's unique address.
@@ -39,8 +37,7 @@ test("email verification flow completes successfully", async ({
 // M3.10.12: Invalid token shows an error.
 test("visiting verify-email with invalid token shows error", async ({
   page,
-}, testInfo) => {
-  test.setTimeout(slowBrowserTimeoutMs(testInfo, 10_000));
+}) => {
   await goto(page, "/verify-email?token=totally_invalid_token");
   await expect(page.locator(SEL.error)).toBeVisible();
 });
