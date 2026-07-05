@@ -1,6 +1,5 @@
 use crate::helpers::{
-    postgres_bootstrap_url, postgres_only, postgres_testing_enabled, recorded_postgres_url,
-    unique_postgres_url, Backend,
+    postgres_bootstrap_url, postgres_only, recorded_postgres_url, unique_postgres_url, Backend,
 };
 use sqlx::Connection;
 
@@ -43,9 +42,6 @@ async fn database_exists(db_name: &str) -> bool {
 #[tokio::test]
 async fn per_test_database_is_dropped_on_teardown(#[case] backend: Backend) {
     let _ = backend;
-    if !postgres_testing_enabled() {
-        return;
-    }
 
     let env = Backend::Postgres.setup().await;
     let db_name = db_name_from_url(&recorded_postgres_url(&env.base));
@@ -69,9 +65,6 @@ async fn per_test_database_is_dropped_on_teardown(#[case] backend: Backend) {
 #[tokio::test]
 async fn unique_postgres_database_is_dropped_on_guard_drop(#[case] backend: Backend) {
     let _ = backend;
-    if !postgres_testing_enabled() {
-        return;
-    }
 
     let (options, guard) = unique_postgres_url().await;
     let db_name = db_name_from_url(&options.to_string());

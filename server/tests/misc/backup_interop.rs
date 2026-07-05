@@ -21,9 +21,7 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use crate::helpers::{
-    postgres_only, postgres_testing_enabled, unique_postgres_url, Backend, PostgresDbGuard,
-};
+use crate::helpers::{postgres_only, unique_postgres_url, Backend, PostgresDbGuard};
 
 fn sqlite_storage_args(base: &TempDir, name: &str) -> StorageArgs {
     StorageArgs {
@@ -141,9 +139,6 @@ async fn assert_backup_fixture_restored(args: &StorageArgs, post_id: i64) {
 #[tokio::test]
 async fn sqlite_backup_restores_into_postgres(#[case] backend: Backend) {
     let _ = backend;
-    if !postgres_testing_enabled() {
-        return;
-    }
 
     let base = TempDir::new().expect("temp dir");
     let source_args = sqlite_storage_args(&base, "sqlite-source");
@@ -178,9 +173,6 @@ async fn sqlite_backup_restores_into_postgres(#[case] backend: Backend) {
 #[tokio::test]
 async fn postgres_backup_restores_into_sqlite(#[case] backend: Backend) {
     let _ = backend;
-    if !postgres_testing_enabled() {
-        return;
-    }
 
     let base = TempDir::new().expect("temp dir");
     let (source_args, _pg_source) = postgres_storage_args(&base, "postgres-source").await;
