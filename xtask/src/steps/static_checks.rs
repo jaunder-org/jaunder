@@ -30,6 +30,10 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
     };
 
     vec![
+        // The migrated (non-compiling) checks — keep this set in sync with
+        // `devtool::check::ALL` (tools/devtool/src/check.rs), which drives the nix
+        // `static-checks` derivation's `devtool check --all`. They are interleaved with
+        // the native compiling checks below in the host gate's order.
         devtool_check("fmt", mode),
         devtool_check("leptosfmt", mode),
         devtool_check("prettier", mode),

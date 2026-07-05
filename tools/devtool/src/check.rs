@@ -10,6 +10,10 @@ use std::process::Command;
 use anyhow::{bail, Context, Result};
 
 /// The 7 non-compiling static checks devtool owns, in the host gate's order.
+///
+/// Kept in sync with the `devtool_check(<name>)` calls in
+/// `xtask/src/steps/static_checks.rs::specs()` (the host mirror — it can't import this
+/// list, being a separate host-only workspace that reaches devtool only over the CLI).
 pub const ALL: &[&str] = &[
     "fmt",
     "leptosfmt",
@@ -25,22 +29,22 @@ pub const ALL: &[&str] = &[
 /// `ert`/`tsc` have no autofix and ignore it. Args are verbatim from the former
 /// `xtask::steps::static_checks::specs` — this is now their single source of truth.
 fn spec(name: &str, fix: bool) -> Result<(&'static str, Vec<String>)> {
-    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let owned = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     Ok(match name {
         "fmt" => (
             "cargo",
             if fix {
-                s(&["fmt"])
+                owned(&["fmt"])
             } else {
-                s(&["fmt", "--check"])
+                owned(&["fmt", "--check"])
             },
         ),
         "leptosfmt" => (
             "leptosfmt",
             if fix {
-                s(&["-x", ".direnv", "-x", ".git", "-x", "target", "**/*.rs"])
+                owned(&["-x", ".direnv", "-x", ".git", "-x", "target", "**/*.rs"])
             } else {
-                s(&[
+                owned(&[
                     "-x", ".direnv", "-x", ".git", "-x", "target", "--check", "**/*.rs",
                 ])
             },
@@ -48,16 +52,16 @@ fn spec(name: &str, fix: bool) -> Result<(&'static str, Vec<String>)> {
         "prettier" => (
             "prettier",
             if fix {
-                s(&["-w", "end2end", "**/*.md"])
+                owned(&["-w", "end2end", "**/*.md"])
             } else {
-                s(&["--check", "end2end", "**/*.md"])
+                owned(&["--check", "end2end", "**/*.md"])
             },
         ),
-        "tsc" => ("tsc", s(&["--noEmit", "-p", "end2end/tsconfig.json"])),
+        "tsc" => ("tsc", owned(&["--noEmit", "-p", "end2end/tsconfig.json"])),
         "elisp-fmt" => (
             "emacs",
             if fix {
-                s(&[
+                owned(&[
                     "--batch",
                     "-Q",
                     "-l",
@@ -66,7 +70,7 @@ fn spec(name: &str, fix: bool) -> Result<(&'static str, Vec<String>)> {
                     "jaunder-fmt-fix",
                 ])
             } else {
-                s(&[
+                owned(&[
                     "--batch",
                     "-Q",
                     "-l",
@@ -78,14 +82,14 @@ fn spec(name: &str, fix: bool) -> Result<(&'static str, Vec<String>)> {
         ),
         "ert" => (
             "emacs",
-            s(&["--batch", "-Q", "-l", "elisp/scripts/run-tests.el"]),
+            owned(&["--batch", "-Q", "-l", "elisp/scripts/run-tests.el"]),
         ),
         "tools-fmt" => (
             "cargo",
             if fix {
-                s(&["fmt", "--manifest-path", "tools/Cargo.toml", "--all"])
+                owned(&["fmt", "--manifest-path", "tools/Cargo.toml", "--all"])
             } else {
-                s(&[
+                owned(&[
                     "fmt",
                     "--manifest-path",
                     "tools/Cargo.toml",
