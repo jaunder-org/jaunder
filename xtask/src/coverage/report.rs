@@ -400,6 +400,25 @@ mod tests {
     }
 
     #[test]
+    fn block_stop_is_anchored_not_incidental() {
+        // Inside an OPEN block, an incidental mention of cov:ignore-stop must NOT close
+        // it — only a real anchored `// cov:ignore-stop` does (the -stop side of AC2).
+        // Under the old bare-`contains`, line 2 would spuriously close the block, then
+        // line 4's real `-stop` would `bail!` (no open block).
+        let report = "\
+/repo/a.rs:
+    1|      |    // cov:ignore-start
+    2|     0|    dropped() // mentions cov:ignore-stop but not as a marker
+    3|     0|    still_dropped()
+    4|      |    // cov:ignore-stop
+    5|     0|    measured()
+";
+        let files = parse_text_report(report, "/repo").unwrap();
+        let lines: Vec<u32> = files[0].lines.iter().map(|l| l.line).collect();
+        assert_eq!(lines, vec![5]); // block stayed open past the incidental mention
+    }
+
+    #[test]
     fn comment_marker_is_matches_first_token_only() {
         assert!(comment_marker_is(" cov:ignore", "cov:ignore"));
         assert!(comment_marker_is(" cov:ignore trailing", "cov:ignore"));
@@ -410,5 +429,10 @@ mod tests {
         ));
         assert!(comment_marker_is(" cov:ignore-start", "cov:ignore-start"));
         assert!(!comment_marker_is(" cov:ignore-start", "cov:ignore")); // distinct token
+        assert!(comment_marker_is(" cov:ignore-stop", "cov:ignore-stop"));
+        assert!(!comment_marker_is(
+            " closes the cov:ignore-stop block",
+            "cov:ignore-stop"
+        ));
     }
 }

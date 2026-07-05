@@ -127,6 +127,8 @@ fn bounds(attrs: &[syn::Attribute], sig: Span, block: Span) -> (usize, usize) {
         .map(|a| a.span().start().line)
         .chain(std::iter::once(sig.start().line))
         .min()
+        // The chained `sig.start().line` guarantees a non-empty iterator, so `min`
+        // is always `Some`; the fallback is unreachable but keeps this panic-free.
         .unwrap_or_else(|| sig.start().line);
     (start, block.end().line)
 }
