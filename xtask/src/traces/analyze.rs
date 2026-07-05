@@ -115,20 +115,6 @@ pub struct Analysis {
     pub resource_initiators: Vec<HotspotRow>,
     /// Slow resource assets, `max_ms` desc. Section 7b.
     pub resource_assets: Vec<AssetRow>,
-    /// Navigation commit→hydration by cache warmth, `avg_ms` desc. All rows. Section 5.
-    pub cache_warmth: Vec<CacheWarmthRow>,
-    /// Per-test hydration budget vs API budget, `hydration_ms` desc. Section 8.
-    pub hydration_vs_api: Vec<HydrationVsApiRow>,
-    /// Navigation phase component samples, `ms` desc. Section 9a.
-    pub nav_phase_component_samples: Vec<PhaseSampleRow>,
-    /// Navigation phase component targets, `max_ms` desc. Section 9b.
-    pub nav_phase_component_targets: Vec<PhaseTargetRow>,
-    /// Navigation phase components by project, `avg_ms` desc. Section 9c.
-    pub nav_phase_component_by_project: Vec<PhaseProjectRow>,
-    /// Hydration runtime component samples, `ms` desc. Section 10a.
-    pub hydration_runtime_samples: Vec<RuntimeSampleRow>,
-    /// Hydration runtime components by project, `avg_ms` desc. Section 10b.
-    pub hydration_runtime_by_project: Vec<RuntimeProjectRow>,
 }
 
 /// One row of the "slowest spans" table (Node `printSlowest` :189-214).
@@ -216,78 +202,6 @@ pub struct AssetRow {
     pub total_ms: f64,
 }
 
-/// Navigation commit→hydration by cache warmth (Node `printE2eNavigationCacheWarmth`).
-#[derive(Debug, Clone)]
-pub struct CacheWarmthRow {
-    pub cache_warmth: String,
-    pub project: String,
-    pub count: usize,
-    pub avg_ms: f64,
-    pub max_ms: f64,
-}
-
-/// A test's navigation-hydration budget vs API budget (Node `printE2eHydrationVsApi`).
-#[derive(Debug, Clone)]
-pub struct HydrationVsApiRow {
-    pub hydration_ms: f64,
-    pub api_ms: f64,
-    pub ratio: Option<f64>,
-    pub project: String,
-    pub trace_id: String,
-    pub test: String,
-}
-
-/// A single navigation-phase-component sample (Node phase-component `samples`).
-#[derive(Debug, Clone)]
-pub struct PhaseSampleRow {
-    pub phase: String,
-    pub project: String,
-    pub ms: f64,
-    pub trace_id: String,
-    pub target: String,
-}
-
-/// Navigation phase component aggregated by (phase, project, target).
-#[derive(Debug, Clone)]
-pub struct PhaseTargetRow {
-    pub phase: String,
-    pub project: String,
-    pub target: String,
-    pub count: usize,
-    pub avg_ms: f64,
-    pub max_ms: f64,
-}
-
-/// Navigation phase component aggregated by (phase, project).
-#[derive(Debug, Clone)]
-pub struct PhaseProjectRow {
-    pub phase: String,
-    pub project: String,
-    pub count: usize,
-    pub avg_ms: f64,
-    pub max_ms: f64,
-}
-
-/// A single hydration-runtime-component sample (Node `printHydrationRuntimeComponents`).
-#[derive(Debug, Clone)]
-pub struct RuntimeSampleRow {
-    pub component: String,
-    pub project: String,
-    pub ms: f64,
-    pub trace_id: String,
-    pub test: String,
-}
-
-/// Hydration runtime component aggregated by (component, project).
-#[derive(Debug, Clone)]
-pub struct RuntimeProjectRow {
-    pub component: String,
-    pub project: String,
-    pub count: usize,
-    pub avg_ms: f64,
-    pub max_ms: f64,
-}
-
 /// Sort a `f64`-keyed vector descending, treating the key as a total order (NaN
 /// sinks to the end). Used by every ranked section.
 fn sort_desc_by<T>(rows: &mut [T], key: impl Fn(&T) -> f64) {
@@ -336,22 +250,18 @@ fn action_hotspot_rows(spans: &[Span]) -> Vec<HotspotRow> {
 
 /// The navigation phase fields aggregated as `navigation.<label>` (Node `addPhase`
 /// set, :373-387).
-const NAV_PHASES: [(&str, &str); 9] = [
+const NAV_PHASES: [(&str, &str); 5] = [
     ("navigation.total", "totalMs"),
     ("navigation.request", "requestMs"),
     (
         "navigation.commit_to_domcontentloaded",
         "commitToDomContentLoadedMs",
     ),
-    ("navigation.commit_to_hydration", "commitToHydrationMs"),
+    ("navigation.commit_to_mount", "commitToMountMs"),
     (
         "navigation.domcontentloaded_to_load",
         "domContentLoadedToLoadMs",
     ),
-    ("navigation.load_to_hydration", "loadToHydrationMs"),
-    ("navigation.wasm_init", "wasmInitMs"),
-    ("navigation.leptos_hydrate", "leptosHydrateMs"),
-    ("navigation.post_hydrate_effects", "postHydrateEffectsMs"),
 ];
 
 /// Section 4 — navigation phase totals + slow navigation targets from
@@ -517,242 +427,6 @@ fn resource_sections(spans: &[Span]) -> (Vec<HotspotRow>, Vec<AssetRow>) {
     (initiator_rows, asset_rows)
 }
 
-/// Section 5 — navigation commit→hydration grouped by cache warmth × project.
-fn cache_warmth_rows(spans: &[Span]) -> Vec<CacheWarmthRow> {
-    let mut groups: Vec<(String, Agg)> = Vec::new();
-    for s in e2e_tests(spans) {
-        let navs = parse_json_attr(&s.raw, "e2e.navigation_top_json");
-        let Some(arr) = navs.as_array() else {
-            continue;
-        };
-        for nav in arr {
-            let Some(hyd) = field_f64(nav, "commitToHydrationMs") else {
-                continue;
-            };
-            if hyd < 0.0 {
-                continue;
-            }
-            let warmth = if nav.get("cacheWarmth").and_then(Value::as_str) == Some("warm") {
-                "warm"
-            } else {
-                "cold"
-            };
-            let key = format!("{warmth}\n{}", project_label(&s.project));
-            entry(&mut groups, &key, Agg::default).add(hyd);
-        }
-    }
-    let mut rows: Vec<CacheWarmthRow> = groups
-        .into_iter()
-        .map(|(key, a)| {
-            let (warmth, project) = key.split_once('\n').unwrap_or(("", ""));
-            CacheWarmthRow {
-                cache_warmth: warmth.to_string(),
-                project: project.to_string(),
-                count: a.count,
-                avg_ms: a.avg(),
-                max_ms: a.max_ms,
-            }
-        })
-        .collect();
-    sort_desc_by(&mut rows, |r| r.avg_ms);
-    rows
-}
-
-/// Section 8 — per-test navigation-hydration budget vs `/api/` request budget.
-fn hydration_vs_api_rows(spans: &[Span]) -> Vec<HydrationVsApiRow> {
-    let mut rows: Vec<HydrationVsApiRow> = Vec::new();
-    for s in e2e_tests(spans) {
-        let mut hydration_ms = 0.0;
-        if let Some(arr) = parse_json_attr(&s.raw, "e2e.navigation_top_json").as_array() {
-            for nav in arr {
-                if let Some(v) = field_f64(nav, "commitToHydrationMs") {
-                    if v > 0.0 {
-                        hydration_ms += v;
-                    }
-                }
-            }
-        }
-        let mut api_ms = 0.0;
-        if let Some(arr) = parse_json_attr(&s.raw, "e2e.request_top_slow_json").as_array() {
-            for req in arr {
-                let url = req.get("url").and_then(Value::as_str).unwrap_or("");
-                if !url.contains("/api/") {
-                    continue;
-                }
-                if let Some(v) = field_f64(req, "durationMs") {
-                    if v > 0.0 {
-                        api_ms += v;
-                    }
-                }
-            }
-        }
-        let ratio = if api_ms > 0.0 {
-            Some(hydration_ms / api_ms)
-        } else {
-            None
-        };
-        rows.push(HydrationVsApiRow {
-            hydration_ms,
-            api_ms,
-            ratio,
-            project: project_label(&s.project),
-            trace_id: s.trace_id.clone(),
-            test: e2e_test_name(s),
-        });
-    }
-    sort_desc_by(&mut rows, |r| r.hydration_ms);
-    rows
-}
-
-/// The navigation-phase component fields (Node `printNavigationPhaseComponentHotspots`).
-const NAV_PHASE_COMPONENTS: [(&str, &str); 4] = [
-    ("commit_to_hydration", "commitToHydrationMs"),
-    ("wasm_init", "wasmInitMs"),
-    ("leptos_hydrate", "leptosHydrateMs"),
-    ("post_hydrate_effects", "postHydrateEffectsMs"),
-];
-
-/// Section 9 — navigation phase component samples, targets, and by-project.
-fn nav_phase_component_sections(
-    spans: &[Span],
-) -> (
-    Vec<PhaseSampleRow>,
-    Vec<PhaseTargetRow>,
-    Vec<PhaseProjectRow>,
-) {
-    let mut samples: Vec<PhaseSampleRow> = Vec::new();
-    let mut target_groups: Vec<(String, Agg)> = Vec::new();
-    let mut proj_groups: Vec<(String, Agg)> = Vec::new();
-    for s in e2e_tests(spans) {
-        let project = project_label(&s.project);
-        let navs = parse_json_attr(&s.raw, "e2e.navigation_top_json");
-        let Some(arr) = navs.as_array() else {
-            continue;
-        };
-        for nav in arr {
-            let target = to_url_path(nav.get("url").and_then(Value::as_str).unwrap_or("-"));
-            for (label, field) in NAV_PHASE_COMPONENTS {
-                let Some(v) = field_f64(nav, field) else {
-                    continue;
-                };
-                if v < 0.0 {
-                    continue;
-                }
-                samples.push(PhaseSampleRow {
-                    phase: label.to_string(),
-                    project: project.clone(),
-                    ms: v,
-                    trace_id: s.trace_id.clone(),
-                    target: target.clone(),
-                });
-                entry(
-                    &mut target_groups,
-                    &format!("{label}\n{project}\n{target}"),
-                    Agg::default,
-                )
-                .add(v);
-                entry(
-                    &mut proj_groups,
-                    &format!("{label}\n{project}"),
-                    Agg::default,
-                )
-                .add(v);
-            }
-        }
-    }
-    sort_desc_by(&mut samples, |r| r.ms);
-    let mut targets: Vec<PhaseTargetRow> = target_groups
-        .into_iter()
-        .map(|(key, a)| {
-            let p: Vec<&str> = key.splitn(3, '\n').collect();
-            PhaseTargetRow {
-                phase: p[0].to_string(),
-                project: p[1].to_string(),
-                target: p[2].to_string(),
-                count: a.count,
-                avg_ms: a.avg(),
-                max_ms: a.max_ms,
-            }
-        })
-        .collect();
-    sort_desc_by(&mut targets, |r| r.max_ms);
-    let mut by_project: Vec<PhaseProjectRow> = proj_groups
-        .into_iter()
-        .map(|(key, a)| {
-            let (phase, project) = key.split_once('\n').unwrap_or(("", ""));
-            PhaseProjectRow {
-                phase: phase.to_string(),
-                project: project.to_string(),
-                count: a.count,
-                avg_ms: a.avg(),
-                max_ms: a.max_ms,
-            }
-        })
-        .collect();
-    sort_desc_by(&mut by_project, |r| r.avg_ms);
-    (samples, targets, by_project)
-}
-
-/// The hydration-runtime component fields (Node `printHydrationRuntimeComponents`).
-const HYDRATION_RUNTIME_COMPONENTS: [(&str, &str); 5] = [
-    ("hydration", "hydrationMs"),
-    ("wasm_resource", "wasmResourceMs"),
-    ("wasm_init", "wasmInitMs"),
-    ("leptos_hydrate", "leptosHydrateMs"),
-    ("post_hydrate_effects", "postHydrateEffectsMs"),
-];
-
-/// Section 10 — hydration runtime component samples and by-project.
-fn hydration_runtime_sections(spans: &[Span]) -> (Vec<RuntimeSampleRow>, Vec<RuntimeProjectRow>) {
-    let mut samples: Vec<RuntimeSampleRow> = Vec::new();
-    let mut proj_groups: Vec<(String, Agg)> = Vec::new();
-    for s in e2e_tests(spans) {
-        let project = project_label(&s.project);
-        let test = e2e_test_name(s);
-        let runtime = parse_json_attr(&s.raw, "e2e.hydration_runtime_json");
-        if !runtime.is_object() {
-            continue;
-        }
-        for (label, field) in HYDRATION_RUNTIME_COMPONENTS {
-            let Some(v) = field_f64(&runtime, field) else {
-                continue;
-            };
-            if v < 0.0 {
-                continue;
-            }
-            samples.push(RuntimeSampleRow {
-                component: label.to_string(),
-                project: project.clone(),
-                ms: v,
-                trace_id: s.trace_id.clone(),
-                test: test.clone(),
-            });
-            entry(
-                &mut proj_groups,
-                &format!("{label}\n{project}"),
-                Agg::default,
-            )
-            .add(v);
-        }
-    }
-    sort_desc_by(&mut samples, |r| r.ms);
-    let mut by_project: Vec<RuntimeProjectRow> = proj_groups
-        .into_iter()
-        .map(|(key, a)| {
-            let (component, project) = key.split_once('\n').unwrap_or(("", ""));
-            RuntimeProjectRow {
-                component: component.to_string(),
-                project: project.to_string(),
-                count: a.count,
-                avg_ms: a.avg(),
-                max_ms: a.max_ms,
-            }
-        })
-        .collect();
-    sort_desc_by(&mut by_project, |r| r.avg_ms);
-    (samples, by_project)
-}
-
 /// Compute the whole [`Analysis`] from already-parsed spans. No I/O.
 pub fn analyze_spans(spans: Vec<Span>, project_filter: Option<String>) -> Analysis {
     let mut slowest_spans: Vec<SlowSpanRow> = spans
@@ -848,14 +522,6 @@ pub fn analyze_spans(spans: Vec<Span>, project_filter: Option<String>) -> Analys
     let (long_task_hotspots, long_task_by_project) = long_task_sections(&spans);
     let (resource_initiators, resource_assets) = resource_sections(&spans);
 
-    // Sections 5, 8, 9, 10 — cache warmth, hydration budgets, phase/runtime components.
-    let cache_warmth = cache_warmth_rows(&spans);
-    let hydration_vs_api = hydration_vs_api_rows(&spans);
-    let (nav_phase_component_samples, nav_phase_component_targets, nav_phase_component_by_project) =
-        nav_phase_component_sections(&spans);
-    let (hydration_runtime_samples, hydration_runtime_by_project) =
-        hydration_runtime_sections(&spans);
-
     Analysis {
         span_count: spans.len(),
         project_filter,
@@ -870,13 +536,6 @@ pub fn analyze_spans(spans: Vec<Span>, project_filter: Option<String>) -> Analys
         long_task_by_project,
         resource_initiators,
         resource_assets,
-        cache_warmth,
-        hydration_vs_api,
-        nav_phase_component_samples,
-        nav_phase_component_targets,
-        nav_phase_component_by_project,
-        hydration_runtime_samples,
-        hydration_runtime_by_project,
     }
 }
 
@@ -987,12 +646,12 @@ mod tests {
             .expect("navigation.total present");
         assert_eq!(total.count, 2);
         assert_eq!(total.max_ms, 900.0);
-        let hyd = a
+        let mount = a
             .navigation_phase_hotspots
             .iter()
-            .find(|r| r.name == "navigation.commit_to_hydration")
-            .expect("commit_to_hydration present");
-        assert_eq!(hyd.max_ms, 400.0);
+            .find(|r| r.name == "navigation.commit_to_mount")
+            .expect("commit_to_mount present");
+        assert_eq!(mount.max_ms, 400.0);
         // Two navigation targets, feed slowest.
         assert_eq!(a.navigation_targets.len(), 2);
         assert_eq!(a.navigation_targets[0].target, "jaunder.local:8080/feed");
@@ -1038,89 +697,6 @@ mod tests {
         assert_eq!(wasm.name, "jaunder.local:8080/pkg/jaunder.wasm");
         assert_eq!(wasm.initiator, "fetch");
         assert_eq!(wasm.max_ms, 300.0);
-    }
-
-    #[test]
-    fn cache_warmth_by_warmth_and_project() {
-        let a = analyze_spans(fixture_spans(), None);
-        // Firefox nav has a cold (commit→hydration 400) and a warm (220) entry;
-        // chromium's nav JSON is malformed, so it contributes nothing.
-        assert_eq!(a.cache_warmth.len(), 2);
-        // Sorted by avg desc → cold (400) first.
-        assert_eq!(a.cache_warmth[0].cache_warmth, "cold");
-        assert_eq!(a.cache_warmth[0].project, "firefox");
-        assert_eq!(a.cache_warmth[0].avg_ms, 400.0);
-        let warm = a
-            .cache_warmth
-            .iter()
-            .find(|r| r.cache_warmth == "warm")
-            .expect("warm row");
-        assert_eq!(warm.avg_ms, 220.0);
-    }
-
-    #[test]
-    fn hydration_vs_api_budget() {
-        let a = analyze_spans(fixture_spans(), None);
-        assert_eq!(a.hydration_vs_api.len(), 2);
-        // Firefox: hydration 400+220=620; api = create_post 210 (feed has no /api/).
-        let ff = &a.hydration_vs_api[0];
-        assert_eq!(ff.project, "firefox");
-        assert_eq!(ff.hydration_ms, 620.0);
-        assert_eq!(ff.api_ms, 210.0);
-        assert!((ff.ratio.unwrap() - 620.0 / 210.0).abs() < 1e-9);
-        // Chromium: no valid nav hydration → 0; api = get_feed 80; ratio = 0.
-        let ch = &a.hydration_vs_api[1];
-        assert_eq!(ch.hydration_ms, 0.0);
-        assert_eq!(ch.api_ms, 80.0);
-        assert_eq!(ch.ratio, Some(0.0));
-    }
-
-    #[test]
-    fn navigation_phase_components() {
-        let a = analyze_spans(fixture_spans(), None);
-        // Slowest sample is firefox commit_to_hydration = 400.
-        let top = &a.nav_phase_component_samples[0];
-        assert_eq!(top.phase, "commit_to_hydration");
-        assert_eq!(top.ms, 400.0);
-        // By-project: commit_to_hydration/firefox over 400 & 220 → count 2, avg 310.
-        let cth = a
-            .nav_phase_component_by_project
-            .iter()
-            .find(|r| r.phase == "commit_to_hydration" && r.project == "firefox")
-            .expect("commit_to_hydration/firefox");
-        assert_eq!(cth.count, 2);
-        assert_eq!(cth.avg_ms, 310.0);
-        assert_eq!(cth.max_ms, 400.0);
-        // Targets carry the URL path.
-        assert!(a.nav_phase_component_targets.iter().any(|r| {
-            r.phase == "commit_to_hydration"
-                && r.target == "jaunder.local:8080/feed"
-                && r.max_ms == 400.0
-        }));
-    }
-
-    #[test]
-    fn hydration_runtime_components() {
-        let a = analyze_spans(fixture_spans(), None);
-        // Slowest sample is firefox hydration = 420.
-        let top = &a.hydration_runtime_samples[0];
-        assert_eq!(top.component, "hydration");
-        assert_eq!(top.ms, 420.0);
-        let h_ff = a
-            .hydration_runtime_by_project
-            .iter()
-            .find(|r| r.component == "hydration" && r.project == "firefox")
-            .expect("hydration/firefox");
-        assert_eq!(h_ff.avg_ms, 420.0);
-        // Firefox reports wasm_resource; chromium's runtime omits it.
-        assert!(a
-            .hydration_runtime_by_project
-            .iter()
-            .any(|r| r.component == "wasm_resource" && r.project == "firefox"));
-        assert!(!a
-            .hydration_runtime_by_project
-            .iter()
-            .any(|r| r.component == "wasm_resource" && r.project == "chromium"));
     }
 
     #[test]

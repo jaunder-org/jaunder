@@ -47,25 +47,6 @@ type PagePerfSummary = {
     topSlow: Array<{ name: string; initiatorType: string; durationMs: number }>;
   };
   longTasks: Array<{ startTime: number; duration: number; name: string }>;
-  hydrationRuntime: {
-    hydrationMs: number | null;
-    navigationMs: number | null;
-    wasmTransferBytes: number | null;
-    wasmResourceMs: number | null;
-    wasmInitMs: number | null;
-    leptosHydrateMs: number | null;
-    postHydrateEffectsMs: number | null;
-  } | null;
-};
-
-type HydrationPerfPayload = {
-  hydration_ms?: unknown;
-  navigation_ms?: unknown;
-  wasm_transfer_bytes?: unknown;
-  wasm_resource_ms?: unknown;
-  wasm_init_ms?: unknown;
-  leptos_hydrate_ms?: unknown;
-  post_hydrate_effects_ms?: unknown;
 };
 
 type NavigationRecord = {
@@ -79,9 +60,6 @@ type NavigationRecord = {
   requestFinishedMs: number | null;
   requestFailed: boolean;
   requestFailureText?: string;
-  wasmInitMs: number | null;
-  leptosHydrateMs: number | null;
-  postHydrateEffectsMs: number | null;
 };
 
 type NavigationSummary = {
@@ -91,13 +69,9 @@ type NavigationSummary = {
   totalMs: number;
   requestMs: number | null;
   commitToDomContentLoadedMs: number | null;
-  commitToHydrationMs: number | null;
+  commitToMountMs: number | null;
   domContentLoadedToLoadMs: number | null;
-  loadToHydrationMs: number | null;
   requestFailed: boolean;
-  wasmInitMs: number | null;
-  leptosHydrateMs: number | null;
-  postHydrateEffectsMs: number | null;
 };
 
 // Per-test budgets scale up for two independent reasons, and a test can hit
@@ -334,29 +308,17 @@ const test = base.extend<{
 
       await page.exposeBinding("__jaunderRecordHydration", (_source, value) => {
         if (!value || typeof value !== "object") return;
-        const payload = value as {
-          href?: unknown;
-          perf?: HydrationPerfPayload;
-        };
+        const payload = value as { href?: unknown };
         const href = typeof payload.href === "string" ? payload.href : null;
         const nowMs = Date.now();
-        const perf = payload.perf;
-        const parseMetric = (metric: unknown): number | null =>
-          typeof metric === "number" && Number.isFinite(metric) ? metric : null;
 
-        // Hydration should be attributed to the most recent matching navigation.
+        // The mount-ready marker should be attributed to the most recent matching
+        // navigation (CSR has no hydration; `data-hydrated` marks mount-ready).
         for (let index = navigations.length - 1; index >= 0; index -= 1) {
           const navigation = navigations[index];
           if (navigation.hydratedMs !== null) continue;
           if (href !== null && navigation.url !== href) continue;
           navigation.hydratedMs = nowMs;
-          if (perf && typeof perf === "object") {
-            navigation.wasmInitMs = parseMetric(perf.wasm_init_ms);
-            navigation.leptosHydrateMs = parseMetric(perf.leptos_hydrate_ms);
-            navigation.postHydrateEffectsMs = parseMetric(
-              perf.post_hydrate_effects_ms,
-            );
-          }
           return;
         }
       });
@@ -368,44 +330,19 @@ const test = base.extend<{
             duration: number;
             name: string;
           }>;
-          __jaunder_perf?: unknown;
           __jaunderHydrationNotified?: boolean;
-          __jaunderHydrationNotifyRetries?: number;
-          __jaunderRecordHydration?: (payload: {
-            href: string;
-            perf?: unknown;
-          }) => void;
+          __jaunderRecordHydration?: (payload: { href: string }) => void;
         };
         globalScope.__jaunderLongTasks = [];
         globalScope.__jaunderHydrationNotified = false;
-        globalScope.__jaunderHydrationNotifyRetries = 0;
 
         const notifyHydration = () => {
           if (globalScope.__jaunderHydrationNotified) return;
           const body = document.body;
           if (!body || !body.hasAttribute("data-hydrated")) return;
-          // body[data-hydrated] can flip before __jaunder_perf is populated, so
-          // poll briefly (up to 20×25ms) for the perf payload before giving up
-          // and notifying without it — otherwise we'd lose the runtime metrics.
-          const perf = globalScope.__jaunder_perf;
-          if (!perf || typeof perf !== "object") {
-            const retries = globalScope.__jaunderHydrationNotifyRetries ?? 0;
-            if (retries < 20) {
-              globalScope.__jaunderHydrationNotifyRetries = retries + 1;
-              setTimeout(notifyHydration, 25);
-              return;
-            }
-          }
           globalScope.__jaunderHydrationNotified = true;
           try {
-            globalScope.__jaunderRecordHydration?.({
-              href: location.href,
-              perf:
-                globalScope.__jaunder_perf &&
-                typeof globalScope.__jaunder_perf === "object"
-                  ? globalScope.__jaunder_perf
-                  : undefined,
-            });
+            globalScope.__jaunderRecordHydration?.({ href: location.href });
           } catch {
             // Ignore cross-context bridge errors while collecting diagnostics.
           }
@@ -469,9 +406,6 @@ const test = base.extend<{
             hydratedMs: null,
             requestFinishedMs: null,
             requestFailed: false,
-            wasmInitMs: null,
-            leptosHydrateMs: null,
-            postHydrateEffectsMs: null,
           });
         }
       });
@@ -577,7 +511,6 @@ const test = base.extend<{
         navigation: null,
         resources: { count: 0, totalDurationMs: 0, topSlow: [] },
         longTasks: [],
-        hydrationRuntime: null,
       };
 
       try {
@@ -596,32 +529,9 @@ const test = base.extend<{
                   duration: number;
                   name: string;
                 }>;
-                __jaunder_perf?: {
-                  hydration_ms?: number;
-                  navigation_ms?: number;
-                  wasm_transfer_bytes?: number;
-                  wasm_resource_ms?: number;
-                  wasm_init_ms?: number;
-                  leptos_hydrate_ms?: number;
-                  post_hydrate_effects_ms?: number;
-                };
               }
             ).__jaunderLongTasks ?? []
           ).slice(-20);
-          const hydrationRuntime =
-            (
-              globalThis as typeof globalThis & {
-                __jaunder_perf?: {
-                  hydration_ms?: number;
-                  navigation_ms?: number;
-                  wasm_transfer_bytes?: number;
-                  wasm_resource_ms?: number;
-                  wasm_init_ms?: number;
-                  leptos_hydrate_ms?: number;
-                  post_hydrate_effects_ms?: number;
-                };
-              }
-            ).__jaunder_perf ?? null;
 
           const topSlow = resources
             .map((resource) => ({
@@ -653,19 +563,6 @@ const test = base.extend<{
               topSlow,
             },
             longTasks,
-            hydrationRuntime: hydrationRuntime
-              ? {
-                  hydrationMs: hydrationRuntime.hydration_ms ?? null,
-                  navigationMs: hydrationRuntime.navigation_ms ?? null,
-                  wasmTransferBytes:
-                    hydrationRuntime.wasm_transfer_bytes ?? null,
-                  wasmResourceMs: hydrationRuntime.wasm_resource_ms ?? null,
-                  wasmInitMs: hydrationRuntime.wasm_init_ms ?? null,
-                  leptosHydrateMs: hydrationRuntime.leptos_hydrate_ms ?? null,
-                  postHydrateEffectsMs:
-                    hydrationRuntime.post_hydrate_effects_ms ?? null,
-                }
-              : null,
           };
         });
       } catch {
@@ -700,17 +597,13 @@ const test = base.extend<{
             navigation.domContentLoadedMs !== null
               ? navigation.domContentLoadedMs - navigation.committedMs
               : null;
-          const commitToHydrationMs =
+          const commitToMountMs =
             navigation.committedMs !== null && navigation.hydratedMs !== null
               ? navigation.hydratedMs - navigation.committedMs
               : null;
           const domContentLoadedToLoadMs =
             navigation.domContentLoadedMs !== null && navigation.loadMs !== null
               ? navigation.loadMs - navigation.domContentLoadedMs
-              : null;
-          const loadToHydrationMs =
-            navigation.loadMs !== null && navigation.hydratedMs !== null
-              ? navigation.hydratedMs - navigation.loadMs
               : null;
           return {
             id: navigation.id,
@@ -719,13 +612,9 @@ const test = base.extend<{
             totalMs: endMs - navigation.startedMs,
             requestMs,
             commitToDomContentLoadedMs,
-            commitToHydrationMs,
+            commitToMountMs,
             domContentLoadedToLoadMs,
-            loadToHydrationMs,
             requestFailed: navigation.requestFailed,
-            wasmInitMs: navigation.wasmInitMs,
-            leptosHydrateMs: navigation.leptosHydrateMs,
-            postHydrateEffectsMs: navigation.postHydrateEffectsMs,
           };
         })
         .sort((left, right) => right.totalMs - left.totalMs);
@@ -761,10 +650,6 @@ const test = base.extend<{
         otlpAttribute(
           "e2e.long_tasks_json",
           JSON.stringify(pagePerfSummary.longTasks),
-        ),
-        otlpAttribute(
-          "e2e.hydration_runtime_json",
-          JSON.stringify(pagePerfSummary.hydrationRuntime),
         ),
         otlpAttribute("e2e.action_count", actions.length),
         otlpAttribute("e2e.action_top_json", JSON.stringify(topActions)),
@@ -826,25 +711,12 @@ const test = base.extend<{
               navigation.commitToDomContentLoadedMs,
             ),
             otlpAttribute(
-              "navigation.commit_to_hydration_ms",
-              navigation.commitToHydrationMs,
+              "navigation.commit_to_mount_ms",
+              navigation.commitToMountMs,
             ),
             otlpAttribute(
               "navigation.domcontentloaded_to_load_ms",
               navigation.domContentLoadedToLoadMs,
-            ),
-            otlpAttribute(
-              "navigation.load_to_hydration_ms",
-              navigation.loadToHydrationMs,
-            ),
-            otlpAttribute("navigation.wasm_init_ms", navigation.wasmInitMs),
-            otlpAttribute(
-              "navigation.leptos_hydrate_ms",
-              navigation.leptosHydrateMs,
-            ),
-            otlpAttribute(
-              "navigation.post_hydrate_effects_ms",
-              navigation.postHydrateEffectsMs,
             ),
             otlpAttribute(
               "navigation.request_failed",
