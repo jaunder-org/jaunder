@@ -6430,6 +6430,113 @@ async fn create_post_foreign_key_violation_maps_to_internal(#[case] backend: Bac
     );
 }
 
+// =============================================================================
+// create_posts (single-transaction batch insert) — issue #9
+// =============================================================================
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_posts_empty_slice_is_noop(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let ids = env.state.posts.create_posts(&[]).await.unwrap();
+    assert!(ids.is_empty());
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_posts_batches_all_rows_in_order(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let user_id = state
+        .users
+        .create_user(
+            &username("batch_alice"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let inputs: Vec<CreatePostInput> = (0..3)
+        .map(|i| CreatePostInput {
+            user_id,
+            title: Some(format!("Batch {i}")),
+            slug: format!("batch-{i}").parse().unwrap(),
+            body: format!("body {i}"),
+            format: PostFormat::Markdown,
+            rendered_html: format!("<p>body {i}</p>"),
+            published_at: Some(Utc::now()),
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        })
+        .collect();
+
+    let ids = state.posts.create_posts(&inputs).await.unwrap();
+    assert_eq!(ids.len(), 3);
+
+    // Each id resolves to the matching row, and its Public audience is honored
+    // (visible to Anonymous — get_post_by_id filters on audience).
+    for (i, id) in ids.iter().enumerate() {
+        let rec = state
+            .posts
+            .get_post_by_id(*id, &ViewerIdentity::Anonymous)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(rec.title.as_deref(), Some(format!("Batch {i}").as_str()));
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_posts_conflict_rolls_back_whole_batch(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let user_id = state
+        .users
+        .create_user(
+            &username("batch_bob"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let mk = |slug: &str, i: usize| CreatePostInput {
+        user_id,
+        title: Some(format!("Row {i}")),
+        slug: slug.parse().unwrap(),
+        body: format!("body {i}"),
+        format: PostFormat::Markdown,
+        rendered_html: format!("<p>body {i}</p>"),
+        published_at: Some(Utc::now()),
+        summary: None,
+        audiences: vec![AudienceTarget::Public],
+    };
+    // Rows 0 and 2 collide on slug — the batch must fail on row 2 and undo 0/1.
+    let inputs = vec![mk("dup", 0), mk("unique", 1), mk("dup", 2)];
+
+    let err = state.posts.create_posts(&inputs).await.unwrap_err();
+    assert!(
+        matches!(err, CreatePostError::SlugConflict),
+        "expected SlugConflict, got {err:?}"
+    );
+
+    // Nothing persisted: the author's collection (drafts + published) is empty.
+    let collection = state
+        .posts
+        .list_collection_by_user(user_id, None, 50)
+        .await
+        .unwrap();
+    assert!(
+        collection.is_empty(),
+        "expected full rollback, found {} rows",
+        collection.len()
+    );
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Backend) {

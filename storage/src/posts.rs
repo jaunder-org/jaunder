@@ -307,6 +307,12 @@ pub trait PostStorage: Send + Sync {
     /// Creates a new post.
     async fn create_post(&self, input: &CreatePostInput) -> Result<i64, CreatePostError>;
 
+    /// Creates `inputs.len()` posts in a single transaction, returning their new
+    /// ids in input order. All-or-nothing: any failure (e.g. a slug conflict on
+    /// one row) rolls the whole batch back and nothing persists. An empty slice
+    /// is a no-op returning an empty vec without opening a transaction.
+    async fn create_posts(&self, inputs: &[CreatePostInput]) -> Result<Vec<i64>, CreatePostError>;
+
     /// Fetches a post by its ID, applying the viewer-resolution filter: the post
     /// is returned only if `viewer` is the author or a targeted audience admits
     /// them. See ADR-0020.
@@ -602,6 +608,25 @@ where
         let post_id = write_post_in_tx::<DB>(&mut tx, input).await?;
         tx.commit().await?;
         Ok(post_id)
+    }
+
+    #[tracing::instrument(
+        name = "storage.posts.create_batch",
+        skip(self, inputs),
+        fields(db.system = DB::DB_SYSTEM, count = inputs.len())
+    )]
+    async fn create_posts(&self, inputs: &[CreatePostInput]) -> Result<Vec<i64>, CreatePostError> {
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut tx = self.pool.begin().await?;
+        let mut ids = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            // `?` drops `tx` on error → whole-batch rollback (atomic seed).
+            ids.push(write_post_in_tx::<DB>(&mut tx, input).await?);
+        }
+        tx.commit().await?;
+        Ok(ids)
     }
 
     #[tracing::instrument(
