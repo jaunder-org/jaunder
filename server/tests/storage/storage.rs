@@ -6402,6 +6402,36 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
 
 #[apply(backends)]
 #[tokio::test]
+async fn create_post_foreign_key_violation_maps_to_internal(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+
+    // A post referencing a non-existent user violates the `posts.user_id` foreign
+    // key on both backends (SQLite enforces FKs here — sqlx's SqliteConnectOptions
+    // defaults `foreign_keys` to ON), a *non-unique* DB error. So `create_post`
+    // (via the shared `write_post_in_tx`) maps it to `Internal`, not `SlugConflict`
+    // — exercising the generic-error arm.
+    let input = CreatePostInput {
+        user_id: 999_999,
+        title: Some("Orphan".to_string()),
+        slug: "orphan".parse().unwrap(),
+        body: "body".to_string(),
+        format: PostFormat::Markdown,
+        rendered_html: "<p>body</p>".to_string(),
+        published_at: Some(Utc::now()),
+        summary: None,
+        audiences: vec![AudienceTarget::Public],
+    };
+
+    let err = state.posts.create_post(&input).await.unwrap_err();
+    assert!(
+        matches!(err, CreatePostError::Internal(_)),
+        "expected Internal for FK violation, got {err:?}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;

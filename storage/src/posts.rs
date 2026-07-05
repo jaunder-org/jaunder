@@ -595,44 +595,12 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn create_post(&self, input: &CreatePostInput) -> Result<i64, CreatePostError> {
-        let now = Utc::now();
-        let format = input.format.to_string();
-
         let mut tx = self.pool.begin().await?;
-
-        let result = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-             RETURNING post_id",
-        )
-        .bind(input.user_id)
-        .bind(input.title.clone())
-        .bind(input.slug.as_str())
-        .bind(input.body.as_str())
-        .bind(format.as_str())
-        .bind(input.rendered_html.as_str())
-        .bind(now)
-        .bind(now)
-        .bind(input.published_at)
-        .bind(input.summary.clone())
-        .fetch_one(&mut *tx)
-        .await;
-
-        let post_id = match result {
-            Ok(id) => id,
-            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-                tx.rollback().await.ok();
-                return Err(CreatePostError::SlugConflict);
-            }
-            Err(e) => {
-                tx.rollback().await.ok();
-                return Err(CreatePostError::Internal(e));
-            }
-        };
-
-        replace_post_audiences::<DB>(&mut tx, post_id, &input.audiences).await?;
+        // On any error the `?` drops `tx`, which sqlx rolls back — equivalent to
+        // the previous explicit `tx.rollback()` before returning. (`&mut tx`
+        // coerces to `&mut DB::Connection` for the helper.)
+        let post_id = write_post_in_tx::<DB>(&mut tx, input).await?;
         tx.commit().await?;
-        // (`&mut tx` derefs to `&mut DB::Connection` for the helper.)
         Ok(post_id)
     }
 
@@ -1558,6 +1526,59 @@ fn audience_target_from_row(kind: &str, audience_id: Option<i64>) -> Option<Audi
         Ok(TargetKind::Named) => audience_id.map(AudienceTarget::Named),
         Err(()) => None,
     }
+}
+
+/// Writes one post row and its audience rows onto a caller-supplied transaction
+/// connection, so it joins whatever transaction is open.
+///
+/// This is the single place that knows the post `INSERT` and the
+/// unique-violation → [`CreatePostError::SlugConflict`] mapping: both
+/// `create_post` (write one) and `create_posts` (write many in one transaction)
+/// are pure transaction orchestration over it, so the row-write logic lives once
+/// rather than being duplicated per arity.
+pub(crate) async fn write_post_in_tx<DB>(
+    conn: &mut DB::Connection,
+    input: &CreatePostInput,
+) -> Result<i64, CreatePostError>
+where
+    DB: PostDialect,
+    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<i64>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<DateTime<Utc>>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    let now = Utc::now();
+    let format = input.format.to_string();
+
+    let post_id = sqlx::query_scalar::<_, i64>(
+        "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING post_id",
+    )
+    .bind(input.user_id)
+    .bind(input.title.clone())
+    .bind(input.slug.as_str())
+    .bind(input.body.as_str())
+    .bind(format.as_str())
+    .bind(input.rendered_html.as_str())
+    .bind(now)
+    .bind(now)
+    .bind(input.published_at)
+    .bind(input.summary.clone())
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(|e| match e {
+        sqlx::Error::Database(db) if db.is_unique_violation() => CreatePostError::SlugConflict,
+        e => CreatePostError::Internal(e),
+    })?;
+
+    replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
+    Ok(post_id)
 }
 
 /// Replaces a post's `post_audiences` rows to exactly match `audiences`.
