@@ -38,7 +38,7 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
 test-utils = []
-# `seed-posts` gates only `seed_rendered_post` (the shared timeline-post recipe)
+# `seed-posts` gates only `seed_post_input` (the shared timeline-post recipe)
 # and pulls NO extra deps, so the `test-support` binary can link the recipe
 # without the heavy scaffolding. `test-support` implies it.
 seed-posts = []

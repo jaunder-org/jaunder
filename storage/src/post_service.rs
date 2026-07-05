@@ -36,8 +36,36 @@ pub async fn create_rendered_post(
     summary: Option<String>,
     audiences: Vec<AudienceTarget>,
 ) -> Result<i64, CreatePostError> {
+    let input = render_post_input(
+        user_id,
+        title,
+        slug,
+        body,
+        format,
+        published_at,
+        summary,
+        audiences,
+    );
+    storage.create_post(&input).await
+}
+
+/// Renders `body` per `format` and assembles the [`CreatePostInput`] without
+/// writing it. Shared by [`create_rendered_post`] (write one) and the batch
+/// seeders (collect many), so the render-and-assemble recipe lives in one place.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn render_post_input(
+    user_id: i64,
+    title: Option<String>,
+    slug: Slug,
+    body: String,
+    format: PostFormat,
+    published_at: Option<DateTime<Utc>>,
+    summary: Option<String>,
+    audiences: Vec<AudienceTarget>,
+) -> CreatePostInput {
     let rendered_html = render(&body, &format);
-    let input = CreatePostInput {
+    CreatePostInput {
         user_id,
         title,
         slug,
@@ -47,32 +75,23 @@ pub async fn create_rendered_post(
         published_at,
         summary,
         audiences,
-    };
-    storage.create_post(&input).await
+    }
 }
 
-/// The single definition of "a timeline-visible seeded post": a public,
-/// Markdown-rendered post, published now iff `published`. Shared by
-/// `storage::test_support::seed_posts` (in-process) and the `test-support`
-/// binary's `seed_posts_for_user` (out-of-process), so the recipe — not just a
-/// row, but the Public audience + rendered HTML that make it timeline-visible —
-/// lives in one place. Gated so a normal `storage` build never compiles it, yet
-/// the `test-support` binary reaches it via the lightweight `seed-posts` feature
-/// (no `tempfile`/`rstest_reuse`).
-///
-/// # Errors
-///
-/// Returns `Err(CreatePostError)` if the storage write fails.
+/// The single definition of "a timeline-visible seeded post", as data: a public,
+/// Markdown-rendered post, published now iff `published` — the Public audience
+/// plus rendered HTML that make it timeline-visible. Returns the
+/// [`CreatePostInput`] instead of writing it, so both seeders
+/// (`storage::test_support::seed_posts` in-process and the `test-support`
+/// binary's `seed_posts_for_user` out-of-process) build a `Vec` and write them
+/// in one batched transaction via [`PostStorage::create_posts`]. Gated so a
+/// normal `storage` build never compiles it, yet the `test-support` binary
+/// reaches it via the lightweight `seed-posts` feature (no
+/// `tempfile`/`rstest_reuse`).
 #[cfg(any(test, feature = "seed-posts"))]
-pub async fn seed_rendered_post(
-    storage: &dyn PostStorage,
-    user_id: i64,
-    slug: Slug,
-    body: String,
-    published: bool,
-) -> Result<i64, CreatePostError> {
-    create_rendered_post(
-        storage,
+#[must_use]
+pub fn seed_post_input(user_id: i64, slug: Slug, body: String, published: bool) -> CreatePostInput {
+    render_post_input(
         user_id,
         None,
         slug,
@@ -82,7 +101,6 @@ pub async fn seed_rendered_post(
         None,
         vec![AudienceTarget::Public],
     )
-    .await
 }
 
 /// Renders `body` according to `format` and updates the post via storage.
