@@ -401,14 +401,11 @@ git commit -m "docs(observability): drop CSR-OBE hydration trace sections, commi
 
 **Interfaces:** none — integration gate proving the whole cut (spec AC7).
 
-- [ ] **Step 1: Run the full local gate.** Run: `cargo xtask validate` (Bash
-      background mode — long; static + clippy + coverage + e2e across
-      `{sqlite,postgres}×{chromium,firefox}`). Expected: green. The e2e run
-      exercises `fixtures.ts` end-to-end, proving the emitter changes don't
-      break OTel capture or any test. Confirm completion via the
-      `xtask-done: … ok=true` sentinel.
+- [x] **Step 1: Run the full local gate.** → `cargo xtask validate` PASSED in
+      504s — all steps green incl. `nix-e2e` (all four combos) and coverage (0
+      CRAP over threshold). AC7 satisfied.
 
-- [ ] **Step 2: If green, the branch is ready for jaunder-ship.** No commit —
+- [x] **Step 2: If green, the branch is ready for jaunder-ship.** No commit —
       `validate` is verify-only.
 
 ---
