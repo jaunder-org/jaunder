@@ -96,7 +96,7 @@ rather than faking one).
     it).
   - `pub fn probe_verdict(base: &str, junk: &str, rs: &str) -> Result<(), DriftError>`
 
-- [ ] **Step 1: Write the failing tests** (one per branch)
+- [x] **Step 1: Write the failing tests** (one per branch)
 
 ```rust
 #[cfg(test)]
@@ -143,12 +143,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo nextest run -p xtask coverage::probe` Expected: FAIL —
 `probe_verdict` / `DriftError` not defined.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Every branch is pinned by a test (both-hold, junk-moved, rs-static, precedence,
 Display). To signature
@@ -159,11 +159,11 @@ else `Ok(())`. `DriftError`'s `Display` must contain "admits"/"junk" and
 detail depend on it). Module doc-comment: what the probe guards and why (link
 #241/#37).
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `cargo nextest run -p xtask coverage::probe` Expected: PASS (5 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/coverage/probe.rs xtask/src/coverage/mod.rs
@@ -201,7 +201,7 @@ Run `cargo xtask check` first so the commit gate passes clean
   - `Command::Coverage(CoverageCommand::ProbeSource)` → runnable as
     `cargo xtask coverage probe-source`.
 
-- [ ] **Step 1: Add the nix-eval helper** in `xtask/src/steps/nix.rs`
+- [x] **Step 1: Add the nix-eval helper** in `xtask/src/steps/nix.rs`
 
 ```rust
 /// Evaluate the coverage check's `.drvPath` for the flake rooted at `flake_dir`.
@@ -228,7 +228,7 @@ pub fn eval_coverage_drvpath(flake_dir: &Path) -> Result<String> {
 }
 ```
 
-- [ ] **Step 2: Add `WorktreeGuard` + orchestrator** in
+- [x] **Step 2: Add `WorktreeGuard` + orchestrator** in
       `xtask/src/coverage/probe.rs`
 
 Uses (add to the file's imports): `std::fs`, `std::path::{Path, PathBuf}`,
@@ -313,7 +313,7 @@ fn run_probe() -> Result<()> {
 (`probe_verdict(&base, &junk, &rs)?` relies on `DriftError: std::error::Error`
 from Task 1.)
 
-- [ ] **Step 3: Wire the CLI** in `xtask/src/lib.rs`
+- [x] **Step 3: Wire the CLI** in `xtask/src/lib.rs`
 
 Add the nested enum (mirroring `AdrCommand`, `lib.rs:124`):
 
@@ -362,12 +362,12 @@ defaults to `true` — correct, the probe emits a normal `StepResult` envelope.
 The `match cli.command` sites in tests all have `_ =>` catch-alls, so only
 `command_name` needs the new arm.)
 
-- [ ] **Step 4: Build + run the real subcommand (AC1)**
+- [x] **Step 4: Build + run the real subcommand (AC1)**
 
 Run: `cargo xtask coverage probe-source` Expected: exits 0; human output
 `[ ok ] coverage-probe-source — …contract holds…`.
 
-- [ ] **Step 5: Verify no real-tree mutation (AC5) and not-per-commit (AC7)**
+- [x] **Step 5: Verify no real-tree mutation (AC5) and not-per-commit (AC7)**
 
 Run: `git -C <this worktree> status --porcelain` → unchanged (no `probe.txt`, no
 `__drift_probe.rs`); `git worktree list` shows no
@@ -375,7 +375,7 @@ Run: `git -C <this worktree> status --porcelain` → unchanged (no `probe.txt`, 
 `Check`/`Validate` dispatch arms (`lib.rs:239-283`) do not call
 `coverage::probe`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/src/steps/nix.rs xtask/src/coverage/probe.rs xtask/src/lib.rs
@@ -385,7 +385,7 @@ git commit -m "feat(coverage): cargo xtask coverage probe-source drift guard (#2
 Run `cargo xtask check` first (**jaunder-commit**) — the crate must compile
 clean (incl. the new `command_name` arm).
 
-- [ ] **Step 7: Demonstrate the guard fires (AC2 + AC3)** — throwaway
+- [x] **Step 7: Demonstrate the guard fires (AC2 + AC3)** — throwaway
       **committed** filter edits, then reset.
 
 The probe evals an ephemeral `git worktree add --detach … HEAD` checkout, so it
@@ -425,7 +425,7 @@ clean. No code change results from this step — it is pure verification.
 - Consumes: `cargo xtask coverage probe-source` (Task 2).
 - Produces: a CI step that fails a PR on drift.
 
-- [ ] **Step 1: Add the step** after "Validate (static + clippy + coverage, via
+- [x] **Step 1: Add the step** after "Validate (static + clippy + coverage, via
       xtask)" (`ci.yml:40-41`), before the diagnostics upload:
 
 ```yaml
@@ -439,14 +439,14 @@ Rationale inline-comment: `if: always()` so a drift signal isn't masked by an
 unrelated `validate` failure; placed here to reuse the job's nix + cachix +
 xtask cache (eval-only, ~seconds).
 
-- [ ] **Step 2: Validate the workflow YAML**
+- [x] **Step 2: Validate the workflow YAML**
 
 Run: `cargo xtask check` (its `prettier`/static steps format & check
 `.github/**/*.yml`) — Expected: PASS, `ci.yml` unchanged by formatting (or
 auto-formatted, then re-inspect the diff). Inspect: the step sits inside
 `validate-no-e2e`, not the `e2e` matrix.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .github/workflows/ci.yml
@@ -469,7 +469,7 @@ Run `cargo xtask check` first (**jaunder-commit**).
 - Consumes: the shipped subcommand + CI step.
 - Produces: contributor-facing description of the probe and its CI role.
 
-- [ ] **Step 1: Document the probe**
+- [x] **Step 1: Document the probe**
 
 Add a short paragraph under the coverage section: what
 `cargo xtask coverage probe-source` guards (the `src` filter's two invariants —
@@ -480,12 +480,12 @@ an ephemeral worktree (so it guards what CI/PRs carry, not local uncommitted
 edits), that it runs in CI (`validate-no-e2e`) and on request, and that it is
 deliberately **not** in per-commit `check`/`validate`.
 
-- [ ] **Step 2: Verify docs formatting**
+- [x] **Step 2: Verify docs formatting**
 
 Run: `cargo xtask check` — Expected: PASS (prettier covers Markdown; ADR/readme
 parity unaffected).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add CONTRIBUTING.md
