@@ -510,127 +510,6 @@
               sed -i 's/csr_bg\.wasm/jaunder.wasm/g' $out/jaunder.js
             '';
 
-        # Playwright config for the Nix VM environment.
-        # Chromium needs --no-sandbox (runs as root) and GPU/shm disabled.
-        # WebKit (WPE) is excluded: WPEWebProcess crashes with SIGABRT in
-        # the NixOS VM, filling the disk with coredumps.
-        nixPlaywrightConfig = pkgs.writeText "playwright.nix.config.js" ''
-          const { defineConfig, devices } = require('@playwright/test');
-          const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
-          // Worker count is env-driven (#155). Default is 2: it cuts the e2e
-          // wall-clock well below the old serial baseline (Firefox was the ~12min
-          // long pole) while staying robust — 2 browser instances per combo is
-          // far less bursty than 4, so it tolerates a shared/loaded host and lets
-          // all four combos run concurrently in small (2-core/3GB) VMs without
-          // oversubscribing a 16-core box. workers=4 is also viable (and ~1min
-          // faster on the isolated CI combo) but needs cores>=workers, so its
-          // 4-core VMs can't pack 4-wide — the local aggregate is slower and
-          // needs concurrency throttling. workers=2 is the better balance
-          // (measured #155). See docs/observability.md #155 AC3/AC4. Override
-          // with JAUNDER_E2E_WORKERS.
-          const workers = parseInt(process.env.JAUNDER_E2E_WORKERS || '2', 10);
-          // Firefox in a headless VM defaults to Fission site-isolation plus a
-          // pool of content processes; each Playwright worker is a separate
-          // instance, so the RSS multiplies. These prefs collapse each instance
-          // to a single content process and trim the in-memory caches. The e2e
-          // suite exercises app behavior, not Firefox's process-isolation, so
-          // this is transparent to the tests — it just cuts RSS enough to run
-          // the VMs at 3 GB (#155, #61).
-          const firefoxLaunchOptions = {
-            firefoxUserPrefs: {
-              'fission.autostart': false,
-              'dom.ipc.processCount': 1,
-              'dom.ipc.processCount.webIsolated': 1,
-              'browser.sessionhistory.max_total_viewers': 0,
-              'browser.cache.memory.capacity': 51200,
-            },
-          };
-          module.exports = defineConfig({
-            testDir: './tests',
-            timeout: 30 * 1000,
-            expect: { timeout: 5000 },
-            reporter: [
-              ['line'],
-              ['json', { outputFile: '/tmp/e2e/playwright-report.json' }],
-            ],
-            use: {
-              actionTimeout: 0,
-              // Capture forensics only for failed tests, so a green run (the
-              // common case) writes nothing extra and pays negligible overhead.
-              // Recovered from the validate-diagnostics artifact on a red e2e
-              // (#123/#49). No video — the trace already carries DOM snapshots.
-              trace: 'retain-on-failure',
-              screenshot: 'only-on-failure',
-              ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
-            },
-            // Artifact root for traces/screenshots; copied out by the testScript.
-            outputDir: '/tmp/e2e/test-results',
-            // SQLite write contention was the historical reason for workers:1,
-            // but the pool runs WAL + 5s busy_timeout + BEGIN IMMEDIATE
-            // (ADR-0039) and the #155 probes measured ZERO SQLITE_BUSY at 4
-            // concurrent workers — the real limit was CPU oversubscription,
-            // handled by worker-aware per-test budgets (fixtures.ts).
-            workers: workers,
-            fullyParallel: workers > 1,
-            // admin-site mutates the site.title/base_url global singletons, so
-            // under fullyParallel it must not overlap specs that read them
-            // (ADR-0039). Each browser is split: the main project excludes
-            // admin-site and runs in parallel; a serial `-admin` project runs
-            // admin-site alone AFTER the main project (project `dependencies` +
-            // fullyParallel:false). At workers=1 this is inert (all serial anyway).
-            projects: [
-              {
-                name: 'chromium',
-                testIgnore: /admin-site\.spec\.ts/,
-                use: {
-                  ...devices['Desktop Chrome'],
-                  launchOptions: {
-                    args: [
-                      '--no-sandbox',
-                      '--disable-gpu',
-                      '--disable-dev-shm-usage',
-                    ],
-                  },
-                },
-              },
-              {
-                name: 'chromium-admin',
-                testMatch: /admin-site\.spec\.ts/,
-                fullyParallel: false,
-                dependencies: ['chromium'],
-                use: {
-                  ...devices['Desktop Chrome'],
-                  launchOptions: {
-                    args: [
-                      '--no-sandbox',
-                      '--disable-gpu',
-                      '--disable-dev-shm-usage',
-                    ],
-                  },
-                },
-              },
-              {
-                name: 'firefox',
-                testIgnore: /admin-site\.spec\.ts/,
-                use: {
-                  ...devices['Desktop Firefox'],
-                  launchOptions: firefoxLaunchOptions,
-                },
-              },
-              {
-                name: 'firefox-admin',
-                testMatch: /admin-site\.spec\.ts/,
-                fullyParallel: false,
-                dependencies: ['firefox'],
-                use: {
-                  ...devices['Desktop Firefox'],
-                  launchOptions: firefoxLaunchOptions,
-                },
-              },
-            ],
-          });
-        '';
-
         e2eOtelCollectorConfig = pkgs.writeText "jaunder-otel-collector.yaml" ''
           receivers:
             otlp:
@@ -770,7 +649,7 @@
               + " JAUNDER_E2E_TRACEPARENT=${traceParent}"
               + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
               + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-              + " --config playwright.nix.config.js"
+              + " --config playwright.config.ts"
               + " --project ${browser} --project ${browser}-admin"
             )
             # Stream the Playwright line-reporter output into the build log (-L), so
@@ -797,7 +676,7 @@
             if machine.execute("test -s /var/lib/jaunder/otel-traces.jsonl")[0] == 0:
                 machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-${backend}.jsonl")
 
-            machine.execute("test -s /tmp/e2e/playwright-report.json && cp /tmp/e2e/playwright-report.json /tmp/playwright-report-${backend}.json")
+            machine.execute("test -s /tmp/e2e/test-results/results.json && cp /tmp/e2e/test-results/results.json /tmp/playwright-report-${backend}.json")
             _grab("/tmp/playwright-report-${backend}.json")
 
             machine.execute("tar czf /tmp/playwright-artifacts-${backend}.tar.gz -C /tmp/e2e test-results 2>/dev/null || true")
@@ -904,7 +783,6 @@
               machine.wait_for_open_port(3000, timeout=30)
 
               machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
-              machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")
 
               # Seed a fresh DB and run the one browser this derivation targets.
               # Browsers run as separate derivations (one VM each) so their state
@@ -1008,7 +886,6 @@
               machine.wait_for_open_port(3000, timeout=30)
 
               machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
-              machine.succeed("cp ${nixPlaywrightConfig} /tmp/e2e/playwright.nix.config.js")
 
               def seed_db():
                 # Dynamic TRUNCATE of every public-schema table avoids
@@ -1090,7 +967,7 @@
           };
 
         # attr name -> warm check, e.g. { "e2e-sqlite-chromium" = <drv>; ... }
-        # The warm gate runs at workers=2 (#155, see nixPlaywrightConfig), so the
+        # The warm gate runs at workers=2 (#155, see playwright.config.ts), so the
         # VMs are sized 3 GB / 2 vCPU: cores >= workers avoids in-guest CPU
         # starvation, and with the Firefox process-slimming prefs 3 GB clears the
         # OOM that heavier VMs hit (#61). At workers=2 the per-VM footprint is

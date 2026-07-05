@@ -89,7 +89,7 @@ landed with the flip.
 
 ## Consequences
 
-- The suite runs parallel at `workers=2` (`nixPlaywrightConfig` + the
+- The suite runs parallel at `workers=2` (`playwright.config.ts` + the
   `admin-site` serial project + small-VM sizing); #173 is dissolved by the CSR
   cutover (#180), so there is no SSR race to gate on.
 - The `auth`/`email`/`password_reset` specs no longer depend on shared seeded

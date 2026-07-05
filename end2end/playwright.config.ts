@@ -1,123 +1,99 @@
 import { devices, defineConfig } from "@playwright/test";
 
 const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
-// Firefox and WebKit hydrate the Leptos WASM bundle slower than Chromium, so
-// their projects below get a scaled-up per-test timeout instead of the Chromium one.
-const hydrationHeavyTimeoutScale = 2.2;
-const chromiumProjectTimeoutMs = 30 * 1000;
-const hydrationHeavyProjectTimeoutMs = Math.ceil(
-  chromiumProjectTimeoutMs * hydrationHeavyTimeoutScale,
-);
+// Worker count is env-driven (#155), default 2: two browser instances per combo
+// stays robust on a small/loaded host and lets all four {backend×browser} combos
+// run concurrently, while still cutting the serial wall-clock (Firefox was the long
+// pole). The host driver (`cargo xtask e2e-local`) overrides this to 1 for its debug
+// wasm build. Measured in docs/observability.md #155.
+const workers = parseInt(process.env.JAUNDER_E2E_WORKERS || "2", 10);
 
-/**
- * Read environment variables from file.
- * https://github.com/motdotla/dotenv
- */
-// require('dotenv').config();
+// Firefox in a headless VM defaults to Fission + a content-process pool; each
+// Playwright worker is a separate instance, so RSS multiplies. These prefs
+// collapse each instance to one content process and trim caches — transparent to
+// the app-level tests, and harmless on the host (#155, #61).
+const firefoxLaunchOptions = {
+  firefoxUserPrefs: {
+    "fission.autostart": false,
+    "dom.ipc.processCount": 1,
+    "dom.ipc.processCount.webIsolated": 1,
+    "browser.sessionhistory.max_total_viewers": 0,
+    "browser.cache.memory.capacity": 51200,
+  },
+};
 
-/**
- * See https://playwright.dev/docs/test-configuration.
- */
+// Applied on every chromium project. Required in the Nix VM (runs as root);
+// benign for a throwaway test browser locally, so shared rather than gated (#153).
+const chromiumLaunchOptions = {
+  args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+};
+
 export default defineConfig({
   testDir: "./tests",
-  /* Maximum time one test can run for. */
   timeout: 30 * 1000,
-  expect: {
-    /**
-     * Maximum time expect() should wait for the condition to be met.
-     * For example in `await expect(locator).toHaveText();`
-     */
-    timeout: 5000,
-  },
-  /* Run tests in files in parallel */
-  fullyParallel: true,
-  /* Fail the build on CI if you accidentally left test.only in the source code. */
+  expect: { timeout: 5000 },
+  fullyParallel: workers > 1,
   forbidOnly: !!process.env.CI,
-  /* Retry on CI only */
-  retries: process.env.CI ? 2 : 0,
-  /* Opt out of parallel tests on CI. */
-  workers: process.env.CI ? 1 : undefined,
-  /* Reporter to use. See https://playwright.dev/docs/test-reporters */
-  reporter: "html",
-  /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
+  workers,
+  // CI default reporter: streamed line output for the build log + a machine-readable
+  // report at the conventional name, inside the default outputDir. The host driver
+  // (cargo xtask e2e-local) overrides this with --reporter=html,line for interactive
+  // runs (#153).
+  reporter: [["line"], ["json", { outputFile: "test-results/results.json" }]],
   use: {
-    /* Maximum time each action such as `click()` can take. Defaults to 0 (no limit). */
     actionTimeout: 0,
-    ...(traceParent
-      ? {
-          extraHTTPHeaders: {
-            traceparent: traceParent,
-          },
-        }
-      : {}),
-    /* Base URL to use in actions like `await page.goto('/')`. */
-    // baseURL: 'http://localhost:3000',
-
-    /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
-    trace: "on-first-retry",
+    // Capture forensics only on failure so a green run writes nothing extra (#123/#49).
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
+    ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
   },
-
-  /* Configure projects for major browsers */
+  // admin-site mutates site.title/base_url global singletons, so under fullyParallel it
+  // must not overlap specs that read them (ADR-0039). Each browser splits into a parallel
+  // main project (admin-site ignored) and a serial *-admin project that runs admin-site
+  // alone AFTER the main project (dependencies + fullyParallel:false). At workers=1 this
+  // is inert. webkit is defined for host use; the VM never selects it (WPE SIGABRT), so no
+  // gating needed.
   projects: [
     {
       name: "chromium",
-      timeout: chromiumProjectTimeoutMs,
+      testIgnore: /admin-site\.spec\.ts/,
       use: {
         ...devices["Desktop Chrome"],
+        launchOptions: chromiumLaunchOptions,
       },
     },
-
+    {
+      name: "chromium-admin",
+      testMatch: /admin-site\.spec\.ts/,
+      fullyParallel: false,
+      dependencies: ["chromium"],
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: chromiumLaunchOptions,
+      },
+    },
     {
       name: "firefox",
-      timeout: hydrationHeavyProjectTimeoutMs,
+      testIgnore: /admin-site\.spec\.ts/,
       use: {
         ...devices["Desktop Firefox"],
+        launchOptions: firefoxLaunchOptions,
       },
     },
-
+    {
+      name: "firefox-admin",
+      testMatch: /admin-site\.spec\.ts/,
+      fullyParallel: false,
+      dependencies: ["firefox"],
+      use: {
+        ...devices["Desktop Firefox"],
+        launchOptions: firefoxLaunchOptions,
+      },
+    },
     {
       name: "webkit",
-      timeout: hydrationHeavyProjectTimeoutMs,
-      use: {
-        ...devices["Desktop Safari"],
-      },
+      testIgnore: /admin-site\.spec\.ts/,
+      use: { ...devices["Desktop Safari"] },
     },
-
-    /* Test against mobile viewports. */
-    // {
-    //   name: 'Mobile Chrome',
-    //   use: {
-    //     ...devices['Pixel 5'],
-    //   },
-    // },
-    // {
-    //   name: 'Mobile Safari',
-    //   use: {
-    //     ...devices['iPhone 12'],
-    //   },
-    // },
-
-    /* Test against branded browsers. */
-    // {
-    //   name: 'Microsoft Edge',
-    //   use: {
-    //     channel: 'msedge',
-    //   },
-    // },
-    // {
-    //   name: 'Google Chrome',
-    //   use: {
-    //     channel: 'chrome',
-    //   },
-    // },
   ],
-
-  /* Folder for test artifacts such as screenshots, videos, traces, etc. */
-  // outputDir: 'test-results/',
-
-  /* Run your local dev server before starting the tests */
-  // webServer: {
-  //   command: 'npm run start',
-  //   port: 3000,
-  // },
 });
