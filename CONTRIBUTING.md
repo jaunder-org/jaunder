@@ -255,12 +255,13 @@ job. Running every combo in parallel across runners cuts e2e wall-clock;
 
 The Emacs client lives in `elisp/` (see [`elisp/README.md`](elisp/README.md)).
 Its ERT suite and formatter run in the verify ladder: `ert` and `elisp-fmt` are
-`cargo xtask check`/`validate` steps, mirrored by the `ert-check` /
-`elisp-fmt-check` Nix checks. prettier cannot format Emacs Lisp, so `elisp-fmt`
-uses built-in `emacs-lisp-mode` indentation (auto-fix under `check`, verify
-under `validate`). elisp is interim-exempt from the Rust coverage gate
-(cargo-llvm-cov is Rust-only; follow-on #82) — instead, write an ERT test for
-every pure mapping/transform function. Rationale:
+`cargo xtask check`/`validate` steps that run through `devtool check` — the same
+implementation the `static-checks` Nix check runs, so `nix flake check` covers
+them too, with no duplicated sibling to drift (#188). prettier cannot format
+Emacs Lisp, so `elisp-fmt` uses built-in `emacs-lisp-mode` indentation (auto-fix
+under `check`, verify under `validate`). elisp is interim-exempt from the Rust
+coverage gate (cargo-llvm-cov is Rust-only; follow-on #82) — instead, write an
+ERT test for every pure mapping/transform function. Rationale:
 [ADR-0031](docs/adr/0031-elisp-separately-tested-subproject.md).
 
 ### Observability and Performance Analysis
@@ -531,12 +532,10 @@ request; it is deliberately **not** part of per-commit `check`/`validate`
 
 - `checks.x86_64-linux.nextest` — Rust nextest suite
 - `checks.x86_64-linux.clippy` — clippy
-- `checks.x86_64-linux.rustfmt` — rustfmt
-- `checks.x86_64-linux.leptosfmt-check` — leptosfmt
-- `checks.x86_64-linux.prettier-check` — prettier for `end2end/`
-- `checks.x86_64-linux.ert-check` — ERT suite for `elisp/`
-- `checks.x86_64-linux.elisp-fmt-check` — emacs-lisp indentation check for
-  `elisp/`
+- `checks.x86_64-linux.static-checks` — the 7 non-compiling static checks
+  (`fmt`, `leptosfmt`, `prettier`, `tsc`, `elisp-fmt`, `ert`, `tools-fmt`) run
+  in one derivation via `devtool check --all` — the same implementation the host
+  verify ladder runs, so there is no hand-duplicated sibling to drift (#188)
 - `checks.x86_64-linux.deny` — cargo-deny
 - `checks.x86_64-linux.e2e-sqlite-chromium` — Playwright end-to-end flow against
   SQLite on Chromium with `JAUNDER_E2E_WARMUP=1` (default)

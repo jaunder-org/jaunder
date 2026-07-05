@@ -34,8 +34,9 @@ emacs --batch -Q -l elisp/scripts/format.el -f jaunder-fmt-fix
 ```
 
 The pure suite and format steps run automatically as the `ert` and `elisp-fmt`
-steps in `cargo xtask check` and `cargo xtask validate`, and as the `ert-check`
-/ `elisp-fmt-check` nix checks.
+steps in `cargo xtask check` and `cargo xtask validate` — both via
+`devtool check` — and, through the same implementation, as part of the
+`static-checks` nix check (so `nix flake check` covers them too).
 
 ### Live integration tests
 

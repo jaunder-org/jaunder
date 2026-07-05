@@ -14,60 +14,14 @@ pub struct StepSpec {
 /// The ordered static-check steps for `mode`. Pure (no I/O) so the step list
 /// and its mode-dependent arguments can be unit-tested without shelling out.
 ///
-/// Command invocations are kept verbatim with `scripts/verify` Phase 1 + 2,
-/// adjusted only for the Fix/Check switch on the formatting tools. `tools/` is a
-/// virtual workspace (needs `--all`); `xtask/` has a root package (no `--all`).
+/// The 7 non-compiling checks (`fmt`, `leptosfmt`, `prettier`, `tsc`, `elisp-fmt`,
+/// `ert`, `tools-fmt`) run through `devtool check <name>` — devtool owns their tool +
+/// args (the single source of truth; #188), and the nix `static-checks` derivation runs
+/// the same command. The *compiling* checks (`clippy`, `cargo-deny`, `tools-clippy`) and
+/// the `xtask` self-lint stay native `cargo` invocations here — they need built deps, or
+/// `xtask/` is out of the flake source. `tools/` is a virtual workspace (needs `--all`);
+/// `xtask/` has a root package (no `--all`).
 pub fn specs(mode: Mode) -> Vec<StepSpec> {
-    // cargo fmt — scripts/verify uses `cargo fmt --check` (no --all)
-    let fmt_args = match mode {
-        Mode::Check => vec!["fmt", "--check"],
-        Mode::Fix => vec!["fmt"],
-    };
-    // leptosfmt — scripts/verify: leptosfmt -x .direnv -x .git -x target --check '**/*.rs'
-    let leptos_args = match mode {
-        Mode::Check => vec![
-            "-x", ".direnv", "-x", ".git", "-x", "target", "--check", "**/*.rs",
-        ],
-        Mode::Fix => vec!["-x", ".direnv", "-x", ".git", "-x", "target", "**/*.rs"],
-    };
-    // prettier — end2end/ frontend assets + all tracked Markdown (**/*.md,
-    // scoped by .prettierignore); proseWrap: always from .prettierrc.json.
-    let prettier_args = match mode {
-        Mode::Check => vec!["--check", "end2end", "**/*.md"],
-        Mode::Fix => vec!["-w", "end2end", "**/*.md"],
-    };
-    // elisp-fmt — emacs-batch indentation; prettier cannot format Emacs Lisp, so
-    // the elisp subproject is formatted with built-in emacs-lisp-mode indentation.
-    let elisp_fmt_args = match mode {
-        Mode::Check => vec![
-            "--batch",
-            "-Q",
-            "-l",
-            "elisp/scripts/format.el",
-            "-f",
-            "jaunder-fmt-check",
-        ],
-        Mode::Fix => vec![
-            "--batch",
-            "-Q",
-            "-l",
-            "elisp/scripts/format.el",
-            "-f",
-            "jaunder-fmt-fix",
-        ],
-    };
-    // tools/ workspace (coverage + devtool): a separate *virtual* workspace, so
-    // `--all` is required because the workspace root has no package targets.
-    let tools_fmt_args = match mode {
-        Mode::Check => vec![
-            "fmt",
-            "--manifest-path",
-            "tools/Cargo.toml",
-            "--all",
-            "--check",
-        ],
-        Mode::Fix => vec!["fmt", "--manifest-path", "tools/Cargo.toml", "--all"],
-    };
     // xtask/ workspace: a separate workspace *with* a root package, so a bare
     // `--manifest-path` covers it (no `--all`, unlike tools/).
     let xtask_fmt_args = match mode {
@@ -76,54 +30,18 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
     };
 
     vec![
-        StepSpec {
-            name: "fmt",
-            program: "cargo",
-            args: fmt_args,
-        },
-        StepSpec {
-            name: "leptosfmt",
-            program: "leptosfmt",
-            args: leptos_args,
-        },
-        StepSpec {
-            name: "prettier",
-            program: "prettier",
-            args: prettier_args,
-        },
-        // tsc-deps — provision end2end/node_modules (the tsc type-dep closure)
-        // before the tsc step. It is gitignored and only ever created by the
-        // devShell shellHook, relative to the nix-develop cwd — so a worktree
-        // running the gate without re-entering the shell has none, and tsc cannot
-        // resolve @playwright/test or @types/node. This shared script (also run by
-        // the shellHook) symlinks the nix store closure into <cwd>/end2end/
-        // node_modules, so the gate self-heals in any worktree. Runs in both modes;
-        // idempotent and only touches gitignored symlinks, so it does not violate
-        // the "Check mode never mutates tracked source" invariant.
-        StepSpec {
-            name: "tsc-deps",
-            program: "bash",
-            args: vec!["end2end/provision-node-modules.sh"],
-        },
-        // tsc — type-check end2end/ (verify-only; tsc has no autofix, so the args are
-        // identical in both modes, unlike the formatters above). The compiler comes from
-        // the devShell (pkgs.typescript) and the type-dep closure from the tsc-deps step
-        // above (end2end/node_modules).
-        StepSpec {
-            name: "tsc",
-            program: "tsc",
-            args: vec!["--noEmit", "-p", "end2end/tsconfig.json"],
-        },
-        StepSpec {
-            name: "elisp-fmt",
-            program: "emacs",
-            args: elisp_fmt_args,
-        },
-        StepSpec {
-            name: "ert",
-            program: "emacs",
-            args: vec!["--batch", "-Q", "-l", "elisp/scripts/run-tests.el"],
-        },
+        // The migrated (non-compiling) checks — keep this set in sync with
+        // `devtool::check::ALL` (tools/devtool/src/check.rs), which drives the nix
+        // `static-checks` derivation's `devtool check --all`. They are interleaved with
+        // the native compiling checks below in the host gate's order.
+        devtool_check("fmt", mode),
+        devtool_check("leptosfmt", mode),
+        devtool_check("prettier", mode),
+        // tsc — `devtool check tsc` provisions end2end/node_modules first (the former
+        // `tsc-deps` step, now folded in) then type-checks; verify-only.
+        devtool_check("tsc", mode),
+        devtool_check("elisp-fmt", mode),
+        devtool_check("ert", mode),
         StepSpec {
             name: "cargo-deny",
             program: "cargo",
@@ -135,11 +53,7 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
             program: "cargo",
             args: vec!["clippy", "--all-targets", "--", "-D", "warnings"],
         },
-        StepSpec {
-            name: "tools-fmt",
-            program: "cargo",
-            args: tools_fmt_args,
-        },
+        devtool_check("tools-fmt", mode),
         StepSpec {
             name: "tools-clippy",
             program: "cargo",
@@ -172,6 +86,33 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
             ],
         },
     ]
+}
+
+/// A migrated (non-compiling) static check: run it through `devtool check <name>` so
+/// devtool is the single source of truth for its tool+args, launched via `cargo run`
+/// from the `tools/` workspace so a local edit is reflected — consistent with `xtask`
+/// itself being rebuilt each run. The nix `static-checks` derivation runs the same
+/// `devtool check` from the prebuilt `devtoolBin`. Fix mode appends `--fix`.
+fn devtool_check(name: &'static str, mode: Mode) -> StepSpec {
+    let mut args = vec![
+        "run",
+        "--quiet",
+        "--manifest-path",
+        "tools/Cargo.toml",
+        "-p",
+        "devtool",
+        "--",
+        "check",
+        name,
+    ];
+    if matches!(mode, Mode::Fix) {
+        args.push("--fix");
+    }
+    StepSpec {
+        name,
+        program: "cargo",
+        args,
+    }
 }
 
 /// Run the static check suite. In `Mode::Fix`, formatting commands auto-fix in
@@ -233,72 +174,47 @@ mod tests {
     }
 
     #[test]
-    fn elisp_fmt_checks_in_check_writes_in_fix() {
-        let check = find(&specs(Mode::Check), "elisp-fmt").args.clone();
+    fn migrated_checks_delegate_to_devtool() {
+        // The 7 non-compiling checks now run via `cargo run -p devtool -- check <name>`
+        // (devtool owns their tool+args); fix mode appends --fix.
+        let s = specs(Mode::Check);
+        let fmt = find(&s, "fmt");
+        assert_eq!(fmt.program, "cargo");
         assert_eq!(
-            check,
+            fmt.args,
             [
-                "--batch",
-                "-Q",
-                "-l",
-                "elisp/scripts/format.el",
-                "-f",
-                "jaunder-fmt-check"
+                "run",
+                "--quiet",
+                "--manifest-path",
+                "tools/Cargo.toml",
+                "-p",
+                "devtool",
+                "--",
+                "check",
+                "fmt"
             ]
         );
-        let fix = find(&specs(Mode::Fix), "elisp-fmt").args.clone();
-        assert_eq!(
-            fix,
-            [
-                "--batch",
-                "-Q",
-                "-l",
-                "elisp/scripts/format.el",
-                "-f",
-                "jaunder-fmt-fix"
-            ]
+        let fix_specs = specs(Mode::Fix);
+        let prettier_fix = find(&fix_specs, "prettier");
+        assert!(
+            prettier_fix.args.contains(&"--fix"),
+            "fix mode passes --fix: {:?}",
+            prettier_fix.args
         );
+        // tsc-deps is gone — folded into `devtool check tsc`.
+        assert!(specs(Mode::Check).iter().all(|s| s.name != "tsc-deps"));
     }
 
     #[test]
-    fn ert_runs_the_batch_runner_in_both_modes() {
-        for mode in [Mode::Check, Mode::Fix] {
-            let s = specs(mode);
-            let ert = find(&s, "ert");
-            assert_eq!(ert.program, "emacs");
-            assert_eq!(
-                ert.args,
-                ["--batch", "-Q", "-l", "elisp/scripts/run-tests.el"]
-            );
-        }
-    }
-
-    #[test]
-    fn tsc_deps_provisions_before_tsc_in_both_modes() {
-        // The tsc-deps step runs the shared provisioning script (idempotent, both
-        // modes) and must precede tsc so end2end/node_modules exists before the
-        // type-check resolves @playwright/test.
-        for mode in [Mode::Check, Mode::Fix] {
-            let s = specs(mode);
-            let deps = find(&s, "tsc-deps");
-            assert_eq!(deps.program, "bash");
-            assert_eq!(deps.args, ["end2end/provision-node-modules.sh"]);
-            let names: Vec<&str> = s.iter().map(|spec| spec.name).collect();
-            let deps_at = names.iter().position(|n| *n == "tsc-deps").unwrap();
-            let tsc_at = names.iter().position(|n| *n == "tsc").unwrap();
-            assert!(deps_at < tsc_at, "tsc-deps must run before tsc");
-        }
-    }
-
-    #[test]
-    fn tsc_typechecks_in_both_modes() {
-        // Verify-only: tsc has no autofix, so the args are identical in both modes.
-        for mode in [Mode::Check, Mode::Fix] {
-            let s = specs(mode);
-            let tsc = find(&s, "tsc");
-            assert_eq!(tsc.program, "tsc");
-            assert_eq!(tsc.args, ["--noEmit", "-p", "end2end/tsconfig.json"]);
-        }
+    fn native_checks_stay_native() {
+        // The compiling checks + xtask self-lint still run cargo directly.
+        let s = specs(Mode::Check);
+        assert_eq!(
+            find(&s, "clippy").args,
+            ["clippy", "--all-targets", "--", "-D", "warnings"]
+        );
+        assert_eq!(find(&s, "cargo-deny").args, ["deny", "check"]);
+        assert_eq!(find(&s, "xtask-clippy").program, "cargo");
     }
 
     #[test]
@@ -307,7 +223,6 @@ mod tests {
             "fmt",
             "leptosfmt",
             "prettier",
-            "tsc-deps",
             "tsc",
             "elisp-fmt",
             "ert",

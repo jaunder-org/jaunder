@@ -79,6 +79,7 @@ convention). See the Status column below for each ADR's current status.
 | [0049](adr/0049-app-driven-scoped-server-diagnostics.md)           | App-driven scoped server-diagnostics capture                                                                 | accepted   |
 | [0050](adr/0050-stateless-coverage-gate.md)                        | Stateless coverage gate — `cov:ignore` + `#[component]` exemption + CRAP threshold                           | accepted   |
 | [0051](adr/0051-single-playwright-config.md)                       | One Playwright config for host and CI                                                                        | proposed   |
+| [0052](adr/0052-devtool-unifies-static-checks.md)                  | devtool is the single implementation of the non-compiling static checks                                      | accepted   |
 
 <!-- adr-table:end -->
 

@@ -542,11 +542,6 @@
           '';
         };
 
-        end2endSrc = pkgs.lib.cleanSourceWith {
-          src = ./end2end;
-          filter = path: _type: !(pkgs.lib.hasInfix "/node_modules" path);
-        };
-
         emacsSrc = pkgs.lib.cleanSourceWith {
           src = ./elisp;
         };
@@ -1099,19 +1094,47 @@
                 cargoClippyExtraArgs = "--all-targets -- -D warnings";
               }
             );
-            rustfmt = craneLib.cargoFmt {
-              inherit src;
-              pname = "jaunder";
-              version = "0.1.0";
-            };
-            leptosfmt-check =
-              pkgs.runCommand "leptosfmt-check"
+            # The 7 non-compiling static checks (#188), unified behind one `devtool
+            # check --all` — the same command the host verify ladder runs. Not a crane
+            # derivation: none of these compiles, so no vendored deps are needed; a plain
+            # runCommand over a broad source tree suffices (and stays cheap). The
+            # compiling checks `clippy`/`deny` keep their crane derivations above/below.
+            static-checks =
+              let
+                staticCheckSrc = pkgs.lib.cleanSourceWith {
+                  src = craneLib.path ./.;
+                  # Rust + end2end/ + elisp/ + tools/ + all *.md + the prettier config.
+                  # Exclusion-only; keep the working tree clean when building locally.
+                  filter =
+                    path: _type:
+                    !(pkgs.lib.hasInfix "/xtask/" path)
+                    && !(pkgs.lib.hasInfix "/node_modules" path)
+                    && !(pkgs.lib.hasInfix "/target/" path)
+                    && !(pkgs.lib.hasInfix "/.direnv/" path);
+                };
+              in
+              pkgs.runCommand "static-checks"
                 {
-                  nativeBuildInputs = [ pkgs.leptosfmt ];
+                  nativeBuildInputs = [
+                    devtoolBin
+                    toolchain
+                    pkgs.leptosfmt
+                    pkgs.prettier
+                    pkgs.nodejs
+                    pkgs.typescript
+                    emacsForCi
+                  ];
+                  # ert needs a zone DB (#160); tsc needs BOTH node-dep envs (the
+                  # provision script guards on each with `${VAR:?}`).
+                  TZDIR = "${pkgs.tzdata}/share/zoneinfo";
+                  E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
+                  E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
                 }
                 ''
-                  cd ${src}
-                  leptosfmt -x .direnv -x .git -x target --check '**/*.rs'
+                  # Writable copy: `devtool check tsc` provisions end2end/node_modules.
+                  cp --no-preserve=mode -r ${staticCheckSrc} src
+                  cd src
+                  devtool check --all
                   touch $out
                 '';
             deny = craneLib.cargoDeny {
@@ -1214,38 +1237,6 @@
                       ${self.checks.${system}.coverage}/status.json >&2
                     exit 1
                   fi
-                  touch $out
-                '';
-            prettier-check =
-              pkgs.runCommand "prettier-check"
-                {
-                  nativeBuildInputs = [ pkgs.prettier ];
-                }
-                ''
-                  prettier --check ${end2endSrc}
-                  touch $out
-                '';
-            ert-check =
-              pkgs.runCommand "ert-check"
-                {
-                  nativeBuildInputs = [ emacsForCi ];
-                  # The pure ERT suite exercises timezone→UTC conversion and IANA
-                  # zone-name validation, which need a zone database; a bare
-                  # runCommand sandbox has none, so name lookups would silently
-                  # fall back to UTC. Point the C library / Emacs at tzdata (#160).
-                  TZDIR = "${pkgs.tzdata}/share/zoneinfo";
-                }
-                ''
-                  emacs --batch -Q -l ${emacsSrc}/scripts/run-tests.el
-                  touch $out
-                '';
-            elisp-fmt-check =
-              pkgs.runCommand "elisp-fmt-check"
-                {
-                  nativeBuildInputs = [ emacsForCi ];
-                }
-                ''
-                  emacs --batch -Q -l ${emacsSrc}/scripts/format.el -f jaunder-fmt-check
                   touch $out
                 '';
           };
