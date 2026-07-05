@@ -2,8 +2,9 @@
 
 **Issue:** [#249](https://github.com/jaunder-org/jaunder/issues/249) —
 `refactor(e2e): host e2e loop owns its server + shares the Nix VM's e2e infrastructure`
-**Status:** approved (2026-07-05) **Base:** `origin/main` @ `7a5366cb` —
-**standalone issue** (see §0).
+**Status:** shipped (2026-07-05) — all §5 ACs verified (`cargo xtask validate`
+green); #268 (full cargo-leptos removal) folded into this branch during
+execution. **Base:** `origin/main` @ `7a5366cb` — **standalone issue** (see §0).
 
 **Relates to (all separate, none blocking):**
 

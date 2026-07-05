@@ -12,6 +12,19 @@
 **Base:** `origin/main` @ `7a5366cb` (#236 landed via PR #272 — `build-csr` +
 `devtool csr-bundle` present). Re-derive any line refs before editing.
 
+> **Shipped (2026-07-05).** All tasks landed; every §5 AC verified
+> (`cargo xtask validate` green, incl. the full
+> `{sqlite,postgres}×{chromium,firefox}` e2e matrix + a 71/71 host smoke-run).
+> Deviations from the plan as written: **T4a and T4b were merged into one
+> commit** (introducing `base_url_from_runtime` / `ServerChild` in the same
+> commit that uses them avoids an xtask dead-code boundary); the Playwright
+> process also receives `JAUNDER_DB` + the capture-file env + a
+> `target/debug`-prepended PATH (so `seed.ts`/`mail.ts`/`websub.ts` resolve the
+> server's files/DB/binary); and **#268 (complete cargo-leptos removal) was
+> folded into this branch** — no one uses the `watch`/`serve` dev loop, so it
+> was removed with no replacement. Review nits were polished and ADR-0051's
+> stale server-ownership note updated. The PR closes #249 and #268.
+
 **Goal:** Make `cargo xtask e2e-local` own the full host e2e lifecycle — build,
 start `jaunder serve` on an ephemeral port with the VM's capture env, seed via a
 shared `devtool seed-e2e`, run Playwright against the discovered URL, and tear
