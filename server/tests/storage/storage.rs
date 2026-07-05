@@ -859,7 +859,7 @@ async fn open_database_succeeds_on_postgres_test_vm(#[case] backend: Backend) {
     // Backend-specific: exercises the Postgres migration path on a fresh DB,
     // so it opens its own `unique_postgres_url()` rather than using `env.state`.
     let _ = backend;
-    let url = unique_postgres_url().await;
+    let (url, _pg) = unique_postgres_url().await;
     open_database(&url).await.unwrap();
 }
 
@@ -869,7 +869,7 @@ async fn open_database_runs_postgres_migrations_on_existing_empty_db(#[case] bac
     // Backend-specific: exercises the Postgres migration path on a fresh DB,
     // so it opens its own `unique_postgres_url()` rather than using `env.state`.
     let _ = backend;
-    let url = unique_postgres_url().await;
+    let (url, _pg) = unique_postgres_url().await;
     let state = open_database(&url).await.unwrap();
     assert_eq!(state.site_config.get("missing").await.unwrap(), None);
 }
@@ -882,7 +882,7 @@ async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db(
     // Backend-specific: exercises the Postgres migration path on a fresh DB,
     // so it opens its own `unique_postgres_url()` rather than using `env.state`.
     let _ = backend;
-    let url = unique_postgres_url().await;
+    let (url, _pg) = unique_postgres_url().await;
     let state = open_existing_database(&url).await.unwrap();
     assert_eq!(state.site_config.get("missing").await.unwrap(), None);
 }

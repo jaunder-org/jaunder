@@ -21,7 +21,9 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use crate::helpers::{postgres_only, postgres_testing_enabled, unique_postgres_url, Backend};
+use crate::helpers::{
+    postgres_only, postgres_testing_enabled, unique_postgres_url, Backend, PostgresDbGuard,
+};
 
 fn sqlite_storage_args(base: &TempDir, name: &str) -> StorageArgs {
     StorageArgs {
@@ -35,11 +37,15 @@ fn sqlite_storage_args(base: &TempDir, name: &str) -> StorageArgs {
     }
 }
 
-async fn postgres_storage_args(base: &TempDir, name: &str) -> StorageArgs {
-    StorageArgs {
-        storage_path: base.path().join(format!("{name}-storage")),
-        db: unique_postgres_url().await,
-    }
+async fn postgres_storage_args(base: &TempDir, name: &str) -> (StorageArgs, PostgresDbGuard) {
+    let (db, guard) = unique_postgres_url().await;
+    (
+        StorageArgs {
+            storage_path: base.path().join(format!("{name}-storage")),
+            db,
+        },
+        guard,
+    )
 }
 
 async fn populate_backup_fixture(args: &StorageArgs) -> i64 {
@@ -155,7 +161,7 @@ async fn sqlite_backup_restores_into_postgres(#[case] backend: Backend) {
     .await
     .expect("sqlite backup");
 
-    let target_args = postgres_storage_args(&base, "postgres-target").await;
+    let (target_args, _pg_target) = postgres_storage_args(&base, "postgres-target").await;
     cmd_init(&target_args, false)
         .await
         .expect("init postgres target");
@@ -177,7 +183,7 @@ async fn postgres_backup_restores_into_sqlite(#[case] backend: Backend) {
     }
 
     let base = TempDir::new().expect("temp dir");
-    let source_args = postgres_storage_args(&base, "postgres-source").await;
+    let (source_args, _pg_source) = postgres_storage_args(&base, "postgres-source").await;
     cmd_init(&source_args, false)
         .await
         .expect("init postgres source");

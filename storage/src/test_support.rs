@@ -428,6 +428,20 @@ fn report_drop_outcome(
     }
 }
 
+/// RAII owner of a per-test Postgres database created by [`unique_postgres_url`]
+/// (or [`template_postgres_url`]). Dropping it removes the database via
+/// [`drop_test_database`], so the ephemeral cluster's data dir does not grow with
+/// the suite. This is the single teardown primitive; [`TestBase`] composes it.
+pub struct PostgresDbGuard {
+    db_name: String,
+}
+
+impl Drop for PostgresDbGuard {
+    fn drop(&mut self) {
+        drop_test_database(&self.db_name);
+    }
+}
+
 /// A connect URL naming a per-test database that has **not** been created — for
 /// tests that exercise the "database is absent" path.
 ///
@@ -447,7 +461,7 @@ pub fn nonexistent_postgres_url() -> DbConnectOptions {
 ///
 /// If the test URL lacks a username, or the admin connection / `CREATE DATABASE`
 /// fails.
-pub async fn unique_postgres_url() -> DbConnectOptions {
+pub async fn unique_postgres_url() -> (DbConnectOptions, PostgresDbGuard) {
     let db_name = unique_postgres_db_name();
 
     let bootstrap: sqlx::postgres::PgConnectOptions = postgres_bootstrap_url().parse().unwrap();
@@ -470,7 +484,8 @@ pub async fn unique_postgres_url() -> DbConnectOptions {
     .await
     .unwrap();
 
-    postgres_url_with_db_name(&db_name).parse().unwrap()
+    let options = postgres_url_with_db_name(&db_name).parse().unwrap();
+    (options, PostgresDbGuard { db_name })
 }
 
 /// Name of the once-migrated template database that per-test databases are

@@ -1,5 +1,6 @@
 use crate::helpers::{
-    postgres_bootstrap_url, postgres_only, postgres_testing_enabled, recorded_postgres_url, Backend,
+    postgres_bootstrap_url, postgres_only, postgres_testing_enabled, recorded_postgres_url,
+    unique_postgres_url, Backend,
 };
 use sqlx::Connection;
 
@@ -59,5 +60,31 @@ async fn per_test_database_is_dropped_on_teardown(#[case] backend: Backend) {
     assert!(
         !database_exists(&db_name).await,
         "per-test database {db_name} should be dropped once the TestEnv is gone"
+    );
+}
+
+#[apply(postgres_only)]
+// reason: asserts unique_postgres_url()'s per-test database is dropped when its
+// PostgresDbGuard is dropped — via pg_database; SQLite has no such cluster.
+#[tokio::test]
+async fn unique_postgres_database_is_dropped_on_guard_drop(#[case] backend: Backend) {
+    let _ = backend;
+    if !postgres_testing_enabled() {
+        return;
+    }
+
+    let (options, guard) = unique_postgres_url().await;
+    let db_name = db_name_from_url(&options.to_string());
+
+    assert!(
+        database_exists(&db_name).await,
+        "unique_postgres_url() database {db_name} should exist while its guard is held"
+    );
+
+    drop(guard);
+
+    assert!(
+        !database_exists(&db_name).await,
+        "unique_postgres_url() database {db_name} should be dropped once its guard is gone"
     );
 }
