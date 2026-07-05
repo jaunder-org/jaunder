@@ -2020,4 +2020,181 @@ mod tests {
 
         assert_eq!(post.summary, Some("the summary".into()));
     }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn create_post_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.base.close_pool().await;
+        let input = CreatePostInput {
+            user_id: 1,
+            title: Some("Test".to_string()),
+            slug: "test-post".parse().unwrap(),
+            body: "body".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>body</p>".to_string(),
+            published_at: None,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        };
+        let result = env.state.posts.create_post(&input).await;
+        assert!(result.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_post_by_id_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.base.close_pool().await;
+        let result = env
+            .state
+            .posts
+            .get_post_by_id(1, &ViewerIdentity::Anonymous)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_published_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.base.close_pool().await;
+        let result = env
+            .state
+            .posts
+            .list_published(None, 10, &ViewerIdentity::Anonymous, Utc::now())
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn tag_post_insert_error_returns_internal(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let uid = seed_user(&env.state).await;
+        let post_id = env
+            .state
+            .posts
+            .create_post(&CreatePostInput {
+                user_id: uid,
+                title: Some("Post".to_string()),
+                slug: "post".parse().unwrap(),
+                body: "body".to_string(),
+                format: PostFormat::Markdown,
+                rendered_html: "<p>body</p>".to_string(),
+                published_at: None,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+            })
+            .await
+            .unwrap();
+
+        // Break the post_tags INSERT (but not the existence check or tag insert) so it
+        // returns a non-unique Database error: exercises the catch-all Internal arm and
+        // the BEGIN IMMEDIATE rollback path on an unexpected failure.
+        env.base
+            .pool()
+            .execute("ALTER TABLE post_tags RENAME COLUMN tag_display TO tag_display_x")
+            .await
+            .unwrap();
+
+        let result = env.state.posts.tag_post(post_id, "rust").await;
+        assert!(matches!(result, Err(TaggingError::Internal(_))));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_collection_by_user_orders_by_updated_at_desc_and_excludes_deleted(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let uid = seed_user(&env.state).await;
+        let now = Utc::now();
+
+        let mk = |slug: &str, published: bool| CreatePostInput {
+            user_id: uid,
+            title: Some(format!("Post {slug}")),
+            slug: slug.parse().unwrap(),
+            body: "body".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>body</p>".to_string(),
+            published_at: published.then_some(now - chrono::Duration::minutes(30)),
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        };
+
+        // Post 1: draft. Post 2: published. Post 3: soft-deleted (excluded).
+        let post1_id = env
+            .state
+            .posts
+            .create_post(&mk("draft-post", false))
+            .await
+            .unwrap();
+        let post2_id = env
+            .state
+            .posts
+            .create_post(&mk("published-post", true))
+            .await
+            .unwrap();
+        let post3_id = env
+            .state
+            .posts
+            .create_post(&mk("deleted-post", true))
+            .await
+            .unwrap();
+
+        // Give distinct updated_at (post2 more recent than post1) and soft-delete post3.
+        // ISO-8601 literals inlined so both backends accept the raw statement.
+        let t_older = (now - chrono::Duration::hours(2)).to_rfc3339();
+        let t_newer = (now - chrono::Duration::hours(1)).to_rfc3339();
+        let now_str = now.to_rfc3339();
+        env.base
+            .pool()
+            .execute(&format!(
+                "UPDATE posts SET updated_at = '{t_older}' WHERE post_id = {post1_id}"
+            ))
+            .await
+            .unwrap();
+        env.base
+            .pool()
+            .execute(&format!(
+                "UPDATE posts SET updated_at = '{t_newer}' WHERE post_id = {post2_id}"
+            ))
+            .await
+            .unwrap();
+        env.base
+            .pool()
+            .execute(&format!(
+                "UPDATE posts SET deleted_at = '{now_str}' WHERE post_id = {post3_id}"
+            ))
+            .await
+            .unwrap();
+
+        let results = env
+            .state
+            .posts
+            .list_collection_by_user(uid, None, 10)
+            .await
+            .unwrap();
+
+        // Should have 2 posts (draft and published, not deleted)
+        assert_eq!(results.len(), 2);
+
+        // Check they are ordered by updated_at DESC (post2 updated more recently)
+        assert_eq!(results[0].post_id, post2_id);
+        assert_eq!(results[1].post_id, post1_id);
+
+        // Verify draft is included
+        assert!(results
+            .iter()
+            .any(|p| p.post_id == post1_id && p.published_at.is_none()));
+
+        // Verify published is included
+        assert!(results
+            .iter()
+            .any(|p| p.post_id == post2_id && p.published_at.is_some()));
+
+        // Verify deleted is not included
+        assert!(!results.iter().any(|p| p.post_id == post3_id));
+    }
 }

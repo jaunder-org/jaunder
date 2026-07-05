@@ -154,3 +154,39 @@ where
             .collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{backends, Backend, TestEnv};
+    use rstest::*;
+    use rstest_reuse::*;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn create_invite_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        base.close_pool().await;
+        let expires_at = chrono::Utc::now();
+        let result = state.invites.create_invite(expires_at).await;
+        assert!(result.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn use_invite_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        base.close_pool().await;
+        let result = state.invites.use_invite("code", 1).await;
+        assert!(matches!(result, Err(UseInviteError::NotFound)));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_invites_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        base.close_pool().await;
+        let result = state.invites.list_invites().await;
+        assert!(result.is_err());
+    }
+}

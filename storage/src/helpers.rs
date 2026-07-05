@@ -569,6 +569,7 @@ mod tests {
         assert!(matches!(err, sqlx::Error::Decode(_)));
     }
 
+    // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
     async fn test_hash_and_verify_password() {
         let password: common::password::Password = "password123".parse().unwrap();
@@ -582,6 +583,7 @@ mod tests {
             .unwrap());
     }
 
+    // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
     async fn test_verify_password_rejects_invalid_hash() {
         let err = verify_password("password123".parse().unwrap(), "not-a-hash".to_string())
@@ -849,6 +851,7 @@ mod tests {
         assert_ne!(raw, hash);
     }
 
+    // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
     async fn dummy_password_hash_is_a_valid_verifiable_hash() {
         // The absent-user authentication path verifies against this hash to
@@ -877,5 +880,42 @@ mod tests {
         // PHC format: $argon2id$v=19$<params>$<salt>$<hash>
         let params = |h: &str| h.split('$').nth(3).map(str::to_owned);
         assert_eq!(params(dummy_password_hash()), params(&real));
+    }
+
+    #[test]
+    fn user_record_from_row_maps_some_fields() {
+        let now = Utc::now();
+        let row: UserRow = (
+            1,
+            "alice".to_string(),
+            Some("Alice".to_string()),
+            Some("Bio".to_string()),
+            now,
+            Some(now),
+            Some("alice@example.com".to_string()),
+            true,
+            false,
+        );
+        let record = user_record_from_row(row).unwrap();
+        assert_eq!(record.user_id, 1);
+        assert_eq!(record.username.as_str(), "alice");
+        assert_eq!(record.display_name, Some("Alice".to_string()));
+        assert_eq!(record.bio, Some("Bio".to_string()));
+        assert_eq!(record.created_at, now);
+        assert_eq!(record.last_authenticated_at, Some(now));
+        assert_eq!(record.email.as_ref().unwrap().as_str(), "alice@example.com");
+        assert!(record.email_verified);
+    }
+
+    #[test]
+    fn invite_record_from_row_maps_some_fields() {
+        let now = Utc::now();
+        let row: InviteRow = ("code".to_string(), now, now, Some(now), Some(1));
+        let record = invite_record_from_row(row);
+        assert_eq!(record.code, "code");
+        assert_eq!(record.created_at, now);
+        assert_eq!(record.expires_at, now);
+        assert_eq!(record.used_at, Some(now));
+        assert_eq!(record.used_by, Some(1));
     }
 }

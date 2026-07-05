@@ -127,3 +127,92 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{backends, Backend};
+    use rstest::*;
+    use rstest_reuse::*;
+
+    fn sample(url: &str) -> FeedCacheRow {
+        FeedCacheRow {
+            feed_url: url.into(),
+            body: "<rss/>".into(),
+            etag: "\"sha256-deadbeef\"".into(),
+            content_type: "application/rss+xml".into(),
+            updated_at: Utc::now(),
+            generated_at: Utc::now(),
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn upsert_then_get_returns_row(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.state
+            .feed_cache
+            .upsert(sample("/feed.rss"))
+            .await
+            .unwrap();
+        let got = env
+            .state
+            .feed_cache
+            .get("/feed.rss")
+            .await
+            .unwrap()
+            .expect("present");
+        assert_eq!(got.feed_url, "/feed.rss");
+        assert_eq!(got.body, "<rss/>");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn second_upsert_updates_existing_body(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let mut row = sample("/feed.rss");
+        env.state.feed_cache.upsert(row.clone()).await.unwrap();
+        row.body = "<rss>updated</rss>".into();
+        env.state.feed_cache.upsert(row).await.unwrap();
+        let got = env
+            .state
+            .feed_cache
+            .get("/feed.rss")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.body, "<rss>updated</rss>");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_missing_returns_none(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        assert!(env
+            .state
+            .feed_cache
+            .get("/missing")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn delete_removes_row(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.state
+            .feed_cache
+            .upsert(sample("/feed.rss"))
+            .await
+            .unwrap();
+        env.state.feed_cache.delete("/feed.rss").await.unwrap();
+        assert!(env
+            .state
+            .feed_cache
+            .get("/feed.rss")
+            .await
+            .unwrap()
+            .is_none());
+    }
+}

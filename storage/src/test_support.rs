@@ -13,6 +13,7 @@
 // clippy-pedantic flags is fixed in place rather than allowed.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use crate::sql::quote_identifier;
 use crate::{AppState, DbConnectOptions};
 use common::mailer::{MailSender, NoopMailSender};
 use sqlx::{Connection, PgPool, SqlitePool};
@@ -58,6 +59,25 @@ impl CloseablePool {
             CloseablePool::Sqlite(pool) => pool.close().await,
             CloseablePool::Postgres(pool) => pool.close().await,
         }
+    }
+
+    /// Runs a raw statement against whichever backend this env uses — the seed
+    /// counterpart to [`close`](CloseablePool::close), dispatched internally so
+    /// callers stay backend-agnostic. (The SQL string may still be dialect-specific.)
+    ///
+    /// # Errors
+    ///
+    /// Returns the `sqlx::Error` if the statement fails to execute.
+    pub async fn execute(&self, sql: &str) -> Result<(), sqlx::Error> {
+        match self {
+            CloseablePool::Sqlite(pool) => {
+                sqlx::query(sql).execute(pool).await?;
+            }
+            CloseablePool::Postgres(pool) => {
+                sqlx::query(sql).execute(pool).await?;
+            }
+        }
+        Ok(())
     }
 
     /// The Postgres pool, for raw-SQL seed/inspect against the per-test database
@@ -316,10 +336,6 @@ pub fn postgres_test_authority() -> String {
     postgres_url_authority(&postgres_bootstrap_url())
 }
 
-fn quote_postgres_identifier(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
 fn postgres_url_with_db_name(db_name: &str) -> String {
     splice_db_name(&postgres_url_string(), db_name)
 }
@@ -371,10 +387,7 @@ fn unique_postgres_db_name() -> String {
 /// regression this guards against.
 fn drop_test_database(db_name: &str) {
     let bootstrap = postgres_bootstrap_url();
-    let statement = format!(
-        "DROP DATABASE {} WITH (FORCE)",
-        quote_postgres_identifier(db_name)
-    );
+    let statement = format!("DROP DATABASE {} WITH (FORCE)", quote_identifier(db_name));
     std::thread::scope(|scope| {
         scope.spawn(|| {
             let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
@@ -450,8 +463,8 @@ pub async fn unique_postgres_url() -> DbConnectOptions {
     let mut admin_conn = sqlx::PgConnection::connect_with(&bootstrap).await.unwrap();
     sqlx::query(&format!(
         "CREATE DATABASE {} OWNER {}",
-        quote_postgres_identifier(&db_name),
-        quote_postgres_identifier(owner),
+        quote_identifier(&db_name),
+        quote_identifier(owner),
     ))
     .execute(&mut admin_conn)
     .await
@@ -498,8 +511,8 @@ async fn ensure_template_db() {
         let owner = options.get_username();
         sqlx::query(&format!(
             "CREATE DATABASE {} OWNER {}",
-            quote_postgres_identifier(TEMPLATE_DB),
-            quote_postgres_identifier(owner),
+            quote_identifier(TEMPLATE_DB),
+            quote_identifier(owner),
         ))
         .execute(&mut admin)
         .await
@@ -545,9 +558,9 @@ pub async fn template_postgres_url() -> DbConnectOptions {
     let mut admin = sqlx::PgConnection::connect_with(&bootstrap).await.unwrap();
     sqlx::query(&format!(
         "CREATE DATABASE {} OWNER {} TEMPLATE {}",
-        quote_postgres_identifier(&db_name),
-        quote_postgres_identifier(owner),
-        quote_postgres_identifier(TEMPLATE_DB),
+        quote_identifier(&db_name),
+        quote_identifier(owner),
+        quote_identifier(TEMPLATE_DB),
     ))
     .execute(&mut admin)
     .await
@@ -614,15 +627,19 @@ pub async fn seed_user(state: &Arc<AppState>) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{bootstrap_url, seed_user, splice_db_name, Backend};
+    use super::{backends, bootstrap_url, seed_user, splice_db_name, Backend};
+    use rstest::*;
+    use rstest_reuse::*;
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn seed_user_creates_a_user() {
-        let env = Backend::Sqlite.setup().await;
+    async fn seed_user_creates_a_user(#[case] backend: Backend) {
+        let env = backend.setup().await;
         let id = seed_user(&env.state).await;
         assert!(id > 0);
     }
 
+    // guard:no-backend — harness type-guard on the SQLite CloseablePool variant; no database ops
     #[tokio::test]
     #[should_panic(expected = "postgres() on a SQLite CloseablePool")]
     async fn postgres_accessor_rejects_a_sqlite_pool() {

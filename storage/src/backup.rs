@@ -589,6 +589,9 @@ fn previous_directory_backup(destination_path: &Path) -> Result<Option<PathBuf>,
 mod tests {
     #![allow(clippy::similar_names)] // parallel fixture names (e.g. user1/user2) aid test clarity
     use super::*;
+    use crate::test_support::{sqlite_only, Backend};
+    use rstest::*;
+    use rstest_reuse::*;
     use std::str::FromStr;
     use tempfile::TempDir;
 
@@ -924,8 +927,13 @@ mod tests {
         Ok(())
     }
 
+    // reason: backup export/restore SQL is backend-specific (ADR-0019); Postgres orchestration coverage tracked in #136
+    #[apply(sqlite_only)]
     #[tokio::test]
-    async fn restore_backup_rejects_missing_db_directory() -> Result<(), BackupError> {
+    async fn restore_backup_rejects_missing_db_directory(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let _ = backend;
         let temp = TempDir::new()?;
         let backup = temp.path().join("backup");
         fs::create_dir(&backup)?;
@@ -954,8 +962,13 @@ mod tests {
         Ok(())
     }
 
+    // reason: backup export/restore SQL is backend-specific (ADR-0019); Postgres orchestration coverage tracked in #136
+    #[apply(sqlite_only)]
     #[tokio::test]
-    async fn export_backup_writes_ndjson_media_and_manifest() -> Result<(), BackupError> {
+    async fn export_backup_writes_ndjson_media_and_manifest(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let _ = backend;
         let temp = TempDir::new()?;
         let database_url = format!("sqlite://{}", temp.path().join("test.db").display());
         let options =
@@ -1000,8 +1013,13 @@ mod tests {
         Ok(())
     }
 
+    // reason: backup export/restore SQL is backend-specific (ADR-0019); Postgres orchestration coverage tracked in #136
+    #[apply(sqlite_only)]
     #[tokio::test]
-    async fn archive_backup_round_trips_database_and_media() -> Result<(), BackupError> {
+    async fn archive_backup_round_trips_database_and_media(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let _ = backend;
         let temp = TempDir::new()?;
         let source_url = format!("sqlite://{}", temp.path().join("source.db").display());
         let source_options =

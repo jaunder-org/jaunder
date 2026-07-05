@@ -174,3 +174,37 @@ where
         Err(crate::helpers::email_verification_claim_error(row))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{backends, Backend, TestEnv};
+    use rstest::*;
+    use rstest_reuse::*;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn create_email_verification_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        base.close_pool().await;
+        let expires_at = chrono::Utc::now();
+        let email: EmailAddress = "test@example.com".parse().unwrap();
+        let result = state
+            .email_verifications
+            .create_email_verification(1, &email, expires_at)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn use_email_verification_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        base.close_pool().await;
+        let result = state
+            .email_verifications
+            .use_email_verification("dGVzdA")
+            .await;
+        assert!(matches!(result, Err(UseEmailVerificationError::NotFound)));
+    }
+}

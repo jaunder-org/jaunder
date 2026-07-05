@@ -20,6 +20,7 @@ mod posts;
 mod sessions;
 mod site_config;
 mod smtp;
+pub(crate) mod sql;
 mod sqlite;
 mod subscriptions;
 mod user_config;

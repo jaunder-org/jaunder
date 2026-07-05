@@ -37,19 +37,3 @@ impl SessionDialect for Sqlite {
         Ok(row)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::super::sqlite_pool;
-    use super::*;
-    use crate::SessionStorage as _;
-
-    #[tokio::test]
-    async fn authenticate_with_closed_pool_returns_internal_error() {
-        let pool = sqlite_pool().await;
-        let storage = SqliteSessionStorage::new(pool.clone());
-        pool.close().await;
-        let result = storage.authenticate("dGVzdA").await;
-        assert!(matches!(result, Err(crate::SessionAuthError::Internal(_))));
-    }
-}

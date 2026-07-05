@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{Pool, Postgres, Row};
 
 use crate::feed_events::{
-    FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStatus, FeedEventStore,
+    parse_status, FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStore,
 };
 
 /// Postgres-backed feed-event storage.
@@ -108,16 +108,5 @@ impl FeedEventDialect for Postgres {
             .execute(pool)
             .await?;
         Ok(())
-    }
-}
-
-fn parse_status(s: &str) -> FeedEventStatus {
-    match s {
-        "pending" => FeedEventStatus::Pending,
-        "claimed" => FeedEventStatus::Claimed,
-        // cov:ignore-start
-        "done" => FeedEventStatus::Done,
-        _ => FeedEventStatus::Failed,
-        // cov:ignore-stop
     }
 }

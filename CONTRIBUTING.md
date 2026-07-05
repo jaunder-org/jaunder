@@ -677,13 +677,14 @@ nix build .#checks.x86_64-linux.postgres-integration
 - Backend-specific optimizations are allowed, but user-visible behavior
   differences must be documented explicitly up front.
 
-### The `test-backend-pattern` guard (enforced across `server/tests`)
+### The `test-backend-pattern` guard (enforced across `server/tests` and `storage/src`)
 
 The `cargo xtask check`/`validate` static pass runs a `test-backend-pattern`
-guard that scans every file under `server/tests/` and fails if a
-`#[tokio::test]` (including parameterized `#[tokio::test(flavor = …)]` forms) is
-not declared backend-explicit. Every DB-touching integration test must carry
-exactly one of:
+guard that scans every file under `server/tests/` and `storage/src/` and fails
+if a `#[tokio::test]` (including parameterized `#[tokio::test(flavor = …)]`
+forms) is not declared backend-explicit. This covers both `server`'s integration
+tests and the `storage` crate's own in-file dialect/home-module tests (widened
+to `storage/src` in #135). Every DB-touching test must carry exactly one of:
 
 - `#[apply(backends)]` — dual-backend, single-axis (the test takes
   `#[case] backend: Backend`).
@@ -698,12 +699,14 @@ exactly one of:
   currently hardcodes SQLite" is NOT a valid reason — convert such a test
   instead.
 
-A genuinely **non-DB** integration test (exercises real router/middleware wiring
-but touches no database) is exempt via a `// guard:no-backend — <reason>`
-comment immediately above its `#[tokio::test]`. A test that is really a **unit
-test** (a pure function/extractor, no router or DB) belongs in a
-`#[cfg(test)] mod tests` in the owning crate, not in `server/tests`. Pure
-synchronous `#[test]` unit tests are never flagged.
+A genuinely **non-DB** async test (touches no live pool) is exempt via a
+`// guard:no-backend — <reason>` comment immediately above its `#[tokio::test]`
+— e.g. a `server` integration test exercising real router/middleware wiring, or
+a `storage` async unit test over a mock store, `DbConnectOptions` routing, or
+password hashing. A `server` test that is really a **unit test** (a pure
+function/extractor, no router or DB) belongs in a `#[cfg(test)] mod tests` in
+the owning crate, not in `server/tests`. Pure synchronous `#[test]` unit tests
+are never flagged.
 
 ## NixOS integration
 

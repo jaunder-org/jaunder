@@ -192,3 +192,20 @@ where
         rows.into_iter().map(session_record_from_row).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{backends, Backend, TestEnv};
+    use rstest::*;
+    use rstest_reuse::*;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn authenticate_with_closed_pool_returns_internal_error(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        base.close_pool().await;
+        let result = state.sessions.authenticate("dGVzdA").await;
+        assert!(matches!(result, Err(SessionAuthError::Internal(_))));
+    }
+}

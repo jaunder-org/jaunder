@@ -13,6 +13,7 @@ use crate::backup::{
     build_manifest, ensure_schema_version, json_value_as_restore_text, order_by_clause,
     read_table_rows, BackupError, BackupManifest, BackupMode, ColumnInfo, TABLES_IN_EXPORT_ORDER,
 };
+use crate::sql::quote_identifier;
 
 pub(crate) async fn export_database(
     pool: &PgPool,
@@ -303,10 +304,6 @@ async fn schema_checksum(connection: &mut PgConnection) -> Result<String, Backup
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn quote_identifier(identifier: &str) -> String {
-    format!("\"{}\"", identifier.replace('"', "\"\""))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,10 +326,5 @@ mod tests {
 
         assert!(sql.contains("to_jsonb(export_row)::text"));
         assert!(sql.contains("ORDER BY \"post_id\", \"tag_id\""));
-    }
-
-    #[test]
-    fn quote_identifier_escapes_double_quotes() {
-        assert_eq!(quote_identifier("a\"b"), "\"a\"\"b\"");
     }
 }
