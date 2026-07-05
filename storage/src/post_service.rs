@@ -36,8 +36,36 @@ pub async fn create_rendered_post(
     summary: Option<String>,
     audiences: Vec<AudienceTarget>,
 ) -> Result<i64, CreatePostError> {
+    let input = render_post_input(
+        user_id,
+        title,
+        slug,
+        body,
+        format,
+        published_at,
+        summary,
+        audiences,
+    );
+    storage.create_post(&input).await
+}
+
+/// Renders `body` per `format` and assembles the [`CreatePostInput`] without
+/// writing it. Shared by [`create_rendered_post`] (write one) and the batch
+/// seeders (collect many), so the render-and-assemble recipe lives in one place.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn render_post_input(
+    user_id: i64,
+    title: Option<String>,
+    slug: Slug,
+    body: String,
+    format: PostFormat,
+    published_at: Option<DateTime<Utc>>,
+    summary: Option<String>,
+    audiences: Vec<AudienceTarget>,
+) -> CreatePostInput {
     let rendered_html = render(&body, &format);
-    let input = CreatePostInput {
+    CreatePostInput {
         user_id,
         title,
         slug,
@@ -47,8 +75,7 @@ pub async fn create_rendered_post(
         published_at,
         summary,
         audiences,
-    };
-    storage.create_post(&input).await
+    }
 }
 
 /// The single definition of "a timeline-visible seeded post": a public,
@@ -71,8 +98,19 @@ pub async fn seed_rendered_post(
     body: String,
     published: bool,
 ) -> Result<i64, CreatePostError> {
-    create_rendered_post(
-        storage,
+    storage
+        .create_post(&seed_post_input(user_id, slug, body, published))
+        .await
+}
+
+/// The timeline-visible seed recipe as data: Public audience + Markdown render,
+/// published-now iff `published`. Returns the input instead of writing it, so
+/// both seeders can batch a `Vec` of these through
+/// [`PostStorage::create_posts`]. See [`seed_rendered_post`].
+#[cfg(any(test, feature = "seed-posts"))]
+#[must_use]
+pub fn seed_post_input(user_id: i64, slug: Slug, body: String, published: bool) -> CreatePostInput {
+    render_post_input(
         user_id,
         None,
         slug,
@@ -82,7 +120,6 @@ pub async fn seed_rendered_post(
         None,
         vec![AudienceTarget::Public],
     )
-    .await
 }
 
 /// Renders `body` according to `format` and updates the post via storage.
