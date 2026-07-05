@@ -389,9 +389,12 @@ export JAUNDER_PG_BOOTSTRAP_TEST_URL=postgres://postgres@127.0.0.1:55432/postgre
 cargo nextest run -p jaunder
 ```
 
-Per-test databases are not dropped after each run, so a persistent instance
-accumulates `jaunder_test_*` databases over time; the ephemeral wrapper avoids
-this by discarding the whole cluster.
+Each per-test database is dropped on teardown — an RAII guard issues
+`DROP DATABASE … WITH (FORCE)` when the test's `TestEnv` / `PostgresDbGuard`
+goes out of scope — so a persistent instance no longer accumulates
+`jaunder_test_*` databases across a normal run. A test process killed before its
+guards run (a hard crash or `SIGKILL`) can still leak one; the ephemeral wrapper
+avoids the issue entirely by discarding the whole cluster.
 
 ### Coverage and dependency policy
 
