@@ -7,6 +7,7 @@
     clippy::unused_async
 )]
 
+use std::fmt::Write as _;
 use std::net::SocketAddr;
 
 use axum::{
@@ -642,6 +643,67 @@ async fn cmd_restore_restores_directory_backup(#[case] backend: Backend) {
         .expect("restore");
 
     assert_backup_fixture_restored(&target_args, post_id).await;
+}
+
+// #136: a backup with a dangling foreign key is rejected uniformly (DEC-C) —
+// ConstraintViolation + target unmodified, on both backends.
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_rejects_dangling_foreign_key(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let source_args = storage_args(backend, &base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    let post_id = populate_backup_fixture(&source_args).await;
+
+    let backup_path = base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    // Append a post_tags row referencing a nonexistent tag_id → dangling FK. The row
+    // MUST carry every column of the real exported row (post_id, tag_id, and the
+    // NOT NULL tag_display) — import_table derives its column set from the first row
+    // and rejects a row missing a column with InvalidBackup *before* inserting, which
+    // would mask the FK violation.
+    let post_tags = backup_path.join("db").join("post_tags.ndjson");
+    let mut contents = std::fs::read_to_string(&post_tags).expect("read post_tags");
+    writeln!(
+        contents,
+        "{{\"post_id\":{post_id},\"tag_id\":999999,\"tag_display\":\"Dangling\"}}"
+    )
+    .expect("append dangling row");
+    std::fs::write(&post_tags, contents).expect("write tampered post_tags");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let target_args = storage_args(backend, &target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+
+    let err = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect_err("restore rejects dangling FK");
+    assert!(
+        err.to_string().contains("failed constraint validation"),
+        "expected ConstraintViolation, got: {err}"
+    );
+
+    // Rollback: nothing from the backup landed in the target.
+    let state = open_existing_database(&target_args.db)
+        .await
+        .expect("open target");
+    let username: Username = "backupuser".parse().expect("valid username");
+    assert!(
+        state
+            .users
+            .get_user_by_username(&username)
+            .await
+            .expect("get user")
+            .is_none(),
+        "target must be unmodified after a rejected restore"
+    );
 }
 
 #[apply(backends)]

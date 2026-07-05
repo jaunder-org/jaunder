@@ -84,7 +84,11 @@ pub(crate) async fn restore_database(
             let columns = columns(&mut connection, table).await?;
             import_table(&mut connection, source_path, table, &columns).await?;
         }
-        Ok::<(), BackupError>(())
+        // Validate FKs *before* committing so a violation rolls the whole restore
+        // back rather than leaving invalid data committed. `foreign_key_check`
+        // scans for violations and works with `foreign_keys = OFF`, so it runs
+        // correctly here inside the transaction.
+        validate_foreign_keys(&mut connection).await
     }
     .await;
 
@@ -94,7 +98,7 @@ pub(crate) async fn restore_database(
             sqlx::query("PRAGMA foreign_keys = ON")
                 .execute(&mut *connection)
                 .await?;
-            validate_foreign_keys(&mut connection).await
+            Ok(())
         }
         Err(error) => {
             let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
