@@ -3,7 +3,6 @@ use crate::sessions::{list_sessions, CreateAppPassword, RevokeSession};
 use leptos::prelude::*;
 
 /// Sessions page — lists all sessions, mints app passwords, and revokes sessions.
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn SessionsPage() -> impl IntoView {
     let revoke_action = ServerAction::<RevokeSession>::new();

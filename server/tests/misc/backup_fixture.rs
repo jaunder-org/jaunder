@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::similar_names)]
-
 use chrono::{DateTime, Utc};
 use common::password::Password;
 use common::username::Username;

@@ -14,8 +14,11 @@ use crate::pages::Topbar;
 use leptos::prelude::*;
 
 /// Account-area page for managing named audiences and their membership.
-#[allow(clippy::must_use_candidate)]
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
+              sub-components would fragment the page without real benefit"
+)]
 #[component]
 pub fn AudiencesPage() -> impl IntoView {
     let create_action = ServerAction::<CreateAudience>::new();
@@ -138,7 +141,6 @@ pub fn AudiencesPage() -> impl IntoView {
 
 /// One audience: its name with rename/delete controls and a checklist of the
 /// author's active subscribers (checked = member).
-#[allow(clippy::must_use_candidate)]
 #[component]
 fn AudienceRow(
     audience: AudienceSummary,

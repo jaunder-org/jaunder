@@ -7,11 +7,11 @@
 //! two-`storage`-instances problem a separate crate would create (see ADR-0033).
 //! `server` reaches it via `storage`'s `test-support` feature.
 
-// Deliberately unwrap/expect-heavy test scaffolding, so the workspace's
-// `unwrap_used`/`expect_used = deny` lints are allowed off for this module
-// (an inner `#![allow]` overrides the crate-level deny); everything else
-// clippy-pedantic flags is fixed in place rather than allowed.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// Deliberately unwrap/expect-heavy test scaffolding (test-support feature, ADR-0033),
+// so the workspace's `unwrap_used`/`expect_used = deny` lints are expected off for this
+// module; `#[expect]` self-removes if the scaffolding ever stops unwrapping. Everything
+// else clippy-pedantic flags is fixed in place rather than suppressed. (#94)
+#![expect(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::sql::quote_identifier;
 use crate::{AppState, DbConnectOptions};

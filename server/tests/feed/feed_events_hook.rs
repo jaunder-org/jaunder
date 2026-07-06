@@ -1,13 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::items_after_statements,
-    clippy::unused_async
-)]
-#![allow(unused_macros)]
-
 use std::sync::Arc;
 
 use axum::{
@@ -20,8 +10,6 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use rstest::*;
-#[allow(clippy::single_component_path_imports)]
-use rstest_reuse;
 use rstest_reuse::*;
 
 use crate::helpers::{

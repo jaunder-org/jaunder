@@ -33,9 +33,7 @@ impl HybridWindow {
         let cutoff = self.cutoff_date(now);
         let mut end = 0usize;
         for (i, p) in posts.iter().enumerate() {
-            #[allow(clippy::cast_possible_truncation)]
-            let i_u32 = i as u32;
-            if i_u32 < self.min_items || p.published_at() >= cutoff {
+            if i < self.min_items as usize || p.published_at() >= cutoff {
                 end = i + 1;
             } else {
                 break;

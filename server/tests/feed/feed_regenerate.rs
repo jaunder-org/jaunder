@@ -1,13 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::items_after_statements,
-    clippy::unused_async
-)]
-#![allow(unused_macros)]
-
 use chrono::Utc;
 use common::password::Password;
 use common::slug::Slug;
@@ -17,8 +7,6 @@ use jaunder::feed::regenerate::regenerate_feed;
 use storage::{CreatePostInput, PostFormat};
 
 use rstest::*;
-#[allow(clippy::single_component_path_imports)]
-use rstest_reuse;
 use rstest_reuse::*;
 
 use crate::helpers::{backends, Backend, TestEnv};

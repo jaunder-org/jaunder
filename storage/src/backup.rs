@@ -587,7 +587,9 @@ fn previous_directory_backup(destination_path: &Path) -> Result<Option<PathBuf>,
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::similar_names)] // parallel fixture names (e.g. user1/user2) aid test clarity
+    // Parallel fixture names (e.g. user1/user2) aid test clarity. Single-compiled test
+    // module, so `#[expect]` self-removes if the names ever diverge. (#94)
+    #![expect(clippy::similar_names)]
     use super::*;
     use tempfile::TempDir;
 

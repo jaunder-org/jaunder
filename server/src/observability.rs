@@ -283,7 +283,11 @@ where
 
 fn slow_span_values(elapsed: Duration, threshold: Duration) -> Option<(u64, u64)> {
     if elapsed >= threshold {
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "latency/threshold durations; their millisecond counts fit u64 for \
+                      any realistic elapsed time"
+        )]
         Some((elapsed.as_millis() as u64, threshold.as_millis() as u64))
     } else {
         None

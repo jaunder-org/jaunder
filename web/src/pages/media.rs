@@ -6,7 +6,11 @@ use crate::{
 };
 use leptos::prelude::*;
 
-#[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "byte counts < 2^52 convert to f64 exactly; larger values only affect a \
+              human-readable one-decimal display, so any loss is immaterial"
+)]
 fn format_bytes(bytes: i64) -> String {
     const KB: i64 = 1_024;
     const MB: i64 = 1_024 * KB;
@@ -23,9 +27,11 @@ fn format_bytes(bytes: i64) -> String {
     }
 }
 
-#[allow(clippy::must_use_candidate)]
-#[allow(clippy::too_many_lines)]
-#[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
+              sub-components would fragment the page without real benefit"
+)]
 #[component]
 pub fn MediaPage() -> impl IntoView {
     let delete_action = ServerAction::<DeleteMedia>::new();
@@ -63,6 +69,12 @@ pub fn MediaPage() -> impl IntoView {
                 {move || Suspend::new(async move {
                     match usage.await {
                         Ok(u) => {
+                            #[expect(
+                                clippy::cast_precision_loss,
+                                reason = "display-only storage-usage percentage; byte \
+                                          counts < 2^52 are exact in f64 and the result \
+                                          is clamped to 100"
+                            )]
                             let pct = if u.quota_bytes > 0 {
                                 (u.used_bytes as f64 / u.quota_bytes as f64 * 100.0).min(100.0)
                             } else {
@@ -117,7 +129,7 @@ pub fn MediaPage() -> impl IntoView {
                                     <tbody>
                                         {items
                                             .into_iter()
-                                            .map(|item| render_media_row(item, delete_action))
+                                            .map(|item| render_media_row(&item, delete_action))
                                             .collect::<Vec<_>>()}
                                     </tbody>
                                 </table>
@@ -160,9 +172,8 @@ pub fn MediaPage() -> impl IntoView {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
 // cov:ignore-start
-fn render_media_row(item: MediaItem, delete_action: ServerAction<DeleteMedia>) -> impl IntoView {
+fn render_media_row(item: &MediaItem, delete_action: ServerAction<DeleteMedia>) -> impl IntoView {
     let url = item.url.clone();
     let filename = item.filename.clone();
     let sha256 = item.sha256.clone();

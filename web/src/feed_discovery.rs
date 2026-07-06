@@ -4,9 +4,12 @@ use leptos_meta::Link;
 
 /// Renders feed auto-discovery link tags for RSS, Atom, and JSON Feed.
 /// The component itself is invisible; it hoists `<link>` tags into the document head.
-#[allow(clippy::must_use_candidate)]
 #[component]
-#[allow(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Leptos #[component] props are stored by the framework and must be owned; \
+              the borrow clippy suggests isn't expressible in a component signature"
+)]
 pub fn FeedDiscovery(surface: FeedSurface) -> impl IntoView {
     let label = surface_label(&surface);
 
@@ -35,9 +38,12 @@ pub fn FeedDiscovery(surface: FeedSurface) -> impl IntoView {
 /// Renders the `RSD` (`EditURI`) autodiscovery link for a user's `AtomPub`
 /// publishing endpoint. Like [`FeedDiscovery`], it is invisible and only hoists
 /// a `<link>` into the document head; editors such as `MarsEdit` follow it.
-#[allow(clippy::must_use_candidate)]
 #[component]
-#[allow(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Leptos #[component] props are stored by the framework and must be owned; \
+              the borrow clippy suggests isn't expressible in a component signature"
+)]
 pub fn RsdDiscovery(username: String) -> impl IntoView {
     view! {
         <Link

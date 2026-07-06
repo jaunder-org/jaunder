@@ -1,13 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::items_after_statements,
-    clippy::unused_async
-)]
-#![allow(unused_macros)]
-
 use std::sync::Arc;
 
 use axum::{
@@ -19,8 +9,6 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 use rstest::*;
-#[allow(clippy::single_component_path_imports)]
-use rstest_reuse;
 use rstest_reuse::*;
 
 use crate::helpers::{
@@ -28,7 +16,7 @@ use crate::helpers::{
     TestEnv,
 };
 
-async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
+fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     ensure_server_fns_registered();
     let storage_path = storage.path().to_path_buf();
     jaunder::create_router(test_options(), state, noop_mailer(), false, storage_path)
@@ -101,7 +89,7 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let response = app
         .oneshot(
@@ -178,7 +166,7 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let response = app
         .oneshot(
@@ -228,7 +216,7 @@ async fn member_get_unknown_returns_404(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let response = app
         .oneshot(
@@ -281,7 +269,7 @@ async fn delete_then_get_is_404(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     // First, delete the post
     let delete_response = app
@@ -353,7 +341,7 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
         .unwrap();
     }
 
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     // Page size 1 with 2 posts -> a next link must be present.
     let response = app
@@ -443,7 +431,7 @@ async fn collection_cursor_validation(
         .await
         .unwrap();
     }
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let response = app
         .oneshot(
@@ -464,7 +452,7 @@ async fn collection_cursor_validation(
 async fn collection_empty_returns_feed_without_entries(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let response = app
         .oneshot(
@@ -565,7 +553,7 @@ impl ForbiddenRequest {
 async fn forbids_other_user(backend: Backend, #[case] request: ForbiddenRequest) {
     let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let response = app.oneshot(request.build(&token)).await.unwrap();
 
@@ -585,7 +573,7 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
     )
     .await
     .unwrap();
-    let app = make_app(state.clone(), &base).await;
+    let app = make_app(state.clone(), &base);
 
     let xml = entry_xml("Hello", "text", "the body");
     let response = app
@@ -613,7 +601,7 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
         "response should have Location header: {loc:?}"
     );
 
-    let app2 = make_app(state, &base).await;
+    let app2 = make_app(state, &base);
     let loc_path = loc.unwrap();
     let get_response = app2
         .oneshot(
@@ -643,7 +631,7 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
 async fn create_post_applies_categories(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let (_, token) = seed_alice(&state).await;
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let xml = entry_xml("Hello", "text", "the body");
     let response = app
@@ -672,7 +660,7 @@ async fn create_post_applies_categories(#[case] backend: Backend) {
 async fn create_html_entry_is_stored_as_html(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let (_, token) = seed_alice(&state).await;
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let xml = entry_xml("H", "html", "&lt;p&gt;hi&lt;/p&gt;");
     let response = app
@@ -711,7 +699,7 @@ async fn create_format_media_type_round_trips(
 ) {
     let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state.clone(), &base).await;
+    let app = make_app(state.clone(), &base);
 
     let xml = entry_xml("Formatted", content_type, content);
     let response = app
@@ -739,7 +727,6 @@ async fn create_format_media_type_round_trips(
 
     // GET the member back: it must echo the same content media type.
     let get = make_app(state, &base)
-        .await
         .oneshot(
             Request::builder()
                 .uri(&location)
@@ -781,7 +768,7 @@ async fn update_replaces_post_body(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let xml = entry_xml("New", "text", "new body");
     let response = app
@@ -828,7 +815,7 @@ async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let xml = entry_xml("New", "text", "new body");
     let response = app
@@ -853,7 +840,7 @@ async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
 async fn create_rejects_malformed_entry(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let response = app
         .oneshot(
@@ -900,7 +887,7 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     // Update without the tag
     let xml = entry_xml("Title", "text", "new body");
@@ -946,7 +933,7 @@ async fn update_with_put_returns_200_and_etag(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let xml = entry_xml("Updated", "text", "updated body");
     let response = app
@@ -1031,7 +1018,7 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
         }
     };
 
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let response = app.oneshot(request).await.unwrap();
 
@@ -1043,7 +1030,7 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
 async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app">
@@ -1122,7 +1109,7 @@ async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let response = app
         .oneshot(
@@ -1152,7 +1139,7 @@ async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
 async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state.clone(), &base).await;
+    let app = make_app(state.clone(), &base);
 
     // A client-supplied <j:slug> must NOT determine the stored slug — the server
     // derives its own from the title (ADR-0023: j:slug is read-only).
@@ -1199,7 +1186,7 @@ async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
 async fn create_skips_invalid_category(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
@@ -1235,7 +1222,7 @@ async fn create_skips_invalid_category(#[case] backend: Backend) {
 async fn update_keeps_unchanged_category(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let with_rust = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
@@ -1289,7 +1276,7 @@ async fn update_keeps_unchanged_category(#[case] backend: Backend) {
 async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
@@ -1370,7 +1357,7 @@ async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    let app = make_app(state.clone(), &base).await;
+    let app = make_app(state.clone(), &base);
 
     let xml = entry_xml("New", "text", "new body");
     let response = app
@@ -1425,7 +1412,7 @@ async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let response = app
         .oneshot(
@@ -1461,7 +1448,7 @@ async fn create_adopts_default_audience(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let app = make_app(state.clone(), &base).await;
+    let app = make_app(state.clone(), &base);
 
     let xml = entry_xml("Hello", "text", "the body");
     let response = app
@@ -1510,7 +1497,7 @@ fn location_post_id(response: &axum::response::Response) -> i64 {
 async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state.clone(), &base).await;
+    let app = make_app(state.clone(), &base);
 
     // A non-draft entry whose <published> is in the far future schedules the post.
     let xml = entry_xml_with_published("Future post", "body", Some("2099-01-01T00:00:00Z"));
@@ -1549,9 +1536,11 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
         .posts
         .get_post_by_permalink(
             &username,
-            2099,
-            1,
-            1,
+            storage::PermalinkDate {
+                year: 2099,
+                month: 1,
+                day: 1,
+            },
             &rec.slug,
             &viewer,
             chrono::Utc::now(),
@@ -1569,7 +1558,7 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
 async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let (_user_id, token) = seed_alice(&state).await;
-    let app = make_app(state.clone(), &base).await;
+    let app = make_app(state.clone(), &base);
 
     // A non-draft entry whose <published> is in the past is live, backdated.
     let xml = entry_xml_with_published("Old post", "body", Some("2000-01-01T00:00:00Z"));
@@ -1627,7 +1616,7 @@ async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
     .await
     .unwrap();
 
-    let app = make_app(state.clone(), &base).await;
+    let app = make_app(state.clone(), &base);
 
     let xml = entry_xml_with_published("Rescheduled", "new body", Some("2099-06-01T00:00:00Z"));
     let response = app

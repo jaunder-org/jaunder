@@ -4,8 +4,6 @@ use crate::helpers::{
 use sqlx::Connection;
 
 use rstest::*;
-#[allow(clippy::single_component_path_imports)]
-use rstest_reuse;
 use rstest_reuse::*;
 
 /// Database name (last path segment, query stripped) from a Postgres test URL.

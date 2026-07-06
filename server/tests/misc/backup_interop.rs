@@ -1,12 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::items_after_statements,
-    clippy::unused_async
-)]
-
 use std::path::Path;
 
 use jaunder::cli::StorageArgs;
@@ -17,8 +8,6 @@ use tempfile::TempDir;
 use crate::backup_fixture::{assert_backup_fixture_restored, populate_backup_fixture};
 
 use rstest::*;
-#[allow(clippy::single_component_path_imports)]
-use rstest_reuse;
 use rstest_reuse::*;
 
 use crate::helpers::{postgres_only, unique_postgres_url, Backend, PostgresDbGuard};

@@ -1,13 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::items_after_statements,
-    clippy::unused_async
-)]
-#![allow(unused_macros)]
-
 use common::visibility::AudienceTarget;
 use std::sync::Arc;
 
@@ -22,8 +12,6 @@ use chrono::Utc;
 use storage::{CreateMediaError, MediaRecord, MediaSource};
 
 use rstest::*;
-#[allow(clippy::single_component_path_imports)]
-use rstest_reuse;
 use rstest_reuse::*;
 
 use crate::helpers::{backends, backends_matrix, Backend, TestEnv};

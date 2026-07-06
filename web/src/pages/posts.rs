@@ -24,7 +24,6 @@ use common::{tag::Tag, username::Username};
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn CreatePostPage() -> impl IntoView {
     let current_user = crate::server_resource(|| (), |()| current_user());
@@ -130,7 +129,6 @@ fn permalink_first_paint(seed_post: Option<crate::posts::PostResponse>) -> AnyVi
     }
 } // cov:ignore
 
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn PostPage() -> impl IntoView {
     // Public projector seed (#178/#179): the content the server painted for this
@@ -244,13 +242,11 @@ pub fn PostPage() -> impl IntoView {
     .into_any()
 }
 
-#[allow(clippy::too_many_lines)]
 /// Subscribe / Unsubscribe control shown on a user's profile (timeline) page.
 ///
 /// Hidden when the viewer is logged out or is viewing their own profile.
 /// Otherwise renders Subscribe when not subscribed and Unsubscribe when
 /// subscribed, querying state via `is_subscribed_to`.
-#[allow(clippy::must_use_candidate)]
 #[component]
 fn SubscribeButton(username: String) -> impl IntoView {
     let subscribe = ServerAction::<SubscribeTo>::new();
@@ -313,7 +309,11 @@ fn SubscribeButton(username: String) -> impl IntoView {
     }
 }
 
-#[allow(clippy::must_use_candidate, clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
+              sub-components would fragment the page without real benefit"
+)]
 #[component]
 pub fn UserTimelinePage() -> impl IntoView {
     let params = use_params_map();
@@ -504,7 +504,6 @@ pub fn UserTimelinePage() -> impl IntoView {
     }
 }
 
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn DraftPreviewPage() -> impl IntoView {
     let delete_action = ServerAction::<DeletePost>::new();
@@ -605,8 +604,11 @@ pub fn DraftPreviewPage() -> impl IntoView {
     }
 }
 
-#[allow(clippy::too_many_lines)]
-#[allow(clippy::must_use_candidate)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
+              sub-components would fragment the page without real benefit"
+)]
 #[component]
 pub fn EditPostPage() -> impl IntoView {
     let params = use_params_map();
@@ -884,7 +886,6 @@ pub fn EditPostPage() -> impl IntoView {
     }
 }
 
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn DraftsPage() -> impl IntoView {
     let publish_action = ServerAction::<PublishPost>::new();
@@ -1057,8 +1058,11 @@ fn render_delete_result(
 // cov:ignore-stop
 
 /// Site-wide listing of posts carrying a tag, at `/tags/:tag`.
-#[allow(clippy::too_many_lines)]
-#[allow(clippy::must_use_candidate)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
+              sub-components would fragment the page without real benefit"
+)]
 #[component]
 pub fn SiteTagPage() -> impl IntoView {
     let params = use_params_map();
@@ -1219,8 +1223,11 @@ pub fn SiteTagPage() -> impl IntoView {
 }
 
 /// Per-user listing of posts carrying a tag, at `/~:username/tags/:tag`.
-#[allow(clippy::too_many_lines)]
-#[allow(clippy::must_use_candidate)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
+              sub-components would fragment the page without real benefit"
+)]
 #[component]
 pub fn UserTagPage() -> impl IntoView {
     let params = use_params_map();

@@ -7,7 +7,6 @@ use crate::pages::ui::Topbar;
 use crate::posts::list_local_timeline;
 use common::feed::FeedSurface;
 
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn HomePage() -> impl IntoView {
     let state = TimelineState::default();

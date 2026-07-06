@@ -8,7 +8,6 @@ use leptos_router::components::Redirect;
 ///
 /// On success renders a neutral confirmation message. On error (no verified
 /// email / contact operator) surfaces the error message directly.
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn ForgotPasswordPage() -> impl IntoView {
     let request_action = ServerAction::<RequestPasswordReset>::new();
@@ -46,7 +45,6 @@ pub fn ForgotPasswordPage() -> impl IntoView {
 
 /// Reads the `token` query parameter; shows a new-password form.
 /// On success redirects to `/login`.
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn ResetPasswordPage() -> impl IntoView {
     use leptos_router::hooks::use_query_map;

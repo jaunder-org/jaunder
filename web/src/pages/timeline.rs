@@ -108,7 +108,6 @@ where
 
 /// The scroll region shared by both timelines: the post list (or an empty
 /// placeholder) followed by the load-more button.
-#[allow(clippy::must_use_candidate)]
 #[component]
 // cov:ignore-start
 pub(crate) fn TimelineRows(

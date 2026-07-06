@@ -56,7 +56,6 @@ pub struct UploadResponse {
 /// # Errors
 ///
 /// Returns `4xx`/`5xx` status codes on validation failures or I/O errors.
-#[allow(clippy::too_many_lines)]
 #[tracing::instrument(name = "media.upload", skip_all)]
 pub async fn upload_handler(
     Extension(media): Extension<Arc<dyn MediaStorage>>,

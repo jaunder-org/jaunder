@@ -103,22 +103,22 @@ pub mod test_utils {
 
         /// Return a clone of all messages sent so far.
         ///
-        /// # Panics
-        ///
-        /// Panics if the internal mutex is poisoned.
-        #[allow(clippy::expect_used)] // test double: panicking on a poisoned mutex is fine
+        /// Recovers from a poisoned mutex (the guarded `Vec` is always in a
+        /// consistent state), so this never panics.
         pub fn sent(&self) -> Vec<EmailMessage> {
-            self.sent.lock().expect("mutex poisoned").clone()
+            self.sent
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
         }
     }
 
     #[async_trait]
     impl MailSender for CapturingMailSender {
-        #[allow(clippy::expect_used)] // test double: panicking on a poisoned mutex is fine
         async fn send_email(&self, message: &EmailMessage) -> Result<(), MailError> {
             self.sent
                 .lock()
-                .expect("mutex poisoned")
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(message.clone());
             Ok(())
         }

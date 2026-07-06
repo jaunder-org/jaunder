@@ -80,5 +80,13 @@ server = [
     "dep:tracing",
 ]
 
-[lints]
-workspace = true
+[lints.clippy]
+# Keep in sync with [workspace.lints.clippy] in the root Cargo.toml; Cargo forbids
+# augmenting `workspace = true` with a local override, so web re-declares the workspace
+# lints in order to add the one crate-specific exception below.
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+# Leptos view fns return `impl IntoView` consumed by the framework; a caller can't
+# ignore the return, so must_use_candidate is noise crate-wide here. (#94)
+must_use_candidate = "allow"

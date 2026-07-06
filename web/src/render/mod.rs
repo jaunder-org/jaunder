@@ -85,9 +85,6 @@ pub enum TagCtx {
 /// each of the first two whitespace-separated words, uppercased. `hue`: sum of
 /// all char codes mod 360. Shared by the reactive `Avatar` component and the
 /// pure [`render_avatar`] so a seeded avatar and its reactive re-render coincide.
-#[allow(clippy::cast_precision_loss)]
-#[allow(clippy::cast_possible_truncation)]
-#[allow(clippy::cast_sign_loss)]
 #[must_use]
 pub fn avatar_parts(name: &str) -> (String, u32) {
     let initials: String = name
@@ -102,13 +99,12 @@ pub fn avatar_parts(name: &str) -> (String, u32) {
 
 /// One avatar chip as `<div class="j-av" …>`, byte-identical to the reactive
 /// `pages::ui::Avatar` component's output for the same `(name, size)`.
-#[allow(clippy::cast_precision_loss)]
-#[allow(clippy::cast_possible_truncation)]
-#[allow(clippy::cast_sign_loss)]
 #[must_use]
 pub fn render_avatar(name: &str, size: u32) -> String {
     let (initials, hue) = avatar_parts(name);
-    let font_size = (size as f32 * 0.36).round() as u32;
+    // Integer equivalent of `(size as f32 * 0.36).round()`, avoiding float casts;
+    // `+ 50` gives round-half-up. `size` is a small avatar dimension.
+    let font_size = (size * 36 + 50) / 100;
     format!(
         "<div class=\"j-av\" style=\"width:{size}px;height:{size}px;background:oklch(0.58 0.07 {hue});font-size:{font_size}px\">{initials}</div>",
         initials = escape_html(&initials),

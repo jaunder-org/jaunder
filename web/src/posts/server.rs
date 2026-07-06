@@ -7,8 +7,8 @@ use common::visibility::ViewerIdentity;
 use leptos::context::use_context;
 use leptos_axum::ResponseOptions;
 use storage::{
-    post_tag_diff, ListByTagError, PerformCreationError, PerformUpdateError, PostCursor,
-    PostRecord, PostStorage, PostTag,
+    post_tag_diff, ListByTagError, PerformCreationError, PerformUpdateError, PermalinkDate,
+    PostCursor, PostRecord, PostStorage, PostTag,
 };
 
 pub fn timeline_post_summary(
@@ -162,7 +162,13 @@ pub async fn fetch_post_record(
     NaiveDate::from_ymd_opt(year, month, day)
         .ok_or_else(|| InternalError::validation("Invalid permalink"))?;
     posts
-        .get_post_by_permalink(username, year, month, day, slug, viewer, Utc::now())
+        .get_post_by_permalink(
+            username,
+            PermalinkDate { year, month, day },
+            slug,
+            viewer,
+            Utc::now(),
+        )
         .await
         .map_err(InternalError::storage)
 }
@@ -245,8 +251,7 @@ fn set_not_found_status() {
 /// "forbidden" would confirm the post exists to a viewer not allowed to see it,
 /// leaking its existence. Fail closed to an indistinguishable not-found while
 /// preserving the real cause in the operator message.
-#[allow(clippy::needless_pass_by_value)]
-pub fn private_post_not_found_error(error: InternalError) -> InternalError {
+pub fn private_post_not_found_error(error: &InternalError) -> InternalError {
     set_not_found_status();
     InternalError::masked(
         WebError::not_found("Post"),

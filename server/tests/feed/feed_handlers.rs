@@ -1,13 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::items_after_statements,
-    clippy::unused_async
-)]
-#![allow(unused_macros)]
-
 use common::visibility::AudienceTarget;
 use std::sync::Arc;
 
@@ -23,8 +13,6 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 use rstest::*;
-#[allow(clippy::single_component_path_imports)]
-use rstest_reuse;
 use rstest_reuse::*;
 
 use crate::helpers::{
@@ -34,7 +22,7 @@ use storage::CreatePostInput;
 use storage::PostFormat;
 
 /// Build the router with a real temp storage directory.
-async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
+fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     ensure_server_fns_registered();
     let storage_path = storage.path().to_path_buf();
     std::fs::create_dir_all(storage_path.join("media").join("upload")).unwrap();
@@ -55,7 +43,7 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
     #[case] backend: Backend,
 ) {
     let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(state.clone(), &base).await;
+    let app = make_app(state.clone(), &base);
 
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
@@ -135,7 +123,7 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
 #[tokio::test]
 async fn handler_serves_site_tag_feed_with_200(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(state.clone(), &base).await;
+    let app = make_app(state.clone(), &base);
 
     // A tagged, published post so the site-tag surface has content.
     let username: Username = "frank".parse().expect("valid username");
@@ -193,7 +181,7 @@ async fn handler_serves_site_tag_feed_with_200(#[case] backend: Backend) {
 #[tokio::test]
 async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(state.clone(), &base).await;
+    let app = make_app(state.clone(), &base);
 
     // Pre-populate the cache with a known body
     let known_body = "known feed body";
@@ -232,7 +220,7 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
 #[tokio::test]
 async fn handler_if_none_match_returns_304(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(state.clone(), &base).await;
+    let app = make_app(state.clone(), &base);
 
     let etag = "test-etag-123";
     let row = storage::FeedCacheRow {
@@ -265,7 +253,7 @@ async fn handler_if_none_match_returns_304(#[case] backend: Backend) {
 #[tokio::test]
 async fn handler_if_modified_since_returns_304_when_unchanged(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(state.clone(), &base).await;
+    let app = make_app(state.clone(), &base);
 
     // Round to seconds to ensure RFC2822 conversion is lossless
     let update_time = Utc::now()
@@ -310,7 +298,7 @@ async fn handler_if_modified_since_returns_304_when_unchanged(#[case] backend: B
 #[tokio::test]
 async fn handler_rejects_invalid_request_with_404(backend: Backend, #[case] uri: &str) {
     let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let req = Request::builder()
         .method("GET")
@@ -364,7 +352,7 @@ async fn handler_returns_correct_content_type_per_format(#[case] backend: Backen
     ];
 
     for (ext, expected_content_type) in &test_cases {
-        let app = make_app(state.clone(), &base).await;
+        let app = make_app(state.clone(), &base);
         let req = Request::builder()
             .method("GET")
             .uri(format!("/~eve/feed.{ext}"))

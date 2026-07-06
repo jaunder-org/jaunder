@@ -1,12 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::items_after_statements,
-    clippy::unused_async
-)]
-
 use std::fmt::Write as _;
 use std::net::SocketAddr;
 
@@ -28,8 +19,6 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 use rstest::*;
-#[allow(clippy::single_component_path_imports)]
-use rstest_reuse;
 use rstest_reuse::*;
 
 use crate::backup_fixture::{

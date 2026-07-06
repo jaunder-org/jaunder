@@ -215,6 +215,10 @@ fn parse_publish_at(raw: Option<&str>) -> crate::error::InternalResult<Option<Da
 /// because `chrono` is a `server`-only dependency here and the server-fn
 /// signature must also compile for the wasm client. The wire is UTC; the
 /// browser converts the author's local `datetime-local` value before sending.
+// `#[expect]` can't be used here: the `#[server]` macro emits too_many_arguments from
+// its own expansion, so a fn-level expectation is always reported "unfulfilled". A plain
+// `#[allow]` is the only mechanism that suppresses a macro-emitted lint. The args are the
+// RPC input contract — bundling them into a struct would change the JSON wire shape. (#94)
 #[allow(clippy::too_many_arguments)]
 #[server(endpoint = "/create_post", input = Json)]
 pub async fn create_post(
@@ -347,7 +351,9 @@ pub async fn get_post(
         // viewing their own unpublished draft, so require auth and confirm the
         // requester owns the namespace; everyone else gets an indistinguishable
         // 404 (never a 403 that would leak the draft's existence).
-        let auth = require_auth().await.map_err(private_post_not_found_error)?;
+        let auth = require_auth()
+            .await
+            .map_err(|e| private_post_not_found_error(&e))?;
         if auth.username != username_parsed {
             return Err(not_found_error());
         }
@@ -371,7 +377,9 @@ pub async fn get_post(
 #[server(endpoint = "/get_post_preview")]
 pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
     boundary!("get_post_preview", {
-        let auth = require_auth().await.map_err(private_post_not_found_error)?;
+        let auth = require_auth()
+            .await
+            .map_err(|e| private_post_not_found_error(&e))?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
         let post = posts
@@ -389,6 +397,8 @@ pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
 }
 
 /// Updates an existing post for the authenticated author.
+// See `create_post`: `#[expect]` is always "unfulfilled" against the `#[server]` macro's
+// own emission, so a justified `#[allow]` is the only working suppression here. (#94)
 #[allow(clippy::too_many_arguments)]
 #[server(endpoint = "/update_post", input = Json)]
 pub async fn update_post(
@@ -521,7 +531,9 @@ pub async fn default_audience_selection() -> WebResult<AudienceSelection> {
 pub async fn post_audience_selection(post_id: i64) -> WebResult<AudienceSelection> {
     boundary!("post_audience_selection", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
-        let auth = require_auth().await.map_err(private_post_not_found_error)?;
+        let auth = require_auth()
+            .await
+            .map_err(|e| private_post_not_found_error(&e))?;
 
         let post = posts
             .get_post_by_id(post_id, &viewer_identity().await)
