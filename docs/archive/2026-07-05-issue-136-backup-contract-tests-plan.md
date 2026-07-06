@@ -830,7 +830,7 @@ tests.
   `migrated_pool`/`migrated_conn`
   - unused test imports; cov:ignore the export `Err` arm)
 
-- [ ] **Step 1: Delete the 3 orchestration tests** in `storage/src/backup.rs` —
+- [x] **Step 1: Delete the 3 orchestration tests** in `storage/src/backup.rs` —
       `restore_backup_rejects_missing_db_directory`,
       `export_backup_writes_ndjson_media_and_manifest`,
       `archive_backup_round_trips_database_and_media` (the
@@ -839,7 +839,7 @@ tests.
       (`sqlite_only`, `Backend`, the `rstest`/`rstest_reuse` globs,
       `std::str::FromStr` — whatever clippy flags after deletion).
 
-- [ ] **Step 2: Delete the 5 dialect tests + helpers** in
+- [x] **Step 2: Delete the 5 dialect tests + helpers** in
       `storage/src/sqlite/backup.rs` —
       `export_database_triggers_rollback_on_write_failure`,
       `restore_database_triggers_rollback_on_import_failure`,
@@ -853,7 +853,7 @@ tests.
       imports (`sqlite_only`, `Backend`, `rstest`/`rstest_reuse`,
       `sqlx::Connection`, `TempDir` — whatever clippy flags).
 
-- [ ] **Step 3: cov:ignore the SQLite export rollback arm** in
+- [x] **Step 3: cov:ignore the SQLite export rollback arm** in
       `storage/src/sqlite/backup.rs`, `export_database` (the `Err(error) =>`
       arm, lines ~55–58), matching the existing Postgres marker:
 
@@ -868,7 +868,7 @@ tests.
         }
 ```
 
-- [ ] **Step 4: Run the storage tests + the full gate** (coverage must not
+- [x] **Step 4: Run the storage tests + the full gate** (coverage must not
       regress):
 
 Run: `cargo nextest run -p storage backup` Expected: PASS (only the pure helper
@@ -878,7 +878,7 @@ Run: `devtool run -- cargo xtask check` Expected: `ok:true` — coverage green, 
 CRAP regression, `test-backend-pattern` guard passes (no bare DB
 `#[tokio::test]`).
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add storage/src/backup.rs storage/src/sqlite/backup.rs
@@ -892,7 +892,7 @@ git commit -m "test(backup): drop interim sqlite_only tests; cov:ignore export r
 **Files:** Create:
 `docs/adr/drafts/backup-test-homing-and-uniform-restore-failure.md`
 
-- [ ] **Step 1: Author the ADR draft** via **jaunder-adr** (numberless draft in
+- [x] **Step 1: Author the ADR draft** via **jaunder-adr** (numberless draft in
       `docs/adr/drafts/`; `cargo xtask adr promote` numbers it at ship). Record:
   - **Homing (DEC-A/DEC-B):** backup contract tests live at the CLI/server-test
     level (`commands.rs` + `backup_interop.rs`), not rebuilt in the storage
@@ -908,7 +908,7 @@ git commit -m "test(backup): drop interim sqlite_only tests; cov:ignore export r
     bytes may differ (canonicalization is a non-goal).
   - Amends/extends ADR-0053's backup carve-out. Link issue #136 and issue #4.
 
-- [ ] **Step 2: Format + commit** (prettier the Markdown before staging —
+- [x] **Step 2: Format + commit** (prettier the Markdown before staging —
       jaunder pre-commit restages prose):
 
 ```bash
