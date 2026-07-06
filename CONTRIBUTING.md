@@ -409,7 +409,7 @@ The gate is **stateless**: its verdict is a pure function of
 `(coverage report, source tree)` — there is no committed baseline, anchor, or
 manifest. Each run builds a fresh `cargo llvm-cov` report inside the Nix
 `coverage` check and classifies every executable source line. An **uncovered
-line fails the gate** unless one of two things exempts it:
+line fails the gate** unless one of three things exempts it:
 
 - **Structural exemption — `#[component]` bodies.** Leptos CSR UI is exercised
   by the e2e matrix (browser WASM), not by native host tests, so component
@@ -420,6 +420,18 @@ line fails the gate** unless one of two things exempts it:
   exemption is keyed on the **construct**, not on files or directories, so
   `#[server]` and plain helper code co-located in `web/src/pages/*` stays
   measured.
+- **Structural exemption — `unreachable!("msg")`.** A literal `unreachable!`
+  invocation carrying a **non-empty message** is dropped from the executable set
+  with **no marker**. It is _self-enforcing_: reaching the line panics ⇒ the
+  test fails ⇒ `cargo llvm-cov` exits non-zero ⇒ the `coverage` check produces
+  no report — so, unlike a `cov:ignore` on a reachable line, you cannot silently
+  cheat coverage on live code. It is _message-required_ (a bare `unreachable!()`
+  stays **measured**, forcing an explicit justification, mirroring `crap:allow`)
+  and, like `#[component]`, **fail-closed** — `std::unreachable!`, aliases, and
+  macro-generated forms are not recognized and stay measured. Use it for
+  provably-dead lines (a match arm a domain invariant makes unreachable) in
+  preference to a `cov:ignore`: the marker is a permanent, prose-only promise,
+  whereas an `unreachable!` re-flags itself the moment the line ever goes live.
 - **`// cov:ignore` marker.** A line explicitly marked as an accepted gap.
 
 `cov:ignore` is the **only** manual acceptance path — there is no baseline file
@@ -512,7 +524,10 @@ force-fitted with artificial tests:
   context — `cov:ignore`'d.
 - **A few PostgreSQL storage error branches** (`storage/src/postgres/*`) and
   **asset serving** (`server/src/assets.rs`, compile-time embedded assets):
-  unreachable or impractical to exercise host-side — `cov:ignore`'d.
+  unreachable or impractical to exercise host-side — `cov:ignore`'d. A
+  provably-dead branch here is a candidate for `unreachable!("msg")` instead
+  (self-enforcing, no marker); migrating the existing markers is tracked in
+  #245.
 
 **Source-filter drift guard (`cargo xtask coverage probe-source`).** The Nix
 `coverage` derivation's `src` is filtered to cargo sources (plus an explicit
