@@ -71,7 +71,7 @@ async fn serve(
             if row.updated_at <= t.with_timezone(&chrono::Utc) {
                 return StatusCode::NOT_MODIFIED.into_response();
             }
-        }
+        } // cov:ignore fall-through brace when if-modified-since parses but the row is newer (304 + no-header paths are tested)
     }
 
     let mut resp_headers = HeaderMap::new();
@@ -276,6 +276,64 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn serve_returns_200_when_if_none_match_does_not_match() {
+        let mut cache = storage::MockFeedCacheStorage::new();
+        cache
+            .expect_get()
+            .returning(|_| Ok(Some(sample_row("\"etag-1\"", Utc::now()))));
+
+        // IF_NONE_MATCH present but a different etag: the conditional falls
+        // through to a normal 200 rather than returning 304.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_static("\"etag-other\""),
+        );
+
+        let resp = serve(
+            Arc::new(cache),
+            empty_site_config(),
+            empty_posts(),
+            headers,
+            FeedSurface::Site,
+            FeedFormat::Rss,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn serve_returns_200_when_modified_since_is_stale() {
+        // Row updated *after* the client's If-Modified-Since date: the
+        // conditional falls through to a 200 rather than returning 304.
+        let updated_at = Utc::now();
+        let mut cache = storage::MockFeedCacheStorage::new();
+        cache
+            .expect_get()
+            .returning(move |_| Ok(Some(sample_row("\"etag-1\"", updated_at))));
+
+        let mut headers = HeaderMap::new();
+        let ims = (Utc::now() - Duration::days(1)).to_rfc2822();
+        headers.insert(
+            header::IF_MODIFIED_SINCE,
+            HeaderValue::from_str(&ims).unwrap(),
+        );
+
+        let resp = serve(
+            Arc::new(cache),
+            empty_site_config(),
+            empty_posts(),
+            headers,
+            FeedSurface::Site,
+            FeedFormat::Rss,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     // guard:no-backend — mock store

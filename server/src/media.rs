@@ -518,6 +518,35 @@ mod tests {
 
     // guard:no-backend — mock store
     #[tokio::test]
+    async fn serve_response_serves_body_when_if_none_match_does_not_match() {
+        let (temp, p) = stored_file("photo.jpg");
+        let mut media = storage::MockMediaStorage::new();
+        // ETag present but not matching: the conditional falls through to the
+        // normal serve path (DB lookup + 200) rather than returning 304.
+        media
+            .expect_find_by_hash()
+            .times(1)
+            .returning(|_, _| Ok(None));
+
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::IF_NONE_MATCH,
+            HeaderValue::from_static("\"not-the-hash\""),
+        );
+
+        let resp = serve_response(
+            Extension(Arc::new(media) as Arc<dyn MediaStorage>),
+            Extension(Arc::new(temp.path().to_path_buf())),
+            Path(p),
+            headers,
+        )
+        .await
+        .expect("serve response");
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
     async fn serve_response_falls_back_to_extension_content_type_when_db_has_no_record() {
         let (temp, p) = stored_file("photo.jpg");
         let mut media = storage::MockMediaStorage::new();

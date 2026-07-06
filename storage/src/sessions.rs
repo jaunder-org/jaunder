@@ -41,6 +41,7 @@ pub enum SessionAuthError {
 ///
 /// This trait manages the lifecycle of session tokens used for authenticating
 /// web and API requests.
+#[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait SessionStorage: Send + Sync {
     /// Creates a new session for a user.
