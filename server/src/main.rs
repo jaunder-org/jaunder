@@ -4,27 +4,23 @@ use common::username::Username;
 use jaunder::cli::{Cli, Commands};
 
 #[tokio::main]
-// cov:ignore-start
 async fn main() -> anyhow::Result<()> {
-    // cov:ignore-stop
     // Fail-closed: a production binary must never link a `common` compiled with
     // cheap test KDF params. Feature isolation (resolver 2, dev-deps only) keeps
     // this false in production; if it is ever true, refuse to start rather than
     // hash passwords weakly. main() is never run by the integration tests, so this
     // does not affect the test build.
-    // cov:ignore-start
     if common::CHEAP_KDF_ENABLED {
         eprintln!(
-            // cov:ignore-stop
             "FATAL: jaunder built with cheap-kdf (test-only password hashing); refusing to start"
         );
-        // cov:ignore-start
         std::process::exit(1);
-    }
+    } // cov:ignore process::exit(1) above diverges, so this closing brace is unreachable
+      // cov:ignore-start
     let cli = Cli::parse();
     run(cli).await
+    // cov:ignore-stop
 }
-// cov:ignore-stop
 
 /// Executes the application logic based on the provided CLI arguments.
 ///
