@@ -643,12 +643,10 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
             .await
             .map_err(|e| match e {
                 UpdatePostError::NotFound | UpdatePostError::Unauthorized => {
-                    InternalError::not_found("Post") // cov:ignore
+                    InternalError::not_found("Post")
                 }
-                // cov:ignore-start
                 UpdatePostError::Internal(error) => InternalError::storage(error),
             })?;
-        // cov:ignore-stop
 
         let published_at = updated
             .published_at
@@ -946,5 +944,91 @@ mod tests {
         );
         assert!(!published.is_draft);
         assert!(published.published_at.is_some());
+    }
+}
+
+#[cfg(all(test, feature = "server"))]
+mod server_tests {
+    // Helper fns in this feature-gated test module aren't covered by clippy's
+    // allow-{unwrap,expect}-in-tests, so allow the test-scaffolding panics.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::publish_post;
+    use crate::error::WebError;
+    use crate::test_support::auth_parts;
+    use chrono::Utc;
+    use common::slug::Slug;
+    use common::username::Username;
+    use leptos::prelude::provide_context;
+    use leptos::reactive::owner::Owner;
+    use std::sync::Arc;
+    use storage::{
+        MockPostStorage, MockSubscriptionStorage, PostFormat, PostRecord, PostStorage,
+        SubscriptionStorage, UpdatePostError,
+    };
+
+    fn owned_post(user_id: i64) -> PostRecord {
+        let now = Utc::now();
+        PostRecord {
+            post_id: 1,
+            user_id,
+            author_username: "alice".parse::<Username>().unwrap(),
+            title: Some("t".to_string()),
+            slug: "hello-world".parse::<Slug>().unwrap(),
+            body: "body".to_string(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>body</p>".to_string(),
+            created_at: now,
+            updated_at: now,
+            published_at: None,
+            deleted_at: None,
+            summary: None,
+            tags: vec![],
+        }
+    }
+
+    /// Wires an authenticated owner (user 1) whose post store returns an owned,
+    /// non-deleted post but fails `update_post` with `error`. Returns the owner,
+    /// which the caller must keep alive across the `.await`.
+    fn setup(error: fn() -> UpdatePostError) -> Owner {
+        let owner = Owner::new();
+        owner.set();
+        provide_context(auth_parts(1, "alice"));
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_get_post_by_id()
+            .returning(|_id, _viewer| Ok(Some(owned_post(1))));
+        posts
+            .expect_get_post_audiences()
+            .returning(|_id| Ok(Vec::new()));
+        posts
+            .expect_update_post()
+            .returning(move |_id, _editor, _input| Err(error()));
+        provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
+        // `viewer_identity()` (used to fetch the post) may consult the local
+        // channel id; allow it zero-or-more times.
+        let mut subs = MockSubscriptionStorage::new();
+        subs.expect_local_channel_id()
+            .times(0..)
+            .returning(|| Ok(1));
+        provide_context(Arc::new(subs) as Arc<dyn SubscriptionStorage>);
+        owner
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn publish_post_maps_not_found_update_error_to_not_found() {
+        let owner = setup(|| UpdatePostError::NotFound);
+        let result = publish_post(1).await;
+        drop(owner);
+        assert!(matches!(result.unwrap_err(), WebError::NotFound { .. }));
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn publish_post_maps_internal_update_error_to_storage() {
+        let owner = setup(|| UpdatePostError::Internal(sqlx::Error::PoolClosed));
+        let result = publish_post(1).await;
+        drop(owner);
+        assert!(matches!(result.unwrap_err(), WebError::Storage { .. }));
     }
 }

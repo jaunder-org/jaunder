@@ -256,7 +256,7 @@ pub async fn fetch_posts_by_tag(
                 chrono::Utc::now(),
             )
             .await,
-    )?; // cov:ignore
+    )?;
     Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
 }
 
@@ -302,7 +302,7 @@ pub async fn fetch_user_posts_by_tag(
                 chrono::Utc::now(),
             )
             .await,
-    )?; // cov:ignore
+    )?;
     Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
 }
 
@@ -354,4 +354,69 @@ pub async fn list_user_posts_by_tag(
         )
         .await
     })
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    // Helper fns in this feature-gated test module aren't covered by clippy's
+    // allow-{unwrap,expect}-in-tests, so allow the test-scaffolding panics.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::{fetch_posts_by_tag, fetch_user_posts_by_tag};
+    use common::username::Username;
+    use common::visibility::ViewerIdentity;
+    use storage::{ListByTagError, MockPostStorage, MockUserStorage, UserRecord};
+
+    fn user(user_id: i64, username: &str) -> UserRecord {
+        UserRecord {
+            user_id,
+            username: username.parse::<Username>().unwrap(),
+            display_name: None,
+            bio: None,
+            created_at: chrono::Utc::now(),
+            last_authenticated_at: None,
+            email: None,
+            email_verified: false,
+            is_operator: false,
+        }
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn fetch_posts_by_tag_propagates_storage_error() {
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_list_posts_by_tag()
+            .returning(|_tag, _cursor, _limit, _viewer, _now| {
+                Err(ListByTagError::Internal(sqlx::Error::PoolClosed))
+            });
+        let result =
+            fetch_posts_by_tag(&posts, &ViewerIdentity::Anonymous, "rust", None, None, None).await;
+        assert!(result.is_err());
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn fetch_user_posts_by_tag_propagates_storage_error() {
+        let mut users = MockUserStorage::new();
+        users
+            .expect_get_user_by_username()
+            .returning(|_username| Ok(Some(user(2, "author"))));
+        let mut posts = MockPostStorage::new();
+        posts.expect_list_user_posts_by_tag().returning(
+            |_uid, _tag, _cursor, _limit, _viewer, _now| {
+                Err(ListByTagError::Internal(sqlx::Error::PoolClosed))
+            },
+        );
+        let result = fetch_user_posts_by_tag(
+            &posts,
+            &users,
+            &ViewerIdentity::Anonymous,
+            "author",
+            "rust",
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_err());
+    }
 }

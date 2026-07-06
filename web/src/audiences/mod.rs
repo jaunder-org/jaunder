@@ -54,10 +54,8 @@ fn map_audience_error(err: AudienceError) -> InternalError {
         AudienceError::DuplicateName => {
             InternalError::conflict("an audience with that name already exists")
         }
-        // cov:ignore-start
         AudienceError::NotFound => InternalError::not_found("audience"),
         AudienceError::Storage(e) => InternalError::storage(e),
-        // cov:ignore-stop
     }
 }
 
@@ -176,7 +174,7 @@ pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
                     .ok()
                     .flatten()
                     .map_or_else(|| row.subscriber_ref.clone(), |u| u.username.to_string()),
-                Err(_) => row.subscriber_ref.clone(), // cov:ignore
+                Err(_) => row.subscriber_ref.clone(),
             };
             out.push(SubscriberSummary {
                 subscription_id: row.subscription_id,
@@ -242,4 +240,58 @@ pub async fn list_audience_members(audience_id: i64) -> WebResult<Vec<i64>> {
             .map_err(InternalError::storage)?;
         Ok(members)
     })
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::{list_my_subscribers, map_audience_error};
+    use crate::error::WebError;
+    use crate::test_support::auth_parts;
+    use common::visibility::SubscriptionStatus;
+    use leptos::prelude::provide_context;
+    use leptos::reactive::owner::Owner;
+    use std::sync::Arc;
+    use storage::{
+        AudienceError, MockSubscriptionStorage, MockUserStorage, SubscriptionRecord,
+        SubscriptionStorage, UserStorage,
+    };
+
+    #[test]
+    fn map_audience_error_not_found_maps_to_not_found() {
+        let err = map_audience_error(AudienceError::NotFound);
+        assert!(matches!(err.public(), WebError::NotFound { .. }));
+    }
+
+    #[test]
+    fn map_audience_error_storage_maps_to_storage() {
+        let err = map_audience_error(AudienceError::Storage(sqlx::Error::PoolClosed));
+        assert!(matches!(err.public(), WebError::Storage { .. }));
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn list_my_subscribers_falls_back_to_raw_ref_when_non_numeric() {
+        let owner = Owner::new();
+        owner.set();
+        provide_context(auth_parts(1, "alice"));
+        let mut subs = MockSubscriptionStorage::new();
+        subs.expect_list_subscribers().returning(|_author| {
+            Ok(vec![SubscriptionRecord {
+                subscription_id: 7,
+                channel_id: 1,
+                subscriber_ref: "not-a-number".to_string(),
+                status: SubscriptionStatus::Active,
+                created_at: chrono::Utc::now(),
+            }])
+        });
+        provide_context(Arc::new(subs) as Arc<dyn SubscriptionStorage>);
+        // A non-numeric `subscriber_ref` never parses to a user id, so `get_user`
+        // is never called; the raw reference is used as the display label.
+        provide_context(Arc::new(MockUserStorage::new()) as Arc<dyn UserStorage>);
+
+        let result = list_my_subscribers().await.unwrap();
+        drop(owner);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].label, "not-a-number");
+    }
 }

@@ -110,7 +110,7 @@ pub async fn is_subscribed_to(author_username: String) -> WebResult<bool> {
         // so the profile can hide the button rather than surfacing an error.
         let Ok(author_id) = resolve_author(users.as_ref(), &author_username, auth.user_id).await
         else {
-            return Ok(false); // cov:ignore
+            return Ok(false);
         };
         let channel_id = subscriptions
             .local_channel_id()
@@ -123,4 +123,54 @@ pub async fn is_subscribed_to(author_username: String) -> WebResult<bool> {
             .map_err(InternalError::storage)?;
         Ok(subscribed)
     })
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    // Helper fns in this feature-gated test module aren't covered by clippy's
+    // allow-{unwrap,expect}-in-tests, so allow the test-scaffolding panics.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::is_subscribed_to;
+    use crate::test_support::auth_parts;
+    use common::username::Username;
+    use leptos::prelude::provide_context;
+    use leptos::reactive::owner::Owner;
+    use std::sync::Arc;
+    use storage::{
+        MockSubscriptionStorage, MockUserStorage, SubscriptionStorage, UserRecord, UserStorage,
+    };
+
+    fn user(user_id: i64, username: &str) -> UserRecord {
+        UserRecord {
+            user_id,
+            username: username.parse::<Username>().unwrap(),
+            display_name: None,
+            bio: None,
+            created_at: chrono::Utc::now(),
+            last_authenticated_at: None,
+            email: None,
+            email_verified: false,
+            is_operator: false,
+        }
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn is_subscribed_to_returns_false_when_viewing_own_profile() {
+        let owner = Owner::new();
+        owner.set();
+        provide_context(auth_parts(1, "alice"));
+        let mut users = MockUserStorage::new();
+        users
+            .expect_get_user_by_username()
+            .returning(|_username| Ok(Some(user(1, "alice"))));
+        provide_context(Arc::new(users) as Arc<dyn UserStorage>);
+        provide_context(Arc::new(MockSubscriptionStorage::new()) as Arc<dyn SubscriptionStorage>);
+
+        // `resolve_author` rejects the self-target, so the fn short-circuits to
+        // `Ok(false)` without ever consulting the subscription store.
+        let result = is_subscribed_to("alice".to_string()).await;
+        drop(owner);
+        assert!(!result.unwrap());
+    }
 }
