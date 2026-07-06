@@ -97,6 +97,7 @@ pub enum DeleteMediaError {
 ///
 /// This trait manages the metadata for media files, supporting both user
 /// uploads and cached remote content.
+#[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait MediaStorage: Send + Sync {
     /// Inserts a new media record.
@@ -117,10 +118,12 @@ pub trait MediaStorage: Send + Sync {
     ) -> sqlx::Result<Option<MediaRecord>>;
 
     /// Lists media records for a user, with optional filtering and pagination.
-    async fn list_media(
+    // Explicit `'a` for `mockall::automock` — see
+    // `PostStorage::list_published_by_user`.
+    async fn list_media<'a>(
         &self,
         user_id: i64,
-        source: Option<&MediaSource>,
+        source: Option<&'a MediaSource>,
         limit: u32,
         offset: u32,
     ) -> sqlx::Result<Vec<MediaRecord>>;
@@ -269,10 +272,10 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn list_media(
+    async fn list_media<'a>(
         &self,
         user_id: i64,
-        source: Option<&MediaSource>,
+        source: Option<&'a MediaSource>,
         limit: u32,
         offset: u32,
     ) -> sqlx::Result<Vec<MediaRecord>> {

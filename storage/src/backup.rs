@@ -560,7 +560,7 @@ fn file_sha256(path: &Path) -> Result<[u8; 32], BackupError> {
 
 fn previous_directory_backup(destination_path: &Path) -> Result<Option<PathBuf>, BackupError> {
     let Some(parent) = destination_path.parent() else {
-        return Ok(None); // cov:ignore
+        return Ok(None);
     };
     if !parent.exists() {
         return Ok(None);
@@ -591,7 +591,24 @@ mod tests {
     // module, so `#[expect]` self-removes if the names ever diverge. (#94)
     #![expect(clippy::similar_names)]
     use super::*;
+    use crate::test_support::{backends, recorded_postgres_url, sqlite_only, sqlite_url, Backend};
+    use rstest::*;
+    use rstest_reuse::*;
+    use std::str::FromStr;
     use tempfile::TempDir;
+
+    /// The [`DbConnectOptions`] addressing the database behind a backend's
+    /// [`Backend::setup`] test env, so a backend-parametric backup test can drive
+    /// the public `export_backup`/`restore_backup` API against either backend.
+    fn backup_db_options(
+        backend: Backend,
+        base: &TempDir,
+    ) -> Result<DbConnectOptions, BackupError> {
+        Ok(match backend {
+            Backend::Sqlite => sqlite_url(base),
+            Backend::Postgres => DbConnectOptions::from_str(&recorded_postgres_url(base))?,
+        })
+    }
 
     fn quote_test_identifier(identifier: &str) -> String {
         format!("\"{identifier}\"")
@@ -751,6 +768,14 @@ mod tests {
         let temp = TempDir::new()?;
         let destination = temp.path().join("nonexistent_parent").join("backup");
         assert_eq!(previous_directory_backup(&destination)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn previous_directory_backup_returns_none_for_parentless_path() -> Result<(), BackupError> {
+        // The filesystem root has no parent, so there is no sibling directory to
+        // source a previous backup from.
+        assert_eq!(previous_directory_backup(Path::new("/"))?, None);
         Ok(())
     }
 
@@ -922,6 +947,84 @@ mod tests {
             fs::read_to_string(destination.join("nested").join("avatar.txt"))?,
             "image"
         );
+        Ok(())
+    }
+    // Both backends' restore path shares the ragged-NDJSON contract: a row that
+    // omits a column present in row 0 is rejected as `InvalidBackup`, and the
+    // failed import rolls the restore transaction back. One `#[apply(backends)]`
+    // test covers the SQLite and PostgreSQL `import_table` missing-column arms
+    // plus the PostgreSQL `restore_database` rollback arm.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn restore_rejects_row_missing_a_column(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let source = backend.setup().await;
+        // Two users so the exported users.ndjson has a later row to corrupt while
+        // leaving row 0 (which seeds `column_names`) complete.
+        for username in ["userone", "usertwo"] {
+            source
+                .state
+                .users
+                .create_user(
+                    &username.parse().expect("valid username"),
+                    &"password123".parse().expect("valid password"),
+                    None,
+                    false,
+                )
+                .await
+                .expect("seed user");
+        }
+
+        let temp = TempDir::new()?;
+        let media = temp.path().join("media");
+        fs::create_dir_all(&media)?;
+        let backup = temp.path().join("backup");
+
+        let source_db = backup_db_options(backend, &source.base)?;
+        export_backup(BackupExportOptions {
+            database: &source_db,
+            media_path: &media,
+            destination_path: &backup,
+            mode: BackupMode::Directory,
+        })
+        .await?;
+
+        // Drop a column from the last exported user row: row 0 still carries every
+        // column (so `column_names` includes it), but the last row omits it, so the
+        // per-row bind trips the missing-column check during restore.
+        let users_ndjson = backup.join("db").join("users.ndjson");
+        let mut rows: Vec<serde_json::Map<String, serde_json::Value>> =
+            fs::read_to_string(&users_ndjson)?
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(serde_json::from_str)
+                .collect::<Result<_, _>>()?;
+        assert!(rows.len() >= 2, "expected at least two exported user rows");
+        let victim = rows[0]
+            .keys()
+            .next()
+            .expect("exported row has columns")
+            .clone();
+        rows.last_mut().expect("non-empty rows").remove(&victim);
+        let mut corrupted = String::new();
+        for row in &rows {
+            corrupted.push_str(&serde_json::to_string(row)?);
+            corrupted.push('\n');
+        }
+        fs::write(&users_ndjson, corrupted)?;
+
+        let target = backend.setup().await;
+        let target_db = backup_db_options(backend, &target.base)?;
+        let error = restore_backup(BackupRestoreOptions {
+            database: &target_db,
+            media_path: &temp.path().join("restored-media"),
+            source_path: &backup,
+        })
+        .await
+        .expect_err("restore should reject a row missing a column");
+
+        assert!(matches!(error, BackupError::InvalidBackup(_)));
         Ok(())
     }
 }

@@ -153,10 +153,8 @@ async fn import_table(
         let mut query = sqlx::query(&insert);
         for column in &column_names {
             let value = row.get(column).ok_or_else(|| {
-                // cov:ignore-start
                 BackupError::InvalidBackup(format!("table {table} row is missing column {column}"))
             })?;
-            // cov:ignore-stop
             query = bind_json_value(query, value);
         }
         query.execute(&mut *connection).await?;

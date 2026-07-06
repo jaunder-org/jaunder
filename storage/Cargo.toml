@@ -29,6 +29,9 @@ tracing.workspace = true
 # so `storage`'s own `cfg(test)` build has them without enabling the feature.
 tempfile = { workspace = true, optional = true }
 rstest_reuse = { workspace = true, optional = true }
+# Pulled in by `test-utils` so downstream test crates (web, server) get the
+# `#[automock]`-generated `Mock*Storage` fakes; never in a shipped binary.
+mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -37,7 +40,7 @@ rstest_reuse.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
-test-utils = []
+test-utils = ["dep:mockall"]
 # `seed-posts` gates only `seed_post_input` (the shared timeline-post recipe)
 # and pulls NO extra deps, so the `test-support` binary can link the recipe
 # without the heavy scaffolding. `test-support` implies it.
