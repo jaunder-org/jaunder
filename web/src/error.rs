@@ -394,7 +394,11 @@ where
     Fut: std::future::Future<Output = T> + Send + 'static,
     // cov:ignore-stop
 {
-    #[allow(clippy::disallowed_methods)] // the one sanctioned Resource::new (issue #124)
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the one sanctioned Resource::new; all other call sites must go through \
+                  web::server_resource (#124)"
+    )]
     // cov:ignore-start
     leptos::prelude::Resource::new(source, move |s| scoped_fetcher_future(fetcher(s)))
 }

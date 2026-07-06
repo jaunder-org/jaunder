@@ -10,7 +10,10 @@ use jaunder::feed::worker::FeedWorker;
 use storage::{CreatePostInput, FeedCacheRow, PostFormat};
 
 use rstest::*;
-#[allow(clippy::single_component_path_imports)]
+#[expect(
+    clippy::single_component_path_imports,
+    reason = "rstest_reuse needs the bare `use rstest_reuse;` import in scope for its #[template]/#[apply] macros; a glob import would trip wildcard_imports instead"
+)]
 use rstest_reuse;
 use rstest_reuse::*;
 
