@@ -723,7 +723,8 @@ mod tests {
         fs::write(
             previous.join("media").join("nested").join("image.txt"),
             "same",
-        )?; // cov:ignore
+        )
+        .expect("write previous nested media file");
 
         mirror_media_directory(&source, &destination, Some(&previous))?;
 
@@ -751,7 +752,8 @@ mod tests {
         assert!(!files_have_same_content(
             &source.join("image.txt"),
             &previous.join("media").join("image.txt")
-        )?); // cov:ignore
+        )
+        .expect("compare source and previous media files"));
         Ok(())
     }
 
@@ -946,7 +948,8 @@ mod tests {
         fs::write(
             db.join("users.ndjson"),
             "{\"user_id\":1}\n\n{\"user_id\":2}\n",
-        )?; // cov:ignore
+        )
+        .expect("write users.ndjson fixture");
 
         let rows = read_table_rows(temp.path(), "users")?;
         assert_eq!(rows.len(), 2);

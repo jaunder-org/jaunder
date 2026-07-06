@@ -27,10 +27,7 @@ fn map_restore_error(error: sqlx::Error) -> BackupError {
         .map(|db| db.message().to_owned());
     match constraint_message {
         Some(message) => BackupError::ConstraintViolation(message),
-        // cov:ignore-start — a non-`23` restore error isn't triggerable through the
-        // public restore interface; only the constraint path is exercised by tests.
         None => BackupError::Sqlx(error),
-        // cov:ignore-stop
     }
 }
 
@@ -354,6 +351,74 @@ mod tests {
             error.is_err(),
             "export into a missing db/ dir must fail and roll back"
         );
+    }
+
+    // reason: drives the Postgres dialect's restore directly with a backup whose
+    // users.ndjson carries a non-numeric `user_id`. `import_table`'s
+    // `CAST($n AS BIGINT)` then raises SQLSTATE 22P02 (class 22, a data exception —
+    // not a class-23 constraint violation), so `map_restore_error` takes its `None`
+    // arm and yields `BackupError::Sqlx`. That arm is unreachable through the public
+    // restore interface, so it is exercised at the dialect level here.
+    #[apply(postgres_only)]
+    #[tokio::test]
+    async fn restore_maps_non_constraint_error_to_sqlx(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let source = backend.setup().await;
+        let CloseablePool::Postgres(source_pool) = source.base.pool() else {
+            unreachable!("postgres_only yields a Postgres pool")
+        };
+        source
+            .state
+            .users
+            .create_user(
+                &"userone".parse().expect("valid username"),
+                &"password123".parse().expect("valid password"),
+                None,
+                false,
+            )
+            .await
+            .expect("seed user");
+
+        // Export a real backup so its manifest's schema version/checksum match the
+        // fresh target, and users.ndjson has a complete row to corrupt.
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let backup = temp.path().join("backup");
+        std::fs::create_dir_all(backup.join("db"))?;
+        let manifest = export_database(source_pool, &backup, BackupMode::Directory).await?;
+
+        // Replace the integer `user_id` with a non-numeric string. Row 0 still
+        // carries every column, so `column_names` includes `user_id`; the bind then
+        // trips `CAST('abc' AS BIGINT)` -> SQLSTATE 22P02 during the INSERT.
+        let users_ndjson = backup.join("db").join("users.ndjson");
+        let mut rows: Vec<serde_json::Map<String, serde_json::Value>> =
+            std::fs::read_to_string(&users_ndjson)?
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(serde_json::from_str)
+                .collect::<Result<_, _>>()?;
+        assert!(!rows.is_empty(), "expected an exported user row");
+        rows[0].insert("user_id".to_owned(), serde_json::json!("abc"));
+        let mut corrupted = String::new();
+        for row in &rows {
+            corrupted.push_str(&serde_json::to_string(row)?);
+            corrupted.push('\n');
+        }
+        std::fs::write(&users_ndjson, corrupted)?;
+
+        let target = backend.setup().await;
+        let CloseablePool::Postgres(target_pool) = target.base.pool() else {
+            unreachable!("postgres_only yields a Postgres pool")
+        };
+        let error = restore_database(target_pool, &backup, &manifest)
+            .await
+            .expect_err("restore should fail casting a non-numeric user_id");
+
+        assert!(
+            matches!(error, BackupError::Sqlx(_)),
+            "non-constraint (class 22) restore error must map to Sqlx, got {error:?}"
+        );
+        Ok(())
     }
 
     #[test]

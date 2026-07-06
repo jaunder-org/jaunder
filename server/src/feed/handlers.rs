@@ -71,7 +71,7 @@ async fn serve(
             if row.updated_at <= t.with_timezone(&chrono::Utc) {
                 return StatusCode::NOT_MODIFIED.into_response();
             }
-        } // cov:ignore fall-through brace when if-modified-since parses but the row is newer (304 + no-header paths are tested)
+        } // cov:ignore fall-through brace; llvm-cov leaves it unmarked though the row-newer (200, not 304) path is tested
     }
 
     let mut resp_headers = HeaderMap::new();

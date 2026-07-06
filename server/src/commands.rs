@@ -384,11 +384,12 @@ pub async fn prepare_server(
         Err(_) if !prod => {
             // Dev mode: auto-initialize on first `jaunder serve` so the host e2e
             // loop (and any dev run) works without a manual `jaunder init`.
+            let storage_path = storage.storage_path.display();
             tracing::warn!(
-                storage_path = %storage.storage_path.display(), // cov:ignore tracing field-expr coverage is subscriber-internal
+                storage_path = %storage_path,
                 db = %storage.db,
                 "Database not found — auto-initializing (dev mode): storage={} db={}",
-                storage.storage_path.display(), // cov:ignore tracing field-expr coverage is subscriber-internal
+                storage_path,
                 storage.db,
             );
             cmd_init(storage, true).await?;

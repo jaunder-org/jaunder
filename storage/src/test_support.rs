@@ -407,8 +407,8 @@ fn report_drop_outcome(
 ) {
     match outcome {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => eprintln!("test database drop {db_name} failed: {error}"), // cov:ignore
-        Err(_elapsed) => eprintln!("test database drop {db_name} timed out"),        // cov:ignore
+        Ok(Err(error)) => eprintln!("test database drop {db_name} failed: {error}"),
+        Err(_elapsed) => eprintln!("test database drop {db_name} timed out"),
     }
 }
 
@@ -628,7 +628,7 @@ pub async fn seed_user(state: &Arc<AppState>) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{backends, bootstrap_url, seed_user, splice_db_name, Backend};
+    use super::{backends, bootstrap_url, report_drop_outcome, seed_user, splice_db_name, Backend};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -646,6 +646,20 @@ mod tests {
     async fn postgres_accessor_rejects_a_sqlite_pool() {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         let _ = super::CloseablePool::Sqlite(pool).postgres();
+    }
+
+    // guard:no-backend — drives the pure `report_drop_outcome` logging arms; no database ops
+    #[tokio::test]
+    async fn report_drop_outcome_logs_failure_and_timeout() {
+        // Failure arm: a DROP DATABASE that returned a database error.
+        report_drop_outcome("test_db", Ok(Err(sqlx::Error::RowNotFound)));
+
+        // Timeout arm: a genuine `Elapsed` from a zero-duration timeout over a
+        // future that never completes.
+        let elapsed = tokio::time::timeout(std::time::Duration::ZERO, std::future::pending::<()>())
+            .await
+            .unwrap_err();
+        report_drop_outcome("test_db", Err(elapsed));
     }
 
     #[test]

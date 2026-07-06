@@ -383,7 +383,6 @@ where
 /// [`scoped_fetcher_future`] so server-fn context survives SSR polling on a worker
 /// thread detached from the owner (issue #124). Raw `Resource::new` is banned in
 /// `web` outside this definition (static guard).
-// cov:ignore-start
 pub fn server_resource<T, S, Fut>(
     source: impl Fn() -> S + Send + Sync + 'static,
     fetcher: impl Fn(S) -> Fut + Send + Sync + 'static,
@@ -392,17 +391,14 @@ where
     T: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
     S: PartialEq + Clone + Send + Sync + 'static,
     Fut: std::future::Future<Output = T> + Send + 'static,
-    // cov:ignore-stop
 {
     #[expect(
         clippy::disallowed_methods,
         reason = "the one sanctioned Resource::new; all other call sites must go through \
                   web::server_resource (#124)"
     )]
-    // cov:ignore-start
     leptos::prelude::Resource::new(source, move |s| scoped_fetcher_future(fetcher(s)))
 }
-// cov:ignore-stop
 
 /// Collects strong [`Owner`](leptos::reactive::owner::Owner) handles for every
 /// ancestor of `owner` (parent, grandparent, … up to the root). `Owner::parent()`
@@ -980,6 +976,34 @@ mod owner_lifetime {
             Poll::Ready(value) => Some(value),
             Poll::Pending => None,
         }
+    }
+
+    /// Covers [`server_resource`](super::server_resource). With a current owner set
+    /// (mirroring the adjacent owner tests), calling the sanctioned wrapper exercises
+    /// its generic signature and the `Resource::new` line. `Resource::new` eagerly
+    /// spawns the fetcher through `any_spawner::Executor`, which panics unless an async
+    /// executor is initialized — and no executor is reachable host-side without adding a
+    /// dependency (leptos only initializes one inside its wasm `mount` or `leptos_axum`'s
+    /// private `init_executor`). So we call `server_resource` (its body runs down to the
+    /// `Resource::new` call, covering those lines) and catch the deep executor-spawn
+    /// panic; `catch_unwind` therefore returns `Err`. The panic hook is swapped for a
+    /// no-op so the expected panic does not print (nextest runs each test in its own
+    /// process, so the hook swap is isolated).
+    #[cfg(feature = "server")]
+    #[test]
+    fn server_resource_constructs_under_owner() {
+        let owner = Owner::new();
+        owner.set();
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::server_resource::<i32, (), _>(|| (), |()| async { 0 })
+        }));
+        std::panic::set_hook(prev);
+        assert!(
+            result.is_err(),
+            "expected the executor-spawn panic reached via Resource::new"
+        );
     }
 
     /// Reproduces #89: a future that reads context *after* an await loses it when

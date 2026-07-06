@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -165,12 +167,12 @@ impl FeedWorker {
                     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 );
                 let _ = self.feed_events.mark_regenerated(&ids).await;
+                let item_bytes = row.body.len();
+                let duration_ms = started.elapsed().as_millis();
                 tracing::info!(
                     feed_url,
-                    // cov:ignore-start
-                    item_bytes = row.body.len(),
-                    duration_ms = started.elapsed().as_millis(),
-                    // cov:ignore-stop
+                    item_bytes = item_bytes,
+                    duration_ms = duration_ms,
                     "feed.regen.completed"
                 );
 
@@ -282,19 +284,26 @@ impl FeedWorker {
         let scheduler = tokio_cron_scheduler::JobScheduler::new().await?;
         let job = tokio_cron_scheduler::Job::new_repeated_async(
             Duration::from_secs(10),
-            // cov:ignore-start
-            move |_uuid, _lock| {
-                let worker = worker.clone();
-                Box::pin(async move {
-                    worker.tick().await;
-                })
-            },
+            // cov:ignore-start -- the closure body fires only when the 10s cron
+            // timer elapses; the work it does (spawn_tick → tick) is unit-tested
+            // directly, so only this scheduler-registration wrapper is uncovered.
+            move |_uuid, _lock| spawn_tick(worker.clone()),
         )?;
         // cov:ignore-stop
         scheduler.add(job).await?;
         scheduler.start().await?;
         Ok(scheduler)
     }
+}
+
+/// Drives one [`FeedWorker::tick`] as an owned, boxed future — the body the cron
+/// scheduler runs on every fire. Extracted from the scheduler closure so its
+/// single meaningful statement sits on an ordinary, testable line rather than
+/// inside a closure the scheduler only ever invokes at runtime.
+fn spawn_tick(worker: Arc<FeedWorker>) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(async move {
+        worker.tick().await;
+    })
 }
 
 #[cfg(test)]
@@ -493,5 +502,29 @@ mod tests {
             events,
         );
         w.tick().await;
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn spawn_tick_drives_one_tick() {
+        // The scheduler-closure body: `spawn_tick` boxes a future that runs a
+        // single tick. Awaiting it exercises the same code the cron job fires.
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_feed_urls_needing_catchup()
+            .times(0..)
+            .returning(|_| Ok(vec![]));
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_claim_pending_batch()
+            .times(1)
+            .returning(|_, _| Ok(vec![]));
+        let w = worker(
+            storage::MockSiteConfigStorage::new(),
+            posts,
+            storage::MockFeedCacheStorage::new(),
+            events,
+        );
+        spawn_tick(Arc::new(w)).await;
     }
 }

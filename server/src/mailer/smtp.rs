@@ -96,14 +96,16 @@ impl MailSender for LettreMailSender {
             builder = builder.to(mailbox);
         }
 
-        let email = builder
+        let Ok(email) = builder
             .subject(&message.subject)
             .body(message.body_text.clone())
+        else {
             // lettre's `.body()` only errors when no transfer-encoding fits the
             // bytes; a Rust `String` is guaranteed-valid UTF-8 and always encodes
             // (7bit/8bit/quoted-printable/base64), so this arm is unreachable with
             // our `String` body — no valid input can drive it.
-            .map_err(|e| MailError::Send(Box::new(e)))?; // cov:ignore
+            unreachable!("a String body always encodes; lettre picks a CTE")
+        };
 
         self.mailer
             .send(email)

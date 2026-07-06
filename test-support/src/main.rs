@@ -77,11 +77,14 @@ enum Commands {
 }
 
 #[tokio::main]
-// cov:ignore-start
 async fn main() -> anyhow::Result<()> {
     // crap:allow: test harness entrypoint; real fix tracked in #232
     let cli = Cli::parse();
     match cli.command {
+        // cov:ignore-start -- these three arms open a live database, which a
+        // plain subprocess can't reach; `tests/cli.rs` drives the no-DB
+        // `reset-mail` subcommand and so covers main's entry, `Cli::parse`, this
+        // dispatch, the `ResetMail` arm, and the final `Ok(())`. #232.
         Commands::SeedPosts {
             db,
             username,
@@ -117,6 +120,7 @@ async fn main() -> anyhow::Result<()> {
             set_site_config(&state, &key, &value).await?;
             eprintln!("set site_config {key} = {value}");
         }
+        // cov:ignore-stop
         Commands::ResetMail { path } => {
             reset_mail(&path)?;
             eprintln!("reset mail-capture file {}", path.display());
@@ -124,4 +128,3 @@ async fn main() -> anyhow::Result<()> {
     }
     Ok(())
 }
-// cov:ignore-stop
