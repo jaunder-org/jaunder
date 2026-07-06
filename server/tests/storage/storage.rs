@@ -1,17 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::items_after_statements,
-    clippy::unused_async
-)]
-// The `backends`/`postgres_only` templates are imported from `helpers`; a
-// `#[template]` expands to a name-mangled `macro_rules!`, so a per-item
-// `#[allow(unused_macros)]` can't reach an unused one — this crate-level allow
-// suppresses the resulting dead-template lint.
-#![allow(unused_macros)]
-
 use chrono::{Datelike, Utc};
 use common::password::Password;
 use common::tag::Tag;
@@ -280,6 +266,13 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
 #[apply(sqlite_only)]
 #[tokio::test]
 async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
+    struct StubPending;
+    impl SubscriptionPolicy for StubPending {
+        fn initial_status(&self, _a: i64, _c: i64, _r: &str) -> SubscriptionStatus {
+            SubscriptionStatus::Pending
+        }
+    }
+
     let env = backend.setup().await;
     let pool = open_pool(&env.base).await; // same DB file as env.state
                                            // Only `active` is seeded this milestone (M13 adds `pending`). Seed the
@@ -289,12 +282,6 @@ async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
         .execute(&pool)
         .await
         .unwrap();
-    struct StubPending;
-    impl SubscriptionPolicy for StubPending {
-        fn initial_status(&self, _a: i64, _c: i64, _r: &str) -> SubscriptionStatus {
-            SubscriptionStatus::Pending
-        }
-    }
     let store = SqliteSubscriptionStorage::new(pool, Arc::new(StubPending));
     let author = env
         .state
@@ -2809,10 +2796,11 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
     use chrono::Duration;
     use common::feed::{FeedSurface, HybridWindow};
+
+    let env = backend.setup().await;
+    let state = &env.state;
 
     let alice_id = state
         .users
@@ -6360,9 +6348,10 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backend: Backend) {
+    use storage::CreatePostError;
+
     let env = backend.setup().await;
     let state = &env.state;
-    use storage::CreatePostError;
 
     let user_id = state
         .users
@@ -6654,9 +6643,10 @@ async fn update_rendered_post_org_renders_and_updates(#[case] backend: Backend) 
 #[apply(backends)]
 #[tokio::test]
 async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: Backend) {
+    use storage::UpdatePostError;
+
     let env = backend.setup().await;
     let state = &env.state;
-    use storage::UpdatePostError;
 
     let err = update_rendered_post(
         state.posts.as_ref(),

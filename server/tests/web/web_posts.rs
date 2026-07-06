@@ -1,13 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::items_after_statements,
-    clippy::unused_async
-)]
-#![allow(unused_macros)]
-
 use std::sync::Arc;
 
 use axum::{
@@ -2779,6 +2769,8 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn get_post_carries_tags(#[case] backend: Backend) {
+    use chrono::Datelike;
+
     let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
         .users
@@ -2829,7 +2821,6 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
         .published_at
         .unwrap();
 
-    use chrono::Datelike;
     let (status, body) = get_post_form(
         Arc::clone(&state),
         "author",

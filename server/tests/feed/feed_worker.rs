@@ -1,13 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::items_after_statements,
-    clippy::unused_async
-)]
-#![allow(unused_macros)]
-
 use common::visibility::AudienceTarget;
 use std::sync::Arc;
 
@@ -23,6 +13,21 @@ use rstest::*;
 #[allow(clippy::single_component_path_imports)]
 use rstest_reuse;
 use rstest_reuse::*;
+
+/// Test double whose `WebSub` client always reports the hub refused the ping,
+/// so the worker exercises its ping-failure backoff path.
+struct FailingWebSubClient;
+
+#[async_trait::async_trait]
+impl jaunder::websub::WebSubClient for FailingWebSubClient {
+    async fn send_publish(
+        &self,
+        _hub_url: &str,
+        _feed_url: &str,
+    ) -> Result<(), jaunder::websub::WebSubError> {
+        Err(jaunder::websub::WebSubError::HubRefused { status: 503 })
+    }
+}
 
 /// Builds a [`FeedWorker`] from a test `AppState`'s handles plus an injected
 /// `WebSub` client (the worker no longer reaches into a shared bundle).
@@ -126,10 +131,9 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
         .await
         .expect("create post");
 
-    const HUB_URL_KEY: &str = "feeds.websub_hub_url";
     state
         .site_config
-        .set(HUB_URL_KEY, "https://hub.example.com/")
+        .set("feeds.websub_hub_url", "https://hub.example.com/")
         .await
         .expect("set hub url");
 
@@ -183,10 +187,9 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
         .await
         .expect("create post");
 
-    const HUB_URL_KEY: &str = "feeds.websub_hub_url";
     state
         .site_config
-        .set(HUB_URL_KEY, "https://hub.example.com/")
+        .set("feeds.websub_hub_url", "https://hub.example.com/")
         .await
         .expect("set hub url");
 
@@ -262,18 +265,6 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
     // test used to construct (which left Postgres uncovered).
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    struct FailingWebSubClient;
-    #[async_trait::async_trait]
-    impl jaunder::websub::WebSubClient for FailingWebSubClient {
-        async fn send_publish(
-            &self,
-            _hub_url: &str,
-            _feed_url: &str,
-        ) -> Result<(), jaunder::websub::WebSubError> {
-            Err(jaunder::websub::WebSubError::HubRefused { status: 503 })
-        }
-    }
-
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     let user_id = state
@@ -299,10 +290,9 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
         .await
         .expect("create post");
 
-    const HUB_URL_KEY: &str = "feeds.websub_hub_url";
     state
         .site_config
-        .set(HUB_URL_KEY, "https://hub.example.com/")
+        .set("feeds.websub_hub_url", "https://hub.example.com/")
         .await
         .expect("set hub url");
 
@@ -496,10 +486,9 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
         .await
         .expect("create post");
 
-    const HUB_URL_KEY: &str = "feeds.websub_hub_url";
     state
         .site_config
-        .set(HUB_URL_KEY, "https://hub.example.com/")
+        .set("feeds.websub_hub_url", "https://hub.example.com/")
         .await
         .expect("set hub url");
 
@@ -523,18 +512,6 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
             .mark_failed(&ids, "seed", past)
             .await
             .expect("mark failed");
-    }
-
-    struct FailingWebSubClient;
-    #[async_trait::async_trait]
-    impl jaunder::websub::WebSubClient for FailingWebSubClient {
-        async fn send_publish(
-            &self,
-            _hub_url: &str,
-            _feed_url: &str,
-        ) -> Result<(), jaunder::websub::WebSubError> {
-            Err(jaunder::websub::WebSubError::HubRefused { status: 503 })
-        }
     }
 
     make_worker(&state, std::sync::Arc::new(FailingWebSubClient))

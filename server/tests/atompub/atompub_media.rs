@@ -1,13 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::items_after_statements,
-    clippy::unused_async
-)]
-#![allow(unused_macros)]
-
 use std::sync::Arc;
 
 use axum::{
@@ -35,7 +25,7 @@ const PNG: &[u8] = &[
     0x42, 0x60, 0x82,
 ];
 
-async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
+fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     ensure_server_fns_registered();
     let storage_path = storage.path().to_path_buf();
     std::fs::create_dir_all(storage_path.join("media").join("upload")).unwrap();
@@ -64,7 +54,7 @@ async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
     let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let response = app
         .oneshot(
@@ -105,7 +95,7 @@ async fn reupload_identical_returns_200(#[case] backend: Backend) {
     let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let _resp1 = app
         .clone()
@@ -147,7 +137,7 @@ async fn get_media_member_returns_entry(#[case] backend: Backend) {
     let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let resp = app
         .clone()
@@ -196,7 +186,7 @@ async fn get_unknown_media_returns_404(#[case] backend: Backend) {
     let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let response = app
         .oneshot(
@@ -220,7 +210,7 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
     let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let resp = app
         .clone()
@@ -283,7 +273,7 @@ async fn upload_forbids_other_user(#[case] backend: Backend) {
     let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let response = app
         .oneshot(
@@ -327,7 +317,7 @@ async fn upload_rejects_empty_slug(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let token = seed_alice(&state).await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(state, &storage).await;
+    let app = make_app(state, &storage);
 
     // ".." sanitizes to an empty filename.
     let response = app
@@ -358,7 +348,7 @@ async fn member_forbids_other_user(backend: Backend, #[case] method: &str) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let token = seed_alice(&state).await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(state, &storage).await;
+    let app = make_app(state, &storage);
 
     let response = app
         .oneshot(

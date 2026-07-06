@@ -1,13 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::items_after_statements,
-    clippy::unused_async
-)]
-#![allow(unused_macros)]
-
 use std::sync::Arc;
 
 use axum::{
@@ -26,7 +16,7 @@ use crate::helpers::{
     backends, ensure_server_fns_registered, noop_mailer, test_options, Backend, TestEnv,
 };
 
-async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
+fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     ensure_server_fns_registered();
     let storage_path = storage.path().to_path_buf();
     jaunder::create_router(test_options(), state, noop_mailer(), false, storage_path)
@@ -83,7 +73,7 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
     .await
     .unwrap();
     state.posts.tag_post(post.post_id, "rust").await.unwrap();
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let response = app
         .oneshot(
@@ -142,7 +132,7 @@ async fn service_document_rejects_basic_username_mismatch(#[case] backend: Backe
         .create_session(user_id, "MarsEdit")
         .await
         .unwrap();
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     // Correct token, but the Basic username does not match the session's user.
     let response = app
@@ -163,7 +153,7 @@ async fn service_document_rejects_basic_username_mismatch(#[case] backend: Backe
 #[tokio::test]
 async fn service_document_requires_authentication(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     let response = app
         .oneshot(

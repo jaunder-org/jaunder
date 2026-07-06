@@ -8,7 +8,6 @@
 // Timing-based, so it is #[ignore]d -- excluded from CI to avoid being a
 // flake source itself. Run on demand:
 //   cargo test -p jaunder --test feed -- --ignored claim_pending_batch_no_lock_contention
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::Arc;
 

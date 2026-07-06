@@ -1,13 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::items_after_statements,
-    clippy::unused_async
-)]
-#![allow(unused_macros)]
-
 use std::sync::Arc;
 
 use axum::{
@@ -42,7 +32,7 @@ use crate::helpers::{
 //   It generates rows × 2 cases (2 rows × 2 backends = 4).
 use crate::helpers::backends;
 
-async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
+fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     ensure_server_fns_registered();
     let storage_path = storage.path().to_path_buf();
     jaunder::create_router(test_options(), state, noop_mailer(), false, storage_path)
@@ -68,7 +58,7 @@ async fn rsd_document_advertises_service_url(#[case] backend: Backend) {
         })
         .await
         .unwrap();
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     // RSD is public — no authentication required.
     let response = app
@@ -125,7 +115,7 @@ async fn user_page_includes_rsd_autodiscovery_link(
         )
         .await
         .unwrap();
-    let app = make_app(state, &base).await;
+    let app = make_app(state, &base);
 
     // Rendering the user page (server-side) hoists the EditURI autodiscovery
     // link into the document head.

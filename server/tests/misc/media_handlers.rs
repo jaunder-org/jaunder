@@ -1,13 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::items_after_statements,
-    clippy::unused_async
-)]
-#![allow(unused_macros)]
-
 use std::sync::Arc;
 
 use axum::{
@@ -27,7 +17,7 @@ use crate::helpers::{backends, backends_matrix, Backend, TestEnv};
 use crate::helpers::{ensure_server_fns_registered, test_options};
 
 /// Build the router with a real temp storage directory.
-async fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
+fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     ensure_server_fns_registered();
     let storage_path = storage.path().to_path_buf();
     std::fs::create_dir_all(storage_path.join("media").join("upload")).unwrap();
@@ -83,7 +73,7 @@ async fn upload_returns_201_with_json(#[case] backend: Backend) {
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let (boundary, body_bytes) = multipart_body("photo.jpg", "image/jpeg", b"fake jpeg data");
 
@@ -126,7 +116,7 @@ async fn upload_requires_auth(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let (boundary, body_bytes) = multipart_body("file.txt", "text/plain", b"hello");
 
@@ -175,7 +165,7 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let (boundary, body_bytes) = multipart_body("serve_test.png", "image/png", b"PNG_CONTENT_HERE");
 
@@ -209,7 +199,7 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
     let url = upload_json["url"].as_str().unwrap().to_owned();
 
     // Rebuild the app (oneshot consumes it).
-    let app2 = make_app(Arc::clone(&state), &storage).await;
+    let app2 = make_app(Arc::clone(&state), &storage);
 
     let serve_response = app2
         .oneshot(
@@ -246,7 +236,7 @@ async fn serve_returns_404(backend: Backend, #[case] uri: &str) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let response = app
         .oneshot(
@@ -272,7 +262,7 @@ async fn proxy_requires_auth(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let response = app
         .oneshot(
@@ -311,7 +301,7 @@ async fn proxy_redirects_authenticated(#[case] backend: Backend) {
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let url = format!("/media/proxy?url=http%3A%2F%2Fexample.com%2Fimage.jpg&user_id={user_id}");
 
@@ -364,7 +354,7 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let (boundary, body_bytes) = multipart_body("etag_test.png", "image/png", b"PNG_DATA");
 
@@ -394,7 +384,7 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
     let sha256 = upload_json["sha256"].as_str().unwrap().to_owned();
     let etag = format!("\"{sha256}\"");
 
-    let app2 = make_app(Arc::clone(&state), &storage).await;
+    let app2 = make_app(Arc::clone(&state), &storage);
     let resp = app2
         .oneshot(
             Request::builder()
@@ -432,7 +422,7 @@ async fn upload_returns_400_for_empty_multipart(#[case] backend: Backend) {
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let boundary = "----testboundary1234";
     let body = format!("--{boundary}--\r\n");
@@ -481,7 +471,7 @@ async fn upload_deduplicates_same_content(#[case] backend: Backend) {
 
     // Upload the same content twice (different filename).
     for filename in ["dup1.jpg", "dup2.jpg"] {
-        let app = make_app(Arc::clone(&state), &storage).await;
+        let app = make_app(Arc::clone(&state), &storage);
         let (boundary, body_bytes) = multipart_body(filename, "image/jpeg", b"SAME_CONTENT");
         let resp = app
             .oneshot(
@@ -540,7 +530,7 @@ async fn upload_quota_exceeded_returns_507(#[case] backend: Backend) {
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let (boundary, body_bytes) = multipart_body("big.jpg", "image/jpeg", b"SOME_DATA_OVER_QUOTA");
 
@@ -592,7 +582,7 @@ async fn upload_at_max_file_size_boundary_succeeds(#[case] backend: Backend) {
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let (boundary, body_bytes) = multipart_body("exact.txt", "text/plain", b"hello");
 
@@ -648,7 +638,7 @@ async fn upload_one_byte_over_max_file_size_is_rejected(#[case] backend: Backend
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let (boundary, body_bytes) = multipart_body("toobig.txt", "text/plain", b"hello!");
 
@@ -704,7 +694,7 @@ async fn upload_at_exact_quota_succeeds(#[case] backend: Backend) {
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     let (boundary, body_bytes) = multipart_body("quota.txt", "text/plain", b"hello");
 
@@ -755,7 +745,7 @@ async fn proxy_rejects_mismatched_user_id(#[case] backend: Backend) {
     let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage).await;
+    let app = make_app(Arc::clone(&state), &storage);
 
     // Pass a different user_id in query params.
     let wrong_user_id = user_id + 999;
