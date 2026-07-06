@@ -27,7 +27,11 @@ fn format_bytes(bytes: i64) -> String {
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
+              sub-components would fragment the page without real benefit"
+)]
 #[component]
 pub fn MediaPage() -> impl IntoView {
     let delete_action = ServerAction::<DeleteMedia>::new();

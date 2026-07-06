@@ -1652,9 +1652,6 @@ where
 /// Shared across backends: the four `FeedSurface` variants differ only in the
 /// ranked-CTE source/predicate and bind list, and the JSON tag aggregation is
 /// supplied by [`PostDialect::TAGS_SUBQUERY`].
-// The body is dominated by four near-identical SQL string literals; splitting
-// it would only duplicate the generic `where`-clause four times.
-#[allow(clippy::too_many_lines)]
 async fn list_published_in_window_rows<DB>(
     pool: &Pool<DB>,
     surface: &common::feed::FeedSurface,
@@ -1678,8 +1675,65 @@ where
         FeedSurface::Site => {
             // Binds: $1 now, $2 min_items, $3 cutoff, $4..$8 resolution.
             let (resolution, binds, _) = resolution_where(viewer, 4);
-            let sql = format!(
-                "WITH ranked AS (
+            let sql = window_sql(surface, tags, &resolution);
+            let query = sqlx::query_as::<_, PostRow>(&sql)
+                .bind(now)
+                .bind(min_items)
+                .bind(cutoff);
+            binds.bind_onto(query).fetch_all(pool).await
+        }
+        FeedSurface::User { username } => {
+            // Binds: $1 now, $2 username, $3 min_items, $4 cutoff,
+            // $5..$9 resolution.
+            let (resolution, binds, _) = resolution_where(viewer, 5);
+            let sql = window_sql(surface, tags, &resolution);
+            let query = sqlx::query_as::<_, PostRow>(&sql)
+                .bind(now)
+                .bind(username.as_str())
+                .bind(min_items)
+                .bind(cutoff);
+            binds.bind_onto(query).fetch_all(pool).await
+        }
+        FeedSurface::SiteTag { tag } => {
+            // Binds: $1 now, $2 tag, $3 min_items, $4 cutoff, $5..$9 resolution.
+            let (resolution, binds, _) = resolution_where(viewer, 5);
+            let sql = window_sql(surface, tags, &resolution);
+            let query = sqlx::query_as::<_, PostRow>(&sql)
+                .bind(now)
+                .bind(tag.as_str())
+                .bind(min_items)
+                .bind(cutoff);
+            binds.bind_onto(query).fetch_all(pool).await
+        }
+        FeedSurface::UserTag { username, tag } => {
+            // Binds: $1 now, $2 username, $3 tag, $4 min_items, $5 cutoff,
+            // $6..$10 resolution.
+            let (resolution, binds, _) = resolution_where(viewer, 6);
+            let sql = window_sql(surface, tags, &resolution);
+            let query = sqlx::query_as::<_, PostRow>(&sql)
+                .bind(now)
+                .bind(username.as_str())
+                .bind(tag.as_str())
+                .bind(min_items)
+                .bind(cutoff);
+            binds.bind_onto(query).fetch_all(pool).await
+        }
+    }
+}
+
+/// Assembles the hybrid-window SQL for `surface`.
+///
+/// Pure string construction with no DB generics: the four near-identical
+/// templates — differing only in the ranked-CTE source/predicate and bind
+/// placeholders — live here, while [`list_published_in_window_rows`] keeps the
+/// generic `where`-clause, per-surface bind list, and execution. `tags` supplies
+/// the JSON tag aggregation ([`PostDialect::TAGS_SUBQUERY`]) and `resolution` the
+/// audience-resolution predicate.
+fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str) -> String {
+    use common::feed::FeedSurface;
+    match surface {
+        FeedSurface::Site => format!(
+            "WITH ranked AS (
      SELECT p.post_id, p.published_at,
             ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
      FROM posts p
@@ -1696,19 +1750,9 @@ where
  WHERE (r.rn <= $2 OR r.published_at >= $3)
    AND {resolution}
  ORDER BY p.published_at DESC, p.post_id DESC"
-            );
-            let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(now)
-                .bind(min_items)
-                .bind(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
-        }
-        FeedSurface::User { username } => {
-            // Binds: $1 now, $2 username, $3 min_items, $4 cutoff,
-            // $5..$9 resolution.
-            let (resolution, binds, _) = resolution_where(viewer, 5);
-            let sql = format!(
-                "WITH ranked AS (
+        ),
+        FeedSurface::User { .. } => format!(
+            "WITH ranked AS (
      SELECT p.post_id, p.published_at,
             ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
      FROM posts p
@@ -1727,19 +1771,9 @@ where
  WHERE (r.rn <= $3 OR r.published_at >= $4)
    AND {resolution}
  ORDER BY p.published_at DESC, p.post_id DESC"
-            );
-            let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(now)
-                .bind(username.as_str())
-                .bind(min_items)
-                .bind(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
-        }
-        FeedSurface::SiteTag { tag } => {
-            // Binds: $1 now, $2 tag, $3 min_items, $4 cutoff, $5..$9 resolution.
-            let (resolution, binds, _) = resolution_where(viewer, 5);
-            let sql = format!(
-                "WITH ranked AS (
+        ),
+        FeedSurface::SiteTag { .. } => format!(
+            "WITH ranked AS (
      SELECT p.post_id, p.published_at,
             ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
      FROM posts p
@@ -1759,20 +1793,9 @@ where
  WHERE (r.rn <= $3 OR r.published_at >= $4)
    AND {resolution}
  ORDER BY p.published_at DESC, p.post_id DESC"
-            );
-            let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(now)
-                .bind(tag.as_str())
-                .bind(min_items)
-                .bind(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
-        }
-        FeedSurface::UserTag { username, tag } => {
-            // Binds: $1 now, $2 username, $3 tag, $4 min_items, $5 cutoff,
-            // $6..$10 resolution.
-            let (resolution, binds, _) = resolution_where(viewer, 6);
-            let sql = format!(
-                "WITH ranked AS (
+        ),
+        FeedSurface::UserTag { .. } => format!(
+            "WITH ranked AS (
      SELECT p.post_id, p.published_at,
             ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
      FROM posts p
@@ -1794,15 +1817,7 @@ where
  WHERE (r.rn <= $4 OR r.published_at >= $5)
    AND {resolution}
  ORDER BY p.published_at DESC, p.post_id DESC"
-            );
-            let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(now)
-                .bind(username.as_str())
-                .bind(tag.as_str())
-                .bind(min_items)
-                .bind(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
-        }
+        ),
     }
 }
 

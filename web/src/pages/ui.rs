@@ -609,7 +609,11 @@ fn audience_checkbox(
 
 // ─── 3.7 PostCreateForm ───────────────────────────────────────
 
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
+              sub-components would fragment the page without real benefit"
+)]
 #[component]
 // cov:ignore-start
 pub fn PostCreateForm(
@@ -1037,7 +1041,6 @@ fn SidebarSource(proto: &'static str, name: &'static str, sub: &'static str) -> 
 
 /// The left navigation sidebar. Reads theme and current-user from context.
 /// `active`: the key of the currently active nav item (e.g. `"home"`).
-#[allow(clippy::too_many_lines)]
 #[component]
 pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     let active_key = active.unwrap_or_default();
@@ -1233,7 +1236,11 @@ pub fn normalize_tag_token(raw: &str) -> String {
 /// Key bindings: `Enter`/`Tab` commit a chip from the text field; `Backspace`
 /// on an empty field removes the last chip; `ArrowUp`/`ArrowDown` navigate
 /// the autocomplete dropdown; `Escape` closes it.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
+              sub-components would fragment the page without real benefit"
+)]
 #[component]
 // cov:ignore-start
 pub fn TagInput(

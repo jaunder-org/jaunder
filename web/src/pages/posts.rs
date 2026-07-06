@@ -242,7 +242,6 @@ pub fn PostPage() -> impl IntoView {
     .into_any()
 }
 
-#[allow(clippy::too_many_lines)]
 /// Subscribe / Unsubscribe control shown on a user's profile (timeline) page.
 ///
 /// Hidden when the viewer is logged out or is viewing their own profile.
@@ -310,7 +309,11 @@ fn SubscribeButton(username: String) -> impl IntoView {
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
+              sub-components would fragment the page without real benefit"
+)]
 #[component]
 pub fn UserTimelinePage() -> impl IntoView {
     let params = use_params_map();
@@ -601,7 +604,11 @@ pub fn DraftPreviewPage() -> impl IntoView {
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
+              sub-components would fragment the page without real benefit"
+)]
 #[component]
 pub fn EditPostPage() -> impl IntoView {
     let params = use_params_map();
@@ -1051,7 +1058,11 @@ fn render_delete_result(
 // cov:ignore-stop
 
 /// Site-wide listing of posts carrying a tag, at `/tags/:tag`.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
+              sub-components would fragment the page without real benefit"
+)]
 #[component]
 pub fn SiteTagPage() -> impl IntoView {
     let params = use_params_map();
@@ -1212,7 +1223,11 @@ pub fn SiteTagPage() -> impl IntoView {
 }
 
 /// Per-user listing of posts carrying a tag, at `/~:username/tags/:tag`.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
+              sub-components would fragment the page without real benefit"
+)]
 #[component]
 pub fn UserTagPage() -> impl IntoView {
     let params = use_params_map();

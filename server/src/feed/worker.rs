@@ -10,7 +10,7 @@ use storage::{
 };
 use tokio::sync::Mutex;
 
-use super::regenerate::regenerate_feed;
+use super::regenerate::{regenerate_feed, RegenerateError};
 
 const BATCH_LIMIT: usize = 200;
 #[allow(clippy::duration_suboptimal_units)]
@@ -92,7 +92,6 @@ impl FeedWorker {
 
     /// Processes a batch of pending feed events: regenerates feeds and pings the
     /// `WebSub` hub. Groups events by `feed_url` to avoid redundant regeneration.
-    #[allow(clippy::too_many_lines)]
     pub async fn tick(&self) {
         // Enqueue go-live regeneration first so the same tick drains what it
         // just enqueued. A failure here must not abort the tick — the queue
@@ -137,109 +136,140 @@ impl FeedWorker {
         let identity = self.site_config.get_identity().await.ok();
 
         for (feed_url, recs) in groups {
-            let ids: Vec<i64> = recs.iter().map(|r| r.id).collect();
-            let started = std::time::Instant::now();
+            self.process_feed_group(feed_url, recs, hub_url.as_deref(), identity.as_ref())
+                .await;
+        }
+    }
 
-            match regenerate_feed(
-                self.site_config.as_ref(),
-                self.posts.as_ref(),
-                self.feed_cache.as_ref(),
-                &feed_url,
-            )
-            .await
-            {
-                Ok(row) => {
-                    common::metrics::feed_regeneration(common::metrics::RegenResult::Ok);
-                    common::metrics::feed_regen_duration_ms(
-                        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                    );
-                    let _ = self.feed_events.mark_regenerated(&ids).await;
-                    tracing::info!(
-                        feed_url,
-                        // cov:ignore-start
-                        item_bytes = row.body.len(),
-                        duration_ms = started.elapsed().as_millis(),
-                        // cov:ignore-stop
-                        "feed.regen.completed"
-                    );
+    /// Regenerates one feed surface and reconciles the queued events for it: on
+    /// success, marks them regenerated and pings the hub; on failure, schedules a
+    /// backoff retry or marks the batch exhausted.
+    async fn process_feed_group(
+        &self,
+        feed_url: String,
+        recs: Vec<FeedEventRecord>,
+        hub_url: Option<&str>,
+        identity: Option<&common::site::SiteIdentity>,
+    ) {
+        let ids: Vec<i64> = recs.iter().map(|r| r.id).collect();
+        let started = std::time::Instant::now();
 
-                    let attempt = recs.iter().map(|r| r.attempts).max().unwrap_or(0) + 1;
-                    if let Some(hub) = &hub_url {
-                        let base = identity
-                            .as_ref()
-                            .and_then(|i| i.base_url.as_deref())
-                            .unwrap_or("")
-                            .trim_end_matches('/');
-                        let absolute = format!("{base}{feed_url}");
-                        tracing::info!(feed_url, hub, attempt, "feed.websub.ping.attempted");
+        match regenerate_feed(
+            self.site_config.as_ref(),
+            self.posts.as_ref(),
+            self.feed_cache.as_ref(),
+            &feed_url,
+        )
+        .await
+        {
+            Ok(row) => {
+                common::metrics::feed_regeneration(common::metrics::RegenResult::Ok);
+                common::metrics::feed_regen_duration_ms(
+                    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                );
+                let _ = self.feed_events.mark_regenerated(&ids).await;
+                tracing::info!(
+                    feed_url,
+                    // cov:ignore-start
+                    item_bytes = row.body.len(),
+                    duration_ms = started.elapsed().as_millis(),
+                    // cov:ignore-stop
+                    "feed.regen.completed"
+                );
 
-                        let result = self.websub.send_publish(hub, &absolute).await;
-                        match result {
-                            Ok(()) => {
-                                common::metrics::websub_ping(common::metrics::PingOutcome::Success);
-                                tracing::info!(
-                                    feed_url,
-                                    hub,
-                                    attempt,
-                                    "feed.websub.ping.succeeded"
-                                );
-                                let _ = self.feed_events.mark_pinged(&ids).await;
-                            }
-                            Err(e) => {
-                                let attempt_usize = usize::try_from(attempt).unwrap_or(0);
-                                let next_attempt_idx = attempt_usize.saturating_sub(1);
-                                if next_attempt_idx >= BACKOFFS_SECS.len() {
-                                    common::metrics::websub_ping(
-                                        common::metrics::PingOutcome::Exhausted,
-                                    );
-                                    tracing::warn!(feed_url, hub, "feed.websub.ping.exhausted");
-                                    let _ =
-                                        self.feed_events.mark_exhausted(&ids, &e.to_string()).await;
-                                } else {
-                                    let delay = chrono::Duration::seconds(
-                                        i64::try_from(BACKOFFS_SECS[next_attempt_idx])
-                                            .unwrap_or(60),
-                                    );
-                                    let next = Utc::now() + delay;
-                                    common::metrics::websub_ping(
-                                        common::metrics::PingOutcome::Failed,
-                                    );
-                                    tracing::warn!(feed_url, hub, attempt, error = %e, "feed.websub.ping.failed");
-                                    let _ = self
-                                        .feed_events
-                                        .mark_failed(&ids, &e.to_string(), next)
-                                        .await;
-                                }
-                            }
-                        }
-                    } else {
-                        // No hub configured — treat as complete.
-                        common::metrics::websub_ping(common::metrics::PingOutcome::NoHub);
-                        let _ = self.feed_events.mark_pinged(&ids).await;
-                    }
+                let attempt = recs.iter().map(|r| r.attempts).max().unwrap_or(0) + 1;
+                self.ping_websub(&feed_url, &ids, attempt, hub_url, identity)
+                    .await;
+            }
+            Err(e) => {
+                self.on_regen_failure(&feed_url, &ids, &recs, &e).await;
+            }
+        }
+    }
+
+    /// Pings the `WebSub` hub for a freshly regenerated `feed_url`, marking the
+    /// events pinged on success and scheduling a backoff retry (or marking them
+    /// exhausted) on failure. With no hub configured the batch is treated as
+    /// complete.
+    async fn ping_websub(
+        &self,
+        feed_url: &str,
+        ids: &[i64],
+        attempt: i32,
+        hub_url: Option<&str>,
+        identity: Option<&common::site::SiteIdentity>,
+    ) {
+        if let Some(hub) = hub_url {
+            let base = identity
+                .and_then(|i| i.base_url.as_deref())
+                .unwrap_or("")
+                .trim_end_matches('/');
+            let absolute = format!("{base}{feed_url}");
+            tracing::info!(feed_url, hub, attempt, "feed.websub.ping.attempted");
+
+            let result = self.websub.send_publish(hub, &absolute).await;
+            match result {
+                Ok(()) => {
+                    common::metrics::websub_ping(common::metrics::PingOutcome::Success);
+                    tracing::info!(feed_url, hub, attempt, "feed.websub.ping.succeeded");
+                    let _ = self.feed_events.mark_pinged(ids).await;
                 }
                 Err(e) => {
-                    common::metrics::feed_regeneration(common::metrics::RegenResult::Error);
-                    tracing::error!(error = %e, feed_url, "feed.regen.failed");
-                    let attempt = recs.iter().map(|r| r.attempts).max().unwrap_or(0) + 1;
                     let attempt_usize = usize::try_from(attempt).unwrap_or(0);
                     let next_attempt_idx = attempt_usize.saturating_sub(1);
                     if next_attempt_idx >= BACKOFFS_SECS.len() {
-                        // cov:ignore-start
-                        let _ = self.feed_events.mark_exhausted(&ids, &e.to_string()).await;
-                        // cov:ignore-stop
+                        common::metrics::websub_ping(common::metrics::PingOutcome::Exhausted);
+                        tracing::warn!(feed_url, hub, "feed.websub.ping.exhausted");
+                        let _ = self.feed_events.mark_exhausted(ids, &e.to_string()).await;
                     } else {
-                        let next = Utc::now()
-                            + chrono::Duration::seconds(
-                                i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
-                            );
+                        let delay = chrono::Duration::seconds(
+                            i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
+                        );
+                        let next = Utc::now() + delay;
+                        common::metrics::websub_ping(common::metrics::PingOutcome::Failed);
+                        tracing::warn!(feed_url, hub, attempt, error = %e, "feed.websub.ping.failed");
                         let _ = self
                             .feed_events
-                            .mark_failed(&ids, &e.to_string(), next)
+                            .mark_failed(ids, &e.to_string(), next)
                             .await;
                     }
                 }
             }
+        } else {
+            // No hub configured — treat as complete.
+            common::metrics::websub_ping(common::metrics::PingOutcome::NoHub);
+            let _ = self.feed_events.mark_pinged(ids).await;
+        }
+    }
+
+    /// Reconciles the queued events after a failed regeneration: schedules a
+    /// backoff retry, or marks the batch exhausted once the backoff schedule is
+    /// used up.
+    async fn on_regen_failure(
+        &self,
+        feed_url: &str,
+        ids: &[i64],
+        recs: &[FeedEventRecord],
+        e: &RegenerateError,
+    ) {
+        common::metrics::feed_regeneration(common::metrics::RegenResult::Error);
+        tracing::error!(error = %e, feed_url, "feed.regen.failed");
+        let attempt = recs.iter().map(|r| r.attempts).max().unwrap_or(0) + 1;
+        let attempt_usize = usize::try_from(attempt).unwrap_or(0);
+        let next_attempt_idx = attempt_usize.saturating_sub(1);
+        if next_attempt_idx >= BACKOFFS_SECS.len() {
+            // cov:ignore-start
+            let _ = self.feed_events.mark_exhausted(ids, &e.to_string()).await;
+            // cov:ignore-stop
+        } else {
+            let next = Utc::now()
+                + chrono::Duration::seconds(
+                    i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
+                );
+            let _ = self
+                .feed_events
+                .mark_failed(ids, &e.to_string(), next)
+                .await;
         }
     }
 
