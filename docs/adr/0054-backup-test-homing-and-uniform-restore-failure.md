@@ -37,7 +37,7 @@ resolving #136 two facts drove the decisions below:
 **1. Home backup contract tests at the CLI/server-test level, not the storage
 crate.** All backup fidelity and negative tests live in `server/tests/misc/`
 (`commands.rs` for per-backend round-trips, negatives, and archive mode;
-`backup_interop.rs` for cross-backend hops and the A→B→A→B cycle), driven
+`backup_interop.rs` for cross-backend hops and the four-hop cycle), driven
 through `cmd_init`/`cmd_backup`/`cmd_restore` and asserted through `AppState`.
 The 8 interim `sqlite_only` storage tests are deleted; their happy-path coverage
 is subsumed by the CLI round-trip and transitive coverage, and their error-path
@@ -45,16 +45,20 @@ coverage is reconceived as dual-backend negatives (dangling-FK, malformed-row,
 missing-`db/`). Placement is coverage-neutral (ADR-0053: one workspace-wide
 instrumented pass with Postgres live).
 
-**2. Keep both single-hop cross-backend tests and add an A→B→A→B cycle.** The
-two existing hops (both directions) localize which direction broke; the cycle
-(sqlite→postgres→sqlite→postgres) is an additional completeness proof. The cycle
-asserts fixture **values** survive every hop and that the same-backend Postgres
-dump pair is byte-identical (`E_B₁ == E_B₂`, over `db/*.ndjson` and
-`manifest.json` minus its wall-clock `timestamp`). It does **not** assert
-`E_A₁ == E_A₂`: SQLite writes `created_at`/`updated_at` at nanosecond precision,
-which Postgres `timestamptz` quantizes to microseconds, so the SQLite dumps
-differ byte-for-byte after a Postgres round-trip — a cosmetic difference, not a
-fidelity loss.
+**2. Keep both single-hop cross-backend tests and add a four-hop cycle.** The
+two existing hops (both directions) localize which direction broke; the cycle is
+an additional completeness proof. It asserts fixture **values** survive every
+hop and that **both** same-backend dump pairs are byte-identical (over
+`db/*.ndjson` and `manifest.json` minus its wall-clock `timestamp`). The cycle
+is seeded from **Postgres** (`postgres→sqlite→postgres→sqlite`) on purpose:
+Postgres `timestamptz` stores at microsecond resolution — the coarser of the two
+backends — so every timestamp is pinned at µs from the first store and no hop
+quantizes it further, leaving both the Postgres and the SQLite dump pairs
+byte-stable. Seeding from SQLite instead would lose sub-µs precision of
+`created_at`/`updated_at` (SQLite writes them at nanosecond precision) on the
+first SQLite→Postgres hop, so only the Postgres pair would be byte-comparable —
+a cosmetic difference, not a fidelity loss, but avoided by starting at the
+coarser precision.
 
 **3. Restore fails uniformly across backends.** A constraint-violating restore
 now returns `BackupError::ConstraintViolation` **and** leaves the target

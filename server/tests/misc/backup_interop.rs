@@ -153,64 +153,62 @@ fn manifest_without_timestamp(dir: &Path) -> serde_json::Value {
     value
 }
 
-// #136: an A→B→A→B cross-backend cycle proves value fidelity through four hops and
-// byte-stable Postgres dumps (E_B1 == E_B2). See the spec's "A→B→A→B full-cycle
-// fidelity" section.
+// #136: a Postgres→SQLite→Postgres→SQLite cycle proves value fidelity through four hops
+// AND byte-stable dumps on BOTH backends. Seeding from Postgres is deliberate: Postgres
+// `timestamptz` stores at microsecond resolution — the coarser of the two backends — so
+// every timestamp is pinned at µs from the first store and no later hop quantizes it
+// further. SQLite stores restored text verbatim and never truncates, so both same-backend
+// dump pairs stay byte-identical. (Seeding from SQLite instead would lose sub-µs precision
+// of `created_at`/`updated_at` on the first SQLite→Postgres hop — see ADR-0054 DEC-D — and
+// only the Postgres pair would be byte-comparable.)
 #[apply(postgres_only)]
-// reason: the A→B→A→B cycle exercises BOTH engines in one test, so it needs a live Postgres.
+// reason: the cross-backend cycle exercises BOTH engines in one test, so it needs a live Postgres.
 #[tokio::test]
 async fn backup_round_trips_full_cycle_across_backends(#[case] backend: Backend) {
     let _ = backend;
 
     let base = TempDir::new().expect("temp dir");
 
-    // A (sqlite): seed, export E_A1.
-    let a1 = sqlite_storage_args(&base, "a1");
-    cmd_init(&a1, false).await.expect("init a1");
-    let post_id = populate_backup_fixture(&a1).await;
-    let dir_a1 = base.path().join("dir-a1");
-    cmd_backup(&a1, BackupMode::Directory, Some(dir_a1.clone()))
+    // P1 (postgres): seed, export E_P1.
+    let (p1, _pg_p1) = postgres_storage_args(&base, "p1").await;
+    cmd_init(&p1, false).await.expect("init p1");
+    let post_id = populate_backup_fixture(&p1).await;
+    let dir_p1 = base.path().join("dir-p1");
+    cmd_backup(&p1, BackupMode::Directory, Some(dir_p1.clone()))
         .await
-        .expect("backup a1");
+        .expect("backup p1");
 
-    // B (postgres): restore, assert, export E_B1.
-    let (b1, _pg_b1) = postgres_storage_args(&base, "b1").await;
-    cmd_init(&b1, false).await.expect("init b1");
-    cmd_restore(&b1, &dir_a1).await.expect("restore into b1");
-    assert_backup_fixture_restored(&b1, post_id).await;
-    let dir_b1 = base.path().join("dir-b1");
-    cmd_backup(&b1, BackupMode::Directory, Some(dir_b1.clone()))
+    // S1 (sqlite): restore, assert, export E_S1.
+    let s1 = sqlite_storage_args(&base, "s1");
+    cmd_init(&s1, false).await.expect("init s1");
+    cmd_restore(&s1, &dir_p1).await.expect("restore into s1");
+    assert_backup_fixture_restored(&s1, post_id).await;
+    let dir_s1 = base.path().join("dir-s1");
+    cmd_backup(&s1, BackupMode::Directory, Some(dir_s1.clone()))
         .await
-        .expect("backup b1");
+        .expect("backup s1");
 
-    // A2 (sqlite): restore, assert, export E_A2.
-    let a2 = sqlite_storage_args(&base, "a2");
-    cmd_init(&a2, false).await.expect("init a2");
-    cmd_restore(&a2, &dir_b1).await.expect("restore into a2");
-    assert_backup_fixture_restored(&a2, post_id).await;
-    let dir_a2 = base.path().join("dir-a2");
-    cmd_backup(&a2, BackupMode::Directory, Some(dir_a2.clone()))
+    // P2 (postgres): restore, assert, export E_P2.
+    let (p2, _pg_p2) = postgres_storage_args(&base, "p2").await;
+    cmd_init(&p2, false).await.expect("init p2");
+    cmd_restore(&p2, &dir_s1).await.expect("restore into p2");
+    assert_backup_fixture_restored(&p2, post_id).await;
+    let dir_p2 = base.path().join("dir-p2");
+    cmd_backup(&p2, BackupMode::Directory, Some(dir_p2.clone()))
         .await
-        .expect("backup a2");
+        .expect("backup p2");
 
-    // B2 (postgres): restore, assert, export E_B2.
-    let (b2, _pg_b2) = postgres_storage_args(&base, "b2").await;
-    cmd_init(&b2, false).await.expect("init b2");
-    cmd_restore(&b2, &dir_a2).await.expect("restore into b2");
-    assert_backup_fixture_restored(&b2, post_id).await;
-    let dir_b2 = base.path().join("dir-b2");
-    cmd_backup(&b2, BackupMode::Directory, Some(dir_b2.clone()))
+    // S2 (sqlite): restore, assert, export E_S2.
+    let s2 = sqlite_storage_args(&base, "s2");
+    cmd_init(&s2, false).await.expect("init s2");
+    cmd_restore(&s2, &dir_p2).await.expect("restore into s2");
+    assert_backup_fixture_restored(&s2, post_id).await;
+    let dir_s2 = base.path().join("dir-s2");
+    cmd_backup(&s2, BackupMode::Directory, Some(dir_s2.clone()))
         .await
-        .expect("backup b2");
+        .expect("backup s2");
 
-    // Sound floor: same-backend Postgres dumps are byte-identical.
-    assert_backups_equal(&dir_b1, &dir_b2);
-
-    // note (DEC-D, verified here): the SQLite `db/*.ndjson` dumps do NOT survive a
-    // Postgres round-trip byte-for-byte, so `E_A1 == E_A2` is intentionally NOT
-    // asserted. `created_at`/`updated_at` are app-written with nanosecond precision on
-    // SQLite but quantized to microseconds by Postgres `timestamptz`
-    // (e.g. `…38.696740562` → `…38.696741`). This is cosmetic: value fidelity is proven
-    // by the `assert_backup_fixture_restored` calls above (including `published_at`,
-    // seeded at µs precision), and `E_B1 == E_B2` is the byte-level floor.
+    // Both same-backend dump pairs are byte-identical — nothing drifts across the cycle.
+    assert_backups_equal(&dir_p1, &dir_p2);
+    assert_backups_equal(&dir_s1, &dir_s2);
 }
