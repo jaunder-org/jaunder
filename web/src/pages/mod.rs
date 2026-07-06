@@ -190,13 +190,3 @@ pub fn App() -> impl IntoView {
         </Router>
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_theme_is_nonempty() {
-        assert!(!DEFAULT_THEME.is_empty());
-    }
-}

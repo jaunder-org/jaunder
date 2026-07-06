@@ -731,6 +731,83 @@ mod tests {
     }
 
     #[test]
+    fn default_theme_is_nonempty() {
+        assert!(!DEFAULT_THEME.is_empty());
+    }
+
+    #[test]
+    fn avatar_parts_single_word() {
+        let (initials, _hue) = avatar_parts("Mara");
+        assert_eq!(initials, "M");
+    }
+
+    #[test]
+    fn avatar_parts_two_words() {
+        let (initials, _hue) = avatar_parts("Mara Ek");
+        assert_eq!(initials, "ME");
+    }
+
+    #[test]
+    fn avatar_parts_more_than_two_words_uses_first_two() {
+        let (initials, _hue) = avatar_parts("Mara Jane Ek");
+        assert_eq!(initials, "MJ");
+    }
+
+    #[test]
+    fn avatar_parts_empty_name() {
+        let (initials, hue) = avatar_parts("");
+        assert_eq!(initials, "");
+        assert_eq!(hue, 0);
+    }
+
+    #[test]
+    fn avatar_parts_hue_is_in_range() {
+        let (_initials, hue) = avatar_parts("Some User");
+        assert!(hue < 360);
+    }
+
+    #[test]
+    fn avatar_parts_hue_is_deterministic() {
+        let (_, h1) = avatar_parts("Mara Ek");
+        let (_, h2) = avatar_parts("Mara Ek");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn avatar_parts_hue_differs_for_different_names() {
+        let (_, h1) = avatar_parts("Alice");
+        let (_, h2) = avatar_parts("Bob");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn format_post_time_includes_time_portion() {
+        assert_eq!(
+            format_post_time("2026-04-23T10:30:00+00:00"),
+            "2026-04-23 10:30"
+        );
+    }
+
+    #[test]
+    fn format_post_time_handles_date_only_input() {
+        // Input with no 'T' separator — return as-is.
+        assert_eq!(format_post_time("2026-04-23"), "2026-04-23");
+    }
+
+    #[test]
+    fn format_post_time_handles_negative_offset() {
+        assert_eq!(
+            format_post_time("2026-04-23T15:45:00-05:00"),
+            "2026-04-23 15:45"
+        );
+    }
+
+    #[test]
+    fn format_post_time_handles_utc_z_suffix() {
+        assert_eq!(format_post_time("2026-04-23T10:30:00Z"), "2026-04-23 10:30");
+    }
+
+    #[test]
     fn prepaint_script_is_inline_blocking_and_reads_the_marker() {
         let s = PREPAINT_SCRIPT;
         assert!(s.starts_with("<script>") && s.ends_with("</script>"), "{s}");

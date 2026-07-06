@@ -245,22 +245,22 @@ git commit -m "refactor(web): relocate format_bytes to web::render (#300)"
 - Consumes: `web::render::{avatar_parts, format_post_time, DEFAULT_THEME}`
   (already defined there).
 
-- [ ] **Step 1:** Move the 7 `avatar_parts_*` tests (`ui.rs:1484-1529`) and 4
+- [x] **Step 1:** Move the 7 `avatar_parts_*` tests (`ui.rs:1484-1529`) and 4
       `format_post_time_*` tests (`ui.rs:1529-1551`) into `render/mod.rs`'s test
       module (they already reference `crate::render::…`; switch to `super::…`).
-- [ ] **Step 2:** Move `default_theme_is_nonempty` (`pages/mod.rs:198`) into
+- [x] **Step 2:** Move `default_theme_is_nonempty` (`pages/mod.rs:198`) into
       `render/mod.rs`'s test module as `super::DEFAULT_THEME`; drop the
       now-empty `mod tests` from `pages/mod.rs`.
-- [ ] **Step 3: Run tests, verify PASS**
+- [x] **Step 3: Run tests, verify PASS**
 
 Run: `cargo nextest run -p web render::` Expected: PASS — avatar/time/theme
 tests now under `render::tests::…`.
 
-- [ ] **Step 4: Verify** `cargo build -p web` clean. The only tests left in
+- [x] **Step 4: Verify** `cargo build -p web` clean. The only tests left in
       `pages/ui.rs`'s module are the `local_datetime_*` + `marker_*` stub tests
       (deleted in Task 7).
 
-- [ ] **Step 5: Commit** (`cargo xtask check` first)
+- [x] **Step 5: Commit** (`cargo xtask check` first)
 
 ```bash
 git add web/src/pages/ui.rs web/src/pages/mod.rs web/src/render/mod.rs
