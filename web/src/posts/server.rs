@@ -228,12 +228,12 @@ pub async fn find_draft_by_permalink_for_user(
         }
 
         let Some(next_cursor) = next_cursor else {
-            return Ok(None); // cov:ignore
+            unreachable!("drafts is non-empty after the is_empty guard, so last() is Some")
         };
         cursor = Some(next_cursor);
     }
 
-    Ok(None) // cov:ignore
+    Ok(None)
 }
 
 pub fn not_found_error() -> InternalError {
@@ -390,6 +390,53 @@ mod tests {
             true,
         );
         assert_eq!(response.summary, Some("the summary".into()));
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn find_draft_by_permalink_returns_none_after_exhausting_pages() {
+        // guard:no-backend — mock store
+        use chrono::{TimeZone, Utc};
+        use common::{slug::Slug, username::Username};
+        use storage::{MockPostStorage, PostFormat, PostRecord};
+
+        let mut mock = MockPostStorage::new();
+        // Every call returns a full 50-row page of drafts whose slug never matches
+        // the searched permalink, each row carrying a distinct created_at/post_id so
+        // `to_post_cursor` yields an advancing (non-`None`) cursor. Since the page is
+        // always non-empty and never matches, all 200 iterations of the safety bound
+        // run and the loop falls through to `Ok(None)`.
+        mock.expect_list_drafts_by_user()
+            .returning(|_user_id, _cursor, _limit, _now| {
+                let base = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
+                let username = "author".parse::<Username>().unwrap();
+                let slug = "other-slug".parse::<Slug>().unwrap();
+                let page = (0..50_i64)
+                    .map(|i| PostRecord {
+                        post_id: i,
+                        user_id: 1,
+                        author_username: username.clone(),
+                        title: None,
+                        slug: slug.clone(),
+                        body: String::new(),
+                        format: PostFormat::Markdown,
+                        rendered_html: String::new(),
+                        created_at: base + chrono::Duration::seconds(i),
+                        updated_at: base,
+                        published_at: None,
+                        deleted_at: None,
+                        summary: None,
+                        tags: vec![],
+                    })
+                    .collect();
+                Ok(page)
+            });
+
+        let searched = "target-slug".parse::<Slug>().unwrap();
+        let result = find_draft_by_permalink_for_user(&mock, 1, 2020, 1, 1, &searched)
+            .await
+            .unwrap();
+        assert!(result.is_none());
     }
 
     mod sqlite_storage_tests {

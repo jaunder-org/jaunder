@@ -1,5 +1,14 @@
 //! Persistence layer for Jaunder.
 
+// `mockall`'s `#[automock]` (behind `test-utils`) generates matcher code taking
+// `&Option<&T>` for the traits with `Option<&…Cursor>`/`Option<&str>` args
+// (PostStorage/UserStorage/MediaStorage), tripping `clippy::ref_option_ref` under
+// `-D warnings`. The generated `Mock*` structs are module-level siblings of the
+// traits, so the allow is scoped at the crate root and gated to `test-utils` (the
+// only build where the mocks exist). No production code uses `&Option<&T>`, so
+// nothing genuine is masked (#245).
+#![cfg_attr(feature = "test-utils", allow(clippy::ref_option_ref))]
+
 mod app_state;
 mod atomic;
 mod audiences;

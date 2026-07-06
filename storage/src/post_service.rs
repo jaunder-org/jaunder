@@ -449,10 +449,8 @@ pub async fn perform_post_creation(
                 return Ok(record);
             }
             Err(CreatePostError::SlugConflict) => {}
-            // cov:ignore-start
             Err(CreatePostError::Internal(e)) => {
                 return Err(PerformCreationError::Storage(e));
-                // cov:ignore-stop
             }
         }
     }
@@ -608,6 +606,39 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, PerformCreationError::EmptyPost));
+    }
+
+    // guard:no-backend — injects a MockPostStorage whose create_post returns an
+    // Internal error; no live database backend
+    #[cfg(feature = "test-utils")]
+    #[tokio::test]
+    async fn test_perform_post_creation_storage_internal_error() {
+        // A storage-layer `Internal` error from `create_post` (as opposed to the
+        // retryable `SlugConflict`) short-circuits the slug-retry loop into
+        // `PerformCreationError::Storage`.
+        let mut storage = crate::MockPostStorage::new();
+        storage
+            .expect_create_post()
+            .returning(|_input| Err(CreatePostError::Internal(sqlx::Error::RowNotFound)));
+
+        let err = perform_post_creation(
+            &storage,
+            PostCreation {
+                user_id: 1,
+                body: "Hello, world!".to_owned(),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, PerformCreationError::Storage(_)));
     }
 
     #[apply(backends)]

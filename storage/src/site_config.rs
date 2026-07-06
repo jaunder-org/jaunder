@@ -12,6 +12,7 @@ use sqlx::{Database, Pool};
 ///
 /// This trait manages instance-wide settings that are not specific to any
 /// individual user.
+#[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait SiteConfigStorage: Send + Sync {
     /// Returns the value for a specific configuration key.

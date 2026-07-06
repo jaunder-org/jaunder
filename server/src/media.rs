@@ -148,7 +148,7 @@ async fn serve_response(
     if let Some(if_none_match) = req_headers.get(axum::http::header::IF_NONE_MATCH) {
         if if_none_match.to_str().unwrap_or("") == etag_value {
             return Ok(StatusCode::NOT_MODIFIED.into_response());
-        } // cov:ignore
+        }
     }
 
     // Look up content_type from DB; fall back to extension detection.
@@ -157,7 +157,7 @@ async fn serve_response(
         .await
         .map_err(serve_internal_error)?
         .map_or_else(
-            || detect_content_type(&params.filename).to_owned(), // cov:ignore
+            || detect_content_type(&params.filename).to_owned(),
             |r| r.content_type,
         );
 
@@ -471,5 +471,107 @@ mod tests {
         // ...but carried, percent-encoded, in filename*.
         assert!(value.contains("filename*=UTF-8''caf%C3%A9"), "{value}");
         assert!(HeaderValue::from_str(&value).is_ok());
+    }
+
+    const SAMPLE_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    /// Materializes a stored media file under a fresh temp storage root and
+    /// returns the root plus the matching serve params.
+    fn stored_file(filename: &str) -> (tempfile::TempDir, ServeParams) {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let dir = temp
+            .path()
+            .join("media")
+            .join("upload")
+            .join("e3")
+            .join("b0")
+            .join(SAMPLE_HASH);
+        std::fs::create_dir_all(&dir).expect("create media dirs");
+        std::fs::write(dir.join(filename), b"file-bytes").expect("write file");
+        let p = params("upload", "e3", "b0", SAMPLE_HASH, filename);
+        (temp, p)
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn serve_response_returns_304_on_matching_if_none_match() {
+        let (temp, p) = stored_file("photo.jpg");
+        // No DB lookup happens: the ETag match short-circuits before find_by_hash.
+        let media = storage::MockMediaStorage::new();
+
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::IF_NONE_MATCH,
+            HeaderValue::from_str(&format!("\"{SAMPLE_HASH}\"")).unwrap(),
+        );
+
+        let resp = serve_response(
+            Extension(Arc::new(media) as Arc<dyn MediaStorage>),
+            Extension(Arc::new(temp.path().to_path_buf())),
+            Path(p),
+            headers,
+        )
+        .await
+        .expect("serve response");
+        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn serve_response_serves_body_when_if_none_match_does_not_match() {
+        let (temp, p) = stored_file("photo.jpg");
+        let mut media = storage::MockMediaStorage::new();
+        // ETag present but not matching: the conditional falls through to the
+        // normal serve path (DB lookup + 200) rather than returning 304.
+        media
+            .expect_find_by_hash()
+            .times(1)
+            .returning(|_, _| Ok(None));
+
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::IF_NONE_MATCH,
+            HeaderValue::from_static("\"not-the-hash\""),
+        );
+
+        let resp = serve_response(
+            Extension(Arc::new(media) as Arc<dyn MediaStorage>),
+            Extension(Arc::new(temp.path().to_path_buf())),
+            Path(p),
+            headers,
+        )
+        .await
+        .expect("serve response");
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn serve_response_falls_back_to_extension_content_type_when_db_has_no_record() {
+        let (temp, p) = stored_file("photo.jpg");
+        let mut media = storage::MockMediaStorage::new();
+        // No DB record -> content type is detected from the filename extension.
+        media
+            .expect_find_by_hash()
+            .times(1)
+            .returning(|_, _| Ok(None));
+
+        let resp = serve_response(
+            Extension(Arc::new(media) as Arc<dyn MediaStorage>),
+            Extension(Arc::new(temp.path().to_path_buf())),
+            Path(p),
+            axum::http::HeaderMap::new(),
+        )
+        .await
+        .expect("serve response");
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let expected = detect_content_type("photo.jpg");
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some(expected)
+        );
     }
 }

@@ -12,7 +12,7 @@ pub async fn require_operator() -> InternalResult<()> {
         .await
         .map_err(InternalError::storage)?
     else {
-        return Err(InternalError::unauthorized("user does not exist")); // cov:ignore
+        return Err(InternalError::unauthorized("user does not exist"));
     };
 
     if !user.is_operator {
@@ -20,4 +20,33 @@ pub async fn require_operator() -> InternalResult<()> {
     }
 
     Ok(())
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::require_operator;
+    use crate::error::WebError;
+    use crate::test_support::auth_parts;
+    use leptos::prelude::provide_context;
+    use leptos::reactive::owner::Owner;
+    use std::sync::Arc;
+    use storage::{MockUserStorage, UserStorage};
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn require_operator_rejects_when_user_absent() {
+        let owner = Owner::new();
+        owner.set();
+        provide_context(auth_parts(1, "ghost"));
+        let mut users = MockUserStorage::new();
+        users.expect_get_user().returning(|_uid| Ok(None));
+        provide_context(Arc::new(users) as Arc<dyn UserStorage>);
+
+        let result = require_operator().await;
+        drop(owner);
+        assert!(matches!(
+            result.unwrap_err().public(),
+            WebError::Unauthorized
+        ));
+    }
 }

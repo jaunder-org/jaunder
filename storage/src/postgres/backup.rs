@@ -27,10 +27,7 @@ fn map_restore_error(error: sqlx::Error) -> BackupError {
         .map(|db| db.message().to_owned());
     match constraint_message {
         Some(message) => BackupError::ConstraintViolation(message),
-        // cov:ignore-start — a non-`23` restore error isn't triggerable through the
-        // public restore interface; only the constraint path is exercised by tests.
         None => BackupError::Sqlx(error),
-        // cov:ignore-stop
     }
 }
 
@@ -72,11 +69,14 @@ pub(crate) async fn export_database(
             sqlx::query("COMMIT").execute(&mut *connection).await?;
             Ok(manifest)
         }
-        // cov:ignore-start
+        // Export rollback is unreachable through the public `export_backup`
+        // (`export_directory_backup` always creates the `db/` subdir before the
+        // dialect writes). It is exercised directly by pointing the dialect
+        // `export_database` at a destination lacking `db/` (see tests). Parity
+        // with sqlite/backup.rs.
         Err(error) => {
             let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
             Err(error)
-            // cov:ignore-stop
         }
     }
 }
@@ -153,13 +153,11 @@ async fn import_table(
         let mut query = sqlx::query(&insert);
         for column in &column_names {
             let value = row.get(&column.name).ok_or_else(|| {
-                // cov:ignore-start
                 BackupError::InvalidBackup(format!(
                     "table {table} row is missing column {}",
                     column.name
                 ))
             })?;
-            // cov:ignore-stop
             query = query.bind(json_value_as_restore_text(value));
         }
         query
@@ -327,6 +325,101 @@ async fn schema_checksum(connection: &mut PgConnection) -> Result<String, Backup
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{postgres_only, Backend, CloseablePool};
+    use rstest::*;
+    use rstest_reuse::*;
+
+    // reason: drives the Postgres dialect's `export_database` directly with a
+    // destination that lacks the `db/` subdir the public API always creates, so
+    // the first `export_table` File::create fails mid-transaction and the export
+    // ROLLBACK arm runs. The SQLite analog lives in sqlite/backup.rs.
+    #[apply(postgres_only)]
+    #[tokio::test]
+    async fn export_database_rolls_back_on_write_failure(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let CloseablePool::Postgres(pool) = env.base.pool() else {
+            unreachable!("postgres_only yields a Postgres pool")
+        };
+
+        // A fresh temp dir with no `db/` subdir: `export_table`'s
+        // File::create(destination/db/<table>.ndjson) fails, forcing the
+        // transaction into the ROLLBACK arm.
+        let destination = tempfile::TempDir::new().expect("tempdir");
+
+        let error = export_database(pool, destination.path(), BackupMode::Directory).await;
+        assert!(
+            error.is_err(),
+            "export into a missing db/ dir must fail and roll back"
+        );
+    }
+
+    // reason: drives the Postgres dialect's restore directly with a backup whose
+    // users.ndjson carries a non-numeric `user_id`. `import_table`'s
+    // `CAST($n AS BIGINT)` then raises SQLSTATE 22P02 (class 22, a data exception —
+    // not a class-23 constraint violation), so `map_restore_error` takes its `None`
+    // arm and yields `BackupError::Sqlx`. That arm is unreachable through the public
+    // restore interface, so it is exercised at the dialect level here.
+    #[apply(postgres_only)]
+    #[tokio::test]
+    async fn restore_maps_non_constraint_error_to_sqlx(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let source = backend.setup().await;
+        let CloseablePool::Postgres(source_pool) = source.base.pool() else {
+            unreachable!("postgres_only yields a Postgres pool")
+        };
+        source
+            .state
+            .users
+            .create_user(
+                &"userone".parse().expect("valid username"),
+                &"password123".parse().expect("valid password"),
+                None,
+                false,
+            )
+            .await
+            .expect("seed user");
+
+        // Export a real backup so its manifest's schema version/checksum match the
+        // fresh target, and users.ndjson has a complete row to corrupt.
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let backup = temp.path().join("backup");
+        std::fs::create_dir_all(backup.join("db"))?;
+        let manifest = export_database(source_pool, &backup, BackupMode::Directory).await?;
+
+        // Replace the integer `user_id` with a non-numeric string. Row 0 still
+        // carries every column, so `column_names` includes `user_id`; the bind then
+        // trips `CAST('abc' AS BIGINT)` -> SQLSTATE 22P02 during the INSERT.
+        let users_ndjson = backup.join("db").join("users.ndjson");
+        let mut rows: Vec<serde_json::Map<String, serde_json::Value>> =
+            std::fs::read_to_string(&users_ndjson)?
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(serde_json::from_str)
+                .collect::<Result<_, _>>()?;
+        assert!(!rows.is_empty(), "expected an exported user row");
+        rows[0].insert("user_id".to_owned(), serde_json::json!("abc"));
+        let mut corrupted = String::new();
+        for row in &rows {
+            corrupted.push_str(&serde_json::to_string(row)?);
+            corrupted.push('\n');
+        }
+        std::fs::write(&users_ndjson, corrupted)?;
+
+        let target = backend.setup().await;
+        let CloseablePool::Postgres(target_pool) = target.base.pool() else {
+            unreachable!("postgres_only yields a Postgres pool")
+        };
+        let error = restore_database(target_pool, &backup, &manifest)
+            .await
+            .expect_err("restore should fail casting a non-numeric user_id");
+
+        assert!(
+            matches!(error, BackupError::Sqlx(_)),
+            "non-constraint (class 22) restore error must map to Sqlx, got {error:?}"
+        );
+        Ok(())
+    }
 
     #[test]
     fn json_select_orders_by_table_key() {

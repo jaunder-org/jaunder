@@ -52,13 +52,14 @@ pub(crate) async fn export_database(
             sqlx::query("COMMIT").execute(&mut *connection).await?;
             Ok(manifest)
         }
-        // cov:ignore-start — export rollback is unreachable through public export_backup
-        // (export_directory_backup always creates the db/ subdir before the dialect
-        // writes); no host-side trigger. Parity with postgres/backup.rs.
+        // Export rollback is unreachable through the public `export_backup`
+        // (`export_directory_backup` always creates the `db/` subdir before the
+        // dialect writes). It is exercised directly by pointing the dialect
+        // `export_database` at a destination lacking `db/` (see tests). Parity
+        // with postgres/backup.rs.
         Err(error) => {
             let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
             Err(error)
-            // cov:ignore-stop
         }
     }
 }
@@ -153,10 +154,8 @@ async fn import_table(
         let mut query = sqlx::query(&insert);
         for column in &column_names {
             let value = row.get(column).ok_or_else(|| {
-                // cov:ignore-start
                 BackupError::InvalidBackup(format!("table {table} row is missing column {column}"))
             })?;
-            // cov:ignore-stop
             query = bind_json_value(query, value);
         }
         query.execute(&mut *connection).await?;
@@ -194,8 +193,8 @@ fn bind_json_value<'q>(
             // genuinely non-integral numbers.
             if let Some(value) = value.as_i64() {
                 query.bind(value)
-            } else if let Some(value) = value.as_u64().and_then(|value| i64::try_from(value).ok()) {
-                query.bind(value) // cov:ignore
+            } else if value.as_u64().and_then(|v| i64::try_from(v).ok()).is_some() {
+                unreachable!("as_i64 already claims every u64 that fits in i64")
             } else {
                 query.bind(value.as_f64())
             }
@@ -316,6 +315,33 @@ async fn schema_checksum(connection: &mut SqliteConnection) -> Result<String, Ba
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{sqlite_only, Backend, CloseablePool};
+    use rstest::*;
+    use rstest_reuse::*;
+
+    // reason: drives the SQLite dialect's `export_database` directly with a
+    // destination that lacks the `db/` subdir the public API always creates, so
+    // the first `export_table` File::create fails mid-transaction and the export
+    // ROLLBACK arm runs. The Postgres analog lives in postgres/backup.rs.
+    #[apply(sqlite_only)]
+    #[tokio::test]
+    async fn export_database_rolls_back_on_write_failure(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let CloseablePool::Sqlite(pool) = env.base.pool() else {
+            unreachable!("sqlite_only yields a SQLite pool")
+        };
+
+        // A fresh temp dir with no `db/` subdir: `export_table`'s
+        // File::create(destination/db/<table>.ndjson) fails, forcing the
+        // transaction into the ROLLBACK arm.
+        let destination = tempfile::TempDir::new().expect("tempdir");
+
+        let error = export_database(pool, destination.path(), BackupMode::Directory).await;
+        assert!(
+            error.is_err(),
+            "export into a missing db/ dir must fail and roll back"
+        );
+    }
 
     #[test]
     fn json_select_marks_boolean_values_as_json_booleans() {

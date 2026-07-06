@@ -59,7 +59,7 @@ fn describe_bootstrap_error(err: storage::PgBootstrapError) -> anyhow::Error {
         storage::PgBootstrapError::DatabaseExists(name) => anyhow::anyhow!(
             "database '{name}' already exists; refusing to modify existing database state"
         ),
-        storage::PgBootstrapError::Sqlx(err) => err.into(), // cov:ignore
+        storage::PgBootstrapError::Sqlx(err) => err.into(),
     }
 }
 
@@ -384,18 +384,20 @@ pub async fn prepare_server(
         Err(_) if !prod => {
             // Dev mode: auto-initialize on first `jaunder serve` so the host e2e
             // loop (and any dev run) works without a manual `jaunder init`.
+            let storage_path = storage.storage_path.display();
             tracing::warn!(
-                storage_path = %storage.storage_path.display(), // cov:ignore
+                storage_path = %storage_path,
                 db = %storage.db,
                 "Database not found — auto-initializing (dev mode): storage={} db={}",
-                storage.storage_path.display(), // cov:ignore
+                storage_path,
                 storage.db,
             );
             cmd_init(storage, true).await?;
-            // cov:ignore-start
-            open_existing_database(&storage.db)
-                .await
-                .map_err(|e| anyhow::anyhow!("{e}; auto-init failed"))?
+            open_existing_database(&storage.db).await.map_err(|e| {
+                // cov:ignore-start -- unreachable in practice: reopening cannot
+                // fail immediately after `cmd_init` just created the database.
+                anyhow::anyhow!("{e}; auto-init failed")
+            })?
             // cov:ignore-stop
         }
         Err(e) => return Err(anyhow::anyhow!("{e}; run `jaunder init` first")),
@@ -509,6 +511,14 @@ mod tests {
     }
 
     #[test]
+    fn describe_bootstrap_error_sqlx_passes_through_source_message() {
+        let expected = sqlx::Error::PoolClosed.to_string();
+        let err =
+            describe_bootstrap_error(storage::PgBootstrapError::Sqlx(sqlx::Error::PoolClosed));
+        assert_eq!(err.to_string(), expected);
+    }
+
+    #[test]
     fn test_require_postgres_options() {
         let pg_url = "postgres://user:pass@localhost/db";
         let opts: DbConnectOptions = pg_url.parse().unwrap();
@@ -616,5 +626,34 @@ mod tests {
             "invite must expire in the future, got: {}",
             invites[0].expires_at
         );
+    }
+
+    #[tokio::test]
+    async fn prepare_server_auto_initializes_in_dev_mode() {
+        // A fresh storage dir with no database: `open_existing_database` fails,
+        // and because `prod == false`, `prepare_server` takes the dev auto-init
+        // branch (warn + `cmd_init` + reopen) instead of erroring. Binding to
+        // port 0 avoids a fixed-port clash; we never enter the serve loop.
+        let temp = TempDir::new().expect("temp dir");
+        let db_path = temp.path().join("jaunder.db");
+        let db_url = format!("sqlite:{}", db_path.display());
+        let opts: DbConnectOptions = db_url.parse().expect("parse sqlite url");
+        let storage = StorageArgs {
+            storage_path: temp.path().to_path_buf(),
+            db: opts,
+        };
+        assert!(
+            !db_path.exists(),
+            "database must not exist before prepare_server"
+        );
+
+        let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let prepared = prepare_server(&storage, bind, false, None)
+            .await
+            .expect("dev-mode prepare_server must auto-initialize");
+
+        assert!(db_path.exists(), "auto-init must have created the database");
+        // Drop the prepared server (and its background workers) without serving.
+        drop(prepared);
     }
 }

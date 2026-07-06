@@ -49,20 +49,18 @@ async fn serve(
             .await
             {
                 Ok(row) => row,
-                // cov:ignore-start
                 Err(e) => {
                     return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-                    // cov:ignore-stop
                 }
             }
         }
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(), // cov:ignore
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
     if let Some(etag) = headers.get(header::IF_NONE_MATCH) {
         if etag.to_str().ok() == Some(row.etag.as_str()) {
             return StatusCode::NOT_MODIFIED.into_response();
-        } // cov:ignore
+        }
     }
     if let Some(ims) = headers.get(header::IF_MODIFIED_SINCE) {
         if let Some(t) = ims
@@ -72,10 +70,8 @@ async fn serve(
         {
             if row.updated_at <= t.with_timezone(&chrono::Utc) {
                 return StatusCode::NOT_MODIFIED.into_response();
-                // cov:ignore-start
             }
-        }
-        // cov:ignore-stop
+        } // cov:ignore fall-through brace; llvm-cov leaves it unmarked though the row-newer (200, not 304) path is tested
     }
 
     let mut resp_headers = HeaderMap::new();
@@ -95,7 +91,6 @@ async fn serve(
     (StatusCode::OK, resp_headers, row.body).into_response()
 }
 
-// cov:ignore-start
 pub async fn feed_site(
     Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
@@ -105,9 +100,7 @@ pub async fn feed_site(
 ) -> Response {
     let Some(format) = parse_format(&ext) else {
         return StatusCode::NOT_FOUND.into_response();
-        // cov:ignore-stop
     };
-    // cov:ignore-start
     serve(
         feed_cache,
         site_config,
@@ -118,7 +111,6 @@ pub async fn feed_site(
     )
     .await
 }
-// cov:ignore-stop
 
 pub async fn feed_site_tag(
     Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
@@ -128,7 +120,7 @@ pub async fn feed_site_tag(
     Path((tag, ext)): Path<(String, String)>,
 ) -> Response {
     let Some(format) = parse_format(&ext) else {
-        return StatusCode::NOT_FOUND.into_response(); // cov:ignore
+        return StatusCode::NOT_FOUND.into_response();
     };
     let Ok(tag) = tag.parse::<Tag>() else {
         return StatusCode::NOT_FOUND.into_response();
@@ -176,12 +168,11 @@ pub async fn feed_user_tag(
     Path((username, tag, ext)): Path<(String, String, String)>,
 ) -> Response {
     let Some(format) = parse_format(&ext) else {
-        return StatusCode::NOT_FOUND.into_response(); // cov:ignore
+        return StatusCode::NOT_FOUND.into_response();
     };
     let (Ok(username), Ok(tag)) = (username.parse::<Username>(), tag.parse::<Tag>()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    // cov:ignore-start
     serve(
         feed_cache,
         site_config,
@@ -191,5 +182,265 @@ pub async fn feed_user_tag(
         format,
     )
     .await
-    // cov:ignore-stop
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+    use storage::{FeedCacheError, FeedCacheRow};
+
+    fn sample_row(etag: &str, updated_at: chrono::DateTime<chrono::Utc>) -> FeedCacheRow {
+        FeedCacheRow {
+            feed_url: "/feed.rss".to_owned(),
+            body: "<rss/>".to_owned(),
+            etag: etag.to_owned(),
+            content_type: "application/rss+xml; charset=utf-8".to_owned(),
+            updated_at,
+            generated_at: updated_at,
+        }
+    }
+
+    fn empty_site_config() -> Arc<dyn SiteConfigStorage> {
+        Arc::new(storage::MockSiteConfigStorage::new())
+    }
+
+    fn empty_posts() -> Arc<dyn PostStorage> {
+        Arc::new(storage::MockPostStorage::new())
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn serve_returns_500_when_regeneration_fails() {
+        let mut cache = storage::MockFeedCacheStorage::new();
+        cache.expect_get().returning(|_| Ok(None));
+        let mut site_config = storage::MockSiteConfigStorage::new();
+        // A storage failure during regeneration surfaces as a 500.
+        site_config
+            .expect_get_feeds_config()
+            .returning(|| Err(sqlx::Error::PoolClosed));
+
+        let resp = serve(
+            Arc::new(cache),
+            Arc::new(site_config),
+            empty_posts(),
+            HeaderMap::new(),
+            FeedSurface::Site,
+            FeedFormat::Rss,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn serve_returns_500_when_cache_get_errors() {
+        let mut cache = storage::MockFeedCacheStorage::new();
+        cache
+            .expect_get()
+            .returning(|_| Err(FeedCacheError::Db(sqlx::Error::PoolClosed)));
+
+        let resp = serve(
+            Arc::new(cache),
+            empty_site_config(),
+            empty_posts(),
+            HeaderMap::new(),
+            FeedSurface::Site,
+            FeedFormat::Rss,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn serve_returns_304_on_if_none_match() {
+        let mut cache = storage::MockFeedCacheStorage::new();
+        cache
+            .expect_get()
+            .returning(|_| Ok(Some(sample_row("\"etag-1\"", Utc::now()))));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_static("\"etag-1\""),
+        );
+
+        let resp = serve(
+            Arc::new(cache),
+            empty_site_config(),
+            empty_posts(),
+            headers,
+            FeedSurface::Site,
+            FeedFormat::Rss,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn serve_returns_200_when_if_none_match_does_not_match() {
+        let mut cache = storage::MockFeedCacheStorage::new();
+        cache
+            .expect_get()
+            .returning(|_| Ok(Some(sample_row("\"etag-1\"", Utc::now()))));
+
+        // IF_NONE_MATCH present but a different etag: the conditional falls
+        // through to a normal 200 rather than returning 304.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_static("\"etag-other\""),
+        );
+
+        let resp = serve(
+            Arc::new(cache),
+            empty_site_config(),
+            empty_posts(),
+            headers,
+            FeedSurface::Site,
+            FeedFormat::Rss,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn serve_returns_200_when_modified_since_is_stale() {
+        // Row updated *after* the client's If-Modified-Since date: the
+        // conditional falls through to a 200 rather than returning 304.
+        let updated_at = Utc::now();
+        let mut cache = storage::MockFeedCacheStorage::new();
+        cache
+            .expect_get()
+            .returning(move |_| Ok(Some(sample_row("\"etag-1\"", updated_at))));
+
+        let mut headers = HeaderMap::new();
+        let ims = (Utc::now() - Duration::days(1)).to_rfc2822();
+        headers.insert(
+            header::IF_MODIFIED_SINCE,
+            HeaderValue::from_str(&ims).unwrap(),
+        );
+
+        let resp = serve(
+            Arc::new(cache),
+            empty_site_config(),
+            empty_posts(),
+            headers,
+            FeedSurface::Site,
+            FeedFormat::Rss,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn serve_returns_304_on_if_modified_since() {
+        let updated_at = Utc::now() - Duration::days(1);
+        let mut cache = storage::MockFeedCacheStorage::new();
+        cache
+            .expect_get()
+            .returning(move |_| Ok(Some(sample_row("\"etag-1\"", updated_at))));
+
+        let mut headers = HeaderMap::new();
+        let ims = (Utc::now() + Duration::days(1)).to_rfc2822();
+        headers.insert(
+            header::IF_MODIFIED_SINCE,
+            HeaderValue::from_str(&ims).unwrap(),
+        );
+
+        let resp = serve(
+            Arc::new(cache),
+            empty_site_config(),
+            empty_posts(),
+            headers,
+            FeedSurface::Site,
+            FeedFormat::Rss,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn feed_site_returns_404_on_bad_format() {
+        let resp = feed_site(
+            Extension(Arc::new(storage::MockFeedCacheStorage::new()) as Arc<dyn FeedCacheStorage>),
+            Extension(empty_site_config()),
+            Extension(empty_posts()),
+            HeaderMap::new(),
+            Path("bogus".to_owned()),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn feed_site_delegates_to_serve_on_valid_format() {
+        let mut cache = storage::MockFeedCacheStorage::new();
+        cache
+            .expect_get()
+            .returning(|_| Ok(Some(sample_row("\"etag-1\"", Utc::now()))));
+
+        let resp = feed_site(
+            Extension(Arc::new(cache) as Arc<dyn FeedCacheStorage>),
+            Extension(empty_site_config()),
+            Extension(empty_posts()),
+            HeaderMap::new(),
+            Path("rss".to_owned()),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn feed_site_tag_returns_404_on_bad_ext() {
+        let resp = feed_site_tag(
+            Extension(Arc::new(storage::MockFeedCacheStorage::new()) as Arc<dyn FeedCacheStorage>),
+            Extension(empty_site_config()),
+            Extension(empty_posts()),
+            HeaderMap::new(),
+            Path(("rust".to_owned(), "bogus".to_owned())),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn feed_user_tag_returns_404_on_bad_ext() {
+        let resp = feed_user_tag(
+            Extension(Arc::new(storage::MockFeedCacheStorage::new()) as Arc<dyn FeedCacheStorage>),
+            Extension(empty_site_config()),
+            Extension(empty_posts()),
+            HeaderMap::new(),
+            Path(("alice".to_owned(), "rust".to_owned(), "bogus".to_owned())),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn feed_user_tag_delegates_to_serve_on_valid() {
+        let mut cache = storage::MockFeedCacheStorage::new();
+        cache
+            .expect_get()
+            .returning(|_| Ok(Some(sample_row("\"etag-1\"", Utc::now()))));
+
+        let resp = feed_user_tag(
+            Extension(Arc::new(cache) as Arc<dyn FeedCacheStorage>),
+            Extension(empty_site_config()),
+            Extension(empty_posts()),
+            HeaderMap::new(),
+            Path(("alice".to_owned(), "rust".to_owned(), "rss".to_owned())),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
 }

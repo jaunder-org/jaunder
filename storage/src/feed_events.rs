@@ -49,6 +49,7 @@ pub enum FeedEventError {
     Db(#[from] sqlx::Error),
 }
 
+#[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait FeedEventStorage: Send + Sync {
     /// Insert a new `pending` row for `feed_url`. Returns the new row id.

@@ -26,6 +26,7 @@ pub enum FeedCacheError {
     Db(#[from] sqlx::Error),
 }
 
+#[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait FeedCacheStorage: Send + Sync {
     async fn get(&self, feed_url: &str) -> Result<Option<FeedCacheRow>, FeedCacheError>;

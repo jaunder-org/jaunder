@@ -197,7 +197,7 @@ impl Backend {
         let (state, base) = match self {
             Backend::Sqlite => {
                 let DbConnectOptions::Sqlite(options) = sqlite_url(&dir) else {
-                    unreachable!() // cov:ignore — sqlite_url always yields SQLite
+                    unreachable!("sqlite_url always yields Sqlite")
                 };
                 let (state, pool) = crate::sqlite::open_sqlite_database_with_pool(&options, true)
                     .await
@@ -208,7 +208,7 @@ impl Backend {
                 let (url, guard) = template_postgres_url().await;
                 // template_postgres_url() always yields Postgres, so unreachable.
                 let DbConnectOptions::Postgres { options, .. } = &url else {
-                    unreachable!() // cov:ignore
+                    unreachable!("template_postgres_url always yields Postgres")
                 };
                 let (state, pool) = crate::postgres::open_postgres_database_with_pool(options)
                     .await
@@ -407,8 +407,8 @@ fn report_drop_outcome(
 ) {
     match outcome {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => eprintln!("test database drop {db_name} failed: {error}"), // cov:ignore
-        Err(_elapsed) => eprintln!("test database drop {db_name} timed out"),        // cov:ignore
+        Ok(Err(error)) => eprintln!("test database drop {db_name} failed: {error}"),
+        Err(_elapsed) => eprintln!("test database drop {db_name} timed out"),
     }
 }
 
@@ -450,7 +450,7 @@ pub async fn unique_postgres_url() -> (DbConnectOptions, PostgresDbGuard) {
 
     let bootstrap: sqlx::postgres::PgConnectOptions = postgres_bootstrap_url().parse().unwrap();
     let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
-        panic!("expected postgres options"); // cov:ignore — postgres_url() always parses to Postgres
+        unreachable!("postgres_url always yields Postgres")
     };
     let owner = options.get_username();
     assert!(
@@ -505,7 +505,7 @@ async fn ensure_template_db() {
 
     if !exists {
         let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
-            panic!("expected postgres options"); // cov:ignore — postgres_url() always parses to Postgres
+            unreachable!("postgres_url always yields Postgres")
         };
         let owner = options.get_username();
         sqlx::query(&format!(
@@ -548,7 +548,7 @@ pub async fn template_postgres_url() -> (DbConnectOptions, PostgresDbGuard) {
     ensure_template_db().await;
 
     let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
-        panic!("expected postgres options"); // cov:ignore — postgres_url() always parses to Postgres
+        unreachable!("postgres_url always yields Postgres")
     };
     let owner = options.get_username();
     let db_name = unique_postgres_db_name();
@@ -628,7 +628,7 @@ pub async fn seed_user(state: &Arc<AppState>) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{backends, bootstrap_url, seed_user, splice_db_name, Backend};
+    use super::{backends, bootstrap_url, report_drop_outcome, seed_user, splice_db_name, Backend};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -646,6 +646,20 @@ mod tests {
     async fn postgres_accessor_rejects_a_sqlite_pool() {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         let _ = super::CloseablePool::Sqlite(pool).postgres();
+    }
+
+    // guard:no-backend — drives the pure `report_drop_outcome` logging arms; no database ops
+    #[tokio::test]
+    async fn report_drop_outcome_logs_failure_and_timeout() {
+        // Failure arm: a DROP DATABASE that returned a database error.
+        report_drop_outcome("test_db", Ok(Err(sqlx::Error::RowNotFound)));
+
+        // Timeout arm: a genuine `Elapsed` from a zero-duration timeout over a
+        // future that never completes.
+        let elapsed = tokio::time::timeout(std::time::Duration::ZERO, std::future::pending::<()>())
+            .await
+            .unwrap_err();
+        report_drop_outcome("test_db", Err(elapsed));
     }
 
     #[test]

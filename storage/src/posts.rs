@@ -315,6 +315,7 @@ pub enum ListByTagError {
 ///
 /// This trait manages the lifecycle of posts, including versioned edits,
 /// draft/publish status, soft-deletion, and tagging.
+#[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait PostStorage: Send + Sync {
     /// Creates a new post.
@@ -373,10 +374,17 @@ pub trait PostStorage: Send + Sync {
     ///
     /// `now` gates scheduled posts (`published_at > now`) off this public
     /// surface until their time.
-    async fn list_published_by_user(
+    ///
+    /// The explicit `'a` on the `cursor` reference exists so
+    /// `mockall::automock` can mock this trait: automock cannot synthesize a
+    /// lifetime for a reference nested inside a generic (here
+    /// `Option<&PostCursor>`), so we name it. Behaviour is identical to
+    /// lifetime elision — the annotation is purely to satisfy the macro
+    /// (ref #245).
+    async fn list_published_by_user<'a>(
         &self,
         username: &Username,
-        cursor: Option<&PostCursor>,
+        cursor: Option<&'a PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
@@ -387,9 +395,10 @@ pub trait PostStorage: Send + Sync {
     ///
     /// `now` gates scheduled posts (`published_at > now`) off this public
     /// surface until their time.
-    async fn list_published(
+    // Explicit `'a` for `mockall::automock` — see `list_published_by_user`.
+    async fn list_published<'a>(
         &self,
-        cursor: Option<&PostCursor>,
+        cursor: Option<&'a PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
@@ -402,10 +411,11 @@ pub trait PostStorage: Send + Sync {
     /// so a future-dated post — invisible on every public surface until its
     /// time — stays visible to its own author. `now` gates which posts count
     /// as not-yet-live.
-    async fn list_drafts_by_user(
+    // Explicit `'a` for `mockall::automock` — see `list_published_by_user`.
+    async fn list_drafts_by_user<'a>(
         &self,
         user_id: i64,
-        cursor: Option<&PostCursor>,
+        cursor: Option<&'a PostCursor>,
         limit: u32,
         now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>>;
@@ -413,10 +423,11 @@ pub trait PostStorage: Send + Sync {
     /// Lists all of a user's non-soft-deleted posts (drafts + published)
     /// ordered by `updated_at DESC, post_id DESC` for the `AtomPub` Collection
     /// surface. Tags are hydrated.
-    async fn list_collection_by_user(
+    // Explicit `'a` for `mockall::automock` — see `list_published_by_user`.
+    async fn list_collection_by_user<'a>(
         &self,
         user_id: i64,
-        cursor: Option<&CollectionCursor>,
+        cursor: Option<&'a CollectionCursor>,
         limit: u32,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
@@ -434,10 +445,11 @@ pub trait PostStorage: Send + Sync {
     ///
     /// `now` gates scheduled posts (`published_at > now`) off this public
     /// surface until their time.
-    async fn list_posts_by_tag(
+    // Explicit `'a` for `mockall::automock` — see `list_published_by_user`.
+    async fn list_posts_by_tag<'a>(
         &self,
         tag_slug: &Tag,
-        cursor: Option<&PostCursor>,
+        cursor: Option<&'a PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
@@ -448,11 +460,12 @@ pub trait PostStorage: Send + Sync {
     ///
     /// `now` gates scheduled posts (`published_at > now`) off this public
     /// surface until their time.
-    async fn list_user_posts_by_tag(
+    // Explicit `'a` for `mockall::automock` — see `list_published_by_user`.
+    async fn list_user_posts_by_tag<'a>(
         &self,
         user_id: i64,
         tag_slug: &Tag,
-        cursor: Option<&PostCursor>,
+        cursor: Option<&'a PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
@@ -461,7 +474,12 @@ pub trait PostStorage: Send + Sync {
     /// Returns tag records whose slug begins with `prefix` (case-insensitive
     /// on the slug). An empty / `None` prefix returns all tags, alphabetically,
     /// up to `limit`.
-    async fn list_tags(&self, prefix: Option<&str>, limit: u32) -> sqlx::Result<Vec<TagRecord>>;
+    // Explicit `'a` for `mockall::automock` — see `list_published_by_user`.
+    async fn list_tags<'a>(
+        &self,
+        prefix: Option<&'a str>,
+        limit: u32,
+    ) -> sqlx::Result<Vec<TagRecord>>;
 
     /// Lists published posts matching `surface`, applying the
     /// [`HybridWindow`](common::feed::HybridWindow) selection rule (union of
@@ -775,10 +793,10 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn list_published_by_user(
+    async fn list_published_by_user<'a>(
         &self,
         username: &Username,
-        cursor: Option<&PostCursor>,
+        cursor: Option<&'a PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
@@ -850,9 +868,9 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn list_published(
+    async fn list_published<'a>(
         &self,
-        cursor: Option<&PostCursor>,
+        cursor: Option<&'a PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
@@ -919,10 +937,10 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn list_drafts_by_user(
+    async fn list_drafts_by_user<'a>(
         &self,
         user_id: i64,
-        cursor: Option<&PostCursor>,
+        cursor: Option<&'a PostCursor>,
         limit: u32,
         now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>> {
@@ -982,10 +1000,10 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn list_collection_by_user(
+    async fn list_collection_by_user<'a>(
         &self,
         user_id: i64,
-        cursor: Option<&CollectionCursor>,
+        cursor: Option<&'a CollectionCursor>,
         limit: u32,
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
@@ -1085,10 +1103,10 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn list_posts_by_tag(
+    async fn list_posts_by_tag<'a>(
         &self,
         tag_slug: &Tag,
-        cursor: Option<&PostCursor>,
+        cursor: Option<&'a PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
@@ -1178,11 +1196,11 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn list_user_posts_by_tag(
+    async fn list_user_posts_by_tag<'a>(
         &self,
         user_id: i64,
         tag_slug: &Tag,
-        cursor: Option<&PostCursor>,
+        cursor: Option<&'a PostCursor>,
         limit: u32,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
@@ -1276,7 +1294,11 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn list_tags(&self, prefix: Option<&str>, limit: u32) -> sqlx::Result<Vec<TagRecord>> {
+    async fn list_tags<'a>(
+        &self,
+        prefix: Option<&'a str>,
+        limit: u32,
+    ) -> sqlx::Result<Vec<TagRecord>> {
         let normalized = prefix
             .map(str::trim)
             .filter(|p| !p.is_empty())

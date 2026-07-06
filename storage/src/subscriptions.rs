@@ -32,6 +32,7 @@ pub struct SubscriptionRecord {
 }
 
 /// Async operations on the `subscriptions` table.
+#[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait SubscriptionStorage: Send + Sync {
     /// Routes through the admission seam to pick the initial status, then

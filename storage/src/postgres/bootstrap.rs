@@ -65,7 +65,7 @@ pub async fn create_postgres_database_and_role(
         quote_identifier(app_role),
     );
     if !execute_utility(&mut admin_conn, &create_db_sql, "42P04").await? {
-        return Err(PgBootstrapError::DatabaseExists(database_name.to_owned())); // cov:ignore
+        return Err(PgBootstrapError::DatabaseExists(database_name.to_owned()));
     }
 
     Ok(())
@@ -86,7 +86,7 @@ async fn execute_utility(
         {
             Ok(false)
         }
-        Err(other) => Err(other), // cov:ignore
+        Err(other) => Err(other),
     }
 }
 
@@ -97,10 +97,23 @@ fn pg_error_code_matches(code: Option<&str>, expected: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{postgres_only, Backend};
+    use crate::test_support::{postgres_bootstrap_url, postgres_only, Backend};
     use rstest::*;
     use rstest_reuse::*;
     use std::time::Duration;
+
+    /// A process-unique suffix for admin-created role/database identifiers, so
+    /// the bootstrap tests don't collide with each other or a prior run.
+    fn unique_suffix() -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after unix epoch")
+            .as_nanos();
+        format!("{nanos}_{n}")
+    }
 
     // reason: exercises CREATE ROLE/CREATE DATABASE admin DDL; no SQLite analog
     #[apply(postgres_only)]
@@ -118,6 +131,58 @@ mod tests {
             create_postgres_database_and_role(&bootstrap, "app_role", "secret", "app_db"),
         )
         .await;
+    }
+
+    // reason: exercises the DatabaseExists arm of admin CREATE DATABASE DDL; no SQLite analog
+    #[apply(postgres_only)]
+    #[tokio::test]
+    async fn create_postgres_database_and_role_reports_existing_database(#[case] backend: Backend) {
+        let _ = backend;
+        let bootstrap: PgConnectOptions = postgres_bootstrap_url().parse().expect("bootstrap url");
+        let mut admin = PgConnection::connect_with(&bootstrap)
+            .await
+            .expect("admin connect");
+
+        let suffix = unique_suffix();
+        let db_name = format!("cov_bootstrap_db_{suffix}");
+        let role_name = format!("cov_bootstrap_role_{suffix}");
+
+        // Pre-create the target database so the bootstrap's CREATE DATABASE hits
+        // the benign already-exists (42P04) path and reports DatabaseExists.
+        sqlx::query(&format!("CREATE DATABASE {}", quote_identifier(&db_name)))
+            .execute(&mut admin)
+            .await
+            .expect("pre-create database");
+
+        let error = create_postgres_database_and_role(&bootstrap, &role_name, "secret", &db_name)
+            .await
+            .expect_err("database already exists");
+        assert!(matches!(error, PgBootstrapError::DatabaseExists(_)));
+
+        // The role is created before the DB step fails, so drop both to leave the
+        // shared cluster clean.
+        let _ = sqlx::query(&format!("DROP DATABASE {}", quote_identifier(&db_name)))
+            .execute(&mut admin)
+            .await;
+        let _ = sqlx::query(&format!("DROP ROLE {}", quote_identifier(&role_name)))
+            .execute(&mut admin)
+            .await;
+    }
+
+    // reason: exercises execute_utility's non-benign error passthrough over admin DDL; no SQLite analog
+    #[apply(postgres_only)]
+    #[tokio::test]
+    async fn execute_utility_propagates_unexpected_errors(#[case] backend: Backend) {
+        let _ = backend;
+        let bootstrap: PgConnectOptions = postgres_bootstrap_url().parse().expect("bootstrap url");
+        let mut admin = PgConnection::connect_with(&bootstrap)
+            .await
+            .expect("admin connect");
+
+        // A syntax error's SQLSTATE (42601) never matches the already-exists code,
+        // so execute_utility surfaces it as Err rather than the benign Ok(false).
+        let result = execute_utility(&mut admin, "NOT A VALID STATEMENT", "42710").await;
+        assert!(result.is_err());
     }
 
     #[test]

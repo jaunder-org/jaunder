@@ -47,6 +47,7 @@ impl From<sqlx::Error> for AudienceError {
 /// Every write is scoped by `author_user_id`; `add_member` additionally threads
 /// `author_user_id` into the membership row so the composite FKs enforce the
 /// same-owner invariant (no app-level check).
+#[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait AudienceStorage: Send + Sync {
     /// Creates a named audience for the author. Maps the

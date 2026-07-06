@@ -52,6 +52,7 @@ croner = "2.2"
 tempfile = "3"
 rstest = "0.26"
 rstest_reuse = "0.7"
+mockall = "0.13"
 anyhow = "1"
 argon2 = { version = "0.5", features = ["std"] }
 base64 = "0.22"

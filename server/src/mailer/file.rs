@@ -29,7 +29,9 @@ impl MailSender for FileMailSender {
             "subject": message.subject,
             "body_text": message.body_text,
         });
-        let mut line = serde_json::to_string(&record).map_err(|e| MailError::Send(Box::new(e)))?; // cov:ignore
+        let Ok(mut line) = serde_json::to_string(&record) else {
+            unreachable!("serializing a json! of owned strings is infallible")
+        };
         line.push('\n');
 
         let path = self.path.clone();
@@ -44,6 +46,10 @@ impl MailSender for FileMailSender {
             Ok::<(), MailError>(())
         })
         .await
+        // A JoinError only arises if the blocking task panics or is cancelled.
+        // This closure only does file I/O (each fallible step handled with `?`,
+        // so it returns Err rather than panicking) and is awaited immediately
+        // (never cancelled), so no input can drive this arm.
         .map_err(|e| MailError::Send(Box::new(e)))? // cov:ignore
     }
 }

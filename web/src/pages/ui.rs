@@ -131,13 +131,11 @@ pub fn Dot(proto: String) -> impl IntoView {
 // ─── 3.4 Chip ─────────────────────────────────────────────────
 
 #[component]
-// cov:ignore-start
 pub fn Chip(
     label: String,
     #[prop(optional)] proto: Option<String>,
     #[prop(optional)] count: Option<u32>,
     #[prop(default = false)] active: bool,
-    // cov:ignore-stop
 ) -> impl IntoView {
     let class = if active { "j-chip is-active" } else { "j-chip" };
     view! {
@@ -178,12 +176,10 @@ pub fn BackupBanner() -> impl IntoView {
 }
 
 #[component]
-// cov:ignore-start
 pub fn Topbar(
     #[prop(into)] title: Signal<String>,
     #[prop(optional, into)] sub: Option<Signal<String>>,
     #[prop(optional)] children: Option<Children>,
-    // cov:ignore-stop
 ) -> impl IntoView {
     view! {
         <div class="j-topbar">
@@ -208,7 +204,6 @@ pub fn Topbar(
 /// Renders a `name="body"` textarea and a `name="format"` hidden input.
 /// When `show_seg` is true (default), also renders the `.j-seg` format toggle.
 #[component]
-// cov:ignore-start
 pub fn ComposerFields(
     body: RwSignal<String>,
     format: RwSignal<String>,
@@ -221,7 +216,6 @@ pub fn ComposerFields(
     /// Optional callback fired on every body input event (e.g. to clear a flash message).
     #[prop(optional)]
     on_input: Option<Callback<()>>,
-    // cov:ignore-stop
 ) -> impl IntoView {
     view! {
         <textarea
@@ -277,7 +271,6 @@ pub fn ComposerFields(
 /// The browser's `Date` does the local→UTC conversion so it honors the
 /// author's timezone and DST. Form dispatch is client-only, so the non-wasm
 /// build only needs this to compile (the stub is never executed there).
-// cov:ignore-start
 // Deliberate manual keep: this genuine helper (not a Leptos view) benefits from
 // `#[must_use]`; the crate-wide `must_use_candidate = "allow"` (Cargo.toml, #94)
 // means clippy no longer flags it, so we assert it by hand.
@@ -287,7 +280,6 @@ pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    // cov:ignore-stop
     #[cfg(target_arch = "wasm32")]
     {
         // `new Date("YYYY-MM-DDTHH:MM")` (time present, no offset) is parsed as
@@ -300,9 +292,9 @@ pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        Some(trimmed.to_string()) // cov:ignore
+        Some(trimmed.to_string())
     }
-} // cov:ignore
+}
 
 #[expect(
     clippy::needless_pass_by_value,
@@ -310,7 +302,6 @@ pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
               the borrow clippy suggests isn't expressible in a component signature"
 )]
 #[component]
-// cov:ignore-start
 pub fn PostDisplay(
     post: TimelinePostSummary,
     banner: Option<String>,
@@ -319,7 +310,6 @@ pub fn PostDisplay(
     #[prop(default = TagContext::SiteWide)]
     tag_context: TagContext,
     #[prop(optional)] children: Option<Children>,
-    // cov:ignore-stop
 ) -> impl IntoView {
     let time_label = crate::render::format_post_time(&post.published_at);
     // Built once and shared by both arms so the authored content column is the SAME
@@ -375,24 +365,19 @@ pub fn PostDisplay(
 /// client-side signal that the viewer owns this post, so its action column shows
 /// even though the anonymous seed data has `is_author = false`. `false` on the
 /// host build (no marker) — the affordance is wasm-only chrome.
-// cov:ignore-start
 fn marker_matches(author: &str) -> bool {
-    // cov:ignore-stop
     #[cfg(target_arch = "wasm32")]
     {
         crate::auth::marker::read().as_deref() == Some(author)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // cov:ignore-start
         let _ = author;
         false
-        // cov:ignore-stop
     }
-} // cov:ignore
+}
 
 #[component]
-// cov:ignore-start
 pub fn PostCard(
     post: TimelinePostSummary,
     banner: Option<String>,
@@ -401,7 +386,6 @@ pub fn PostCard(
     tag_context: TagContext,
     #[prop(optional)] on_mutate: Option<Callback<()>>,
     #[prop(optional)] on_unpublish: Option<Callback<()>>,
-    // cov:ignore-stop
 ) -> impl IntoView {
     // The seed/anonymous data has `is_author = false` (the projector paints
     // anonymous-only), so on the Local timeline the owner's own posts would show no
@@ -615,7 +599,6 @@ fn audience_checkbox(
               sub-components would fragment the page without real benefit"
 )]
 #[component]
-// cov:ignore-start
 pub fn PostCreateForm(
     compact: bool,
     #[prop(optional)] username: Option<String>,
@@ -625,7 +608,6 @@ pub fn PostCreateForm(
     /// Called on every textarea input event (compact mode only).
     #[prop(optional)]
     on_input: Option<Callback<()>>,
-    // cov:ignore-stop
 ) -> impl IntoView {
     let create_action = ServerAction::<CreatePost>::new();
     let body = RwSignal::new(String::new());
@@ -1107,18 +1089,16 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
 /// Boot-time marker read: `Some(username)` in the browser when the auth marker is
 /// set, `None` on the host build (the sidebar only ever renders in wasm). Lets the
 /// sidebar pick authed vs. anon synchronously at mount (#181), no async gate.
-// cov:ignore-start
 fn marker_username_on_boot() -> Option<String> {
-    // cov:ignore-stop
     #[cfg(target_arch = "wasm32")]
     {
         crate::auth::marker::read()
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        None // cov:ignore
+        None
     }
-} // cov:ignore
+}
 
 /// The authenticated sidebar chrome (brand, search, nav + operator admin links,
 /// sources, footer avatar). Shared by the marker-seeded initial render and the
@@ -1242,11 +1222,9 @@ pub fn normalize_tag_token(raw: &str) -> String {
               sub-components would fragment the page without real benefit"
 )]
 #[component]
-// cov:ignore-start
 pub fn TagInput(
     tags: RwSignal<Vec<TagSummary>>,
     #[prop(default = "tags")] name: &'static str,
-    // cov:ignore-stop
 ) -> impl IntoView {
     let input_text = RwSignal::new(String::new());
     let error: RwSignal<Option<String>> = RwSignal::new(None);
@@ -1467,8 +1445,40 @@ pub fn TagInput(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_valid_tag_slug, normalize_tag_token};
+    use super::{
+        is_valid_tag_slug, local_datetime_to_utc_rfc3339, marker_matches, marker_username_on_boot,
+        normalize_tag_token,
+    };
     use crate::render::{avatar_parts, format_post_time};
+
+    #[test]
+    fn local_datetime_empty_or_blank_is_none() {
+        // The empty-guard runs on the host build (publish-now → None).
+        assert_eq!(local_datetime_to_utc_rfc3339(""), None);
+        assert_eq!(local_datetime_to_utc_rfc3339("   "), None);
+    }
+
+    #[test]
+    fn local_datetime_host_arm_returns_trimmed_input() {
+        // Off-wasm the fn echoes the trimmed wall-clock string; the browser's
+        // Date-based local→UTC conversion is the wasm-only arm.
+        assert_eq!(
+            local_datetime_to_utc_rfc3339("  2026-01-02T03:04  ").as_deref(),
+            Some("2026-01-02T03:04"),
+        );
+    }
+
+    #[test]
+    fn marker_matches_is_false_off_wasm() {
+        // No auth marker exists on the host build, so the ownership affordance
+        // never shows there regardless of the author.
+        assert!(!marker_matches("anyone"));
+    }
+
+    #[test]
+    fn marker_username_on_boot_is_none_off_wasm() {
+        assert_eq!(marker_username_on_boot(), None);
+    }
 
     #[test]
     fn avatar_parts_single_word() {

@@ -81,6 +81,7 @@ pub struct ProfileUpdate<'a> {
 ///
 /// This trait defines the core interface for managing user accounts, including
 /// creation, authentication, and profile management.
+#[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait UserStorage: Send + Sync {
     /// Creates a new user account.
@@ -92,11 +93,13 @@ pub trait UserStorage: Send + Sync {
     ///
     /// Returns [`CreateUserError::UsernameTaken`] if the username exists, or
     /// [`CreateUserError::Internal`] on database failure.
-    async fn create_user(
+    // Explicit `'a` for `mockall::automock` — see
+    // `PostStorage::list_published_by_user`.
+    async fn create_user<'a>(
         &self,
         username: &Username,
         password: &Password,
-        display_name: Option<&str>,
+        display_name: Option<&'a str>,
         is_operator: bool,
     ) -> Result<i64, CreateUserError>;
 
@@ -121,13 +124,21 @@ pub trait UserStorage: Send + Sync {
     async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>>;
 
     /// Updates the display name and/or bio for a user.
-    async fn update_profile(&self, user_id: i64, update: &ProfileUpdate<'_>) -> sqlx::Result<()>;
-
-    /// Sets or clears a user's email address and verification status.
-    async fn set_email(
+    // Explicit `'a` for `mockall::automock` — see
+    // `PostStorage::list_published_by_user`.
+    async fn update_profile<'a>(
         &self,
         user_id: i64,
-        email: Option<&EmailAddress>,
+        update: &ProfileUpdate<'a>,
+    ) -> sqlx::Result<()>;
+
+    /// Sets or clears a user's email address and verification status.
+    // Explicit `'a` for `mockall::automock` — see
+    // `PostStorage::list_published_by_user`.
+    async fn set_email<'a>(
+        &self,
+        user_id: i64,
+        email: Option<&'a EmailAddress>,
         verified: bool,
     ) -> sqlx::Result<()>;
 
@@ -185,11 +196,11 @@ where
         skip(self, password, display_name),
         fields(username = %username.as_str(), db.system = DB::DB_SYSTEM)
     )]
-    async fn create_user(
+    async fn create_user<'a>(
         &self,
         username: &Username,
         password: &Password,
-        display_name: Option<&str>,
+        display_name: Option<&'a str>,
         is_operator: bool,
     ) -> Result<i64, CreateUserError> {
         let password_hash = crate::helpers::hash_password(password.clone())
@@ -353,7 +364,11 @@ where
         Ok(row.map(user_record_from_row).transpose()?)
     }
 
-    async fn update_profile(&self, user_id: i64, update: &ProfileUpdate<'_>) -> sqlx::Result<()> {
+    async fn update_profile<'a>(
+        &self,
+        user_id: i64,
+        update: &ProfileUpdate<'a>,
+    ) -> sqlx::Result<()> {
         sqlx::query("UPDATE users SET display_name = $1, bio = $2 WHERE user_id = $3")
             .bind(update.display_name)
             .bind(update.bio)
@@ -363,10 +378,10 @@ where
         Ok(())
     }
 
-    async fn set_email(
+    async fn set_email<'a>(
         &self,
         user_id: i64,
-        email: Option<&EmailAddress>,
+        email: Option<&'a EmailAddress>,
         verified: bool,
     ) -> sqlx::Result<()> {
         sqlx::query("UPDATE users SET email = $1, email_verified = $2 WHERE user_id = $3")

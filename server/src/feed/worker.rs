@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -96,7 +98,7 @@ impl FeedWorker {
         // just enqueued. A failure here must not abort the tick — the queue
         // drain below is independent — so it is logged, not propagated.
         if let Err(e) = self.go_live_pass(Utc::now()).await {
-            tracing::error!(error = %e, "feed worker go-live pass failed"); // cov:ignore
+            tracing::error!(error = %e, "feed worker go-live pass failed");
         }
 
         let claimed = match self
@@ -108,15 +110,13 @@ impl FeedWorker {
             .await
         {
             Ok(c) => c,
-            // cov:ignore-start
             Err(e) => {
                 tracing::error!(error = %e, "feed worker claim failed");
                 return;
-                // cov:ignore-stop
             }
         };
         if claimed.is_empty() {
-            return; // cov:ignore
+            return;
         }
 
         // Group by feed_url to avoid redundant regeneration
@@ -167,12 +167,12 @@ impl FeedWorker {
                     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 );
                 let _ = self.feed_events.mark_regenerated(&ids).await;
+                let item_bytes = row.body.len();
+                let duration_ms = started.elapsed().as_millis();
                 tracing::info!(
                     feed_url,
-                    // cov:ignore-start
-                    item_bytes = row.body.len(),
-                    duration_ms = started.elapsed().as_millis(),
-                    // cov:ignore-stop
+                    item_bytes = item_bytes,
+                    duration_ms = duration_ms,
                     "feed.regen.completed"
                 );
 
@@ -284,17 +284,247 @@ impl FeedWorker {
         let scheduler = tokio_cron_scheduler::JobScheduler::new().await?;
         let job = tokio_cron_scheduler::Job::new_repeated_async(
             Duration::from_secs(10),
-            // cov:ignore-start
-            move |_uuid, _lock| {
-                let worker = worker.clone();
-                Box::pin(async move {
-                    worker.tick().await;
-                })
-            },
+            // cov:ignore-start -- the closure body fires only when the 10s cron
+            // timer elapses; the work it does (spawn_tick → tick) is unit-tested
+            // directly, so only this scheduler-registration wrapper is uncovered.
+            move |_uuid, _lock| spawn_tick(worker.clone()),
         )?;
         // cov:ignore-stop
         scheduler.add(job).await?;
         scheduler.start().await?;
         Ok(scheduler)
+    }
+}
+
+/// Drives one [`FeedWorker::tick`] as an owned, boxed future — the body the cron
+/// scheduler runs on every fire. Extracted from the scheduler closure so its
+/// single meaningful statement sits on an ordinary, testable line rather than
+/// inside a closure the scheduler only ever invokes at runtime.
+fn spawn_tick(worker: Arc<FeedWorker>) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(async move {
+        worker.tick().await;
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::websub::NoopWebSubClient;
+    use common::site::SiteIdentity;
+    use storage::{FeedEventError, FeedEventRecord, FeedEventStatus};
+
+    fn event(id: i64, feed_url: &str, attempts: i32) -> FeedEventRecord {
+        let now = Utc::now();
+        FeedEventRecord {
+            id,
+            feed_url: feed_url.to_owned(),
+            status: FeedEventStatus::Claimed,
+            attempts,
+            last_error: None,
+            next_attempt_at: now,
+            claimed_at: Some(now),
+            created_at: now,
+            regenerated_at: None,
+            pinged_at: None,
+        }
+    }
+
+    fn worker(
+        site_config: storage::MockSiteConfigStorage,
+        posts: storage::MockPostStorage,
+        feed_cache: storage::MockFeedCacheStorage,
+        feed_events: storage::MockFeedEventStorage,
+    ) -> FeedWorker {
+        FeedWorker::new(
+            Arc::new(site_config),
+            Arc::new(posts),
+            Arc::new(feed_cache),
+            Arc::new(feed_events),
+            Arc::new(NoopWebSubClient),
+        )
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn tick_logs_and_returns_when_claim_fails() {
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_feed_urls_needing_catchup()
+            .times(0..)
+            .returning(|_| Ok(vec![]));
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_claim_pending_batch()
+            .times(1)
+            .returning(|_, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+        // No mark_* expectation is set: any call after the claim error would
+        // panic as an unexpected call, proving the tick returned early.
+        let w = worker(
+            storage::MockSiteConfigStorage::new(),
+            posts,
+            storage::MockFeedCacheStorage::new(),
+            events,
+        );
+        w.tick().await;
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn tick_returns_when_batch_is_empty() {
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_feed_urls_needing_catchup()
+            .times(0..)
+            .returning(|_| Ok(vec![]));
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_claim_pending_batch()
+            .times(1)
+            .returning(|_, _| Ok(vec![]));
+        let w = worker(
+            storage::MockSiteConfigStorage::new(),
+            posts,
+            storage::MockFeedCacheStorage::new(),
+            events,
+        );
+        w.tick().await;
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn tick_logs_when_go_live_pass_fails_but_still_drains() {
+        let mut posts = storage::MockPostStorage::new();
+        // Go-live pass fails; the error is logged, not propagated, and the tick
+        // continues to the (empty) queue drain.
+        posts
+            .expect_feed_urls_needing_catchup()
+            .times(1)
+            .returning(|_| Err(sqlx::Error::PoolClosed));
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_claim_pending_batch()
+            .times(1)
+            .returning(|_, _| Ok(vec![]));
+        let w = worker(
+            storage::MockSiteConfigStorage::new(),
+            posts,
+            storage::MockFeedCacheStorage::new(),
+            events,
+        );
+        w.tick().await;
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn tick_regenerates_and_completes_without_hub() {
+        let mut site_config = storage::MockSiteConfigStorage::new();
+        site_config
+            .expect_get_feeds_websub_hub_url()
+            .times(0..)
+            .returning(|| Ok(None));
+        site_config.expect_get_identity().times(0..).returning(|| {
+            Ok(SiteIdentity {
+                title: "Jaunder".to_owned(),
+                base_url: None,
+            })
+        });
+        site_config
+            .expect_get_feeds_config()
+            .times(0..)
+            .returning(|| {
+                Ok(common::feed::FeedsConfig {
+                    min_items: 10,
+                    min_days: 30,
+                    websub_hub_url: None,
+                })
+            });
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_feed_urls_needing_catchup()
+            .times(0..)
+            .returning(|_| Ok(vec![]));
+        posts
+            .expect_list_published_in_window()
+            .times(0..)
+            .returning(|_, _, _, _| Ok(vec![]));
+        let mut cache = storage::MockFeedCacheStorage::new();
+        cache.expect_upsert().times(0..).returning(|_| Ok(()));
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_claim_pending_batch()
+            .times(1)
+            .returning(|_, _| Ok(vec![event(1, "/feed.rss", 0)]));
+        events
+            .expect_mark_regenerated()
+            .times(1)
+            .returning(|_| Ok(()));
+        // No hub configured -> the tick treats the event as complete (mark_pinged).
+        events.expect_mark_pinged().times(1).returning(|_| Ok(()));
+        let w = worker(site_config, posts, cache, events);
+        w.tick().await;
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn tick_marks_exhausted_when_regen_fails_past_backoff_table() {
+        let mut site_config = storage::MockSiteConfigStorage::new();
+        site_config
+            .expect_get_feeds_websub_hub_url()
+            .times(0..)
+            .returning(|| Ok(None));
+        site_config.expect_get_identity().times(0..).returning(|| {
+            Ok(SiteIdentity {
+                title: "Jaunder".to_owned(),
+                base_url: None,
+            })
+        });
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_feed_urls_needing_catchup()
+            .times(0..)
+            .returning(|_| Ok(vec![]));
+        let mut events = storage::MockFeedEventStorage::new();
+        // An unparseable feed_url makes regenerate_feed fail immediately; the
+        // record's high attempt count pushes the next attempt past the backoff
+        // table, so the tick marks the events exhausted (terminal failure).
+        events
+            .expect_claim_pending_batch()
+            .times(1)
+            .returning(|_, _| Ok(vec![event(1, "not-a-feed-url", 10)]));
+        events
+            .expect_mark_exhausted()
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let w = worker(
+            site_config,
+            posts,
+            storage::MockFeedCacheStorage::new(),
+            events,
+        );
+        w.tick().await;
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn spawn_tick_drives_one_tick() {
+        // The scheduler-closure body: `spawn_tick` boxes a future that runs a
+        // single tick. Awaiting it exercises the same code the cron job fires.
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_feed_urls_needing_catchup()
+            .times(0..)
+            .returning(|_| Ok(vec![]));
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_claim_pending_batch()
+            .times(1)
+            .returning(|_, _| Ok(vec![]));
+        let w = worker(
+            storage::MockSiteConfigStorage::new(),
+            posts,
+            storage::MockFeedCacheStorage::new(),
+            events,
+        );
+        spawn_tick(Arc::new(w)).await;
     }
 }

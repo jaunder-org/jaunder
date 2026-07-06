@@ -4,27 +4,23 @@ use common::username::Username;
 use jaunder::cli::{Cli, Commands};
 
 #[tokio::main]
-// cov:ignore-start
 async fn main() -> anyhow::Result<()> {
-    // cov:ignore-stop
     // Fail-closed: a production binary must never link a `common` compiled with
     // cheap test KDF params. Feature isolation (resolver 2, dev-deps only) keeps
     // this false in production; if it is ever true, refuse to start rather than
     // hash passwords weakly. main() is never run by the integration tests, so this
     // does not affect the test build.
-    // cov:ignore-start
     if common::CHEAP_KDF_ENABLED {
         eprintln!(
-            // cov:ignore-stop
             "FATAL: jaunder built with cheap-kdf (test-only password hashing); refusing to start"
         );
-        // cov:ignore-start
         std::process::exit(1);
-    }
+    } // cov:ignore process::exit(1) above diverges, so this closing brace is unreachable
+      // cov:ignore-start
     let cli = Cli::parse();
     run(cli).await
+    // cov:ignore-stop
 }
-// cov:ignore-stop
 
 /// Executes the application logic based on the provided CLI arguments.
 ///
@@ -37,8 +33,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         // clap's built-in help/usage, which prints and exits.
         // cov:ignore-start
         Cli::parse_from(["jaunder", "--help"]);
-        unreachable!()
         // cov:ignore-stop
+        unreachable!("Cli::parse_from([\"jaunder\", \"--help\"]) prints help and exits the process")
     };
     // `run` owns telemetry for *every* command, `serve` included: one guard,
     // held across the whole dispatch, whose Drop flushes the OTLP exporters
@@ -117,18 +113,14 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             jaunder::commands::cmd_smtp_test(&storage, &to).await?;
         }
         Commands::Backup {
-            // cov:ignore-start
             storage,
             mode,
             path,
-            // cov:ignore-stop
         } => {
-            jaunder::commands::cmd_backup(&storage, mode.into(), path).await?; // cov:ignore
+            jaunder::commands::cmd_backup(&storage, mode.into(), path).await?;
         }
-        // cov:ignore-start
         Commands::Restore { storage, path } => {
             jaunder::commands::cmd_restore(&storage, &path).await?;
-            // cov:ignore-stop
         }
     }
     Ok(())
@@ -137,7 +129,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jaunder::cli::{Cli, Commands, PgBootstrapArgs, StorageArgs};
+    use jaunder::cli::{Cli, CliBackupMode, Commands, PgBootstrapArgs, StorageArgs};
     use tempfile::TempDir;
 
     fn test_storage_args(base: &TempDir) -> StorageArgs {
@@ -439,5 +431,83 @@ mod tests {
 
         // Verify that the database was created by auto-init.
         assert!(base.path().join("test.db").exists());
+    }
+
+    #[tokio::test]
+    async fn run_backup_creates_artifact() {
+        let base = TempDir::new().unwrap();
+        let storage = test_storage_args(&base);
+        run(Cli {
+            command: Some(Commands::Init {
+                storage: storage.clone(),
+                skip_if_exists: false,
+            }),
+            verbose: false,
+        })
+        .await
+        .unwrap();
+
+        // `cmd_backup` creates the artifact itself, so no prior backup is needed.
+        let backup_path = base.path().join("backup");
+        run(Cli {
+            command: Some(Commands::Backup {
+                storage,
+                mode: CliBackupMode::Directory,
+                path: Some(backup_path.clone()),
+            }),
+            verbose: false,
+        })
+        .await
+        .expect("backup dispatch should succeed");
+        assert!(backup_path.exists());
+    }
+
+    #[tokio::test]
+    async fn run_restore_from_backup() {
+        // Produce a backup from an initialized source storage...
+        let source_base = TempDir::new().unwrap();
+        let source = test_storage_args(&source_base);
+        run(Cli {
+            command: Some(Commands::Init {
+                storage: source.clone(),
+                skip_if_exists: false,
+            }),
+            verbose: false,
+        })
+        .await
+        .unwrap();
+        let backup_path = source_base.path().join("backup");
+        run(Cli {
+            command: Some(Commands::Backup {
+                storage: source,
+                mode: CliBackupMode::Directory,
+                path: Some(backup_path.clone()),
+            }),
+            verbose: false,
+        })
+        .await
+        .unwrap();
+
+        // ...then restore it into a fresh (empty) target storage.
+        let target_base = TempDir::new().unwrap();
+        let target = test_storage_args(&target_base);
+        run(Cli {
+            command: Some(Commands::Init {
+                storage: target.clone(),
+                skip_if_exists: false,
+            }),
+            verbose: false,
+        })
+        .await
+        .unwrap();
+        run(Cli {
+            command: Some(Commands::Restore {
+                storage: target,
+                path: backup_path,
+            }),
+            verbose: false,
+        })
+        .await
+        .expect("restore dispatch should succeed");
     }
 }

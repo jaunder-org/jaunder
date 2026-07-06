@@ -191,7 +191,7 @@ async fn export_directory_backup(
         options.media_path,
         &options.destination_path.join("media"),
         previous_backup.as_deref(),
-    )?; // cov:ignore
+    )?;
 
     write_manifest(options.destination_path, &manifest)?;
     Ok(manifest)
@@ -451,11 +451,15 @@ fn restore_media_entries(
             fs::create_dir_all(&destination_path)?;
             restore_media_entries(source_root, destination_root, &child_relative_path)?;
         } else if metadata.is_file() {
-            if let Some(parent) = destination_path.parent() {
-                fs::create_dir_all(parent)?;
-            } // cov:ignore
+            let Some(parent) = destination_path.parent() else {
+                unreachable!("a joined destination path always has a parent")
+            };
+            fs::create_dir_all(parent)?;
             fs::copy(source_path, destination_path)?;
-        } // cov:ignore
+        }
+        // Entries that are neither a directory nor a regular file (sockets,
+        // FIFOs, devices, broken symlinks whose target vanished) are silently
+        // skipped — media backups only carry regular files.
     }
     Ok(())
 }
@@ -497,17 +501,15 @@ fn mirror_media_entries(
                 destination_root,
                 previous_backup,
                 &child_relative_path,
-            )?; // cov:ignore
+            )?;
         } else if metadata.is_file() {
             copy_or_link_media_file(
                 &source_path,
                 &destination_path,
                 previous_backup,
                 &child_relative_path,
-                // cov:ignore-start
             )?;
-        }
-        // cov:ignore-stop
+        } // cov:ignore is_file arm's closing brace; llvm-cov leaves it unmarked though the arm's copy-success and `?`-failure paths are both tested
     }
     Ok(())
 }
@@ -518,9 +520,10 @@ fn copy_or_link_media_file(
     previous_backup: Option<&Path>,
     relative_path: &Path,
 ) -> Result<(), BackupError> {
-    if let Some(parent) = destination_path.parent() {
-        fs::create_dir_all(parent)?;
-    } // cov:ignore
+    let Some(parent) = destination_path.parent() else {
+        unreachable!("a joined destination path always has a parent")
+    };
+    fs::create_dir_all(parent)?;
 
     // Deduplicate against the previous backup: when this file is byte-identical
     // to its counterpart there, hard-link to that copy instead of writing a new
@@ -560,7 +563,7 @@ fn file_sha256(path: &Path) -> Result<[u8; 32], BackupError> {
 
 fn previous_directory_backup(destination_path: &Path) -> Result<Option<PathBuf>, BackupError> {
     let Some(parent) = destination_path.parent() else {
-        return Ok(None); // cov:ignore
+        return Ok(None);
     };
     if !parent.exists() {
         return Ok(None);
@@ -591,7 +594,24 @@ mod tests {
     // module, so `#[expect]` self-removes if the names ever diverge. (#94)
     #![expect(clippy::similar_names)]
     use super::*;
+    use crate::test_support::{backends, recorded_postgres_url, sqlite_only, sqlite_url, Backend};
+    use rstest::*;
+    use rstest_reuse::*;
+    use std::str::FromStr;
     use tempfile::TempDir;
+
+    /// The [`DbConnectOptions`] addressing the database behind a backend's
+    /// [`Backend::setup`] test env, so a backend-parametric backup test can drive
+    /// the public `export_backup`/`restore_backup` API against either backend.
+    fn backup_db_options(
+        backend: Backend,
+        base: &TempDir,
+    ) -> Result<DbConnectOptions, BackupError> {
+        Ok(match backend {
+            Backend::Sqlite => sqlite_url(base),
+            Backend::Postgres => DbConnectOptions::from_str(&recorded_postgres_url(base))?,
+        })
+    }
 
     fn quote_test_identifier(identifier: &str) -> String {
         format!("\"{identifier}\"")
@@ -703,7 +723,8 @@ mod tests {
         fs::write(
             previous.join("media").join("nested").join("image.txt"),
             "same",
-        )?; // cov:ignore
+        )
+        .expect("write previous nested media file");
 
         mirror_media_directory(&source, &destination, Some(&previous))?;
 
@@ -731,7 +752,82 @@ mod tests {
         assert!(!files_have_same_content(
             &source.join("image.txt"),
             &previous.join("media").join("image.txt")
-        )?); // cov:ignore
+        )
+        .expect("compare source and previous media files"));
+        Ok(())
+    }
+
+    #[test]
+    fn mirror_media_propagates_copy_failure() -> Result<(), BackupError> {
+        // Structural (root-immune) fs failure: pre-create the destination file
+        // path as a *directory* so `fs::copy` into it fails with EISDIR. The
+        // error propagates out of `copy_or_link_media_file` and back up through
+        // the recursive `mirror_media_entries` call — both `?` arms that were
+        // previously cov:ignored.
+        let temp = TempDir::new()?;
+        let source = temp.path().join("source");
+        let destination = temp.path().join("destination");
+        fs::create_dir_all(source.join("dir1"))?;
+        fs::write(source.join("dir1").join("file.txt"), "x")?;
+        // A directory sitting where the copied file must be written.
+        fs::create_dir_all(destination.join("dir1").join("file.txt"))?;
+
+        let error = mirror_media_directory(&source, &destination, None)
+            .expect_err("copying onto a directory must fail");
+        assert!(matches!(error, BackupError::Io(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn restore_media_skips_non_regular_entries() -> Result<(), BackupError> {
+        // A Unix-domain socket is neither a directory nor a regular file, so the
+        // restore walk takes the fallthrough arm (previously cov:ignored) and
+        // silently skips it, while a sibling regular file still copies.
+        let temp = TempDir::new()?;
+        let source = temp.path().join("source");
+        let destination = temp.path().join("destination");
+        fs::create_dir_all(&source)?;
+        let _listener =
+            std::os::unix::net::UnixListener::bind(source.join("sock")).expect("bind unix socket");
+        fs::write(source.join("real.txt"), "keep")?;
+
+        restore_media_directory(&source, &destination)?;
+
+        assert_eq!(fs::read_to_string(destination.join("real.txt"))?, "keep");
+        assert!(
+            !destination.join("sock").exists(),
+            "a non-regular entry must not be copied"
+        );
+        Ok(())
+    }
+
+    #[apply(sqlite_only)]
+    #[tokio::test]
+    async fn export_propagates_media_mirror_failure(
+        #[case] backend: Backend,
+        // reason: the media-mirror `?` propagation in `export_directory_backup` is
+        // backend-independent filesystem code; SQLite exercises it fully.
+    ) -> Result<(), BackupError> {
+        let source = backend.setup().await;
+        let temp = TempDir::new()?;
+        // A *regular file* where a media directory is expected: `mirror` calls
+        // `fs::read_dir` on it, which fails with ENOTDIR. That structural error
+        // propagates out of `mirror_media_directory` and through the
+        // `export_directory_backup` `?` that was cov:ignored.
+        let media = temp.path().join("media-not-a-dir");
+        fs::write(&media, "not a directory")?;
+        let backup = temp.path().join("backup");
+        let source_db = backup_db_options(backend, &source.base)?;
+
+        let error = export_backup(BackupExportOptions {
+            database: &source_db,
+            media_path: &media,
+            destination_path: &backup,
+            mode: BackupMode::Directory,
+        })
+        .await
+        .expect_err("a dangling media symlink must fail the export");
+        assert!(matches!(error, BackupError::Io(_)));
         Ok(())
     }
 
@@ -751,6 +847,14 @@ mod tests {
         let temp = TempDir::new()?;
         let destination = temp.path().join("nonexistent_parent").join("backup");
         assert_eq!(previous_directory_backup(&destination)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn previous_directory_backup_returns_none_for_parentless_path() -> Result<(), BackupError> {
+        // The filesystem root has no parent, so there is no sibling directory to
+        // source a previous backup from.
+        assert_eq!(previous_directory_backup(Path::new("/"))?, None);
         Ok(())
     }
 
@@ -844,7 +948,8 @@ mod tests {
         fs::write(
             db.join("users.ndjson"),
             "{\"user_id\":1}\n\n{\"user_id\":2}\n",
-        )?; // cov:ignore
+        )
+        .expect("write users.ndjson fixture");
 
         let rows = read_table_rows(temp.path(), "users")?;
         assert_eq!(rows.len(), 2);
@@ -922,6 +1027,87 @@ mod tests {
             fs::read_to_string(destination.join("nested").join("avatar.txt"))?,
             "image"
         );
+        Ok(())
+    }
+    // Both backends' restore path shares the ragged-NDJSON contract: a row that
+    // omits a column present in row 0 is rejected as `InvalidBackup`, and the
+    // failed import rolls the restore transaction back. One `#[apply(backends)]`
+    // test covers the SQLite and PostgreSQL `import_table` missing-column arms
+    // plus the PostgreSQL `restore_database` rollback arm.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn restore_rejects_row_missing_a_column(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let source = backend.setup().await;
+        // Two users so the exported users.ndjson has a later row to corrupt while
+        // leaving row 0 (which seeds `column_names`) complete.
+        for username in ["userone", "usertwo"] {
+            source
+                .state
+                .users
+                .create_user(
+                    &username.parse().expect("valid username"),
+                    &"password123".parse().expect("valid password"),
+                    None,
+                    false,
+                )
+                .await
+                .expect("seed user");
+        }
+
+        let temp = TempDir::new()?;
+        let media = temp.path().join("media");
+        fs::create_dir_all(&media)?;
+        // A regular media file so the export mirrors it through the `is_file`
+        // success branch (not just the empty-dir / failure paths).
+        fs::write(media.join("avatar.txt"), b"img")?;
+        let backup = temp.path().join("backup");
+
+        let source_db = backup_db_options(backend, &source.base)?;
+        export_backup(BackupExportOptions {
+            database: &source_db,
+            media_path: &media,
+            destination_path: &backup,
+            mode: BackupMode::Directory,
+        })
+        .await?;
+
+        // Drop a column from the last exported user row: row 0 still carries every
+        // column (so `column_names` includes it), but the last row omits it, so the
+        // per-row bind trips the missing-column check during restore.
+        let users_ndjson = backup.join("db").join("users.ndjson");
+        let mut rows: Vec<serde_json::Map<String, serde_json::Value>> =
+            fs::read_to_string(&users_ndjson)?
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(serde_json::from_str)
+                .collect::<Result<_, _>>()?;
+        assert!(rows.len() >= 2, "expected at least two exported user rows");
+        let victim = rows[0]
+            .keys()
+            .next()
+            .expect("exported row has columns")
+            .clone();
+        rows.last_mut().expect("non-empty rows").remove(&victim);
+        let mut corrupted = String::new();
+        for row in &rows {
+            corrupted.push_str(&serde_json::to_string(row)?);
+            corrupted.push('\n');
+        }
+        fs::write(&users_ndjson, corrupted)?;
+
+        let target = backend.setup().await;
+        let target_db = backup_db_options(backend, &target.base)?;
+        let error = restore_backup(BackupRestoreOptions {
+            database: &target_db,
+            media_path: &temp.path().join("restored-media"),
+            source_path: &backup,
+        })
+        .await
+        .expect_err("restore should reject a row missing a column");
+
+        assert!(matches!(error, BackupError::InvalidBackup(_)));
         Ok(())
     }
 }
