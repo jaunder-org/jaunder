@@ -6,7 +6,6 @@ use leptos::prelude::*;
 
 /// Email settings page — shows current email and verification status;
 /// form to submit a new email address for verification.
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn EmailPage() -> impl IntoView {
     let request_action = ServerAction::<RequestEmailVerification>::new();

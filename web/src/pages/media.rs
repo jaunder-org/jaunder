@@ -23,7 +23,6 @@ fn format_bytes(bytes: i64) -> String {
     }
 }
 
-#[allow(clippy::must_use_candidate)]
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::cast_precision_loss)]
 #[component]

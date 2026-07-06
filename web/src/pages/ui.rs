@@ -25,7 +25,6 @@ pub use crate::render::TagCtx as TagContext;
 /// (kept markup-equivalent to [`crate::render::render_tag_list`], the anonymous /
 /// projector path). See [`TagContext`] for the linking behavior.
 #[allow(clippy::needless_pass_by_value)]
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn TagList(tags: Vec<TagSummary>, context: TagContext) -> impl IntoView {
     if tags.is_empty() {
@@ -70,7 +69,6 @@ pub use crate::render::Icons;
 
 // ─── 3.1 Icon ─────────────────────────────────────────────────
 
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoView {
     view! {
@@ -93,7 +91,6 @@ pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoVie
 // ─── 3.2 Avatar ───────────────────────────────────────────────
 
 #[allow(clippy::needless_pass_by_value)]
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
     let (initials, hue) = crate::render::avatar_parts(&name);
@@ -114,7 +111,6 @@ pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
 // ─── 3.3 Dot ──────────────────────────────────────────────────
 
 #[allow(clippy::needless_pass_by_value)]
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Dot(proto: String) -> impl IntoView {
     let style = format!("background: var(--c-{proto})");
@@ -123,7 +119,6 @@ pub fn Dot(proto: String) -> impl IntoView {
 
 // ─── 3.4 Chip ─────────────────────────────────────────────────
 
-#[allow(clippy::must_use_candidate)]
 #[component]
 // cov:ignore-start
 pub fn Chip(
@@ -144,7 +139,6 @@ pub fn Chip(
 
 // ─── 3.5 Topbar ───────────────────────────────────────────────
 
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn BackupBanner() -> impl IntoView {
     let visible = crate::server_resource(|| (), |()| backup_warning_visible());
@@ -172,7 +166,6 @@ pub fn BackupBanner() -> impl IntoView {
     }
 }
 
-#[allow(clippy::must_use_candidate)]
 #[component]
 // cov:ignore-start
 pub fn Topbar(
@@ -203,7 +196,6 @@ pub fn Topbar(
 ///
 /// Renders a `name="body"` textarea and a `name="format"` hidden input.
 /// When `show_seg` is true (default), also renders the `.j-seg` format toggle.
-#[allow(clippy::must_use_candidate)]
 #[component]
 // cov:ignore-start
 pub fn ComposerFields(
@@ -274,8 +266,11 @@ pub fn ComposerFields(
 /// The browser's `Date` does the local→UTC conversion so it honors the
 /// author's timezone and DST. Form dispatch is client-only, so the non-wasm
 /// build only needs this to compile (the stub is never executed there).
-#[allow(clippy::must_use_candidate)]
 // cov:ignore-start
+// Deliberate manual keep: this genuine helper (not a Leptos view) benefits from
+// `#[must_use]`; the crate-wide `must_use_candidate = "allow"` (Cargo.toml, #94)
+// means clippy no longer flags it, so we assert it by hand.
+#[must_use]
 pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
     let trimmed = local.trim();
     if trimmed.is_empty() {
@@ -299,7 +294,6 @@ pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
 } // cov:ignore
 
 #[allow(clippy::needless_pass_by_value)]
-#[allow(clippy::must_use_candidate)]
 #[component]
 // cov:ignore-start
 pub fn PostDisplay(
@@ -382,7 +376,6 @@ fn marker_matches(author: &str) -> bool {
     }
 } // cov:ignore
 
-#[allow(clippy::must_use_candidate)]
 #[component]
 // cov:ignore-start
 pub fn PostCard(
@@ -488,7 +481,6 @@ pub fn PostCard(
 /// is author-only and the storage layer drops any named selection for it
 /// (see `audience_selection_to_targets`); the named checkboxes are disabled
 /// while Private is chosen to make that explicit.
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
     // SSR-resolved Resources serialize their value to the client and are not
@@ -603,7 +595,6 @@ fn audience_checkbox(
 // ─── 3.7 PostCreateForm ───────────────────────────────────────
 
 #[allow(clippy::too_many_lines)]
-#[allow(clippy::must_use_candidate)]
 #[component]
 // cov:ignore-start
 pub fn PostCreateForm(
@@ -933,7 +924,6 @@ pub fn PostCreateForm(
 
 // ─── 3.8 InlineComposer ───────────────────────────────────────
 
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {
     let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
@@ -1036,7 +1026,6 @@ fn SidebarSource(proto: &'static str, name: &'static str, sub: &'static str) -> 
 /// The left navigation sidebar. Reads theme and current-user from context.
 /// `active`: the key of the currently active nav item (e.g. `"home"`).
 #[allow(clippy::too_many_lines)]
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     let active_key = active.unwrap_or_default();
@@ -1233,7 +1222,6 @@ pub fn normalize_tag_token(raw: &str) -> String {
 /// on an empty field removes the last chip; `ArrowUp`/`ArrowDown` navigate
 /// the autocomplete dropdown; `Escape` closes it.
 #[allow(clippy::too_many_lines)]
-#[allow(clippy::must_use_candidate)]
 #[component]
 // cov:ignore-start
 pub fn TagInput(

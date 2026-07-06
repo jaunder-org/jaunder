@@ -14,7 +14,6 @@ use crate::pages::timeline::{TimelineRows, TimelineState, PAGE_SIZE};
 use crate::pages::ui::{InlineComposer, Topbar};
 use crate::posts::list_home_feed;
 
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn CockpitPage() -> impl IntoView {
     let state = TimelineState::default();

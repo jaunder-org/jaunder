@@ -5,7 +5,6 @@ use leptos::prelude::*;
 ///
 /// `on_uploaded` is called with the media URL string on success.
 /// `on_error` is called with a human-readable message on failure.
-#[allow(clippy::must_use_candidate)]
 #[allow(unused_variables)]
 #[component]
 // cov:ignore-start
@@ -82,7 +81,6 @@ pub fn MediaUploadButton(
 
 /// Self-contained media upload widget: button, uploaded-URL display, and error.
 /// Drop this into any `ActionForm` aside that needs media upload.
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn MediaPanel() -> impl IntoView {
     let last_media_url = RwSignal::new(Option::<String>::None);

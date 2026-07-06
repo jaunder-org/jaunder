@@ -4,7 +4,6 @@ use crate::profile::{get_default_post_format, get_profile, SetDefaultPostFormat,
 use leptos::prelude::*;
 
 /// Profile page — shows username, display name, bio; allows updating.
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn ProfilePage() -> impl IntoView {
     let update_action = ServerAction::<UpdateProfile>::new();
@@ -63,7 +62,6 @@ pub fn ProfilePage() -> impl IntoView {
 }
 
 /// Control for setting the user's default post format preference.
-#[allow(clippy::must_use_candidate)]
 #[component]
 fn DefaultPostFormatControl() -> impl IntoView {
     let action = ServerAction::<SetDefaultPostFormat>::new();

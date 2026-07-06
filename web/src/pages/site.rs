@@ -4,7 +4,6 @@ use crate::site::{get_site_identity, UpdateSiteIdentity};
 use common::site::SiteIdentity;
 use leptos::prelude::*;
 
-#[allow(clippy::must_use_candidate)]
 #[component]
 pub fn SiteSettingsPage() -> impl IntoView {
     let update_action = ServerAction::<UpdateSiteIdentity>::new();

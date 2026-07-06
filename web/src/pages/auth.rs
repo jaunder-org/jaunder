@@ -5,7 +5,6 @@ use leptos::prelude::*;
 
 /// Registration page.
 #[component]
-#[allow(clippy::must_use_candidate)]
 pub fn RegisterPage() -> impl IntoView {
     let register_action = ServerAction::<Register>::new();
     let policy = crate::server_resource(|| (), |()| get_registration_policy());
@@ -97,7 +96,6 @@ pub fn RegisterPage() -> impl IntoView {
 
 /// Login page.
 #[component]
-#[allow(clippy::must_use_candidate)]
 pub fn LoginPage() -> impl IntoView {
     let login_action = ServerAction::<Login>::new();
     let username = RwSignal::new(String::new());
@@ -167,7 +165,6 @@ pub fn LoginPage() -> impl IntoView {
 
 /// Logout page — fires the logout server action on mount.
 #[component]
-#[allow(clippy::must_use_candidate)]
 pub fn LogoutPage() -> impl IntoView {
     let logout_action = ServerAction::<Logout>::new();
 
