@@ -6,7 +6,11 @@ use crate::{
 };
 use leptos::prelude::*;
 
-#[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "byte counts < 2^52 convert to f64 exactly; larger values only affect a \
+              human-readable one-decimal display, so any loss is immaterial"
+)]
 fn format_bytes(bytes: i64) -> String {
     const KB: i64 = 1_024;
     const MB: i64 = 1_024 * KB;
@@ -24,7 +28,6 @@ fn format_bytes(bytes: i64) -> String {
 }
 
 #[allow(clippy::too_many_lines)]
-#[allow(clippy::cast_precision_loss)]
 #[component]
 pub fn MediaPage() -> impl IntoView {
     let delete_action = ServerAction::<DeleteMedia>::new();
@@ -62,6 +65,12 @@ pub fn MediaPage() -> impl IntoView {
                 {move || Suspend::new(async move {
                     match usage.await {
                         Ok(u) => {
+                            #[expect(
+                                clippy::cast_precision_loss,
+                                reason = "display-only storage-usage percentage; byte \
+                                          counts < 2^52 are exact in f64 and the result \
+                                          is clamped to 100"
+                            )]
                             let pct = if u.quota_bytes > 0 {
                                 (u.used_bytes as f64 / u.quota_bytes as f64 * 100.0).min(100.0)
                             } else {

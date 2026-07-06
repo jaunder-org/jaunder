@@ -94,10 +94,9 @@ pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoVie
 #[component]
 pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
     let (initials, hue) = crate::render::avatar_parts(&name);
-    #[allow(clippy::cast_precision_loss)]
-    #[allow(clippy::cast_possible_truncation)]
-    #[allow(clippy::cast_sign_loss)]
-    let font_size = (size as f32 * 0.36).round() as u32;
+    // Integer equivalent of `(size as f32 * 0.36).round()`; must match
+    // `render::render_avatar` so SSR and reactive output coincide.
+    let font_size = (size * 36 + 50) / 100;
     let style = format!(
         "width:{size}px;height:{size}px;background:oklch(0.58 0.07 {hue});font-size:{font_size}px"
     );
@@ -601,7 +600,7 @@ pub fn PostCreateForm(
     compact: bool,
     #[prop(optional)] username: Option<String>,
     #[prop(into)] on_success: Callback<CreatePostResult>,
-    #[prop(default = 6)] rows: usize,
+    #[prop(default = 6)] rows: u32,
     #[prop(default = "What\u{2019}s on your mind?")] placeholder: &'static str,
     /// Called on every textarea input event (compact mode only).
     #[prop(optional)]
@@ -653,9 +652,6 @@ pub fn PostCreateForm(
     #[cfg(not(target_arch = "wasm32"))]
     let _ = on_success;
 
-    #[allow(clippy::cast_possible_truncation)]
-    let rows_u32 = rows as u32;
-
     if compact {
         let dispatch_save = move |_| {
             create_action.dispatch(CreatePost {
@@ -688,7 +684,7 @@ pub fn PostCreateForm(
                     <ComposerFields
                         body=body
                         format=format
-                        rows=rows_u32
+                        rows=rows
                         placeholder=placeholder
                         textarea_class=""
                         show_seg=false
@@ -793,7 +789,7 @@ pub fn PostCreateForm(
                     <ComposerFields
                         body=body
                         format=format
-                        rows=rows_u32
+                        rows=rows
                         placeholder=placeholder
                         show_seg=false
                     />
