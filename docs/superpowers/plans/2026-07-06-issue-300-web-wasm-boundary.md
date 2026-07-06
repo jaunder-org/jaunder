@@ -83,7 +83,7 @@ _Every task's requirements implicitly include these (spec §Acceptance / project
 
 **Files:** none (GitHub tracker only).
 
-- [ ] **Step 1:** File the Direction B (crate split) follow-on issue via
+- [x] **Step 1:** File the Direction B (crate split) follow-on issue via
       **jaunder-issues** in `jaunder-org/jaunder`. Body: summarize spec
       §Approach Direction B — split `web` into a shared pure crate (`render` +
       helpers, both targets, host-tested/measured), a server-fn API crate
@@ -92,15 +92,16 @@ _Every task's requirements implicitly include these (spec §Acceptance / project
       `#[server]` arg-list restructuring, and relates ADR-0040/0044/0050/0051 +
       this issue's ADR (Task 2). Label `tooling`; milestone "Code quality
       improvement".
-- [ ] **Step 2:** Edit issue #300's body — amend the Acceptance section: remove
+- [x] **Step 2:** Edit issue #300's body — amend the Acceptance section: remove
       the `too_many_arguments` criterion and add a line "The 2
       `too_many_arguments` suppressions are out of scope; owned by #299." (per
       spec §Corrections).
-- [ ] **Step 3:** Add a comment to #299 noting it owns the
+- [x] **Step 3:** Add a comment to #299 noting it owns the
       `create_post`/`update_post` arg restructuring + the `input = Json`
       wire-shape constraint, referenced from #300.
-- [ ] **Step 4: Commit** — no code changed; this is a tracker-only task, nothing
-      to commit. Record completion by ticking the boxes.
+- [x] **Step 4: Commit** — no code changed; this is a tracker-only task, nothing
+      to commit. Record completion by ticking the boxes. (B filed as #303 with
+      native `blocked-by #300`; #300/#299 reconciled via comments.)
 
 ---
 
@@ -115,7 +116,7 @@ _Every task's requirements implicitly include these (spec §Acceptance / project
 
 - Produces: an ADR the spec (AC#9) and the Task 1 issues reference.
 
-- [ ] **Step 1:** Write the ADR via **jaunder-adr**. Content: the `web`
+- [x] **Step 1:** Write the ADR via **jaunder-adr**. Content: the `web`
       host/wasm boundary is **module-level**, not line-level — `pages/` (the
       Leptos UI) compiles wasm-only; pure logic lives in host-compiled homes
       (`render`, `tags`, `auth::marker`); `#[server]` fn definitions and
@@ -125,14 +126,13 @@ _Every task's requirements implicitly include these (spec §Acceptance / project
       pass keeps wasm-only code linted. The crate split (Direction B) is
       deferred to its follow-on issue (Task 1). Status: Accepted. Relates
       ADR-0040, ADR-0044, ADR-0050, ADR-0051/#268.
-- [ ] **Step 2:** Verify the draft renders and follows the ADR template
+- [x] **Step 2:** Verify the draft renders and follows the ADR template
       (`docs/adr/` conventions). No promotion now — that happens at ship.
-- [ ] **Step 3: Commit**
-
-```bash
-git add docs/adr/drafts/web-host-wasm-boundary-module-level.md
-git commit -m "docs(adr): draft module-level web host/wasm boundary (#300)"
-```
+- [x] **Step 3: No commit** — CORRECTION: `docs/adr/drafts/` is **gitignored**
+      (except `README.md`) per ADR-0048/the drafts README; a draft carries no
+      number and is never committed. It lives out-of-git until
+      `cargo xtask adr promote` numbers + moves + stages it at ship
+      (**jaunder-ship**). Nothing to commit here.
 
 ---
 
@@ -154,31 +154,31 @@ git commit -m "docs(adr): draft module-level web host/wasm boundary (#300)"
   `common::tag::Tag::from_str` without pulling `common` into WASM" doc stays
   accurate — `tags` is a `web` module, not `common`).
 
-- [ ] **Step 1:** Move `is_valid_tag_slug` and `normalize_tag_token` (with
+- [x] **Step 1:** Move `is_valid_tag_slug` and `normalize_tag_token` (with
       `#[must_use]` + doc-comments) verbatim from `ui.rs` into
       `web/src/tags/mod.rs`.
-- [ ] **Step 2:** Move their tests — the 9 `is_valid_tag_slug` cases
+- [x] **Step 2:** Move their tests — the 9 `is_valid_tag_slug` cases
       (`ui.rs:1555-1602`) and the 4 `normalize_tag_token` cases
       (`ui.rs:1605-1627`, incl. `normalize_then_is_valid`) — into a
       `#[cfg(test)] mod tests` in `tags/mod.rs`, importing
       `use super::{is_valid_tag_slug, normalize_tag_token};`.
-- [ ] **Step 3:** In `ui.rs`, repoint the `TagInput` call sites
+- [x] **Step 3:** In `ui.rs`, repoint the `TagInput` call sites
       (`normalize_tag_token(&input_text.get())` at :1305,
       `is_valid_tag_slug(&text)` at :1310) to `crate::tags::normalize_tag_token`
       / `crate::tags::is_valid_tag_slug`, and drop the moved fns/tests + the
       now-stale imports in the `ui.rs` test module.
-- [ ] **Step 4: Run tests, verify PASS in new home**
+- [x] **Step 4: Run tests, verify PASS in new home**
 
 Run: `cargo nextest run -p web tags::` Expected: PASS — 13 relocated tests run
 under `tags::tests::…`.
 
-- [ ] **Step 5: Verify no duplication / host build intact**
+- [x] **Step 5: Verify no duplication / host build intact**
 
 Run: `cargo build -p web` and
 `rg 'fn is_valid_tag_slug|fn normalize_tag_token' web/src` → each defined
 **once** (in `tags/mod.rs`). Expected: builds clean; single definition each.
 
-- [ ] **Step 6: Commit** (`cargo xtask check` first)
+- [x] **Step 6: Commit** (`cargo xtask check` first)
 
 ```bash
 git add web/src/pages/ui.rs web/src/tags/mod.rs
@@ -201,23 +201,26 @@ git commit -m "refactor(web): relocate tag-slug helpers to web::tags (#300)"
 - Produces: `web::render::format_bytes(bytes: i64) -> String` (signature + the
   `cast_precision_loss` `#[expect]` reason unchanged).
 
-- [ ] **Step 1:** Move `format_bytes` (with its
+- [x] **Step 1:** Move `format_bytes` (with its
       `#[expect(clippy::cast_precision_loss, …)]` attribute) verbatim from
       `media.rs` into `render/mod.rs`. Make it `pub` (crate-internal use).
-- [ ] **Step 2:** Move the 4 `format_bytes_*` tests (`media.rs:220-240`) into
+- [x] **Step 2:** Move the 4 `format_bytes_*` tests (`media.rs:220-240`) into
       `render/mod.rs`'s test module, importing `super::format_bytes`.
-- [ ] **Step 3:** In `media.rs`, repoint `render_media_row`'s
+- [x] **Step 3:** In `media.rs`, repoint `render_media_row`'s
       `format_bytes(...)` call to `crate::render::format_bytes`; remove the
       moved fn + `mod tests`.
-- [ ] **Step 4: Run tests, verify PASS**
+- [x] **Step 4: Run tests, verify PASS**
 
 Run: `cargo nextest run -p web render::` Expected: PASS — the 4 `format_bytes_*`
 tests run under `render::tests::…`.
 
-- [ ] **Step 5: Verify** `cargo build -p web` clean;
+- [x] **Step 5: Verify** `cargo build -p web` clean;
       `rg 'fn format_bytes' web/src` → single definition in `render/mod.rs`.
 
-- [ ] **Step 6: Commit** (`cargo xtask check` first)
+- [x] **Step 6: Commit** (`cargo xtask check` first) — NOTE: committed together
+      with Task 3 in one `refactor(web): relocate pure helpers to host homes`
+      commit (the git-add hook auto-stages all tracked edits, so Task 3 + Task 4
+      landed as one reviewable relocation diff).
 
 ```bash
 git add web/src/pages/media.rs web/src/render/mod.rs

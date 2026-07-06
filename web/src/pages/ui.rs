@@ -1181,30 +1181,6 @@ fn authed_sidebar(active_key: &str, username: &str, is_operator: bool) -> impl I
     // cov:ignore-stop
 } // cov:ignore
 
-// ─── Pure helpers for TagInput ────────────────────────────────
-
-/// Returns `true` when `s` is a valid tag slug: non-empty, first char
-/// `[a-z0-9]`, remaining chars `[a-z0-9-]`.  The input must already be
-/// lowercased (call [`normalize_tag_token`] first).
-///
-/// Mirrors [`common::tag::Tag::from_str`] so client and server agree on
-/// validity without importing `common` into the WASM bundle.
-#[must_use]
-pub fn is_valid_tag_slug(s: &str) -> bool {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => false,
-        Some(c) if !c.is_ascii_lowercase() && !c.is_ascii_digit() => false,
-        _ => chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
-    }
-}
-
-/// Trims whitespace from `raw` and lowercases the result.
-#[must_use]
-pub fn normalize_tag_token(raw: &str) -> String {
-    raw.trim().to_lowercase()
-}
-
 // ─── 3.9 TagInput ─────────────────────────────────────────────
 
 /// Chip-based tag input with debounced autocomplete.
@@ -1302,12 +1278,12 @@ pub fn TagInput(
                     }
                 }
                 // Commit the typed text; Tab passes through if the field is empty.
-                let text = normalize_tag_token(&input_text.get());
+                let text = crate::tags::normalize_tag_token(&input_text.get());
                 if text.is_empty() {
                     return;
                 }
                 ev.prevent_default();
-                if is_valid_tag_slug(&text) {
+                if crate::tags::is_valid_tag_slug(&text) {
                     let slug = text.clone();
                     tags.update(|t| {
                         if !t.iter().any(|x| x.slug == slug) {
@@ -1445,10 +1421,7 @@ pub fn TagInput(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        is_valid_tag_slug, local_datetime_to_utc_rfc3339, marker_matches, marker_username_on_boot,
-        normalize_tag_token,
-    };
+    use super::{local_datetime_to_utc_rfc3339, marker_matches, marker_username_on_boot};
     use crate::render::{avatar_parts, format_post_time};
 
     #[test]
@@ -1550,81 +1523,5 @@ mod tests {
     #[test]
     fn format_post_time_handles_utc_z_suffix() {
         assert_eq!(format_post_time("2026-04-23T10:30:00Z"), "2026-04-23 10:30");
-    }
-
-    // ─── is_valid_tag_slug ────────────────────────────────────
-
-    #[test]
-    fn tag_slug_accepts_lowercase_alpha() {
-        assert!(is_valid_tag_slug("rust"));
-    }
-
-    #[test]
-    fn tag_slug_accepts_leading_digit() {
-        assert!(is_valid_tag_slug("42things"));
-    }
-
-    #[test]
-    fn tag_slug_accepts_hyphens_in_body() {
-        assert!(is_valid_tag_slug("hello-world"));
-    }
-
-    #[test]
-    fn tag_slug_accepts_single_char() {
-        assert!(is_valid_tag_slug("a"));
-        assert!(is_valid_tag_slug("0"));
-    }
-
-    #[test]
-    fn tag_slug_rejects_empty() {
-        assert!(!is_valid_tag_slug(""));
-    }
-
-    #[test]
-    fn tag_slug_rejects_leading_hyphen() {
-        assert!(!is_valid_tag_slug("-hello"));
-    }
-
-    #[test]
-    fn tag_slug_rejects_uppercase() {
-        assert!(!is_valid_tag_slug("Rust"));
-        assert!(!is_valid_tag_slug("RUST"));
-    }
-
-    #[test]
-    fn tag_slug_rejects_spaces() {
-        assert!(!is_valid_tag_slug("hello world"));
-    }
-
-    #[test]
-    fn tag_slug_rejects_special_chars() {
-        assert!(!is_valid_tag_slug("tag@site"));
-        assert!(!is_valid_tag_slug("tag_name"));
-    }
-
-    // ─── normalize_tag_token ──────────────────────────────────
-
-    #[test]
-    fn normalize_trims_whitespace() {
-        assert_eq!(normalize_tag_token("  rust  "), "rust");
-    }
-
-    #[test]
-    fn normalize_lowercases() {
-        assert_eq!(normalize_tag_token("Rust"), "rust");
-        assert_eq!(normalize_tag_token("HELLO-WORLD"), "hello-world");
-    }
-
-    #[test]
-    fn normalize_empty_stays_empty() {
-        assert_eq!(normalize_tag_token(""), "");
-        assert_eq!(normalize_tag_token("   "), "");
-    }
-
-    #[test]
-    fn normalize_then_validate_roundtrip() {
-        let normalized = normalize_tag_token("  Hello-World  ");
-        assert!(is_valid_tag_slug(&normalized));
-        assert_eq!(normalized, "hello-world");
     }
 }
