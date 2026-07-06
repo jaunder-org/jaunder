@@ -5,10 +5,14 @@
 //! - the body of a `#[component]` function — Leptos component bodies render only
 //!   in the browser (never natively exercised by the host test suite), so
 //!   measuring them is noise; and
-//! - a literal `unreachable!(<non-empty message>)` invocation — a provably-dead
-//!   line whose exemption is *self-enforcing*: reaching it panics ⇒ the test
-//!   fails ⇒ `cargo llvm-cov` exits non-zero ⇒ no report. A bare `unreachable!()`
-//!   (no message) stays measured, mirroring `crap:allow`'s required reason.
+//! - a literal `unreachable!(<message>)` invocation — a provably-dead line whose
+//!   exemption is *self-enforcing*: reaching it panics ⇒ the test fails ⇒
+//!   `cargo llvm-cov` exits non-zero ⇒ no report. A message **argument** is
+//!   required (recognition is `!mac.tokens.is_empty()`), so a bare
+//!   `unreachable!()` stays measured — mirroring the spirit of `crap:allow`'s
+//!   required reason. (The token check does not inspect the message text, so a
+//!   deliberately-empty `unreachable!("")` is still exempted; this degenerate
+//!   form is not worth the fragile format-arg parsing to reject.)
 //!
 //! Recognition is deliberately **fail-closed**: an unparseable file (or an
 //! unrecognized form — `std::unreachable!`, aliases, macro-generated invocations)
