@@ -222,11 +222,9 @@ impl MediaManager {
         };
         match self.media.create_media(&record).await {
             Ok(()) | Err(CreateMediaError::AlreadyExists) => Ok(()),
-            // cov:ignore-start
             Err(CreateMediaError::Internal(e)) => {
                 tracing::error!(error = %e, "create_media failed");
                 Err(anyhow::anyhow!(MediaError::Internal(e.to_string())))
-                // cov:ignore-stop
             }
         }
     }
@@ -401,6 +399,31 @@ mod tests {
             MediaManager::upload_outcome(None),
             UploadOutcome::Error
         ));
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn register_in_db_maps_internal_create_error() {
+        let mut media = storage::MockMediaStorage::new();
+        media
+            .expect_create_media()
+            .times(1)
+            .returning(|_| Err(CreateMediaError::Internal(sqlx::Error::PoolClosed)));
+        let manager = MediaManager::new(
+            Arc::new(media),
+            Arc::new(storage::MockSiteConfigStorage::new()),
+            Arc::new(PathBuf::from("/tmp")),
+        );
+
+        let err = manager
+            .register_in_db(1, "deadbeef", "file.png", "image/png", 100)
+            .await
+            .unwrap_err();
+
+        let media_err = err
+            .downcast_ref::<MediaError>()
+            .expect("internal create error maps to MediaError");
+        assert!(matches!(media_err, MediaError::Internal(_)));
     }
 
     #[tokio::test]

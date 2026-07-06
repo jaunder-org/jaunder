@@ -61,7 +61,7 @@ pub async fn regenerate_feed(
     let base = identity.base_url.as_deref().unwrap_or("");
     let self_url = format!("{base}{}", percent_encode_path(feed_url));
     let canonical_url = match &surface {
-        FeedSurface::Site => format!("{base}/"), // cov:ignore
+        FeedSurface::Site => format!("{base}/"),
         FeedSurface::SiteTag { tag } => {
             format!("{base}/tags/{}/", urlencoding::encode(tag.as_str()))
         }
@@ -181,6 +181,46 @@ mod tests {
         let err = storage_err(sqlx::Error::RowNotFound);
         let source = err.source().expect("Storage should expose a source");
         assert!(source.downcast_ref::<sqlx::Error>().is_some());
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn regenerate_site_feed_emits_base_anchored_canonical_url() {
+        use common::site::SiteIdentity;
+
+        let mut site_config = storage::MockSiteConfigStorage::new();
+        site_config.expect_get_feeds_config().returning(|| {
+            Ok(common::feed::FeedsConfig {
+                min_items: 10,
+                min_days: 30,
+                websub_hub_url: None,
+            })
+        });
+        site_config.expect_get_identity().returning(|| {
+            Ok(SiteIdentity {
+                title: "Jaunder".to_owned(),
+                base_url: Some("https://example.com".to_owned()),
+            })
+        });
+
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_list_published_in_window()
+            .returning(|_, _, _, _| Ok(vec![]));
+
+        let mut feed_cache = storage::MockFeedCacheStorage::new();
+        feed_cache.expect_upsert().returning(|_| Ok(()));
+
+        let row = regenerate_feed(&site_config, &posts, &feed_cache, "/feed.rss")
+            .await
+            .expect("site feed regenerates");
+
+        // The `FeedSurface::Site` arm anchors the canonical URL at `{base}/`.
+        assert!(
+            row.body.contains("https://example.com/"),
+            "canonical base-anchored URL missing: {}",
+            row.body
+        );
     }
 
     #[test]
