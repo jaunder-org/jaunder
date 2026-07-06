@@ -161,9 +161,6 @@ fn manifest_without_timestamp(dir: &Path) -> serde_json::Value {
 #[tokio::test]
 async fn backup_round_trips_full_cycle_across_backends(#[case] backend: Backend) {
     let _ = backend;
-    if !postgres_testing_enabled() {
-        return;
-    }
 
     let base = TempDir::new().expect("temp dir");
 
@@ -177,7 +174,7 @@ async fn backup_round_trips_full_cycle_across_backends(#[case] backend: Backend)
         .expect("backup a1");
 
     // B (postgres): restore, assert, export E_B1.
-    let b1 = postgres_storage_args(&base, "b1").await;
+    let (b1, _pg_b1) = postgres_storage_args(&base, "b1").await;
     cmd_init(&b1, false).await.expect("init b1");
     cmd_restore(&b1, &dir_a1).await.expect("restore into b1");
     assert_backup_fixture_restored(&b1, post_id).await;
@@ -197,7 +194,7 @@ async fn backup_round_trips_full_cycle_across_backends(#[case] backend: Backend)
         .expect("backup a2");
 
     // B2 (postgres): restore, assert, export E_B2.
-    let b2 = postgres_storage_args(&base, "b2").await;
+    let (b2, _pg_b2) = postgres_storage_args(&base, "b2").await;
     cmd_init(&b2, false).await.expect("init b2");
     cmd_restore(&b2, &dir_a2).await.expect("restore into b2");
     assert_backup_fixture_restored(&b2, post_id).await;

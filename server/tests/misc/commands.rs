@@ -653,7 +653,7 @@ async fn cmd_restore_restores_directory_backup(#[case] backend: Backend) {
 #[tokio::test]
 async fn cmd_restore_rejects_dangling_foreign_key(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let source_args = storage_args(backend, &base).await;
+    let (source_args, _pg_source) = storage_args(backend, &base).await;
     cmd_init(&source_args, false).await.expect("init source");
     let post_id = populate_backup_fixture(&source_args).await;
 
@@ -681,7 +681,7 @@ async fn cmd_restore_rejects_dangling_foreign_key(#[case] backend: Backend) {
     std::fs::write(&post_tags, contents).expect("write tampered post_tags");
 
     let target_base = TempDir::new().expect("target temp dir");
-    let target_args = storage_args(backend, &target_base).await;
+    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
     cmd_init(&target_args, false).await.expect("init target");
 
     let err = cmd_restore(&target_args, &backup_path)
@@ -701,7 +701,7 @@ async fn cmd_restore_rejects_dangling_foreign_key(#[case] backend: Backend) {
 #[tokio::test]
 async fn cmd_restore_rolls_back_on_malformed_row(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let source_args = storage_args(backend, &base).await;
+    let (source_args, _pg_source) = storage_args(backend, &base).await;
     cmd_init(&source_args, false).await.expect("init source");
     populate_backup_fixture(&source_args).await;
 
@@ -723,7 +723,7 @@ async fn cmd_restore_rolls_back_on_malformed_row(#[case] backend: Backend) {
     std::fs::write(&posts, contents).expect("write tampered posts");
 
     let target_base = TempDir::new().expect("target temp dir");
-    let target_args = storage_args(backend, &target_base).await;
+    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
     cmd_init(&target_args, false).await.expect("init target");
 
     let err = cmd_restore(&target_args, &backup_path)
@@ -742,7 +742,7 @@ async fn cmd_restore_rolls_back_on_malformed_row(#[case] backend: Backend) {
 #[tokio::test]
 async fn cmd_restore_rejects_missing_db_directory(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let source_args = storage_args(backend, &base).await;
+    let (source_args, _pg_source) = storage_args(backend, &base).await;
     cmd_init(&source_args, false).await.expect("init source");
     populate_backup_fixture(&source_args).await;
 
@@ -758,7 +758,7 @@ async fn cmd_restore_rejects_missing_db_directory(#[case] backend: Backend) {
     std::fs::remove_dir_all(backup_path.join("db")).expect("remove db dir");
 
     let target_base = TempDir::new().expect("target temp dir");
-    let target_args = storage_args(backend, &target_base).await;
+    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
     cmd_init(&target_args, false).await.expect("init target");
 
     let err = cmd_restore(&target_args, &backup_path)
@@ -775,7 +775,7 @@ async fn cmd_restore_rejects_missing_db_directory(#[case] backend: Backend) {
 #[tokio::test]
 async fn cmd_restore_restores_archive_backup(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
-    let source_args = storage_args(backend, &base).await;
+    let (source_args, _pg_source) = storage_args(backend, &base).await;
     cmd_init(&source_args, false).await.expect("init source");
     let post_id = populate_backup_fixture(&source_args).await;
 
@@ -790,7 +790,7 @@ async fn cmd_restore_restores_archive_backup(#[case] backend: Backend) {
     assert!(archive_path.is_file(), "archive backup is a single file");
 
     let target_base = TempDir::new().expect("target temp dir");
-    let target_args = storage_args(backend, &target_base).await;
+    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
     cmd_init(&target_args, false).await.expect("init target");
     cmd_restore(&target_args, &archive_path)
         .await
