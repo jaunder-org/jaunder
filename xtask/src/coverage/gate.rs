@@ -2,14 +2,17 @@
 //! plus each file's structural exemptions ([`super::exempt`]) — no baseline, no
 //! anchor, no history. This is the authoritative coverage gate (its verdict
 //! feeds `gate_fails` in [`super`]): an executable line FAILS iff it is
-//! uncovered AND not `#[component]`-exempt AND not suppressed by a `cov:ignore`
-//! marker.
+//! uncovered AND not structurally exempt (a `#[component]` body or a
+//! message-carrying `unreachable!` invocation) AND not suppressed by a
+//! `cov:ignore` marker.
 //!
 //! The A1-guard tripwire is the load-bearing safety check: a *covered* line
-//! inside an exempt (`#[component]`) span means the "components are never
-//! rendered natively" invariant — the premise that makes blanket component
-//! exemption a wash — is violated. Such a line is reported as a
-//! `guard_violation` so the gate fails until it is understood.
+//! inside an exempt span means the exemption's premise is violated — either a
+//! `#[component]` body is being exercised natively (breaking "components are
+//! never rendered natively", the assumption that makes blanket component
+//! exemption a wash) or an `unreachable!` assertion was actually reached. Such a
+//! line is reported as a `guard_violation` so the gate fails until it is
+//! understood.
 
 use std::collections::BTreeSet;
 
@@ -33,9 +36,10 @@ pub struct Fail {
 
 /// Stateless verdict: an executable line FAILS iff uncovered AND not exempt.
 ///
-/// Guard (A1 tripwire): a COVERED line inside an exempt (`#[component]`) span
-/// means the "components are never natively rendered" invariant is violated → it
-/// is reported in `guard_violations`.
+/// Guard (A1 tripwire): a COVERED line inside an exempt (`#[component]` body or
+/// `unreachable!` assertion) span means the exemption's premise is violated (a
+/// component rendered natively, or an `unreachable!` reached) → it is reported in
+/// `guard_violations`.
 ///
 /// `exempt_of(path)` returns the exempt line set for that file (empty on any
 /// error — fail-closed: unknown → measured).
