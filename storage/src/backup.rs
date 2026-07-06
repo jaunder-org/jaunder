@@ -451,9 +451,10 @@ fn restore_media_entries(
             fs::create_dir_all(&destination_path)?;
             restore_media_entries(source_root, destination_root, &child_relative_path)?;
         } else if metadata.is_file() {
-            if let Some(parent) = destination_path.parent() {
-                fs::create_dir_all(parent)?;
-            } // cov:ignore
+            let Some(parent) = destination_path.parent() else {
+                unreachable!("a joined destination path always has a parent")
+            };
+            fs::create_dir_all(parent)?;
             fs::copy(source_path, destination_path)?;
         } // cov:ignore
     }
@@ -518,9 +519,10 @@ fn copy_or_link_media_file(
     previous_backup: Option<&Path>,
     relative_path: &Path,
 ) -> Result<(), BackupError> {
-    if let Some(parent) = destination_path.parent() {
-        fs::create_dir_all(parent)?;
-    } // cov:ignore
+    let Some(parent) = destination_path.parent() else {
+        unreachable!("a joined destination path always has a parent")
+    };
+    fs::create_dir_all(parent)?;
 
     // Deduplicate against the previous backup: when this file is byte-identical
     // to its counterpart there, hard-link to that copy instead of writing a new

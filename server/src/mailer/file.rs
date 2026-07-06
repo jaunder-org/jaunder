@@ -29,7 +29,9 @@ impl MailSender for FileMailSender {
             "subject": message.subject,
             "body_text": message.body_text,
         });
-        let mut line = serde_json::to_string(&record).map_err(|e| MailError::Send(Box::new(e)))?; // cov:ignore
+        let Ok(mut line) = serde_json::to_string(&record) else {
+            unreachable!("serializing a json! of owned strings is infallible")
+        };
         line.push('\n');
 
         let path = self.path.clone();

@@ -106,7 +106,7 @@ impl MailSender for LettreMailSender {
         self.mailer
             .send(email)
             .await
-            .map_err(|e| MailError::Send(Box::new(e)))?; // cov:ignore
+            .map_err(|e| MailError::Send(Box::new(e)))?;
 
         Ok(())
     }
@@ -165,5 +165,37 @@ mod tests {
             ..base_config(SmtpTlsMode::StartTls)
         };
         assert!(LettreMailSender::from_config(&config).is_ok());
+    }
+
+    #[tokio::test]
+    async fn send_email_maps_transport_error() {
+        // guard:no-backend — no DB
+        // Point the mailer at a dead endpoint: nothing listens on 127.0.0.1:0, so
+        // the underlying TCP connect fails immediately and `send()` returns an
+        // error, exercising the transport-error `map_err` arm.
+        let config = SmtpConfig {
+            host: "127.0.0.1".to_owned(),
+            port: 0,
+            tls_mode: SmtpTlsMode::Plain,
+            username: None,
+            password: None,
+            sender: "Jaunder <noreply@example.com>"
+                .parse()
+                .expect("valid email"),
+        };
+        let sender = LettreMailSender::from_config(&config).expect("build mailer");
+
+        let msg = EmailMessage {
+            from: None,
+            to: vec!["bob@example.com".parse().expect("valid email")],
+            subject: "Hello".to_owned(),
+            body_text: "World".to_owned(),
+        };
+
+        let error = sender
+            .send_email(&msg)
+            .await
+            .expect_err("send against a dead endpoint must fail");
+        assert!(matches!(error, MailError::Send(_)));
     }
 }
