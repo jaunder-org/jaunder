@@ -336,7 +336,10 @@ pub async fn collection_post(
 /// Returns `412` if `If-Match` is present and stale.
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.member_put", skip_all)]
-#[allow(clippy::too_many_arguments)] // axum extractor handler; args are request inputs
+#[expect(
+    clippy::too_many_arguments,
+    reason = "axum extractor handler; each argument is a separate request extractor and cannot be bundled"
+)]
 pub async fn member_put(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,

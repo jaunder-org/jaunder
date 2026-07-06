@@ -25,10 +25,10 @@ use storage::{
     create_rendered_post, open_database, open_existing_database, perform_post_update,
     update_rendered_post, AppState, AudienceError, ConfirmPasswordResetError, CreatePostError,
     CreatePostInput, CreateUserError, DbConnectOptions, FeedCacheRow, GoLivePost, ListByTagError,
-    PostCursor, PostFormat, PostUpdate, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
-    SessionAuthError, SqliteSubscriptionStorage, SubscriptionStorage, TaggingError,
-    UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
-    UsePasswordResetError, UserAuthError,
+    PermalinkDate, PostCursor, PostFormat, PostUpdate, ProfileUpdate, PublishUpdate,
+    RegisterWithInviteError, RenderedPostContent, RenderedPostUpdate, SessionAuthError,
+    SqliteSubscriptionStorage, SubscriptionStorage, TaggingError, UpdatePostError, UpdatePostInput,
+    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError,
 };
 use tempfile::TempDir;
 
@@ -1961,14 +1961,16 @@ async fn seed_post_published_at(
 ) -> i64 {
     create_rendered_post(
         &*state.posts,
-        user_id,
-        None,
-        slug.parse().expect("valid slug"),
-        format!("# {slug}\n\nbody"),
-        PostFormat::Markdown,
-        Some(published_at),
-        None,
-        vec![AudienceTarget::Public],
+        RenderedPostContent {
+            user_id,
+            title: None,
+            slug: slug.parse().expect("valid slug"),
+            body: format!("# {slug}\n\nbody"),
+            format: PostFormat::Markdown,
+            published_at: Some(published_at),
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        },
     )
     .await
     .expect("seed post should be created")
@@ -1999,9 +2001,11 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
         .posts
         .get_post_by_permalink(
             &username("alice"),
-            2026,
-            6,
-            26,
+            PermalinkDate {
+                year: 2026,
+                month: 6,
+                day: 26,
+            },
             &"live-one".parse().unwrap(),
             &ViewerIdentity::Anonymous,
             now,
@@ -2013,9 +2017,11 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
         .posts
         .get_post_by_permalink(
             &username("alice"),
-            2026,
-            6,
-            26,
+            PermalinkDate {
+                year: 2026,
+                month: 6,
+                day: 26,
+            },
             &"sched-one".parse().unwrap(),
             &ViewerIdentity::Anonymous,
             now,
@@ -2033,9 +2039,11 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
         .posts
         .get_post_by_permalink(
             &username("alice"),
-            2026,
-            6,
-            26,
+            PermalinkDate {
+                year: 2026,
+                month: 6,
+                day: 26,
+            },
             &"sched-one".parse().unwrap(),
             &ViewerIdentity::Anonymous,
             after,
@@ -5699,9 +5707,11 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
         .posts
         .get_post_by_permalink(
             &username("permalink_del_user"),
-            created_at.year(),
-            created_at.month(),
-            created_at.day(),
+            PermalinkDate {
+                year: created_at.year(),
+                month: created_at.month(),
+                day: created_at.day(),
+            },
             &"permalink-test".parse().unwrap(),
             &ViewerIdentity::Anonymous,
             Utc::now(),
@@ -5720,9 +5730,11 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
         .posts
         .get_post_by_permalink(
             &username("permalink_del_user"),
-            created_at.year(),
-            created_at.month(),
-            created_at.day(),
+            PermalinkDate {
+                year: created_at.year(),
+                month: created_at.month(),
+                day: created_at.day(),
+            },
             &"permalink-test".parse().unwrap(),
             &ViewerIdentity::Anonymous,
             Utc::now(),
@@ -6271,14 +6283,16 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
 
     let post_id = create_rendered_post(
         state.posts.as_ref(),
-        user_id,
-        Some("Rendered Markdown".to_string()),
-        "rendered-markdown".parse().unwrap(),
-        "**bold**".to_string(),
-        PostFormat::Markdown,
-        None,
-        None,
-        vec![AudienceTarget::Public],
+        RenderedPostContent {
+            user_id,
+            title: Some("Rendered Markdown".to_string()),
+            slug: "rendered-markdown".parse().unwrap(),
+            body: "**bold**".to_string(),
+            format: PostFormat::Markdown,
+            published_at: None,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        },
     )
     .await
     .unwrap();
@@ -6315,14 +6329,16 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
 
     let post_id = create_rendered_post(
         state.posts.as_ref(),
-        user_id,
-        Some("Rendered Org".to_string()),
-        "rendered-org".parse().unwrap(),
-        "*bold*".to_string(),
-        PostFormat::Org,
-        None,
-        None,
-        vec![AudienceTarget::Public],
+        RenderedPostContent {
+            user_id,
+            title: Some("Rendered Org".to_string()),
+            slug: "rendered-org".parse().unwrap(),
+            body: "*bold*".to_string(),
+            format: PostFormat::Org,
+            published_at: None,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        },
     )
     .await
     .unwrap();
@@ -6363,14 +6379,16 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
 
     create_rendered_post(
         state.posts.as_ref(),
-        user_id,
-        Some("First Post".to_string()),
-        "conflict-slug".parse().unwrap(),
-        "body".to_string(),
-        PostFormat::Markdown,
-        Some(now),
-        None,
-        vec![AudienceTarget::Public],
+        RenderedPostContent {
+            user_id,
+            title: Some("First Post".to_string()),
+            slug: "conflict-slug".parse().unwrap(),
+            body: "body".to_string(),
+            format: PostFormat::Markdown,
+            published_at: Some(now),
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        },
     )
     .await
     .unwrap();
@@ -6378,14 +6396,16 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
     // Second create with same slug+date conflicts
     let err = create_rendered_post(
         state.posts.as_ref(),
-        user_id,
-        Some("Second Post".to_string()),
-        "conflict-slug".parse().unwrap(),
-        "body".to_string(),
-        PostFormat::Markdown,
-        Some(now),
-        None,
-        vec![AudienceTarget::Public],
+        RenderedPostContent {
+            user_id,
+            title: Some("Second Post".to_string()),
+            slug: "conflict-slug".parse().unwrap(),
+            body: "body".to_string(),
+            format: PostFormat::Markdown,
+            published_at: Some(now),
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        },
     )
     .await
     .unwrap_err();
@@ -6561,15 +6581,17 @@ async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Back
 
     let record = update_rendered_post(
         state.posts.as_ref(),
-        post_id,
-        user_id,
-        Some("Updated Title".to_string()),
-        "update-render-md".parse().unwrap(),
-        "**updated**".to_string(),
-        PostFormat::Markdown,
-        PublishUpdate::Unpublish,
-        None,
-        vec![AudienceTarget::Public],
+        RenderedPostUpdate {
+            post_id,
+            editor_user_id: user_id,
+            title: Some("Updated Title".to_string()),
+            slug: "update-render-md".parse().unwrap(),
+            body: "**updated**".to_string(),
+            format: PostFormat::Markdown,
+            publish: PublishUpdate::Unpublish,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        },
     )
     .await
     .unwrap();
@@ -6606,15 +6628,17 @@ async fn update_rendered_post_org_renders_and_updates(#[case] backend: Backend) 
 
     let record = update_rendered_post(
         state.posts.as_ref(),
-        post_id,
-        user_id,
-        Some("Updated Org Title".to_string()),
-        "update-render-org".parse().unwrap(),
-        "*bold org*".to_string(),
-        PostFormat::Org,
-        PublishUpdate::Unpublish,
-        None,
-        vec![AudienceTarget::Public],
+        RenderedPostUpdate {
+            post_id,
+            editor_user_id: user_id,
+            title: Some("Updated Org Title".to_string()),
+            slug: "update-render-org".parse().unwrap(),
+            body: "*bold org*".to_string(),
+            format: PostFormat::Org,
+            publish: PublishUpdate::Unpublish,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        },
     )
     .await
     .unwrap();
@@ -6636,15 +6660,17 @@ async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: B
 
     let err = update_rendered_post(
         state.posts.as_ref(),
-        99999,
-        1,
-        Some("No Post".to_string()),
-        "no-post".parse().unwrap(),
-        "body".to_string(),
-        PostFormat::Markdown,
-        PublishUpdate::Unpublish,
-        None,
-        vec![AudienceTarget::Public],
+        RenderedPostUpdate {
+            post_id: 99999,
+            editor_user_id: 1,
+            title: Some("No Post".to_string()),
+            slug: "no-post".parse().unwrap(),
+            body: "body".to_string(),
+            format: PostFormat::Markdown,
+            publish: PublishUpdate::Unpublish,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        },
     )
     .await
     .unwrap_err();

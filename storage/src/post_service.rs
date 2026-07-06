@@ -19,24 +19,47 @@ use common::visibility::AudienceTarget;
 // Orchestration helpers
 // ---------------------------------------------------------------------------
 
+/// The raw, unrendered fields of a post to create. Bundles the create inputs so
+/// [`create_rendered_post`] and [`render_post_input`] stay under the argument
+/// limit and share one named shape at every call site.
+pub struct RenderedPostContent {
+    /// Author of the new post.
+    pub user_id: i64,
+    /// Explicit title, or `None`.
+    pub title: Option<String>,
+    /// Slug for the new post.
+    pub slug: Slug,
+    /// Raw post body in `format`.
+    pub body: String,
+    /// Markup format of `body`.
+    pub format: PostFormat,
+    /// Publication timestamp, or `None` for a draft.
+    pub published_at: Option<DateTime<Utc>>,
+    /// Optional summary/excerpt.
+    pub summary: Option<String>,
+    /// Audience targeting for the new post.
+    pub audiences: Vec<AudienceTarget>,
+}
+
 /// Renders `body` according to `format` and creates the post via storage.
 ///
 /// # Errors
 ///
 /// Returns `Err(CreatePostError)` if the storage layer returns an error.
-#[allow(clippy::too_many_arguments)]
 pub async fn create_rendered_post(
     storage: &dyn PostStorage,
-    user_id: i64,
-    title: Option<String>,
-    slug: Slug,
-    body: String,
-    format: PostFormat,
-    published_at: Option<DateTime<Utc>>,
-    summary: Option<String>,
-    audiences: Vec<AudienceTarget>,
+    content: RenderedPostContent,
 ) -> Result<i64, CreatePostError> {
-    let input = render_post_input(
+    let input = render_post_input(content);
+    storage.create_post(&input).await
+}
+
+/// Renders `body` per `format` and assembles the [`CreatePostInput`] without
+/// writing it. Shared by [`create_rendered_post`] (write one) and the batch
+/// seeders (collect many), so the render-and-assemble recipe lives in one place.
+#[must_use]
+pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
+    let RenderedPostContent {
         user_id,
         title,
         slug,
@@ -45,25 +68,7 @@ pub async fn create_rendered_post(
         published_at,
         summary,
         audiences,
-    );
-    storage.create_post(&input).await
-}
-
-/// Renders `body` per `format` and assembles the [`CreatePostInput`] without
-/// writing it. Shared by [`create_rendered_post`] (write one) and the batch
-/// seeders (collect many), so the render-and-assemble recipe lives in one place.
-#[allow(clippy::too_many_arguments)]
-#[must_use]
-pub fn render_post_input(
-    user_id: i64,
-    title: Option<String>,
-    slug: Slug,
-    body: String,
-    format: PostFormat,
-    published_at: Option<DateTime<Utc>>,
-    summary: Option<String>,
-    audiences: Vec<AudienceTarget>,
-) -> CreatePostInput {
+    } = content;
     let rendered_html = render(&body, &format);
     CreatePostInput {
         user_id,
@@ -91,16 +96,40 @@ pub fn render_post_input(
 #[cfg(any(test, feature = "seed-posts"))]
 #[must_use]
 pub fn seed_post_input(user_id: i64, slug: Slug, body: String, published: bool) -> CreatePostInput {
-    render_post_input(
+    render_post_input(RenderedPostContent {
         user_id,
-        None,
+        title: None,
         slug,
         body,
-        PostFormat::Markdown,
-        published.then(Utc::now),
-        None,
-        vec![AudienceTarget::Public],
-    )
+        format: PostFormat::Markdown,
+        published_at: published.then(Utc::now),
+        summary: None,
+        audiences: vec![AudienceTarget::Public],
+    })
+}
+
+/// The raw, unrendered fields of a post edit. Bundles the update inputs so
+/// [`update_rendered_post`] stays under the argument limit and names its shape
+/// at every call site.
+pub struct RenderedPostUpdate {
+    /// Post being edited.
+    pub post_id: i64,
+    /// User performing the edit (ownership is checked in storage).
+    pub editor_user_id: i64,
+    /// Explicit title, or `None`.
+    pub title: Option<String>,
+    /// New slug for the post.
+    pub slug: Slug,
+    /// Raw post body in `format`.
+    pub body: String,
+    /// Markup format of `body`.
+    pub format: PostFormat,
+    /// What this update does to the post's publication state.
+    pub publish: PublishUpdate,
+    /// Optional summary/excerpt.
+    pub summary: Option<String>,
+    /// Audience targeting for the post (replaces its existing rows).
+    pub audiences: Vec<AudienceTarget>,
 }
 
 /// Renders `body` according to `format` and updates the post via storage.
@@ -108,19 +137,21 @@ pub fn seed_post_input(user_id: i64, slug: Slug, body: String, published: bool) 
 /// # Errors
 ///
 /// Returns `Err(UpdatePostError)` if the storage layer returns an error.
-#[allow(clippy::too_many_arguments)]
 pub async fn update_rendered_post(
     storage: &dyn PostStorage,
-    post_id: i64,
-    editor_user_id: i64,
-    title: Option<String>,
-    slug: Slug,
-    body: String,
-    format: PostFormat,
-    publish: PublishUpdate,
-    summary: Option<String>,
-    audiences: Vec<AudienceTarget>,
+    update: RenderedPostUpdate,
 ) -> Result<PostRecord, UpdatePostError> {
+    let RenderedPostUpdate {
+        post_id,
+        editor_user_id,
+        title,
+        slug,
+        body,
+        format,
+        publish,
+        summary,
+        audiences,
+    } = update;
     let rendered_html = render(&body, &format);
     let (unpublish, explicit_published_at) = publish.into_inputs();
     let input = UpdatePostInput {
@@ -390,14 +421,16 @@ pub async fn perform_post_creation(
 
         match create_rendered_post(
             storage,
-            user_id,
-            metadata.title.clone(),
-            slug,
-            body.clone(),
-            format.clone(),
-            published_at,
-            summary.clone(),
-            audiences.clone(),
+            RenderedPostContent {
+                user_id,
+                title: metadata.title.clone(),
+                slug,
+                body: body.clone(),
+                format: format.clone(),
+                published_at,
+                summary: summary.clone(),
+                audiences: audiences.clone(),
+            },
         )
         .await
         {

@@ -470,17 +470,30 @@ mod tests {
     // post_to_entry tests
     // -----------------------------------------------------------------------
 
-    #[allow(clippy::too_many_arguments)]
-    fn make_post(
+    /// Fields for the [`make_post`] test builder, bundled so the builder stays
+    /// under the argument limit.
+    struct MakePost<'a> {
         post_id: i64,
-        title: Option<&str>,
-        slug: &str,
-        body: &str,
+        title: Option<&'a str>,
+        slug: &'a str,
+        body: &'a str,
         format: PostFormat,
         published_at: Option<DateTime<Utc>>,
-        summary: Option<&str>,
+        summary: Option<&'a str>,
         tags: Vec<(String, String)>,
-    ) -> PostRecord {
+    }
+
+    fn make_post(fields: MakePost) -> PostRecord {
+        let MakePost {
+            post_id,
+            title,
+            slug,
+            body,
+            format,
+            published_at,
+            summary,
+            tags,
+        } = fields;
         let tags_vec = tags
             .into_iter()
             .enumerate()
@@ -512,16 +525,16 @@ mod tests {
 
     #[test]
     fn post_to_entry_markdown_format_becomes_text_content() {
-        let post = make_post(
-            42,
-            Some("Title"),
-            "slug",
-            "# Markdown Body",
-            PostFormat::Markdown,
-            Some(Utc::now()),
-            None,
-            vec![],
-        );
+        let post = make_post(MakePost {
+            post_id: 42,
+            title: Some("Title"),
+            slug: "slug",
+            body: "# Markdown Body",
+            format: PostFormat::Markdown,
+            published_at: Some(Utc::now()),
+            summary: None,
+            tags: vec![],
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 
@@ -534,16 +547,16 @@ mod tests {
 
     #[test]
     fn post_to_entry_org_format_becomes_text_content() {
-        let post = make_post(
-            42,
-            Some("Title"),
-            "slug",
-            "* Org Body",
-            PostFormat::Org,
-            Some(Utc::now()),
-            None,
-            vec![],
-        );
+        let post = make_post(MakePost {
+            post_id: 42,
+            title: Some("Title"),
+            slug: "slug",
+            body: "* Org Body",
+            format: PostFormat::Org,
+            published_at: Some(Utc::now()),
+            summary: None,
+            tags: vec![],
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 
@@ -553,16 +566,16 @@ mod tests {
 
     #[test]
     fn post_to_entry_html_format_becomes_html_content() {
-        let post = make_post(
-            42,
-            Some("Title"),
-            "slug",
-            "<p>HTML</p>",
-            PostFormat::Html,
-            Some(Utc::now()),
-            None,
-            vec![],
-        );
+        let post = make_post(MakePost {
+            post_id: 42,
+            title: Some("Title"),
+            slug: "slug",
+            body: "<p>HTML</p>",
+            format: PostFormat::Html,
+            published_at: Some(Utc::now()),
+            summary: None,
+            tags: vec![],
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 
@@ -572,16 +585,16 @@ mod tests {
 
     #[test]
     fn post_to_entry_id_is_edit_uri() {
-        let post = make_post(
-            7,
-            Some("Title"),
-            "slug",
-            "body",
-            PostFormat::Markdown,
-            Some(Utc::now()),
-            None,
-            vec![],
-        );
+        let post = make_post(MakePost {
+            post_id: 7,
+            title: Some("Title"),
+            slug: "slug",
+            body: "body",
+            format: PostFormat::Markdown,
+            published_at: Some(Utc::now()),
+            summary: None,
+            tags: vec![],
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 
@@ -590,16 +603,16 @@ mod tests {
 
     #[test]
     fn post_to_entry_edit_link() {
-        let post = make_post(
-            7,
-            Some("Title"),
-            "slug",
-            "body",
-            PostFormat::Markdown,
-            Some(Utc::now()),
-            None,
-            vec![],
-        );
+        let post = make_post(MakePost {
+            post_id: 7,
+            title: Some("Title"),
+            slug: "slug",
+            body: "body",
+            format: PostFormat::Markdown,
+            published_at: Some(Utc::now()),
+            summary: None,
+            tags: vec![],
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 
@@ -614,16 +627,16 @@ mod tests {
     #[test]
     fn post_to_entry_published_post_has_alternate_link() {
         let now = Utc::now();
-        let post = make_post(
-            7,
-            Some("Title"),
-            "slug",
-            "body",
-            PostFormat::Markdown,
-            Some(now),
-            None,
-            vec![],
-        );
+        let post = make_post(MakePost {
+            post_id: 7,
+            title: Some("Title"),
+            slug: "slug",
+            body: "body",
+            format: PostFormat::Markdown,
+            published_at: Some(now),
+            summary: None,
+            tags: vec![],
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 
@@ -641,16 +654,16 @@ mod tests {
 
     #[test]
     fn post_to_entry_draft_post_has_no_alternate_link() {
-        let post = make_post(
-            7,
-            Some("Title"),
-            "slug",
-            "body",
-            PostFormat::Markdown,
-            None, // No published_at = draft
-            None,
-            vec![],
-        );
+        let post = make_post(MakePost {
+            post_id: 7,
+            title: Some("Title"),
+            slug: "slug",
+            body: "body",
+            format: PostFormat::Markdown,
+            published_at: None, // No published_at = draft
+            summary: None,
+            tags: vec![],
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 
@@ -664,16 +677,16 @@ mod tests {
 
     #[test]
     fn post_to_entry_title_from_post() {
-        let post = make_post(
-            7,
-            Some("My Title"),
-            "slug",
-            "body",
-            PostFormat::Markdown,
-            Some(Utc::now()),
-            None,
-            vec![],
-        );
+        let post = make_post(MakePost {
+            post_id: 7,
+            title: Some("My Title"),
+            slug: "slug",
+            body: "body",
+            format: PostFormat::Markdown,
+            published_at: Some(Utc::now()),
+            summary: None,
+            tags: vec![],
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 
@@ -682,16 +695,16 @@ mod tests {
 
     #[test]
     fn post_to_entry_title_falls_back_to_slug() {
-        let post = make_post(
-            7,
-            None, // No title
-            "my-slug",
-            "body",
-            PostFormat::Markdown,
-            Some(Utc::now()),
-            None,
-            vec![],
-        );
+        let post = make_post(MakePost {
+            post_id: 7,
+            title: None, // No title
+            slug: "my-slug",
+            body: "body",
+            format: PostFormat::Markdown,
+            published_at: Some(Utc::now()),
+            summary: None,
+            tags: vec![],
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 
@@ -700,16 +713,16 @@ mod tests {
 
     #[test]
     fn post_to_entry_summary() {
-        let post = make_post(
-            7,
-            Some("Title"),
-            "slug",
-            "body",
-            PostFormat::Markdown,
-            Some(Utc::now()),
-            Some("This is a summary"),
-            vec![],
-        );
+        let post = make_post(MakePost {
+            post_id: 7,
+            title: Some("Title"),
+            slug: "slug",
+            body: "body",
+            format: PostFormat::Markdown,
+            published_at: Some(Utc::now()),
+            summary: Some("This is a summary"),
+            tags: vec![],
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 
@@ -718,16 +731,16 @@ mod tests {
 
     #[test]
     fn post_to_entry_no_summary() {
-        let post = make_post(
-            7,
-            Some("Title"),
-            "slug",
-            "body",
-            PostFormat::Markdown,
-            Some(Utc::now()),
-            None,
-            vec![],
-        );
+        let post = make_post(MakePost {
+            post_id: 7,
+            title: Some("Title"),
+            slug: "slug",
+            body: "body",
+            format: PostFormat::Markdown,
+            published_at: Some(Utc::now()),
+            summary: None,
+            tags: vec![],
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 
@@ -736,19 +749,19 @@ mod tests {
 
     #[test]
     fn post_to_entry_categories_from_tags() {
-        let post = make_post(
-            7,
-            Some("Title"),
-            "slug",
-            "body",
-            PostFormat::Markdown,
-            Some(Utc::now()),
-            None,
-            vec![
+        let post = make_post(MakePost {
+            post_id: 7,
+            title: Some("Title"),
+            slug: "slug",
+            body: "body",
+            format: PostFormat::Markdown,
+            published_at: Some(Utc::now()),
+            summary: None,
+            tags: vec![
                 ("rust".to_string(), "Rust".to_string()),
                 ("programming".to_string(), "Programming".to_string()),
             ],
-        );
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 
@@ -758,16 +771,16 @@ mod tests {
 
     #[test]
     fn post_to_entry_no_tags() {
-        let post = make_post(
-            7,
-            Some("Title"),
-            "slug",
-            "body",
-            PostFormat::Markdown,
-            Some(Utc::now()),
-            None,
-            vec![],
-        );
+        let post = make_post(MakePost {
+            post_id: 7,
+            title: Some("Title"),
+            slug: "slug",
+            body: "body",
+            format: PostFormat::Markdown,
+            published_at: Some(Utc::now()),
+            summary: None,
+            tags: vec![],
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 
@@ -776,16 +789,16 @@ mod tests {
 
     #[test]
     fn post_to_entry_published_post_not_marked_draft() {
-        let post = make_post(
-            7,
-            Some("Title"),
-            "slug",
-            "body",
-            PostFormat::Markdown,
-            Some(Utc::now()),
-            None,
-            vec![],
-        );
+        let post = make_post(MakePost {
+            post_id: 7,
+            title: Some("Title"),
+            slug: "slug",
+            body: "body",
+            format: PostFormat::Markdown,
+            published_at: Some(Utc::now()),
+            summary: None,
+            tags: vec![],
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 
@@ -794,16 +807,16 @@ mod tests {
 
     #[test]
     fn post_to_entry_draft_post_marked_draft() {
-        let post = make_post(
-            7,
-            Some("Title"),
-            "slug",
-            "body",
-            PostFormat::Markdown,
-            None, // No published_at = draft
-            None,
-            vec![],
-        );
+        let post = make_post(MakePost {
+            post_id: 7,
+            title: Some("Title"),
+            slug: "slug",
+            body: "body",
+            format: PostFormat::Markdown,
+            published_at: None, // No published_at = draft
+            summary: None,
+            tags: vec![],
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 
@@ -813,16 +826,16 @@ mod tests {
     #[test]
     fn post_to_entry_timestamps() {
         let now = Utc::now();
-        let post = make_post(
-            7,
-            Some("Title"),
-            "slug",
-            "body",
-            PostFormat::Markdown,
-            Some(now),
-            None,
-            vec![],
-        );
+        let post = make_post(MakePost {
+            post_id: 7,
+            title: Some("Title"),
+            slug: "slug",
+            body: "body",
+            format: PostFormat::Markdown,
+            published_at: Some(now),
+            summary: None,
+            tags: vec![],
+        });
 
         let entry = post_to_entry(&post, "https://example.com");
 

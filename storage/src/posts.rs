@@ -15,6 +15,19 @@ use crate::helpers::{post_record_from_row, PostRow};
 
 pub use common::render::{InvalidPostFormat, PostFormat};
 
+/// The `year`/`month`/`day` component of a public permalink lookup key. Bundling
+/// the date triple keeps [`PostStorage::get_post_by_permalink`] under the
+/// argument limit while naming the trio at every call site.
+#[derive(Debug, Clone, Copy)]
+pub struct PermalinkDate {
+    /// Four-digit calendar year.
+    pub year: i32,
+    /// Month of year, 1–12.
+    pub month: u32,
+    /// Day of month, 1–31.
+    pub day: u32,
+}
+
 /// A post record returned by [`PostStorage`] queries.
 ///
 /// `tags` is populated by the same query that loads the rest of the row via
@@ -327,16 +340,10 @@ pub trait PostStorage: Send + Sync {
     ///
     /// `now` gates scheduled posts: a post with `published_at > now` is
     /// future-dated and stays invisible on this public surface until its time.
-    // The permalink is addressed by its full date + slug + author, so the eight
-    // parameters are irreducible (adding `now` for scheduled visibility tips it
-    // one over the clippy default).
-    #[allow(clippy::too_many_arguments)]
     async fn get_post_by_permalink(
         &self,
         username: &Username,
-        year: i32,
-        month: u32,
-        day: u32,
+        date: PermalinkDate,
         slug: &Slug,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
@@ -684,17 +691,15 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    #[allow(clippy::too_many_arguments)]
     async fn get_post_by_permalink(
         &self,
         username: &Username,
-        year: i32,
-        month: u32,
-        day: u32,
+        date: PermalinkDate,
         slug: &Slug,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> sqlx::Result<Option<PostRecord>> {
+        let PermalinkDate { year, month, day } = date;
         let date_str = format!("{year:04}-{month:02}-{day:02}");
         let (resolution, binds, _) = resolution_where(viewer, 5);
         // `published_at <= $4` hides scheduled (future-dated) posts until due.

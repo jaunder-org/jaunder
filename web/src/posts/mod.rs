@@ -215,6 +215,10 @@ fn parse_publish_at(raw: Option<&str>) -> crate::error::InternalResult<Option<Da
 /// because `chrono` is a `server`-only dependency here and the server-fn
 /// signature must also compile for the wasm client. The wire is UTC; the
 /// browser converts the author's local `datetime-local` value before sending.
+// `#[expect]` can't be used here: the `#[server]` macro emits too_many_arguments from
+// its own expansion, so a fn-level expectation is always reported "unfulfilled". A plain
+// `#[allow]` is the only mechanism that suppresses a macro-emitted lint. The args are the
+// RPC input contract — bundling them into a struct would change the JSON wire shape. (#94)
 #[allow(clippy::too_many_arguments)]
 #[server(endpoint = "/create_post", input = Json)]
 pub async fn create_post(
@@ -393,6 +397,8 @@ pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
 }
 
 /// Updates an existing post for the authenticated author.
+// See `create_post`: `#[expect]` is always "unfulfilled" against the `#[server]` macro's
+// own emission, so a justified `#[allow]` is the only working suppression here. (#94)
 #[allow(clippy::too_many_arguments)]
 #[server(endpoint = "/update_post", input = Json)]
 pub async fn update_post(
