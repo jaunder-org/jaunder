@@ -277,7 +277,6 @@ pub fn ComposerFields(
 /// The browser's `Date` does the local→UTC conversion so it honors the
 /// author's timezone and DST. Form dispatch is client-only, so the non-wasm
 /// build only needs this to compile (the stub is never executed there).
-// cov:ignore-start
 // Deliberate manual keep: this genuine helper (not a Leptos view) benefits from
 // `#[must_use]`; the crate-wide `must_use_candidate = "allow"` (Cargo.toml, #94)
 // means clippy no longer flags it, so we assert it by hand.
@@ -287,7 +286,6 @@ pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    // cov:ignore-stop
     #[cfg(target_arch = "wasm32")]
     {
         // `new Date("YYYY-MM-DDTHH:MM")` (time present, no offset) is parsed as
@@ -300,9 +298,9 @@ pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        Some(trimmed.to_string()) // cov:ignore
+        Some(trimmed.to_string())
     }
-} // cov:ignore
+}
 
 #[expect(
     clippy::needless_pass_by_value,
@@ -375,21 +373,17 @@ pub fn PostDisplay(
 /// client-side signal that the viewer owns this post, so its action column shows
 /// even though the anonymous seed data has `is_author = false`. `false` on the
 /// host build (no marker) — the affordance is wasm-only chrome.
-// cov:ignore-start
 fn marker_matches(author: &str) -> bool {
-    // cov:ignore-stop
     #[cfg(target_arch = "wasm32")]
     {
         crate::auth::marker::read().as_deref() == Some(author)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // cov:ignore-start
         let _ = author;
         false
-        // cov:ignore-stop
     }
-} // cov:ignore
+}
 
 #[component]
 // cov:ignore-start
@@ -1107,18 +1101,16 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
 /// Boot-time marker read: `Some(username)` in the browser when the auth marker is
 /// set, `None` on the host build (the sidebar only ever renders in wasm). Lets the
 /// sidebar pick authed vs. anon synchronously at mount (#181), no async gate.
-// cov:ignore-start
 fn marker_username_on_boot() -> Option<String> {
-    // cov:ignore-stop
     #[cfg(target_arch = "wasm32")]
     {
         crate::auth::marker::read()
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        None // cov:ignore
+        None
     }
-} // cov:ignore
+}
 
 /// The authenticated sidebar chrome (brand, search, nav + operator admin links,
 /// sources, footer avatar). Shared by the marker-seeded initial render and the
@@ -1467,8 +1459,40 @@ pub fn TagInput(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_valid_tag_slug, normalize_tag_token};
+    use super::{
+        is_valid_tag_slug, local_datetime_to_utc_rfc3339, marker_matches, marker_username_on_boot,
+        normalize_tag_token,
+    };
     use crate::render::{avatar_parts, format_post_time};
+
+    #[test]
+    fn local_datetime_empty_or_blank_is_none() {
+        // The empty-guard runs on the host build (publish-now → None).
+        assert_eq!(local_datetime_to_utc_rfc3339(""), None);
+        assert_eq!(local_datetime_to_utc_rfc3339("   "), None);
+    }
+
+    #[test]
+    fn local_datetime_host_arm_returns_trimmed_input() {
+        // Off-wasm the fn echoes the trimmed wall-clock string; the browser's
+        // Date-based local→UTC conversion is the wasm-only arm.
+        assert_eq!(
+            local_datetime_to_utc_rfc3339("  2026-01-02T03:04  ").as_deref(),
+            Some("2026-01-02T03:04"),
+        );
+    }
+
+    #[test]
+    fn marker_matches_is_false_off_wasm() {
+        // No auth marker exists on the host build, so the ownership affordance
+        // never shows there regardless of the author.
+        assert!(!marker_matches("anyone"));
+    }
+
+    #[test]
+    fn marker_username_on_boot_is_none_off_wasm() {
+        assert_eq!(marker_username_on_boot(), None);
+    }
 
     #[test]
     fn avatar_parts_single_word() {
