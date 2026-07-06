@@ -1,3 +1,7 @@
+// Shared test helper `#[path]`-included into every integration-test crate; each crate
+// uses a different subset, so some helpers/re-exports read as dead/unused per-crate.
+// `#[expect]` can't be used (it would be "unfulfilled" in the crates that DO use them),
+// so these stay `#[allow]`. (#94)
 #![allow(dead_code)]
 
 use leptos::prelude::LeptosOptions;

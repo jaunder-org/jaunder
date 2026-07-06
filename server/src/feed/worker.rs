@@ -13,8 +13,7 @@ use tokio::sync::Mutex;
 use super::regenerate::{regenerate_feed, RegenerateError};
 
 const BATCH_LIMIT: usize = 200;
-#[allow(clippy::duration_suboptimal_units)]
-const LEASE_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
+const LEASE_TIMEOUT: Duration = Duration::from_mins(5);
 const BACKOFFS_SECS: &[u64] = &[60, 300, 1800, 7200, 7200, 7200];
 
 /// The background feed worker: the deps it needs to regenerate feeds and ping

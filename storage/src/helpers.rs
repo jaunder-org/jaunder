@@ -129,7 +129,9 @@ pub(crate) type PostRecordParts = (
 
 /// Row shape for the JSON-aggregated tags column. Field names match the SQL
 /// `json_object` keys verbatim, hence the matching `tag_` prefixes.
-#[allow(clippy::struct_field_names)]
+// Fields mirror the SQL `json_object` aggregation keys (tag_id/tag_slug/tag_display)
+// this struct deserializes; renaming would need per-field `#[serde(rename)]` for no gain.
+#[expect(clippy::struct_field_names)]
 #[derive(Deserialize)]
 struct PostTagJson {
     tag_id: i64,

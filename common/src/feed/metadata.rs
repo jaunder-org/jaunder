@@ -45,8 +45,11 @@ pub fn feed_etag(items: &[FeedItem], generated_at: DateTime<Utc>) -> String {
     hasher.update(b"|");
     hasher.update(last_id.to_le_bytes());
     let digest = hasher.finalize();
-    #[allow(clippy::format_collect)]
-    let hex: String = digest.iter().take(16).map(|b| format!("{b:02x}")).collect();
+    let hex = digest.iter().take(16).fold(String::new(), |mut acc, b| {
+        use std::fmt::Write as _;
+        let _ = write!(acc, "{b:02x}");
+        acc
+    });
     format!("\"sha256-{hex}\"")
 }
 
