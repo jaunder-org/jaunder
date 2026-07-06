@@ -591,7 +591,7 @@ mod tests {
     // module, so `#[expect]` self-removes if the names ever diverge. (#94)
     #![expect(clippy::similar_names)]
     use super::*;
-    use crate::test_support::{backends, recorded_postgres_url, sqlite_only, sqlite_url, Backend};
+    use crate::test_support::{backends, recorded_postgres_url, sqlite_url, Backend};
     use rstest::*;
     use rstest_reuse::*;
     use std::str::FromStr;
