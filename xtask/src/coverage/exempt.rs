@@ -2,9 +2,10 @@
 //! the 1-based line numbers that are exempt from coverage. Two constructs are
 //! recognized:
 //!
-//! - the body of a `#[component]` function — Leptos component bodies render only
-//!   in the browser (never natively exercised by the host test suite), so
-//!   measuring them is noise; and
+//! - a `#[component]` function, signature AND body — Leptos component bodies
+//!   render only in the browser, and the `#[component]` macro generates a prop
+//!   struct/builder from the parameter list whose code is attributed to the
+//!   signature lines and is likewise never exercised host-side; and
 //! - a literal `unreachable!(<message>)` invocation — a provably-dead line whose
 //!   exemption is *self-enforcing*: reaching it panics ⇒ the test fails ⇒
 //!   `cargo llvm-cov` exits non-zero ⇒ no report. A message **argument** is
@@ -48,7 +49,14 @@ struct ExemptVisitor<'a> {
 impl<'ast> syn::visit::Visit<'ast> for ExemptVisitor<'_> {
     fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
         if has_component_attr(&f.attrs) {
-            add_span(self.out, f.block.span()); // whole body exempt
+            // Exempt the WHOLE component fn, signature + body. The body renders only
+            // in the browser; and the `#[component]` macro generates a prop
+            // struct/builder from the parameter list whose code is attributed back
+            // to the SIGNATURE lines and is likewise never exercised host-side.
+            // Body-only exemption forced hand-marking the prop list — a `cov:ignore`
+            // on a function declaration, which is exactly the wrong shape (#245).
+            add_span(self.out, f.sig.span()); // signature + macro-generated prop code
+            add_span(self.out, f.block.span()); // body
         }
         syn::visit::visit_item_fn(self, f);
     }
@@ -116,6 +124,27 @@ fn Bar() -> impl IntoView {
             ex.contains(&3),
             "#[component(transparent)] body exempt: {ex:?}"
         );
+    }
+
+    #[test]
+    fn exempts_component_signature_prop_list() {
+        // The `#[component]` macro generates prop struct/builder code attributed to
+        // the multi-line parameter list; those signature lines must be exempt too,
+        // not just the body — else the prop list needs hand-marking (#245).
+        let src = "\
+#[component]
+pub fn Widget(
+    label: String,
+    count: u32,
+) -> impl IntoView {
+    view! { <span>{label}</span> }
+}
+";
+        let ex = exempt_lines(src).unwrap();
+        // Line 2 `pub fn Widget(`, 3 `label`, 4 `count` are signature lines.
+        assert!(ex.contains(&2), "fn signature line exempt: {ex:?}");
+        assert!(ex.contains(&3), "prop line exempt: {ex:?}");
+        assert!(ex.contains(&4), "prop line exempt: {ex:?}");
     }
 
     #[test]

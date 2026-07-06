@@ -131,13 +131,11 @@ pub fn Dot(proto: String) -> impl IntoView {
 // ─── 3.4 Chip ─────────────────────────────────────────────────
 
 #[component]
-// cov:ignore-start
 pub fn Chip(
     label: String,
     #[prop(optional)] proto: Option<String>,
     #[prop(optional)] count: Option<u32>,
     #[prop(default = false)] active: bool,
-    // cov:ignore-stop
 ) -> impl IntoView {
     let class = if active { "j-chip is-active" } else { "j-chip" };
     view! {
@@ -178,12 +176,10 @@ pub fn BackupBanner() -> impl IntoView {
 }
 
 #[component]
-// cov:ignore-start
 pub fn Topbar(
     #[prop(into)] title: Signal<String>,
     #[prop(optional, into)] sub: Option<Signal<String>>,
     #[prop(optional)] children: Option<Children>,
-    // cov:ignore-stop
 ) -> impl IntoView {
     view! {
         <div class="j-topbar">
@@ -208,7 +204,6 @@ pub fn Topbar(
 /// Renders a `name="body"` textarea and a `name="format"` hidden input.
 /// When `show_seg` is true (default), also renders the `.j-seg` format toggle.
 #[component]
-// cov:ignore-start
 pub fn ComposerFields(
     body: RwSignal<String>,
     format: RwSignal<String>,
@@ -221,7 +216,6 @@ pub fn ComposerFields(
     /// Optional callback fired on every body input event (e.g. to clear a flash message).
     #[prop(optional)]
     on_input: Option<Callback<()>>,
-    // cov:ignore-stop
 ) -> impl IntoView {
     view! {
         <textarea
@@ -308,7 +302,6 @@ pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
               the borrow clippy suggests isn't expressible in a component signature"
 )]
 #[component]
-// cov:ignore-start
 pub fn PostDisplay(
     post: TimelinePostSummary,
     banner: Option<String>,
@@ -317,7 +310,6 @@ pub fn PostDisplay(
     #[prop(default = TagContext::SiteWide)]
     tag_context: TagContext,
     #[prop(optional)] children: Option<Children>,
-    // cov:ignore-stop
 ) -> impl IntoView {
     let time_label = crate::render::format_post_time(&post.published_at);
     // Built once and shared by both arms so the authored content column is the SAME
@@ -386,7 +378,6 @@ fn marker_matches(author: &str) -> bool {
 }
 
 #[component]
-// cov:ignore-start
 pub fn PostCard(
     post: TimelinePostSummary,
     banner: Option<String>,
@@ -395,7 +386,6 @@ pub fn PostCard(
     tag_context: TagContext,
     #[prop(optional)] on_mutate: Option<Callback<()>>,
     #[prop(optional)] on_unpublish: Option<Callback<()>>,
-    // cov:ignore-stop
 ) -> impl IntoView {
     // The seed/anonymous data has `is_author = false` (the projector paints
     // anonymous-only), so on the Local timeline the owner's own posts would show no
@@ -609,7 +599,6 @@ fn audience_checkbox(
               sub-components would fragment the page without real benefit"
 )]
 #[component]
-// cov:ignore-start
 pub fn PostCreateForm(
     compact: bool,
     #[prop(optional)] username: Option<String>,
@@ -619,7 +608,6 @@ pub fn PostCreateForm(
     /// Called on every textarea input event (compact mode only).
     #[prop(optional)]
     on_input: Option<Callback<()>>,
-    // cov:ignore-stop
 ) -> impl IntoView {
     let create_action = ServerAction::<CreatePost>::new();
     let body = RwSignal::new(String::new());
@@ -1234,11 +1222,9 @@ pub fn normalize_tag_token(raw: &str) -> String {
               sub-components would fragment the page without real benefit"
 )]
 #[component]
-// cov:ignore-start
 pub fn TagInput(
     tags: RwSignal<Vec<TagSummary>>,
     #[prop(default = "tags")] name: &'static str,
-    // cov:ignore-stop
 ) -> impl IntoView {
     let input_text = RwSignal::new(String::new());
     let error: RwSignal<Option<String>> = RwSignal::new(None);

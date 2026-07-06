@@ -6,7 +6,6 @@ use leptos::prelude::*;
 /// `on_uploaded` is called with the media URL string on success.
 /// `on_error` is called with a human-readable message on failure.
 #[component]
-// cov:ignore-start
 pub fn MediaUploadButton(
     /// Called with the `/media/upload/...` URL when the upload succeeds.
     #[prop(into)]
@@ -14,7 +13,6 @@ pub fn MediaUploadButton(
     /// Called with an error message when the upload fails.
     #[prop(into, optional)]
     on_error: Option<Callback<String>>,
-    // cov:ignore-stop
 ) -> impl IntoView {
     // `on_uploaded`/`on_error` are consumed only in the wasm upload path below;
     // acknowledge them on the SSR build so they don't read as unused.

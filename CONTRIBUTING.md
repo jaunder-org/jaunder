@@ -411,15 +411,19 @@ manifest. Each run builds a fresh `cargo llvm-cov` report inside the Nix
 `coverage` check and classifies every executable source line. An **uncovered
 line fails the gate** unless one of three things exempts it:
 
-- **Structural exemption — `#[component]` bodies.** Leptos CSR UI is exercised
-  by the e2e matrix (browser WASM), not by native host tests, so component
-  function bodies are never covered host-side. The gate recognizes the
+- **Structural exemption — `#[component]` functions (signature + body).** Leptos
+  CSR UI is exercised by the e2e matrix (browser WASM), not by native host
+  tests, so component code is never covered host-side. The gate recognizes the
   `#[component]` attribute with `syn` (attribute-anchored, **fail-closed** — an
-  unrecognized component form leaves its body _measured_ and can FAIL, never
-  silently exempts) and drops those body lines from the executable set. The
-  exemption is keyed on the **construct**, not on files or directories, so
-  `#[server]` and plain helper code co-located in `web/src/pages/*` stays
-  measured.
+  unrecognized component form leaves it _measured_ and can FAIL, never silently
+  exempts) and drops both the body **and the signature** lines from the
+  executable set: the `#[component]` macro generates a prop struct/builder from
+  the parameter list whose code is attributed back to the signature lines and is
+  likewise only exercised on render, so the signature must be exempt too (else
+  the prop list needs hand-marking — a `cov:ignore` on a function declaration).
+  The exemption is keyed on the **construct**, not on files or directories, so
+  `#[server]` and plain helper code (incl. non-`#[component]` `-> impl IntoView`
+  view builders) co-located in `web/src/pages/*` stays measured.
 - **Structural exemption — `unreachable!("msg")`.** A literal `unreachable!`
   invocation carrying a **non-empty message** is dropped from the executable set
   with **no marker**. It is _self-enforcing_: reaching the line panics ⇒ the

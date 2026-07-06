@@ -109,12 +109,10 @@ where
 /// The scroll region shared by both timelines: the post list (or an empty
 /// placeholder) followed by the load-more button.
 #[component]
-// cov:ignore-start
 pub(crate) fn TimelineRows(
     state: TimelineState,
     on_mutate: Callback<()>,
     on_load_more: Callback<()>,
-    // cov:ignore-stop
 ) -> impl IntoView {
     let read_rows = move || read_signal!(state.rows);
     let read_has_more = move || read_signal!(state.has_more);
