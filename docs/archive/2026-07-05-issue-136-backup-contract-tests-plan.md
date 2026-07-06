@@ -104,7 +104,7 @@ change.
   cov:ignore the export arm (Task 8).
 - **Modify** `storage/src/backup.rs` — delete the 3 interim orchestration tests
   (Task 8).
-- **Create** `docs/adr/drafts/backup-test-homing-and-uniform-restore-failure.md`
+- **Create** `docs/adr/0054-backup-test-homing-and-uniform-restore-failure.md`
   (Task 9).
 
 ---
@@ -890,7 +890,7 @@ git commit -m "test(backup): drop interim sqlite_only tests; cov:ignore export r
 ## Task 9: ADR draft — backup test homing + uniform restore failure
 
 **Files:** Create:
-`docs/adr/drafts/backup-test-homing-and-uniform-restore-failure.md`
+`docs/adr/0054-backup-test-homing-and-uniform-restore-failure.md`
 
 - [x] **Step 1: Author the ADR draft** via **jaunder-adr** (numberless draft in
       `docs/adr/drafts/`; `cargo xtask adr promote` numbers it at ship). Record:
@@ -912,7 +912,7 @@ git commit -m "test(backup): drop interim sqlite_only tests; cov:ignore export r
       jaunder pre-commit restages prose):
 
 ```bash
-git add docs/adr/drafts/backup-test-homing-and-uniform-restore-failure.md
+git add docs/adr/0054-backup-test-homing-and-uniform-restore-failure.md
 git commit -m "docs(adr): draft backup test-homing + uniform restore-failure contract"
 ```
 
