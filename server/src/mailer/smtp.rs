@@ -40,10 +40,8 @@ impl LettreMailSender {
                 .to_string()
                 .parse()
                 .map_err(|e: lettre::address::AddressError| {
-                    // cov:ignore-start
                     BuildMailerError::InvalidSender(e.to_string())
                 })?;
-        // cov:ignore-stop
 
         let builder = match config.tls_mode {
             SmtpTlsMode::Plain => {
@@ -83,9 +81,9 @@ impl MailSender for LettreMailSender {
         let from: Mailbox = message
             .from
             .as_ref()
-            .map(|a| a.to_string().parse()) // cov:ignore
+            .map(|a| a.to_string().parse())
             .transpose()
-            .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))? // cov:ignore
+            .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))?
             .unwrap_or_else(|| self.sender.clone());
 
         let mut builder = Message::builder().from(from);
@@ -94,13 +92,17 @@ impl MailSender for LettreMailSender {
             let mailbox: Mailbox = to_addr
                 .to_string()
                 .parse()
-                .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))?; // cov:ignore
+                .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))?;
             builder = builder.to(mailbox);
         }
 
         let email = builder
             .subject(&message.subject)
             .body(message.body_text.clone())
+            // lettre's `.body()` only errors when no transfer-encoding fits the
+            // bytes; a Rust `String` is guaranteed-valid UTF-8 and always encodes
+            // (7bit/8bit/quoted-printable/base64), so this arm is unreachable with
+            // our `String` body — no valid input can drive it.
             .map_err(|e| MailError::Send(Box::new(e)))?; // cov:ignore
 
         self.mailer
@@ -196,6 +198,72 @@ mod tests {
             .send_email(&msg)
             .await
             .expect_err("send against a dead endpoint must fail");
+        assert!(matches!(error, MailError::Send(_)));
+    }
+
+    /// A domain-literal address (`user@[127.0.0.1]`) that `email_address`
+    /// accepts but lettre's stricter `Mailbox` parser rejects. Used to drive the
+    /// re-parse `map_err` arms, which are unreachable through equal parsers.
+    fn divergent_address() -> email_address::EmailAddress {
+        "user@[127.0.0.1]"
+            .parse()
+            .expect("email_address accepts a domain-literal")
+    }
+
+    #[tokio::test]
+    async fn from_config_rejects_sender_lettre_cannot_parse() {
+        // guard:no-backend — no DB
+        // `email_address` accepts the domain-literal sender, but lettre's Mailbox
+        // parser rejects it, so `from_config` maps it to InvalidSender.
+        let config = SmtpConfig {
+            sender: divergent_address(),
+            ..base_config(SmtpTlsMode::Plain)
+        };
+        // `LettreMailSender` is not `Debug`, so match on the result rather than
+        // using `expect_err`.
+        assert!(matches!(
+            LettreMailSender::from_config(&config),
+            Err(BuildMailerError::InvalidSender(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn send_email_rejects_from_lettre_cannot_parse() {
+        // guard:no-backend — no DB
+        // A valid sender builds the mailer; the message's `from` is the divergent
+        // address, so the `from` re-parse fails before any network use.
+        let sender =
+            LettreMailSender::from_config(&base_config(SmtpTlsMode::Plain)).expect("build mailer");
+        let msg = EmailMessage {
+            from: Some(divergent_address()),
+            to: vec!["bob@example.com".parse().expect("valid email")],
+            subject: "Hello".to_owned(),
+            body_text: "World".to_owned(),
+        };
+        let error = sender
+            .send_email(&msg)
+            .await
+            .expect_err("an unparseable from must fail");
+        assert!(matches!(error, MailError::Send(_)));
+    }
+
+    #[tokio::test]
+    async fn send_email_rejects_recipient_lettre_cannot_parse() {
+        // guard:no-backend — no DB
+        // Valid from (defaulted from config), but a recipient is the divergent
+        // address, so the `to` re-parse fails before any network use.
+        let sender =
+            LettreMailSender::from_config(&base_config(SmtpTlsMode::Plain)).expect("build mailer");
+        let msg = EmailMessage {
+            from: None,
+            to: vec![divergent_address()],
+            subject: "Hello".to_owned(),
+            body_text: "World".to_owned(),
+        };
+        let error = sender
+            .send_email(&msg)
+            .await
+            .expect_err("an unparseable recipient must fail");
         assert!(matches!(error, MailError::Send(_)));
     }
 }

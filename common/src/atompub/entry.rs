@@ -374,7 +374,13 @@ fn resolve_ref(e: &BytesRef) -> Result<String, AtomPubError> {
     if e.is_char_ref() {
         return match e.resolve_char_ref()? {
             Some(c) => Ok(c.to_string()),
-            None => Ok(String::new()), // cov:ignore
+            // `resolve_char_ref` yields `Ok(None)` only for a *non*-char ref (one
+            // without a `#` prefix); the enclosing `is_char_ref()` guard excludes
+            // that here. A numeric ref resolves to `Ok(Some(_))`, or — for an
+            // out-of-range/surrogate/NUL code point — `Err` (returned via `?`).
+            None => {
+                unreachable!("resolve_char_ref returns None only for non-char refs, excluded by is_char_ref()")
+            }
         };
     }
     let name =
@@ -698,6 +704,20 @@ mod tests {
 </entry>"#;
         let entry = entry_from_xml(xml).expect("parse");
         assert_eq!(entry.title().as_str(), "ABC \"q\" 'a'");
+    }
+
+    #[test]
+    fn non_scalar_char_ref_is_an_error() {
+        // `&#xD800;` is a syntactically valid numeric char-ref, but U+D800 is a
+        // UTF-16 surrogate — not a Unicode scalar value — so quick-xml's
+        // `resolve_char_ref` returns `Err` (surfaced through `?` as Malformed),
+        // never `Ok(None)`. This documents why `resolve_ref`'s `None` arm is
+        // unreachable: guarded by `is_char_ref()`, resolution yields only
+        // `Some(_)` or `Err`.
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>a&#xD800;b</title>
+</entry>"#;
+        assert!(entry_from_xml(xml).is_err());
     }
 
     #[test]

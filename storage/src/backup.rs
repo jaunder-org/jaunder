@@ -191,7 +191,7 @@ async fn export_directory_backup(
         options.media_path,
         &options.destination_path.join("media"),
         previous_backup.as_deref(),
-    )?; // cov:ignore
+    )?;
 
     write_manifest(options.destination_path, &manifest)?;
     Ok(manifest)
@@ -456,7 +456,10 @@ fn restore_media_entries(
             };
             fs::create_dir_all(parent)?;
             fs::copy(source_path, destination_path)?;
-        } // cov:ignore
+        }
+        // Entries that are neither a directory nor a regular file (sockets,
+        // FIFOs, devices, broken symlinks whose target vanished) are silently
+        // skipped — media backups only carry regular files.
     }
     Ok(())
 }
@@ -498,17 +501,15 @@ fn mirror_media_entries(
                 destination_root,
                 previous_backup,
                 &child_relative_path,
-            )?; // cov:ignore
+            )?;
         } else if metadata.is_file() {
             copy_or_link_media_file(
                 &source_path,
                 &destination_path,
                 previous_backup,
                 &child_relative_path,
-                // cov:ignore-start
             )?;
-        }
-        // cov:ignore-stop
+        } // cov:ignore is_file arm's closing brace; llvm-cov leaves it unmarked though the arm's copy-success and `?`-failure paths are both tested
     }
     Ok(())
 }
@@ -593,7 +594,7 @@ mod tests {
     // module, so `#[expect]` self-removes if the names ever diverge. (#94)
     #![expect(clippy::similar_names)]
     use super::*;
-    use crate::test_support::{backends, recorded_postgres_url, sqlite_url, Backend};
+    use crate::test_support::{backends, recorded_postgres_url, sqlite_only, sqlite_url, Backend};
     use rstest::*;
     use rstest_reuse::*;
     use std::str::FromStr;
@@ -751,6 +752,80 @@ mod tests {
             &source.join("image.txt"),
             &previous.join("media").join("image.txt")
         )?); // cov:ignore
+        Ok(())
+    }
+
+    #[test]
+    fn mirror_media_propagates_copy_failure() -> Result<(), BackupError> {
+        // Structural (root-immune) fs failure: pre-create the destination file
+        // path as a *directory* so `fs::copy` into it fails with EISDIR. The
+        // error propagates out of `copy_or_link_media_file` and back up through
+        // the recursive `mirror_media_entries` call — both `?` arms that were
+        // previously cov:ignored.
+        let temp = TempDir::new()?;
+        let source = temp.path().join("source");
+        let destination = temp.path().join("destination");
+        fs::create_dir_all(source.join("dir1"))?;
+        fs::write(source.join("dir1").join("file.txt"), "x")?;
+        // A directory sitting where the copied file must be written.
+        fs::create_dir_all(destination.join("dir1").join("file.txt"))?;
+
+        let error = mirror_media_directory(&source, &destination, None)
+            .expect_err("copying onto a directory must fail");
+        assert!(matches!(error, BackupError::Io(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn restore_media_skips_non_regular_entries() -> Result<(), BackupError> {
+        // A Unix-domain socket is neither a directory nor a regular file, so the
+        // restore walk takes the fallthrough arm (previously cov:ignored) and
+        // silently skips it, while a sibling regular file still copies.
+        let temp = TempDir::new()?;
+        let source = temp.path().join("source");
+        let destination = temp.path().join("destination");
+        fs::create_dir_all(&source)?;
+        let _listener =
+            std::os::unix::net::UnixListener::bind(source.join("sock")).expect("bind unix socket");
+        fs::write(source.join("real.txt"), "keep")?;
+
+        restore_media_directory(&source, &destination)?;
+
+        assert_eq!(fs::read_to_string(destination.join("real.txt"))?, "keep");
+        assert!(
+            !destination.join("sock").exists(),
+            "a non-regular entry must not be copied"
+        );
+        Ok(())
+    }
+
+    #[apply(sqlite_only)]
+    #[tokio::test]
+    async fn export_propagates_media_mirror_failure(
+        #[case] backend: Backend,
+        // reason: the media-mirror `?` propagation in `export_directory_backup` is
+        // backend-independent filesystem code; SQLite exercises it fully.
+    ) -> Result<(), BackupError> {
+        let source = backend.setup().await;
+        let temp = TempDir::new()?;
+        // A *regular file* where a media directory is expected: `mirror` calls
+        // `fs::read_dir` on it, which fails with ENOTDIR. That structural error
+        // propagates out of `mirror_media_directory` and through the
+        // `export_directory_backup` `?` that was cov:ignored.
+        let media = temp.path().join("media-not-a-dir");
+        fs::write(&media, "not a directory")?;
+        let backup = temp.path().join("backup");
+        let source_db = backup_db_options(backend, &source.base)?;
+
+        let error = export_backup(BackupExportOptions {
+            database: &source_db,
+            media_path: &media,
+            destination_path: &backup,
+            mode: BackupMode::Directory,
+        })
+        .await
+        .expect_err("a dangling media symlink must fail the export");
+        assert!(matches!(error, BackupError::Io(_)));
         Ok(())
     }
 
@@ -981,6 +1056,9 @@ mod tests {
         let temp = TempDir::new()?;
         let media = temp.path().join("media");
         fs::create_dir_all(&media)?;
+        // A regular media file so the export mirrors it through the `is_file`
+        // success branch (not just the empty-dir / failure paths).
+        fs::write(media.join("avatar.txt"), b"img")?;
         let backup = temp.path().join("backup");
 
         let source_db = backup_db_options(backend, &source.base)?;
