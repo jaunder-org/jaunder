@@ -24,7 +24,11 @@ pub use crate::render::TagCtx as TagContext;
 /// Renders a post's tags as clickable chips for the reactive authored post view
 /// (kept markup-equivalent to [`crate::render::render_tag_list`], the anonymous /
 /// projector path). See [`TagContext`] for the linking behavior.
-#[allow(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Leptos #[component] props are stored by the framework and must be owned; \
+              the borrow clippy suggests isn't expressible in a component signature"
+)]
 #[component]
 pub fn TagList(tags: Vec<TagSummary>, context: TagContext) -> impl IntoView {
     if tags.is_empty() {
@@ -90,7 +94,11 @@ pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoVie
 
 // ─── 3.2 Avatar ───────────────────────────────────────────────
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Leptos #[component] props are stored by the framework and must be owned; \
+              the borrow clippy suggests isn't expressible in a component signature"
+)]
 #[component]
 pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
     let (initials, hue) = crate::render::avatar_parts(&name);
@@ -109,7 +117,11 @@ pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
 
 // ─── 3.3 Dot ──────────────────────────────────────────────────
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Leptos #[component] props are stored by the framework and must be owned; \
+              the borrow clippy suggests isn't expressible in a component signature"
+)]
 #[component]
 pub fn Dot(proto: String) -> impl IntoView {
     let style = format!("background: var(--c-{proto})");
@@ -292,7 +304,11 @@ pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
     }
 } // cov:ignore
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Leptos #[component] props are stored by the framework and must be owned; \
+              the borrow clippy suggests isn't expressible in a component signature"
+)]
 #[component]
 // cov:ignore-start
 pub fn PostDisplay(

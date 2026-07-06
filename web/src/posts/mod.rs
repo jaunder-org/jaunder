@@ -347,7 +347,9 @@ pub async fn get_post(
         // viewing their own unpublished draft, so require auth and confirm the
         // requester owns the namespace; everyone else gets an indistinguishable
         // 404 (never a 403 that would leak the draft's existence).
-        let auth = require_auth().await.map_err(private_post_not_found_error)?;
+        let auth = require_auth()
+            .await
+            .map_err(|e| private_post_not_found_error(&e))?;
         if auth.username != username_parsed {
             return Err(not_found_error());
         }
@@ -371,7 +373,9 @@ pub async fn get_post(
 #[server(endpoint = "/get_post_preview")]
 pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
     boundary!("get_post_preview", {
-        let auth = require_auth().await.map_err(private_post_not_found_error)?;
+        let auth = require_auth()
+            .await
+            .map_err(|e| private_post_not_found_error(&e))?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
         let post = posts
@@ -521,7 +525,9 @@ pub async fn default_audience_selection() -> WebResult<AudienceSelection> {
 pub async fn post_audience_selection(post_id: i64) -> WebResult<AudienceSelection> {
     boundary!("post_audience_selection", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
-        let auth = require_auth().await.map_err(private_post_not_found_error)?;
+        let auth = require_auth()
+            .await
+            .map_err(|e| private_post_not_found_error(&e))?;
 
         let post = posts
             .get_post_by_id(post_id, &viewer_identity().await)

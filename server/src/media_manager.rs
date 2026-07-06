@@ -101,11 +101,8 @@ impl MediaManager {
     /// # Errors
     ///
     /// Returns `anyhow::Error` if the filename is empty after sanitization.
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn validate_filename(file_name: Option<impl AsRef<str>>) -> anyhow::Result<String> {
-        let raw_name = file_name
-            .as_ref()
-            .map_or("upload", std::convert::AsRef::as_ref);
+    pub fn validate_filename(file_name: Option<&str>) -> anyhow::Result<String> {
+        let raw_name = file_name.unwrap_or("upload");
         let name = sanitize_filename(raw_name);
         if name.is_empty() {
             anyhow::bail!(MediaError::BadRequest("Invalid filename".to_owned()));
@@ -302,10 +299,6 @@ impl MediaManager {
     ///
     /// Returns `anyhow::Error` on an invalid filename, oversized payload, quota
     /// exhaustion, I/O failure, or DB error.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the content-addressed target path has no parent directory.
     pub async fn upload_bytes(
         &self,
         auth_user: &AuthUser,

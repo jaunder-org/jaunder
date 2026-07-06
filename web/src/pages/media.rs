@@ -125,7 +125,7 @@ pub fn MediaPage() -> impl IntoView {
                                     <tbody>
                                         {items
                                             .into_iter()
-                                            .map(|item| render_media_row(item, delete_action))
+                                            .map(|item| render_media_row(&item, delete_action))
                                             .collect::<Vec<_>>()}
                                     </tbody>
                                 </table>
@@ -168,9 +168,8 @@ pub fn MediaPage() -> impl IntoView {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
 // cov:ignore-start
-fn render_media_row(item: MediaItem, delete_action: ServerAction<DeleteMedia>) -> impl IntoView {
+fn render_media_row(item: &MediaItem, delete_action: ServerAction<DeleteMedia>) -> impl IntoView {
     let url = item.url.clone();
     let filename = item.filename.clone();
     let sha256 = item.sha256.clone();
