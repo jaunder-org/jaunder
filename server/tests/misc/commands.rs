@@ -32,7 +32,9 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
-use crate::backup_fixture::{assert_backup_fixture_restored, populate_backup_fixture};
+use crate::backup_fixture::{
+    assert_backup_fixture_restored, assert_target_unmodified, populate_backup_fixture,
+};
 use crate::helpers::{
     backends, nonexistent_postgres_url, postgres_bootstrap_url, postgres_only,
     postgres_test_authority, sqlite_url, unique_postgres_url, Backend, PostgresDbGuard,
@@ -691,19 +693,7 @@ async fn cmd_restore_rejects_dangling_foreign_key(#[case] backend: Backend) {
     );
 
     // Rollback: nothing from the backup landed in the target.
-    let state = open_existing_database(&target_args.db)
-        .await
-        .expect("open target");
-    let username: Username = "backupuser".parse().expect("valid username");
-    assert!(
-        state
-            .users
-            .get_user_by_username(&username)
-            .await
-            .expect("get user")
-            .is_none(),
-        "target must be unmodified after a rejected restore"
-    );
+    assert_target_unmodified(&target_args).await;
 }
 
 // #136: a backup with a malformed row is rejected and rolls back cleanly on both backends.
@@ -744,19 +734,7 @@ async fn cmd_restore_rolls_back_on_malformed_row(#[case] backend: Backend) {
         "expected InvalidBackup, got: {err}"
     );
 
-    let state = open_existing_database(&target_args.db)
-        .await
-        .expect("open target");
-    let username: Username = "backupuser".parse().expect("valid username");
-    assert!(
-        state
-            .users
-            .get_user_by_username(&username)
-            .await
-            .expect("get user")
-            .is_none(),
-        "target must be unmodified after a rejected restore"
-    );
+    assert_target_unmodified(&target_args).await;
 }
 
 // #136: a backup missing its db/ directory is rejected (InvalidBackup) on both backends.

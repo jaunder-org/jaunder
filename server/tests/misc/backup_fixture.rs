@@ -66,9 +66,9 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, post_id: i64) {
     assert_eq!(user.display_name.as_deref(), Some("Backup User"));
 
     // View as the restored post's author. Backup/restore does not yet carry the
-    // `post_audiences` rows (issue #4), so an Anonymous viewer would be filtered
-    // out by the resolution predicate; the owner is always admitted via the author
-    // branch, which is the correct viewer here.
+    // `post_audiences` rows (the `TABLES_IN_EXPORT_ORDER` gap tracked in issue #4),
+    // so an Anonymous viewer would be filtered out by the resolution predicate; the
+    // owner is always admitted via the author branch, which is the correct viewer here.
     let local = state
         .subscriptions
         .local_channel_id()
@@ -98,5 +98,21 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, post_id: i64) {
         std::fs::read_to_string(args.storage_path.join("media").join("avatar.txt"))
             .expect("read restored media"),
         "media"
+    );
+}
+
+/// Assert a restore target is untouched — the fixture's operator user is absent —
+/// after a rejected restore rolled back.
+pub async fn assert_target_unmodified(args: &StorageArgs) {
+    let state = open_existing_database(&args.db).await.expect("open target");
+    let username: Username = "backupuser".parse().expect("valid username");
+    assert!(
+        state
+            .users
+            .get_user_by_username(&username)
+            .await
+            .expect("get user")
+            .is_none(),
+        "target must be unmodified after a rejected restore"
     );
 }
