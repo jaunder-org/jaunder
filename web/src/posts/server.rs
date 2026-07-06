@@ -228,7 +228,7 @@ pub async fn find_draft_by_permalink_for_user(
         }
 
         let Some(next_cursor) = next_cursor else {
-            return Ok(None); // cov:ignore
+            unreachable!("drafts is non-empty after the is_empty guard, so last() is Some")
         };
         cursor = Some(next_cursor);
     }

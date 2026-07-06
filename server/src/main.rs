@@ -37,8 +37,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         // clap's built-in help/usage, which prints and exits.
         // cov:ignore-start
         Cli::parse_from(["jaunder", "--help"]);
-        unreachable!()
         // cov:ignore-stop
+        unreachable!("Cli::parse_from([\"jaunder\", \"--help\"]) prints help and exits the process")
     };
     // `run` owns telemetry for *every* command, `serve` included: one guard,
     // held across the whole dispatch, whose Drop flushes the OTLP exporters

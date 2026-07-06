@@ -197,7 +197,7 @@ impl Backend {
         let (state, base) = match self {
             Backend::Sqlite => {
                 let DbConnectOptions::Sqlite(options) = sqlite_url(&dir) else {
-                    unreachable!() // cov:ignore — sqlite_url always yields SQLite
+                    unreachable!("sqlite_url always yields Sqlite")
                 };
                 let (state, pool) = crate::sqlite::open_sqlite_database_with_pool(&options, true)
                     .await
@@ -208,7 +208,7 @@ impl Backend {
                 let (url, guard) = template_postgres_url().await;
                 // template_postgres_url() always yields Postgres, so unreachable.
                 let DbConnectOptions::Postgres { options, .. } = &url else {
-                    unreachable!() // cov:ignore
+                    unreachable!("template_postgres_url always yields Postgres")
                 };
                 let (state, pool) = crate::postgres::open_postgres_database_with_pool(options)
                     .await
@@ -450,7 +450,7 @@ pub async fn unique_postgres_url() -> (DbConnectOptions, PostgresDbGuard) {
 
     let bootstrap: sqlx::postgres::PgConnectOptions = postgres_bootstrap_url().parse().unwrap();
     let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
-        panic!("expected postgres options"); // cov:ignore — postgres_url() always parses to Postgres
+        unreachable!("postgres_url always yields Postgres")
     };
     let owner = options.get_username();
     assert!(
@@ -505,7 +505,7 @@ async fn ensure_template_db() {
 
     if !exists {
         let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
-            panic!("expected postgres options"); // cov:ignore — postgres_url() always parses to Postgres
+            unreachable!("postgres_url always yields Postgres")
         };
         let owner = options.get_username();
         sqlx::query(&format!(
@@ -548,7 +548,7 @@ pub async fn template_postgres_url() -> (DbConnectOptions, PostgresDbGuard) {
     ensure_template_db().await;
 
     let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
-        panic!("expected postgres options"); // cov:ignore — postgres_url() always parses to Postgres
+        unreachable!("postgres_url always yields Postgres")
     };
     let owner = options.get_username();
     let db_name = unique_postgres_db_name();

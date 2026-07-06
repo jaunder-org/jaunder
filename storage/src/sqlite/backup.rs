@@ -192,8 +192,8 @@ fn bind_json_value<'q>(
             // genuinely non-integral numbers.
             if let Some(value) = value.as_i64() {
                 query.bind(value)
-            } else if let Some(value) = value.as_u64().and_then(|value| i64::try_from(value).ok()) {
-                query.bind(value) // cov:ignore
+            } else if value.as_u64().and_then(|v| i64::try_from(v).ok()).is_some() {
+                unreachable!("as_i64 already claims every u64 that fits in i64")
             } else {
                 query.bind(value.as_f64())
             }
