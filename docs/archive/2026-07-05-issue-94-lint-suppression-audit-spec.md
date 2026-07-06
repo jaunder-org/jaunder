@@ -3,6 +3,29 @@
 **Issue:** jaunder-org/jaunder#94 · **Milestone:** Code quality improvement ·
 **Type:** Task **Branch:** `worktree-issue-94-clippy-suppressions`
 
+## Delivery outcome (2026-07-06) — landed as a mechanical checkpoint
+
+This shipped as a **checkpoint, not the full goal**. Result: **192 `#[allow]` → 5
+`#[allow]` + 28 `#[expect]`** (+ the D-config-1 `must_use_candidate` disable), all
+mechanical/behavior-preserving fixes; `cargo xtask validate` green (incl. e2e).
+
+The acceptance criteria below are **partially met**, by explicit decision:
+
+- **AC-zero-allow / AC-keepers not literally met.** 5 `#[allow]` survive, and the
+  surviving `#[expect]` set is broader than K1–K3: several categories the fix-table
+  called "fix the code" (the 8 Leptos `too_many_lines` view fns, `needless_pass_by_value`,
+  the 6 crate-root test `unwrap/expect`, `similar_names`, `struct_field_names`) were
+  reinterpreted as justified idiom/test keepers. On review this was recognized as
+  *deferring* the underlying design fixes, not completing them.
+- **Root causes → follow-ups (the real path to zero):** #300 (make `web` wasm-only —
+  extract the `#[server]`/SSR layer; dissolves the `cfg(not(wasm32))` stubs +
+  `must_use_candidate`), #301 (decompose oversized view components; resolve
+  `needless_pass_by_value`; drop display casts), #298 (server test-infra shared crate;
+  the `helpers/mod.rs` + crate-root test allows), #299 (`#[server]`-fn input structs),
+  #294 (anti-regrowth guardrail).
+- The new `media_manager` `cov:ignore` (unreachable `.parent()` branch, forced by the
+  P2 panic→error fix) was explicitly approved.
+
 ## Goal
 
 Drive the repository to **zero in-source `#[allow(...)]`**, honoring
