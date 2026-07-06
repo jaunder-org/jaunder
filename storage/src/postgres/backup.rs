@@ -15,6 +15,25 @@ use crate::backup::{
 };
 use crate::sql::quote_identifier;
 
+/// Map a Postgres integrity-constraint violation (SQLSTATE class `23`, e.g. `23503`
+/// `foreign_key_violation`) to `ConstraintViolation`, so a restore that violates the
+/// schema fails uniformly with `SQLite` (which detects it via `foreign_key_check`).
+/// Any other database error is a genuine infrastructure failure and passes through as
+/// `Sqlx`.
+fn map_restore_error(error: sqlx::Error) -> BackupError {
+    let constraint_message = error
+        .as_database_error()
+        .filter(|db| db.code().is_some_and(|code| code.starts_with("23")))
+        .map(|db| db.message().to_owned());
+    match constraint_message {
+        Some(message) => BackupError::ConstraintViolation(message),
+        // cov:ignore-start — a non-`23` restore error isn't triggerable through the
+        // public restore interface; only the constraint path is exercised by tests.
+        None => BackupError::Sqlx(error),
+        // cov:ignore-stop
+    }
+}
+
 pub(crate) async fn export_database(
     pool: &PgPool,
     destination_path: &Path,
@@ -86,11 +105,9 @@ pub(crate) async fn restore_database(
             sqlx::query("COMMIT").execute(&mut *connection).await?;
             Ok(())
         }
-        // cov:ignore-start
         Err(error) => {
             let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
             Err(error)
-            // cov:ignore-stop
         }
     }
 }
@@ -145,7 +162,10 @@ async fn import_table(
             // cov:ignore-stop
             query = query.bind(json_value_as_restore_text(value));
         }
-        query.execute(&mut *connection).await?;
+        query
+            .execute(&mut *connection)
+            .await
+            .map_err(map_restore_error)?;
     }
 
     Ok(())

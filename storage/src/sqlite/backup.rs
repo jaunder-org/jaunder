@@ -52,9 +52,13 @@ pub(crate) async fn export_database(
             sqlx::query("COMMIT").execute(&mut *connection).await?;
             Ok(manifest)
         }
+        // cov:ignore-start — export rollback is unreachable through public export_backup
+        // (export_directory_backup always creates the db/ subdir before the dialect
+        // writes); no host-side trigger. Parity with postgres/backup.rs.
         Err(error) => {
             let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
             Err(error)
+            // cov:ignore-stop
         }
     }
 }
@@ -84,7 +88,11 @@ pub(crate) async fn restore_database(
             let columns = columns(&mut connection, table).await?;
             import_table(&mut connection, source_path, table, &columns).await?;
         }
-        Ok::<(), BackupError>(())
+        // Validate FKs *before* committing so a violation rolls the whole restore
+        // back rather than leaving invalid data committed. `foreign_key_check`
+        // scans for violations and works with `foreign_keys = OFF`, so it runs
+        // correctly here inside the transaction.
+        validate_foreign_keys(&mut connection).await
     }
     .await;
 
@@ -94,7 +102,7 @@ pub(crate) async fn restore_database(
             sqlx::query("PRAGMA foreign_keys = ON")
                 .execute(&mut *connection)
                 .await?;
-            validate_foreign_keys(&mut connection).await
+            Ok(())
         }
         Err(error) => {
             let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
@@ -308,39 +316,6 @@ async fn schema_checksum(connection: &mut SqliteConnection) -> Result<String, Ba
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{sqlite_only, Backend};
-    use rstest::*;
-    use rstest_reuse::*;
-    use sqlx::Connection;
-    use tempfile::TempDir;
-
-    /// An in-memory `SQLite` pool with the app migrations applied. Shared setup for
-    /// the backup tests (they exercise `SQLite`-specific dialect internals against a
-    /// real schema). `expect`s rather than `?`-propagates: a migration failure is
-    /// a broken build, not a case under test, so there is no error path to cover.
-    async fn migrated_pool() -> SqlitePool {
-        let pool = SqlitePool::connect("sqlite::memory:")
-            .await
-            .expect("connect in-memory sqlite pool");
-        sqlx::migrate!("./migrations/sqlite")
-            .run(&pool)
-            .await
-            .expect("run sqlite migrations");
-        pool
-    }
-
-    /// An in-memory `SQLite` connection with the app migrations applied (for tests
-    /// that take a `&mut SqliteConnection` rather than a pool). See [`migrated_pool`].
-    async fn migrated_conn() -> sqlx::SqliteConnection {
-        let mut conn = sqlx::SqliteConnection::connect("sqlite::memory:")
-            .await
-            .expect("connect in-memory sqlite connection");
-        sqlx::migrate!("./migrations/sqlite")
-            .run(&mut conn)
-            .await
-            .expect("run sqlite migrations");
-        conn
-    }
 
     #[test]
     fn json_select_marks_boolean_values_as_json_booleans() {
@@ -394,111 +369,5 @@ mod tests {
             let query = sqlx::query("SELECT ?1");
             let _query = bind_json_value(query, &value);
         }
-    }
-
-    // reason: interim single-backend; backup is a cross-backend contract to be reconceived at the contract level (round-trip + cross-backend fidelity) in #136
-    #[apply(sqlite_only)]
-    #[tokio::test]
-    async fn export_database_triggers_rollback_on_write_failure(
-        #[case] backend: Backend,
-    ) -> Result<(), BackupError> {
-        let _ = backend;
-        let pool = migrated_pool().await;
-        let temp = TempDir::new()?;
-        // No "db" subdirectory — File::create in export_table will fail
-        let result = export_database(&pool, temp.path(), BackupMode::Directory).await;
-        assert!(
-            result.is_err(),
-            "export should fail when db subdir is missing"
-        );
-        Ok(())
-    }
-
-    // reason: interim single-backend; backup is a cross-backend contract to be reconceived at the contract level (round-trip + cross-backend fidelity) in #136
-    #[apply(sqlite_only)]
-    #[tokio::test]
-    async fn restore_database_triggers_rollback_on_import_failure(
-        #[case] backend: Backend,
-    ) -> Result<(), BackupError> {
-        let _ = backend;
-        let pool = migrated_pool().await;
-        let temp = TempDir::new()?;
-        let backup_dir = temp.path().join("backup");
-        std::fs::create_dir_all(backup_dir.join("db"))?;
-        let manifest = export_database(&pool, &backup_dir, BackupMode::Directory).await?;
-
-        // Corrupt the first table's ndjson with a non-object row to trigger InvalidBackup
-        if let Some(first_table) = manifest.tables.first() {
-            use std::io::Write;
-            let ndjson_path = backup_dir.join("db").join(format!("{first_table}.ndjson"));
-            let mut file = std::fs::OpenOptions::new().append(true).open(ndjson_path)?;
-            writeln!(file, "[1, 2, 3]")?;
-        } // cov:ignore
-
-        let dest_pool = migrated_pool().await;
-        let result = restore_database(&dest_pool, &backup_dir, &manifest).await;
-        assert!(result.is_err(), "restore should fail on corrupted backup");
-        Ok(())
-    }
-
-    // reason: interim single-backend; backup is a cross-backend contract to be reconceived at the contract level (round-trip + cross-backend fidelity) in #136
-    #[apply(sqlite_only)]
-    #[tokio::test]
-    async fn validate_foreign_keys_reports_violations(
-        #[case] backend: Backend,
-    ) -> Result<(), BackupError> {
-        let _ = backend;
-        let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:").await?;
-        sqlx::query("PRAGMA foreign_keys = OFF")
-            .execute(&mut connection)
-            .await?;
-        sqlx::query("CREATE TABLE parent (id INTEGER PRIMARY KEY)")
-            .execute(&mut connection)
-            .await?;
-        sqlx::query(
-            "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id))",
-        )
-        .execute(&mut connection)
-        .await?;
-        sqlx::query("INSERT INTO child (id, parent_id) VALUES (1, 999)")
-            .execute(&mut connection)
-            .await?;
-
-        let error = validate_foreign_keys(&mut connection)
-            .await
-            .expect_err("foreign key violation");
-
-        assert!(matches!(error, BackupError::ConstraintViolation(_)));
-        Ok(())
-    }
-
-    // reason: interim single-backend; backup is a cross-backend contract to be reconceived at the contract level (round-trip + cross-backend fidelity) in #136
-    #[apply(sqlite_only)]
-    #[tokio::test]
-    async fn schema_version_returns_migration_count(
-        #[case] backend: Backend,
-    ) -> Result<(), BackupError> {
-        let _ = backend;
-        let mut connection = migrated_conn().await;
-        let version = schema_version(&mut connection).await?;
-        assert_eq!(version, 22, "expected one entry per migration file");
-        Ok(())
-    }
-
-    // reason: interim single-backend; backup is a cross-backend contract to be reconceived at the contract level (round-trip + cross-backend fidelity) in #136
-    #[apply(sqlite_only)]
-    #[tokio::test]
-    async fn schema_checksum_returns_nonempty_hex_string(
-        #[case] backend: Backend,
-    ) -> Result<(), BackupError> {
-        let _ = backend;
-        let mut connection = migrated_conn().await;
-        let checksum = schema_checksum(&mut connection).await?;
-        assert_eq!(checksum.len(), 64, "SHA-256 hex string must be 64 chars");
-        assert!(
-            checksum.chars().all(|c| c.is_ascii_hexdigit()),
-            "checksum must be lowercase hex"
-        );
-        Ok(())
     }
 }

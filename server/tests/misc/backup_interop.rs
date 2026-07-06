@@ -7,14 +7,14 @@
     clippy::unused_async
 )]
 
-use chrono::Utc;
-use common::password::Password;
-use common::username::Username;
-use common::visibility::AudienceTarget;
+use std::path::Path;
+
 use jaunder::cli::StorageArgs;
 use jaunder::commands::{cmd_backup, cmd_init, cmd_restore};
-use storage::{open_existing_database, BackupMode, CreatePostInput, PostFormat};
+use storage::BackupMode;
 use tempfile::TempDir;
+
+use crate::backup_fixture::{assert_backup_fixture_restored, populate_backup_fixture};
 
 use rstest::*;
 #[allow(clippy::single_component_path_imports)]
@@ -44,93 +44,6 @@ async fn postgres_storage_args(base: &TempDir, name: &str) -> (StorageArgs, Post
         },
         guard,
     )
-}
-
-async fn populate_backup_fixture(args: &StorageArgs) -> i64 {
-    let state = open_existing_database(&args.db)
-        .await
-        .expect("open database");
-    let username: Username = "backupuser".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, Some("Backup User"), true)
-        .await
-        .expect("create user");
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id,
-            title: Some("Restored Post".to_owned()),
-            slug: "restored-post".parse().expect("valid slug"),
-            body: "body text".to_owned(),
-            format: PostFormat::Markdown,
-            rendered_html: "<p>body text</p>".to_owned(),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-        })
-        .await
-        .expect("create post");
-    state
-        .posts
-        .tag_post(post_id, "Backup-Test")
-        .await
-        .expect("tag post");
-    std::fs::write(args.storage_path.join("media").join("avatar.txt"), "media")
-        .expect("write media");
-    post_id
-}
-
-async fn assert_backup_fixture_restored(args: &StorageArgs, post_id: i64) {
-    let state = open_existing_database(&args.db)
-        .await
-        .expect("open restored database");
-    let username: Username = "backupuser".parse().expect("valid username");
-    let user = state
-        .users
-        .get_user_by_username(&username)
-        .await
-        .expect("get user")
-        .expect("restored user");
-    assert!(user.is_operator);
-    assert_eq!(user.display_name.as_deref(), Some("Backup User"));
-
-    // View as the restored post's author. Backup/restore does not yet carry the
-    // `post_audiences` rows (see TABLES_IN_EXPORT_ORDER), so an Anonymous viewer
-    // would be filtered out by the resolution predicate; the owner is always
-    // admitted via the author branch, which is the correct viewer here.
-    let local = state
-        .subscriptions
-        .local_channel_id()
-        .await
-        .expect("local channel id");
-    let post = state
-        .posts
-        .get_post_by_id(
-            post_id,
-            &common::visibility::ViewerIdentity::local(user.user_id, local),
-        )
-        .await
-        .expect("get post")
-        .expect("restored post");
-    assert_eq!(post.title.as_deref(), Some("Restored Post"));
-    assert_eq!(post.slug.as_str(), "restored-post");
-
-    let tags = state
-        .posts
-        .get_tags_for_post(post_id)
-        .await
-        .expect("get tags");
-    assert_eq!(tags.len(), 1);
-    assert_eq!(tags[0].tag_slug.as_str(), "backup-test");
-    assert_eq!(tags[0].tag_display, "Backup-Test");
-
-    assert_eq!(
-        std::fs::read_to_string(args.storage_path.join("media").join("avatar.txt"))
-            .expect("read restored media"),
-        "media"
-    );
 }
 
 #[apply(postgres_only)]
@@ -199,4 +112,103 @@ async fn postgres_backup_restores_into_sqlite(#[case] backend: Backend) {
         .expect("restore into sqlite");
 
     assert_backup_fixture_restored(&target_args, post_id).await;
+}
+
+/// Assert two backup directories are byte-identical over `db/*.ndjson` and
+/// `manifest.json` with only its (wall-clock) `timestamp` field excluded.
+fn assert_backups_equal(left: &Path, right: &Path) {
+    let mut left_tables: Vec<_> = std::fs::read_dir(left.join("db"))
+        .expect("read left db")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    let mut right_tables: Vec<_> = std::fs::read_dir(right.join("db"))
+        .expect("read right db")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    left_tables.sort();
+    right_tables.sort();
+    assert_eq!(left_tables, right_tables, "db table file sets differ");
+    for name in left_tables {
+        assert_eq!(
+            std::fs::read(left.join("db").join(&name)).expect("read left table"),
+            std::fs::read(right.join("db").join(&name)).expect("read right table"),
+            "table {} differs between dumps",
+            name.display()
+        );
+    }
+    assert_eq!(
+        manifest_without_timestamp(left),
+        manifest_without_timestamp(right),
+        "manifest differs (excluding timestamp)"
+    );
+}
+
+fn manifest_without_timestamp(dir: &Path) -> serde_json::Value {
+    let text = std::fs::read_to_string(dir.join("manifest.json")).expect("read manifest");
+    let mut value: serde_json::Value = serde_json::from_str(&text).expect("parse manifest");
+    value
+        .as_object_mut()
+        .expect("manifest is a JSON object")
+        .remove("timestamp");
+    value
+}
+
+// #136: a Postgres→SQLite→Postgres→SQLite cycle proves value fidelity through four hops
+// AND byte-stable dumps on BOTH backends. Seeding from Postgres is deliberate: Postgres
+// `timestamptz` stores at microsecond resolution — the coarser of the two backends — so
+// every timestamp is pinned at µs from the first store and no later hop quantizes it
+// further. SQLite stores restored text verbatim and never truncates, so both same-backend
+// dump pairs stay byte-identical. (Seeding from SQLite instead would lose sub-µs precision
+// of `created_at`/`updated_at` on the first SQLite→Postgres hop — see ADR-0054 DEC-D — and
+// only the Postgres pair would be byte-comparable.)
+#[apply(postgres_only)]
+// reason: the cross-backend cycle exercises BOTH engines in one test, so it needs a live Postgres.
+#[tokio::test]
+async fn backup_round_trips_full_cycle_across_backends(#[case] backend: Backend) {
+    let _ = backend;
+
+    let base = TempDir::new().expect("temp dir");
+
+    // P1 (postgres): seed, export E_P1.
+    let (p1, _pg_p1) = postgres_storage_args(&base, "p1").await;
+    cmd_init(&p1, false).await.expect("init p1");
+    let post_id = populate_backup_fixture(&p1).await;
+    let dir_p1 = base.path().join("dir-p1");
+    cmd_backup(&p1, BackupMode::Directory, Some(dir_p1.clone()))
+        .await
+        .expect("backup p1");
+
+    // S1 (sqlite): restore, assert, export E_S1.
+    let s1 = sqlite_storage_args(&base, "s1");
+    cmd_init(&s1, false).await.expect("init s1");
+    cmd_restore(&s1, &dir_p1).await.expect("restore into s1");
+    assert_backup_fixture_restored(&s1, post_id).await;
+    let dir_s1 = base.path().join("dir-s1");
+    cmd_backup(&s1, BackupMode::Directory, Some(dir_s1.clone()))
+        .await
+        .expect("backup s1");
+
+    // P2 (postgres): restore, assert, export E_P2.
+    let (p2, _pg_p2) = postgres_storage_args(&base, "p2").await;
+    cmd_init(&p2, false).await.expect("init p2");
+    cmd_restore(&p2, &dir_s1).await.expect("restore into p2");
+    assert_backup_fixture_restored(&p2, post_id).await;
+    let dir_p2 = base.path().join("dir-p2");
+    cmd_backup(&p2, BackupMode::Directory, Some(dir_p2.clone()))
+        .await
+        .expect("backup p2");
+
+    // S2 (sqlite): restore, assert, export E_S2.
+    let s2 = sqlite_storage_args(&base, "s2");
+    cmd_init(&s2, false).await.expect("init s2");
+    cmd_restore(&s2, &dir_p2).await.expect("restore into s2");
+    assert_backup_fixture_restored(&s2, post_id).await;
+    let dir_s2 = base.path().join("dir-s2");
+    cmd_backup(&s2, BackupMode::Directory, Some(dir_s2.clone()))
+        .await
+        .expect("backup s2");
+
+    // Both same-backend dump pairs are byte-identical — nothing drifts across the cycle.
+    assert_backups_equal(&dir_p1, &dir_p2);
+    assert_backups_equal(&dir_s1, &dir_s2);
 }

@@ -7,14 +7,13 @@
     clippy::unused_async
 )]
 
-use common::visibility::AudienceTarget;
+use std::fmt::Write as _;
 use std::net::SocketAddr;
 
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use chrono::Utc;
 use common::password::Password;
 use common::username::Username;
 use jaunder::cli::StorageArgs;
@@ -24,7 +23,7 @@ use jaunder::commands::{
 };
 use leptos::prelude::LeptosOptions;
 use sqlx::Connection;
-use storage::{open_database, open_existing_database, BackupMode, CreatePostInput, PostFormat};
+use storage::{open_database, open_existing_database, BackupMode};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -33,6 +32,9 @@ use rstest::*;
 use rstest_reuse;
 use rstest_reuse::*;
 
+use crate::backup_fixture::{
+    assert_backup_fixture_restored, assert_target_unmodified, populate_backup_fixture,
+};
 use crate::helpers::{
     backends, nonexistent_postgres_url, postgres_bootstrap_url, postgres_only,
     postgres_test_authority, sqlite_url, unique_postgres_url, Backend, PostgresDbGuard,
@@ -57,93 +59,6 @@ fn uninitialized_storage_args(backend: Backend, base: &TempDir) -> StorageArgs {
         Backend::Postgres => nonexistent_postgres_url(),
     };
     StorageArgs { storage_path, db }
-}
-
-async fn populate_backup_fixture(args: &StorageArgs) -> i64 {
-    let state = open_existing_database(&args.db)
-        .await
-        .expect("open database");
-    let username: Username = "backupuser".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, Some("Backup User"), true)
-        .await
-        .expect("create user");
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id,
-            title: Some("Restored Post".to_owned()),
-            slug: "restored-post".parse().expect("valid slug"),
-            body: "body text".to_owned(),
-            format: PostFormat::Markdown,
-            rendered_html: "<p>body text</p>".to_owned(),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-        })
-        .await
-        .expect("create post");
-    state
-        .posts
-        .tag_post(post_id, "Backup-Test")
-        .await
-        .expect("tag post");
-    std::fs::write(args.storage_path.join("media").join("avatar.txt"), "media")
-        .expect("write media");
-    post_id
-}
-
-async fn assert_backup_fixture_restored(args: &StorageArgs, post_id: i64) {
-    let state = open_existing_database(&args.db)
-        .await
-        .expect("open restored database");
-    let username: Username = "backupuser".parse().expect("valid username");
-    let user = state
-        .users
-        .get_user_by_username(&username)
-        .await
-        .expect("get user")
-        .expect("restored user");
-    assert!(user.is_operator);
-    assert_eq!(user.display_name.as_deref(), Some("Backup User"));
-
-    // View as the restored post's author. Backup/restore does not yet carry the
-    // `post_audiences` rows (see TABLES_IN_EXPORT_ORDER), so an Anonymous viewer
-    // would be filtered out by the resolution predicate; the owner is always
-    // admitted via the author branch, which is the correct viewer here.
-    let local = state
-        .subscriptions
-        .local_channel_id()
-        .await
-        .expect("local channel id");
-    let post = state
-        .posts
-        .get_post_by_id(
-            post_id,
-            &common::visibility::ViewerIdentity::local(user.user_id, local),
-        )
-        .await
-        .expect("get post")
-        .expect("restored post");
-    assert_eq!(post.title.as_deref(), Some("Restored Post"));
-    assert_eq!(post.slug.as_str(), "restored-post");
-
-    let tags = state
-        .posts
-        .get_tags_for_post(post_id)
-        .await
-        .expect("get tags");
-    assert_eq!(tags.len(), 1);
-    assert_eq!(tags[0].tag_slug.as_str(), "backup-test");
-    assert_eq!(tags[0].tag_display, "Backup-Test");
-
-    assert_eq!(
-        std::fs::read_to_string(args.storage_path.join("media").join("avatar.txt"))
-            .expect("read restored media"),
-        "media"
-    );
 }
 
 #[apply(backends)]
@@ -726,6 +641,158 @@ async fn cmd_restore_restores_directory_backup(#[case] backend: Backend) {
     let (target_args, _pg_target) = storage_args(backend, &target_base).await;
     cmd_init(&target_args, false).await.expect("init target");
     cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("restore");
+
+    assert_backup_fixture_restored(&target_args, post_id).await;
+}
+
+// #136: a backup with a dangling foreign key is rejected uniformly (DEC-C) —
+// ConstraintViolation + target unmodified, on both backends.
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_rejects_dangling_foreign_key(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let (source_args, _pg_source) = storage_args(backend, &base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    let post_id = populate_backup_fixture(&source_args).await;
+
+    let backup_path = base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    // Append a post_tags row referencing a nonexistent tag_id → dangling FK. The row
+    // MUST carry every column of the real exported row (post_id, tag_id, and the
+    // NOT NULL tag_display) — import_table derives its column set from the first row
+    // and rejects a row missing a column with InvalidBackup *before* inserting, which
+    // would mask the FK violation.
+    let post_tags = backup_path.join("db").join("post_tags.ndjson");
+    let mut contents = std::fs::read_to_string(&post_tags).expect("read post_tags");
+    writeln!(
+        contents,
+        "{{\"post_id\":{post_id},\"tag_id\":999999,\"tag_display\":\"Dangling\"}}"
+    )
+    .expect("append dangling row");
+    std::fs::write(&post_tags, contents).expect("write tampered post_tags");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+
+    let err = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect_err("restore rejects dangling FK");
+    assert!(
+        err.to_string().contains("failed constraint validation"),
+        "expected ConstraintViolation, got: {err}"
+    );
+
+    // Rollback: nothing from the backup landed in the target.
+    assert_target_unmodified(&target_args).await;
+}
+
+// #136: a backup with a malformed row is rejected and rolls back cleanly on both backends.
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_rolls_back_on_malformed_row(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let (source_args, _pg_source) = storage_args(backend, &base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    populate_backup_fixture(&source_args).await;
+
+    let backup_path = base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    // Corrupt a NON-first table (posts, export index 6) with a non-object row, so an
+    // earlier table (users, index 1) is inserted before the read fails — proving the
+    // transaction rolls the earlier inserts back.
+    let posts = backup_path.join("db").join("posts.ndjson");
+    let mut contents = std::fs::read_to_string(&posts).expect("read posts");
+    contents.push_str("[1, 2, 3]\n");
+    std::fs::write(&posts, contents).expect("write tampered posts");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+
+    let err = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect_err("restore rejects malformed row");
+    assert!(
+        err.to_string().contains("non-object row"),
+        "expected InvalidBackup, got: {err}"
+    );
+
+    assert_target_unmodified(&target_args).await;
+}
+
+// #136: a backup missing its db/ directory is rejected (InvalidBackup) on both backends.
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_rejects_missing_db_directory(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let (source_args, _pg_source) = storage_args(backend, &base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    populate_backup_fixture(&source_args).await;
+
+    let backup_path = base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    std::fs::remove_dir_all(backup_path.join("db")).expect("remove db dir");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+
+    let err = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect_err("restore rejects missing db dir");
+    assert!(
+        err.to_string().contains("missing db directory"),
+        "expected InvalidBackup, got: {err}"
+    );
+}
+
+// #136: backup/restore round-trips in Archive mode on both backends.
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_restores_archive_backup(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let (source_args, _pg_source) = storage_args(backend, &base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    let post_id = populate_backup_fixture(&source_args).await;
+
+    let archive_path = base.path().join("backup.tar.gz");
+    cmd_backup(
+        &source_args,
+        BackupMode::Archive,
+        Some(archive_path.clone()),
+    )
+    .await
+    .expect("backup");
+    assert!(archive_path.is_file(), "archive backup is a single file");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+    cmd_restore(&target_args, &archive_path)
         .await
         .expect("restore");
 
