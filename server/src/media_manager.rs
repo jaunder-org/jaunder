@@ -238,12 +238,6 @@ impl MediaManager {
     /// `tmp_path` with a known content hash and size: enforces quota, content-
     /// addresses the file (dedup via hard-link), records it in the DB, and builds
     /// the response. The temp file is consumed (moved, linked, or removed).
-    ///
-    /// # Panics
-    ///
-    /// Panics if the content-addressed target path has no parent directory,
-    /// which is unreachable: it is built by joining `media`/`relative_path`
-    /// onto the storage root, so it always ends in a filename component.
     async fn finalize_upload(
         &self,
         user_id: i64,
@@ -260,12 +254,17 @@ impl MediaManager {
         }
         let relative_path = media_path("upload", &metadata.sha256_hex, &metadata.filename);
         let target_path = self.storage_path.join("media").join(&relative_path);
-        // `target_path` always ends in a filename component, so it always has a
-        // parent; the expect is provably unreachable.
-        #[allow(clippy::expect_used)]
+        // `target_path` is built by joining `media`/`relative_path` onto the storage
+        // root, so it always ends in a filename component and has a parent; surface a
+        // clear error rather than panicking if that invariant is ever violated.
         let hash_dir = target_path
             .parent()
-            .expect("target path has a parent")
+            // cov:ignore-start — defensive: `target_path` always has a parent (see
+            // above), so this error branch is unreachable in practice.
+            .ok_or_else(|| {
+                anyhow::anyhow!("media target path {} has no parent", target_path.display())
+            })?
+            // cov:ignore-stop
             .to_path_buf();
         let deduplicated = self
             .handle_deduplication(&tmp_path.to_path_buf(), &target_path, &hash_dir)
