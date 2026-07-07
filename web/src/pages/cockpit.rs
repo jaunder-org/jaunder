@@ -61,7 +61,7 @@ pub fn CockpitPage() -> impl IntoView {
     });
 
     let on_load_more = Callback::new(move |()| {
-        crate::pages::timeline::spawn_load_more(state, |c1, c2, n| list_home_feed(c1, c2, n));
+        crate::pages::timeline::spawn_load_more(state, list_home_feed);
     });
 
     let read_error = move || read_signal!(state.error);

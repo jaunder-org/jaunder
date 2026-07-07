@@ -419,11 +419,11 @@ git commit -m "refactor(web): gate pages wasm-only, delete per-line target_arch 
   `cargo clippy --target wasm32-unknown-unknown` over the client feature and
   fail on warnings.
 
-- [ ] **Step 1:** Confirm the wasm32 target is available in the gate toolchain
+- [x] **Step 1:** Confirm the wasm32 target is available in the gate toolchain
       (xtask's `build_csr` step already builds
       `--target wasm32-unknown-unknown`, so it is —
       `xtask/src/steps/build_csr.rs:26`).
-- [ ] **Step 2:** Add a clippy step that **directly compiles `web::pages` under
+- [x] **Step 2:** Add a clippy step that **directly compiles `web::pages` under
       wasm32** so the pass actually lints it:
       `cargo clippy -p web --features csr --target wasm32-unknown-unknown -- -D warnings`.
       Target `-p web` (not `-p csr`): the `csr` _feature_ is declared on `web`
@@ -433,22 +433,29 @@ git commit -m "refactor(web): gate pages wasm-only, delete per-line target_arch 
       static-checks phase as the host clippy
       (`xtask/src/steps/static_checks.rs:54`) so `check` and `validate` both run
       it.
-- [ ] **Step 3:** Mirror it in the Nix gate derivation so CI runs the same pass
+- [x] **Step 3:** Mirror it in the Nix gate derivation so CI runs the same pass
       (ADR-0034 — the checks run raw tooling, not xtask; add it alongside the
       host `clippy = craneLib.cargoClippy` in `flake.nix`).
-- [ ] **Step 4: Prove the pass genuinely lints `pages/`** — before trusting a
-      clean run, temporarily inject a wasm-only lint into a `pages/` fn (e.g.
-      `let _x = 1;` an unused binding, or a `#[allow]`-free
-      `clippy::let_and_return`) and run the new step; confirm it **FAILS** on
-      that lint. Then revert the injection. (A clean pass alone proves nothing —
-      the failure is what confirms `pages/` is in the linted set.)
-- [ ] **Step 5: Run the full check and fix any real wasm-only findings**
+- [x] **Step 4: Prove the pass genuinely lints `pages/`** — satisfied by REAL
+      findings, no synthetic injection needed: the first run failed with 13
+      genuine `pages/` lints (redundant_closure in cockpit/home/upload,
+      items_after_statements in ui/upload, manual_let_else + unused_mut in
+      upload) plus 2 `too_many_arguments` (posts server fns) and 1
+      `unfulfilled_lint_expectations` (audiences). That the pass caught `pages/`
+      code proves it is in the linted set.
+- [x] **Step 5: Run the full check and fix any real wasm-only findings** — all
+      genuine `pages/` + `error.rs` findings fixed in source (no new
+      suppressions). **Decision (user-approved):** because the pass necessarily
+      re-lints the whole `web` crate on wasm and clippy can't scope to a module
+      (that needs the crate split, Direction B), two lints owned elsewhere are
+      allowed on the wasm invocation ONLY, each tracked to its owner for
+      removal: `-A clippy::too_many_arguments` (the `#[server]` fns' wasm macro
+      expansion; → #299) and `-A unfulfilled_lint_expectations`
+      (target-sensitive component `#[expect(too_many_lines)]`; → #301). Both
+      issues annotated. Verified: host `cargo xtask check --no-test` PASS (incl.
+      the new step), flake `wasm-clippy` derivation eval-clean + builds green.
 
-Run: `cargo xtask check` Expected: PASS. If the wasm clippy pass surfaces
-genuine lints in the now-wasm-only `pages/` code, **fix the code** (no new
-suppressions — Global Constraints).
-
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/ nix/ flake.nix

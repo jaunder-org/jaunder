@@ -894,6 +894,8 @@ pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl In
     let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
     let on_success = Callback::new(move |created: CreatePostResult| {
+        use leptos_dom::helpers::set_timeout;
+        use std::time::Duration;
         let url = created
             .permalink
             .clone()
@@ -904,8 +906,6 @@ pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl In
             "Draft saved!".to_string()
         };
         flash.set(Some((url, msg)));
-        use leptos_dom::helpers::set_timeout;
-        use std::time::Duration;
         set_timeout(move || flash.set(None), Duration::from_secs(30));
         if created.published_at.is_some() {
             on_publish.update(|v| *v += 1);
@@ -1163,14 +1163,14 @@ pub fn TagInput(
     let debounce_tick = RwSignal::new(0u64);
 
     let on_input = move |ev: leptos::ev::Event| {
+        use leptos::task::spawn_local;
+        use leptos_dom::helpers::set_timeout;
+        use std::time::Duration;
+
         let val = event_target_value(&ev);
         input_text.set(val.clone());
         error.set(None);
         selected_idx.set(None);
-
-        use leptos::task::spawn_local;
-        use leptos_dom::helpers::set_timeout;
-        use std::time::Duration;
 
         let prefix = val.trim().to_lowercase();
         if prefix.is_empty() {

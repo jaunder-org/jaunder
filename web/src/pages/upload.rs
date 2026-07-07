@@ -24,9 +24,10 @@ pub fn MediaUploadButton(
     };
 
     let on_file_change = move |ev: leptos::ev::Event| {
-        let _ = ev;
         use leptos::task::spawn_local;
         use leptos::wasm_bindgen::JsCast;
+
+        let _ = ev;
 
         let Some(input) = file_input.get() else {
             return;
@@ -39,9 +40,8 @@ pub fn MediaUploadButton(
             return;
         };
 
-        let form_data = match web_sys::FormData::new() {
-            Ok(fd) => fd,
-            Err(_) => return,
+        let Ok(form_data) = web_sys::FormData::new() else {
+            return;
         };
         if form_data.append_with_blob("file", &file).is_err() {
             return;
@@ -144,7 +144,7 @@ async fn upload_file(form_data: web_sys::FormData) -> Result<String, String> {
 
     let window = web_sys::window().ok_or("no window")?;
 
-    let mut opts = web_sys::RequestInit::new();
+    let opts = web_sys::RequestInit::new();
     opts.set_method("POST");
     let body_val: JsValue = form_data.into();
     opts.set_body(&body_val);
@@ -180,6 +180,6 @@ async fn upload_file(form_data: web_sys::FormData) -> Result<String, String> {
 
     parsed["url"]
         .as_str()
-        .map(|s| s.to_string())
+        .map(ToString::to_string)
         .ok_or_else(|| "response JSON missing 'url' field".to_string())
 }

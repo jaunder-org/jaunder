@@ -45,7 +45,7 @@ pub fn HomePage() -> impl IntoView {
     });
 
     let on_load_more = Callback::new(move |()| {
-        crate::pages::timeline::spawn_load_more(state, |c1, c2, n| list_local_timeline(c1, c2, n));
+        crate::pages::timeline::spawn_load_more(state, list_local_timeline);
     });
 
     let read_error = move || read_signal!(state.error);

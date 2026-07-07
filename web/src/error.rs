@@ -3,6 +3,7 @@ use leptos::server_fn::{
     error::{FromServerFnError, ServerFnErrorErr},
 };
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "server")]
 use std::error::Error;
 use thiserror::Error;
 
