@@ -82,6 +82,7 @@ convention). See the Status column below for each ADR's current status.
 | [0052](adr/0052-devtool-unifies-static-checks.md)                  | devtool is the single implementation of the non-compiling static checks                                      | accepted   |
 | [0053](adr/0053-storage-test-homing-and-dual-backend.md)           | Storage test homing and the dual-backend presumption                                                         | proposed   |
 | [0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md) | Backup test homing and the uniform restore-failure contract                                                  | accepted   |
+| [0055](adr/0055-web-host-wasm-boundary-module-level.md)            | web host/wasm boundary is module-level, not line-level                                                       | accepted   |
 
 <!-- adr-table:end -->
 

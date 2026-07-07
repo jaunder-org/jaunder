@@ -680,9 +680,132 @@ pub fn render_sidebar(active_key: &str) -> String {
     out
 }
 
+/// Formats a byte count as a human-readable size (`B` / `KB` / `MB` / `GB`, one
+/// decimal). Shared display formatter, host-tested here.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "byte counts < 2^52 convert to f64 exactly; larger values only affect a \
+              human-readable one-decimal display, so any loss is immaterial"
+)]
+pub fn format_bytes(bytes: i64) -> String {
+    const KB: i64 = 1_024;
+    const MB: i64 = 1_024 * KB;
+    const GB: i64 = 1_024 * MB;
+
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_bytes_displays_bytes_below_kb() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(1023), "1023 B");
+    }
+
+    #[test]
+    fn format_bytes_displays_kb_range() {
+        assert_eq!(format_bytes(1024), "1.0 KB");
+        assert_eq!(format_bytes(1536), "1.5 KB");
+    }
+
+    #[test]
+    fn format_bytes_displays_mb_range() {
+        assert_eq!(format_bytes(1024 * 1024), "1.0 MB");
+        assert_eq!(format_bytes(1024 * 1024 * 2), "2.0 MB");
+    }
+
+    #[test]
+    fn format_bytes_displays_gb_range() {
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.0 GB");
+    }
+
+    #[test]
+    fn default_theme_is_nonempty() {
+        assert!(!DEFAULT_THEME.is_empty());
+    }
+
+    #[test]
+    fn avatar_parts_single_word() {
+        let (initials, _hue) = avatar_parts("Mara");
+        assert_eq!(initials, "M");
+    }
+
+    #[test]
+    fn avatar_parts_two_words() {
+        let (initials, _hue) = avatar_parts("Mara Ek");
+        assert_eq!(initials, "ME");
+    }
+
+    #[test]
+    fn avatar_parts_more_than_two_words_uses_first_two() {
+        let (initials, _hue) = avatar_parts("Mara Jane Ek");
+        assert_eq!(initials, "MJ");
+    }
+
+    #[test]
+    fn avatar_parts_empty_name() {
+        let (initials, hue) = avatar_parts("");
+        assert_eq!(initials, "");
+        assert_eq!(hue, 0);
+    }
+
+    #[test]
+    fn avatar_parts_hue_is_in_range() {
+        let (_initials, hue) = avatar_parts("Some User");
+        assert!(hue < 360);
+    }
+
+    #[test]
+    fn avatar_parts_hue_is_deterministic() {
+        let (_, h1) = avatar_parts("Mara Ek");
+        let (_, h2) = avatar_parts("Mara Ek");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn avatar_parts_hue_differs_for_different_names() {
+        let (_, h1) = avatar_parts("Alice");
+        let (_, h2) = avatar_parts("Bob");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn format_post_time_includes_time_portion() {
+        assert_eq!(
+            format_post_time("2026-04-23T10:30:00+00:00"),
+            "2026-04-23 10:30"
+        );
+    }
+
+    #[test]
+    fn format_post_time_handles_date_only_input() {
+        // Input with no 'T' separator — return as-is.
+        assert_eq!(format_post_time("2026-04-23"), "2026-04-23");
+    }
+
+    #[test]
+    fn format_post_time_handles_negative_offset() {
+        assert_eq!(
+            format_post_time("2026-04-23T15:45:00-05:00"),
+            "2026-04-23 15:45"
+        );
+    }
+
+    #[test]
+    fn format_post_time_handles_utc_z_suffix() {
+        assert_eq!(format_post_time("2026-04-23T10:30:00Z"), "2026-04-23 10:30");
+    }
 
     #[test]
     fn prepaint_script_is_inline_blocking_and_reads_the_marker() {

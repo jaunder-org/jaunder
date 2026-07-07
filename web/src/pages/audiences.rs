@@ -44,20 +44,16 @@ pub fn AudiencesPage() -> impl IntoView {
     // (web-style-guide.md §9, mirroring `home.rs`): SSR renders the loading
     // placeholder; wasm-only Effects seed the lists after hydration, and any
     // mutation bumps `version` to re-fetch.
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let audiences_res = crate::server_resource(version, |_| list_my_audiences());
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let subscribers_res = crate::server_resource(version, |_| list_my_subscribers());
     // `None` = still loading; `Some(Ok/Err)` once resolved on the client.
     let audiences = RwSignal::new(None::<Result<Vec<AudienceSummary>, String>>);
     let subscribers = RwSignal::new(Vec::<SubscriberSummary>::new());
-    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = audiences_res.get() {
             audiences.set(Some(result.map_err(|e| e.to_string())));
         }
     });
-    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(Ok(list)) = subscribers_res.get() {
             subscribers.set(list);
@@ -156,13 +152,11 @@ fn AudienceRow(
     // Members re-fetch whenever an assign/unassign mutation lands. Resolved
     // client-only (web-style-guide.md §9): an SSR-serialized `Err` from the
     // disposal race would otherwise stick. `None` = loading.
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let members_res = crate::server_resource(
         move || (add_action.version().get(), remove_action.version().get()),
         move |_| list_audience_members(audience_id),
     );
     let member_ids = RwSignal::new(None::<Vec<i64>>);
-    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = members_res.get() {
             member_ids.set(Some(result.unwrap_or_default()));

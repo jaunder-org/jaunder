@@ -14,11 +14,6 @@ pub fn MediaUploadButton(
     #[prop(into, optional)]
     on_error: Option<Callback<String>>,
 ) -> impl IntoView {
-    // `on_uploaded`/`on_error` are consumed only in the wasm upload path below;
-    // acknowledge them on the SSR build so they don't read as unused.
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = (&on_uploaded, &on_error);
-
     let uploading = RwSignal::new(false);
     let file_input = NodeRef::<leptos::html::Input>::new();
 
@@ -29,48 +24,43 @@ pub fn MediaUploadButton(
     };
 
     let on_file_change = move |ev: leptos::ev::Event| {
-        #[cfg(not(target_arch = "wasm32"))]
+        use leptos::task::spawn_local;
+        use leptos::wasm_bindgen::JsCast;
+
         let _ = ev;
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = ev;
-            use leptos::task::spawn_local;
-            use leptos::wasm_bindgen::JsCast;
 
-            let Some(input) = file_input.get() else {
-                return;
-            };
-            let input_el: web_sys::HtmlInputElement = input.unchecked_into();
-            let Some(files) = input_el.files() else {
-                return;
-            };
-            let Some(file): Option<web_sys::File> = files.get(0) else {
-                return;
-            };
+        let Some(input) = file_input.get() else {
+            return;
+        };
+        let input_el: web_sys::HtmlInputElement = input.unchecked_into();
+        let Some(files) = input_el.files() else {
+            return;
+        };
+        let Some(file): Option<web_sys::File> = files.get(0) else {
+            return;
+        };
 
-            let form_data = match web_sys::FormData::new() {
-                Ok(fd) => fd,
-                Err(_) => return,
-            };
-            if form_data.append_with_blob("file", &file).is_err() {
-                return;
-            }
+        let Ok(form_data) = web_sys::FormData::new() else {
+            return;
+        };
+        if form_data.append_with_blob("file", &file).is_err() {
+            return;
+        }
 
-            uploading.set(true);
+        uploading.set(true);
 
-            spawn_local(async move {
-                let result = upload_file(form_data).await;
-                uploading.set(false);
-                match result {
-                    Ok(url) => on_uploaded.run(url),
-                    Err(msg) => {
-                        if let Some(cb) = on_error {
-                            cb.run(msg);
-                        }
+        spawn_local(async move {
+            let result = upload_file(form_data).await;
+            uploading.set(false);
+            match result {
+                Ok(url) => on_uploaded.run(url),
+                Err(msg) => {
+                    if let Some(cb) = on_error {
+                        cb.run(msg);
                     }
                 }
-            });
-        }
+            }
+        });
     };
 
     view! {
@@ -141,15 +131,20 @@ pub fn MediaPanel() -> impl IntoView {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
 async fn upload_file(form_data: web_sys::FormData) -> Result<String, String> {
+    // crap:allow: wasm-only browser glue — a `fetch` POST to /media/upload from
+    // the compose form's FormData. Not host-instrumentable (`web_sys::window` /
+    // `fetch`); its verification is the media-upload e2e. Was
+    // `#[cfg(target_arch = "wasm32")]`-excluded before `pages/` became
+    // module-gated wasm-only (#300); the CRAP metric source-parses it now that the
+    // fn-level gate is gone, so accept the drift explicitly.
     use leptos::wasm_bindgen::JsCast;
     use leptos::wasm_bindgen::JsValue;
     use wasm_bindgen_futures::JsFuture;
 
     let window = web_sys::window().ok_or("no window")?;
 
-    let mut opts = web_sys::RequestInit::new();
+    let opts = web_sys::RequestInit::new();
     opts.set_method("POST");
     let body_val: JsValue = form_data.into();
     opts.set_body(&body_val);
@@ -185,6 +180,6 @@ async fn upload_file(form_data: web_sys::FormData) -> Result<String, String> {
 
     parsed["url"]
         .as_str()
-        .map(|s| s.to_string())
+        .map(ToString::to_string)
         .ok_or_else(|| "response JSON missing 'url' field".to_string())
 }

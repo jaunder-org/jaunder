@@ -53,6 +53,37 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
             program: "cargo",
             args: vec!["clippy", "--all-targets", "--", "-D", "warnings"],
         },
+        // wasm-clippy — `web::pages` compiles wasm-only (#300), so the host `clippy`
+        // step above never sees it. Lint it on the wasm target: `-p web --features csr`
+        // pulls `pages/` into the compile under `target_arch = "wasm32"`. This
+        // necessarily re-lints the whole `web` crate on wasm; two lints are governed
+        // elsewhere and allowed here TEMPORARILY (each tracked to its owner):
+        //   -A clippy::too_many_arguments      — the create_post/update_post #[server]
+        //     fns; the fn-level #[allow] doesn't reach the wasm macro expansion. REMOVE
+        //     when #299 restructures their args (they'll drop below 7).
+        //   -A unfulfilled_lint_expectations   — component #[expect(too_many_lines)]s
+        //     that fire on host but not on the (shorter) wasm `view!` expansion. REMOVE
+        //     when #301 decomposes those components (the #[expect]s go away entirely).
+        StepSpec {
+            name: "wasm-clippy",
+            program: "cargo",
+            args: vec![
+                "clippy",
+                "-p",
+                "web",
+                "--features",
+                "csr",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--",
+                "-D",
+                "warnings",
+                "-A",
+                "clippy::too_many_arguments",
+                "-A",
+                "unfulfilled_lint_expectations",
+            ],
+        },
         devtool_check("tools-fmt", mode),
         StepSpec {
             name: "tools-clippy",
@@ -228,6 +259,7 @@ mod tests {
             "ert",
             "cargo-deny",
             "clippy",
+            "wasm-clippy",
             "tools-fmt",
             "tools-clippy",
             "xtask-fmt",

@@ -27,6 +27,7 @@ pub mod feed_discovery;
 pub mod feed_events;
 pub mod invites;
 pub mod media;
+#[cfg(target_arch = "wasm32")]
 pub mod pages;
 pub mod password_reset;
 pub mod posts;
@@ -41,6 +42,7 @@ mod test_support;
 pub mod viewer;
 
 pub use error::server_resource;
+#[cfg(target_arch = "wasm32")]
 pub use pages::App;
 
 // Only the wasm32 body of `mount_csr` below uses the leptos prelude (the host

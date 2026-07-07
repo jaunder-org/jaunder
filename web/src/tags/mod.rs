@@ -51,3 +51,111 @@ pub async fn list_tags(prefix: Option<String>, limit: Option<u32>) -> WebResult<
             .collect())
     })
 }
+
+// ─── Pure helpers for the TagInput UI ─────────────────────────
+// Client-side tag-slug validation, shared by the wasm-only `pages::ui::TagInput`
+// and host-tested here. Kept in `web::tags` (both-target, no `target_arch` gate)
+// rather than in `pages/` so it stays coverage-measured once `pages` is wasm-only.
+
+/// Returns `true` when `s` is a valid tag slug: non-empty, first char
+/// `[a-z0-9]`, remaining chars `[a-z0-9-]`.  The input must already be
+/// lowercased (call [`normalize_tag_token`] first).
+///
+/// Mirrors [`common::tag::Tag::from_str`] so client and server agree on
+/// validity without importing `common` into the WASM bundle.
+#[must_use]
+pub fn is_valid_tag_slug(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => false,
+        Some(c) if !c.is_ascii_lowercase() && !c.is_ascii_digit() => false,
+        _ => chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+    }
+}
+
+/// Trims whitespace from `raw` and lowercases the result.
+#[must_use]
+pub fn normalize_tag_token(raw: &str) -> String {
+    raw.trim().to_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_valid_tag_slug, normalize_tag_token};
+
+    // ─── is_valid_tag_slug ────────────────────────────────────
+
+    #[test]
+    fn tag_slug_accepts_lowercase_alpha() {
+        assert!(is_valid_tag_slug("rust"));
+    }
+
+    #[test]
+    fn tag_slug_accepts_leading_digit() {
+        assert!(is_valid_tag_slug("42things"));
+    }
+
+    #[test]
+    fn tag_slug_accepts_hyphens_in_body() {
+        assert!(is_valid_tag_slug("hello-world"));
+    }
+
+    #[test]
+    fn tag_slug_accepts_single_char() {
+        assert!(is_valid_tag_slug("a"));
+        assert!(is_valid_tag_slug("0"));
+    }
+
+    #[test]
+    fn tag_slug_rejects_empty() {
+        assert!(!is_valid_tag_slug(""));
+    }
+
+    #[test]
+    fn tag_slug_rejects_leading_hyphen() {
+        assert!(!is_valid_tag_slug("-hello"));
+    }
+
+    #[test]
+    fn tag_slug_rejects_uppercase() {
+        assert!(!is_valid_tag_slug("Rust"));
+        assert!(!is_valid_tag_slug("RUST"));
+    }
+
+    #[test]
+    fn tag_slug_rejects_spaces() {
+        assert!(!is_valid_tag_slug("hello world"));
+    }
+
+    #[test]
+    fn tag_slug_rejects_special_chars() {
+        assert!(!is_valid_tag_slug("tag@site"));
+        assert!(!is_valid_tag_slug("tag_name"));
+    }
+
+    // ─── normalize_tag_token ──────────────────────────────────
+
+    #[test]
+    fn normalize_trims_whitespace() {
+        assert_eq!(normalize_tag_token("  rust  "), "rust");
+    }
+
+    #[test]
+    fn normalize_lowercases() {
+        assert_eq!(normalize_tag_token("Rust"), "rust");
+        assert_eq!(normalize_tag_token("HELLO-WORLD"), "hello-world");
+    }
+
+    #[test]
+    fn normalize_empty_stays_empty() {
+        assert_eq!(normalize_tag_token(""), "");
+        assert_eq!(normalize_tag_token("   "), "");
+    }
+
+    #[test]
+    fn normalize_then_validate_roundtrip() {
+        let normalized = normalize_tag_token("  Hello-World  ");
+        assert!(is_valid_tag_slug(&normalized));
+        assert_eq!(normalized, "hello-world");
+    }
+}

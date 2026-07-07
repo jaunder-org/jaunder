@@ -1091,6 +1091,29 @@
                 cargoClippyExtraArgs = "--all-targets -- -D warnings";
               }
             );
+            # wasm-clippy — `web::pages` compiles wasm-only (#300), so the host `clippy`
+            # above never sees it. Lint it on the wasm target (mirrors the host xtask
+            # `wasm-clippy` step). The two `-A` flags are TEMPORARY and must stay in sync
+            # with xtask/src/steps/static_checks.rs — remove `too_many_arguments` when
+            # #299 restructures the #[server] args, and `unfulfilled_lint_expectations`
+            # when #301 decomposes the oversized components.
+            wasm-clippy = craneLib.cargoClippy (
+              commonArgs
+              // {
+                cargoArtifacts = craneLib.buildDepsOnly (
+                  commonArgs
+                  // {
+                    CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+                    cargoExtraArgs = "-p web --features csr";
+                    doCheck = false;
+                  }
+                );
+                CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+                cargoClippyExtraArgs =
+                  "-p web --features csr -- -D warnings "
+                  + "-A clippy::too_many_arguments -A unfulfilled_lint_expectations";
+              }
+            );
             # The 7 non-compiling static checks (#188), unified behind one `devtool
             # check --all` — the same command the host verify ladder runs. Not a crane
             # derivation: none of these compiles, so no vendored deps are needed; a plain

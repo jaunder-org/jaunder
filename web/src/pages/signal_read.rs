@@ -1,22 +1,14 @@
-//! `read_signal!` reads a state signal the way each render target needs it.
+//! `read_signal!` reads a state signal reactively.
 //!
-//! Page components seed their signals from wasm-only `Effect`s that run after
-//! hydration and never fire during SSR. So a render closure must read reactively
-//! on the client (`.get()`), to re-render once the Effect seeds the signal, but
-//! read once and untracked on the server (`.get_untracked()`), where nothing
-//! will ever update it and a tracked read only registers a subscription that can
-//! never fire.
+//! Page components seed their signals from `Effect`s that run after hydration, so
+//! a render closure reads reactively (`.get()`) to re-render once the Effect seeds
+//! the signal. (`pages` compiles wasm-only since #300; before that this macro also
+//! had a `.get_untracked()` arm for the never-mounted server build — the reactive
+//! read is now unconditional.)
 
 macro_rules! read_signal {
     ($signal:expr) => {{
-        #[cfg(target_arch = "wasm32")]
-        {
-            $signal.get()
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            $signal.get_untracked()
-        }
+        $signal.get()
     }};
 }
 
