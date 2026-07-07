@@ -27,7 +27,6 @@ pub fn CockpitPage() -> impl IntoView {
     // is authed-only and served from the SPA shell (no-store), so an async gate is
     // correct here — there is no cacheable-page flash constraint. `Ok(None)` means
     // anonymous / expired → bounce to `/login` (D6).
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let initial_page = crate::server_resource(
         move || refresh_version.get(),
         |_| async move {
@@ -42,7 +41,6 @@ pub fn CockpitPage() -> impl IntoView {
     );
 
     // Client-only effect copies the resolved Resource into the timeline signals.
-    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
@@ -63,7 +61,6 @@ pub fn CockpitPage() -> impl IntoView {
     });
 
     let on_load_more = Callback::new(move |()| {
-        #[cfg(target_arch = "wasm32")]
         crate::pages::timeline::spawn_load_more(state, |c1, c2, n| list_home_feed(c1, c2, n));
     });
 

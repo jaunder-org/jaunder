@@ -30,13 +30,11 @@ pub fn HomePage() -> impl IntoView {
     // viewer-independent — no `current_user()` gate and no mode swap (#181, D10).
     // Re-fetch on mutation (`refresh_version`) so the owner's own edits/deletes,
     // performed via the client-side action column, reflect immediately.
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let initial_page = crate::server_resource(
         move || refresh_version.get(),
         |_| list_local_timeline(None, None, Some(PAGE_SIZE)),
     );
 
-    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
@@ -47,7 +45,6 @@ pub fn HomePage() -> impl IntoView {
     });
 
     let on_load_more = Callback::new(move |()| {
-        #[cfg(target_arch = "wasm32")]
         crate::pages::timeline::spawn_load_more(state, |c1, c2, n| list_local_timeline(c1, c2, n));
     });
 

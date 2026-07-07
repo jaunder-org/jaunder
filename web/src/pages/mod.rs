@@ -80,25 +80,19 @@ pub fn App() -> impl IntoView {
     // - the browser performs a real page load, refreshing all server-rendered state
     //   (including the auth header that reads from the `user` Resource), and
     // - Playwright's waitForURL() reliably detects the navigation in all browsers.
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = leptos::server_fn::redirect::set_redirect_hook(|loc: &str| {
-            if let Some(window) = web_sys::window() {
-                let _ = window.location().replace(loc);
-            }
-        });
-    }
+    let _ = leptos::server_fn::redirect::set_redirect_hook(|loc: &str| {
+        if let Some(window) = web_sys::window() {
+            let _ = window.location().replace(loc);
+        }
+    });
 
     let theme = RwSignal::new(DEFAULT_THEME.to_string());
 
     // On WASM: restore theme from localStorage on startup.
-    #[cfg(target_arch = "wasm32")]
-    {
-        if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-            if let Ok(Some(val)) = storage.get_item("jaunder_theme") {
-                if !val.is_empty() {
-                    theme.set(val);
-                }
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        if let Ok(Some(val)) = storage.get_item("jaunder_theme") {
+            if !val.is_empty() {
+                theme.set(val);
             }
         }
     }
@@ -106,16 +100,12 @@ pub fn App() -> impl IntoView {
     provide_context(theme);
 
     // On WASM: persist theme to localStorage whenever it changes.
-    #[cfg(target_arch = "wasm32")]
-    {
-        Effect::new(move |_| {
-            let val = theme.get();
-            if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten())
-            {
-                let _ = storage.set_item("jaunder_theme", &val);
-            }
-        });
-    }
+    Effect::new(move |_| {
+        let val = theme.get();
+        if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+            let _ = storage.set_item("jaunder_theme", &val);
+        }
+    });
 
     view! {
         // sets the document title

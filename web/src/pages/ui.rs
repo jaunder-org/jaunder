@@ -1,7 +1,6 @@
 use crate::audiences::{list_my_audiences, AudienceSummary};
 // `current_user` is the sidebar's background reconcile (#181), used only in the
-// wasm-only correction Effect — gate the import so the host build sees no unused.
-#[cfg(target_arch = "wasm32")]
+// wasm-only correction Effect.
 use crate::auth::current_user;
 use crate::backup::{backup_warning_visible, current_user_is_operator};
 use crate::pages::upload::MediaPanel;
@@ -280,20 +279,13 @@ pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        // `new Date("YYYY-MM-DDTHH:MM")` (time present, no offset) is parsed as
-        // local time per ECMAScript; `toISOString()` re-renders it in UTC.
-        let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(trimmed));
-        if date.get_time().is_nan() {
-            return None;
-        }
-        date.to_iso_string().as_string()
+    // `new Date("YYYY-MM-DDTHH:MM")` (time present, no offset) is parsed as
+    // local time per ECMAScript; `toISOString()` re-renders it in UTC.
+    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(trimmed));
+    if date.get_time().is_nan() {
+        return None;
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        Some(trimmed.to_string())
-    }
+    date.to_iso_string().as_string()
 }
 
 #[expect(
@@ -366,15 +358,7 @@ pub fn PostDisplay(
 /// even though the anonymous seed data has `is_author = false`. `false` on the
 /// host build (no marker) — the affordance is wasm-only chrome.
 fn marker_matches(author: &str) -> bool {
-    #[cfg(target_arch = "wasm32")]
-    {
-        crate::auth::marker::read().as_deref() == Some(author)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = author;
-        false
-    }
+    crate::auth::marker::read().as_deref() == Some(author)
 }
 
 #[component]
@@ -438,17 +422,9 @@ pub fn PostCard(
                     type="button"
                     class="j-btn is-danger"
                     on:click=move |_| {
-                        let confirmed = {
-                            #[cfg(target_arch = "wasm32")]
-                            {
-                                web_sys::window()
-                                    .and_then(|w| {
-                                        w.confirm_with_message("Delete this post?").ok()
-                                    })
-                                    .unwrap_or(false)
-                            }
-                            #[cfg(not(target_arch = "wasm32"))] { false }
-                        };
+                        let confirmed = web_sys::window()
+                            .and_then(|w| { w.confirm_with_message("Delete this post?").ok() })
+                            .unwrap_or(false);
                         if confirmed {
                             delete_action.dispatch(DeletePost { post_id });
                         }
@@ -488,10 +464,8 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
     // multiselect would stay empty. So resolve it client-only: SSR renders no
     // checkboxes, and a wasm-only Effect seeds them after hydration
     // (web-style-guide.md §9, mirroring `home.rs`).
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let named = crate::server_resource(|| (), |()| list_my_audiences());
     let named_audiences = RwSignal::new(Vec::<AudienceSummary>::new());
-    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(Ok(list)) = named.get() {
             named_audiences.set(list);
@@ -625,34 +599,27 @@ pub fn PostCreateForm(
         base: "public".to_string(),
         named: Vec::new(),
     });
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let default_audience = crate::server_resource(|| (), |()| default_audience_selection());
     // Client-only: copying the resolved Resource into `audience` must not run
     // during SSR, where the future can resolve after the per-request reactive
     // owner is disposed (web-style-guide.md §9). SSR renders the Public
     // default; the real default is seeded on the client after hydration.
-    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(Ok(default)) = default_audience.get() {
             audience.set(default);
         }
     });
 
-    #[cfg(target_arch = "wasm32")]
-    {
-        Effect::new(move |_| {
-            if let Some(Ok(ref created)) = create_action.value().get() {
-                let created = created.clone();
-                on_success.run(created);
-                body.set(String::new());
-                summary.set(String::new());
-                publish_at.set(String::new());
-                tags.set(Vec::new());
-            }
-        });
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = on_success;
+    Effect::new(move |_| {
+        if let Some(Ok(ref created)) = create_action.value().get() {
+            let created = created.clone();
+            on_success.run(created);
+            body.set(String::new());
+            summary.set(String::new());
+            publish_at.set(String::new());
+            tags.set(Vec::new());
+        }
+    });
 
     if compact {
         let dispatch_save = move |_| {
@@ -926,9 +893,6 @@ pub fn PostCreateForm(
 pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {
     let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = on_publish;
-
     let on_success = Callback::new(move |created: CreatePostResult| {
         let url = created
             .permalink
@@ -940,14 +904,11 @@ pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl In
             "Draft saved!".to_string()
         };
         flash.set(Some((url, msg)));
-        #[cfg(target_arch = "wasm32")]
-        {
-            use leptos_dom::helpers::set_timeout;
-            use std::time::Duration;
-            set_timeout(move || flash.set(None), Duration::from_secs(30));
-            if created.published_at.is_some() {
-                on_publish.update(|v| *v += 1);
-            }
+        use leptos_dom::helpers::set_timeout;
+        use std::time::Duration;
+        set_timeout(move || flash.set(None), Duration::from_secs(30));
+        if created.published_at.is_some() {
+            on_publish.update(|v| *v += 1);
         }
     });
 
@@ -1045,29 +1006,26 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     // the real session and correct a stale one without gating first paint — a dead
     // session clears the marker (toward anon, the safe direction); a live session
     // with a missing marker sets it. wasm-only: the marker lives in localStorage.
-    #[cfg(target_arch = "wasm32")]
-    {
-        let reconcile = crate::server_resource(move || location.pathname.get(), |_| current_user());
-        Effect::new(move |_| {
-            if let Some(res) = reconcile.get() {
-                match res {
-                    Ok(Some(u)) => {
-                        crate::auth::marker::set(&u);
-                        if owner.get_untracked().as_deref() != Some(u.as_str()) {
-                            owner.set(Some(u));
-                        }
+    let reconcile = crate::server_resource(move || location.pathname.get(), |_| current_user());
+    Effect::new(move |_| {
+        if let Some(res) = reconcile.get() {
+            match res {
+                Ok(Some(u)) => {
+                    crate::auth::marker::set(&u);
+                    if owner.get_untracked().as_deref() != Some(u.as_str()) {
+                        owner.set(Some(u));
                     }
-                    Ok(None) => {
-                        crate::auth::marker::clear();
-                        if owner.get_untracked().is_some() {
-                            owner.set(None);
-                        }
-                    }
-                    Err(_) => {}
                 }
+                Ok(None) => {
+                    crate::auth::marker::clear();
+                    if owner.get_untracked().is_some() {
+                        owner.set(None);
+                    }
+                }
+                Err(_) => {}
             }
-        });
-    }
+        }
+    });
 
     let anon_html = crate::render::render_sidebar(&active_key);
     view! {
@@ -1090,14 +1048,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
 /// set, `None` on the host build (the sidebar only ever renders in wasm). Lets the
 /// sidebar pick authed vs. anon synchronously at mount (#181), no async gate.
 fn marker_username_on_boot() -> Option<String> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        crate::auth::marker::read()
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        None
-    }
+    crate::auth::marker::read()
 }
 
 /// The authenticated sidebar chrome (brand, search, nav + operator admin links,
@@ -1209,7 +1160,6 @@ pub fn TagInput(
     let selected_idx: RwSignal<Option<usize>> = RwSignal::new(None);
     // Tick counter for debounce: increment on each keystroke; the timeout
     // callback only fires if the tick hasn't changed.
-    #[cfg(target_arch = "wasm32")]
     let debounce_tick = RwSignal::new(0u64);
 
     let on_input = move |ev: leptos::ev::Event| {
@@ -1218,42 +1168,37 @@ pub fn TagInput(
         error.set(None);
         selected_idx.set(None);
 
-        #[cfg(target_arch = "wasm32")]
-        {
-            use leptos::task::spawn_local;
-            use leptos_dom::helpers::set_timeout;
-            use std::time::Duration;
+        use leptos::task::spawn_local;
+        use leptos_dom::helpers::set_timeout;
+        use std::time::Duration;
 
-            let prefix = val.trim().to_lowercase();
-            if prefix.is_empty() {
-                suggestions.set(Vec::new());
-                suggestions_open.set(false);
-                return;
-            }
-
-            let tick = debounce_tick.get_untracked() + 1;
-            debounce_tick.set(tick);
-
-            set_timeout(
-                move || {
-                    if debounce_tick.get_untracked() != tick {
-                        return;
-                    }
-                    spawn_local(async move {
-                        if let Ok(results) = crate::tags::list_tags(Some(prefix), Some(10)).await {
-                            if debounce_tick.get_untracked() == tick {
-                                let open = !results.is_empty();
-                                suggestions.set(results);
-                                suggestions_open.set(open);
-                            }
-                        }
-                    });
-                },
-                Duration::from_millis(150),
-            );
+        let prefix = val.trim().to_lowercase();
+        if prefix.is_empty() {
+            suggestions.set(Vec::new());
+            suggestions_open.set(false);
+            return;
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        let _ = val;
+
+        let tick = debounce_tick.get_untracked() + 1;
+        debounce_tick.set(tick);
+
+        set_timeout(
+            move || {
+                if debounce_tick.get_untracked() != tick {
+                    return;
+                }
+                spawn_local(async move {
+                    if let Ok(results) = crate::tags::list_tags(Some(prefix), Some(10)).await {
+                        if debounce_tick.get_untracked() == tick {
+                            let open = !results.is_empty();
+                            suggestions.set(results);
+                            suggestions_open.set(open);
+                        }
+                    }
+                });
+            },
+            Duration::from_millis(150),
+        );
     };
 
     let on_keydown = move |ev: leptos::ev::KeyboardEvent| {
@@ -1414,41 +1359,5 @@ pub fn TagInput(
             }}
         </div>
         {move || error.get().map(|e| view! { <p class="j-tag-error">{e}</p> })}
-    }
-}
-
-// ─── Tests ────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::{local_datetime_to_utc_rfc3339, marker_matches, marker_username_on_boot};
-
-    #[test]
-    fn local_datetime_empty_or_blank_is_none() {
-        // The empty-guard runs on the host build (publish-now → None).
-        assert_eq!(local_datetime_to_utc_rfc3339(""), None);
-        assert_eq!(local_datetime_to_utc_rfc3339("   "), None);
-    }
-
-    #[test]
-    fn local_datetime_host_arm_returns_trimmed_input() {
-        // Off-wasm the fn echoes the trimmed wall-clock string; the browser's
-        // Date-based local→UTC conversion is the wasm-only arm.
-        assert_eq!(
-            local_datetime_to_utc_rfc3339("  2026-01-02T03:04  ").as_deref(),
-            Some("2026-01-02T03:04"),
-        );
-    }
-
-    #[test]
-    fn marker_matches_is_false_off_wasm() {
-        // No auth marker exists on the host build, so the ownership affordance
-        // never shows there regardless of the author.
-        assert!(!marker_matches("anyone"));
-    }
-
-    #[test]
-    fn marker_username_on_boot_is_none_off_wasm() {
-        assert_eq!(marker_username_on_boot(), None);
     }
 }

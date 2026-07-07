@@ -9,7 +9,6 @@ use crate::pages::signal_read::read_signal;
 use crate::pages::ui::PostCard;
 use crate::posts::{TimelinePage, TimelinePostSummary};
 
-#[cfg(target_arch = "wasm32")]
 use {crate::error::WebResult, leptos::task::spawn_local, std::future::Future};
 
 /// The fetch page size shared by both timelines' initial + load-more requests.
@@ -56,7 +55,6 @@ impl TimelineState {
     /// Resolve a re-fetch into the signals, clearing loading + any prior error.
     /// wasm-only: re-fetches resolve on the client, in the page's post-hydration
     /// `Effect` (the host build only ever runs the seed `adopt`).
-    #[cfg(target_arch = "wasm32")]
     pub fn resolve(&self, page: TimelinePage) {
         self.adopt(page);
         self.loading_more.set(false);
@@ -67,7 +65,6 @@ impl TimelineState {
 
     /// Record a fetch failure (empty the rows so a stale page isn't shown). wasm-only
     /// for the same reason as [`resolve`](Self::resolve).
-    #[cfg(target_arch = "wasm32")]
     pub fn fail(&self, message: String) {
         self.error.set(Some(message));
         self.rows.set(Vec::new());
@@ -77,7 +74,6 @@ impl TimelineState {
 
 /// wasm-only load-more: fetch the next page with the current cursors and append
 /// it. `fetch` is the page's list fn (`list_local_timeline` / `list_home_feed`).
-#[cfg(target_arch = "wasm32")]
 pub(crate) fn spawn_load_more<F, Fut>(state: TimelineState, fetch: F)
 where
     F: FnOnce(Option<String>, Option<i64>, Option<u32>) -> Fut + 'static,

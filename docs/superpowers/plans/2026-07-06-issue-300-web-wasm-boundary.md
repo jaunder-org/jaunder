@@ -279,32 +279,59 @@ git commit -m "test(web): relocate render/theme tests to web::render (#300)"
 
 **Interfaces:** — (audit; any relocation follows the Task 3/4 pattern).
 
-- [ ] **Step 1:** Enumerate every host-compiled (un-`target_arch`-gated)
+- [x] **Step 1:** Enumerate every host-compiled (un-`target_arch`-gated)
       function/impl in `web/src/pages/*.rs` that is coverage-measured today.
       Command: `rg -n 'pub fn|fn |impl ' web/src/pages` cross-referenced against
       the current coverage report (`cargo xtask check`'s coverage output). Known
       candidates: `TimelineState::adopt` / `TimelineState::default`
       (`pages/timeline.rs:32,48`).
-- [ ] **Step 2:** Classify each: **pure non-glue logic** (relocate to a host
+- [x] **Step 2:** Classify each: **pure non-glue logic** (relocate to a host
       home — `render`/`tags`/a new module — following Task 3's move-with-tests
       pattern, adding a host test if none exists) vs **wasm-only reactive/UI
       glue** (e.g. mutates Leptos `RwSignal`s — `TimelineState::adopt` sets
       signals — so it is glue, verified by the e2e matrix; record and let it
       leave the measured set).
-- [ ] **Step 3:** Write the disposition list: each measured `pages/` line
+- [x] **Step 3:** Write the disposition list: each measured `pages/` line
       leaving the set, with a one-line "relocated to X" or "wasm-only glue,
       e2e-verified" for each. This is the concrete evidence for spec AC#5. Paste
       it into the PR description at ship.
-- [ ] **Step 4:** If Step 2 relocated anything, run `cargo nextest run -p web`
-      (Expected: PASS) and **Commit**:
+- [x] **Step 4:** Audit relocated **nothing** — all remaining host-compiled
+      `pages/` code is glue or already-relocated pure logic. No code commit; the
+      disposition list below is the deliverable.
 
-```bash
-git add web/src
-git commit -m "refactor(web): relocate remaining pure pages helpers per measured-line audit (#300)"
-```
+#### Audit disposition (backs spec AC#5)
 
-(If the audit relocates nothing — all remaining measured lines are glue — there
-is no code commit; the disposition list is the deliverable.)
+Every non-`#[component]` fn in `pages/` was enumerated (`rg` over
+`web/src/pages/`, cross-checked against cov:ignore/`#[cfg]`/`#[component]`
+markers). Full classification:
+
+- **Already-relocated pure logic (Tasks 3–5), stays host-measured:**
+  `is_valid_tag_slug` + `normalize_tag_token` → `web::tags`; `format_bytes` →
+  `web::render`; the `avatar_parts` / `format_post_time` / `DEFAULT_THEME` tests
+  → `web::render`. No coverage lost — moved with their subjects/tests.
+- **`#[component]` bodies** (all the `*Page` / UI components): ADR-0050
+  structural exemption — never counted; unaffected.
+- **Already `cov:ignore`'d glue** (not measured today, so no shrink):
+  `TimelineState::default`/`adopt` (`timeline.rs:32,48`),
+  `permalink_first_paint` (`posts.rs:114`), `render_draft_row`/
+  `render_delete_form`/`render_delete_result` (`posts.rs:966,1023,1044`),
+  `audience_checkbox` (`ui.rs:561`), `authed_sidebar` (`ui.rs:1108`),
+  `render_media_row` (`media.rs:156`), `site_settings_form` (`site.rs:57`),
+  `backup_settings_form` (`backup.rs:47`).
+- **Already wasm-only gated** (not host-measured today):
+  `TimelineState::resolve`/ `fail`/`spawn_load_more` (`timeline.rs`),
+  `upload_file` (`upload.rs:145`).
+- **Wasm-boundary stubs — the ONLY measured lines leaving the set, all
+  spec-acknowledged (Task 7 makes them wasm-only, verification → e2e):**
+  `local_datetime_to_utc_rfc3339` (`ui.rs:278`; the fake host arm + its
+  empty-guard test — the one genuine pure line lost, per spec §map(b), a
+  one-line guard), `marker_matches` (`ui.rs:368`; host `false` arm),
+  `marker_username_on_boot` (`ui.rs:1092`; host `None` arm).
+
+**Conclusion:** no pure non-glue logic silently leaves the coverage-measured
+set. The only shrink is the three wasm-boundary stubs' host arms (fake/None
+values that never ship) plus the one acknowledged `local_datetime` empty-guard
+test — exactly what the spec authorized.
 
 ---
 
@@ -323,7 +350,7 @@ is no code commit; the disposition list is the deliverable.)
   in `pages/`).
 - Produces: `web::pages` compiles **only** under `target_arch = "wasm32"`.
 
-- [ ] **Step 1:** In `lib.rs`, gate the `pages` module and its single re-export
+- [x] **Step 1:** In `lib.rs`, gate the `pages` module and its single re-export
       wasm-only (the only two lib.rs-level references to `pages`; the
       `pub use ui::{…}` / `pub use upload::{…}` re-exports live inside
       `pages/mod.rs` and are gated automatically):
@@ -338,7 +365,7 @@ pub use pages::App;
 Confirm no host code outside `pages/` consumes these (verified in spec: only
 `mount_csr`'s wasm body uses `App`).
 
-- [ ] **Step 2:** Delete the now-dead / redundant per-line gates across
+- [x] **Step 2:** Delete the now-dead / redundant per-line gates across
       `pages/*.rs` — the whole module is wasm-only, so:
   - remove every `#[cfg(not(target_arch = "wasm32"))]` arm (dead) — this deletes
     the `local_datetime_to_utc_rfc3339` fake arm (`ui.rs:293-296`), the
@@ -350,13 +377,13 @@ Confirm no host code outside `pages/` consumes these (verified in spec: only
   - remove every
     `#[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]` shim
     (the unused-var only arose on the deleted host arm).
-- [ ] **Step 3:** Delete the orphaned host-stub tests still in `pages/ui.rs`'s
+- [x] **Step 3:** Delete the orphaned host-stub tests still in `pages/ui.rs`'s
       test module: `local_datetime_empty_or_blank_is_none`,
       `local_datetime_host_arm_returns_trimmed_input`,
       `marker_matches_is_false_off_wasm`,
       `marker_username_on_boot_is_none_off_wasm` (spec §map (b)). Remove the
       now-empty `mod tests` if nothing remains.
-- [ ] **Step 4: Verify both targets compile and AC#1 holds**
+- [x] **Step 4: Verify both targets compile and AC#1 holds**
 
 Run: `cargo build -p web` (default) and `cargo build -p server` → Expected: PASS
 (pages excluded on host). Run:
@@ -365,7 +392,10 @@ build) → Expected: PASS (pages compiled). Run:
 `rg 'cfg\(not\(target_arch = "wasm32"\)\)|cfg_attr\(not\(target_arch' web/src/pages`
 → Expected: **no matches** (AC#1, AC#2).
 
-- [ ] **Step 5: Commit** (`cargo xtask check` first)
+- [x] **Step 5: Commit** (`cargo xtask check` first) — verified: fast gate green
+      (host clippy+compile),
+      `cargo build -p web --features csr --target     wasm32-unknown-unknown`
+      exit 0, both rg checks empty.
 
 ```bash
 git add web/src/lib.rs web/src/pages

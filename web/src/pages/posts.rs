@@ -173,7 +173,6 @@ pub fn PostPage() -> impl IntoView {
                     // It may be a server-handled URL (e.g. /media/…) that the SPA
                     // router matched here because it has the same number of segments.
                     // Reload the page so the server can handle it properly.
-                    #[cfg(target_arch = "wasm32")]
                     if let Some(window) = web_sys::window() {
                         if let Ok(href) = window.location().href() {
                             let _ = window.location().replace(&href);
@@ -187,7 +186,6 @@ pub fn PostPage() -> impl IntoView {
     );
 
     let on_unpublish = Callback::new(move |()| {
-        #[cfg(target_arch = "wasm32")]
         if let Some(window) = web_sys::window() {
             let _ = window.location().replace("/drafts");
         }
@@ -330,7 +328,6 @@ pub fn UserTimelinePage() -> impl IntoView {
     let mutate_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let initial_page = crate::server_resource(
         move || (username.get(), mutate_version.get()),
         |(username, _)| async move {
@@ -373,7 +370,6 @@ pub fn UserTimelinePage() -> impl IntoView {
     // disposal because the Resource future can resolve on a tokio worker after
     // the per-request owner is gone, panicking on signal access. SSR renders
     // the loading placeholder; signals seed on the client after hydration.
-    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
@@ -397,7 +393,6 @@ pub fn UserTimelinePage() -> impl IntoView {
 
     // ServerAction dispatches happen only on the client, so this effect's body
     // never fires server-side; using `Effect::new` matches that reality.
-    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = load_more_action.value().get() {
             match result {
@@ -630,11 +625,9 @@ pub fn EditPostPage() -> impl IntoView {
     // ServerAction dispatches happen only on the client; this redirect-on-publish
     // effect only ever fires there. `Effect::new_isomorphic` would needlessly
     // schedule on the server.
-    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(Ok(ref updated)) = update_post_action.value().get() {
             if updated.published_at.is_some() {
-                #[cfg(target_arch = "wasm32")]
                 if let Some(ref permalink) = updated.permalink {
                     if let Some(window) = web_sys::window() {
                         let _ = window.location().replace(permalink);
@@ -652,13 +645,11 @@ pub fn EditPostPage() -> impl IntoView {
             .unwrap_or(-1)
     };
     let post = crate::server_resource(post_id_param, get_post_preview);
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let current_audience = crate::server_resource(post_id_param, post_audience_selection);
     // Client-only: copying the resolved Resource into `audience` must not run
     // during SSR, where the future can resolve after the per-request reactive
     // owner is disposed (web-style-guide.md §9). The picker is seeded with the
     // post's current targeting on the client after hydration.
-    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(Ok(selection)) = current_audience.get() {
             audience.set(selection);
@@ -1071,7 +1062,6 @@ pub fn SiteTagPage() -> impl IntoView {
     let mutate_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let initial_page = crate::server_resource(
         move || (tag.get(), mutate_version.get()),
         |(tag, _)| async move {
@@ -1108,7 +1098,6 @@ pub fn SiteTagPage() -> impl IntoView {
 
     let load_more_action = ServerAction::<ListPostsByTag>::new();
 
-    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
@@ -1130,7 +1119,6 @@ pub fn SiteTagPage() -> impl IntoView {
         }
     });
 
-    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = load_more_action.value().get() {
             match result {
@@ -1245,7 +1233,6 @@ pub fn UserTagPage() -> impl IntoView {
     let mutate_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     let initial_page = crate::server_resource(
         move || (username.get(), tag.get(), mutate_version.get()),
         |(username, tag, _)| async move {
@@ -1285,7 +1272,6 @@ pub fn UserTagPage() -> impl IntoView {
 
     let load_more_action = ServerAction::<ListUserPostsByTag>::new();
 
-    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
@@ -1307,7 +1293,6 @@ pub fn UserTagPage() -> impl IntoView {
         }
     });
 
-    #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         if let Some(result) = load_more_action.value().get() {
             match result {
