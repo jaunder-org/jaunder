@@ -109,7 +109,7 @@ _Every task's requirements implicitly include these (spec §Acceptance / project
 
 **Files:**
 
-- Create: `docs/adr/drafts/web-host-wasm-boundary-module-level.md` (numberless
+- Create: `docs/adr/0055-web-host-wasm-boundary-module-level.md` (numberless
   draft; **jaunder-adr** flow — `cargo xtask adr promote` numbers it at ship).
 
 **Interfaces:**
