@@ -267,7 +267,10 @@ of edits; preserve even if deleted from source," made concrete:
 
 - Each observed state of `(source, upstream-id)` is a **new immutable version**
   (version, observed-at, upstream-state, raw payload, content-hash). Current
-  view = latest; edit history = the chain.
+  view = latest; edit history = the chain. (For feeds, "raw payload" is
+  concretized as the entry's **native fragment** — per-entry, not
+  whole-response; see `docs/feed-reading.md` §2.5 and its ADR for the deliberate
+  fidelity trade.)
 - **Content-hash change detection** keeps it from ballooning (AT gives a CID
   free; hash AP/RSS) — re-polls that don't change just bump last-seen.
 - **Disappearance ≠ deletion.** An entry silently dropping from a feed →

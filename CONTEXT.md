@@ -46,11 +46,21 @@ _Avoid_: calling this "the feed" without qualification when an AtomPub
 Collection is also in play.
 
 **`feed_*` scope**: The `feed_*` identifier family — `feed_url`, `feed_cache`,
-`feed_events` (and the planned inbound `source_feeds`) — refers **only** to
-syndication feeds (RSS, Atom, JSON Feed). "Feed" is not a synonym for a
-publication, a followed source in general, or an inbound reading timeline;
-ActivityPub actors and AT records are **not** "feeds." _Avoid_: treating
-`feed_url` as a universal publication/source identity — identity is per-entity.
+`feed_events` — refers **only** to syndication feeds (RSS, Atom, JSON Feed), and
+only on the **outbound** side (Jaunder producing its own feeds). "Feed" is not a
+synonym for a publication, a followed source in general, or an inbound reading
+timeline; ActivityPub actors and AT records are **not** "feeds." _Avoid_:
+treating `feed_url` as a universal publication/source identity — identity is
+per-entity.
+
+**`ajr_*` scope**: The **inbound** syndication family (**A**tom / **J**SON Feed
+/ **R**SS ingestion — `docs/feed-reading.md`): `ajr_feeds` (followed fetch
+units), `ajr_follows`, `ajr_fetches`, `ajr_entries`, `ajr_entry_versions`,
+`ajr_channel_versions`. "ajr" is unfamiliar but unambiguous — deliberately
+distinct from the outbound `feed_*` family so an identifier's direction is
+always legible. _Avoid_: `feed_*` names for inbound machinery, and
+"subscription" naming for follows (the outbound `subscriptions` table is
+_subscribers to me_).
 
 ### Clients
 
