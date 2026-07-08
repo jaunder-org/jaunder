@@ -12,6 +12,7 @@ use common::backup::BackupMode;
 use common::mailer::{EmailMessage, MailSender};
 use common::password::Password;
 use common::username::Username;
+use host::capture;
 use leptos::prelude::{Env, LeptosOptions};
 use storage::load_smtp_config;
 use storage::{
@@ -429,7 +430,11 @@ pub async fn prepare_server(
     )
     .start()
     .await?;
-    let mailer = crate::mailer::build_mailer(db.site_config.as_ref()).await;
+    let mailer = crate::mailer::build_mailer(
+        db.site_config.as_ref(),
+        capture::file(capture::Stream::Mail),
+    )
+    .await;
     let router = crate::create_router(
         leptos_options,
         db,

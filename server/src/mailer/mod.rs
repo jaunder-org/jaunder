@@ -29,16 +29,20 @@ pub use smtp::{BuildMailerError, LettreMailSender};
 
 /// Picks a mailer implementation based on environment and stored SMTP config.
 ///
-/// In e2e tests, `JAUNDER_MAIL_CAPTURE_FILE` short-circuits to the file-capture
-/// transport. Otherwise falls back to the configured SMTP transport, or the
-/// no-op sender if configuration is absent or invalid.
+/// In e2e tests, a `Some` capture path (resolved from `JAUNDER_CAPTURE_DIR` at the
+/// composition root — see the `host` crate) short-circuits to the file-capture
+/// transport. Otherwise (`None`, the production default) falls back to the configured
+/// SMTP transport, or the no-op sender if configuration is absent or invalid.
 ///
 /// Lives in `server` (not `storage`) because it depends on lettre and
 /// file-capture transports — concerns that the storage crate is deliberately
 /// kept agnostic of.
 #[tracing::instrument(name = "server.mailer.build", skip(site_config))]
-pub async fn build_mailer(site_config: &dyn SiteConfigStorage) -> Arc<dyn MailSender> {
-    if let Ok(path) = std::env::var("JAUNDER_MAIL_CAPTURE_FILE") {
+pub async fn build_mailer(
+    site_config: &dyn SiteConfigStorage,
+    mail_capture: Option<std::path::PathBuf>,
+) -> Arc<dyn MailSender> {
+    if let Some(path) = mail_capture {
         return Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>;
     }
     match load_smtp_config(site_config).await {
@@ -55,6 +59,7 @@ mod tests {
     use std::collections::HashMap;
 
     use async_trait::async_trait;
+    use rstest::*;
 
     use super::*;
 
@@ -76,7 +81,7 @@ mod tests {
         // No smtp.host → load_smtp_config returns Ok(None) → NoopMailSender arm
         let store = MapConfigStore(HashMap::new());
         store.set("unused", "value").await.unwrap(); // cover MapConfigStore::set
-        let sender = build_mailer(&store).await;
+        let sender = build_mailer(&store, None).await;
         // NoopMailSender always returns NotConfigured; verify send_email is callable
         let msg = common::mailer::EmailMessage {
             from: None,
@@ -94,7 +99,36 @@ mod tests {
     async fn build_mailer_returns_sender_when_smtp_config_present() {
         // smtp.host set → load_smtp_config returns Ok(Some(cfg)) → LettreMailSender arm
         let store = MapConfigStore(HashMap::from([("smtp.host", "localhost")]));
-        let _sender = build_mailer(&store).await;
+        let _sender = build_mailer(&store, None).await;
         // Just verify build_mailer runs without panic; actual SMTP send requires a server.
+    }
+
+    #[fixture]
+    fn capture_dir() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    // A `Some` capture path selects the file transport and writes to `<dir>/mail.jsonl`.
+    // Injected as a value — no env, no lock (spec Decision 5).
+    #[rstest]
+    #[tokio::test]
+    async fn build_mailer_selects_file_sender_when_path_given(capture_dir: tempfile::TempDir) {
+        let path = capture_dir.path().join("mail.jsonl");
+        let store = MapConfigStore(HashMap::new());
+        let sender = build_mailer(&store, Some(path.clone())).await;
+        let msg = common::mailer::EmailMessage {
+            from: None,
+            to: vec!["x@example.com".parse().unwrap()],
+            subject: "Test".to_string(),
+            body_text: String::new(),
+        };
+        sender
+            .send_email(&msg)
+            .await
+            .expect("file sender writes the line");
+        assert!(
+            path.exists(),
+            "FileMailSender must write to the injected capture path"
+        );
     }
 }

@@ -1795,6 +1795,7 @@ dependencies = [
  "email_address",
  "flate2",
  "futures-util",
+ "host",
  "leptos",
  "leptos_axum",
  "lettre",
