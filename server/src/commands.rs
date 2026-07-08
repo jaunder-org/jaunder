@@ -420,7 +420,7 @@ pub async fn prepare_server(
     .await?;
     // The `WebSub` publisher is a service, not storage: it is constructed at the
     // composition root and injected into the feed worker (ADR-0016).
-    let websub = crate::websub::default_client_from_env();
+    let websub = crate::websub::default_client(capture::file(capture::Stream::WebSub));
     let feed_scheduler = crate::feed::worker::FeedWorker::new(
         db.site_config.clone(),
         db.posts.clone(),

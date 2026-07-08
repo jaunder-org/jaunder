@@ -5,9 +5,8 @@ use std::path::PathBuf;
 use super::{WebSubClient, WebSubError};
 
 /// A [`WebSubClient`] that appends each ping as a JSON line to a file on disk
-/// instead of contacting a hub.  Used when `JAUNDER_WEBSUB_CAPTURE_FILE` is set
-/// in the environment (typically for end-to-end tests), mirroring the
-/// `FileMailSender` mail-capture transport.
+/// instead of contacting a hub.  Used for the `websub.jsonl` stream of the
+/// `JAUNDER_CAPTURE_DIR` contract (end-to-end tests only); see the `host` crate.
 pub struct FileCapturingWebSubClient {
     path: PathBuf,
 }
