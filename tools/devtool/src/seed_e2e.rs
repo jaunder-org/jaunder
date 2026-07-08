@@ -14,7 +14,7 @@ use anyhow::{bail, Context};
 /// The canonical fixture invocations as `(args, fatal)`. `fatal` is currently
 /// always true — the tuple shape keeps a future non-fatal step a data change
 /// rather than a control-flow change. Pure, so it is unit-tested directly.
-fn seed_invocations(mail_file: &str) -> Vec<(Vec<String>, bool)> {
+fn seed_invocations() -> Vec<(Vec<String>, bool)> {
     let step = |xs: &[&str]| -> (Vec<String>, bool) {
         (xs.iter().map(|x| (*x).to_owned()).collect(), true)
     };
@@ -55,14 +55,14 @@ fn seed_invocations(mail_file: &str) -> Vec<(Vec<String>, bool)> {
             "--value",
             "https://hub.test.local/",
         ]),
-        step(&["reset-mail", "--path", mail_file]),
+        step(&["reset-mail"]),
     ]
 }
 
 /// Run the canonical seed by shelling each invocation out to `test_support_bin`
 /// with `JAUNDER_DB=db`. Fatal on the first non-zero exit.
-pub fn run(db: &str, mail_file: &str, test_support_bin: &Path) -> anyhow::Result<()> {
-    for (args, _fatal) in seed_invocations(mail_file) {
+pub fn run(db: &str, test_support_bin: &Path) -> anyhow::Result<()> {
+    for (args, _fatal) in seed_invocations() {
         let status = Command::new(test_support_bin)
             .args(&args)
             .env("JAUNDER_DB", db)
@@ -81,7 +81,7 @@ mod tests {
 
     #[test]
     fn canonical_fixture_invocations() {
-        let inv = seed_invocations("/tmp/mail.jsonl");
+        let inv = seed_invocations();
         let as_vecs: Vec<Vec<&str>> = inv
             .iter()
             .map(|(args, fatal)| {
@@ -128,7 +128,7 @@ mod tests {
                     "--value",
                     "https://hub.test.local/"
                 ],
-                vec!["reset-mail", "--path", "/tmp/mail.jsonl"],
+                vec!["reset-mail"],
             ]
         );
     }
