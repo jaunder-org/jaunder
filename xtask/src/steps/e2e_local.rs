@@ -10,16 +10,16 @@
 //!
 //! Canonical e2e-server env-var set the host driver and the flake both provide
 //! (names shared, values per-environment; see also `flake.nix` `mailCaptureEnv`):
-//! `JAUNDER_BIND`, `JAUNDER_DB`, `JAUNDER_RUNTIME_FILE`,
-//! `JAUNDER_MAIL_CAPTURE_FILE`, `JAUNDER_WEBSUB_CAPTURE_FILE`,
-//! `JAUNDER_DIAG_LOG_FILE` — plus `JAUNDER_STORAGE_PATH` host-side only (the VM
-//! instead relies on systemd `WorkingDirectory=/var/lib/jaunder` + the `./data`
-//! default). Values differ per environment
-//! (host: a temp dir + ephemeral port; VM: `/var/lib/jaunder` + `:3000`). The
-//! DB + capture-file vars are ALSO set on the Playwright process (with
-//! `target/debug` prepended to PATH) so `mail.ts`/`websub.ts` read the same files
-//! the server writes and `seed.ts`'s bare-`test-support` `seedPostsViaTool`
-//! resolves the same binary + DB — VM parity for the mail/websub/pagination specs.
+//! `JAUNDER_BIND`, `JAUNDER_DB`, `JAUNDER_RUNTIME_FILE`, `JAUNDER_CAPTURE_DIR`
+//! (the single capture-dir contract, #227) — plus `JAUNDER_STORAGE_PATH`
+//! host-side only (the VM instead relies on systemd
+//! `WorkingDirectory=/var/lib/jaunder` + the `./data` default). Values differ per
+//! environment (host: a temp dir + ephemeral port; VM: `/var/lib/jaunder` +
+//! `:3000`). The DB + capture-dir vars are ALSO set on the Playwright process (with
+//! `target/debug` prepended to PATH) so `mail.ts`/`websub.ts` resolve the same
+//! capture paths (via `test-support capture-path`) the server writes, and
+//! `seed.ts`'s bare-`test-support` `seedPostsViaTool` resolves the same binary +
+//! DB — VM parity for the mail/websub/pagination specs.
 use std::process::{Child, Command};
 use std::thread::sleep;
 use std::time::Duration;
@@ -90,9 +90,10 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
     let sp = storage.path().display();
     let db = format!("sqlite:{sp}/jaunder.db");
     let runtime = storage.path().join("runtime.json");
-    let mail = format!("{sp}/mail.jsonl");
-    let websub = format!("{sp}/websub.jsonl");
-    let diag = format!("{sp}/jaunder-diag.log");
+    // The single capture-dir contract (#227): a dedicated subdir the server writes
+    // mail.jsonl/websub.jsonl/diag.log into. Kept separate from the storage root so it
+    // holds only capture streams (VM parity: /var/lib/jaunder/capture).
+    let capture = format!("{sp}/capture");
 
     // 3. Start `jaunder serve` on an EPHEMERAL port (:0) with the canonical capture
     // env, in the dev environment (default) so the schema auto-inits on start.
@@ -103,9 +104,7 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
         .env("JAUNDER_STORAGE_PATH", storage.path())
         .env("JAUNDER_DB", &db)
         .env("JAUNDER_RUNTIME_FILE", &runtime)
-        .env("JAUNDER_MAIL_CAPTURE_FILE", &mail)
-        .env("JAUNDER_WEBSUB_CAPTURE_FILE", &websub)
-        .env("JAUNDER_DIAG_LOG_FILE", &diag)
+        .env("JAUNDER_CAPTURE_DIR", &capture)
         .spawn()
     {
         Ok(c) => c,
@@ -150,8 +149,9 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
     let test_support = format!("{root}/target/debug/test-support");
     if cmd!(
         sh,
-        "cargo run --manifest-path {tools} -- seed-e2e --db {db} --mail-file {mail} --test-support-bin {test_support}"
+        "cargo run --manifest-path {tools} -- seed-e2e --db {db} --test-support-bin {test_support}"
     )
+    .env("JAUNDER_CAPTURE_DIR", &capture)
     .run()
     .is_err()
     {
@@ -188,8 +188,7 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
         .args(pw)
         .env("JAUNDER_E2E_BASE_URL", &base_url)
         .env("JAUNDER_DB", &db)
-        .env("JAUNDER_MAIL_CAPTURE_FILE", &mail)
-        .env("JAUNDER_WEBSUB_CAPTURE_FILE", &websub)
+        .env("JAUNDER_CAPTURE_DIR", &capture)
         .env("JAUNDER_E2E_WORKERS", &workers)
         .env("PLAYWRIGHT_HTML_OPEN", "never")
         .env("PATH", &path)
