@@ -1,6 +1,10 @@
 # ADR-0055: web host/wasm boundary is module-level, not line-level
 
-- Status: accepted
+- Status: superseded
+- Note: superseded by ADR-0056 (web converges on the canonical co-located Leptos
+  CSR layout) — the module-level wasm-only gating of `pages/` is reversed in
+  favor of dual-target, feature-gated co-location. ADR-0055's no-fake-stub and
+  relocate-pure-logic principles are retained.
 - Date: 2026-07-06
 - Issue: [#300](https://github.com/jaunder-org/jaunder/issues/300)
 
