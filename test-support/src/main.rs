@@ -1,9 +1,8 @@
 //! `test-support` — out-of-process test/e2e helpers that link jaunder's real
 //! crates (see `lib.rs`). Never shipped in the `jaunder` production binary.
 
-use std::path::PathBuf;
-
 use clap::{Parser, Subcommand};
+use host::capture;
 use storage::DbConnectOptions;
 
 use test_support::{create_user, reset_mail, seed_posts_for_user, set_site_config};
@@ -68,11 +67,14 @@ enum Commands {
         #[arg(long)]
         value: String,
     },
-    /// Reset the mail-capture file (delete it; missing is fine).
-    ResetMail {
-        /// Path to the mail-capture file.
-        #[arg(long, env = "JAUNDER_MAIL_CAPTURE_FILE")]
-        path: PathBuf,
+    /// Reset the mail-capture file (delete it; missing is fine). Derives
+    /// `<JAUNDER_CAPTURE_DIR>/mail.jsonl`; errors if the capture dir is unset.
+    ResetMail,
+    /// Print the resolved capture-file path for a stream (`mail`/`websub`/`diag`),
+    /// derived from `JAUNDER_CAPTURE_DIR`. Errors on an unset dir or unknown stream.
+    CapturePath {
+        /// The capture stream key.
+        stream: String,
     },
 }
 
@@ -121,9 +123,18 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("set site_config {key} = {value}");
         }
         // cov:ignore-stop
-        Commands::ResetMail { path } => {
+        Commands::ResetMail => {
+            let path = capture::file(capture::Stream::Mail)
+                .ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))?;
             reset_mail(&path)?;
             eprintln!("reset mail-capture file {}", path.display());
+        }
+        Commands::CapturePath { stream } => {
+            let stream = capture::Stream::parse(&stream)
+                .ok_or_else(|| anyhow::anyhow!("unknown capture stream {stream:?}"))?;
+            let path = capture::file(stream)
+                .ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))?;
+            println!("{}", path.display());
         }
     }
     Ok(())

@@ -4239,6 +4239,7 @@ dependencies = [
  "chrono",
  "clap",
  "common",
+ "host",
  "storage",
  "tempfile",
  "tokio",
