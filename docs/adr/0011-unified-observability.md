@@ -78,7 +78,14 @@ records the conventions and architecture.
 - When no endpoint is set (or in any non-server process — wasm, the CLI), no
   provider is installed and every instrument is a no-op, exactly like traces.
 
-### Emit facade: `common::metrics`
+### Emit facade: `host::metrics` (originally `common::metrics`)
+
+> **Superseded (2026-07-09, #345):** the facade now lives in
+> **`host::metrics`**, declared unconditionally. `host` is native-only
+> (ADR-0058), so `opentelemetry` is kept out of the wasm bundle by crate
+> structure rather than the feature gate described below. The text that follows
+> is the original, correct-for-its-time rationale; see the 2026-07-09 addendum
+> for the move.
 
 - A single facade in `common`, behind an optional **`metrics` feature** (enabled
   by `server` and `web/ssr`, never by the wasm/hydrate build). This is a feature
@@ -154,3 +161,29 @@ unreachable collector) are logged, never propagated — a telemetry failure must
 not change a command's exit status. This closes the "CLI export" item the
 metrics addendum deferred (metrics **and** traces, since both shared the
 drop-on-exit defect).
+
+## Addendum (2026-07-09): Metrics facade relocated to `host::metrics` (issue #345)
+
+The 2026-06-18 addendum placed the emit facade in `common` behind an optional
+`metrics` feature because, at the time, `common` was the lowest crate reachable
+by every emitter (`server → web → common`) and a feature gate kept
+`opentelemetry` out of the dual-target crate's wasm build.
+
+ADR-0058 has since introduced `host` — the native-only sibling of `common` — and
+the emitter set has grown to include `host` and `storage`. Every crate that
+emits metrics now depends on `host` (`storage → host`, `web → host` under its
+`server` feature, `server → host`, and `host` itself), and `host` is never in
+the wasm dependency closure. The facade therefore moves to **`host::metrics`**,
+declared **unconditionally**: `opentelemetry` is excluded from wasm by crate
+structure, so the `metrics` feature on `common` — and the `common/metrics` /
+`features = ["metrics"]` opt-ins in `host`, `server`, and `web` — are deleted.
+This also removes `storage`'s prior reliance on Cargo feature unification to see
+the metrics `SessionOutcome` enum (it now references `host::metrics` on a direct
+dependency).
+
+No behavior change: the instrument catalog, bounded-enum cardinality discipline,
+PII rules, and no-op-without-a-provider semantics are unchanged; only the
+facade's crate home moves. Exporter setup remains in `server::observability`.
+This is an application of ADR-0058's charter ("any strictly-host-focused shared
+code... including production machinery pushed down out of `web`"), not a new
+observability decision — hence an amendment here rather than a new ADR.

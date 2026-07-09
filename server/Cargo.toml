@@ -12,7 +12,7 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
-common = { workspace = true, features = ["metrics"] }
+common = { workspace = true }
 host = { workspace = true }
 storage.workspace = true
 web = { path = "../web", default-features = false, features = ["server"] }

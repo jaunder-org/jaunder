@@ -295,7 +295,7 @@ pub async fn create_post(
             .await
             .map_err(InternalError::storage)?;
 
-        common::metrics::post(common::metrics::PostEvent::Created);
+        host::metrics::post(host::metrics::PostEvent::Created);
         Ok(created)
     })
 }
@@ -465,7 +465,7 @@ pub async fn update_post(
         // Only published posts have a public permalink. For drafts, the permalink is None.
         let permalink = record.published_at.is_some().then(|| record.permalink());
 
-        common::metrics::post(common::metrics::PostEvent::Updated);
+        host::metrics::post(host::metrics::PostEvent::Updated);
         Ok(UpdatePostResult {
             post_id,
             slug: record.slug.to_string(),
@@ -609,7 +609,7 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
             .await
             .map_err(InternalError::storage)?;
 
-        common::metrics::post(common::metrics::PostEvent::Published);
+        host::metrics::post(host::metrics::PostEvent::Published);
         Ok(PublishPostResult {
             post_id: updated.post_id,
             slug: updated.slug.to_string(),
@@ -647,7 +647,7 @@ pub async fn delete_post(post_id: i64) -> WebResult<()> {
                 .map_err(InternalError::storage)?;
         }
 
-        common::metrics::post(common::metrics::PostEvent::Deleted);
+        host::metrics::post(host::metrics::PostEvent::Deleted);
         Ok(())
     })
 }

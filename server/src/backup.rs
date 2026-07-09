@@ -62,8 +62,8 @@ async fn run_scheduled_backup(
     })
     .await?;
     let pruned = prune_backups(destination_root, config.retention_count)?;
-    common::metrics::backup_bytes(backup_size_bytes(&destination_path));
-    common::metrics::backup_pruned(u64::try_from(pruned).unwrap_or(u64::MAX));
+    host::metrics::backup_bytes(backup_size_bytes(&destination_path));
+    host::metrics::backup_pruned(u64::try_from(pruned).unwrap_or(u64::MAX));
     tracing::info!(path = %destination_path.display(), "scheduled backup complete");
     Ok(destination_path)
 }
@@ -98,19 +98,19 @@ async fn run_scheduled_backup_logged(
     let started = std::time::Instant::now();
     let result = run_scheduled_backup(database, media_path, destination_root, config).await;
     let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    common::metrics::backup_duration_ms(elapsed_ms);
-    common::metrics::backup_run(backup_result_metric(result.is_ok()));
+    host::metrics::backup_duration_ms(elapsed_ms);
+    host::metrics::backup_run(backup_result_metric(result.is_ok()));
     if let Err(error) = result {
         tracing::error!(error = %error, "scheduled backup failed");
     }
 }
 
 /// Maps a backup run's success flag to its bounded `result` attribute.
-fn backup_result_metric(succeeded: bool) -> common::metrics::BackupResult {
+fn backup_result_metric(succeeded: bool) -> host::metrics::BackupResult {
     if succeeded {
-        common::metrics::BackupResult::Success
+        host::metrics::BackupResult::Success
     } else {
-        common::metrics::BackupResult::Failure
+        host::metrics::BackupResult::Failure
     }
 }
 

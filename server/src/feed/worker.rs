@@ -162,8 +162,8 @@ impl FeedWorker {
         .await
         {
             Ok(row) => {
-                common::metrics::feed_regeneration(common::metrics::RegenResult::Ok);
-                common::metrics::feed_regen_duration_ms(
+                host::metrics::feed_regeneration(host::metrics::RegenResult::Ok);
+                host::metrics::feed_regen_duration_ms(
                     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 );
                 let _ = self.feed_events.mark_regenerated(&ids).await;
@@ -209,7 +209,7 @@ impl FeedWorker {
             let result = self.websub.send_publish(hub, &absolute).await;
             match result {
                 Ok(()) => {
-                    common::metrics::websub_ping(common::metrics::PingOutcome::Success);
+                    host::metrics::websub_ping(host::metrics::PingOutcome::Success);
                     tracing::info!(feed_url, hub, attempt, "feed.websub.ping.succeeded");
                     let _ = self.feed_events.mark_pinged(ids).await;
                 }
@@ -217,7 +217,7 @@ impl FeedWorker {
                     let attempt_usize = usize::try_from(attempt).unwrap_or(0);
                     let next_attempt_idx = attempt_usize.saturating_sub(1);
                     if next_attempt_idx >= BACKOFFS_SECS.len() {
-                        common::metrics::websub_ping(common::metrics::PingOutcome::Exhausted);
+                        host::metrics::websub_ping(host::metrics::PingOutcome::Exhausted);
                         tracing::warn!(feed_url, hub, "feed.websub.ping.exhausted");
                         let _ = self.feed_events.mark_exhausted(ids, &e.to_string()).await;
                     } else {
@@ -225,7 +225,7 @@ impl FeedWorker {
                             i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
                         );
                         let next = Utc::now() + delay;
-                        common::metrics::websub_ping(common::metrics::PingOutcome::Failed);
+                        host::metrics::websub_ping(host::metrics::PingOutcome::Failed);
                         tracing::warn!(feed_url, hub, attempt, error = %e, "feed.websub.ping.failed");
                         let _ = self
                             .feed_events
@@ -236,7 +236,7 @@ impl FeedWorker {
             }
         } else {
             // No hub configured — treat as complete.
-            common::metrics::websub_ping(common::metrics::PingOutcome::NoHub);
+            host::metrics::websub_ping(host::metrics::PingOutcome::NoHub);
             let _ = self.feed_events.mark_pinged(ids).await;
         }
     }
@@ -251,7 +251,7 @@ impl FeedWorker {
         recs: &[FeedEventRecord],
         e: &RegenerateError,
     ) {
-        common::metrics::feed_regeneration(common::metrics::RegenResult::Error);
+        host::metrics::feed_regeneration(host::metrics::RegenResult::Error);
         tracing::error!(error = %e, feed_url, "feed.regen.failed");
         let attempt = recs.iter().map(|r| r.attempts).max().unwrap_or(0) + 1;
         let attempt_usize = usize::try_from(attempt).unwrap_or(0);

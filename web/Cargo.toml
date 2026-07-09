@@ -67,7 +67,6 @@ csr = ["leptos/csr"]
 server = [
     "dep:anyhow",
     "dep:host",
-    "common/metrics",
     "leptos/ssr",
     "leptos_meta/ssr",
     "leptos_router/ssr",

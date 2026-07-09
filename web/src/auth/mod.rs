@@ -86,9 +86,9 @@ pub async fn register(
             .await;
 
         let metric_policy = match &policy {
-            RegistrationPolicy::Open => common::metrics::RegistrationPolicy::Open,
-            RegistrationPolicy::InviteOnly => common::metrics::RegistrationPolicy::InviteOnly,
-            RegistrationPolicy::Closed => common::metrics::RegistrationPolicy::Closed,
+            RegistrationPolicy::Open => host::metrics::RegistrationPolicy::Open,
+            RegistrationPolicy::InviteOnly => host::metrics::RegistrationPolicy::InviteOnly,
+            RegistrationPolicy::Closed => host::metrics::RegistrationPolicy::Closed,
         };
         let user_id_result: Result<i64, InternalError> = match policy {
             RegistrationPolicy::Open => users
@@ -106,7 +106,7 @@ pub async fn register(
                             .map_err(Into::into);
                         // A successful invite registration redeems the code.
                         if result.is_ok() {
-                            common::metrics::invite(common::metrics::InviteEvent::Redeemed);
+                            host::metrics::invite(host::metrics::InviteEvent::Redeemed);
                         }
                         result
                     }
@@ -115,13 +115,13 @@ pub async fn register(
             }
             RegistrationPolicy::Closed => Err(InternalError::validation("registration is closed")),
         };
-        common::metrics::registration(
-            common::metrics::RegistrationSource::Web,
+        host::metrics::registration(
+            host::metrics::RegistrationSource::Web,
             metric_policy,
             if user_id_result.is_ok() {
-                common::metrics::RegistrationResult::Ok
+                host::metrics::RegistrationResult::Ok
             } else {
-                common::metrics::RegistrationResult::Rejected
+                host::metrics::RegistrationResult::Rejected
             },
         );
         let user_id = user_id_result?;
@@ -162,11 +162,11 @@ pub async fn login(username: String, password: String, label: Option<String>) ->
             .await
         {
             Ok(record) => {
-                common::metrics::login(common::metrics::LoginOutcome::Success);
+                host::metrics::login(host::metrics::LoginOutcome::Success);
                 record
             }
             Err(error) => {
-                common::metrics::login(storage::login_outcome(&error));
+                host::metrics::login(storage::login_outcome(&error));
                 return Err(error.into());
             }
         };

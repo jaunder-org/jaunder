@@ -6,8 +6,11 @@
 //! Tenants live in their own modules. The first is [`capture`] — the `JAUNDER_CAPTURE_DIR`
 //! contract (issue #227, ADR-0057); [`error`] holds the server-side error carrier
 //! (issue #334, ADR-0058 as clarified); [`auth`] holds host-side HTTP credential
-//! parsing + session-cookie construction pushed down from `web` (issue #334).
+//! parsing + session-cookie construction pushed down from `web` (issue #334);
+//! [`metrics`] holds the cardinality-safe OpenTelemetry emitter facade pushed down
+//! from `common` (issue #345, ADR-0011/ADR-0058).
 
 pub mod auth;
 pub mod capture;
 pub mod error;
+pub mod metrics;

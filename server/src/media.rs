@@ -109,7 +109,7 @@ pub async fn serve_handler(
 ) -> Result<Response, StatusCode> {
     let result = serve_response(media, storage_path, params, req_headers).await;
     if let Some(outcome) = serve_result(&result) {
-        common::metrics::media_served(outcome);
+        host::metrics::media_served(outcome);
     }
     result
 }
@@ -117,14 +117,14 @@ pub async fn serve_handler(
 /// Maps a serve outcome to its bounded `result` attribute, or `None` for
 /// internal failures (not one of the served outcomes). Exhaustively tested so
 /// every arm is covered independent of handler call paths.
-fn serve_result(result: &Result<Response, StatusCode>) -> Option<common::metrics::ServeResult> {
+fn serve_result(result: &Result<Response, StatusCode>) -> Option<host::metrics::ServeResult> {
     match result {
         Ok(response) if response.status() == StatusCode::NOT_MODIFIED => {
-            Some(common::metrics::ServeResult::NotModified)
+            Some(host::metrics::ServeResult::NotModified)
         }
-        Ok(_) => Some(common::metrics::ServeResult::Ok),
+        Ok(_) => Some(host::metrics::ServeResult::Ok),
         Err(status) if *status == StatusCode::NOT_FOUND => {
-            Some(common::metrics::ServeResult::NotFound)
+            Some(host::metrics::ServeResult::NotFound)
         }
         Err(_) => None,
     }
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn serve_result_maps_each_outcome() {
-        use common::metrics::ServeResult;
+        use host::metrics::ServeResult;
         let ok: Result<Response, StatusCode> = Ok(StatusCode::OK.into_response());
         assert!(matches!(serve_result(&ok), Some(ServeResult::Ok)));
         let not_modified: Result<Response, StatusCode> =

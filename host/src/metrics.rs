@@ -1,8 +1,13 @@
-//! Cardinality-safe OpenTelemetry metric emitters, shared by `web`, `server`,
-//! and the CLI. Instruments are built once from the global meter; when no
-//! `MeterProvider` is installed (no OTLP endpoint, or any non-server process)
-//! they are no-ops. Helper arguments are bounded enums, so a call site can
-//! never emit an unbounded attribute. See the design spec / ADR-0011.
+//! Cardinality-safe OpenTelemetry metric emitters, shared by `web` (SSR),
+//! `server`, `storage`, and the CLI. Instruments are built once from the global
+//! meter; when no `MeterProvider` is installed (no OTLP endpoint, or any
+//! non-server process) they are no-ops. Helper arguments are bounded enums, so a
+//! call site can never emit an unbounded attribute. Exporter setup lives in the
+//! binary (`server::observability`), not here.
+//!
+//! This facade lives in `host` — the native-only shared crate (ADR-0058) — so
+//! `opentelemetry` is kept out of the wasm bundle by crate structure rather than
+//! a feature gate (issue #345). See ADR-0011 (amended) and ADR-0058.
 
 use std::sync::LazyLock;
 

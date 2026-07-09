@@ -32,11 +32,11 @@ async fn serve(
     let feed_url = canonicalize(&surface, format);
     let row = match feed_cache.get(&feed_url).await {
         Ok(Some(row)) => {
-            common::metrics::feed_cache(common::metrics::CacheResult::Hit);
+            host::metrics::feed_cache(host::metrics::CacheResult::Hit);
             row
         }
         Ok(None) => {
-            common::metrics::feed_cache(common::metrics::CacheResult::Miss);
+            host::metrics::feed_cache(host::metrics::CacheResult::Miss);
             // Cache miss: build the feed inline rather than 404. The background
             // worker only refreshes feeds that have pending events, so a cold or
             // evicted cache entry has no other path back to being populated.

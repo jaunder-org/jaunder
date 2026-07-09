@@ -7,12 +7,15 @@ license = "GPL-3.0-only"
 [dependencies]
 anyhow.workspace = true
 http.workspace = true
+opentelemetry.workspace = true
 sqlx.workspace = true
 tracing.workspace = true
-common = { path = "../common", features = ["metrics"] }
+common = { path = "../common" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = ["metrics", "testing"] }
 tracing-subscriber = { workspace = true }
 
 [lints]
