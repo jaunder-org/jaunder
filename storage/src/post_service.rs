@@ -362,9 +362,10 @@ impl From<PerformCreationError> for host::error::InternalError {
             PerformCreationError::InvalidSlug(_) => {
                 InternalError::validation_source(error.to_string(), error)
             }
-            PerformCreationError::Exhausted(_) => {
-                InternalError::server_message("unable to allocate a unique slug after 100 attempts")
-            }
+            // Carry the typed error as the operator source (its `Display` renders the real
+            // attempt count) rather than a hardcoded literal that lies when the retry bound
+            // isn't 100. Wire projection is unchanged (kind `Internal` → "server operation failed").
+            PerformCreationError::Exhausted(_) => InternalError::server(error),
             PerformCreationError::CreatedNotFound => {
                 InternalError::server_message("created post not found")
             }
