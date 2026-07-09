@@ -29,12 +29,22 @@ target-agnostic `common`. Because it never targets wasm, it may use
 `std::fs`/`std::env` freely with no cfg gating, and `common` keeps its "zero
 host-only carve-outs" invariant.
 
-**Load-bearing invariant: `host` depends only on `common`.** `host` is the host
-_floor_ — code that needs a `storage` (or higher) type belongs in
-`storage`/`server`, not here. This keeps the crate graph acyclic and stops
-`host` drifting into a dependency grab-bag (the `AppState` failure mode ADR-0016
-addressed). The rule earns its keep the moment a second, non-leaf tenant lands
-and other crates depend _on_ `host` rather than the reverse.
+**Load-bearing invariant: `host` depends on no _workspace_ crate except
+`common`.** `host` is the host _floor_ — code that needs a `storage` (or higher)
+_workspace_ type (`PostStorage`, `AudienceError`, …) belongs in
+`storage`/`server`, not here. It **may** depend on external _infrastructure_
+crates the shared code genuinely needs (`anyhow`, `tracing`, `sqlx`, `chrono`,
+`http`): the dividing line is that `host` knows _raw infrastructure types_ (e.g.
+classifying a `sqlx::Error`) but never our domain/storage abstractions. Only
+workspace-crate deps can cycle or recreate the grab-bag, so the rule that keeps
+the graph acyclic and stops `host` drifting into an omnibus (the `AppState`
+failure mode ADR-0016 addressed) is specifically _no workspace crate above it_.
+The rule earns its keep the moment a second, non-leaf tenant lands and other
+crates depend _on_ `host` rather than the reverse.
+
+_(Clarified 2026-07-09 by #334, whose error-carrier tenant is the first to take
+external infra deps — `sqlx`/`chrono`/`http` — while still depending on no
+workspace crate but `common`.)_
 
 The intended trio, by compilation target:
 
