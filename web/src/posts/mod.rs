@@ -11,15 +11,13 @@ mod listing;
 pub use listing::*;
 
 #[cfg(feature = "server")]
-use server::{
-    apply_post_tag_diff, find_draft_by_permalink_for_user, not_found_error, parse_post_cursor,
-    private_post_not_found_error,
-};
-// Re-exported for the `server` crate's public projector, which fetches the same
-// public data and maps records the same way (one query, no drift). These stay
-// in scope for the `#[server]` fns below via the `pub use`.
+use server::{not_found_error, private_post_not_found_error};
+// Re-exported for the `server` crate's public projector, which maps the fetched
+// record the same way this vertical does (one projection, no drift). `post_response`
+// is a wire-type builder that stays in `web`; the projector imports the effectful
+// `fetch_post_record` straight from `storage`.
 #[cfg(feature = "server")]
-pub use server::{fetch_post_record, post_response};
+pub use server::post_response;
 
 use crate::error::WebResult;
 use crate::tags::TagSummary;
@@ -35,8 +33,10 @@ use {
     common::{slug::Slug, tag::Tag, username::Username},
     std::{collections::BTreeSet, sync::Arc},
     storage::{
-        perform_post_creation, perform_post_update, FeedEventStorage, PostCreation, PostFormat,
-        PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage, UpdatePostInput,
+        apply_post_tag_diff, fetch_post_record, find_draft_by_permalink_for_user,
+        parse_post_cursor, perform_post_creation, perform_post_update, FeedEventStorage,
+        PostCreation, PostFormat, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
+        UpdatePostInput,
     },
 };
 
@@ -794,15 +794,6 @@ mod tests {
     fn candidate_slug_appends_numeric_suffix_after_conflict() {
         assert_eq!(candidate_slug("hello-world", 1), "hello-world-2");
         assert_eq!(candidate_slug("hello-world", 2), "hello-world-3");
-    }
-
-    #[cfg(feature = "server")]
-    #[test]
-    fn parse_post_cursor_accepts_empty_cursor() {
-        use crate::posts::server::parse_post_cursor;
-
-        let cursor = parse_post_cursor(None, None).unwrap();
-        assert!(cursor.is_none());
     }
 
     #[cfg(feature = "server")]

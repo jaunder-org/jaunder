@@ -1,7 +1,7 @@
 //! Content storage for posts, revisions, and tagging.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -9,6 +9,7 @@ use common::slug::Slug;
 use common::tag::Tag;
 use common::username::Username;
 use common::visibility::{AudienceTarget, TargetKind, ViewerIdentity};
+use host::error::{InternalError, InternalResult};
 
 use crate::backend::Backend;
 use crate::helpers::{post_record_from_row, PostRow};
@@ -335,6 +336,182 @@ pub enum ListByTagError {
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
+}
+
+// ---------------------------------------------------------------------------
+// Cursor + effectful post orchestration
+//
+// Cursor (de)serialization plus the effectful read/tag helpers shared by
+// `web`'s `#[server]` bodies and the `server` crate's public projector. They
+// take `&dyn PostStorage`/`PostRecord`/`PostCursor` — storage abstractions the
+// `host` floor cannot name — so they home here in `storage`, returning
+// `host::error::InternalError` where fallible.
+// ---------------------------------------------------------------------------
+
+/// Projects a [`PostRecord`] onto the keyset [`PostCursor`] that paginates the
+/// listing after it.
+#[must_use]
+pub fn to_post_cursor(post: &PostRecord) -> PostCursor {
+    PostCursor {
+        created_at: post.created_at,
+        post_id: post.post_id,
+    }
+}
+
+/// Parses the wire cursor pair into a [`PostCursor`]. Both components must be
+/// supplied together (an opaque paging token) or both absent (the first page).
+///
+/// # Errors
+///
+/// Returns a validation error if only one component is present, or if
+/// `cursor_created_at` is not a valid RFC3339 instant.
+pub fn parse_post_cursor(
+    cursor_created_at: Option<String>,
+    cursor_post_id: Option<i64>,
+) -> InternalResult<Option<PostCursor>> {
+    match (cursor_created_at, cursor_post_id) {
+        (None, None) => Ok(None),
+        (Some(created_at), Some(post_id)) => {
+            let created_at = chrono::DateTime::parse_from_rfc3339(created_at.trim())
+                .map_err(|e| InternalError::validation_source("invalid cursor_created_at", e))?
+                .with_timezone(&Utc);
+            Ok(Some(PostCursor {
+                created_at,
+                post_id,
+            }))
+        }
+        _ => Err(InternalError::validation(
+            "cursor_created_at and cursor_post_id must be provided together",
+        )),
+    }
+}
+
+/// Diff the existing tag set against `desired` (a Vec of validated display
+/// tokens) and apply the difference: `tag_post` for new entries, `untag_post`
+/// for removed entries. Re-applying an existing tag with new display casing
+/// is a no-op at the slug level (the storage layer keys on slug); the
+/// display casing of the existing row is preserved.
+///
+/// # Errors
+///
+/// Returns a storage error if the existing tags cannot be read, or a server
+/// error (via `From<TaggingError>`) if a `tag_post`/`untag_post` write fails.
+pub async fn apply_post_tag_diff(
+    posts: &dyn PostStorage,
+    post_id: i64,
+    desired: &[String],
+) -> InternalResult<()> {
+    let existing = posts.get_tags_for_post(post_id).await?;
+    let diff = post_tag_diff(&existing, desired);
+
+    for display in diff.to_add {
+        posts.tag_post(post_id, display).await?;
+    }
+    for slug in diff.to_remove {
+        posts.untag_post(post_id, slug).await?;
+    }
+    Ok(())
+}
+
+/// The shared public-permalink lookup used by both the `get_post` server fn and
+/// the non-reactive public projector.
+///
+/// Validates the date, then does the visibility-filtered store lookup for
+/// `viewer`. The caller maps the record to a `PostResponse` with its own
+/// `is_author` (the projector always anonymous → `false`; the server fn derives
+/// it from the session), so there is one query and no drift between the two
+/// public surfaces.
+///
+/// # Errors
+///
+/// Returns a validation error for an impossible calendar date, or a storage
+/// error if the permalink lookup fails.
+pub async fn fetch_post_record(
+    posts: &dyn PostStorage,
+    viewer: &ViewerIdentity,
+    username: &Username,
+    year: i32,
+    month: u32,
+    day: u32,
+    slug: &Slug,
+) -> InternalResult<Option<PostRecord>> {
+    NaiveDate::from_ymd_opt(year, month, day)
+        .ok_or_else(|| InternalError::validation("Invalid permalink"))?;
+    posts
+        .get_post_by_permalink(
+            username,
+            PermalinkDate { year, month, day },
+            slug,
+            viewer,
+            Utc::now(),
+        )
+        .await
+        .map_err(InternalError::storage)
+}
+
+/// Finds an authenticated author's own draft at a given permalink by paging
+/// their draft list.
+///
+/// # Errors
+///
+/// Returns a storage error if a draft-listing page fails to load.
+pub async fn find_draft_by_permalink_for_user(
+    posts: &dyn PostStorage,
+    user_id: i64,
+    year: i32,
+    month: u32,
+    day: u32,
+    slug: &Slug,
+) -> InternalResult<Option<PostRecord>> {
+    let mut cursor = None;
+
+    // Search through up to 10,000 drafts (200 pages of 50). This 200-iteration
+    // limit is a safety bound to prevent infinite loops or excessive DB load
+    // while still being large enough for almost any user's draft list.
+    for _ in 0..200 {
+        let drafts = posts
+            .list_drafts_by_user(user_id, cursor.as_ref(), 50, chrono::Utc::now())
+            .await?;
+        if drafts.is_empty() {
+            return Ok(None);
+        }
+
+        let next_cursor = drafts.last().map(to_post_cursor);
+
+        if let Some(found) = drafts.into_iter().find(|post| {
+            post.slug == *slug
+                && post.created_at.year() == year
+                && post.created_at.month() == month
+                && post.created_at.day() == day
+        }) {
+            return Ok(Some(found));
+        }
+
+        let Some(next_cursor) = next_cursor else {
+            unreachable!("drafts is non-empty after the is_empty guard, so last() is Some")
+        };
+        cursor = Some(next_cursor);
+    }
+
+    Ok(None)
+}
+
+/// Applies the `TagNotFound → empty` business rule to a by-tag listing result:
+/// a missing tag yields an empty page (not an error), while a real storage
+/// failure propagates.
+///
+/// # Errors
+///
+/// Returns a storage error if the underlying listing failed for any reason
+/// other than a missing tag.
+pub fn list_by_tag_rows(
+    result: Result<Vec<PostRecord>, ListByTagError>,
+) -> InternalResult<Vec<PostRecord>> {
+    match result {
+        Ok(rows) => Ok(rows),
+        Err(ListByTagError::TagNotFound) => Ok(Vec::new()),
+        Err(ListByTagError::Internal(e)) => Err(InternalError::storage(e)),
+    }
 }
 
 /// Async operations on the `posts` and `post_revisions` tables.
@@ -2344,5 +2521,236 @@ mod tests {
         assert_eq!(error.public_message(), "server operation failed");
         // The typed source is preserved (not flattened to the wire message).
         assert!(error.operator_message().contains("post not found"));
+    }
+
+    // -- Cursor + effectful helper tests (Cluster C push-down, #334) --
+
+    #[test]
+    fn to_post_cursor_round_trips_through_parse() {
+        use chrono::TimeZone;
+        let post = PostRecord {
+            post_id: 42,
+            user_id: 1,
+            author_username: "author".parse().unwrap(),
+            title: None,
+            slug: "hello-world".parse().unwrap(),
+            body: String::new(),
+            format: PostFormat::Markdown,
+            rendered_html: String::new(),
+            created_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
+            updated_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
+            published_at: None,
+            deleted_at: None,
+            summary: None,
+            tags: vec![],
+        };
+
+        let cursor = to_post_cursor(&post);
+        let parsed = parse_post_cursor(Some(cursor.created_at.to_rfc3339()), Some(cursor.post_id))
+            .unwrap()
+            .expect("both components present yields a cursor");
+        assert_eq!(parsed.created_at, post.created_at);
+        assert_eq!(parsed.post_id, post.post_id);
+    }
+
+    #[test]
+    fn parse_post_cursor_accepts_empty_cursor() {
+        assert!(parse_post_cursor(None, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn parse_post_cursor_rejects_half_a_cursor() {
+        assert!(parse_post_cursor(Some("2026-04-12T08:30:00Z".to_string()), None).is_err());
+    }
+
+    #[test]
+    fn list_by_tag_rows_maps_each_arm() {
+        assert!(list_by_tag_rows(Ok(vec![])).is_ok());
+
+        let tag_not_found = list_by_tag_rows(Err(ListByTagError::TagNotFound));
+        assert!(matches!(tag_not_found, Ok(rows) if rows.is_empty()));
+
+        let internal = list_by_tag_rows(Err(ListByTagError::Internal(sqlx::Error::PoolClosed)));
+        assert!(internal.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn fetch_post_record_returns_seeded_post_and_none_for_missing(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let posts = &*env.state.posts;
+        let ids = crate::test_support::seed_posts(&env.state, user_id, 1, true).await;
+        let record = posts
+            .get_post_by_id(ids[0], &ViewerIdentity::Anonymous)
+            .await
+            .unwrap()
+            .unwrap();
+        let (year, month, day) = (
+            record.created_at.year(),
+            record.created_at.month(),
+            record.created_at.day(),
+        );
+
+        // A published, public post is visible to an anonymous viewer at its permalink.
+        let found = fetch_post_record(
+            posts,
+            &ViewerIdentity::Anonymous,
+            &record.author_username,
+            year,
+            month,
+            day,
+            &record.slug,
+        )
+        .await
+        .unwrap();
+        assert_eq!(found.map(|p| p.post_id), Some(record.post_id));
+
+        // A permalink with no matching post resolves to None (not an error).
+        let missing = fetch_post_record(
+            posts,
+            &ViewerIdentity::Anonymous,
+            &record.author_username,
+            year,
+            month,
+            day,
+            &"no-such-slug".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn apply_post_tag_diff_adds_then_removes_tags(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let posts = &*env.state.posts;
+        let post_id = posts
+            .create_post(&CreatePostInput {
+                user_id,
+                title: Some("Post".to_string()),
+                slug: "post".parse().unwrap(),
+                body: "body".to_string(),
+                format: PostFormat::Markdown,
+                rendered_html: "<p>body</p>".to_string(),
+                published_at: None,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+            })
+            .await
+            .unwrap();
+
+        // Adding two tags then reading back yields both slugs.
+        apply_post_tag_diff(posts, post_id, &["rust".to_string(), "web".to_string()])
+            .await
+            .unwrap();
+        let mut slugs: Vec<String> = posts
+            .get_tags_for_post(post_id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|t| t.tag_slug.to_string())
+            .collect();
+        slugs.sort();
+        assert_eq!(slugs, vec!["rust".to_string(), "web".to_string()]);
+
+        // Narrowing the desired set removes the dropped tag.
+        apply_post_tag_diff(posts, post_id, &["rust".to_string()])
+            .await
+            .unwrap();
+        let remaining: Vec<String> = posts
+            .get_tags_for_post(post_id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|t| t.tag_slug.to_string())
+            .collect();
+        assert_eq!(remaining, vec!["rust".to_string()]);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn find_draft_by_permalink_for_user_finds_draft_and_misses(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let posts = &*env.state.posts;
+        // Seed unpublished drafts; read one back (via the per-user draft listing,
+        // which is author-scoped and so needs no viewer) for its permalink parts.
+        crate::test_support::seed_posts(&env.state, user_id, 3, false).await;
+        let drafts = posts
+            .list_drafts_by_user(user_id, None, 50, Utc::now())
+            .await
+            .unwrap();
+        let record = drafts.first().expect("seeded draft is listed");
+        let (year, month, day) = (
+            record.created_at.year(),
+            record.created_at.month(),
+            record.created_at.day(),
+        );
+
+        let found =
+            find_draft_by_permalink_for_user(posts, user_id, year, month, day, &record.slug)
+                .await
+                .unwrap();
+        assert_eq!(found.map(|p| p.post_id), Some(record.post_id));
+
+        // A slug the user has no draft for pages to an empty page and returns None.
+        let missing = find_draft_by_permalink_for_user(
+            posts,
+            user_id,
+            year,
+            month,
+            day,
+            &"no-such-draft".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(missing.is_none());
+    }
+
+    // guard:no-backend — mock store, no live database backend
+    #[cfg(feature = "test-utils")]
+    #[tokio::test]
+    async fn find_draft_by_permalink_returns_none_after_exhausting_pages() {
+        use chrono::TimeZone;
+        let mut mock = crate::MockPostStorage::new();
+        // Every call returns a full 50-row page of drafts whose slug never matches
+        // the searched permalink, each row carrying a distinct created_at/post_id so
+        // `to_post_cursor` yields an advancing (non-`None`) cursor. Since the page is
+        // always non-empty and never matches, all 200 iterations of the safety bound
+        // run and the loop falls through to `Ok(None)`.
+        mock.expect_list_drafts_by_user()
+            .returning(|_user_id, _cursor, _limit, _now| {
+                let base = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
+                let username = "author".parse::<Username>().unwrap();
+                let slug = "other-slug".parse::<Slug>().unwrap();
+                let page = (0..50_i64)
+                    .map(|i| PostRecord {
+                        post_id: i,
+                        user_id: 1,
+                        author_username: username.clone(),
+                        title: None,
+                        slug: slug.clone(),
+                        body: String::new(),
+                        format: PostFormat::Markdown,
+                        rendered_html: String::new(),
+                        created_at: base + chrono::Duration::seconds(i),
+                        updated_at: base,
+                        published_at: None,
+                        deleted_at: None,
+                        summary: None,
+                        tags: vec![],
+                    })
+                    .collect();
+                Ok(page)
+            });
+
+        let searched = "target-slug".parse::<Slug>().unwrap();
+        let result = find_draft_by_permalink_for_user(&mock, 1, 2020, 1, 1, &searched)
+            .await
+            .unwrap();
+        assert!(result.is_none());
     }
 }

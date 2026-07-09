@@ -12,7 +12,7 @@ use crate::tags::TagSummary;
 
 #[cfg(feature = "server")]
 use {
-    super::server::{list_by_tag_rows, parse_post_cursor, timeline_post_summary, to_post_cursor},
+    super::server::timeline_post_summary,
     crate::auth::require_auth,
     crate::error::{InternalError, InternalResult},
     crate::viewer::viewer_identity,
@@ -22,7 +22,10 @@ use {
         visibility::{viewer_user_id, ViewerIdentity},
     },
     std::sync::Arc,
-    storage::{PostCursor, PostRecord, PostStorage, UserStorage},
+    storage::{
+        list_by_tag_rows, parse_post_cursor, to_post_cursor, PostCursor, PostRecord, PostStorage,
+        UserStorage,
+    },
 };
 
 /// A published post row returned by timeline listing endpoints.
