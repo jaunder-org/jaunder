@@ -126,10 +126,10 @@ fn copy_e2e_journals() {
 }
 
 /// Copy e2e diagnostic files — the app journal (`jaunder-journal-*.log`), the full
-/// system journal (`system-journal-*.log`), OTEL traces (`otel-traces-*.jsonl`),
-/// the Playwright per-test JSON report (`playwright-report-*.json`), the Playwright
-/// trace/screenshot tarball (`playwright-artifacts-*.tar.gz`), and the capture-dir
-/// tarball (`capture-*.tar.gz`, #227 — diag.log plus any mail/websub) — from
+/// system journal (`system-journal-*.log`), the Playwright per-test JSON report
+/// (`playwright-report-*.json`), the Playwright trace/screenshot tarball
+/// (`playwright-artifacts-*.tar.gz`), and the capture-dir tarball (`capture-*.tar.gz`,
+/// #227 — diag.log plus any mail/websub and, since #332, the otel trace) — from
 /// `src_dir` into `dest_dir` (created if needed). The system journal and tarball are
 /// the #123/#49 failure-path additions; the capture tarball is the #227 consolidated
 /// capture artifact.
@@ -139,7 +139,6 @@ fn copy_e2e_diagnostics_between(src_dir: &std::path::Path, dest_dir: &std::path:
     let wanted = |name: &str| {
         (name.starts_with("jaunder-journal-") && name.ends_with(".log"))
             || (name.starts_with("system-journal-") && name.ends_with(".log"))
-            || (name.starts_with("otel-traces-") && name.ends_with(".jsonl"))
             || (name.starts_with("playwright-report-") && name.ends_with(".json"))
             || (name.starts_with("playwright-artifacts-") && name.ends_with(".tar.gz"))
             || (name.starts_with("capture-") && name.ends_with(".tar.gz"))
@@ -157,36 +156,13 @@ fn copy_e2e_diagnostics_between(src_dir: &std::path::Path, dest_dir: &std::path:
         }
         let from = entry.path();
         let to = dest_dir.join(name);
-        // OTEL traces arrive as a directory (`otel-traces-<backend>.jsonl/otel-traces.jsonl`,
-        // an intentional layout the trace-analysis tooling depends on); journals and the
-        // Playwright report are flat files. Handle both.
-        let ok = if from.is_dir() {
-            copy_tree(&from, &to).is_ok()
-        } else {
-            std::fs::copy(&from, &to).is_ok()
-        };
-        if ok {
+        // Every lifted artifact is a flat file (journals, the Playwright report, and the
+        // trace/capture tarballs); the otel trace now rides `capture-*.tar.gz`.
+        if std::fs::copy(&from, &to).is_ok() {
             copied += 1;
         }
     }
     copied
-}
-
-/// Recursively copy the directory tree at `from` to `to` (creating `to` and any
-/// parents). Pure std I/O so it stays unit-testable; used for the OTEL trace
-/// directory artifact.
-fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let dst = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_tree(&entry.path(), &dst)?;
-        } else {
-            std::fs::copy(entry.path(), dst)?;
-        }
-    }
-    Ok(())
 }
 
 /// A `Write` that fans every write out to two inner writers, **best-effort**: a
@@ -596,7 +572,7 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
     }
 
     #[test]
-    fn copy_e2e_diagnostics_between_copies_journal_otel_and_playwright() {
+    fn copy_e2e_diagnostics_between_copies_journal_capture_and_playwright() {
         let tmp = std::env::temp_dir().join(format!("xtask-j-{}", std::process::id()));
         let src = tmp.join("src");
         let dest = tmp.join("dest");
@@ -613,31 +589,18 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         // A bare `capture.tar.gz` (no `-<backend>`) must NOT match — the filter requires
         // the `capture-<backend>` prefix the flake's tar step always produces.
         std::fs::write(src.join("capture.tar.gz"), b"n").unwrap();
-        // OTEL traces arrive as a directory (the load-bearing
-        // `otel-traces-<backend>.jsonl/otel-traces.jsonl` layout), not a flat file.
-        std::fs::create_dir_all(src.join("otel-traces-sqlite.jsonl")).unwrap();
-        std::fs::write(
-            src.join("otel-traces-sqlite.jsonl")
-                .join("otel-traces.jsonl"),
-            b"o",
-        )
-        .unwrap();
 
         let n = super::copy_e2e_diagnostics_between(&src, &dest);
 
         assert_eq!(
-            n, 6,
-            "journal + otel dir + playwright report + artifacts tarball + system journal + capture tarball are copied; unrelated and un-suffixed capture are not"
+            n, 5,
+            "journal + playwright report + artifacts tarball + system journal + capture tarball are copied; unrelated and un-suffixed capture are not"
         );
         assert!(dest.join("jaunder-journal-sqlite.log").exists());
         assert!(dest.join("playwright-report-sqlite.json").exists());
         assert!(dest.join("playwright-artifacts-sqlite.tar.gz").exists());
         assert!(dest.join("system-journal-sqlite.log").exists());
         assert!(dest.join("capture-sqlite.tar.gz").exists());
-        assert!(dest
-            .join("otel-traces-sqlite.jsonl")
-            .join("otel-traces.jsonl")
-            .exists());
         assert!(!dest.join("unrelated.txt").exists());
         assert!(
             !dest.join("capture.tar.gz").exists(),
