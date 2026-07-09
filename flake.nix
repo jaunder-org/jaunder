@@ -577,8 +577,8 @@
         # fail the check on any `panicked at` line. Default-deny via `allowed_panics`.
         #
         # #144: panic detection now sources from the UNION of the scoped diag file
-        # (`/var/lib/jaunder/jaunder-diag.log` — the low-noise primary the app's panic
-        # hook writes) and the journal (the fallback, and the only source for a panic
+        # (`/var/lib/jaunder/capture/diag.log` — the low-noise primary the app's panic
+        # hook writes, #227) and the journal (the fallback, and the only source for a panic
         # that fires before the hook is installed). Reports are de-duped by panic
         # location, the scoped record winning; a location seen only in the journal is
         # still reported. Raw-substring scan (not JSON parsing) so a rare torn line in

@@ -239,10 +239,10 @@ the `serve` root resolves it via `host`.
   `build_mailer(site_config: &dyn SiteConfigStorage, mail_capture: Option<PathBuf>) -> Arc<dyn MailSender>`
   — `Some` ⇒ `FileMailSender`, `None` ⇒ SMTP/noop.
 
-- [ ] **Step 1: Add the dep** — `host = { workspace = true }` in
+- [x] **Step 1: Add the dep** — `host = { workspace = true }` in
       `server/Cargo.toml` `[dependencies]`.
 
-- [ ] **Step 2: Write the failing test** — the capture-file branch of
+- [x] **Step 2: Write the failing test** — the capture-file branch of
       `build_mailer` (spec AC2) is currently untested. Inject the path via an
       `rstest` fixture — **no env, no lock**:
 
@@ -269,13 +269,13 @@ being a dev-dep already. The config double is `MapConfigStore`; build the
 mail-send/capture helper. The existing no-SMTP / SMTP-present tests (`:79`,
 `:97`) just gain a `None` second arg.)
 
-- [ ] **Step 3: Run it, verify it fails**
+- [x] **Step 3: Run it, verify it fails**
 
 Run:
 `cargo nextest run -p jaunder build_mailer_selects_file_sender_when_path_given`
 Expected: FAIL — signature has no second param yet.
 
-- [ ] **Step 4: Implement** — change the signature to
+- [x] **Step 4: Implement** — change the signature to
       `build_mailer(site_config: &dyn SiteConfigStorage, mail_capture: Option<std::path::PathBuf>)`
       and replace the `std::env::var(...)` branch with:
 
@@ -291,12 +291,12 @@ update the dual-backend test at `storage.rs:1481` to pass `None`. Update the
 `build_mailer` doc (mod.rs:32) and `FileMailSender` doc (file.rs:7) to the
 capture-dir contract (the _seam_ no longer names any env var — the root does).
 
-- [ ] **Step 5: Run the tests, verify they pass**
+- [x] **Step 5: Run the tests, verify they pass**
 
 Run: `cargo nextest run -p jaunder mailer` Expected: PASS (new test + existing
 mailer tests).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add server/Cargo.toml Cargo.lock server/src/mailer/ server/src/commands.rs server/tests/storage/storage.rs
@@ -326,7 +326,7 @@ Convert `default_client_from_env` → `default_client(Option<PathBuf>)`; the
   `default_client(websub_capture: Option<PathBuf>) -> Arc<dyn WebSubClient>` —
   `Some` ⇒ `FileCapturingWebSubClient`, `None` ⇒ `HttpWebSubClient`.
 
-- [ ] **Step 1: Rewrite the failing test** — the existing
+- [x] **Step 1: Rewrite the failing test** — the existing
       `selects_file_capture_when_env_set_else_http` (mod.rs:51) keys on
       `const ENV_KEY` + `set_var`. Replace it with an injection test — **no env,
       no lock**: `default_client(Some(dir.join("websub.jsonl")))` yields
@@ -336,12 +336,12 @@ Convert `default_client_from_env` → `default_client(Option<PathBuf>)`; the
       `use super::*` — **add `use rstest::*;`** and reuse the temp-dir
       `#[fixture]` shape from Task 3.
 
-- [ ] **Step 2: Run it, verify it fails**
+- [x] **Step 2: Run it, verify it fails**
 
 Run: `cargo nextest run -p jaunder websub` Expected: FAIL — signature has no
 param yet / `default_client` undefined.
 
-- [ ] **Step 3: Implement** — rename to
+- [x] **Step 3: Implement** — rename to
       `default_client(websub_capture: Option<std::path::PathBuf>)` and:
 
 ```rust
@@ -357,11 +357,11 @@ Update the `serve` root at `commands.rs:422` to
 `default_client` doc (mod.rs:29-32) and `FileCapturingWebSubClient` doc
 (file_capture.rs:8) to the capture-dir contract.
 
-- [ ] **Step 4: Run, verify pass**
+- [x] **Step 4: Run, verify pass**
 
 Run: `cargo nextest run -p jaunder websub` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/src/websub/ server/src/commands.rs
@@ -389,7 +389,7 @@ process-global subscriber). Its tests keep the module's existing `lock_env()`
   stays — it still backs the OTLP-endpoint read at `:52`; only the diag read at
   `:65` migrates.
 
-- [ ] **Step 1: Update the failing tests** — the observability tests that
+- [x] **Step 1: Update the failing tests** — the observability tests that
       `set_var`/`remove_var("JAUNDER_DIAG_LOG_FILE")` and assert the diag file
       is written (around `:849-872`) switch to setting `host::CAPTURE_DIR_ENV`
       at a `TempDir`, and assert the diag records land at `<dir>/diag.log` (was
@@ -410,12 +410,12 @@ process-global subscriber). Its tests keep the module's existing `lock_env()`
   file** (so `create_dir_all` / the `<file>/diag.log` open fails). The test's
   intent (open failure disables the sink, startup survives) is unchanged.
 
-- [ ] **Step 2: Run, verify fail**
+- [x] **Step 2: Run, verify fail**
 
 Run: `cargo nextest run -p jaunder observability` Expected: FAIL — reads old var
 / expects old filename.
 
-- [ ] **Step 3: Implement** — replace `diag_log_file`'s body:
+- [x] **Step 3: Implement** — replace `diag_log_file`'s body:
 
 ```rust
 fn diag_log_file() -> Option<std::path::PathBuf> {
@@ -426,11 +426,11 @@ fn diag_log_file() -> Option<std::path::PathBuf> {
 Update the surrounding doc comments (`:59-63` etc.) to name
 `JAUNDER_CAPTURE_DIR` and the `diag.log` filename.
 
-- [ ] **Step 4: Run, verify pass**
+- [x] **Step 4: Run, verify pass**
 
 Run: `cargo nextest run -p jaunder observability` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/src/observability.rs
@@ -455,10 +455,10 @@ git commit -m "refactor(observability): scoped diag log via JAUNDER_CAPTURE_DIR/
   `test-support capture-path <mail|websub|diag>` → prints the absolute path on
   stdout, non-zero on unset dir / unknown stream.
 
-- [ ] **Step 1: Add the dep** — `host = { workspace = true }` in
+- [x] **Step 1: Add the dep** — `host = { workspace = true }` in
       `test-support/Cargo.toml`.
 
-- [ ] **Step 2: Update/add the failing subprocess tests** in
+- [x] **Step 2: Update/add the failing subprocess tests** in
       `test-support/tests/cli.rs` (spawns the built binary, mutates only the
       child's env):
 
@@ -502,12 +502,12 @@ fn capture_path_prints_derived_path() {
 (Match `cli.rs`'s existing spawn idiom — use its binary-path constant if it
 differs from `CARGO_BIN_EXE_test-support`.)
 
-- [ ] **Step 3: Run, verify fail**
+- [x] **Step 3: Run, verify fail**
 
 Run: `cargo nextest run -p test-support` Expected: FAIL — `--path` still
 required / `capture-path` unknown.
 
-- [ ] **Step 4: Implement** in `test-support/src/main.rs`:
+- [x] **Step 4: Implement** in `test-support/src/main.rs`:
   - `ResetMail` loses its `#[arg(long, env = "JAUNDER_MAIL_CAPTURE_FILE")] path`
     field (becomes a unit variant). Its arm:
     `let path = host::capture_path(host::Stream::Mail).context("JAUNDER_CAPTURE_DIR is not set")?; if path.exists() { std::fs::remove_file(&path)?; } Ok(())`.
@@ -517,11 +517,11 @@ required / `capture-path` unknown.
     `capture-path`/`reset-mail` covered by `cli.rs` (they take no DB, so they
     stay outside the DB-only `cov:ignore` block).
 
-- [ ] **Step 5: Run, verify pass**
+- [x] **Step 5: Run, verify pass**
 
 Run: `cargo nextest run -p test-support` Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add test-support/Cargo.toml Cargo.lock test-support/src/main.rs test-support/tests/cli.rs
@@ -546,17 +546,17 @@ git commit -m "feat(test-support): derive reset-mail + add capture-path via JAUN
   `JAUNDER_CAPTURE_DIR` being in its inherited env (set by callers, Tasks 8/9),
   which the spawned `test-support` inherits (`Command` without `env_clear`).
 
-- [ ] **Step 1: Update the failing unit test** — `seed_invocations`'s test
+- [x] **Step 1: Update the failing unit test** — `seed_invocations`'s test
       (`:131`) currently asserts a `reset-mail --path /tmp/mail.jsonl` step.
       Change the expected last step to `["reset-mail"]` and drop the `mail_file`
       argument from the `seed_invocations(...)` call in the test.
 
-- [ ] **Step 2: Run, verify fail**
+- [x] **Step 2: Run, verify fail**
 
 Run: `cargo nextest run --manifest-path tools/Cargo.toml` Expected: FAIL —
 signature/args mismatch.
 
-- [ ] **Step 3: Implement**:
+- [x] **Step 3: Implement**:
   - `seed_e2e.rs`: `fn seed_invocations() -> Vec<(Vec<String>, bool)>` (drop
     `mail_file`); last step `step(&["reset-mail"])`.
     `pub fn run(db: &str, test_support_bin: &Path)` (drop `mail_file`), call
@@ -565,11 +565,11 @@ signature/args mismatch.
     (`:74`) and drop it from the
     `seed_e2e::run(&args.db, &args.test_support_bin)` call (`:122`).
 
-- [ ] **Step 4: Run, verify pass**
+- [x] **Step 4: Run, verify pass**
 
 Run: `cargo nextest run --manifest-path tools/Cargo.toml` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tools/devtool/src/main.rs tools/devtool/src/seed_e2e.rs tools/Cargo.lock
@@ -591,7 +591,7 @@ git commit -m "refactor(devtool): seed-e2e resets mail via JAUNDER_CAPTURE_DIR, 
   no longer takes `--mail-file` (Task 7); `test-support capture-path` on PATH
   (Task 6).
 
-- [ ] **Step 1: Implement** (this task's deliverable is verified by running it,
+- [x] **Step 1: Implement** (this task's deliverable is verified by running it,
       so implement then run):
   - Replace `let mail/websub/diag = format!("{sp}/…")` with
     `let capture = format!("{sp}/capture");`.
@@ -605,18 +605,18 @@ git commit -m "refactor(devtool): seed-e2e resets mail via JAUNDER_CAPTURE_DIR, 
   - Update the module doc (`:11-22`) canonical env list: `JAUNDER_CAPTURE_DIR`
     replaces the three `_FILE` vars.
 
-- [ ] **Step 2: Build the driver, verify it compiles**
+- [x] **Step 2: Build the driver, verify it compiles**
 
 Run: `cargo build -p xtask` (or `devtool run -- cargo xtask --help`) Expected:
 builds clean.
 
-- [ ] **Step 3: Behavioral check (defer heavy run):** the end-to-end exercise of
+- [x] **Step 3: Behavioral check (defer heavy run):** the end-to-end exercise of
       this task happens together with the TS delegation in Task 9 and the full
       matrix in Task 13. Note here that a single-spec host run
       (`cargo xtask e2e-local`, mail spec) is the targeted check once Task 9
       lands.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add xtask/src/steps/e2e_local.rs
@@ -639,7 +639,7 @@ git commit -m "refactor(xtask): host e2e driver sets JAUNDER_CAPTURE_DIR (#227)"
   in the Playwright env (Task 8 host / Task 10 VM).
 - Produces: `capturePathViaTool(stream: "mail" | "websub"): string`.
 
-- [ ] **Step 1: Implement `end2end/tests/capture.ts`** — mirror `seed.ts:30`'s
+- [x] **Step 1: Implement `end2end/tests/capture.ts`** — mirror `seed.ts:30`'s
       `execFileSync("test-support", …, { env: process.env })`:
 
 ```ts
@@ -657,7 +657,7 @@ export function capturePathViaTool(stream: "mail" | "websub"): string {
 }
 ```
 
-- [ ] **Step 2: Update `mail.ts`** — replace the `MAIL_CAPTURE_FILE` module
+- [x] **Step 2: Update `mail.ts`** — replace the `MAIL_CAPTURE_FILE` module
       const (`:26-27`) with a memoized accessor, and swap the four usages
       (`:38,40,66`) to call it:
 
@@ -672,11 +672,11 @@ function mailCaptureFile(): string {
 (Resolving lazily avoids a subprocess at import time. Update the file's header
 comment that referenced `JAUNDER_MAIL_CAPTURE_FILE`.)
 
-- [ ] **Step 3: Update `websub.ts`** — same treatment: memoized
+- [x] **Step 3: Update `websub.ts`** — same treatment: memoized
       `websubCaptureFile()` via `capturePathViaTool("websub")`, swap usages
       (`:35,37,64,91`), update the header comment (`:24-25`, `:4`).
 
-- [ ] **Step 4: Typecheck**
+- [x] **Step 4: Typecheck**
 
 Run: from `end2end/`, `npx tsc --noEmit -p tsconfig.json` (there is no npm
 typecheck script — `package.json` `scripts` is empty; `typescript` is a devDep
@@ -684,14 +684,14 @@ and `tsconfig.json` is present, so this is the real command. Playwright
 transpiles TS at runtime, so this is a separate manual gate.) Expected: PASS (no
 type errors; no remaining `JAUNDER_*_CAPTURE_FILE` refs).
 
-- [ ] **Step 5: Behavioral check** — with Tasks 6 + 8 landed, a targeted host
+- [x] **Step 5: Behavioral check** — with Tasks 6 + 8 landed, a targeted host
       run exercises the delegation:
 
 Run: `cargo xtask e2e-local` filtered to a mail spec (per the driver's
 `test_filter`, e.g. the email-verification spec). Expected: PASS — server writes
 `<tmp>/capture/mail.jsonl`, `mail.ts` reads the same path via `capture-path`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add end2end/tests/capture.ts end2end/tests/mail.ts end2end/tests/websub.ts
@@ -713,7 +713,7 @@ git commit -m "refactor(e2e): TS readers resolve capture paths via test-support 
 - Consumes: server reads `JAUNDER_CAPTURE_DIR`; `capture/diag.log`;
   `devtool seed-e2e` argument-less mail reset.
 
-- [ ] **Step 1: Implement**:
+- [x] **Step 1: Implement**:
   - `mailCaptureEnv` → a single
     `JAUNDER_CAPTURE_DIR = "/var/lib/jaunder/capture";`. **Keep the binding name
     `mailCaptureEnv`** (only change its value + the comment noting #227 is done)
@@ -737,13 +737,13 @@ git commit -m "refactor(e2e): TS readers resolve capture paths via test-support 
     `JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture ` so the seed's `reset-mail`
     derives the path.
 
-- [ ] **Step 2: Evaluate the flake, verify it parses**
+- [x] **Step 2: Evaluate the flake, verify it parses**
 
 Run: `devtool run -- nix flake check --no-build` (or
 `nix eval .#nixosConfigurations` as the repo does for flake syntax). Note: full
 VM build happens in Task 13. Expected: evaluates without error.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add flake.nix
@@ -765,32 +765,32 @@ git commit -m "refactor(e2e): flake sets one JAUNDER_CAPTURE_DIR, copies capture
 - Consumes: the flake now emits a `capture-<backend>.tar.gz` file (Task 10)
   instead of `jaunder-diag-<backend>.log`.
 
-- [ ] **Step 1: Update the failing unit test** —
+- [x] **Step 1: Update the failing unit test** —
       `copy_e2e_diagnostics_between_copies_journal_otel_and_playwright`
       (`:598`): drop the `jaunder-diag-sqlite.log` file + the
       bare-`jaunder-diag.log` "must not lift" assertion; instead create a
       `capture-sqlite.tar.gz` file and assert it is copied (a flat-file copy,
       like `playwright-artifacts-*.tar.gz`). Update the expected count.
 
-- [ ] **Step 2: Run, verify fail**
+- [x] **Step 2: Run, verify fail**
 
 Run:
 `cargo nextest run --manifest-path xtask/Cargo.toml copy_e2e_diagnostics_between`
 Expected: FAIL — filter still keys on `jaunder-diag-`.
 
-- [ ] **Step 3: Implement** — in the `wanted` closure (`:138-145`), drop the
+- [x] **Step 3: Implement** — in the `wanted` closure (`:138-145`), drop the
       `jaunder-diag-` line and add
       `|| (name.starts_with("capture-") && name.ends_with(".tar.gz"))`. Update
       the doc comment (`:128-134`) to describe the capture-dir tarball replacing
       the scoped diag log.
 
-- [ ] **Step 4: Run, verify pass**
+- [x] **Step 4: Run, verify pass**
 
 Run:
 `cargo nextest run --manifest-path xtask/Cargo.toml copy_e2e_diagnostics_between`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/steps/nix.rs
@@ -810,28 +810,28 @@ git commit -m "refactor(xtask): lift the capture-<backend> directory as an e2e a
 - Create: ADR draft(s) under `docs/adr/drafts/` (numberless, per
   **jaunder-adr**)
 
-- [ ] **Step 1: Update `docs/observability.md`** — the diag-log section: var
+- [x] **Step 1: Update `docs/observability.md`** — the diag-log section: var
       `JAUNDER_CAPTURE_DIR`, path `capture/diag.log`.
-- [ ] **Step 2: Update `CONTRIBUTING.md`** — the prod-warning (`:742`): don't
+- [x] **Step 2: Update `CONTRIBUTING.md`** — the prod-warning (`:742`): don't
       set `JAUNDER_CAPTURE_DIR` in production (test-only). The diag-artifact doc
       (`:301-302,306`): lift target `capture-<backend>.tar.gz` (contains
       `diag.log`), VM path `/var/lib/jaunder/capture/diag.log`.
-- [ ] **Step 3: Author the capture-dir ADR draft** (**jaunder-adr**) in
+- [x] **Step 3: Author the capture-dir ADR draft** (**jaunder-adr**) in
       `docs/adr/drafts/`: the `JAUNDER_CAPTURE_DIR` output-dir contract,
       convention filenames, whole-dir lift; state the diag/panic-hook trigger
       var changed from `JAUNDER_DIAG_LOG_FILE` to `JAUNDER_CAPTURE_DIR`.
-- [ ] **Step 4: Author the `host`-crate-layering ADR draft**: `host` =
+- [x] **Step 4: Author the `host`-crate-layering ADR draft**: `host` =
       strictly-host shared crate, sibling to target-agnostic `common`, with a
       future strictly-client crate as its peer. (Keep separate from the
       capture-dir ADR — this is the broader structural convention.)
-- [ ] **Step 5: Mark ADR-0049 superseded-in-part** — a status note + forward
+- [x] **Step 5: Mark ADR-0049 superseded-in-part** — a status note + forward
       cross-reference at its top pointing to the capture-dir ADR (its body line
       ~79 "installed only when `JAUNDER_DIAG_LOG_FILE` is set" is now false).
       Annotate, don't rewrite the body (**jaunder-adr** status-change flow).
-- [ ] **Step 6: Prettier-format** the edited Markdown before staging (repo
+- [x] **Step 6: Prettier-format** the edited Markdown before staging (repo
       pre-commit runs `prettier -w`; format first to avoid the fail-restage
       double commit).
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add docs/observability.md CONTRIBUTING.md docs/adr/
@@ -847,20 +847,20 @@ acceptance gate (spec AC1, AC6-AC10).
 
 **Files:** none (verification only).
 
-- [ ] **Step 1: Clean-break sweep (AC1)**
+- [x] **Step 1: Clean-break sweep (AC1)**
 
 Run:
 `rg 'JAUNDER_(MAIL|WEBSUB)_CAPTURE_FILE|JAUNDER_DIAG_LOG_FILE' server/ test-support/ xtask/ tools/ end2end/ flake.nix docs/observability.md CONTRIBUTING.md`
 Expected: no matches.
 
-- [ ] **Step 2: Full local gate + e2e matrix (AC6-AC10)**
+- [x] **Step 2: Full local gate + e2e matrix (AC6-AC10)**
 
 Run: `devtool run -- cargo xtask validate` (background mode — long). Confirm the
 `xtask-done: … ok=true` sentinel and green across all four
 `{sqlite,postgres}×{chromium,firefox}` combos (mail, websub, and diag/panic-gate
 specs exercised). Expected: PASS.
 
-- [ ] **Step 3:** If green, the cycle is ready for **jaunder-ship** (final
+- [x] **Step 3:** If green, the cycle is ready for **jaunder-ship** (final
       review, archive spec+plan, promote ADR drafts, PR, merge, release the
       issue to Done). No commit — this task is a gate.
 
