@@ -94,6 +94,17 @@ impl From<UserAuthError> for host::error::InternalError {
     }
 }
 
+/// Maps an authentication failure to its bounded `outcome` attribute for the
+/// `jaunder.auth.logins` metric. Exhaustively tested so every variant's mapping
+/// is covered independent of which failures the login path is exercised with.
+#[must_use]
+pub fn login_outcome(error: &UserAuthError) -> common::metrics::LoginOutcome {
+    match error {
+        UserAuthError::InvalidCredentials => common::metrics::LoginOutcome::InvalidCredentials,
+        UserAuthError::Internal(_) => common::metrics::LoginOutcome::InternalError,
+    }
+}
+
 /// Fields to update on a user's profile.
 ///
 /// Each field is `Option<&str>`: `None` clears the field, `Some(v)` sets it.
@@ -656,5 +667,18 @@ mod tests {
         let op = internal.operator_message();
         assert!(op.contains("outer failure"), "operator message: {op}");
         assert!(op.contains("inner cause"), "operator message: {op}");
+    }
+
+    #[test]
+    fn login_outcome_maps_each_variant() {
+        use common::metrics::LoginOutcome;
+        assert!(matches!(
+            login_outcome(&UserAuthError::InvalidCredentials),
+            LoginOutcome::InvalidCredentials
+        ));
+        assert!(matches!(
+            login_outcome(&UserAuthError::Internal(Box::new(std::fmt::Error))),
+            LoginOutcome::InternalError
+        ));
     }
 }

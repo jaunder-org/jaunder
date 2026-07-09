@@ -8,7 +8,7 @@ pub mod marker;
 #[cfg(feature = "server")]
 mod server;
 #[cfg(feature = "server")]
-use server::{classify_current_user, clear_session_cookie, login_outcome, set_session_cookie};
+use server::{classify_current_user, clear_session_cookie, set_session_cookie};
 
 // Public re-exports — must remain accessible as crate::auth::* for other modules
 #[cfg(feature = "server")]
@@ -166,7 +166,7 @@ pub async fn login(username: String, password: String, label: Option<String>) ->
                 record
             }
             Err(error) => {
-                common::metrics::login(login_outcome(&error));
+                common::metrics::login(storage::login_outcome(&error));
                 return Err(error.into());
             }
         };

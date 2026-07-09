@@ -15,7 +15,6 @@ leptos_router.workspace = true
 leptos_axum = { workspace = true, optional = true }
 
 axum = { workspace = true, optional = true }
-base64 = { workspace = true, optional = true }
 common.workspace = true
 host = { path = "../host", optional = true }
 storage = { workspace = true, optional = true }
@@ -56,7 +55,6 @@ js-sys = { workspace = true }
 wasm-bindgen = { workspace = true }
 
 [dev-dependencies]
-base64.workspace = true
 common = { workspace = true, features = ["test-utils"] }
 storage = { workspace = true, features = ["test-utils"] }
 sqlx = { workspace = true }
@@ -75,7 +73,6 @@ server = [
     "leptos_router/ssr",
     "dep:leptos_axum",
     "dep:axum",
-    "dep:base64",
     "dep:chrono",
     "dep:storage",
     "dep:email_address",
