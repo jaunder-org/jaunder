@@ -15,8 +15,12 @@ use {
     super::server::{list_by_tag_rows, parse_post_cursor, timeline_post_summary, to_post_cursor},
     crate::auth::require_auth,
     crate::error::{InternalError, InternalResult},
-    crate::viewer::{viewer_identity, viewer_user_id},
-    common::{tag::Tag, username::Username, visibility::ViewerIdentity},
+    crate::viewer::viewer_identity,
+    common::{
+        tag::Tag,
+        username::Username,
+        visibility::{viewer_user_id, ViewerIdentity},
+    },
     std::sync::Arc,
     storage::{PostCursor, PostRecord, PostStorage, UserStorage},
 };

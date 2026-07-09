@@ -52,6 +52,34 @@ impl ViewerIdentity {
     }
 }
 
+/// Projects an authenticated account plus the resolved `local` channel id into a
+/// [`ViewerIdentity`].
+///
+/// `Some(channel_id)` → a `local` channel viewer; `None` (the `local` channel id
+/// could not be resolved) → [`ViewerIdentity::Anonymous`], fail-closed: a viewer
+/// we cannot positively place on a channel gets no non-public reach.
+#[must_use]
+pub fn account_viewer(user_id: i64, local_channel_id: Option<i64>) -> ViewerIdentity {
+    match local_channel_id {
+        Some(channel_id) => ViewerIdentity::local(user_id, channel_id),
+        None => ViewerIdentity::Anonymous,
+    }
+}
+
+/// The local user id of an account viewer, for *display* of owner controls.
+///
+/// This is the same identity the web `viewer_identity()` extractor resolves,
+/// projected back to a bare `user_id`: `Some(user_id)` for a `local` channel
+/// viewer, `None` for anonymous. Filtering itself lives in the store query; this
+/// is used only to decide whether to render author-only UI affordances.
+#[must_use]
+pub fn viewer_user_id(viewer: &ViewerIdentity) -> Option<i64> {
+    match viewer {
+        ViewerIdentity::Channel { subscriber_ref, .. } => subscriber_ref.parse::<i64>().ok(),
+        ViewerIdentity::Anonymous => None,
+    }
+}
+
 /// What a post is addressed to, as chosen in the editor / API.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AudienceTarget {
@@ -138,5 +166,33 @@ mod tests {
                 subscriber_ref: "42".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn account_viewer_with_channel_is_local() {
+        assert_eq!(
+            account_viewer(7, Some(3)),
+            ViewerIdentity::local(7, 3),
+            "a resolved local channel yields a Channel viewer keyed by the user id",
+        );
+    }
+
+    #[test]
+    fn account_viewer_without_channel_fails_closed_to_anonymous() {
+        assert_eq!(
+            account_viewer(7, None),
+            ViewerIdentity::Anonymous,
+            "an unresolved local channel must fail closed to Anonymous",
+        );
+    }
+
+    #[test]
+    fn viewer_user_id_projects_local_channel_to_user_id() {
+        assert_eq!(viewer_user_id(&ViewerIdentity::local(42, 1)), Some(42));
+    }
+
+    #[test]
+    fn viewer_user_id_is_none_for_anonymous() {
+        assert_eq!(viewer_user_id(&ViewerIdentity::Anonymous), None);
     }
 }
