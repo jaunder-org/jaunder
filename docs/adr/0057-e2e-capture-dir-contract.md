@@ -59,9 +59,13 @@ Adding a new capture stream now needs **zero** new env-var or copy-out plumbing
   means "capture off" (production-inert).
 - The in-VM zero-panic gate reads `capture/diag.log` directly, independent of
   the lift.
-- Follow-up: the collector-written `otel-traces.jsonl` is **not** folded in (it
-  is produced by the otel-collector, not the app, and has its own copy-out
-  layout) — tracked in
-  [#332](https://github.com/jaunder-org/jaunder/issues/332).
+- Extended by [#332](https://github.com/jaunder-org/jaunder/issues/332): the
+  collector-written `otel-traces.jsonl` — deferred at first (produced by the
+  otel-collector, not the app, and originally on its own copy-out layout) — was
+  folded into this same contract. The collector's `file` exporter path is
+  env-templated to `${env:JAUNDER_CAPTURE_DIR}/otel-traces.jsonl`, and a
+  `systemd.tmpfiles` rule creates the dir before the collector (ordered ahead of
+  the app) starts; the trace now rides `capture-<backend>.tar.gz` with the rest,
+  so the separate otel copy-out and xtask lift filter are gone.
 - Realizes the direction ADR-0049 flagged and matches #153's convention-over-env
   ethos.

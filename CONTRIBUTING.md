@@ -279,9 +279,11 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
   artifacts (JSONL) from VM runs or local tests.
 
   ```bash
+  # each otel-traces.jsonl is extracted from an e2e capture-<backend>.tar.gz bundle
+  # (member path capture/otel-traces.jsonl); `cargo xtask traces run` does this for you.
   cargo xtask traces analyze \
-    /path/to/otel-traces-sqlite.jsonl/otel-traces.jsonl \
-    /path/to/otel-traces-postgres.jsonl/otel-traces.jsonl
+    /path/to/sqlite-otel-traces.jsonl \
+    /path/to/postgres-otel-traces.jsonl
   ```
 
   The analyzer reports on:

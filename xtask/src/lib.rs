@@ -189,7 +189,8 @@ pub enum TracesCommand {
     /// tool — not part of `check`/`validate`. Prints human tables only;
     /// `--json` is rejected.
     #[command(after_help = "EXAMPLES:\n  \
-        cargo xtask traces analyze /nix/store/...-e2e-sqlite-chromium/otel-traces-sqlite.jsonl/otel-traces.jsonl\n  \
+        # trace files extracted from an e2e capture-<backend>.tar.gz bundle (capture/otel-traces.jsonl):\n  \
+        cargo xtask traces analyze sqlite-otel-traces.jsonl postgres-otel-traces.jsonl\n  \
         cargo xtask traces analyze --top 40 --project firefox trace-a.jsonl trace-b.jsonl\n  \
         cargo xtask traces analyze --trace 1111...1111 traces.jsonl")]
     Analyze {
@@ -417,8 +418,9 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("traces-run");
             // A nix-build failure or a missing trace file propagates as Err → the
-            // exit-2 path in main.rs (spec §5), not a fail step.
-            let files = traces::run::collect_trace_files(cold, browser)?;
+            // exit-2 path in main.rs (spec §5), not a fail step. `_tmp` guards the
+            // extracted traces (untarred from each capture bundle) until analysis ends.
+            let (_tmp, files) = traces::run::collect_trace_files(cold, browser)?;
             let n = files.len();
             let filters = traces::parse::Filters {
                 trace,
