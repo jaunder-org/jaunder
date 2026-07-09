@@ -49,12 +49,11 @@
       # the host `cargo xtask e2e-local` driver both source (names shared, values
       # per-environment). The full documented list lives in
       # `xtask/src/steps/e2e_local.rs` (module docs). See issue #249.
-      mailCaptureEnv = {
+      captureEnv = {
         # The single capture-dir contract (#227): the server writes mail.jsonl,
-        # websub.jsonl, and diag.log into this dir. Spliced into the jaunder.service
-        # env below so the *server* (not the Playwright process) writes them; the whole
-        # dir is tarred out per combo in e2eRunAndCapture. (Binding name kept to avoid
-        # churning its three consumers below.)
+        # websub.jsonl, and diag.log into this dir, and the e2e otel-collector writes
+        # otel-traces.jsonl (#332). Spliced into the jaunder.service and otel-collector
+        # service envs below; the whole dir is tarred out per combo in e2eRunAndCapture.
         JAUNDER_CAPTURE_DIR = "/var/lib/jaunder/capture";
       };
 
@@ -177,7 +176,7 @@
           services.jaunder.enable = true;
           services.jaunder.bind = "0.0.0.0:3000";
 
-          systemd.services.jaunder.environment = mailCaptureEnv;
+          systemd.services.jaunder.environment = captureEnv;
 
           services.getty.autologinUser = "jaunder";
           security.sudo.wheelNeedsPassword = false;
@@ -522,7 +521,10 @@
             batch: {}
           exporters:
             file:
-              path: /var/lib/jaunder/otel-traces.jsonl
+              # The doubled-apostrophe prefix below is the Nix indented-string escape,
+              # so the env-var reference reaches otelcol verbatim and its env provider
+              # expands it at runtime, rather than Nix antiquoting it at eval time.
+              path: ''${env:JAUNDER_CAPTURE_DIR}/otel-traces.jsonl
           service:
             pipelines:
               traces:
@@ -662,14 +664,6 @@
                 if machine.execute("test -e " + path)[0] == 0:
                     machine.copy_from_vm(path, "")
 
-            # OTel trace keeps its directory layout
-            # ($out/otel-traces-${backend}.jsonl/otel-traces.jsonl) that
-            # `cargo xtask traces run` consumes on the success path: copy_from_vm's 2nd
-            # arg is the target *dir* name (cf. #152). Guarded so an early crash with
-            # no trace yet doesn't abort the remaining copies.
-            if machine.execute("test -s /var/lib/jaunder/otel-traces.jsonl")[0] == 0:
-                machine.copy_from_vm("/var/lib/jaunder/otel-traces.jsonl", "otel-traces-${backend}.jsonl")
-
             machine.execute("test -s /tmp/e2e/test-results/results.json && cp /tmp/e2e/test-results/results.json /tmp/playwright-report-${backend}.json")
             _grab("/tmp/playwright-report-${backend}.json")
 
@@ -679,11 +673,12 @@
             machine.execute("journalctl --no-pager -o short-precise > /tmp/system-journal-${backend}.log")
             _grab("/tmp/system-journal-${backend}.log")
 
-            # Capture-dir contract (#227): tar the whole capture dir out per combo as
+            # Capture-dir contract (#227, #332): tar the whole capture dir out per combo as
             # capture-${backend}.tar.gz — a file copy mirroring the playwright-artifacts
-            # tarball (the proven copy_from_vm shape). Holds diag.log plus any written
-            # mail.jsonl/websub.jsonl. The in-VM zero-panic gate reads diag.log directly,
-            # so it does not depend on this lift.
+            # tarball (the proven copy_from_vm shape). Holds diag.log, the collector's
+            # otel-traces.jsonl (#332 — the collector is stopped above, so its file export is
+            # flushed), plus any written mail.jsonl/websub.jsonl. The in-VM zero-panic gate
+            # reads diag.log directly, so it does not depend on this lift.
             machine.execute("test -d /var/lib/jaunder/capture && tar czf /tmp/capture-${backend}.tar.gz -C /var/lib/jaunder capture 2>/dev/null || true")
             _grab("/tmp/capture-${backend}.tar.gz")
 
@@ -731,10 +726,13 @@
                 ];
                 environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
 
+                systemd.tmpfiles.rules = [ "d /var/lib/jaunder/capture 0755 jaunder jaunder -" ];
                 systemd.services.otel-collector = {
                   description = "Jaunder e2e OTel Collector";
                   wantedBy = [ "multi-user.target" ];
                   after = [ "network.target" ];
+                  # ${env:JAUNDER_CAPTURE_DIR} in the exporter config expands from this.
+                  environment = captureEnv;
                   serviceConfig = {
                     ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml";
                     Restart = "on-failure";
@@ -746,7 +744,7 @@
                 services.jaunder.bind = "127.0.0.1:3000";
                 systemd.services.jaunder.after = [ "otel-collector.service" ];
                 systemd.services.jaunder.requires = [ "otel-collector.service" ];
-                systemd.services.jaunder.environment = mailCaptureEnv // {
+                systemd.services.jaunder.environment = captureEnv // {
                   RUST_LOG = "info";
                   JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317";
                 };
@@ -826,10 +824,13 @@
                 ];
                 environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
 
+                systemd.tmpfiles.rules = [ "d /var/lib/jaunder/capture 0755 jaunder jaunder -" ];
                 systemd.services.otel-collector = {
                   description = "Jaunder e2e OTel Collector";
                   wantedBy = [ "multi-user.target" ];
                   after = [ "network.target" ];
+                  # ${env:JAUNDER_CAPTURE_DIR} in the exporter config expands from this.
+                  environment = captureEnv;
                   serviceConfig = {
                     ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml";
                     Restart = "on-failure";
@@ -855,7 +856,7 @@
                 systemd.services.jaunder.wantedBy = lib.mkForce [ ];
                 systemd.services.jaunder.after = [ "otel-collector.service" ];
                 systemd.services.jaunder.requires = [ "otel-collector.service" ];
-                systemd.services.jaunder.environment = mailCaptureEnv // {
+                systemd.services.jaunder.environment = captureEnv // {
                   RUST_LOG = "info";
                   JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317";
                 };

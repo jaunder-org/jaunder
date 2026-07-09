@@ -9,7 +9,7 @@
 //! Host only.
 //!
 //! Canonical e2e-server env-var set the host driver and the flake both provide
-//! (names shared, values per-environment; see also `flake.nix` `mailCaptureEnv`):
+//! (names shared, values per-environment; see also `flake.nix` `captureEnv`):
 //! `JAUNDER_BIND`, `JAUNDER_DB`, `JAUNDER_RUNTIME_FILE`, `JAUNDER_CAPTURE_DIR`
 //! (the single capture-dir contract, #227) — plus `JAUNDER_STORAGE_PATH`
 //! host-side only (the VM instead relies on systemd
