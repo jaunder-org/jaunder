@@ -55,12 +55,7 @@ impl From<InvalidMediaSource> for host::error::InternalError {
     /// a client validation error whose wire message is the error's `Display`,
     /// carrying the typed source instead of flattening it to a string (A19).
     fn from(error: InvalidMediaSource) -> Self {
-        host::error::InternalError::masked(
-            host::error::ErrorKind::Validation,
-            host::error::ErrorClass::Client,
-            error.to_string(),
-            anyhow::Error::new(error),
-        )
+        host::error::InternalError::validation_source(error.to_string(), error)
     }
 }
 

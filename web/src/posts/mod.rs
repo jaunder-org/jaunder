@@ -28,7 +28,7 @@ use crate::tags::TagSummary;
 #[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
-    crate::error::{ErrorClass, ErrorKind, InternalError},
+    crate::error::InternalError,
     crate::feed_events::enqueue_feed_events,
     crate::viewer::viewer_identity,
     chrono::{DateTime, Utc},
@@ -203,12 +203,7 @@ fn parse_publish_at(raw: Option<&str>) -> crate::error::InternalResult<Option<Da
             DateTime::parse_from_rfc3339(s)
                 .map(|dt| dt.with_timezone(&Utc))
                 .map_err(|e| {
-                    InternalError::masked(
-                        ErrorKind::Validation,
-                        ErrorClass::Client,
-                        format!("invalid publish_at: {e}"),
-                        anyhow::Error::new(e),
-                    )
+                    InternalError::validation_source(format!("invalid publish_at: {e}"), e)
                 })
         })
         .transpose()

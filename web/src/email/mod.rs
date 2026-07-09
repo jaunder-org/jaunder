@@ -22,17 +22,11 @@ pub async fn request_email_verification(email: String) -> WebResult<()> {
         let mailer = expect_context::<Arc<dyn MailSender>>();
 
         // External parse error (`email_address`): keep the site-specific public message on
-        // the wire, but capture the typed source on the anyhow chain rather than flattening
-        // it with `.to_string()` (a blanket `From` would need an `email_address` dep on the
-        // `host` floor; the message is site-specific anyway — cf. the chrono lifts).
-        let email_addr = email.parse::<email_address::EmailAddress>().map_err(|e| {
-            InternalError::masked(
-                crate::error::ErrorKind::Validation,
-                crate::error::ErrorClass::Client,
-                e.to_string(),
-                anyhow::Error::new(e),
-            )
-        })?;
+        // the wire, but capture the typed source rather than flattening it with `.to_string()`
+        // (a blanket `From` would need an `email_address` dep on the `host` floor).
+        let email_addr = email
+            .parse::<email_address::EmailAddress>()
+            .map_err(|e| InternalError::validation_source(e.to_string(), e))?;
 
         let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
         let raw_token = email_verifications

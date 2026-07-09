@@ -230,6 +230,26 @@ impl InternalError {
         }
     }
 
+    /// Lifts a typed error into a `Validation` (client / 400) carrier while
+    /// *supplementing* it with a site-specific `public_message`: the message crosses
+    /// the wire, the typed `source` is preserved on the operator side (downcastable),
+    /// never flattened via `to_string()`. Use this at a call site when the public
+    /// message needs context the error type doesn't carry (which field failed to parse);
+    /// use a `From` impl / the `validation_from!` macro when the type has one canonical
+    /// lift. This is the single home of the masked-validation-with-source shape — the
+    /// macro and the storage `From` impls delegate here.
+    pub fn validation_source(
+        public_message: impl Into<String>,
+        source: impl Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::masked(
+            ErrorKind::Validation,
+            ErrorClass::Client,
+            public_message,
+            anyhow::Error::new(source),
+        )
+    }
+
     /// Attaches a structured key/value to the operator-side context, emitted
     /// at the boundary (see `emit_boundary_failure`). Never reaches the client.
     #[must_use]
@@ -351,12 +371,7 @@ macro_rules! validation_from {
     ($($ty:ty),+ $(,)?) => {$(
         impl From<$ty> for InternalError {
             fn from(error: $ty) -> Self {
-                Self::masked(
-                    ErrorKind::Validation,
-                    ErrorClass::Client,
-                    error.to_string(),
-                    anyhow::Error::new(error),
-                )
+                Self::validation_source(error.to_string(), error)
             }
         }
     )+};

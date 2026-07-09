@@ -171,14 +171,7 @@ pub fn parse_post_cursor(
         (None, None) => Ok(None),
         (Some(created_at), Some(post_id)) => {
             let created_at = chrono::DateTime::parse_from_rfc3339(created_at.trim())
-                .map_err(|e| {
-                    InternalError::masked(
-                        ErrorKind::Validation,
-                        ErrorClass::Client,
-                        "invalid cursor_created_at",
-                        anyhow::Error::new(e),
-                    )
-                })?
+                .map_err(|e| InternalError::validation_source("invalid cursor_created_at", e))?
                 .with_timezone(&Utc);
             Ok(Some(PostCursor {
                 created_at,

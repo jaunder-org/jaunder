@@ -204,16 +204,10 @@ impl From<PerformUpdateError> for host::error::InternalError {
     /// failure. The validation arms carry the typed `PerformUpdateError` as the
     /// operator-side source instead of flattening it (A19).
     fn from(error: PerformUpdateError) -> Self {
-        use host::error::{ErrorClass, ErrorKind, InternalError};
+        use host::error::InternalError;
         match error {
             PerformUpdateError::EmptyPost | PerformUpdateError::InvalidSlug => {
-                let message = error.to_string();
-                InternalError::masked(
-                    ErrorKind::Validation,
-                    ErrorClass::Client,
-                    message,
-                    anyhow::Error::new(error),
-                )
+                InternalError::validation_source(error.to_string(), error)
             }
             PerformUpdateError::NotFound | PerformUpdateError::Unauthorized => {
                 InternalError::not_found("Post")
@@ -362,17 +356,11 @@ impl From<PerformCreationError> for host::error::InternalError {
     /// `(kind, class, public_message)`. The invalid-slug arm carries the typed
     /// error as the operator-side source instead of flattening it (A19).
     fn from(error: PerformCreationError) -> Self {
-        use host::error::{ErrorClass, ErrorKind, InternalError};
+        use host::error::InternalError;
         match error {
             PerformCreationError::EmptyPost => InternalError::validation("post body is required"),
             PerformCreationError::InvalidSlug(_) => {
-                let message = error.to_string();
-                InternalError::masked(
-                    ErrorKind::Validation,
-                    ErrorClass::Client,
-                    message,
-                    anyhow::Error::new(error),
-                )
+                InternalError::validation_source(error.to_string(), error)
             }
             PerformCreationError::Exhausted(_) => {
                 InternalError::server_message("unable to allocate a unique slug after 100 attempts")
