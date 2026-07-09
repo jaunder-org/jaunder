@@ -417,8 +417,9 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("traces-run");
             // A nix-build failure or a missing trace file propagates as Err → the
-            // exit-2 path in main.rs (spec §5), not a fail step.
-            let files = traces::run::collect_trace_files(cold, browser)?;
+            // exit-2 path in main.rs (spec §5), not a fail step. `_tmp` guards the
+            // extracted traces (untarred from each capture bundle) until analysis ends.
+            let (_tmp, files) = traces::run::collect_trace_files(cold, browser)?;
             let n = files.len();
             let filters = traces::parse::Filters {
                 trace,
