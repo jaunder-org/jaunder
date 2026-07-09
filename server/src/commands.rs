@@ -458,6 +458,74 @@ pub async fn prepare_server(
     })
 }
 
+/// Serves `router` on `listener`, draining in-flight requests when `shutdown`
+/// resolves, then returns. Owns `runtime_guard`, so a normal return drops it and
+/// removes the runtime file — the covered removal path. The forced-exit path (see
+/// [`spawn_shutdown_supervisor`]) removes the file explicitly instead.
+///
+/// # Errors
+///
+/// Returns an error if the server exits with an error.
+async fn serve_with_shutdown(
+    listener: tokio::net::TcpListener,
+    router: axum::Router,
+    // Held only for its `Drop`, which removes runtime.json when this function
+    // returns (the graceful path). Underscore-named so it lives to scope end
+    // rather than dropping immediately.
+    _runtime_guard: crate::runtime_file::RuntimeFileGuard,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown)
+        .await?;
+    Ok(())
+    // `_runtime_guard` drops here → removes runtime.json on the graceful path.
+}
+
+/// Installs `SIGINT`/`SIGTERM` handlers and returns a receiver that fires when the
+/// first arrives (the graceful-shutdown trigger). A second signal forces an
+/// immediate exit, best-effort removing the runtime file first — necessary because
+/// `process::exit` skips `Drop`. `runtime_path` is cloned from the guard before it
+/// is moved into [`serve_with_shutdown`].
+///
+/// The streams are created synchronously (before returning), so a caller can rely
+/// on the handlers being active the moment this returns.
+///
+/// # Errors
+///
+/// Returns an error if a signal handler cannot be installed.
+#[cfg(unix)]
+fn spawn_shutdown_supervisor(
+    runtime_path: Option<std::path::PathBuf>,
+) -> std::io::Result<tokio::sync::oneshot::Receiver<()>> {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut sigint = signal(SignalKind::interrupt())?;
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        // cov:ignore-start -- async signal wait-loop; the forced branch ends in
+        // process::exit and is unreachable by a survivable test. The synchronous
+        // setup above and serve_with_shutdown are host-covered by the signal tests.
+        let signal = tokio::select! {
+            _ = sigint.recv() => "SIGINT",
+            _ = sigterm.recv() => "SIGTERM",
+        };
+        tracing::info!(
+            signal,
+            "received shutdown signal; draining in-flight requests"
+        );
+        let _ = tx.send(());
+        tokio::select! { _ = sigint.recv() => {}, _ = sigterm.recv() => {} }
+        tracing::warn!("second shutdown signal; forcing immediate exit");
+        if let Some(p) = &runtime_path {
+            crate::runtime_file::remove_runtime_file(p);
+        }
+        std::process::exit(0);
+        // cov:ignore-stop
+    });
+    Ok(rx)
+}
+
 /// Starts the HTTP server and the background workers.
 ///
 /// # Errors
@@ -482,13 +550,37 @@ pub async fn cmd_serve(
     } = prepare_server(storage, bind, prod, runtime_file).await?;
 
     tracing::info!(bind = %bind, prod, "starting HTTP server");
+    // cov:ignore-start -- live serve glue: unreachable by host tests (the sole
+    // cmd_serve test returns early at prepare_server). The covered pieces live in
+    // serve_with_shutdown + spawn_shutdown_supervisor, exercised by the signal
+    // tests; this only wires them to the prepared server. Mirrors jaunder-uox1.
     // Keep the worker schedulers alive for the lifetime of the serve loop.
     let _backup_scheduler = backup_scheduler;
     let _feed_scheduler = feed_scheduler;
-    // Kept alive until the serve loop returns; removes runtime.json on drop.
-    let _runtime_guard = runtime_guard;
-    axum::serve(listener, router).await?;
-    Ok(()) // cov:ignore
+    #[cfg(unix)]
+    {
+        // Clone the runtime-file path for the forced-exit removal before the guard
+        // moves into serve_with_shutdown (whose Drop handles the graceful path).
+        let runtime_path = runtime_guard.path().map(std::path::Path::to_path_buf);
+        let shutdown_rx = spawn_shutdown_supervisor(runtime_path)?;
+        serve_with_shutdown(listener, router, runtime_guard, async move {
+            let _ = shutdown_rx.await;
+        })
+        .await
+    }
+    #[cfg(not(unix))]
+    {
+        // No signal handling off unix (jaunder targets Linux/NixOS): serve until
+        // the process is otherwise terminated, matching prior behavior.
+        serve_with_shutdown(
+            listener,
+            router,
+            runtime_guard,
+            std::future::pending::<()>(),
+        )
+        .await
+    }
+    // cov:ignore-stop
 }
 
 #[cfg(test)]
@@ -660,5 +752,56 @@ mod tests {
         assert!(db_path.exists(), "auto-init must have created the database");
         // Drop the prepared server (and its background workers) without serving.
         drop(prepared);
+    }
+
+    // The two shutdown tests below raise a REAL signal to their own process. This
+    // is safe only under `cargo nextest` (one process per test) — the tokio
+    // handler, installed synchronously by spawn_shutdown_supervisor *before* we
+    // raise, replaces the default terminate disposition so the signal is delivered
+    // to the handler instead of killing us. Under a bare `cargo test` (libtest,
+    // shared process) two such tests could observe each other's signals; the gate
+    // runs nextest.
+    #[cfg(unix)]
+    async fn assert_signal_removes_runtime_file(signal: nix::sys::signal::Signal) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("runtime.json");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let guard = crate::runtime_file::RuntimeFileGuard::write(path.clone(), addr);
+        assert!(path.exists(), "guard wrote the runtime file");
+
+        // Installs the SIGINT/SIGTERM handlers synchronously, so the raise below
+        // cannot beat handler installation.
+        let shutdown_rx = spawn_shutdown_supervisor(Some(path.clone())).unwrap();
+        let handle = tokio::spawn(serve_with_shutdown(
+            listener,
+            axum::Router::new(),
+            guard,
+            async move {
+                let _ = shutdown_rx.await;
+            },
+        ));
+
+        nix::sys::signal::raise(signal).unwrap();
+
+        // Await serve completion so removal (guard Drop on return) is observed
+        // deterministically, not by a timing poll.
+        handle
+            .await
+            .unwrap()
+            .expect("serve_with_shutdown returns Ok on graceful shutdown");
+        assert!(!path.exists(), "runtime.json removed after {signal:?}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sigterm_drains_and_removes_runtime_file() {
+        assert_signal_removes_runtime_file(nix::sys::signal::Signal::SIGTERM).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sigint_drains_and_removes_runtime_file() {
+        assert_signal_removes_runtime_file(nix::sys::signal::Signal::SIGINT).await;
     }
 }
