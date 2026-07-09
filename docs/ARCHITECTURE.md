@@ -114,11 +114,12 @@ Playwright spans to be parented to the corresponding backend operations.
 
 ### Trace Output Locations
 
-In E2E VM checks, traces are exported to an in-VM collector and persisted to:
+In E2E VM checks, traces are exported to an in-VM collector and persisted under
+the `JAUNDER_CAPTURE_DIR` contract (#332):
 
-- `/var/lib/jaunder/otel-traces.jsonl` (inside the VM)
-- `otel-traces-sqlite.jsonl/otel-traces.jsonl` (as a build artifact)
-- `otel-traces-postgres.jsonl/otel-traces.jsonl` (as a build artifact)
+- `/var/lib/jaunder/capture/otel-traces.jsonl` (inside the VM)
+- lifted per combo inside `capture-<backend>.tar.gz`, alongside `diag.log` and
+  the mail/websub JSONL
 
 ## Tooling & Diagnostics
 

@@ -7,10 +7,11 @@ test runner.
 
 - Backend spans are produced via `tracing` + OpenTelemetry in the `server`
   crate.
-- In e2e VM checks, traces are exported to the in-VM collector and written to:
-  - `/var/lib/jaunder/otel-traces.jsonl` (inside VM)
-  - `otel-traces-sqlite.jsonl/otel-traces.jsonl` (copied artifact)
-  - `otel-traces-postgres.jsonl/otel-traces.jsonl` (copied artifact)
+- In e2e VM checks, traces are exported to the in-VM collector and written under
+  the capture-dir contract (#332):
+  - `/var/lib/jaunder/capture/otel-traces.jsonl` (inside the VM)
+  - lifted per combo inside `capture-<backend>.tar.gz` (the same bundle that
+    carries `diag.log` and the mail/websub JSONL — see below)
 
 ## End-to-End Tracing Layers
 
@@ -61,7 +62,7 @@ at:
 Each line is one JSON object. Tracing events use the `fmt().json()` shape;
 **panic** records are distinguished by `"kind": "panic"` and carry the literal
 `panicked at <location>` message plus a verbatim `location`. Enabled only when
-`JAUNDER_CAPTURE_DIR` is set (the e2e VMs set it via `mailCaptureEnv` in
+`JAUNDER_CAPTURE_DIR` is set (the e2e VMs set it via `captureEnv` in
 `flake.nix`, and the server writes `diag.log` within it — issue #227);
 production leaves it unset, so the feature is inert there.
 
@@ -78,9 +79,11 @@ app-driven scoped-capture decision.
 Use `cargo xtask traces analyze` on one or more artifact files, for example:
 
 ```bash
+# each otel-traces.jsonl is extracted from an e2e capture-<backend>.tar.gz bundle
+# (member path capture/otel-traces.jsonl); `cargo xtask traces run` does this for you.
 cargo xtask traces analyze \
-  /nix/store/...-vm-test-run-jaunder-e2e-sqlite-chromium/otel-traces-sqlite.jsonl/otel-traces.jsonl \
-  /nix/store/...-vm-test-run-jaunder-e2e-postgres-firefox/otel-traces-postgres.jsonl/otel-traces.jsonl
+  sqlite-otel-traces.jsonl \
+  postgres-otel-traces.jsonl
 ```
 
 The analyzer reports:

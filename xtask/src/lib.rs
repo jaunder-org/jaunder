@@ -189,7 +189,8 @@ pub enum TracesCommand {
     /// tool — not part of `check`/`validate`. Prints human tables only;
     /// `--json` is rejected.
     #[command(after_help = "EXAMPLES:\n  \
-        cargo xtask traces analyze /nix/store/...-e2e-sqlite-chromium/otel-traces-sqlite.jsonl/otel-traces.jsonl\n  \
+        # trace files extracted from an e2e capture-<backend>.tar.gz bundle (capture/otel-traces.jsonl):\n  \
+        cargo xtask traces analyze sqlite-otel-traces.jsonl postgres-otel-traces.jsonl\n  \
         cargo xtask traces analyze --top 40 --project firefox trace-a.jsonl trace-b.jsonl\n  \
         cargo xtask traces analyze --trace 1111...1111 traces.jsonl")]
     Analyze {
