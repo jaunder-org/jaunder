@@ -102,11 +102,18 @@ pub trait AudienceStorage: Send + Sync {
         subscription_id: i64,
     ) -> Result<(), AudienceError>;
 
-    /// Removes a subscription from an audience. A no-op if the pairing is absent.
-    async fn remove_member(&self, audience_id: i64, subscription_id: i64) -> sqlx::Result<()>;
+    /// Removes a subscription from an audience the author owns. A no-op if absent
+    /// (including when `audience_id` belongs to another author).
+    async fn remove_member(
+        &self,
+        author_user_id: i64,
+        audience_id: i64,
+        subscription_id: i64,
+    ) -> sqlx::Result<()>;
 
-    /// Lists the `subscription_id`s belonging to an audience, ordered.
-    async fn list_members(&self, audience_id: i64) -> sqlx::Result<Vec<i64>>;
+    /// Lists the `subscription_id`s belonging to an audience the author owns,
+    /// ordered. Empty when `audience_id` belongs to another author.
+    async fn list_members(&self, author_user_id: i64, audience_id: i64) -> sqlx::Result<Vec<i64>>;
 }
 
 /// Generic [`AudienceStorage`] backed by any [`Backend`] database. The SQL is
@@ -265,12 +272,21 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn remove_member(&self, audience_id: i64, subscription_id: i64) -> sqlx::Result<()> {
-        sqlx::query("DELETE FROM audience_members WHERE audience_id = $1 AND subscription_id = $2")
-            .bind(audience_id)
-            .bind(subscription_id)
-            .execute(&self.pool)
-            .await?;
+    async fn remove_member(
+        &self,
+        author_user_id: i64,
+        audience_id: i64,
+        subscription_id: i64,
+    ) -> sqlx::Result<()> {
+        sqlx::query(
+            "DELETE FROM audience_members \
+             WHERE author_user_id = $1 AND audience_id = $2 AND subscription_id = $3",
+        )
+        .bind(author_user_id)
+        .bind(audience_id)
+        .bind(subscription_id)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -279,11 +295,12 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn list_members(&self, audience_id: i64) -> sqlx::Result<Vec<i64>> {
+    async fn list_members(&self, author_user_id: i64, audience_id: i64) -> sqlx::Result<Vec<i64>> {
         let rows = sqlx::query_as::<_, (i64,)>(
             "SELECT subscription_id FROM audience_members \
-             WHERE audience_id = $1 ORDER BY subscription_id",
+             WHERE author_user_id = $1 AND audience_id = $2 ORDER BY subscription_id",
         )
+        .bind(author_user_id)
         .bind(audience_id)
         .fetch_all(&self.pool)
         .await?;

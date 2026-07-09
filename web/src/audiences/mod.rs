@@ -8,15 +8,11 @@
 //! ## Authorization
 //!
 //! Every function derives `author_user_id` from the authenticated session
-//! ([`require_auth`]) — **never** from a client parameter. The store's mutating
-//! methods are author-scoped (`create_audience`, `rename_audience`,
-//! `delete_audience`, `add_member`), so passing the session's `user_id` is
-//! sufficient there. But [`AudienceStorage::remove_member`] and
-//! [`AudienceStorage::list_members`] are **not** author-scoped in the store — a
-//! client-supplied `audience_id` could otherwise reach another author's
-//! audience. So before calling them, these functions verify the target
-//! `audience_id` belongs to the authed author (it must appear in
-//! `list_audiences(author)`), rejecting otherwise.
+//! ([`require_auth`]) — **never** from a client parameter. Every store method is
+//! author-scoped (it takes `author_user_id` and filters by it), so passing the
+//! session's `user_id` is the whole authorization: a client-supplied
+//! `audience_id` owned by another author matches nothing (an empty list, or a
+//! no-op delete).
 
 use crate::error::WebResult;
 use crate::ui::Topbar;
@@ -45,23 +41,6 @@ pub struct SubscriberSummary {
     /// The local subscriber's username (resolved from `subscriber_ref`), or the
     /// raw reference when it could not be resolved to a local user.
     pub label: String,
-}
-
-/// Confirms `audience_id` belongs to `author_user_id` by checking it appears in
-/// the author's own audience list. This is the ownership gate for the store
-/// methods that are not author-scoped (`remove_member`, `list_members`).
-#[cfg(feature = "server")]
-async fn assert_owns_audience(
-    audiences: &dyn AudienceStorage,
-    author_user_id: i64,
-    audience_id: i64,
-) -> Result<(), InternalError> {
-    let owned = audiences.list_audiences(author_user_id).await?;
-    if owned.iter().any(|a| a.audience_id == audience_id) {
-        Ok(())
-    } else {
-        Err(InternalError::not_found("audience"))
-    }
 }
 
 /// Creates a named audience owned by the authenticated author.
@@ -174,9 +153,7 @@ pub async fn add_subscriber_to_audience(audience_id: i64, subscription_id: i64) 
 }
 
 /// Removes a subscription from an audience the authenticated author owns.
-///
-/// `remove_member` is **not** author-scoped in the store, so we verify
-/// ownership of `audience_id` before calling it.
+/// `remove_member` is author-scoped, so a cross-author `audience_id` is a no-op.
 #[server(endpoint = "/remove_subscriber_from_audience")]
 pub async fn remove_subscriber_from_audience(
     audience_id: i64,
@@ -185,25 +162,21 @@ pub async fn remove_subscriber_from_audience(
     boundary!("remove_subscriber_from_audience", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
-        assert_owns_audience(audiences.as_ref(), auth.user_id, audience_id).await?;
         audiences
-            .remove_member(audience_id, subscription_id)
+            .remove_member(auth.user_id, audience_id, subscription_id)
             .await?;
         Ok(())
     })
 }
 
 /// Lists the `subscription_id`s assigned to an audience the author owns.
-///
-/// `list_members` is **not** author-scoped in the store, so we verify
-/// ownership of `audience_id` before calling it.
+/// `list_members` is author-scoped, so a cross-author `audience_id` lists empty.
 #[server(endpoint = "/list_audience_members")]
 pub async fn list_audience_members(audience_id: i64) -> WebResult<Vec<i64>> {
     boundary!("list_audience_members", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
-        assert_owns_audience(audiences.as_ref(), auth.user_id, audience_id).await?;
-        let members = audiences.list_members(audience_id).await?;
+        let members = audiences.list_members(auth.user_id, audience_id).await?;
         Ok(members)
     })
 }
