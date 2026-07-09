@@ -60,16 +60,19 @@ server affordances.**
    - **`serve` always writes a runtime-info file** — a small JSON file in the
      per-instance data dir (default `<JAUNDER_STORAGE_PATH>/runtime.json`,
      `--runtime-file`/`JAUNDER_RUNTIME_FILE` override), written atomically once
-     the listener binds and removed on clean shutdown. Contents are minimal for
-     now — `{ "ip": <ip>, "port": <port> }` — making a `--bind …:0` subprocess
+     the listener binds and removed on shutdown. Removal is **signal-robust as
+     of #140**: `serve` has a graceful-shutdown hook that, on SIGINT/SIGTERM,
+     drains in-flight requests and lets the serve loop return so the RAII guard
+     removes the file; a second signal forces an immediate exit that still
+     removes the file explicitly first. Contents are minimal for now —
+     `{ "ip": <ip>, "port": <port> }` — making a `--bind …:0` subprocess
      discoverable race-free and acting as a binding handshake. The write is
-     best-effort (a failure is logged, not fatal; removal is best-effort, only
-     on a normal serve return). It is the forward-compatible base for three
-     **deferred** follow-ons, none built here: signal-robust removal (a
-     graceful-shutdown hook so the file is reliably removed on SIGTERM/SIGINT),
-     a start-up mutex (refuse on a live `pid`, with stale detection — pairs with
-     signal-robust removal), and a local admin token for a `jaunder shut-down`
-     channel.
+     best-effort (a failure is logged, not fatal); removal is best-effort too (a
+     hard SIGKILL still skips it — recovered by the stale-detection follow-on).
+     It is the forward-compatible base for follow-ons: **signal-robust removal —
+     delivered in #140**; a start-up mutex (refuse on a live `pid`, with stale
+     detection — #141, still deferred); and a local admin token for a
+     `jaunder shut-down` channel (#142, still deferred).
 
 2. **The harness owns the server lifecycle.** A `jaunder-test--with-live-server`
    macro (under `elisp/test/`) spawns

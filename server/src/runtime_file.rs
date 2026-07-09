@@ -22,10 +22,21 @@ fn write_atomic(path: &Path, addr: SocketAddr) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
+/// Best-effort removal of the runtime file at `path`, ignoring errors (it may
+/// already be gone). Shared by `RuntimeFileGuard::drop` and the forced-shutdown
+/// path in `cmd_serve`, which must remove explicitly because `process::exit`
+/// skips `Drop`.
+pub(crate) fn remove_runtime_file(path: &Path) {
+    let _ = std::fs::remove_file(path);
+}
+
 /// RAII guard: writes the runtime file on construction, removes it on `Drop`.
 ///
-/// Removal is best-effort and only runs on a normal unwind (a `SIGKILL` skips
-/// `Drop`); making removal signal-robust is a deferred follow-on (#140).
+/// Removal is signal-robust on a normal service stop (#140): the graceful
+/// shutdown hook in `cmd_serve` lets the serve loop return so `Drop` runs on
+/// `SIGINT`/`SIGTERM`, and its forced-exit path removes the file explicitly via
+/// [`remove_runtime_file`] before `process::exit`. A hard `SIGKILL` still skips
+/// both (recovered by the #141 stale-detection follow-on).
 pub struct RuntimeFileGuard {
     path: Option<PathBuf>,
 }
@@ -58,12 +69,20 @@ impl RuntimeFileGuard {
         let path = override_path.unwrap_or_else(|| storage_path.join("runtime.json"));
         Self::write(path, addr)
     }
+
+    /// The active runtime-file path, or `None` for an inert guard (write failed).
+    /// Lets the shutdown supervisor clone the path before the guard is moved into
+    /// the serve future, so the forced-exit path can remove it without the guard.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
 }
 
 impl Drop for RuntimeFileGuard {
     fn drop(&mut self) {
         if let Some(p) = &self.path {
-            let _ = std::fs::remove_file(p);
+            remove_runtime_file(p);
         }
     }
 }
@@ -123,5 +142,37 @@ mod tests {
         let _guard = RuntimeFileGuard::for_serve(Some(custom.clone()), dir.path(), addr());
         assert!(custom.exists());
         assert!(!dir.path().join("runtime.json").exists());
+    }
+
+    #[test]
+    fn remove_runtime_file_deletes_when_present() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("runtime.json");
+        std::fs::write(&path, "{}").unwrap();
+        assert!(path.exists());
+        remove_runtime_file(&path);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn remove_runtime_file_is_noop_when_absent() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("runtime.json");
+        // Must not panic and must not create the file; idempotent on repeat.
+        remove_runtime_file(&path);
+        remove_runtime_file(&path);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn path_is_some_for_active_guard_and_none_for_inert() {
+        let dir = TempDir::new().unwrap();
+        let active = RuntimeFileGuard::write(dir.path().join("runtime.json"), addr());
+        assert!(active.path().is_some());
+        let inert = RuntimeFileGuard::write(
+            std::path::Path::new("/nonexistent-jaunder-xyz/sub/runtime.json").to_path_buf(),
+            addr(),
+        );
+        assert!(inert.path().is_none());
     }
 }
