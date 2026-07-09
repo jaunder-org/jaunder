@@ -64,15 +64,20 @@ principle).
 
 **Tasks:**
 
-1. ADR draft + commit planning docs & the ADR-0058 clarification.
-2. Decouple `InternalError` from `WebError` in place (in `web`).
-3. Relocate the carrier to `host::error`; split the boundary.
-4. Uniform external/common error handling — `host` `From` impls + de-stringify.
-5. Domain-error `From` impls in `storage`; delete `web` mappers.
-6. Push down `viewer.rs`.
-7. Push down `auth/server.rs`.
-8. Push down `posts/server.rs`.
-9. Acceptance sweep + full `validate`.
+1. ✅ ADR draft + commit planning docs & the ADR-0058 clarification.
+2. ✅ Decouple `InternalError` from `WebError` in place (in `web`).
+3. ✅ Relocate the carrier to `host::error`; split the boundary.
+4. ✅ Uniform external/common error handling — `host` `From` impls +
+   de-stringify.
+5. ✅ Domain-error `From` impls in `storage`; delete `web` mappers.
+6. ✅ Push down `viewer.rs`.
+   - ➕ (pulled-forward DRY) `InternalError::validation_source(msg, source)`
+     constructor; route chrono/email lifts + `validation_from!` macro + storage
+     `From`s through it.
+7. ✅ Push down `auth/server.rs`.
+8. ✅ Push down `posts/server.rs`.
+9. ✅ Acceptance sweep + full `validate` (green: all static + coverage clean +
+   full e2e matrix).
 
 **Key risks/decisions:**
 
@@ -94,7 +99,7 @@ principle).
 
 **Files:**
 
-- Create: `docs/adr/drafts/thin-web-shell-error-layering.md` (numberless draft;
+- Create: `docs/adr/0059-thin-web-shell-error-layering.md` (numberless draft;
   `cargo xtask adr promote` numbers it → ADR-0059 at ship)
 - Already-modified (commit here): `docs/adr/0058-host-crate-layering.md` (the
   dependency-rule clarification),
@@ -103,7 +108,7 @@ principle).
 
 **Interfaces:** none (docs only).
 
-- [ ] **Step 1: Write the ADR draft** using **jaunder-adr**. Required lead
+- [x] **Step 1: Write the ADR draft** using **jaunder-adr**. Required lead
       content (spec "ADR plan" section, verbatim intent): the two
       non-collapsible boundaries — **T2↔T3** security boundary made structural
       (operator payload structurally absent from the wire type ⇒ no-leak by
@@ -114,10 +119,10 @@ principle).
       decision (D7 — resolve here: keep `InternalError`, now
       `host::error::InternalError`). Reference ADR-0017 (its "forthcoming
       structured carrier" thread) and ADR-0016.
-- [ ] **Step 2: Prettier-format the Markdown** (project pre-commit reformats
+- [x] **Step 2: Prettier-format the Markdown** (project pre-commit reformats
       prose):
-      `devtool run -- prettier -w docs/adr/drafts/thin-web-shell-error-layering.md docs/superpowers/specs/2026-07-08-issue-334-thin-web-error-layering.md docs/superpowers/plans/2026-07-09-issue-334-thin-web-error-layering.md docs/adr/0058-host-crate-layering.md`
-- [ ] **Step 3: Commit.**
+      `devtool run -- prettier -w docs/adr/0059-thin-web-shell-error-layering.md docs/superpowers/specs/2026-07-08-issue-334-thin-web-error-layering.md docs/superpowers/plans/2026-07-09-issue-334-thin-web-error-layering.md docs/adr/0058-host-crate-layering.md`
+- [x] **Step 3: Commit.**
 
 The ADR draft under `docs/adr/drafts/` is **gitignored** (draft-out-of-git flow,
 #219) — do **not** `git add` it; it enters history at ship via

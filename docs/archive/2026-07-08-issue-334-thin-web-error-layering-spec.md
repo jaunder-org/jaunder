@@ -142,15 +142,16 @@ across awaits (ADR-0016 addenda #89/#124/#138 — irreducibly leptos), and (b) o
 - **Stays in `web`:** the owner-pinning wrapper (`ScopedFuture`,
   `owner_ancestry_strong`, `server_resource`) and the final `project(...)` call.
   The `boundary!` macro keeps its signature and call sites unchanged.
-- **Moves to `host` (carrier methods):** `error.log_boundary_failure(server_fn)`
-  (the structured `tracing` event over
-  `kind`/`class`/`context`/`source`/`public_message`) and the
+- **Moves to `host` (one carrier method
+  `error.emit_boundary_failure(server_fn)`):** the structured `tracing` event
+  over `kind`/`class`/`context`/`source`/`public_message` **and** the
   `common::metrics::error(kind.as_metric_str(), class.as_metric_str())` emission
+  (log-then-metric, folded into a single method since they always fire together)
   — no leptos dependency. `common::metrics::error` keeps its `&'static str`
   signature (no change).
 
 `web`'s `server_boundary` becomes: pin owners → run body → on `Err`, call
-`err.log_boundary_failure(name)` (host) then return
+`err.emit_boundary_failure(name)` (host) then return
 `project(err.kind(), err.public_message())`.
 
 ### D4 — vertical mappers collapse into `From` impls in `storage`
@@ -319,9 +320,9 @@ Stated so a later conformance review can tell delivered from not.
 - A8. `boundary!` macro signature and all `#[server]` call sites are unchanged.
 - A9. Owner-pinning (`ScopedFuture` ancestry hold, `server_resource`) still
   lives in `web`; the `owner_lifetime` tests are unchanged and green.
-- A10. `log_boundary_failure` + the metric emission are `host` carrier methods
-  (no leptos import in that path); on `Err`, `web`'s `server_boundary` calls
-  them **before** projecting.
+- A10. The structured log + the metric emission are a single `host` carrier
+  method `emit_boundary_failure` (no leptos import in that path); on `Err`,
+  `web`'s `server_boundary` calls it **before** projecting.
 
 **Mapper collapse (D4):**
 
@@ -344,26 +345,31 @@ Stated so a later conformance review can tell delivered from not.
 - A14. `PostResponse`, `TimelinePostSummary`, and their builders remain in
   `web`; no server-fn return type is defined in `host`. (`host`'s freedom from
   leptos/web/storage deps is A3/A4.)
-- A15. The named per-vertical mappers (D4 table) are gone; their conversions are
-  `impl From<…>` in `storage` (or `web` for `auth_rejection_error`); call sites
-  use `?`/`.into()`.
+- A15. The named per-vertical **domain** mappers (D4 table) are gone; their
+  conversions are `impl From<…>` in `storage`, call sites using `?`/`.into()`.
+  The web-local `auth_rejection_error` (source `AuthRejection`, classified
+  **STAYS** in the D5 inventory) remains a typed web-local conversion —
+  delivered as a free fn (`.map_err(auth_rejection_error)`), not a lossy
+  stringify; a `From` impl would be equivalent and is not required.
 
 **Cross-cutting:**
 
 - A16. No `#[cfg(feature = "server")]` item remains in `web/src` that has no
   leptos/wasm/wire tie — checked against the D5 inventory, which is **closed**:
-  it now includes `TaggingError`, the `PostFormat` parse error, and the two
-  `backup/mod.rs` `.public()` sites (A20).
+  it now includes `TaggingError` (→ storage), `InvalidPostFormat` (common-local
+  → host), `InvalidMediaSource` (→ storage), and the two `backup/mod.rs`
+  `.public()` sites (A20).
 - A17. `cargo xtask validate` green (static + clippy incl. wasm-target +
   coverage + full e2e matrix), after the #335 rebase.
 
 **Error-handling completeness (D4, per your "handle it this cycle"):**
 
 - A18. Every typed error source has a typed conversion at its correct home:
-  storage-local (the D4 mappers **plus** `TaggingError` and the `PostFormat`
-  parse error) → `From` in `storage`; common-local (`InvalidSlug`,
-  `Username`/`Tag` parse, `MailError`) and external `sqlx::Error` → `From` in
-  `host`; `chrono` parse (site-specific messages) → the existing
+  storage-local (the D4 mappers **plus** `TaggingError` and
+  `InvalidMediaSource`) → `From` in `storage`; common-local (`InvalidSlug`,
+  `Username`/`Tag` parse, `MailError`, `InvalidPostFormat`) and external
+  `sqlx::Error` → `From` in `host`; `chrono` parse (site-specific messages) →
+  the existing
   `masked(Validation, Client, <site message>, anyhow::Error::new(e))` (no
   blanket `From`, no new constructor, so `host` needs no `chrono` dep). Call
   sites use `?`/`.into()` or `masked`. `host` depends on `sqlx`/`http`, not the
@@ -423,18 +429,19 @@ current (pre-refactor) `web/src` locations.
 
 ### Mapper → `From` conversions (D4)
 
-| Mapper                                                   | source type                              | source crate | `From` impl home                                                      |
-| -------------------------------------------------------- | ---------------------------------------- | ------------ | --------------------------------------------------------------------- |
-| `map_audience_error`                                     | `AudienceError`                          | storage      | **storage**                                                           |
-| `register_open_error`                                    | `CreateUserError`                        | storage      | **storage**                                                           |
-| `register_invite_error`                                  | `RegisterWithInviteError`                | storage      | **storage**                                                           |
-| `login_error`                                            | `UserAuthError`                          | storage      | **storage**                                                           |
-| `perform_update_error`                                   | `PerformUpdateError`                     | storage      | **storage**                                                           |
-| `perform_creation_error`                                 | `PerformCreationError`                   | storage      | **storage**                                                           |
-| inline `match` at `posts/mod.rs:469,644`                 | `PerformUpdateError` / `UpdatePostError` | storage      | **storage**                                                           |
-| `tag_post`/`untag_post` lift (in `apply_post_tag_diff`)  | `TaggingError`                           | storage      | **storage** (maps to kind `Internal`→public `Server`, de-stringified) |
-| `format.parse::<PostFormat>()` lift (`posts/mod.rs:243`) | `PostFormat` parse error                 | storage      | **storage**                                                           |
-| `auth_rejection_error`                                   | `AuthRejection`                          | web-local    | **web** (stays)                                                       |
+| Mapper                                                   | source type                              | source crate | `From` impl home                                                              |
+| -------------------------------------------------------- | ---------------------------------------- | ------------ | ----------------------------------------------------------------------------- |
+| `map_audience_error`                                     | `AudienceError`                          | storage      | **storage**                                                                   |
+| `register_open_error`                                    | `CreateUserError`                        | storage      | **storage**                                                                   |
+| `register_invite_error`                                  | `RegisterWithInviteError`                | storage      | **storage**                                                                   |
+| `login_error`                                            | `UserAuthError`                          | storage      | **storage**                                                                   |
+| `perform_update_error`                                   | `PerformUpdateError`                     | storage      | **storage**                                                                   |
+| `perform_creation_error`                                 | `PerformCreationError`                   | storage      | **storage**                                                                   |
+| inline `match` at `posts/mod.rs:469,644`                 | `PerformUpdateError` / `UpdatePostError` | storage      | **storage**                                                                   |
+| `tag_post`/`untag_post` lift (in `apply_post_tag_diff`)  | `TaggingError`                           | storage      | **storage** (maps to kind `Internal`→public `Server`, de-stringified)         |
+| `format.parse::<PostFormat>()` lift (`posts/mod.rs:243`) | `common::render::InvalidPostFormat`      | **common**   | **host** (common-local ⇒ host, not storage; via the `validation_from!` macro) |
+| `MediaSource` parse lift (`media/mod.rs:59,136`)         | `InvalidMediaSource`                     | storage      | **storage**                                                                   |
+| `auth_rejection_error`                                   | `AuthRejection`                          | web-local    | **web** (stays)                                                               |
 
 Two `#[server]` bodies in `backup/mod.rs` (~:28, :62) branch on
 `error.public() == WebError::Unauthorized`; like `classify_current_user` they
@@ -442,12 +449,12 @@ rewrite to `kind() == ErrorKind::Auth` and **stay in `web`** (the `.public()`
 accessor is deleted with the field).
 
 Typed sources with a _canonical_ lift get a `From`: storage-local (the D4
-mappers **plus** `TaggingError` and the `PostFormat` parse error) → `storage`;
-common-local (`InvalidSlug`, `Username`/`Tag` parse, `MailError`) and external
-`sqlx::Error` → `host` (which takes `sqlx` + `http` as infra deps, D6).
-`From<sqlx::Error>` is behavior-preserving (== today's
-`InternalError::storage(e)`); `From<TaggingError>` preserves its current wire
-class (kind `Internal` → public `Server`), de-stringified. `chrono` parse
+mappers **plus** `TaggingError` and `InvalidMediaSource`) → `storage`;
+common-local (`InvalidSlug`, `Username`/`Tag` parse, `MailError`, and
+`InvalidPostFormat`) and external `sqlx::Error` → `host` (which takes `sqlx` +
+`http` as infra deps, D6). `From<sqlx::Error>` is behavior-preserving (==
+today's `InternalError::storage(e)`); `From<TaggingError>` preserves its current
+wire class (kind `Internal` → public `Server`), de-stringified. `chrono` parse
 failures route through the existing
 `masked(Validation, Client, <site message>, anyhow::Error::new(e))`
 (site-specific messages; no blanket `From`, no new constructor, so `host` needs
