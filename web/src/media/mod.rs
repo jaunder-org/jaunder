@@ -55,8 +55,7 @@ pub async fn list_my_media(
         let source_filter = source
             .as_deref()
             .map(str::parse::<MediaSource>)
-            .transpose()
-            .map_err(|e| InternalError::validation(e.to_string()))?;
+            .transpose()?;
 
         let records = media
             .list_media(
@@ -131,9 +130,7 @@ pub async fn delete_media(
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let source_enum = source
-            .parse::<MediaSource>()
-            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let source_enum = source.parse::<MediaSource>()?;
 
         let url = common::media::media_url(source_enum.as_str(), &sha256, &filename);
 

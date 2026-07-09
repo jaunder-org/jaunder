@@ -26,7 +26,7 @@ use {
     crate::auth::require_auth,
     crate::error::InternalError,
     std::sync::Arc,
-    storage::{AudienceError, AudienceStorage, SubscriptionStorage},
+    storage::{AudienceStorage, SubscriptionStorage},
 };
 
 /// A named audience as shown in the management screen.
@@ -43,20 +43,6 @@ pub struct SubscriberSummary {
     /// The local subscriber's username (resolved from `subscriber_ref`), or the
     /// raw reference when it could not be resolved to a local user.
     pub label: String,
-}
-
-/// Maps an [`AudienceError`] to a user-facing [`InternalError`]: duplicate
-/// names and missing audiences are client-correctable; everything else is a
-/// masked storage failure.
-#[cfg(feature = "server")]
-fn map_audience_error(err: AudienceError) -> InternalError {
-    match err {
-        AudienceError::DuplicateName => {
-            InternalError::conflict("an audience with that name already exists")
-        }
-        AudienceError::NotFound => InternalError::not_found("audience"),
-        AudienceError::Storage(e) => InternalError::storage(e),
-    }
 }
 
 /// Confirms `audience_id` belongs to `author_user_id` by checking it appears in
@@ -86,10 +72,7 @@ pub async fn create_audience(name: String) -> WebResult<i64> {
         if name.is_empty() {
             return Err(InternalError::validation("audience name must not be empty"));
         }
-        let id = audiences
-            .create_audience(auth.user_id, name)
-            .await
-            .map_err(map_audience_error)?;
+        let id = audiences.create_audience(auth.user_id, name).await?;
         Ok(id)
     })
 }
@@ -106,8 +89,7 @@ pub async fn rename_audience(audience_id: i64, name: String) -> WebResult<()> {
         }
         audiences
             .rename_audience(auth.user_id, audience_id, name)
-            .await
-            .map_err(map_audience_error)?;
+            .await?;
         Ok(())
     })
 }
@@ -185,8 +167,7 @@ pub async fn add_subscriber_to_audience(audience_id: i64, subscription_id: i64) 
         let auth = require_auth().await?;
         audiences
             .add_member(auth.user_id, audience_id, subscription_id)
-            .await
-            .map_err(map_audience_error)?;
+            .await?;
         Ok(())
     })
 }
@@ -228,35 +209,16 @@ pub async fn list_audience_members(audience_id: i64) -> WebResult<Vec<i64>> {
 
 #[cfg(all(test, feature = "server"))]
 mod tests {
-    use super::{list_my_subscribers, map_audience_error};
-    use crate::error::WebError;
+    use super::list_my_subscribers;
     use crate::test_support::auth_parts;
     use common::visibility::SubscriptionStatus;
     use leptos::prelude::provide_context;
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
     use storage::{
-        AudienceError, MockSubscriptionStorage, MockUserStorage, SubscriptionRecord,
-        SubscriptionStorage, UserStorage,
+        MockSubscriptionStorage, MockUserStorage, SubscriptionRecord, SubscriptionStorage,
+        UserStorage,
     };
-
-    #[test]
-    fn map_audience_error_not_found_maps_to_not_found() {
-        let err = map_audience_error(AudienceError::NotFound);
-        assert!(matches!(
-            crate::error::project(err.kind(), err.public_message()),
-            WebError::NotFound { .. }
-        ));
-    }
-
-    #[test]
-    fn map_audience_error_storage_maps_to_storage() {
-        let err = map_audience_error(AudienceError::Storage(sqlx::Error::PoolClosed));
-        assert!(matches!(
-            crate::error::project(err.kind(), err.public_message()),
-            WebError::Storage { .. }
-        ));
-    }
 
     // guard:no-backend — mock store
     #[tokio::test]

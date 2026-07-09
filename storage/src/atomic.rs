@@ -26,6 +26,31 @@ pub enum RegisterWithInviteError {
     Internal(#[from] sqlx::Error),
 }
 
+impl From<RegisterWithInviteError> for host::error::InternalError {
+    /// Reproduces the former `web::auth::server::register_invite_error`
+    /// `(kind, class, public_message)`: a taken username is a client conflict,
+    /// the invite-code failures are client validation errors, and an internal
+    /// failure is a masked storage error.
+    fn from(error: RegisterWithInviteError) -> Self {
+        use host::error::InternalError;
+        match error {
+            RegisterWithInviteError::UsernameTaken => {
+                InternalError::conflict("username is already taken")
+            }
+            RegisterWithInviteError::InviteNotFound => {
+                InternalError::validation("invite code not found")
+            }
+            RegisterWithInviteError::InviteExpired => {
+                InternalError::validation("invite code has expired")
+            }
+            RegisterWithInviteError::InviteAlreadyUsed => {
+                InternalError::validation("invite code has already been used")
+            }
+            RegisterWithInviteError::Internal(e) => InternalError::storage(e),
+        }
+    }
+}
+
 /// Errors returned by an atomic password-reset confirmation.
 #[derive(Debug, Error)]
 pub enum ConfirmPasswordResetError {
@@ -170,5 +195,33 @@ mod tests {
                 .await,
             Err(ConfirmPasswordResetError::NotFound)
         ));
+    }
+
+    // Behavior-preserving translation of the former `web` `register_invite_error`
+    // test: each variant maps to the same `(kind, public_message)`.
+    #[test]
+    fn from_register_with_invite_error_maps_variants() {
+        use host::error::{ErrorKind, InternalError};
+
+        let taken: InternalError = RegisterWithInviteError::UsernameTaken.into();
+        assert_eq!(taken.kind(), ErrorKind::Conflict);
+        assert_eq!(taken.public_message(), "username is already taken");
+
+        let not_found: InternalError = RegisterWithInviteError::InviteNotFound.into();
+        assert_eq!(not_found.kind(), ErrorKind::Validation);
+        assert_eq!(not_found.public_message(), "invite code not found");
+
+        let expired: InternalError = RegisterWithInviteError::InviteExpired.into();
+        assert_eq!(expired.kind(), ErrorKind::Validation);
+        assert_eq!(expired.public_message(), "invite code has expired");
+
+        let used: InternalError = RegisterWithInviteError::InviteAlreadyUsed.into();
+        assert_eq!(used.kind(), ErrorKind::Validation);
+        assert_eq!(used.public_message(), "invite code has already been used");
+
+        let internal: InternalError =
+            RegisterWithInviteError::Internal(sqlx::Error::PoolClosed).into();
+        assert_eq!(internal.kind(), ErrorKind::Storage);
+        assert_eq!(internal.public_message(), "storage operation failed");
     }
 }

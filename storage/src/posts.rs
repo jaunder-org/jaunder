@@ -146,6 +146,21 @@ pub enum UpdatePostError {
     Internal(#[from] sqlx::Error),
 }
 
+impl From<UpdatePostError> for host::error::InternalError {
+    /// Reproduces the former inline `web::posts::mod` mapper
+    /// `(kind, class, public_message)`: not-found/unauthorized mask as a 404;
+    /// an internal failure is a masked storage error.
+    fn from(error: UpdatePostError) -> Self {
+        use host::error::InternalError;
+        match error {
+            UpdatePostError::NotFound | UpdatePostError::Unauthorized => {
+                InternalError::not_found("Post")
+            }
+            UpdatePostError::Internal(e) => InternalError::storage(e),
+        }
+    }
+}
+
 /// Cursor for keyset pagination of post listings.
 #[derive(Debug)]
 pub struct PostCursor {
@@ -298,6 +313,17 @@ pub enum TaggingError {
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
+}
+
+impl From<TaggingError> for host::error::InternalError {
+    /// Preserves the current wire class of the `tag_post`/`untag_post` lift:
+    /// the former `web` sites used `InternalError::server_message(e.to_string())`
+    /// (kind `Internal`, public `"server operation failed"`). Routing through
+    /// `server` keeps that projection while carrying the typed `TaggingError`
+    /// as the operator-side source instead of stringifying it (A19).
+    fn from(error: TaggingError) -> Self {
+        host::error::InternalError::server(error)
+    }
 }
 
 /// Errors that can occur when listing posts by tag.
@@ -2284,5 +2310,39 @@ mod tests {
 
         // Verify deleted is not included
         assert!(!results.iter().any(|p| p.post_id == post3_id));
+    }
+
+    // Behavior-preserving translation of the former inline `web::posts::mod`
+    // `UpdatePostError` mapper: not-found/unauthorized mask as a 404, internal
+    // is a masked storage failure.
+    #[test]
+    fn from_update_post_error_maps_variants() {
+        use host::error::{ErrorKind, InternalError};
+
+        let not_found: InternalError = UpdatePostError::NotFound.into();
+        assert_eq!(not_found.kind(), ErrorKind::NotFound);
+        assert_eq!(not_found.public_message(), "Post not found");
+
+        let unauthorized: InternalError = UpdatePostError::Unauthorized.into();
+        assert_eq!(unauthorized.kind(), ErrorKind::NotFound);
+        assert_eq!(unauthorized.public_message(), "Post not found");
+
+        let internal: InternalError = UpdatePostError::Internal(sqlx::Error::PoolClosed).into();
+        assert_eq!(internal.kind(), ErrorKind::Storage);
+        assert_eq!(internal.public_message(), "storage operation failed");
+    }
+
+    // The `tag_post`/`untag_post` lift masked as a server error
+    // (`"server operation failed"`, kind `Internal`); the typed `TaggingError`
+    // is now preserved on the operator side rather than stringified.
+    #[test]
+    fn from_tagging_error_maps_to_server() {
+        use host::error::{ErrorKind, InternalError};
+
+        let error: InternalError = TaggingError::PostNotFound.into();
+        assert_eq!(error.kind(), ErrorKind::Internal);
+        assert_eq!(error.public_message(), "server operation failed");
+        // The typed source is preserved (not flattened to the wire message).
+        assert!(error.operator_message().contains("post not found"));
     }
 }

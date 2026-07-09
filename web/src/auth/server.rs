@@ -273,33 +273,6 @@ pub fn classify_current_user(result: InternalResult<AuthUser>) -> InternalResult
     }
 }
 
-pub fn register_open_error(error: storage::CreateUserError) -> InternalError {
-    match error {
-        storage::CreateUserError::UsernameTaken => {
-            InternalError::conflict("username is already taken")
-        }
-        storage::CreateUserError::Internal(error) => InternalError::storage(error),
-    }
-}
-
-pub fn register_invite_error(error: storage::RegisterWithInviteError) -> InternalError {
-    match error {
-        storage::RegisterWithInviteError::UsernameTaken => {
-            InternalError::conflict("username is already taken")
-        }
-        storage::RegisterWithInviteError::InviteNotFound => {
-            InternalError::validation("invite code not found")
-        }
-        storage::RegisterWithInviteError::InviteExpired => {
-            InternalError::validation("invite code has expired")
-        }
-        storage::RegisterWithInviteError::InviteAlreadyUsed => {
-            InternalError::validation("invite code has already been used")
-        }
-        storage::RegisterWithInviteError::Internal(error) => InternalError::storage(error),
-    }
-}
-
 /// Maps a session-validation failure to its bounded `outcome` attribute for the
 /// `jaunder.auth.session_validations` metric. Kept separate (and exhaustively
 /// tested) so every variant's mapping is covered independent of which errors a
@@ -323,18 +296,6 @@ pub fn login_outcome(error: &storage::UserAuthError) -> common::metrics::LoginOu
             common::metrics::LoginOutcome::InvalidCredentials
         }
         storage::UserAuthError::Internal(_) => common::metrics::LoginOutcome::InternalError,
-    }
-}
-
-pub fn login_error(error: storage::UserAuthError) -> InternalError {
-    match error {
-        storage::UserAuthError::InvalidCredentials => {
-            InternalError::unauthorized("invalid credentials")
-        }
-        // Preserve the structured cause chain for operator logs rather than
-        // eagerly flattening it to a string (InternalError carries an anyhow
-        // source since kq8w.16).
-        storage::UserAuthError::Internal(source) => InternalError::server_boxed(source),
     }
 }
 
@@ -529,98 +490,6 @@ mod tests {
         assert!(matches!(
             login_outcome(&storage::UserAuthError::Internal(Box::new(std::fmt::Error))),
             LoginOutcome::InternalError
-        ));
-    }
-
-    #[test]
-    fn register_open_error_maps_internal_to_storage_error() {
-        let err = register_open_error(storage::CreateUserError::Internal(sqlx::Error::PoolClosed));
-        assert!(matches!(
-            crate::error::project(err.kind(), err.public_message()),
-            crate::error::WebError::Storage { .. }
-        ));
-
-        let conflict = register_open_error(storage::CreateUserError::UsernameTaken);
-        assert!(matches!(
-            crate::error::project(conflict.kind(), conflict.public_message()),
-            crate::error::WebError::Conflict { .. }
-        ));
-    }
-
-    #[test]
-    fn register_invite_error_maps_each_arm() {
-        let taken = register_invite_error(storage::RegisterWithInviteError::UsernameTaken);
-        assert!(matches!(
-            crate::error::project(taken.kind(), taken.public_message()),
-            crate::error::WebError::Conflict { .. }
-        ));
-        let not_found = register_invite_error(storage::RegisterWithInviteError::InviteNotFound);
-        assert!(matches!(
-            crate::error::project(not_found.kind(), not_found.public_message()),
-            crate::error::WebError::Validation { .. }
-        ));
-        let expired = register_invite_error(storage::RegisterWithInviteError::InviteExpired);
-        assert!(matches!(
-            crate::error::project(expired.kind(), expired.public_message()),
-            crate::error::WebError::Validation { .. }
-        ));
-        let used = register_invite_error(storage::RegisterWithInviteError::InviteAlreadyUsed);
-        assert!(matches!(
-            crate::error::project(used.kind(), used.public_message()),
-            crate::error::WebError::Validation { .. }
-        ));
-        let internal = register_invite_error(storage::RegisterWithInviteError::Internal(
-            sqlx::Error::PoolClosed,
-        ));
-        assert!(matches!(
-            crate::error::project(internal.kind(), internal.public_message()),
-            crate::error::WebError::Storage { .. }
-        ));
-    }
-
-    #[test]
-    fn login_error_maps_internal_to_server_error() {
-        use std::fmt;
-
-        // A two-level source chain proves login_error preserves the structured
-        // cause chain rather than flattening it to the top error's string.
-        #[derive(Debug)]
-        struct Inner;
-        impl fmt::Display for Inner {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "inner cause")
-            }
-        }
-        impl std::error::Error for Inner {}
-
-        #[derive(Debug)]
-        struct Outer(Inner);
-        impl fmt::Display for Outer {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "outer failure")
-            }
-        }
-        impl std::error::Error for Outer {
-            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                Some(&self.0)
-            }
-        }
-
-        let err = login_error(storage::UserAuthError::Internal(Box::new(Outer(Inner))));
-        assert!(matches!(
-            crate::error::project(err.kind(), err.public_message()),
-            crate::error::WebError::Server { .. }
-        ));
-        // anyhow's alternate formatting joins the whole chain; the inner cause
-        // would be lost if the source were flattened via `to_string()`.
-        let op = err.operator_message();
-        assert!(op.contains("outer failure"), "operator message: {op}");
-        assert!(op.contains("inner cause"), "operator message: {op}");
-
-        let invalid = login_error(storage::UserAuthError::InvalidCredentials);
-        assert!(matches!(
-            crate::error::project(invalid.kind(), invalid.public_message()),
-            crate::error::WebError::Unauthorized
         ));
     }
 

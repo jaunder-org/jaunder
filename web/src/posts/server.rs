@@ -7,8 +7,7 @@ use common::visibility::ViewerIdentity;
 use leptos::context::use_context;
 use leptos_axum::ResponseOptions;
 use storage::{
-    post_tag_diff, ListByTagError, PerformCreationError, PerformUpdateError, PermalinkDate,
-    PostCursor, PostRecord, PostStorage, PostTag,
+    post_tag_diff, ListByTagError, PermalinkDate, PostCursor, PostRecord, PostStorage, PostTag,
 };
 
 pub fn timeline_post_summary(
@@ -77,16 +76,10 @@ pub async fn apply_post_tag_diff(
     let diff = post_tag_diff(&existing, desired);
 
     for display in diff.to_add {
-        posts
-            .tag_post(post_id, display)
-            .await
-            .map_err(|e| InternalError::server_message(e.to_string()))?;
+        posts.tag_post(post_id, display).await?;
     }
     for slug in diff.to_remove {
-        posts
-            .untag_post(post_id, slug)
-            .await
-            .map_err(|e| InternalError::server_message(e.to_string()))?;
+        posts.untag_post(post_id, slug).await?;
     }
     Ok(())
 }
@@ -267,101 +260,9 @@ pub fn private_post_not_found_error(error: &InternalError) -> InternalError {
     )
 }
 
-pub fn perform_update_error(error: PerformUpdateError) -> InternalError {
-    match error {
-        PerformUpdateError::EmptyPost | PerformUpdateError::InvalidSlug => {
-            InternalError::validation(error.to_string())
-        }
-        PerformUpdateError::NotFound | PerformUpdateError::Unauthorized => {
-            InternalError::not_found("Post")
-        }
-        PerformUpdateError::Storage(error) => InternalError::storage(error),
-    }
-}
-
-pub fn perform_creation_error(err: PerformCreationError) -> InternalError {
-    match err {
-        PerformCreationError::EmptyPost => InternalError::validation("post body is required"),
-        PerformCreationError::InvalidSlug(e) => InternalError::validation(e.to_string()),
-        PerformCreationError::Exhausted(_) => {
-            InternalError::server_message("unable to allocate a unique slug after 100 attempts")
-        }
-        PerformCreationError::CreatedNotFound => {
-            InternalError::server_message("created post not found")
-        }
-        PerformCreationError::Storage(e) => InternalError::storage(e),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn perform_update_error_maps_each_arm() {
-        use crate::error::WebError;
-        use storage::PerformUpdateError;
-
-        let empty = perform_update_error(PerformUpdateError::EmptyPost);
-        assert!(matches!(
-            crate::error::project(empty.kind(), empty.public_message()),
-            WebError::Validation { .. }
-        ));
-        let invalid_slug = perform_update_error(PerformUpdateError::InvalidSlug);
-        assert!(matches!(
-            crate::error::project(invalid_slug.kind(), invalid_slug.public_message()),
-            WebError::Validation { .. }
-        ));
-        let not_found = perform_update_error(PerformUpdateError::NotFound);
-        assert!(matches!(
-            crate::error::project(not_found.kind(), not_found.public_message()),
-            WebError::NotFound { .. }
-        ));
-        let unauthorized = perform_update_error(PerformUpdateError::Unauthorized);
-        assert!(matches!(
-            crate::error::project(unauthorized.kind(), unauthorized.public_message()),
-            WebError::NotFound { .. }
-        ));
-        let storage = perform_update_error(PerformUpdateError::Storage(sqlx::Error::PoolClosed));
-        assert!(matches!(
-            crate::error::project(storage.kind(), storage.public_message()),
-            WebError::Storage { .. }
-        ));
-    }
-
-    #[test]
-    fn perform_creation_error_maps_each_arm() {
-        use crate::error::WebError;
-        use storage::PerformCreationError;
-
-        let empty = perform_creation_error(PerformCreationError::EmptyPost);
-        assert!(matches!(
-            crate::error::project(empty.kind(), empty.public_message()),
-            WebError::Validation { .. }
-        ));
-        let invalid_slug =
-            perform_creation_error(PerformCreationError::InvalidSlug(common::slug::InvalidSlug));
-        assert!(matches!(
-            crate::error::project(invalid_slug.kind(), invalid_slug.public_message()),
-            WebError::Validation { .. }
-        ));
-        let exhausted = perform_creation_error(PerformCreationError::Exhausted(5));
-        assert!(matches!(
-            crate::error::project(exhausted.kind(), exhausted.public_message()),
-            WebError::Server { .. }
-        ));
-        let created_not_found = perform_creation_error(PerformCreationError::CreatedNotFound);
-        assert!(matches!(
-            crate::error::project(created_not_found.kind(), created_not_found.public_message()),
-            WebError::Server { .. }
-        ));
-        let storage =
-            perform_creation_error(PerformCreationError::Storage(sqlx::Error::PoolClosed));
-        assert!(matches!(
-            crate::error::project(storage.kind(), storage.public_message()),
-            WebError::Storage { .. }
-        ));
-    }
 
     #[test]
     fn list_by_tag_rows_maps_each_arm() {

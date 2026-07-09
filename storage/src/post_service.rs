@@ -197,6 +197,32 @@ impl From<UpdatePostError> for PerformUpdateError {
     }
 }
 
+impl From<PerformUpdateError> for host::error::InternalError {
+    /// Reproduces the former `web::posts::server::perform_update_error`
+    /// `(kind, class, public_message)`: empty/invalid-slug are client validation
+    /// errors, not-found/unauthorized mask as a 404, storage is a masked storage
+    /// failure. The validation arms carry the typed `PerformUpdateError` as the
+    /// operator-side source instead of flattening it (A19).
+    fn from(error: PerformUpdateError) -> Self {
+        use host::error::{ErrorClass, ErrorKind, InternalError};
+        match error {
+            PerformUpdateError::EmptyPost | PerformUpdateError::InvalidSlug => {
+                let message = error.to_string();
+                InternalError::masked(
+                    ErrorKind::Validation,
+                    ErrorClass::Client,
+                    message,
+                    anyhow::Error::new(error),
+                )
+            }
+            PerformUpdateError::NotFound | PerformUpdateError::Unauthorized => {
+                InternalError::not_found("Post")
+            }
+            PerformUpdateError::Storage(e) => InternalError::storage(e),
+        }
+    }
+}
+
 /// What an update does to a post's publication state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublishUpdate {
@@ -329,6 +355,34 @@ pub enum PerformCreationError {
     CreatedNotFound,
     #[error("storage error: {0}")]
     Storage(#[source] sqlx::Error),
+}
+
+impl From<PerformCreationError> for host::error::InternalError {
+    /// Reproduces the former `web::posts::server::perform_creation_error`
+    /// `(kind, class, public_message)`. The invalid-slug arm carries the typed
+    /// error as the operator-side source instead of flattening it (A19).
+    fn from(error: PerformCreationError) -> Self {
+        use host::error::{ErrorClass, ErrorKind, InternalError};
+        match error {
+            PerformCreationError::EmptyPost => InternalError::validation("post body is required"),
+            PerformCreationError::InvalidSlug(_) => {
+                let message = error.to_string();
+                InternalError::masked(
+                    ErrorKind::Validation,
+                    ErrorClass::Client,
+                    message,
+                    anyhow::Error::new(error),
+                )
+            }
+            PerformCreationError::Exhausted(_) => {
+                InternalError::server_message("unable to allocate a unique slug after 100 attempts")
+            }
+            PerformCreationError::CreatedNotFound => {
+                InternalError::server_message("created post not found")
+            }
+            PerformCreationError::Storage(e) => InternalError::storage(e),
+        }
+    }
 }
 
 /// Generates a unique slug attempt using a suffix for attempts > 0.
@@ -1091,5 +1145,71 @@ mod tests {
         use crate::UpdatePostError;
         let err: PerformUpdateError = UpdatePostError::Internal(sqlx::Error::RowNotFound).into();
         assert!(matches!(err, PerformUpdateError::Storage(_)));
+    }
+
+    // Behavior-preserving translation of the former `web` `perform_update_error`
+    // test: each arm maps to the same `(kind, public_message)`.
+    #[test]
+    fn from_perform_update_error_maps_variants() {
+        use host::error::{ErrorKind, InternalError};
+
+        let empty: InternalError = PerformUpdateError::EmptyPost.into();
+        assert_eq!(empty.kind(), ErrorKind::Validation);
+        assert_eq!(empty.public_message(), "post body or title is required");
+
+        let invalid_slug: InternalError = PerformUpdateError::InvalidSlug.into();
+        assert_eq!(invalid_slug.kind(), ErrorKind::Validation);
+        assert_eq!(invalid_slug.public_message(), "invalid slug");
+
+        let not_found: InternalError = PerformUpdateError::NotFound.into();
+        assert_eq!(not_found.kind(), ErrorKind::NotFound);
+        assert_eq!(not_found.public_message(), "Post not found");
+
+        let unauthorized: InternalError = PerformUpdateError::Unauthorized.into();
+        assert_eq!(unauthorized.kind(), ErrorKind::NotFound);
+        assert_eq!(unauthorized.public_message(), "Post not found");
+
+        let storage: InternalError = PerformUpdateError::Storage(sqlx::Error::PoolClosed).into();
+        assert_eq!(storage.kind(), ErrorKind::Storage);
+        assert_eq!(storage.public_message(), "storage operation failed");
+    }
+
+    // Behavior-preserving translation of the former `web` `perform_creation_error`
+    // test: each arm maps to the same `(kind, public_message)`; the invalid-slug
+    // arm preserves the typed source.
+    #[test]
+    fn from_perform_creation_error_maps_variants() {
+        use host::error::{ErrorKind, InternalError};
+
+        let empty: InternalError = PerformCreationError::EmptyPost.into();
+        assert_eq!(empty.kind(), ErrorKind::Validation);
+        assert_eq!(empty.public_message(), "post body is required");
+
+        let invalid_slug: InternalError =
+            PerformCreationError::InvalidSlug(common::slug::InvalidSlug).into();
+        assert_eq!(invalid_slug.kind(), ErrorKind::Validation);
+        assert_eq!(
+            invalid_slug.public_message(),
+            common::slug::InvalidSlug.to_string()
+        );
+        // The typed slug error is preserved on the operator side, not flattened.
+        assert!(invalid_slug
+            .operator_message()
+            .contains(&common::slug::InvalidSlug.to_string()));
+
+        let exhausted: InternalError = PerformCreationError::Exhausted(5).into();
+        assert_eq!(exhausted.kind(), ErrorKind::Internal);
+        assert_eq!(exhausted.public_message(), "server operation failed");
+
+        let created_not_found: InternalError = PerformCreationError::CreatedNotFound.into();
+        assert_eq!(created_not_found.kind(), ErrorKind::Internal);
+        assert_eq!(
+            created_not_found.public_message(),
+            "server operation failed"
+        );
+
+        let storage: InternalError = PerformCreationError::Storage(sqlx::Error::PoolClosed).into();
+        assert_eq!(storage.kind(), ErrorKind::Storage);
+        assert_eq!(storage.public_message(), "storage operation failed");
     }
 }

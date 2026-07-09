@@ -8,10 +8,7 @@ pub mod marker;
 #[cfg(feature = "server")]
 mod server;
 #[cfg(feature = "server")]
-use server::{
-    classify_current_user, clear_session_cookie, login_error, login_outcome, register_invite_error,
-    register_open_error, set_session_cookie,
-};
+use server::{classify_current_user, clear_session_cookie, login_outcome, set_session_cookie};
 
 // Public re-exports — must remain accessible as crate::auth::* for other modules
 #[cfg(feature = "server")]
@@ -98,7 +95,7 @@ pub async fn register(
                 .create_user(&username, &password, None, false)
                 .instrument(tracing::info_span!("web.auth.register.create_user_open"))
                 .await
-                .map_err(register_open_error),
+                .map_err(Into::into),
             RegistrationPolicy::InviteOnly => {
                 match invite_code.and_then(common::text::non_empty_owned) {
                     Some(code) => {
@@ -106,7 +103,7 @@ pub async fn register(
                             .create_user_with_invite(&username, &password, None, false, &code)
                             .instrument(tracing::info_span!("web.auth.register.create_user_invite"))
                             .await
-                            .map_err(register_invite_error);
+                            .map_err(Into::into);
                         // A successful invite registration redeems the code.
                         if result.is_ok() {
                             common::metrics::invite(common::metrics::InviteEvent::Redeemed);
@@ -170,7 +167,7 @@ pub async fn login(username: String, password: String, label: Option<String>) ->
             }
             Err(error) => {
                 common::metrics::login(login_outcome(&error));
-                return Err(login_error(error));
+                return Err(error.into());
             }
         };
 

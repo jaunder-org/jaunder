@@ -13,7 +13,7 @@ pub use listing::*;
 #[cfg(feature = "server")]
 use server::{
     apply_post_tag_diff, find_draft_by_permalink_for_user, not_found_error, parse_post_cursor,
-    perform_creation_error, perform_update_error, private_post_not_found_error,
+    private_post_not_found_error,
 };
 // Re-exported for the `server` crate's public projector, which fetches the same
 // public data and maps records the same way (one query, no drift). These stay
@@ -35,9 +35,8 @@ use {
     common::{slug::Slug, tag::Tag, username::Username},
     std::{collections::BTreeSet, sync::Arc},
     storage::{
-        perform_post_creation, perform_post_update, FeedEventStorage, PerformUpdateError,
-        PostCreation, PostFormat, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
-        UpdatePostError, UpdatePostInput,
+        perform_post_creation, perform_post_update, FeedEventStorage, PostCreation, PostFormat,
+        PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage, UpdatePostInput,
     },
 };
 
@@ -272,8 +271,7 @@ pub async fn create_post(
                 audiences,
             },
         )
-        .await
-        .map_err(perform_creation_error)?;
+        .await?;
 
         let created_at = record.created_at.to_rfc3339();
         let published_at_str = record.published_at.map(|timestamp| timestamp.to_rfc3339());
@@ -292,10 +290,7 @@ pub async fn create_post(
         };
 
         for display in &validated_tags {
-            posts
-                .tag_post(created.post_id, display)
-                .await
-                .map_err(|e| InternalError::server_message(e.to_string()))?;
+            posts.tag_post(created.post_id, display).await?;
         }
 
         let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
@@ -453,13 +448,7 @@ pub async fn update_post(
                 audiences,
             },
         )
-        .await
-        .map_err(|e| match e {
-            PerformUpdateError::NotFound | PerformUpdateError::Unauthorized => {
-                InternalError::not_found("Post")
-            }
-            other => perform_update_error(other),
-        })?;
+        .await?;
 
         if let Some(new_tags) = new_tags {
             apply_post_tag_diff(posts.as_ref(), post_id, &new_tags).await?;
@@ -613,13 +602,7 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
                     audiences,
                 },
             )
-            .await
-            .map_err(|e| match e {
-                UpdatePostError::NotFound | UpdatePostError::Unauthorized => {
-                    InternalError::not_found("Post")
-                }
-                UpdatePostError::Internal(error) => InternalError::storage(error),
-            })?;
+            .await?;
 
         let published_at = updated
             .published_at

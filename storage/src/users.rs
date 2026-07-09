@@ -67,6 +67,33 @@ pub enum UserAuthError {
     Internal(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
+impl From<CreateUserError> for host::error::InternalError {
+    /// Reproduces the former `web::auth::server::register_open_error`
+    /// `(kind, class, public_message)`: a taken username is a client conflict,
+    /// anything else is a masked storage failure.
+    fn from(error: CreateUserError) -> Self {
+        use host::error::InternalError;
+        match error {
+            CreateUserError::UsernameTaken => InternalError::conflict("username is already taken"),
+            CreateUserError::Internal(e) => InternalError::storage(e),
+        }
+    }
+}
+
+impl From<UserAuthError> for host::error::InternalError {
+    /// Reproduces the former `web::auth::server::login_error`
+    /// `(kind, class, public_message)`: bad credentials are an unauthorized
+    /// client error, an internal failure is a masked server error preserving the
+    /// boxed typed cause chain for operator logs (not flattened to a string).
+    fn from(error: UserAuthError) -> Self {
+        use host::error::InternalError;
+        match error {
+            UserAuthError::InvalidCredentials => InternalError::unauthorized("invalid credentials"),
+            UserAuthError::Internal(source) => InternalError::server_boxed(source),
+        }
+    }
+}
+
 /// Fields to update on a user's profile.
 ///
 /// Each field is `Option<&str>`: `None` clears the field, `Some(v)` sets it.
@@ -570,5 +597,64 @@ mod tests {
             )
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
+    }
+
+    // Behavior-preserving translation of the former `web` `register_open_error`
+    // test: variants map to the same `(kind, public_message)`.
+    #[test]
+    fn from_create_user_error_maps_variants() {
+        use host::error::{ErrorKind, InternalError};
+
+        let taken: InternalError = CreateUserError::UsernameTaken.into();
+        assert_eq!(taken.kind(), ErrorKind::Conflict);
+        assert_eq!(taken.public_message(), "username is already taken");
+
+        let internal: InternalError = CreateUserError::Internal(sqlx::Error::PoolClosed).into();
+        assert_eq!(internal.kind(), ErrorKind::Storage);
+        assert_eq!(internal.public_message(), "storage operation failed");
+    }
+
+    // Behavior-preserving translation of the former `web` `login_error` test,
+    // including that the boxed cause chain is preserved (not flattened).
+    #[test]
+    fn from_user_auth_error_maps_variants() {
+        use host::error::{ErrorKind, InternalError};
+        use std::fmt;
+
+        // A two-level source chain proves the mapping preserves the structured
+        // cause chain rather than flattening it to the top error's string.
+        #[derive(Debug)]
+        struct Inner;
+        impl fmt::Display for Inner {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "inner cause")
+            }
+        }
+        impl std::error::Error for Inner {}
+
+        #[derive(Debug)]
+        struct Outer(Inner);
+        impl fmt::Display for Outer {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "outer failure")
+            }
+        }
+        impl std::error::Error for Outer {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let invalid: InternalError = UserAuthError::InvalidCredentials.into();
+        assert_eq!(invalid.kind(), ErrorKind::Auth);
+        // The unauthorized wire variant carries no message.
+        assert_eq!(invalid.public_message(), "");
+
+        let internal: InternalError = UserAuthError::Internal(Box::new(Outer(Inner))).into();
+        assert_eq!(internal.kind(), ErrorKind::Internal);
+        assert_eq!(internal.public_message(), "server operation failed");
+        let op = internal.operator_message();
+        assert!(op.contains("outer failure"), "operator message: {op}");
+        assert!(op.contains("inner cause"), "operator message: {op}");
     }
 }
