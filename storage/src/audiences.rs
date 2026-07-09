@@ -42,6 +42,24 @@ impl From<sqlx::Error> for AudienceError {
     }
 }
 
+impl From<AudienceError> for host::error::InternalError {
+    /// Maps an audience failure to the carrier: duplicate names and missing
+    /// audiences are client-correctable; everything else is a masked storage
+    /// failure. Reproduces the former `web::audiences::map_audience_error`
+    /// `(kind, class, public_message)` exactly, so the wire projection is
+    /// preserved by construction.
+    fn from(error: AudienceError) -> Self {
+        use host::error::InternalError;
+        match error {
+            AudienceError::DuplicateName => {
+                InternalError::conflict("an audience with that name already exists")
+            }
+            AudienceError::NotFound => InternalError::not_found("audience"),
+            AudienceError::Storage(e) => InternalError::storage(e),
+        }
+    }
+}
+
 /// Async operations on the `audiences` / `audience_members` tables.
 ///
 /// Every write is scoped by `author_user_id`; `add_member` additionally threads
@@ -239,5 +257,32 @@ where
             .fetch_all(&self.pool)
             .await?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AudienceError;
+    use host::error::{ErrorKind, InternalError};
+
+    // Behavior-preserving translation of the former `web` `map_audience_error`
+    // tests: each variant's `(kind, public_message)` is what the deleted mapper
+    // produced, so the wire projection is unchanged.
+    #[test]
+    fn from_audience_error_maps_variants() {
+        let duplicate: InternalError = AudienceError::DuplicateName.into();
+        assert_eq!(duplicate.kind(), ErrorKind::Conflict);
+        assert_eq!(
+            duplicate.public_message(),
+            "an audience with that name already exists"
+        );
+
+        let not_found: InternalError = AudienceError::NotFound.into();
+        assert_eq!(not_found.kind(), ErrorKind::NotFound);
+        assert_eq!(not_found.public_message(), "audience not found");
+
+        let storage: InternalError = AudienceError::Storage(sqlx::Error::PoolClosed).into();
+        assert_eq!(storage.kind(), ErrorKind::Storage);
+        assert_eq!(storage.public_message(), "storage operation failed");
     }
 }

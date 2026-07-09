@@ -37,6 +37,19 @@ pub enum SessionAuthError {
     Internal(#[from] sqlx::Error),
 }
 
+/// Maps a session-validation failure to its bounded `outcome` attribute for the
+/// `jaunder.auth.session_validations` metric. Kept separate (and exhaustively
+/// tested) so every variant's mapping is covered independent of which errors a
+/// given request path happens to produce.
+#[must_use]
+pub fn session_outcome(error: &SessionAuthError) -> common::metrics::SessionOutcome {
+    match error {
+        SessionAuthError::InvalidToken => common::metrics::SessionOutcome::InvalidToken,
+        SessionAuthError::SessionNotFound => common::metrics::SessionOutcome::SessionNotFound,
+        SessionAuthError::Internal(_) => common::metrics::SessionOutcome::Internal,
+    }
+}
+
 /// Async operations on the `sessions` table.
 ///
 /// This trait manages the lifecycle of session tokens used for authenticating
@@ -208,5 +221,22 @@ mod tests {
         base.close_pool().await;
         let result = state.sessions.authenticate("dGVzdA").await;
         assert!(matches!(result, Err(SessionAuthError::Internal(_))));
+    }
+
+    #[test]
+    fn session_outcome_maps_each_variant() {
+        use common::metrics::SessionOutcome;
+        assert!(matches!(
+            session_outcome(&SessionAuthError::InvalidToken),
+            SessionOutcome::InvalidToken
+        ));
+        assert!(matches!(
+            session_outcome(&SessionAuthError::SessionNotFound),
+            SessionOutcome::SessionNotFound
+        ));
+        assert!(matches!(
+            session_outcome(&SessionAuthError::Internal(sqlx::Error::PoolClosed)),
+            SessionOutcome::Internal
+        ));
     }
 }

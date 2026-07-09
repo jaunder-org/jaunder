@@ -36,12 +36,10 @@ async fn resolve_author(
         .trim()
         .strip_prefix('~')
         .unwrap_or_else(|| author_username.trim())
-        .parse::<Username>()
-        .map_err(|e| InternalError::validation(e.to_string()))?;
+        .parse::<Username>()?;
     let author = users
         .get_user_by_username(&username)
-        .await
-        .map_err(InternalError::storage)?
+        .await?
         .ok_or_else(|| InternalError::not_found("user"))?;
     if author.user_id == viewer_user_id {
         return Err(InternalError::validation("cannot subscribe to yourself"));
@@ -61,14 +59,10 @@ pub async fn subscribe_to(author_username: String) -> WebResult<()> {
         let users = expect_context::<Arc<dyn UserStorage>>();
         let auth = require_auth().await?;
         let author_id = resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
-        let channel_id = subscriptions
-            .local_channel_id()
-            .await
-            .map_err(InternalError::storage)?;
+        let channel_id = subscriptions.local_channel_id().await?;
         subscriptions
             .subscribe(author_id, channel_id, &auth.user_id.to_string())
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
         Ok(())
     })
 }
@@ -83,14 +77,10 @@ pub async fn unsubscribe_from(author_username: String) -> WebResult<()> {
         let users = expect_context::<Arc<dyn UserStorage>>();
         let auth = require_auth().await?;
         let author_id = resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
-        let channel_id = subscriptions
-            .local_channel_id()
-            .await
-            .map_err(InternalError::storage)?;
+        let channel_id = subscriptions.local_channel_id().await?;
         subscriptions
             .unsubscribe(author_id, channel_id, &auth.user_id.to_string())
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
         Ok(())
     })
 }
@@ -112,15 +102,9 @@ pub async fn is_subscribed_to(author_username: String) -> WebResult<bool> {
         else {
             return Ok(false);
         };
-        let channel_id = subscriptions
-            .local_channel_id()
-            .await
-            .map_err(InternalError::storage)?;
+        let channel_id = subscriptions.local_channel_id().await?;
         let viewer = common::visibility::ViewerIdentity::local(auth.user_id, channel_id);
-        let subscribed = subscriptions
-            .is_subscriber(author_id, &viewer)
-            .await
-            .map_err(InternalError::storage)?;
+        let subscribed = subscriptions.is_subscriber(author_id, &viewer).await?;
         Ok(subscribed)
     })
 }

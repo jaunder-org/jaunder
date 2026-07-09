@@ -29,10 +29,10 @@ use axum::{
 use common::visibility::ViewerIdentity;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use storage::{PostStorage, UserStorage};
+use storage::{fetch_post_record, PostStorage, UserStorage};
 use web::posts::{
-    fetch_local_timeline, fetch_post_record, fetch_posts_by_tag, fetch_user_posts,
-    fetch_user_posts_by_tag, post_response,
+    fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
+    post_response,
 };
 use web::render::{render_head, render_shell, PageSeed, PREPAINT_SCRIPT};
 

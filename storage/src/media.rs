@@ -50,6 +50,15 @@ impl std::str::FromStr for MediaSource {
 #[error("media source must be \"upload\" or \"cached\"")]
 pub struct InvalidMediaSource;
 
+impl From<InvalidMediaSource> for host::error::InternalError {
+    /// Reproduces the former `web::media` lift `(kind, class, public_message)`:
+    /// a client validation error whose wire message is the error's `Display`,
+    /// carrying the typed source instead of flattening it to a string (A19).
+    fn from(error: InvalidMediaSource) -> Self {
+        host::error::InternalError::validation_source(error.to_string(), error)
+    }
+}
+
 /// A media metadata record returned by [`MediaStorage`] queries.
 #[derive(Clone, Debug)]
 pub struct MediaRecord {
@@ -471,5 +480,20 @@ mod tests {
             "cached".parse::<MediaSource>().unwrap(),
             MediaSource::Cached
         );
+    }
+
+    // Behavior-preserving translation of the former `web::media` lift: a client
+    // validation error whose wire message is the error's `Display`, with the
+    // typed source preserved on the operator side.
+    #[test]
+    fn from_invalid_media_source_maps_to_validation() {
+        use host::error::{ErrorKind, InternalError};
+
+        let error: InternalError = InvalidMediaSource.into();
+        assert_eq!(error.kind(), ErrorKind::Validation);
+        assert_eq!(error.public_message(), InvalidMediaSource.to_string());
+        assert!(error
+            .operator_message()
+            .contains(&InvalidMediaSource.to_string()));
     }
 }

@@ -57,10 +57,7 @@ pub async fn list_invites() -> WebResult<Vec<InviteInfo>> {
         if policy != RegistrationPolicy::InviteOnly {
             return Err(InternalError::not_found("invites"));
         }
-        let records = invites
-            .list_invites()
-            .await
-            .map_err(InternalError::storage)?;
+        let records = invites.list_invites().await?;
         Ok(records
             .into_iter()
             .map(|r| InviteInfo {

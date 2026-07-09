@@ -6,6 +6,8 @@ license = "GPL-3.0-only"
 
 [dependencies]
 common.workspace = true
+host = { path = "../host" }
+anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 chrono = { workspace = true, features = ["serde"] }

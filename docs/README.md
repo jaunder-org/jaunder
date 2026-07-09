@@ -86,6 +86,7 @@ convention). See the Status column below for each ADR's current status.
 | [0056](adr/0056-web-canonical-colocated-leptos.md)                 | web converges on the canonical co-located Leptos CSR layout                                                  | accepted   |
 | [0057](adr/0057-e2e-capture-dir-contract.md)                       | Single `JAUNDER_CAPTURE_DIR` output-dir contract for e2e capture                                             | accepted   |
 | [0058](adr/0058-host-crate-layering.md)                            | A `host` crate for strictly-host-focused shared code                                                         | accepted   |
+| [0059](adr/0059-thin-web-shell-error-layering.md)                  | The thin web shell and the T1→T2→T3 error pipeline                                                           | proposed   |
 
 <!-- adr-table:end -->
 

@@ -524,6 +524,7 @@ dependencies = [
  "async-trait",
  "atom_syndication",
  "axum",
+ "base64",
  "chrono",
  "croner",
  "email_address",
@@ -1432,7 +1433,13 @@ dependencies = [
 name = "host"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "common",
+ "http",
+ "sqlx",
  "tempfile",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -4078,6 +4085,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 name = "storage"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64",
  "chrono",
@@ -4087,6 +4095,7 @@ dependencies = [
  "email_address",
  "flate2",
  "futures-util",
+ "host",
  "log",
  "mockall",
  "rand 0.9.4",
@@ -5026,12 +5035,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
- "base64",
  "cfg-if",
  "chrono",
  "common",
  "croner",
  "email_address",
+ "host",
  "http",
  "js-sys",
  "leptos",

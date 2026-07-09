@@ -8,10 +8,7 @@ pub mod marker;
 #[cfg(feature = "server")]
 mod server;
 #[cfg(feature = "server")]
-use server::{
-    classify_current_user, clear_session_cookie, login_error, login_outcome, register_invite_error,
-    register_open_error, set_session_cookie,
-};
+use server::{classify_current_user, clear_session_cookie, set_session_cookie};
 
 // Public re-exports — must remain accessible as crate::auth::* for other modules
 #[cfg(feature = "server")]
@@ -76,16 +73,11 @@ pub async fn register(
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
         let username = {
             let _phase = tracing::info_span!("web.auth.register.parse_username").entered();
-            username
-                .to_lowercase()
-                .parse::<Username>()
-                .map_err(|e| InternalError::validation(e.to_string()))?
+            username.to_lowercase().parse::<Username>()?
         };
         let password = {
             let _phase = tracing::info_span!("web.auth.register.parse_password").entered();
-            password
-                .parse::<Password>()
-                .map_err(|e| InternalError::validation(e.to_string()))?
+            password.parse::<Password>()?
         };
         let policy = load_registration_policy(&*site_config)
             .instrument(tracing::info_span!(
@@ -103,7 +95,7 @@ pub async fn register(
                 .create_user(&username, &password, None, false)
                 .instrument(tracing::info_span!("web.auth.register.create_user_open"))
                 .await
-                .map_err(register_open_error),
+                .map_err(Into::into),
             RegistrationPolicy::InviteOnly => {
                 match invite_code.and_then(common::text::non_empty_owned) {
                     Some(code) => {
@@ -111,7 +103,7 @@ pub async fn register(
                             .create_user_with_invite(&username, &password, None, false, &code)
                             .instrument(tracing::info_span!("web.auth.register.create_user_invite"))
                             .await
-                            .map_err(register_invite_error);
+                            .map_err(Into::into);
                         // A successful invite registration redeems the code.
                         if result.is_ok() {
                             common::metrics::invite(common::metrics::InviteEvent::Redeemed);
@@ -137,8 +129,7 @@ pub async fn register(
         let raw_token = sessions
             .create_session(user_id, "Sign-up session")
             .instrument(tracing::info_span!("web.auth.register.create_session"))
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
 
         set_session_cookie(&raw_token);
         leptos_axum::redirect("/");
@@ -159,16 +150,11 @@ pub async fn login(username: String, password: String, label: Option<String>) ->
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
         let username = {
             let _phase = tracing::info_span!("web.auth.login.parse_username").entered();
-            username
-                .to_lowercase()
-                .parse::<Username>()
-                .map_err(|e| InternalError::validation(e.to_string()))?
+            username.to_lowercase().parse::<Username>()?
         };
         let password = {
             let _phase = tracing::info_span!("web.auth.login.parse_password").entered();
-            password
-                .parse::<Password>()
-                .map_err(|e| InternalError::validation(e.to_string()))?
+            password.parse::<Password>()?
         };
         let record = match users
             .authenticate(&username, &password)
@@ -180,8 +166,8 @@ pub async fn login(username: String, password: String, label: Option<String>) ->
                 record
             }
             Err(error) => {
-                common::metrics::login(login_outcome(&error));
-                return Err(login_error(error));
+                common::metrics::login(storage::login_outcome(&error));
+                return Err(error.into());
             }
         };
 
@@ -209,8 +195,7 @@ pub async fn login(username: String, password: String, label: Option<String>) ->
         let raw_token = sessions
             .create_session(record.user_id, &derived_label)
             .instrument(tracing::info_span!("web.auth.login.create_session"))
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
 
         set_session_cookie(&raw_token);
         leptos_axum::redirect("/");
@@ -225,10 +210,7 @@ pub async fn logout() -> WebResult<()> {
     boundary!("logout", {
         if let Ok(auth) = require_auth().await {
             let sessions = expect_context::<Arc<dyn SessionStorage>>();
-            sessions
-                .revoke_session(&auth.token_hash)
-                .await
-                .map_err(InternalError::storage)?;
+            sessions.revoke_session(&auth.token_hash).await?;
         }
         clear_session_cookie();
         leptos_axum::redirect("/");

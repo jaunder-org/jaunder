@@ -5,14 +5,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use common::username::Username;
+use host::auth::resolve_credential;
 use std::sync::Arc;
 use storage::SessionStorage;
 
-/// Cookie settings derived from the public deployment scheme.
-#[derive(Clone, Copy)]
-pub struct CookieSettings {
-    pub secure: bool,
-}
+// `CookieSettings` now lives in `host` (pure config data); re-export it so the
+// long-standing `web::auth::CookieSettings` path (the `server` crate provides it
+// into leptos context) keeps resolving.
+pub use host::auth::CookieSettings;
 
 // ---------------------------------------------------------------------------
 // AuthUser
@@ -77,7 +77,7 @@ where
                 })
             }
             Err(error) => {
-                common::metrics::session_validation(session_outcome(&error));
+                common::metrics::session_validation(storage::session_outcome(&error));
                 Err(AuthRejection::Session(error))
             }
         }
@@ -133,61 +133,13 @@ fn auth_rejection_error(error: AuthRejection) -> InternalError {
 }
 
 // ---------------------------------------------------------------------------
-// Credential resolution
+// Basic-auth username check (thin AuthRejection wrapper over common's core)
 // ---------------------------------------------------------------------------
-
-/// A session token resolved from request headers, plus — for HTTP Basic auth —
-/// the username the authenticated session must belong to.
-struct Credential {
-    /// The raw session token to authenticate.
-    token: String,
-    /// For Basic auth, the username supplied alongside the token, which must
-    /// match the authenticated session's user. `None` for cookie/Bearer auth.
-    expected_username: Option<String>,
-}
-
-/// Resolves the session credential from request headers.
-///
-/// Precedence: the `session=` cookie, then `Authorization: Bearer <token>`,
-/// then `Authorization: Basic <base64(user:token)>` (app passwords). Returns
-/// `None` when no recognized credential is present.
-fn resolve_credential(headers: &axum::http::HeaderMap) -> Option<Credential> {
-    let from_cookie = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| {
-            s.split(';')
-                .map(str::trim)
-                .find_map(|c| c.strip_prefix("session="))
-                .map(|token| Credential {
-                    token: token.to_string(),
-                    expected_username: None,
-                })
-        });
-    if from_cookie.is_some() {
-        return from_cookie;
-    }
-
-    let header = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())?;
-    if let Some(token) = header.strip_prefix("Bearer ") {
-        Some(Credential {
-            token: token.to_string(),
-            expected_username: None,
-        })
-    } else {
-        let (username, password) = parse_basic_auth(header)?;
-        Some(Credential {
-            token: password,
-            expected_username: Some(username),
-        })
-    }
-}
 
 /// Verifies that an app-password (Basic auth) request authenticated as the
 /// user it claimed. Cookie/Bearer requests carry no expected username and
-/// always pass.
+/// always pass. The pure comparison lives in `common::auth`; this wrapper only
+/// lifts it into the web-local [`AuthRejection`] result type.
 ///
 /// # Errors
 ///
@@ -198,43 +150,25 @@ fn verify_basic_username(
     expected: Option<&str>,
 ) -> Result<(), AuthRejection> {
     match expected {
-        Some(expected) if authenticated.as_str() != expected => {
+        Some(expected) if !common::auth::basic_username_matches(authenticated, expected) => {
             Err(AuthRejection::BasicUsernameMismatch)
         }
         _ => Ok(()),
     }
 }
 
-/// Parses an HTTP `Authorization: Basic` header value into `(username, password)`.
-/// Returns `None` for non-Basic schemes or malformed/undecodable credentials.
-fn parse_basic_auth(header: &str) -> Option<(String, String)> {
-    use base64::Engine as _;
-
-    let rest = header.strip_prefix("Basic ")?;
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(rest)
-        .ok()?;
-    let credentials = String::from_utf8(decoded).ok()?;
-    let (username, password) = credentials.split_once(':')?;
-    Some((username.to_string(), password.to_string()))
-}
-
 // ---------------------------------------------------------------------------
-// Cookie helpers
+// Cookie helpers (leptos/axum adapters over host's pure header builders)
 // ---------------------------------------------------------------------------
 
 pub fn set_session_cookie(raw_token: &str) {
     use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
 
-    let secure_attr = if use_context::<CookieSettings>().is_none_or(|settings| settings.secure) {
-        "; Secure"
-    } else {
-        ""
-    };
+    let secure = use_context::<CookieSettings>().is_none_or(|settings| settings.secure);
 
     if let Some(opts) = use_context::<ResponseOptions>() {
-        let cookie = format!("session={raw_token}; HttpOnly; SameSite=Lax; Path=/{secure_attr}");
+        let cookie = host::auth::session_cookie_header(raw_token, secure);
         if let Ok(val) = axum::http::HeaderValue::from_str(&cookie) {
             opts.insert_header(axum::http::header::SET_COOKIE, val);
         }
@@ -245,14 +179,10 @@ pub fn clear_session_cookie() {
     use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
 
-    let secure_attr = if use_context::<CookieSettings>().is_none_or(|settings| settings.secure) {
-        "; Secure"
-    } else {
-        ""
-    };
+    let secure = use_context::<CookieSettings>().is_none_or(|settings| settings.secure);
 
     if let Some(opts) = use_context::<ResponseOptions>() {
-        let cookie = format!("session=; HttpOnly; SameSite=Lax; Path=/{secure_attr}; Max-Age=0");
+        let cookie = host::auth::clear_session_cookie_header(secure);
         if let Ok(val) = axum::http::HeaderValue::from_str(&cookie) {
             opts.insert_header(axum::http::header::SET_COOKIE, val);
         }
@@ -268,73 +198,8 @@ pub fn clear_session_cookie() {
 pub fn classify_current_user(result: InternalResult<AuthUser>) -> InternalResult<Option<String>> {
     match result {
         Ok(auth) => Ok(Some(auth.username.to_string())),
-        Err(error) if matches!(error.public(), crate::error::WebError::Unauthorized) => Ok(None),
+        Err(error) if error.kind() == crate::error::ErrorKind::Auth => Ok(None),
         Err(error) => Err(error),
-    }
-}
-
-pub fn register_open_error(error: storage::CreateUserError) -> InternalError {
-    match error {
-        storage::CreateUserError::UsernameTaken => {
-            InternalError::conflict("username is already taken")
-        }
-        storage::CreateUserError::Internal(error) => InternalError::storage(error),
-    }
-}
-
-pub fn register_invite_error(error: storage::RegisterWithInviteError) -> InternalError {
-    match error {
-        storage::RegisterWithInviteError::UsernameTaken => {
-            InternalError::conflict("username is already taken")
-        }
-        storage::RegisterWithInviteError::InviteNotFound => {
-            InternalError::validation("invite code not found")
-        }
-        storage::RegisterWithInviteError::InviteExpired => {
-            InternalError::validation("invite code has expired")
-        }
-        storage::RegisterWithInviteError::InviteAlreadyUsed => {
-            InternalError::validation("invite code has already been used")
-        }
-        storage::RegisterWithInviteError::Internal(error) => InternalError::storage(error),
-    }
-}
-
-/// Maps a session-validation failure to its bounded `outcome` attribute for the
-/// `jaunder.auth.session_validations` metric. Kept separate (and exhaustively
-/// tested) so every variant's mapping is covered independent of which errors a
-/// given request path happens to produce.
-fn session_outcome(error: &storage::SessionAuthError) -> common::metrics::SessionOutcome {
-    match error {
-        storage::SessionAuthError::InvalidToken => common::metrics::SessionOutcome::InvalidToken,
-        storage::SessionAuthError::SessionNotFound => {
-            common::metrics::SessionOutcome::SessionNotFound
-        }
-        storage::SessionAuthError::Internal(_) => common::metrics::SessionOutcome::Internal,
-    }
-}
-
-/// Maps an authentication failure to its bounded `outcome` attribute for the
-/// `jaunder.auth.logins` metric. Exhaustively tested so every variant's mapping
-/// is covered independent of which failures the login path is exercised with.
-pub fn login_outcome(error: &storage::UserAuthError) -> common::metrics::LoginOutcome {
-    match error {
-        storage::UserAuthError::InvalidCredentials => {
-            common::metrics::LoginOutcome::InvalidCredentials
-        }
-        storage::UserAuthError::Internal(_) => common::metrics::LoginOutcome::InternalError,
-    }
-}
-
-pub fn login_error(error: storage::UserAuthError) -> InternalError {
-    match error {
-        storage::UserAuthError::InvalidCredentials => {
-            InternalError::unauthorized("invalid credentials")
-        }
-        // Preserve the structured cause chain for operator logs rather than
-        // eagerly flattening it to a string (InternalError carries an anyhow
-        // source since kq8w.16).
-        storage::UserAuthError::Internal(source) => InternalError::server_boxed(source),
     }
 }
 
@@ -342,67 +207,6 @@ pub fn login_error(error: storage::UserAuthError) -> InternalError {
 mod tests {
     use super::*;
     use leptos::prelude::{provide_context, Owner};
-
-    #[test]
-    fn parse_basic_auth_decodes_credentials() {
-        // base64("alice:tok123") == "YWxpY2U6dG9rMTIz"
-        assert_eq!(
-            parse_basic_auth("Basic YWxpY2U6dG9rMTIz"),
-            Some(("alice".to_string(), "tok123".to_string()))
-        );
-    }
-
-    #[test]
-    fn parse_basic_auth_rejects_non_basic_and_malformed() {
-        use base64::Engine as _;
-        assert_eq!(parse_basic_auth("Bearer abc"), None);
-        assert_eq!(parse_basic_auth("Basic !!!notbase64!!!"), None);
-        // decodes but has no colon
-        let no_colon = base64::engine::general_purpose::STANDARD.encode("nocolon");
-        assert_eq!(parse_basic_auth(&format!("Basic {no_colon}")), None);
-    }
-
-    fn headers_with(name: axum::http::HeaderName, value: &str) -> axum::http::HeaderMap {
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert(name, axum::http::HeaderValue::from_str(value).unwrap());
-        headers
-    }
-
-    #[test]
-    fn resolve_credential_prefers_cookie_over_authorization() {
-        let mut headers = headers_with(axum::http::header::COOKIE, "session=cookie-token");
-        headers.insert(
-            axum::http::header::AUTHORIZATION,
-            axum::http::HeaderValue::from_static("Bearer bearer-token"),
-        );
-        let credential = resolve_credential(&headers).expect("credential");
-        assert_eq!(credential.token, "cookie-token");
-        assert_eq!(credential.expected_username, None);
-    }
-
-    #[test]
-    fn resolve_credential_reads_bearer_token() {
-        let headers = headers_with(axum::http::header::AUTHORIZATION, "Bearer bearer-token");
-        let credential = resolve_credential(&headers).expect("credential");
-        assert_eq!(credential.token, "bearer-token");
-        assert_eq!(credential.expected_username, None);
-    }
-
-    #[test]
-    fn resolve_credential_reads_basic_app_password() {
-        // base64("alice:tok123") == "YWxpY2U6dG9rMTIz"
-        let headers = headers_with(axum::http::header::AUTHORIZATION, "Basic YWxpY2U6dG9rMTIz");
-        let credential = resolve_credential(&headers).expect("credential");
-        assert_eq!(credential.token, "tok123");
-        assert_eq!(credential.expected_username.as_deref(), Some("alice"));
-    }
-
-    #[test]
-    fn resolve_credential_returns_none_without_recognized_header() {
-        assert!(resolve_credential(&axum::http::HeaderMap::new()).is_none());
-        let headers = headers_with(axum::http::header::AUTHORIZATION, "Negotiate xyz");
-        assert!(resolve_credential(&headers).is_none());
-    }
 
     #[test]
     fn verify_basic_username_passes_without_expected_username() {
@@ -459,19 +263,19 @@ mod tests {
     fn auth_rejection_error_maps_each_variant_to_expected_internal_error() {
         let missing_token = auth_rejection_error(AuthRejection::MissingToken);
         assert!(matches!(
-            missing_token.public(),
+            crate::error::project(missing_token.kind(), missing_token.public_message()),
             crate::error::WebError::Unauthorized
         ));
 
         let missing_state = auth_rejection_error(AuthRejection::MissingSessionStorage);
         assert!(matches!(
-            missing_state.public(),
+            crate::error::project(missing_state.kind(), missing_state.public_message()),
             crate::error::WebError::Server { .. }
         ));
 
         let basic_mismatch = auth_rejection_error(AuthRejection::BasicUsernameMismatch);
         assert!(matches!(
-            basic_mismatch.public(),
+            crate::error::project(basic_mismatch.kind(), basic_mismatch.public_message()),
             crate::error::WebError::Unauthorized
         ));
 
@@ -479,7 +283,7 @@ mod tests {
             storage::SessionAuthError::InvalidToken,
         ));
         assert!(matches!(
-            invalid.public(),
+            crate::error::project(invalid.kind(), invalid.public_message()),
             crate::error::WebError::Unauthorized
         ));
 
@@ -487,7 +291,7 @@ mod tests {
             storage::SessionAuthError::SessionNotFound,
         ));
         assert!(matches!(
-            not_found.public(),
+            crate::error::project(not_found.kind(), not_found.public_message()),
             crate::error::WebError::Unauthorized
         ));
 
@@ -495,137 +299,18 @@ mod tests {
             storage::SessionAuthError::Internal(sqlx::Error::PoolClosed),
         ));
         assert!(matches!(
-            internal.public(),
+            crate::error::project(internal.kind(), internal.public_message()),
             crate::error::WebError::Storage { .. }
-        ));
-    }
-
-    #[test]
-    fn session_outcome_maps_each_variant_to_bounded_attribute() {
-        use common::metrics::SessionOutcome;
-        assert!(matches!(
-            session_outcome(&storage::SessionAuthError::InvalidToken),
-            SessionOutcome::InvalidToken
-        ));
-        assert!(matches!(
-            session_outcome(&storage::SessionAuthError::SessionNotFound),
-            SessionOutcome::SessionNotFound
-        ));
-        assert!(matches!(
-            session_outcome(&storage::SessionAuthError::Internal(
-                sqlx::Error::PoolClosed
-            )),
-            SessionOutcome::Internal
-        ));
-    }
-
-    #[test]
-    fn login_outcome_maps_each_variant() {
-        use common::metrics::LoginOutcome;
-        assert!(matches!(
-            login_outcome(&storage::UserAuthError::InvalidCredentials),
-            LoginOutcome::InvalidCredentials
-        ));
-        assert!(matches!(
-            login_outcome(&storage::UserAuthError::Internal(Box::new(std::fmt::Error))),
-            LoginOutcome::InternalError
-        ));
-    }
-
-    #[test]
-    fn register_open_error_maps_internal_to_storage_error() {
-        let err = register_open_error(storage::CreateUserError::Internal(sqlx::Error::PoolClosed));
-        assert!(matches!(
-            err.public(),
-            crate::error::WebError::Storage { .. }
-        ));
-
-        let conflict = register_open_error(storage::CreateUserError::UsernameTaken);
-        assert!(matches!(
-            conflict.public(),
-            crate::error::WebError::Conflict { .. }
-        ));
-    }
-
-    #[test]
-    fn register_invite_error_maps_each_arm() {
-        assert!(matches!(
-            register_invite_error(storage::RegisterWithInviteError::UsernameTaken).public(),
-            crate::error::WebError::Conflict { .. }
-        ));
-        assert!(matches!(
-            register_invite_error(storage::RegisterWithInviteError::InviteNotFound).public(),
-            crate::error::WebError::Validation { .. }
-        ));
-        assert!(matches!(
-            register_invite_error(storage::RegisterWithInviteError::InviteExpired).public(),
-            crate::error::WebError::Validation { .. }
-        ));
-        assert!(matches!(
-            register_invite_error(storage::RegisterWithInviteError::InviteAlreadyUsed).public(),
-            crate::error::WebError::Validation { .. }
-        ));
-        assert!(matches!(
-            register_invite_error(storage::RegisterWithInviteError::Internal(
-                sqlx::Error::PoolClosed
-            ))
-            .public(),
-            crate::error::WebError::Storage { .. }
-        ));
-    }
-
-    #[test]
-    fn login_error_maps_internal_to_server_error() {
-        use std::fmt;
-
-        // A two-level source chain proves login_error preserves the structured
-        // cause chain rather than flattening it to the top error's string.
-        #[derive(Debug)]
-        struct Inner;
-        impl fmt::Display for Inner {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "inner cause")
-            }
-        }
-        impl std::error::Error for Inner {}
-
-        #[derive(Debug)]
-        struct Outer(Inner);
-        impl fmt::Display for Outer {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "outer failure")
-            }
-        }
-        impl std::error::Error for Outer {
-            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                Some(&self.0)
-            }
-        }
-
-        let err = login_error(storage::UserAuthError::Internal(Box::new(Outer(Inner))));
-        assert!(matches!(
-            err.public(),
-            crate::error::WebError::Server { .. }
-        ));
-        // anyhow's alternate formatting joins the whole chain; the inner cause
-        // would be lost if the source were flattened via `to_string()`.
-        let op = err.operator_message();
-        assert!(op.contains("outer failure"), "operator message: {op}");
-        assert!(op.contains("inner cause"), "operator message: {op}");
-
-        let invalid = login_error(storage::UserAuthError::InvalidCredentials);
-        assert!(matches!(
-            invalid.public(),
-            crate::error::WebError::Unauthorized
         ));
     }
 
     #[tokio::test]
     async fn require_auth_with_parts_returns_server_error_when_parts_missing() {
-        let result = require_auth_with_parts(None).await;
-        assert!(
-            matches!(result, Err(e) if matches!(e.public(), crate::error::WebError::Server { .. }))
-        );
+        let e = require_auth_with_parts(None).await.unwrap_err();
+        assert!(matches!(
+            crate::error::project(e.kind(), e.public_message()),
+            crate::error::WebError::Server { .. }
+        ));
     }
 
     #[test]
@@ -639,9 +324,11 @@ mod tests {
     fn classify_current_user_propagates_non_unauthorized_errors() {
         let err = InternalError::storage(sqlx::Error::PoolClosed);
         let result = classify_current_user(Err(err));
-        assert!(
-            matches!(result, Err(e) if matches!(e.public(), crate::error::WebError::Storage { .. }))
-        );
+        // Non-Auth errors propagate unchanged; assert on the carried `kind` (the wire
+        // projection is covered by `project`'s own test). A nested `matches!` guard
+        // here would leave its no-match arm uncovered.
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), crate::error::ErrorKind::Storage);
     }
 
     // Pure extractor unit test: with a session cookie but no SessionStorage in the

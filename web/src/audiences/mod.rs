@@ -26,7 +26,7 @@ use {
     crate::auth::require_auth,
     crate::error::InternalError,
     std::sync::Arc,
-    storage::{AudienceError, AudienceStorage, SubscriptionStorage},
+    storage::{AudienceStorage, SubscriptionStorage},
 };
 
 /// A named audience as shown in the management screen.
@@ -45,20 +45,6 @@ pub struct SubscriberSummary {
     pub label: String,
 }
 
-/// Maps an [`AudienceError`] to a user-facing [`InternalError`]: duplicate
-/// names and missing audiences are client-correctable; everything else is a
-/// masked storage failure.
-#[cfg(feature = "server")]
-fn map_audience_error(err: AudienceError) -> InternalError {
-    match err {
-        AudienceError::DuplicateName => {
-            InternalError::conflict("an audience with that name already exists")
-        }
-        AudienceError::NotFound => InternalError::not_found("audience"),
-        AudienceError::Storage(e) => InternalError::storage(e),
-    }
-}
-
 /// Confirms `audience_id` belongs to `author_user_id` by checking it appears in
 /// the author's own audience list. This is the ownership gate for the store
 /// methods that are not author-scoped (`remove_member`, `list_members`).
@@ -68,10 +54,7 @@ async fn assert_owns_audience(
     author_user_id: i64,
     audience_id: i64,
 ) -> Result<(), InternalError> {
-    let owned = audiences
-        .list_audiences(author_user_id)
-        .await
-        .map_err(InternalError::storage)?;
+    let owned = audiences.list_audiences(author_user_id).await?;
     if owned.iter().any(|a| a.audience_id == audience_id) {
         Ok(())
     } else {
@@ -89,10 +72,7 @@ pub async fn create_audience(name: String) -> WebResult<i64> {
         if name.is_empty() {
             return Err(InternalError::validation("audience name must not be empty"));
         }
-        let id = audiences
-            .create_audience(auth.user_id, name)
-            .await
-            .map_err(map_audience_error)?;
+        let id = audiences.create_audience(auth.user_id, name).await?;
         Ok(id)
     })
 }
@@ -109,8 +89,7 @@ pub async fn rename_audience(audience_id: i64, name: String) -> WebResult<()> {
         }
         audiences
             .rename_audience(auth.user_id, audience_id, name)
-            .await
-            .map_err(map_audience_error)?;
+            .await?;
         Ok(())
     })
 }
@@ -121,10 +100,7 @@ pub async fn delete_audience(audience_id: i64) -> WebResult<()> {
     boundary!("delete_audience", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
-        audiences
-            .delete_audience(auth.user_id, audience_id)
-            .await
-            .map_err(InternalError::storage)?;
+        audiences.delete_audience(auth.user_id, audience_id).await?;
         Ok(())
     })
 }
@@ -135,10 +111,7 @@ pub async fn list_my_audiences() -> WebResult<Vec<AudienceSummary>> {
     boundary!("list_my_audiences", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
-        let rows = audiences
-            .list_audiences(auth.user_id)
-            .await
-            .map_err(InternalError::storage)?;
+        let rows = audiences.list_audiences(auth.user_id).await?;
         Ok(rows
             .into_iter()
             .map(|a| AudienceSummary {
@@ -158,10 +131,7 @@ pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
         let auth = require_auth().await?;
-        let rows = subscriptions
-            .list_subscribers(auth.user_id)
-            .await
-            .map_err(InternalError::storage)?;
+        let rows = subscriptions.list_subscribers(auth.user_id).await?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             // `subscriber_ref` is the local user id (as a string) for the local
@@ -197,8 +167,7 @@ pub async fn add_subscriber_to_audience(audience_id: i64, subscription_id: i64) 
         let auth = require_auth().await?;
         audiences
             .add_member(auth.user_id, audience_id, subscription_id)
-            .await
-            .map_err(map_audience_error)?;
+            .await?;
         Ok(())
     })
 }
@@ -218,8 +187,7 @@ pub async fn remove_subscriber_from_audience(
         assert_owns_audience(audiences.as_ref(), auth.user_id, audience_id).await?;
         audiences
             .remove_member(audience_id, subscription_id)
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
         Ok(())
     })
 }
@@ -234,39 +202,23 @@ pub async fn list_audience_members(audience_id: i64) -> WebResult<Vec<i64>> {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         assert_owns_audience(audiences.as_ref(), auth.user_id, audience_id).await?;
-        let members = audiences
-            .list_members(audience_id)
-            .await
-            .map_err(InternalError::storage)?;
+        let members = audiences.list_members(audience_id).await?;
         Ok(members)
     })
 }
 
 #[cfg(all(test, feature = "server"))]
 mod tests {
-    use super::{list_my_subscribers, map_audience_error};
-    use crate::error::WebError;
+    use super::list_my_subscribers;
     use crate::test_support::auth_parts;
     use common::visibility::SubscriptionStatus;
     use leptos::prelude::provide_context;
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
     use storage::{
-        AudienceError, MockSubscriptionStorage, MockUserStorage, SubscriptionRecord,
-        SubscriptionStorage, UserStorage,
+        MockSubscriptionStorage, MockUserStorage, SubscriptionRecord, SubscriptionStorage,
+        UserStorage,
     };
-
-    #[test]
-    fn map_audience_error_not_found_maps_to_not_found() {
-        let err = map_audience_error(AudienceError::NotFound);
-        assert!(matches!(err.public(), WebError::NotFound { .. }));
-    }
-
-    #[test]
-    fn map_audience_error_storage_maps_to_storage() {
-        let err = map_audience_error(AudienceError::Storage(sqlx::Error::PoolClosed));
-        assert!(matches!(err.public(), WebError::Storage { .. }));
-    }
 
     // guard:no-backend — mock store
     #[tokio::test]

@@ -3,7 +3,7 @@ use leptos::server_fn::codec::Json;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "server")]
-use {crate::error::InternalError, std::sync::Arc, storage::PostStorage};
+use {std::sync::Arc, storage::PostStorage};
 
 use crate::error::WebResult;
 
@@ -38,10 +38,7 @@ pub async fn list_tags(prefix: Option<String>, limit: Option<u32>) -> WebResult<
     boundary!("list_tags", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
         let resolved_limit = limit.unwrap_or(DEFAULT_TAG_LIMIT).clamp(1, MAX_TAG_LIMIT);
-        let records = posts
-            .list_tags(prefix.as_deref(), resolved_limit)
-            .await
-            .map_err(InternalError::storage)?;
+        let records = posts.list_tags(prefix.as_deref(), resolved_limit).await?;
         Ok(records
             .into_iter()
             .map(|rec| TagSummary {

@@ -55,8 +55,7 @@ pub async fn list_my_media(
         let source_filter = source
             .as_deref()
             .map(str::parse::<MediaSource>)
-            .transpose()
-            .map_err(|e| InternalError::validation(e.to_string()))?;
+            .transpose()?;
 
         let records = media
             .list_media(
@@ -65,8 +64,7 @@ pub async fn list_my_media(
                 limit.unwrap_or(50),
                 offset.unwrap_or(0),
             )
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
 
         Ok(records
             .into_iter()
@@ -94,22 +92,17 @@ pub async fn media_usage() -> WebResult<MediaUsageData> {
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
 
-        let used_bytes = media
-            .get_user_upload_usage(auth.user_id)
-            .await
-            .map_err(InternalError::storage)?;
+        let used_bytes = media.get_user_upload_usage(auth.user_id).await?;
 
         let quota_bytes = site_config
             .get(MEDIA_USER_QUOTA_BYTES_KEY)
-            .await
-            .map_err(InternalError::storage)?
+            .await?
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(DEFAULT_USER_QUOTA_BYTES);
 
         let max_file_size_bytes = site_config
             .get(MEDIA_MAX_FILE_SIZE_BYTES_KEY)
-            .await
-            .map_err(InternalError::storage)?
+            .await?
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(DEFAULT_MAX_FILE_SIZE_BYTES);
 
@@ -137,9 +130,7 @@ pub async fn delete_media(
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let source_enum = source
-            .parse::<MediaSource>()
-            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let source_enum = source.parse::<MediaSource>()?;
 
         let url = common::media::media_url(source_enum.as_str(), &sha256, &filename);
 
@@ -151,13 +142,11 @@ pub async fn delete_media(
                 &crate::viewer::viewer_identity().await,
                 chrono::Utc::now(),
             )
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
 
         let drafts = posts
             .list_drafts_by_user(auth.user_id, None, 1000, chrono::Utc::now())
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
 
         let referenced_in_posts: Vec<i64> = published
             .iter()
