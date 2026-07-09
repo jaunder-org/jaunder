@@ -14,6 +14,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{Database, Pool};
 
+use crate::backend::Backend;
+
 /// A named audience row returned by [`AudienceStorage::list_audiences`].
 #[derive(Clone, Debug)]
 pub struct AudienceRecord {
@@ -100,41 +102,17 @@ pub trait AudienceStorage: Send + Sync {
         subscription_id: i64,
     ) -> Result<(), AudienceError>;
 
-    /// Removes a subscription from an audience. A no-op if absent.
+    /// Removes a subscription from an audience. A no-op if the pairing is absent.
     async fn remove_member(&self, audience_id: i64, subscription_id: i64) -> sqlx::Result<()>;
 
     /// Lists the `subscription_id`s belonging to an audience, ordered.
     async fn list_members(&self, audience_id: i64) -> sqlx::Result<Vec<i64>>;
 }
 
-/// Per-backend SQL for [`AudienceStore`]. The statements differ only in the
-/// placeholder syntax (`SQLite` `?`, Postgres `$n`); the logical behavior is
-/// identical (ADR-0019).
-pub trait AudienceDialect: Database {
-    /// Inserts an audience and returns its id. Bind order: `author_user_id, name`.
-    const INSERT_AUDIENCE: &'static str;
-    /// Renames an audience scoped to its owner, returning the affected
-    /// `audience_id` (`RETURNING` so a no-match is detected generically without
-    /// `rows_affected()`, which sqlx exposes only on concrete result types).
-    /// Bind order: `name, author_user_id, audience_id`.
-    const RENAME_AUDIENCE: &'static str;
-    /// Deletes the audience's membership rows. Bind order: `author_user_id, audience_id`.
-    const DELETE_AUDIENCE_MEMBERS: &'static str;
-    /// Deletes the audience scoped to its owner. Bind order: `author_user_id, audience_id`.
-    const DELETE_AUDIENCE: &'static str;
-    /// Lists the author's audiences. Bind order: `author_user_id`.
-    const LIST_AUDIENCES: &'static str;
-    /// Idempotent membership insert carrying the owner id for the composite FKs.
-    /// Bind order: `audience_id, subscription_id, author_user_id`.
-    const INSERT_MEMBER: &'static str;
-    /// Removes a membership row. Bind order: `audience_id, subscription_id`.
-    const DELETE_MEMBER: &'static str;
-    /// Lists an audience's `subscription_id`s. Bind order: `audience_id`.
-    const LIST_MEMBERS: &'static str;
-}
-
-/// Generic [`AudienceStorage`] backed by any database implementing
-/// [`AudienceDialect`]. Backend SQL is supplied by the dialect; see ADR-0019.
+/// Generic [`AudienceStorage`] backed by any [`Backend`] database. The SQL is
+/// backend-agnostic — the shared `$n` placeholders bind positionally on both
+/// `SQLite` and Postgres — so there is no per-backend dialect: the statements are
+/// merged (dialects are split only where a statement genuinely cannot be shared).
 pub struct AudienceStore<DB: Database> {
     pool: Pool<DB>,
 }
@@ -150,7 +128,8 @@ impl<DB: Database> AudienceStore<DB> {
 #[async_trait]
 impl<DB> AudienceStorage for AudienceStore<DB>
 where
-    DB: AudienceDialect,
+    DB: Backend,
+    // Restated from `Backend` (supertrait where-clauses don't propagate; ADR-0019).
     (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (i64, String, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -159,12 +138,19 @@ where
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
+    #[tracing::instrument(
+        name = "storage.audiences.create",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
     async fn create_audience(&self, author_user_id: i64, name: &str) -> Result<i64, AudienceError> {
-        match sqlx::query_as::<_, (i64,)>(DB::INSERT_AUDIENCE)
-            .bind(author_user_id)
-            .bind(name)
-            .fetch_one(&self.pool)
-            .await
+        match sqlx::query_as::<_, (i64,)>(
+            "INSERT INTO audiences (author_user_id, name) VALUES ($1, $2) RETURNING audience_id",
+        )
+        .bind(author_user_id)
+        .bind(name)
+        .fetch_one(&self.pool)
+        .await
         {
             Ok((id,)) => Ok(id),
             Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
@@ -174,18 +160,28 @@ where
         }
     }
 
+    #[tracing::instrument(
+        name = "storage.audiences.rename",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
     async fn rename_audience(
         &self,
         author_user_id: i64,
         audience_id: i64,
         name: &str,
     ) -> Result<(), AudienceError> {
-        let result = sqlx::query_as::<_, (i64,)>(DB::RENAME_AUDIENCE)
-            .bind(name)
-            .bind(author_user_id)
-            .bind(audience_id)
-            .fetch_optional(&self.pool)
-            .await;
+        // `RETURNING` so a no-match is detected generically (via `fetch_optional`)
+        // without `rows_affected()`, which sqlx exposes only on concrete results.
+        let result = sqlx::query_as::<_, (i64,)>(
+            "UPDATE audiences SET name = $1 WHERE author_user_id = $2 AND audience_id = $3 \
+             RETURNING audience_id",
+        )
+        .bind(name)
+        .bind(author_user_id)
+        .bind(audience_id)
+        .fetch_optional(&self.pool)
+        .await;
         match result {
             Ok(Some(_)) => Ok(()),
             Ok(None) => Err(AudienceError::NotFound),
@@ -196,14 +192,19 @@ where
         }
     }
 
+    #[tracing::instrument(
+        name = "storage.audiences.delete",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
     async fn delete_audience(&self, author_user_id: i64, audience_id: i64) -> sqlx::Result<()> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query(DB::DELETE_AUDIENCE_MEMBERS)
+        sqlx::query("DELETE FROM audience_members WHERE author_user_id = $1 AND audience_id = $2")
             .bind(author_user_id)
             .bind(audience_id)
             .execute(&mut *tx)
             .await?;
-        sqlx::query(DB::DELETE_AUDIENCE)
+        sqlx::query("DELETE FROM audiences WHERE author_user_id = $1 AND audience_id = $2")
             .bind(author_user_id)
             .bind(audience_id)
             .execute(&mut *tx)
@@ -212,11 +213,19 @@ where
         Ok(())
     }
 
+    #[tracing::instrument(
+        name = "storage.audiences.list",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
     async fn list_audiences(&self, author_user_id: i64) -> sqlx::Result<Vec<AudienceRecord>> {
-        let rows = sqlx::query_as::<_, (i64, String, DateTime<Utc>)>(DB::LIST_AUDIENCES)
-            .bind(author_user_id)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = sqlx::query_as::<_, (i64, String, DateTime<Utc>)>(
+            "SELECT audience_id, name, created_at FROM audiences \
+             WHERE author_user_id = $1 ORDER BY audience_id",
+        )
+        .bind(author_user_id)
+        .fetch_all(&self.pool)
+        .await?;
         Ok(rows
             .into_iter()
             .map(|(audience_id, name, created_at)| AudienceRecord {
@@ -227,23 +236,37 @@ where
             .collect())
     }
 
+    #[tracing::instrument(
+        name = "storage.audiences.add_member",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
     async fn add_member(
         &self,
         author_user_id: i64,
         audience_id: i64,
         subscription_id: i64,
     ) -> Result<(), AudienceError> {
-        sqlx::query(DB::INSERT_MEMBER)
-            .bind(audience_id)
-            .bind(subscription_id)
-            .bind(author_user_id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "INSERT INTO audience_members (audience_id, subscription_id, author_user_id) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT (audience_id, subscription_id) DO NOTHING",
+        )
+        .bind(audience_id)
+        .bind(subscription_id)
+        .bind(author_user_id)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
+    #[tracing::instrument(
+        name = "storage.audiences.remove_member",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
     async fn remove_member(&self, audience_id: i64, subscription_id: i64) -> sqlx::Result<()> {
-        sqlx::query(DB::DELETE_MEMBER)
+        sqlx::query("DELETE FROM audience_members WHERE audience_id = $1 AND subscription_id = $2")
             .bind(audience_id)
             .bind(subscription_id)
             .execute(&self.pool)
@@ -251,11 +274,19 @@ where
         Ok(())
     }
 
+    #[tracing::instrument(
+        name = "storage.audiences.list_members",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
     async fn list_members(&self, audience_id: i64) -> sqlx::Result<Vec<i64>> {
-        let rows = sqlx::query_as::<_, (i64,)>(DB::LIST_MEMBERS)
-            .bind(audience_id)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = sqlx::query_as::<_, (i64,)>(
+            "SELECT subscription_id FROM audience_members \
+             WHERE audience_id = $1 ORDER BY subscription_id",
+        )
+        .bind(audience_id)
+        .fetch_all(&self.pool)
+        .await?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 }
