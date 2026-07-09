@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use axum::http::HeaderName;
 use axum::Router;
+use host::capture;
 use opentelemetry::propagation::Extractor;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::WithExportConfig;
@@ -56,13 +57,13 @@ fn otel_exporter_otlp_endpoint() -> Option<String> {
     )
 }
 
-/// The scoped diagnostic-log path, if `JAUNDER_DIAG_LOG_FILE` names one. When set
-/// (e2e only), the server appends a small JSONL file of WARN+ events plus panic
+/// The scoped diagnostic-log path (`<JAUNDER_CAPTURE_DIR>/diag.log`), if capture is on.
+/// When set (e2e only), the server appends a small JSONL file of WARN+ events plus panic
 /// records to it — a purpose-built, low-noise artifact the e2e zero-panic gate
 /// consumes, demoting the kernel-laden journal to a fallback (issue #144). Unset in
-/// production, so the whole feature is inert there.
+/// production, so the whole feature is inert there (see the `host` crate).
 fn diag_log_file() -> Option<std::path::PathBuf> {
-    trimmed_non_empty(std::env::var("JAUNDER_DIAG_LOG_FILE").ok()).map(std::path::PathBuf::from)
+    capture::file(capture::Stream::Diag)
 }
 
 /// Build the scoped diagnostic layer: a JSON `fmt` layer writing to `make_writer`,
@@ -86,7 +87,7 @@ where
 }
 
 /// A single scoped-diagnostic panic record (issue #144). Serialized to one JSONL
-/// line by [`DiagPanicRecord::to_line`] and appended to `JAUNDER_DIAG_LOG_FILE` by
+/// line by [`DiagPanicRecord::to_line`] and appended to the scoped diag log by
 /// the panic hook. `kind: "panic"` discriminates these from the WARN+ tracing events
 /// in the same file; `message` carries the literal `panicked at <location>` substring
 /// the e2e zero-panic gate greps for, and `location` is `Location::to_string()`
@@ -147,7 +148,7 @@ impl<'a> DiagPanicRecord<'a> {
 }
 
 /// Install a panic hook that appends a scoped [`DiagPanicRecord`] to `path`, when a
-/// path is given (`None` — the production default with `JAUNDER_DIAG_LOG_FILE` unset —
+/// path is given (`None` — the production default with `JAUNDER_CAPTURE_DIR` unset —
 /// leaves the existing hook untouched). Taking the `Option` here keeps the enablement
 /// check with the installer, mirroring how the diag *layer* is an `Option`.
 ///
@@ -331,7 +332,7 @@ fn init_tracing_impl(verbose: bool) -> TelemetryGuard {
         fmt::layer().boxed()
     };
 
-    // Scoped diagnostic capture (issue #144): when JAUNDER_DIAG_LOG_FILE is set, append
+    // Scoped diagnostic capture (issue #144): when JAUNDER_CAPTURE_DIR is set, append
     // WARN+ events as JSONL to it via a synchronous `Arc<File>` sink — deliberately not
     // a buffered/non-blocking writer, so a `panic = abort` can't drop the very lines the
     // feature exists to keep. An open failure disables the sink (non-fatal) rather than
@@ -623,7 +624,7 @@ mod tests {
     #[test]
     fn diag_log_file_is_none_when_env_unset() {
         let _lock = lock_env();
-        std::env::remove_var("JAUNDER_DIAG_LOG_FILE");
+        std::env::remove_var(host::capture::DIR_ENV);
         assert!(diag_log_file().is_none());
     }
 
@@ -663,7 +664,7 @@ mod tests {
     fn installed_diag_panic_hook_appends_record_and_restores() {
         let _lock = lock_env();
         let dir = tempfile::TempDir::new().expect("tempdir");
-        let path = dir.path().join("jaunder-diag.log");
+        let path = dir.path().join("diag.log");
         // Save/restore the process-global hook so it can't fire on a later test
         // writing to this now-deleted TempDir.
         let previous = std::panic::take_hook();
@@ -845,8 +846,8 @@ mod tests {
     fn init_tracing_impl_creates_diag_file_when_env_set() {
         let _guard = lock_env();
         let dir = tempfile::TempDir::new().expect("tempdir");
-        let path = dir.path().join("jaunder-diag.log");
-        std::env::set_var("JAUNDER_DIAG_LOG_FILE", &path);
+        std::env::set_var(host::capture::DIR_ENV, dir.path());
+        let path = dir.path().join("diag.log");
         // `init_tracing_impl` installs the global panic hook when the env is set;
         // save/restore it so it can't fire on a later test writing to this TempDir.
         let previous = std::panic::take_hook();
@@ -855,21 +856,23 @@ mod tests {
         // exists even when a prior test already installed the subscriber.
         init_tracing_impl(false);
         std::panic::set_hook(previous);
-        std::env::remove_var("JAUNDER_DIAG_LOG_FILE");
+        std::env::remove_var(host::capture::DIR_ENV);
         assert!(path.exists(), "diag file should be created when env is set");
     }
 
     #[test]
     fn init_tracing_impl_survives_unopenable_diag_path() {
         let _guard = lock_env();
-        // Point the var at a directory: opening it as a file fails, exercising the
-        // non-fatal `Err`/`eprintln` arm without taking down startup.
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        std::env::set_var("JAUNDER_DIAG_LOG_FILE", dir.path());
+        // Point JAUNDER_CAPTURE_DIR at a regular FILE: `capture::file` can't create the
+        // dir and opening `<file>/diag.log` fails, exercising the non-fatal
+        // `Err`/`eprintln` arm without taking down startup. (Pointing at a directory
+        // would now succeed — `capture::file` create_dir_all's it and joins `diag.log`.)
+        let file = tempfile::NamedTempFile::new().expect("temp file");
+        std::env::set_var(host::capture::DIR_ENV, file.path());
         let previous = std::panic::take_hook();
         init_tracing_impl(false);
         std::panic::set_hook(previous);
-        std::env::remove_var("JAUNDER_DIAG_LOG_FILE");
+        std::env::remove_var(host::capture::DIR_ENV);
     }
 
     #[test]

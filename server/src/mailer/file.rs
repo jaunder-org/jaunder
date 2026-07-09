@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use common::mailer::{EmailMessage, MailError, MailSender};
 
 /// A [`MailSender`] that appends each outgoing message as a JSON line to a
-/// file on disk.  Used when `JAUNDER_MAIL_CAPTURE_FILE` is set in the
-/// environment (typically for end-to-end tests).
+/// file on disk.  Used for the `mail.jsonl` stream of the `JAUNDER_CAPTURE_DIR`
+/// contract (end-to-end tests only); see the `host` crate.
 pub struct FileMailSender {
     path: std::path::PathBuf,
 }

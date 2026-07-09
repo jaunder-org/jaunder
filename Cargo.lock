@@ -1429,6 +1429,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "host"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "html-escape"
 version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1788,6 +1795,7 @@ dependencies = [
  "email_address",
  "flate2",
  "futures-util",
+ "host",
  "leptos",
  "leptos_axum",
  "lettre",
@@ -4231,6 +4239,7 @@ dependencies = [
  "chrono",
  "clap",
  "common",
+ "host",
  "storage",
  "tempfile",
  "tokio",

@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 storage = { workspace = true, features = ["seed-posts"] }
 common = { workspace = true }
+host = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }

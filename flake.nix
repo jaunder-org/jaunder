@@ -50,13 +50,12 @@
       # per-environment). The full documented list lives in
       # `xtask/src/steps/e2e_local.rs` (module docs). See issue #249.
       mailCaptureEnv = {
-        JAUNDER_MAIL_CAPTURE_FILE = "/var/lib/jaunder/mail.jsonl";
-        JAUNDER_WEBSUB_CAPTURE_FILE = "/var/lib/jaunder/websub.jsonl";
-        # Scoped server-diagnostics capture (#144): the server appends WARN+ events
-        # and panic records here as JSONL. Spliced into the jaunder.service env below,
-        # so the *server* (not the Playwright process) writes it; copied out per combo
-        # in e2eRunAndCapture. (Name is now a slight misnomer — #227 consolidates.)
-        JAUNDER_DIAG_LOG_FILE = "/var/lib/jaunder/jaunder-diag.log";
+        # The single capture-dir contract (#227): the server writes mail.jsonl,
+        # websub.jsonl, and diag.log into this dir. Spliced into the jaunder.service
+        # env below so the *server* (not the Playwright process) writes them; the whole
+        # dir is tarred out per combo in e2eRunAndCapture. (Binding name kept to avoid
+        # churning its three consumers below.)
+        JAUNDER_CAPTURE_DIR = "/var/lib/jaunder/capture";
       };
 
       jaunderModule =
@@ -578,8 +577,8 @@
         # fail the check on any `panicked at` line. Default-deny via `allowed_panics`.
         #
         # #144: panic detection now sources from the UNION of the scoped diag file
-        # (`/var/lib/jaunder/jaunder-diag.log` — the low-noise primary the app's panic
-        # hook writes) and the journal (the fallback, and the only source for a panic
+        # (`/var/lib/jaunder/capture/diag.log` — the low-noise primary the app's panic
+        # hook writes, #227) and the journal (the fallback, and the only source for a panic
         # that fires before the hook is installed). Reports are de-duped by panic
         # location, the scoped record winning; a location seen only in the journal is
         # still reported. Raw-substring scan (not JSON parsing) so a rare torn line in
@@ -592,7 +591,7 @@
           journal = machine.succeed("cat /tmp/jaunder-journal-${backend}.log")
           # `cat` tolerates the scoped file being absent (empty output) — a run that
           # never wrote it still gates on the journal alone.
-          diag = machine.execute("cat /var/lib/jaunder/jaunder-diag.log 2>/dev/null")[1]
+          diag = machine.execute("cat /var/lib/jaunder/capture/diag.log 2>/dev/null")[1]
           allowed_panics: list[str] = []  # default-deny; add a proven-benign substring + a comment here if one ever appears
 
           def panic_location(line):
@@ -638,8 +637,7 @@
               + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
               + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
               + "${warmupEnv}"
-              + " JAUNDER_MAIL_CAPTURE_FILE=/var/lib/jaunder/mail.jsonl"
-              + " JAUNDER_WEBSUB_CAPTURE_FILE=/var/lib/jaunder/websub.jsonl"
+              + " JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture"
               + " JAUNDER_DB=${jaunderDb}"
               + " JAUNDER_E2E_TRACE_ID=${traceId}"
               + " JAUNDER_E2E_TRACEPARENT=${traceParent}"
@@ -681,11 +679,13 @@
             machine.execute("journalctl --no-pager -o short-precise > /tmp/system-journal-${backend}.log")
             _grab("/tmp/system-journal-${backend}.log")
 
-            # Scoped diagnostic log (#144): rename to the per-backend basename first so
-            # it flat-copies as jaunder-diag-${backend}.log — the xtask lift filter keys
-            # on the `jaunder-diag-` prefix, so a bare `jaunder-diag.log` would be dropped.
-            machine.execute("test -s /var/lib/jaunder/jaunder-diag.log && cp /var/lib/jaunder/jaunder-diag.log /tmp/jaunder-diag-${backend}.log")
-            _grab("/tmp/jaunder-diag-${backend}.log")
+            # Capture-dir contract (#227): tar the whole capture dir out per combo as
+            # capture-${backend}.tar.gz — a file copy mirroring the playwright-artifacts
+            # tarball (the proven copy_from_vm shape). Holds diag.log plus any written
+            # mail.jsonl/websub.jsonl. The in-VM zero-panic gate reads diag.log directly,
+            # so it does not depend on this lift.
+            machine.execute("test -d /var/lib/jaunder/capture && tar czf /tmp/capture-${backend}.tar.gz -C /var/lib/jaunder capture 2>/dev/null || true")
+            _grab("/tmp/capture-${backend}.tar.gz")
 
             ${e2ePanicGate backend}
 
@@ -765,9 +765,8 @@
                 machine.wait_for_unit("jaunder.service", timeout=60)
                 machine.wait_for_open_port(3000, timeout=30)
                 machine.succeed(
-                  "devtool seed-e2e"
+                  "JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture devtool seed-e2e"
                   + " --db sqlite:/var/lib/jaunder/data/jaunder.db"
-                  + " --mail-file /var/lib/jaunder/mail.jsonl"
                   + " --test-support-bin test-support"
                 )
 
@@ -900,9 +899,8 @@
                   + " END LOOP; END \\$\\$;\""
                 )
                 machine.succeed(
-                  "devtool seed-e2e"
+                  "JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture devtool seed-e2e"
                   + " --db postgres://jaunder:testpassword@127.0.0.1/jaunder"
-                  + " --mail-file /var/lib/jaunder/mail.jsonl"
                   + " --test-support-bin test-support"
                 )
 

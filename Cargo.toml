@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "common",
   "csr",
+  "host",
   "server",
   "storage",
   "test-support",
@@ -23,6 +24,7 @@ codegen-units = 1
 
 [workspace.dependencies]
 common = { path = "common" }
+host = { path = "host" }
 storage = { path = "storage" }
 leptos = { version = "0.8.2" }
 leptos_dom = { version = "0.8.2" }

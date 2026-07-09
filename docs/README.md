@@ -84,6 +84,8 @@ convention). See the Status column below for each ADR's current status.
 | [0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md) | Backup test homing and the uniform restore-failure contract                                                  | accepted   |
 | [0055](adr/0055-web-host-wasm-boundary-module-level.md)            | web host/wasm boundary is module-level, not line-level                                                       | superseded |
 | [0056](adr/0056-web-canonical-colocated-leptos.md)                 | web converges on the canonical co-located Leptos CSR layout                                                  | accepted   |
+| [0057](adr/0057-e2e-capture-dir-contract.md)                       | Single `JAUNDER_CAPTURE_DIR` output-dir contract for e2e capture                                             | accepted   |
+| [0058](adr/0058-host-crate-layering.md)                            | A `host` crate for strictly-host-focused shared code                                                         | accepted   |
 
 <!-- adr-table:end -->
 

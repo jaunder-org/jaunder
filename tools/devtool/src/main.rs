@@ -69,9 +69,6 @@ struct SeedE2eArgs {
     /// Target database URL (passed to test-support as JAUNDER_DB).
     #[arg(long)]
     db: String,
-    /// Mail-capture file to reset.
-    #[arg(long)]
-    mail_file: String,
     /// Path to the `test-support` binary — the on-PATH name on the VM guest, the
     /// built `target/debug/test-support` on the host.
     #[arg(long)]
@@ -119,6 +116,6 @@ fn main() -> anyhow::Result<()> {
         Command::Run(args) => run::run(&args.cmd, args.cwd, args.timeout),
         Command::Check(args) => check::run(args.name.as_deref(), args.all, args.fix),
         Command::CsrBundle(args) => csr_bundle::run(&args.wasm, &args.out),
-        Command::SeedE2e(args) => seed_e2e::run(&args.db, &args.mail_file, &args.test_support_bin),
+        Command::SeedE2e(args) => seed_e2e::run(&args.db, &args.test_support_bin),
     }
 }
