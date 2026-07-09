@@ -1,4 +1,3 @@
-pub mod audiences;
 pub mod auth;
 pub mod backup;
 pub mod cockpit;
@@ -26,7 +25,7 @@ pub use upload::{MediaPanel, MediaUploadButton};
 /// server-painted shell and this reactive `AppShell` share one value.
 pub use crate::render::DEFAULT_THEME;
 
-use crate::pages::audiences::AudiencesPage;
+use crate::audiences::AudiencesPage;
 use crate::pages::auth::{LoginPage, LogoutPage, RegisterPage};
 use crate::pages::backup::BackupSettingsPage;
 use crate::pages::cockpit::CockpitPage;
