@@ -128,10 +128,11 @@ fn copy_e2e_journals() {
 /// Copy e2e diagnostic files — the app journal (`jaunder-journal-*.log`), the full
 /// system journal (`system-journal-*.log`), OTEL traces (`otel-traces-*.jsonl`),
 /// the Playwright per-test JSON report (`playwright-report-*.json`), the Playwright
-/// trace/screenshot tarball (`playwright-artifacts-*.tar.gz`), and the scoped
-/// server-diagnostic log (`jaunder-diag-*.log`, #144) — from `src_dir` into
-/// `dest_dir` (created if needed). The system journal and tarball are the #123/#49
-/// failure-path additions; the scoped diag log is the #144 WARN+/panic artifact.
+/// trace/screenshot tarball (`playwright-artifacts-*.tar.gz`), and the capture-dir
+/// tarball (`capture-*.tar.gz`, #227 — diag.log plus any mail/websub) — from
+/// `src_dir` into `dest_dir` (created if needed). The system journal and tarball are
+/// the #123/#49 failure-path additions; the capture tarball is the #227 consolidated
+/// capture artifact.
 /// Serves both the success path (from the out-link) and the failure path (from the
 /// kept outPath). Returns the count copied. Pure path logic so it is unit-testable.
 fn copy_e2e_diagnostics_between(src_dir: &std::path::Path, dest_dir: &std::path::Path) -> usize {
@@ -141,7 +142,7 @@ fn copy_e2e_diagnostics_between(src_dir: &std::path::Path, dest_dir: &std::path:
             || (name.starts_with("otel-traces-") && name.ends_with(".jsonl"))
             || (name.starts_with("playwright-report-") && name.ends_with(".json"))
             || (name.starts_with("playwright-artifacts-") && name.ends_with(".tar.gz"))
-            || (name.starts_with("jaunder-diag-") && name.ends_with(".log"))
+            || (name.starts_with("capture-") && name.ends_with(".tar.gz"))
     };
     let Ok(entries) = std::fs::read_dir(src_dir) else {
         return 0;
@@ -606,12 +607,12 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         // full system journal, copied out of the VM before the check is failed.
         std::fs::write(src.join("playwright-artifacts-sqlite.tar.gz"), b"a").unwrap();
         std::fs::write(src.join("system-journal-sqlite.log"), b"s").unwrap();
-        // #144 scoped diagnostic log (per-backend name is required).
-        std::fs::write(src.join("jaunder-diag-sqlite.log"), b"d").unwrap();
+        // #227 capture-dir tarball (per-backend name is required).
+        std::fs::write(src.join("capture-sqlite.tar.gz"), b"d").unwrap();
         std::fs::write(src.join("unrelated.txt"), b"x").unwrap();
-        // A bare `jaunder-diag.log` (no `-<backend>`) must NOT match — this locks the
-        // e2eRunAndCapture rename step: the flat basename has to carry `-<backend>`.
-        std::fs::write(src.join("jaunder-diag.log"), b"n").unwrap();
+        // A bare `capture.tar.gz` (no `-<backend>`) must NOT match — the filter requires
+        // the `capture-<backend>` prefix the flake's tar step always produces.
+        std::fs::write(src.join("capture.tar.gz"), b"n").unwrap();
         // OTEL traces arrive as a directory (the load-bearing
         // `otel-traces-<backend>.jsonl/otel-traces.jsonl` layout), not a flat file.
         std::fs::create_dir_all(src.join("otel-traces-sqlite.jsonl")).unwrap();
@@ -626,21 +627,21 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
 
         assert_eq!(
             n, 6,
-            "journal + otel dir + playwright report + artifacts tarball + system journal + scoped diag log are copied; unrelated and un-suffixed diag are not"
+            "journal + otel dir + playwright report + artifacts tarball + system journal + capture tarball are copied; unrelated and un-suffixed capture are not"
         );
         assert!(dest.join("jaunder-journal-sqlite.log").exists());
         assert!(dest.join("playwright-report-sqlite.json").exists());
         assert!(dest.join("playwright-artifacts-sqlite.tar.gz").exists());
         assert!(dest.join("system-journal-sqlite.log").exists());
-        assert!(dest.join("jaunder-diag-sqlite.log").exists());
+        assert!(dest.join("capture-sqlite.tar.gz").exists());
         assert!(dest
             .join("otel-traces-sqlite.jsonl")
             .join("otel-traces.jsonl")
             .exists());
         assert!(!dest.join("unrelated.txt").exists());
         assert!(
-            !dest.join("jaunder-diag.log").exists(),
-            "un-suffixed jaunder-diag.log must not be lifted"
+            !dest.join("capture.tar.gz").exists(),
+            "un-suffixed capture.tar.gz must not be lifted"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
