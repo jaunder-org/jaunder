@@ -9,7 +9,7 @@
 > `JAUNDER_DIAG_LOG_FILE` env var this ADR describes. The scoped-diagnostics
 > design below — the WARN+ JSONL layer, the panic hook, and the zero-panic-gate
 > consumption — is otherwise unchanged. See the capture-dir contract ADR
-> ([drafts/e2e-capture-dir-contract.md](drafts/e2e-capture-dir-contract.md)).
+> ([0057-e2e-capture-dir-contract.md](0057-e2e-capture-dir-contract.md)).
 
 ## Context
 
