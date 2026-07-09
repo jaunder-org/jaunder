@@ -53,16 +53,17 @@ The server writes a small, low-noise JSONL file of only its own **WARN+ events
 and panics** — no kernel boot spam, no INFO request lines. It lands per combo
 at:
 
-- `/var/lib/jaunder/jaunder-diag.log` (inside the VM)
-- `.xtask/diagnostics/e2e-<backend>-<browser>/jaunder-diag-<backend>.log`
-  (copied artifact, uploaded in the same `e2e-diagnostics-<backend>-<browser>`
-  CI bundle)
+- `/var/lib/jaunder/capture/diag.log` (inside the VM)
+- `.xtask/diagnostics/e2e-<backend>-<browser>/capture-<backend>.tar.gz` (the
+  capture dir tarred out per combo — it contains `diag.log`; uploaded in the
+  same `e2e-diagnostics-<backend>-<browser>` CI bundle)
 
 Each line is one JSON object. Tracing events use the `fmt().json()` shape;
 **panic** records are distinguished by `"kind": "panic"` and carry the literal
 `panicked at <location>` message plus a verbatim `location`. Enabled only when
-`JAUNDER_DIAG_LOG_FILE` is set (the e2e VMs set it via `mailCaptureEnv` in
-`flake.nix`); production leaves it unset, so the feature is inert there.
+`JAUNDER_CAPTURE_DIR` is set (the e2e VMs set it via `mailCaptureEnv` in
+`flake.nix`, and the server writes `diag.log` within it — issue #227);
+production leaves it unset, so the feature is inert there.
 
 This is the artifact the **zero-panic gate** (ADR-0032) now reads for
 `panicked at`, unioned with the journal and de-duped by panic location. The full

@@ -4,6 +4,13 @@
 - Date: 2026-07-04
 - Issue: [#144](https://github.com/jaunder-org/jaunder/issues/144)
 
+> **Update (#227):** the feature is now enabled by `JAUNDER_CAPTURE_DIR` (the
+> server writes `diag.log` within it) rather than the standalone
+> `JAUNDER_DIAG_LOG_FILE` env var this ADR describes. The scoped-diagnostics
+> design below — the WARN+ JSONL layer, the panic hook, and the zero-panic-gate
+> consumption — is otherwise unchanged. See the capture-dir contract ADR
+> ([drafts/e2e-capture-dir-contract.md](drafts/e2e-capture-dir-contract.md)).
+
 ## Context
 
 Diagnosing an e2e failure meant grovelling the full systemd journal inside the

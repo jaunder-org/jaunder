@@ -298,9 +298,9 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
 - **Failure logs — look here first (#144)**: on a red e2e combo, read the scoped
   server-diagnostic log before the journal. It is a small JSONL file of only the
   server's **WARN+ events and panics** (no kernel/INFO noise), copied per combo
-  to `.xtask/diagnostics/e2e-<backend>-<browser>/jaunder-diag-<backend>.log` (in
-  the VM: `/var/lib/jaunder/jaunder-diag.log`). Panic records carry
-  `"kind": "panic"`. The zero-panic gate
+  to `.xtask/diagnostics/e2e-<backend>-<browser>/capture-<backend>.tar.gz`
+  (which contains `diag.log`; in the VM: `/var/lib/jaunder/capture/diag.log`).
+  Panic records carry `"kind": "panic"`. The zero-panic gate
   ([ADR-0032](docs/adr/0032-e2e-zero-panic-gate.md)) now sources `panicked at`
   from this file unioned with the journal; the full journal
   (`jaunder-journal-<backend>.log`) stays captured as the last-resort fallback.
@@ -739,8 +739,8 @@ are never flagged.
   `services.jaunder.enable = true;` and set `services.jaunder.bind` as needed.
 - Set `services.jaunder.db` to choose the backend for a NixOS deployment. The
   default remains `sqlite:./data/jaunder.db`.
-- Do not set `JAUNDER_MAIL_CAPTURE_FILE` in production. That is test-only and
-  should stay in the interactive VM or e2e test node config.
+- Do not set `JAUNDER_CAPTURE_DIR` in production. That is test-only and should
+  stay in the interactive VM or e2e test node config.
 - The `jaunder` CLI is installed for the `jaunder` user via
   `users.users.jaunder.packages`.
 
