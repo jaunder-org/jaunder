@@ -44,8 +44,9 @@ mod tests {
 
         let result = require_operator().await;
         drop(owner);
+        let err = result.unwrap_err();
         assert!(matches!(
-            result.unwrap_err().public(),
+            crate::error::project(err.kind(), err.public_message()),
             WebError::Unauthorized
         ));
     }

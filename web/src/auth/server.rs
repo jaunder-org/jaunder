@@ -268,7 +268,7 @@ pub fn clear_session_cookie() {
 pub fn classify_current_user(result: InternalResult<AuthUser>) -> InternalResult<Option<String>> {
     match result {
         Ok(auth) => Ok(Some(auth.username.to_string())),
-        Err(error) if matches!(error.public(), crate::error::WebError::Unauthorized) => Ok(None),
+        Err(error) if error.kind() == crate::error::ErrorKind::Auth => Ok(None),
         Err(error) => Err(error),
     }
 }
@@ -459,19 +459,19 @@ mod tests {
     fn auth_rejection_error_maps_each_variant_to_expected_internal_error() {
         let missing_token = auth_rejection_error(AuthRejection::MissingToken);
         assert!(matches!(
-            missing_token.public(),
+            crate::error::project(missing_token.kind(), missing_token.public_message()),
             crate::error::WebError::Unauthorized
         ));
 
         let missing_state = auth_rejection_error(AuthRejection::MissingSessionStorage);
         assert!(matches!(
-            missing_state.public(),
+            crate::error::project(missing_state.kind(), missing_state.public_message()),
             crate::error::WebError::Server { .. }
         ));
 
         let basic_mismatch = auth_rejection_error(AuthRejection::BasicUsernameMismatch);
         assert!(matches!(
-            basic_mismatch.public(),
+            crate::error::project(basic_mismatch.kind(), basic_mismatch.public_message()),
             crate::error::WebError::Unauthorized
         ));
 
@@ -479,7 +479,7 @@ mod tests {
             storage::SessionAuthError::InvalidToken,
         ));
         assert!(matches!(
-            invalid.public(),
+            crate::error::project(invalid.kind(), invalid.public_message()),
             crate::error::WebError::Unauthorized
         ));
 
@@ -487,7 +487,7 @@ mod tests {
             storage::SessionAuthError::SessionNotFound,
         ));
         assert!(matches!(
-            not_found.public(),
+            crate::error::project(not_found.kind(), not_found.public_message()),
             crate::error::WebError::Unauthorized
         ));
 
@@ -495,7 +495,7 @@ mod tests {
             storage::SessionAuthError::Internal(sqlx::Error::PoolClosed),
         ));
         assert!(matches!(
-            internal.public(),
+            crate::error::project(internal.kind(), internal.public_message()),
             crate::error::WebError::Storage { .. }
         ));
     }
@@ -536,40 +536,44 @@ mod tests {
     fn register_open_error_maps_internal_to_storage_error() {
         let err = register_open_error(storage::CreateUserError::Internal(sqlx::Error::PoolClosed));
         assert!(matches!(
-            err.public(),
+            crate::error::project(err.kind(), err.public_message()),
             crate::error::WebError::Storage { .. }
         ));
 
         let conflict = register_open_error(storage::CreateUserError::UsernameTaken);
         assert!(matches!(
-            conflict.public(),
+            crate::error::project(conflict.kind(), conflict.public_message()),
             crate::error::WebError::Conflict { .. }
         ));
     }
 
     #[test]
     fn register_invite_error_maps_each_arm() {
+        let taken = register_invite_error(storage::RegisterWithInviteError::UsernameTaken);
         assert!(matches!(
-            register_invite_error(storage::RegisterWithInviteError::UsernameTaken).public(),
+            crate::error::project(taken.kind(), taken.public_message()),
             crate::error::WebError::Conflict { .. }
         ));
+        let not_found = register_invite_error(storage::RegisterWithInviteError::InviteNotFound);
         assert!(matches!(
-            register_invite_error(storage::RegisterWithInviteError::InviteNotFound).public(),
+            crate::error::project(not_found.kind(), not_found.public_message()),
             crate::error::WebError::Validation { .. }
         ));
+        let expired = register_invite_error(storage::RegisterWithInviteError::InviteExpired);
         assert!(matches!(
-            register_invite_error(storage::RegisterWithInviteError::InviteExpired).public(),
+            crate::error::project(expired.kind(), expired.public_message()),
             crate::error::WebError::Validation { .. }
         ));
+        let used = register_invite_error(storage::RegisterWithInviteError::InviteAlreadyUsed);
         assert!(matches!(
-            register_invite_error(storage::RegisterWithInviteError::InviteAlreadyUsed).public(),
+            crate::error::project(used.kind(), used.public_message()),
             crate::error::WebError::Validation { .. }
         ));
+        let internal = register_invite_error(storage::RegisterWithInviteError::Internal(
+            sqlx::Error::PoolClosed,
+        ));
         assert!(matches!(
-            register_invite_error(storage::RegisterWithInviteError::Internal(
-                sqlx::Error::PoolClosed
-            ))
-            .public(),
+            crate::error::project(internal.kind(), internal.public_message()),
             crate::error::WebError::Storage { .. }
         ));
     }
@@ -604,7 +608,7 @@ mod tests {
 
         let err = login_error(storage::UserAuthError::Internal(Box::new(Outer(Inner))));
         assert!(matches!(
-            err.public(),
+            crate::error::project(err.kind(), err.public_message()),
             crate::error::WebError::Server { .. }
         ));
         // anyhow's alternate formatting joins the whole chain; the inner cause
@@ -615,17 +619,18 @@ mod tests {
 
         let invalid = login_error(storage::UserAuthError::InvalidCredentials);
         assert!(matches!(
-            invalid.public(),
+            crate::error::project(invalid.kind(), invalid.public_message()),
             crate::error::WebError::Unauthorized
         ));
     }
 
     #[tokio::test]
     async fn require_auth_with_parts_returns_server_error_when_parts_missing() {
-        let result = require_auth_with_parts(None).await;
-        assert!(
-            matches!(result, Err(e) if matches!(e.public(), crate::error::WebError::Server { .. }))
-        );
+        let e = require_auth_with_parts(None).await.unwrap_err();
+        assert!(matches!(
+            crate::error::project(e.kind(), e.public_message()),
+            crate::error::WebError::Server { .. }
+        ));
     }
 
     #[test]
@@ -639,9 +644,11 @@ mod tests {
     fn classify_current_user_propagates_non_unauthorized_errors() {
         let err = InternalError::storage(sqlx::Error::PoolClosed);
         let result = classify_current_user(Err(err));
-        assert!(
-            matches!(result, Err(e) if matches!(e.public(), crate::error::WebError::Storage { .. }))
-        );
+        // Non-Auth errors propagate unchanged; assert on the carried `kind` (the wire
+        // projection is covered by `project`'s own test). A nested `matches!` guard
+        // here would leave its no-match arm uncovered.
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), crate::error::ErrorKind::Storage);
     }
 
     // Pure extractor unit test: with a session cookie but no SessionStorage in the

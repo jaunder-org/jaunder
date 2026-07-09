@@ -1,4 +1,4 @@
-use crate::error::{InternalError, InternalResult, WebError};
+use crate::error::{ErrorClass, ErrorKind, InternalError, InternalResult, WebError};
 use crate::tags::TagSummary;
 use chrono::{Datelike, NaiveDate, Utc};
 use common::slug::Slug;
@@ -254,11 +254,13 @@ fn set_not_found_status() {
 pub fn private_post_not_found_error(error: &InternalError) -> InternalError {
     set_not_found_status();
     InternalError::masked(
-        WebError::not_found("Post"),
-        format!(
+        ErrorKind::NotFound,
+        ErrorClass::Client,
+        WebError::not_found("Post").to_string(),
+        anyhow::Error::msg(format!(
             "private post hidden behind not-found response: {}",
             error.operator_message()
-        ),
+        )),
     )
 }
 
@@ -297,24 +299,29 @@ mod tests {
         use crate::error::WebError;
         use storage::PerformUpdateError;
 
+        let empty = perform_update_error(PerformUpdateError::EmptyPost);
         assert!(matches!(
-            perform_update_error(PerformUpdateError::EmptyPost).public(),
+            crate::error::project(empty.kind(), empty.public_message()),
             WebError::Validation { .. }
         ));
+        let invalid_slug = perform_update_error(PerformUpdateError::InvalidSlug);
         assert!(matches!(
-            perform_update_error(PerformUpdateError::InvalidSlug).public(),
+            crate::error::project(invalid_slug.kind(), invalid_slug.public_message()),
             WebError::Validation { .. }
         ));
+        let not_found = perform_update_error(PerformUpdateError::NotFound);
         assert!(matches!(
-            perform_update_error(PerformUpdateError::NotFound).public(),
+            crate::error::project(not_found.kind(), not_found.public_message()),
             WebError::NotFound { .. }
         ));
+        let unauthorized = perform_update_error(PerformUpdateError::Unauthorized);
         assert!(matches!(
-            perform_update_error(PerformUpdateError::Unauthorized).public(),
+            crate::error::project(unauthorized.kind(), unauthorized.public_message()),
             WebError::NotFound { .. }
         ));
+        let storage = perform_update_error(PerformUpdateError::Storage(sqlx::Error::PoolClosed));
         assert!(matches!(
-            perform_update_error(PerformUpdateError::Storage(sqlx::Error::PoolClosed)).public(),
+            crate::error::project(storage.kind(), storage.public_message()),
             WebError::Storage { .. }
         ));
     }
@@ -324,25 +331,31 @@ mod tests {
         use crate::error::WebError;
         use storage::PerformCreationError;
 
+        let empty = perform_creation_error(PerformCreationError::EmptyPost);
         assert!(matches!(
-            perform_creation_error(PerformCreationError::EmptyPost).public(),
+            crate::error::project(empty.kind(), empty.public_message()),
             WebError::Validation { .. }
         ));
+        let invalid_slug =
+            perform_creation_error(PerformCreationError::InvalidSlug(common::slug::InvalidSlug));
         assert!(matches!(
-            perform_creation_error(PerformCreationError::InvalidSlug(common::slug::InvalidSlug))
-                .public(),
+            crate::error::project(invalid_slug.kind(), invalid_slug.public_message()),
             WebError::Validation { .. }
         ));
+        let exhausted = perform_creation_error(PerformCreationError::Exhausted(5));
         assert!(matches!(
-            perform_creation_error(PerformCreationError::Exhausted(5)).public(),
+            crate::error::project(exhausted.kind(), exhausted.public_message()),
             WebError::Server { .. }
         ));
+        let created_not_found = perform_creation_error(PerformCreationError::CreatedNotFound);
         assert!(matches!(
-            perform_creation_error(PerformCreationError::CreatedNotFound).public(),
+            crate::error::project(created_not_found.kind(), created_not_found.public_message()),
             WebError::Server { .. }
         ));
+        let storage =
+            perform_creation_error(PerformCreationError::Storage(sqlx::Error::PoolClosed));
         assert!(matches!(
-            perform_creation_error(PerformCreationError::Storage(sqlx::Error::PoolClosed)).public(),
+            crate::error::project(storage.kind(), storage.public_message()),
             WebError::Storage { .. }
         ));
     }

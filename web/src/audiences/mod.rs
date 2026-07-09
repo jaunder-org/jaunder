@@ -259,13 +259,19 @@ mod tests {
     #[test]
     fn map_audience_error_not_found_maps_to_not_found() {
         let err = map_audience_error(AudienceError::NotFound);
-        assert!(matches!(err.public(), WebError::NotFound { .. }));
+        assert!(matches!(
+            crate::error::project(err.kind(), err.public_message()),
+            WebError::NotFound { .. }
+        ));
     }
 
     #[test]
     fn map_audience_error_storage_maps_to_storage() {
         let err = map_audience_error(AudienceError::Storage(sqlx::Error::PoolClosed));
-        assert!(matches!(err.public(), WebError::Storage { .. }));
+        assert!(matches!(
+            crate::error::project(err.kind(), err.public_message()),
+            WebError::Storage { .. }
+        ));
     }
 
     // guard:no-backend — mock store

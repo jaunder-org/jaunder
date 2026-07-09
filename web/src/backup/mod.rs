@@ -10,7 +10,7 @@ use server::require_operator;
 #[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
-    crate::error::{InternalError, WebError},
+    crate::error::{ErrorKind, InternalError},
     common::backup::{BackupMode, BackupSchedule},
     std::sync::Arc,
     storage::{SiteConfigStorage, UserStorage},
@@ -25,7 +25,7 @@ pub async fn backup_warning_visible() -> WebResult<bool> {
     boundary!("backup_warning_visible", {
         let auth = match require_auth().await {
             Ok(auth) => auth,
-            Err(error) if matches!(error.public(), WebError::Unauthorized) => return Ok(false),
+            Err(error) if error.kind() == ErrorKind::Auth => return Ok(false),
             Err(error) => return Err(error),
         };
 
@@ -59,7 +59,7 @@ pub async fn current_user_is_operator() -> WebResult<bool> {
     boundary!("current_user_is_operator", {
         let auth = match require_auth().await {
             Ok(auth) => auth,
-            Err(error) if matches!(error.public(), WebError::Unauthorized) => return Ok(false),
+            Err(error) if error.kind() == ErrorKind::Auth => return Ok(false),
             Err(error) => return Err(error),
         };
 
