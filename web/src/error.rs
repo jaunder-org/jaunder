@@ -3,14 +3,16 @@ use leptos::server_fn::{
     error::{FromServerFnError, ServerFnErrorErr},
 };
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "server")]
-use std::error::Error;
 use thiserror::Error;
 
-pub type WebResult<T> = Result<T, WebError>;
-
+// The server-side error carrier lives in `host` (ADR-0058); `web` keeps only the
+// wire type, the `kind → WebError` projection, and the leptos owner-pinning
+// boundary. Re-exported so every vertical's `InternalError::storage(…)`/`?` call
+// site names it unchanged through `web::error`.
 #[cfg(feature = "server")]
-pub type InternalResult<T> = Result<T, InternalError>;
+pub use host::error::{ErrorClass, ErrorKind, InternalError, InternalResult};
+
+pub type WebResult<T> = Result<T, WebError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Error)]
 #[serde(rename_all = "snake_case")]
@@ -68,276 +70,6 @@ impl FromServerFnError for WebError {
 
     fn from_server_fn_error(value: ServerFnErrorErr) -> Self {
         Self::server_function(value.to_string())
-    }
-}
-
-/// The category of an internal failure, derived at construction. Drives
-/// outward mapping and is emitted as a discrete `error.kind` field at the
-/// boundary for queryable triage.
-#[cfg(feature = "server")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorKind {
-    Auth,
-    NotFound,
-    Validation,
-    Conflict,
-    Storage,
-    Internal,
-    /// Downstream dependency (mail, `WebSub`, …).
-    External,
-}
-
-#[cfg(feature = "server")]
-impl ErrorKind {
-    /// The bounded `error.kind` attribute value emitted on the `jaunder.errors`
-    /// metric — the same stable names logged as the boundary's `error.kind`
-    /// field, kept low-cardinality by construction.
-    fn as_metric_str(self) -> &'static str {
-        match self {
-            ErrorKind::Auth => "auth",
-            ErrorKind::NotFound => "not_found",
-            ErrorKind::Validation => "validation",
-            ErrorKind::Conflict => "conflict",
-            ErrorKind::Storage => "storage",
-            ErrorKind::Internal => "internal",
-            ErrorKind::External => "external",
-        }
-    }
-}
-
-/// Operational severity, derived at construction so triage (and the
-/// boundary's log level) is mechanical rather than guessed from the message.
-#[cfg(feature = "server")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorClass {
-    /// Expected 4xx (validation, not-found, unauthorized) — never alert.
-    Client,
-    /// Retryable infrastructure failure. Not produced by `web` itself (which
-    /// only sees opaque/typed errors); reserved for classification nearer the
-    /// source.
-    Transient,
-    /// "Can't happen" invariant violation or opaque internal failure — page.
-    Bug,
-    /// Downstream dependency failure. Reserved (see `ErrorKind::External`).
-    External,
-}
-
-#[cfg(feature = "server")]
-impl ErrorClass {
-    /// The tracing level the boundary logs this class at.
-    #[must_use]
-    pub fn log_level(self) -> tracing::Level {
-        match self {
-            ErrorClass::Client => tracing::Level::DEBUG,
-            ErrorClass::Transient | ErrorClass::External => tracing::Level::WARN,
-            ErrorClass::Bug => tracing::Level::ERROR,
-        }
-    }
-
-    /// The bounded `error.class` attribute value emitted on the `jaunder.errors`
-    /// metric — the same stable names logged as the boundary's `error.class`
-    /// field, kept low-cardinality by construction.
-    fn as_metric_str(self) -> &'static str {
-        match self {
-            ErrorClass::Client => "client",
-            ErrorClass::Transient => "transient",
-            ErrorClass::Bug => "bug",
-            ErrorClass::External => "external",
-        }
-    }
-}
-
-/// Server-side error carrier: the exact wire `public_message` plus structured,
-/// queryable operator data (`kind`, `class`, `context`) and the preserved
-/// `source` cause chain (carried via `anyhow`, never stringified eagerly). The
-/// outward `WebError` is *derived* from `(kind, public_message)` at the boundary
-/// via [`project`] — the carrier holds no wire type, so the operator-side payload
-/// is structurally absent from what can cross the wire.
-#[cfg(feature = "server")]
-#[derive(Debug)]
-pub struct InternalError {
-    kind: ErrorKind,
-    class: ErrorClass,
-    context: Vec<(&'static str, String)>,
-    public_message: String,
-    source: Option<anyhow::Error>,
-}
-
-/// A transparent [`Error`] wrapper around a `Box<dyn Error + Send + Sync>` so an
-/// already-boxed error can be carried as an `anyhow` source (the box itself does
-/// not implement `Error`). Forwards `Display` and `source`, so it is invisible
-/// in the cause chain.
-#[cfg(feature = "server")]
-#[derive(Debug)]
-struct BoxedError(Box<dyn Error + Send + Sync>);
-
-#[cfg(feature = "server")]
-impl std::fmt::Display for BoxedError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-#[cfg(feature = "server")]
-impl Error for BoxedError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.0.source()
-    }
-}
-
-#[cfg(feature = "server")]
-impl InternalError {
-    pub fn unauthorized(message: impl Into<String>) -> Self {
-        Self::masked(
-            ErrorKind::Auth,
-            ErrorClass::Client,
-            String::new(),
-            anyhow::Error::msg(message.into()),
-        )
-    }
-
-    pub fn not_found(resource: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::NotFound,
-            class: ErrorClass::Client,
-            context: Vec::new(),
-            public_message: format!("{} not found", resource.into()),
-            source: None,
-        }
-    }
-
-    pub fn validation(message: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::Validation,
-            class: ErrorClass::Client,
-            context: Vec::new(),
-            public_message: message.into(),
-            source: None,
-        }
-    }
-
-    pub fn conflict(message: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::Conflict,
-            class: ErrorClass::Client,
-            context: Vec::new(),
-            public_message: message.into(),
-            source: None,
-        }
-    }
-
-    pub fn storage(error: impl Error + Send + Sync + 'static) -> Self {
-        Self {
-            kind: ErrorKind::Storage,
-            class: ErrorClass::Bug,
-            context: Vec::new(),
-            public_message: "storage operation failed".to_string(),
-            source: Some(anyhow::Error::new(error)),
-        }
-    }
-
-    pub fn server(error: impl Error + Send + Sync + 'static) -> Self {
-        Self {
-            kind: ErrorKind::Internal,
-            class: ErrorClass::Bug,
-            context: Vec::new(),
-            public_message: "server operation failed".to_string(),
-            source: Some(anyhow::Error::new(error)),
-        }
-    }
-
-    /// Like [`Self::server`] but for an already-boxed error. `Box<dyn Error + ...>`
-    /// does not itself implement `Error` (so it can't go through `server`), and
-    /// this anyhow build has no `From<Box<dyn Error + ...>>`; a transparent
-    /// wrapper carries it as a structured source, preserving its cause chain for
-    /// operator logs instead of flattening it to a string.
-    #[must_use]
-    pub fn server_boxed(error: Box<dyn Error + Send + Sync>) -> Self {
-        Self::server(BoxedError(error))
-    }
-
-    pub fn server_message(message: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::Internal,
-            class: ErrorClass::Bug,
-            context: Vec::new(),
-            public_message: "server operation failed".to_string(),
-            source: Some(anyhow::Error::msg(message.into())),
-        }
-    }
-
-    /// A downstream dependency failure (mail, `WebSub`, …). Masks as a 500
-    /// outwardly but classes as `External` so a dependency outage is
-    /// distinguishable from a Jaunder bug during triage.
-    pub fn external(error: impl Error + Send + Sync + 'static) -> Self {
-        Self {
-            kind: ErrorKind::External,
-            class: ErrorClass::External,
-            context: Vec::new(),
-            public_message: "server operation failed".to_string(),
-            source: Some(anyhow::Error::new(error)),
-        }
-    }
-
-    /// Constructs a masked error directly from its projected `(kind, class)`, the
-    /// exact wire `public_message`, and an operator-only `source`. The public and
-    /// operator sides are supplied independently, so the source cause chain stays
-    /// on the operator side and is never inferred from the wire message.
-    pub fn masked(
-        kind: ErrorKind,
-        class: ErrorClass,
-        public_message: impl Into<String>,
-        source: anyhow::Error,
-    ) -> Self {
-        Self {
-            kind,
-            class,
-            context: Vec::new(),
-            public_message: public_message.into(),
-            source: Some(source),
-        }
-    }
-
-    /// Attaches a structured key/value to the operator-side context, emitted
-    /// at the boundary (see [`server_boundary`]). Never reaches the client.
-    #[must_use]
-    pub fn with_context(mut self, key: &'static str, value: impl Into<String>) -> Self {
-        self.context.push((key, value.into()));
-        self
-    }
-
-    #[must_use]
-    pub fn kind(&self) -> ErrorKind {
-        self.kind
-    }
-
-    #[must_use]
-    pub fn class(&self) -> ErrorClass {
-        self.class
-    }
-
-    #[must_use]
-    pub fn context(&self) -> &[(&'static str, String)] {
-        &self.context
-    }
-
-    /// The exact wire message for this error's `kind`, projected to a `WebError`
-    /// at the boundary via [`project`]. Empty for kinds whose wire variant carries
-    /// no message (e.g. `Auth` → `WebError::Unauthorized`).
-    #[must_use]
-    pub fn public_message(&self) -> &str {
-        &self.public_message
-    }
-
-    /// Renders the operator-facing detail (the preserved source cause chain,
-    /// falling back to the public message). For logs and re-masking only;
-    /// never sent to the client.
-    #[must_use]
-    pub fn operator_message(&self) -> String {
-        match &self.source {
-            Some(source) => format!("{source:#}"),
-            None => self.public_message.clone(),
-        }
     }
 }
 
@@ -465,45 +197,11 @@ pub async fn server_boundary<T>(
     match outcome {
         Ok(value) => Ok(value),
         Err(error) => {
-            log_boundary_failure(server_fn, &error);
-            common::metrics::error(error.kind.as_metric_str(), error.class.as_metric_str());
-            Err(project(error.kind, &error.public_message))
+            // The carrier owns its own observability (structured log + metric);
+            // `web` only performs the wire projection.
+            error.emit_boundary_failure(server_fn);
+            Err(project(error.kind(), error.public_message()))
         }
-    }
-}
-
-/// Emits the structured boundary log for a failed server function: discrete,
-/// queryable fields (not one concatenated string), at the level derived from
-/// the error class. `context` is emitted as a single serialized field;
-/// promoting each k/v to a span field is deferred to §4.6 (kq8w.22).
-#[cfg(feature = "server")]
-fn log_boundary_failure(server_fn: &'static str, error: &InternalError) {
-    // Render the preserved cause chain once; empty when there is no source
-    // (e.g. pure client errors).
-    let source = error
-        .source
-        .as_ref()
-        .map(|s| format!("{s:#}"))
-        .unwrap_or_default();
-    macro_rules! emit {
-        ($macro:ident) => {
-            tracing::$macro!(
-                server_fn,
-                error.kind = ?error.kind,
-                error.class = ?error.class,
-                error.public = %error.public_message,
-                error.source = %source,
-                error.context = ?error.context,
-                "server function failed",
-            )
-        };
-    }
-    // `ErrorClass::log_level` is the single source of truth; the match only
-    // exists because `tracing`'s macros require a statically-known level.
-    match error.class.log_level() {
-        tracing::Level::DEBUG => emit!(debug),
-        tracing::Level::WARN => emit!(warn),
-        _ => emit!(error),
     }
 }
 
@@ -755,95 +453,7 @@ mod tests {
 
     #[cfg(feature = "server")]
     #[test]
-    fn error_class_maps_to_log_level() {
-        use super::ErrorClass;
-        use tracing::Level;
-        assert_eq!(ErrorClass::Client.log_level(), Level::DEBUG);
-        assert_eq!(ErrorClass::Transient.log_level(), Level::WARN);
-        assert_eq!(ErrorClass::External.log_level(), Level::WARN);
-        assert_eq!(ErrorClass::Bug.log_level(), Level::ERROR);
-    }
-
-    #[cfg(feature = "server")]
-    #[test]
-    fn error_kind_and_class_metric_strings_are_stable_and_bounded() {
-        use super::{ErrorClass, ErrorKind};
-        // Every variant maps to a fixed, low-cardinality attribute value; these
-        // are the strings emitted on the `jaunder.errors` metric at the boundary.
-        assert_eq!(ErrorKind::Auth.as_metric_str(), "auth");
-        assert_eq!(ErrorKind::NotFound.as_metric_str(), "not_found");
-        assert_eq!(ErrorKind::Validation.as_metric_str(), "validation");
-        assert_eq!(ErrorKind::Conflict.as_metric_str(), "conflict");
-        assert_eq!(ErrorKind::Storage.as_metric_str(), "storage");
-        assert_eq!(ErrorKind::Internal.as_metric_str(), "internal");
-        assert_eq!(ErrorKind::External.as_metric_str(), "external");
-        assert_eq!(ErrorClass::Client.as_metric_str(), "client");
-        assert_eq!(ErrorClass::Transient.as_metric_str(), "transient");
-        assert_eq!(ErrorClass::Bug.as_metric_str(), "bug");
-        assert_eq!(ErrorClass::External.as_metric_str(), "external");
-    }
-
-    #[cfg(feature = "server")]
-    #[test]
-    fn constructors_set_kind_and_class() {
-        use super::{ErrorClass, ErrorKind};
-
-        let unauth = InternalError::unauthorized("nope");
-        assert_eq!(unauth.kind(), ErrorKind::Auth);
-        assert_eq!(unauth.class(), ErrorClass::Client);
-
-        let validation = InternalError::validation("bad");
-        assert_eq!(validation.kind(), ErrorKind::Validation);
-        assert_eq!(validation.class(), ErrorClass::Client);
-
-        let not_found = InternalError::not_found("Post");
-        assert_eq!(not_found.kind(), ErrorKind::NotFound);
-        assert_eq!(not_found.class(), ErrorClass::Client);
-
-        let conflict = InternalError::conflict("dup");
-        assert_eq!(conflict.kind(), ErrorKind::Conflict);
-        assert_eq!(conflict.class(), ErrorClass::Client);
-
-        let storage = InternalError::storage(OuterError {
-            source: SourceError,
-        });
-        assert_eq!(storage.kind(), ErrorKind::Storage);
-        assert_eq!(storage.class(), ErrorClass::Bug);
-
-        let server = InternalError::server(OuterError {
-            source: SourceError,
-        });
-        assert_eq!(server.kind(), ErrorKind::Internal);
-        assert_eq!(server.class(), ErrorClass::Bug);
-    }
-
-    #[cfg(feature = "server")]
-    #[test]
-    fn with_context_accumulates_pairs_in_order() {
-        let error = InternalError::server_message("boom")
-            .with_context("post_id", "42")
-            .with_context("user_id", "7");
-        assert_eq!(
-            error.context(),
-            &[("post_id", "42".to_string()), ("user_id", "7".to_string()),]
-        );
-    }
-
-    #[cfg(feature = "server")]
-    #[test]
-    fn storage_error_captures_source_chain_not_stringified() {
-        let error = InternalError::storage(OuterError {
-            source: SourceError,
-        });
-        // The operator-facing rendering still walks the cause chain (now via
-        // the preserved anyhow source instead of an eager concatenation).
-        assert_eq!(error.operator_message(), "outer failure: source context");
-    }
-
-    #[cfg(feature = "server")]
-    #[test]
     fn external_constructor_sets_external_kind_and_class() {
-        use super::{ErrorClass, ErrorKind};
         let error = InternalError::external(OuterError {
             source: SourceError,
         });
@@ -924,15 +534,6 @@ mod tests {
         let result: WebResult<()> =
             server_boundary("test_fn", async { Err(InternalError::not_found("Post")) }).await;
         assert_eq!(result, Err(WebError::not_found("Post")));
-    }
-
-    #[cfg(feature = "server")]
-    #[test]
-    fn client_error_operator_message_falls_back_to_public() {
-        // A client error carries no source, so the operator rendering falls
-        // back to the public message.
-        let error = InternalError::not_found("Post");
-        assert_eq!(error.operator_message(), "Post not found");
     }
 
     #[cfg(feature = "server")]

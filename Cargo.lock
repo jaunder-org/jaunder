@@ -1432,7 +1432,11 @@ dependencies = [
 name = "host"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "common",
  "tempfile",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -5032,6 +5036,7 @@ dependencies = [
  "common",
  "croner",
  "email_address",
+ "host",
  "http",
  "js-sys",
  "leptos",

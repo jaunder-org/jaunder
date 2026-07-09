@@ -4,6 +4,8 @@
 //! `#[cfg(not(target_arch = "wasm32"))]` gating `common` would demand (ADR-0058).
 //!
 //! Tenants live in their own modules. The first is [`capture`] — the `JAUNDER_CAPTURE_DIR`
-//! contract (issue #227, ADR-0057).
+//! contract (issue #227, ADR-0057); [`error`] holds the server-side error carrier
+//! (issue #334, ADR-0058 as clarified).
 
 pub mod capture;
+pub mod error;
