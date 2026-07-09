@@ -174,25 +174,7 @@ pub fn BackupBanner() -> impl IntoView {
     }
 }
 
-#[component]
-pub fn Topbar(
-    #[prop(into)] title: Signal<String>,
-    #[prop(optional, into)] sub: Option<Signal<String>>,
-    #[prop(optional)] children: Option<Children>,
-) -> impl IntoView {
-    view! {
-        <div class="j-topbar">
-            <div>
-                <h1>{move || title.get()}</h1>
-                {sub
-                    .map(|s| {
-                        view! { <div class="j-sub">{move || s.get()}</div> }
-                    })}
-            </div>
-            <div class="j-topbar-right">{children.map(|c| c())}</div>
-        </div>
-    }
-}
+pub use crate::ui::Topbar;
 
 // ─── 3.6 PostCard ─────────────────────────────────────────────
 
