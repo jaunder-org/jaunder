@@ -1,7 +1,7 @@
 /**
  * Shared mail-capture utilities for Jaunder e2e tests.
  *
- * The server writes every outbound email as a JSON line to `MAIL_CAPTURE_FILE`
+ * The server writes every outbound email as a JSON line to the mail capture file
  * when running in test mode.  These helpers read that file and wait for new
  * messages to appear.
  *
@@ -23,8 +23,14 @@
 
 import * as fs from "fs";
 
-export const MAIL_CAPTURE_FILE =
-  process.env.JAUNDER_MAIL_CAPTURE_FILE ?? "/tmp/jaunder-mail.jsonl";
+import { capturePathViaTool } from "./capture";
+
+// Resolved lazily and memoized via `test-support capture-path` so the filename
+// convention lives only in the Rust `host` crate — never restated here.
+let cachedMailFile: string | undefined;
+function mailCaptureFile(): string {
+  return (cachedMailFile ??= capturePathViaTool("mail"));
+}
 
 export interface CapturedEmail {
   to: string[];
@@ -35,9 +41,9 @@ export interface CapturedEmail {
 
 /** Return every non-empty line currently in the mail capture file. */
 export function readEmailLines(): string[] {
-  if (!fs.existsSync(MAIL_CAPTURE_FILE)) return [];
+  if (!fs.existsSync(mailCaptureFile())) return [];
   return fs
-    .readFileSync(MAIL_CAPTURE_FILE, "utf-8")
+    .readFileSync(mailCaptureFile(), "utf-8")
     .trim()
     .split("\n")
     .filter((line) => line.trim());
@@ -63,7 +69,7 @@ export async function waitForNewEmail(
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(
-    `timed out waiting for new captured email at ${MAIL_CAPTURE_FILE}`,
+    `timed out waiting for new captured email at ${mailCaptureFile()}`,
   );
 }
 

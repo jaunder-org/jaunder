@@ -1,10 +1,10 @@
 /**
  * Shared WebSub-capture utilities for Jaunder e2e tests.
  *
- * When `JAUNDER_WEBSUB_CAPTURE_FILE` is set, the server uses a file-capturing
- * WebSub client that appends every hub ping as a JSON line to that file
- * (instead of contacting a real hub). These helpers read that file and wait
- * for new pings to appear — mirroring the mail-capture helpers in `mail.ts`.
+ * When capture is on, the server uses a file-capturing WebSub client that
+ * appends every hub ping as a JSON line to the websub capture file (instead of
+ * contacting a real hub). These helpers read that file and wait for new pings to
+ * appear — mirroring the mail-capture helpers in `mail.ts`.
  *
  * ## Usage
  *
@@ -21,8 +21,14 @@
 
 import * as fs from "fs";
 
-export const WEBSUB_CAPTURE_FILE =
-  process.env.JAUNDER_WEBSUB_CAPTURE_FILE ?? "/tmp/jaunder-websub.jsonl";
+import { capturePathViaTool } from "./capture";
+
+// Resolved lazily and memoized via `test-support capture-path` so the filename
+// convention lives only in the Rust `host` crate — never restated here.
+let cachedWebsubFile: string | undefined;
+function websubCaptureFile(): string {
+  return (cachedWebsubFile ??= capturePathViaTool("websub"));
+}
 
 export interface CapturedPing {
   hub_url: string;
@@ -32,9 +38,9 @@ export interface CapturedPing {
 
 /** Return every non-empty line currently in the WebSub capture file. */
 export function readPingLines(): string[] {
-  if (!fs.existsSync(WEBSUB_CAPTURE_FILE)) return [];
+  if (!fs.existsSync(websubCaptureFile())) return [];
   return fs
-    .readFileSync(WEBSUB_CAPTURE_FILE, "utf-8")
+    .readFileSync(websubCaptureFile(), "utf-8")
     .trim()
     .split("\n")
     .filter((line) => line.trim());
@@ -61,7 +67,7 @@ export async function waitForNewPing(
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(
-    `timed out waiting for new captured WebSub ping at ${WEBSUB_CAPTURE_FILE}`,
+    `timed out waiting for new captured WebSub ping at ${websubCaptureFile()}`,
   );
 }
 
@@ -88,6 +94,6 @@ export async function waitForPingMatching(
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(
-    `timed out waiting for a matching WebSub ping at ${WEBSUB_CAPTURE_FILE}`,
+    `timed out waiting for a matching WebSub ping at ${websubCaptureFile()}`,
   );
 }
