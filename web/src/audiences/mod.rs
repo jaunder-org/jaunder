@@ -68,10 +68,7 @@ async fn assert_owns_audience(
     author_user_id: i64,
     audience_id: i64,
 ) -> Result<(), InternalError> {
-    let owned = audiences
-        .list_audiences(author_user_id)
-        .await
-        .map_err(InternalError::storage)?;
+    let owned = audiences.list_audiences(author_user_id).await?;
     if owned.iter().any(|a| a.audience_id == audience_id) {
         Ok(())
     } else {
@@ -121,10 +118,7 @@ pub async fn delete_audience(audience_id: i64) -> WebResult<()> {
     boundary!("delete_audience", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
-        audiences
-            .delete_audience(auth.user_id, audience_id)
-            .await
-            .map_err(InternalError::storage)?;
+        audiences.delete_audience(auth.user_id, audience_id).await?;
         Ok(())
     })
 }
@@ -135,10 +129,7 @@ pub async fn list_my_audiences() -> WebResult<Vec<AudienceSummary>> {
     boundary!("list_my_audiences", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
-        let rows = audiences
-            .list_audiences(auth.user_id)
-            .await
-            .map_err(InternalError::storage)?;
+        let rows = audiences.list_audiences(auth.user_id).await?;
         Ok(rows
             .into_iter()
             .map(|a| AudienceSummary {
@@ -158,10 +149,7 @@ pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
         let auth = require_auth().await?;
-        let rows = subscriptions
-            .list_subscribers(auth.user_id)
-            .await
-            .map_err(InternalError::storage)?;
+        let rows = subscriptions.list_subscribers(auth.user_id).await?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             // `subscriber_ref` is the local user id (as a string) for the local
@@ -218,8 +206,7 @@ pub async fn remove_subscriber_from_audience(
         assert_owns_audience(audiences.as_ref(), auth.user_id, audience_id).await?;
         audiences
             .remove_member(audience_id, subscription_id)
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
         Ok(())
     })
 }
@@ -234,10 +221,7 @@ pub async fn list_audience_members(audience_id: i64) -> WebResult<Vec<i64>> {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         assert_owns_audience(audiences.as_ref(), auth.user_id, audience_id).await?;
-        let members = audiences
-            .list_members(audience_id)
-            .await
-            .map_err(InternalError::storage)?;
+        let members = audiences.list_members(audience_id).await?;
         Ok(members)
     })
 }

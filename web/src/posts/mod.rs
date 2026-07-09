@@ -28,7 +28,7 @@ use crate::tags::TagSummary;
 #[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
-    crate::error::InternalError,
+    crate::error::{ErrorClass, ErrorKind, InternalError},
     crate::feed_events::enqueue_feed_events,
     crate::viewer::viewer_identity,
     chrono::{DateTime, Utc},
@@ -203,7 +203,14 @@ fn parse_publish_at(raw: Option<&str>) -> crate::error::InternalResult<Option<Da
         .map(|s| {
             DateTime::parse_from_rfc3339(s)
                 .map(|dt| dt.with_timezone(&Utc))
-                .map_err(|e| InternalError::validation(format!("invalid publish_at: {e}")))
+                .map_err(|e| {
+                    InternalError::masked(
+                        ErrorKind::Validation,
+                        ErrorClass::Client,
+                        format!("invalid publish_at: {e}"),
+                        anyhow::Error::new(e),
+                    )
+                })
         })
         .transpose()
 }
@@ -235,12 +242,9 @@ pub async fn create_post(
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let validated_tags = common::tag::parse_and_validate_tags(tags.unwrap_or_default())
-            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let validated_tags = common::tag::parse_and_validate_tags(tags.unwrap_or_default())?;
 
-        let format = format
-            .parse::<PostFormat>()
-            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let format = format.parse::<PostFormat>()?;
         // Publish + a supplied time = scheduled (future) or backdated (past);
         // publish + no time = live now; not publishing = draft (NULL).
         let published_at = if publish {
@@ -295,10 +299,7 @@ pub async fn create_post(
         }
 
         let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-        let tag_post_tags = posts
-            .get_tags_for_post(created.post_id)
-            .await
-            .map_err(InternalError::storage)?;
+        let tag_post_tags = posts.get_tags_for_post(created.post_id).await?;
         let tag_slugs: BTreeSet<Tag> = tag_post_tags.iter().map(|t| t.tag_slug.clone()).collect();
         enqueue_feed_events(feed_events.as_ref(), &auth.username, &tag_slugs)
             .await
@@ -321,12 +322,8 @@ pub async fn get_post(
     boundary!("get_post", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let username_parsed = username
-            .parse::<Username>()
-            .map_err(|e| InternalError::validation(e.to_string()))?;
-        let slug_parsed = slug
-            .parse::<Slug>()
-            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let username_parsed = username.parse::<Username>()?;
+        let slug_parsed = slug.parse::<Slug>()?;
 
         let viewer = viewer_identity().await;
         if let Some(post) = fetch_post_record(
@@ -384,8 +381,7 @@ pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
 
         let post = posts
             .get_post_by_id(post_id, &viewer_identity().await)
-            .await
-            .map_err(InternalError::storage)?
+            .await?
             .ok_or_else(not_found_error)?;
 
         if post.deleted_at.is_some() || post.user_id != auth.user_id {
@@ -421,8 +417,7 @@ pub async fn update_post(
         // Load old tags before mutation to union with new tags
         let old = posts
             .get_post_by_id(post_id, &viewer_identity().await)
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
         let old_tag_slugs: BTreeSet<Tag> = old
             .as_ref()
             .map(|p| p.tags.iter().map(|t| t.tag_slug.clone()).collect())
@@ -430,16 +425,9 @@ pub async fn update_post(
 
         // Validate tags up-front so a malformed input rejects before any
         // post mutation lands.
-        let new_tags = tags
-            .map(|t| {
-                common::tag::parse_and_validate_tags(t)
-                    .map_err(|e| InternalError::validation(e.to_string()))
-            })
-            .transpose()?;
+        let new_tags = tags.map(common::tag::parse_and_validate_tags).transpose()?;
 
-        let format = format
-            .parse::<PostFormat>()
-            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let format = format.parse::<PostFormat>()?;
         let normalized_summary = summary.and_then(common::text::non_empty_owned);
         let audiences = audience_targets_or_public(audience.as_ref());
 
@@ -478,10 +466,7 @@ pub async fn update_post(
         }
 
         // Fetch current tags after mutation and union with old tags
-        let current_tags = posts
-            .get_tags_for_post(post_id)
-            .await
-            .map_err(InternalError::storage)?;
+        let current_tags = posts.get_tags_for_post(post_id).await?;
         let mut all_tag_slugs: BTreeSet<Tag> = old_tag_slugs;
         for tag in current_tags {
             all_tag_slugs.insert(tag.tag_slug);
@@ -515,10 +500,7 @@ pub async fn default_audience_selection() -> WebResult<AudienceSelection> {
     boundary!("default_audience_selection", {
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         require_auth().await?;
-        let default = site_config
-            .get_default_audience()
-            .await
-            .map_err(InternalError::storage)?;
+        let default = site_config.get_default_audience().await?;
         Ok(targets_to_audience_selection(std::slice::from_ref(
             &default,
         )))
@@ -537,17 +519,13 @@ pub async fn post_audience_selection(post_id: i64) -> WebResult<AudienceSelectio
 
         let post = posts
             .get_post_by_id(post_id, &viewer_identity().await)
-            .await
-            .map_err(InternalError::storage)?
+            .await?
             .ok_or_else(not_found_error)?;
         if post.deleted_at.is_some() || post.user_id != auth.user_id {
             return Err(not_found_error());
         }
 
-        let targets = posts
-            .get_post_audiences(post_id)
-            .await
-            .map_err(InternalError::storage)?;
+        let targets = posts.get_post_audiences(post_id).await?;
         Ok(targets_to_audience_selection(&targets))
     })
 }
@@ -572,8 +550,7 @@ pub async fn list_drafts(
                 page_size,
                 chrono::Utc::now(),
             )
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
 
         Ok(drafts
             .into_iter()
@@ -609,8 +586,7 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
 
         let existing = posts
             .get_post_by_id(post_id, &viewer_identity().await)
-            .await
-            .map_err(InternalError::storage)?
+            .await?
             .ok_or_else(|| InternalError::not_found("Post"))?;
 
         if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
@@ -619,10 +595,7 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
 
         // Preserve the post's existing audience targeting across publication
         // (chosen in the editor); publishing must not silently re-target it.
-        let audiences = posts
-            .get_post_audiences(post_id)
-            .await
-            .map_err(InternalError::storage)?;
+        let audiences = posts.get_post_audiences(post_id).await?;
 
         let updated = posts
             .update_post(
@@ -677,18 +650,14 @@ pub async fn delete_post(post_id: i64) -> WebResult<()> {
 
         let existing = posts
             .get_post_by_id(post_id, &viewer_identity().await)
-            .await
-            .map_err(InternalError::storage)?
+            .await?
             .ok_or_else(|| InternalError::not_found("Post"))?;
 
         if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
             return Err(InternalError::not_found("Post"));
         }
 
-        posts
-            .soft_delete_post(post_id)
-            .await
-            .map_err(InternalError::storage)?;
+        posts.soft_delete_post(post_id).await?;
 
         // Only enqueue feed events for published posts
         if existing.published_at.is_some() {
@@ -714,18 +683,14 @@ pub async fn unpublish_post(post_id: i64) -> WebResult<()> {
 
         let existing = posts
             .get_post_by_id(post_id, &viewer_identity().await)
-            .await
-            .map_err(InternalError::storage)?
+            .await?
             .ok_or_else(|| InternalError::not_found("Post"))?;
 
         if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
             return Err(InternalError::not_found("Post"));
         }
 
-        posts
-            .unpublish_post(post_id)
-            .await
-            .map_err(InternalError::storage)?;
+        posts.unpublish_post(post_id).await?;
 
         let tag_slugs: BTreeSet<Tag> = existing.tags.iter().map(|t| t.tag_slug.clone()).collect();
         let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
@@ -751,6 +716,17 @@ mod tests {
             base: base.to_string(),
             named: named.to_vec(),
         }
+    }
+
+    // The `publish_at` parse-failure branch: an unparseable RFC3339 value yields a
+    // Validation error carrying the friendly wire message (the chrono source rides the
+    // anyhow chain rather than being flattened via `.to_string()`).
+    #[cfg(feature = "server")]
+    #[test]
+    fn parse_publish_at_rejects_unparseable_value() {
+        let err = super::parse_publish_at(Some("not-a-date")).unwrap_err();
+        assert_eq!(err.kind(), crate::error::ErrorKind::Validation);
+        assert!(err.public_message().starts_with("invalid publish_at:"));
     }
 
     #[test]

@@ -76,16 +76,11 @@ pub async fn register(
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
         let username = {
             let _phase = tracing::info_span!("web.auth.register.parse_username").entered();
-            username
-                .to_lowercase()
-                .parse::<Username>()
-                .map_err(|e| InternalError::validation(e.to_string()))?
+            username.to_lowercase().parse::<Username>()?
         };
         let password = {
             let _phase = tracing::info_span!("web.auth.register.parse_password").entered();
-            password
-                .parse::<Password>()
-                .map_err(|e| InternalError::validation(e.to_string()))?
+            password.parse::<Password>()?
         };
         let policy = load_registration_policy(&*site_config)
             .instrument(tracing::info_span!(
@@ -137,8 +132,7 @@ pub async fn register(
         let raw_token = sessions
             .create_session(user_id, "Sign-up session")
             .instrument(tracing::info_span!("web.auth.register.create_session"))
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
 
         set_session_cookie(&raw_token);
         leptos_axum::redirect("/");
@@ -159,16 +153,11 @@ pub async fn login(username: String, password: String, label: Option<String>) ->
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
         let username = {
             let _phase = tracing::info_span!("web.auth.login.parse_username").entered();
-            username
-                .to_lowercase()
-                .parse::<Username>()
-                .map_err(|e| InternalError::validation(e.to_string()))?
+            username.to_lowercase().parse::<Username>()?
         };
         let password = {
             let _phase = tracing::info_span!("web.auth.login.parse_password").entered();
-            password
-                .parse::<Password>()
-                .map_err(|e| InternalError::validation(e.to_string()))?
+            password.parse::<Password>()?
         };
         let record = match users
             .authenticate(&username, &password)
@@ -209,8 +198,7 @@ pub async fn login(username: String, password: String, label: Option<String>) ->
         let raw_token = sessions
             .create_session(record.user_id, &derived_label)
             .instrument(tracing::info_span!("web.auth.login.create_session"))
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
 
         set_session_cookie(&raw_token);
         leptos_axum::redirect("/");
@@ -225,10 +213,7 @@ pub async fn logout() -> WebResult<()> {
     boundary!("logout", {
         if let Ok(auth) = require_auth().await {
             let sessions = expect_context::<Arc<dyn SessionStorage>>();
-            sessions
-                .revoke_session(&auth.token_hash)
-                .await
-                .map_err(InternalError::storage)?;
+            sessions.revoke_session(&auth.token_hash).await?;
         }
         clear_session_cookie();
         leptos_axum::redirect("/");

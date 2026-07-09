@@ -87,10 +87,7 @@ pub async fn fetch_user_posts(
     cursor_post_id: Option<i64>,
     limit: Option<u32>,
 ) -> InternalResult<TimelinePage> {
-    let username = username
-        .trim()
-        .parse::<Username>()
-        .map_err(|e| InternalError::validation(e.to_string()))?;
+    let username = username.trim().parse::<Username>()?;
     let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
     let page_size = limit.unwrap_or(50).clamp(1, 50);
     let rows = posts
@@ -101,8 +98,7 @@ pub async fn fetch_user_posts(
             viewer,
             chrono::Utc::now(),
         )
-        .await
-        .map_err(InternalError::storage)?;
+        .await?;
     Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
 }
 
@@ -130,8 +126,7 @@ pub async fn fetch_local_timeline(
             viewer,
             chrono::Utc::now(),
         )
-        .await
-        .map_err(InternalError::storage)?;
+        .await?;
     Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
 }
 
@@ -203,8 +198,7 @@ pub async fn list_home_feed(
                 &viewer,
                 chrono::Utc::now(),
             )
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
 
         let has_more = rows.len() > page_size as usize;
         rows.truncate(page_size as usize);
@@ -240,10 +234,7 @@ pub async fn fetch_posts_by_tag(
     cursor_post_id: Option<i64>,
     limit: Option<u32>,
 ) -> InternalResult<TimelinePage> {
-    let tag_slug = tag
-        .trim()
-        .parse::<Tag>()
-        .map_err(|e| InternalError::validation(e.to_string()))?;
+    let tag_slug = tag.trim().parse::<Tag>()?;
     let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
     let page_size = limit.unwrap_or(50).clamp(1, 50);
     let rows = list_by_tag_rows(
@@ -277,18 +268,11 @@ pub async fn fetch_user_posts_by_tag(
     cursor: Option<PostCursor>,
     limit: Option<u32>,
 ) -> InternalResult<TimelinePage> {
-    let username = username
-        .trim()
-        .parse::<Username>()
-        .map_err(|e| InternalError::validation(e.to_string()))?;
-    let tag_slug = tag
-        .trim()
-        .parse::<Tag>()
-        .map_err(|e| InternalError::validation(e.to_string()))?;
+    let username = username.trim().parse::<Username>()?;
+    let tag_slug = tag.trim().parse::<Tag>()?;
     let author = users
         .get_user_by_username(&username)
-        .await
-        .map_err(InternalError::storage)?
+        .await?
         .ok_or_else(|| InternalError::not_found("user"))?;
     let page_size = limit.unwrap_or(50).clamp(1, 50);
     let rows = list_by_tag_rows(

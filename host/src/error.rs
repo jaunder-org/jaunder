@@ -311,6 +311,66 @@ impl InternalError {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Typed `From` conversions (ADR-0017 §3, ADR-0058)
+// ---------------------------------------------------------------------------
+//
+// Each lift reproduces the exact wire `public_message` its call sites produced
+// before, so switching a site to bare `?`/`.into()` is behavior-preserving; the
+// `(kind, class)` is fixed here, at the conversion's home, so a site can never
+// silently move the wire class by switching to `?`. The improvement is purely
+// operator-side: the *typed* source is now preserved on the `anyhow` chain
+// instead of being eagerly stringified (ADR-0017 §3, A19).
+
+impl From<sqlx::Error> for InternalError {
+    /// A storage-driver failure: masks as `"storage operation failed"` (kind
+    /// `Storage`, class `Bug`) while preserving the `sqlx::Error` as a typed,
+    /// downcastable source. Behavior-identical to `InternalError::storage(error)`.
+    fn from(error: sqlx::Error) -> Self {
+        Self::storage(error)
+    }
+}
+
+impl From<common::mailer::MailError> for InternalError {
+    /// A mail-transport failure. Matches the pre-existing
+    /// `mailer.send_email(...).map_err(InternalError::server)` classification
+    /// (kind `Internal`, class `Bug`, public `"server operation failed"`) while
+    /// preserving the typed `MailError` (and its boxed transport source) for
+    /// operator logs.
+    fn from(error: common::mailer::MailError) -> Self {
+        Self::server(error)
+    }
+}
+
+/// Generates `From<T> for InternalError` for each `common` value-object
+/// parse/validation error `T`: kind `Validation`, class `Client`, public
+/// message = the source's `Display` (byte-for-byte what the old
+/// `.map_err(|e| InternalError::validation(e.to_string()))` lifts produced),
+/// with the typed source now preserved on the operator side (A19).
+macro_rules! validation_from {
+    ($($ty:ty),+ $(,)?) => {$(
+        impl From<$ty> for InternalError {
+            fn from(error: $ty) -> Self {
+                Self::masked(
+                    ErrorKind::Validation,
+                    ErrorClass::Client,
+                    error.to_string(),
+                    anyhow::Error::new(error),
+                )
+            }
+        }
+    )+};
+}
+
+validation_from!(
+    common::slug::InvalidSlug,
+    common::username::InvalidUsername,
+    common::tag::InvalidTag,
+    common::tag::TagValidationError,
+    common::password::PasswordError,
+    common::render::InvalidPostFormat,
+);
+
 #[cfg(test)]
 mod tests {
     use super::{ErrorClass, ErrorKind, InternalError};
@@ -543,5 +603,79 @@ mod tests {
             source: SourceError,
         })
         .emit_boundary_failure("test_fn");
+    }
+
+    #[test]
+    fn from_sqlx_error_matches_storage_constructor() {
+        // `?` on a `sqlx::Error` produces exactly `InternalError::storage(err)`.
+        let error: InternalError = sqlx::Error::RowNotFound.into();
+        assert_eq!(error.kind(), ErrorKind::Storage);
+        assert_eq!(error.class(), ErrorClass::Bug);
+        // Same wire projection inputs as `InternalError::storage(...)`.
+        assert_eq!(error.public_message(), "storage operation failed");
+        // The typed `sqlx::Error` is preserved on the operator side, not the wire.
+        assert!(error.operator_message().contains("no rows returned"));
+    }
+
+    #[test]
+    fn from_mail_error_matches_server_constructor() {
+        // Mirrors `send_email(...).map_err(InternalError::server)`: Internal/Bug,
+        // masked public, typed `MailError` preserved for operators.
+        let error: InternalError = common::mailer::MailError::NotConfigured.into();
+        assert_eq!(error.kind(), ErrorKind::Internal);
+        assert_eq!(error.class(), ErrorClass::Bug);
+        assert_eq!(error.public_message(), "server operation failed");
+        assert!(error
+            .operator_message()
+            .contains("mail sender is not configured"));
+    }
+
+    #[test]
+    fn from_common_validation_sources_preserve_display_as_public_and_are_client() {
+        // Each common value-object parse error lifts to Validation/Client with
+        // the source's `Display` as the wire message (identical to the old
+        // `.map_err(|e| InternalError::validation(e.to_string()))`) and the
+        // typed source preserved on the operator side.
+        macro_rules! check {
+            ($value:expr) => {{
+                let display = $value.to_string();
+                let error: InternalError = $value.into();
+                assert_eq!(error.kind(), ErrorKind::Validation);
+                assert_eq!(error.class(), ErrorClass::Client);
+                assert_eq!(error.public_message(), display);
+                assert!(error.operator_message().contains(&display));
+            }};
+        }
+        check!(common::slug::InvalidSlug);
+        check!(common::username::InvalidUsername);
+        check!(common::tag::InvalidTag);
+        check!(common::tag::TagValidationError::TooMany { count: 99, max: 25 });
+        check!(common::password::PasswordError::PasswordTooShort);
+        check!(common::render::InvalidPostFormat);
+    }
+
+    #[test]
+    fn masked_pairs_a_site_validation_message_with_a_typed_source() {
+        // Mirrors the chrono parse call sites: a specific public message plus a
+        // typed source on the anyhow chain. `host` has no `chrono` dep, so a
+        // stand-in typed error stands for `chrono::ParseError`; the real chrono
+        // wiring is guarded by the web suite.
+        let error = InternalError::masked(
+            ErrorKind::Validation,
+            ErrorClass::Client,
+            "invalid publish_at: premature end of input",
+            anyhow::Error::new(OuterError {
+                source: SourceError,
+            }),
+        );
+        assert_eq!(error.kind(), ErrorKind::Validation);
+        assert_eq!(error.class(), ErrorClass::Client);
+        assert_eq!(
+            error.public_message(),
+            "invalid publish_at: premature end of input"
+        );
+        // Typed source on the operator side, downcastable, not stringified onto
+        // the wire.
+        assert!(error.operator_message().contains("outer failure"));
     }
 }

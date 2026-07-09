@@ -7,11 +7,7 @@ use storage::UserStorage;
 pub async fn require_operator() -> InternalResult<()> {
     let auth = require_auth().await?;
     let users = expect_context::<Arc<dyn UserStorage>>();
-    let Some(user) = users
-        .get_user(auth.user_id)
-        .await
-        .map_err(InternalError::storage)?
-    else {
+    let Some(user) = users.get_user(auth.user_id).await? else {
         return Err(InternalError::unauthorized("user does not exist"));
     };
 

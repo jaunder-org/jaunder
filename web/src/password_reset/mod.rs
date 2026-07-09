@@ -20,15 +20,9 @@ pub async fn request_password_reset(username: String) -> WebResult<()> {
         let password_resets = expect_context::<Arc<dyn PasswordResetStorage>>();
         let mailer = expect_context::<Arc<dyn MailSender>>();
 
-        let parsed_username = username
-            .to_lowercase()
-            .parse::<Username>()
-            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let parsed_username = username.to_lowercase().parse::<Username>()?;
 
-        let user = users
-            .get_user_by_username(&parsed_username)
-            .await
-            .map_err(InternalError::storage)?;
+        let user = users.get_user_by_username(&parsed_username).await?;
 
         // Extract user_id and verified email together. Return the same "contact
         // operator" error whether the user is missing or lacks a verified email,
@@ -50,8 +44,7 @@ pub async fn request_password_reset(username: String) -> WebResult<()> {
         let expires_at = chrono::Utc::now() + Duration::hours(1);
         let raw_token = password_resets
             .create_password_reset(user_id, expires_at)
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
 
         let link = format!("/reset-password?token={raw_token}");
         let message = EmailMessage {
@@ -68,7 +61,7 @@ pub async fn request_password_reset(username: String) -> WebResult<()> {
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         common::metrics::email_send_duration_ms(elapsed_ms);
         common::metrics::email_send_result(common::metrics::EmailKind::PasswordReset, &send_result);
-        send_result.map_err(InternalError::server)?;
+        send_result?;
 
         common::metrics::password_reset(common::metrics::PasswordResetEvent::Requested);
         Ok(())
@@ -80,9 +73,7 @@ pub async fn confirm_password_reset(token: String, new_password: String) -> WebR
     boundary!("confirm_password_reset", {
         let atomic = expect_context::<Arc<dyn AtomicOps>>();
 
-        let password = new_password
-            .parse::<Password>()
-            .map_err(|e| InternalError::validation(e.to_string()))?;
+        let password = new_password.parse::<Password>()?;
 
         atomic
             .confirm_password_reset(&token, &password)

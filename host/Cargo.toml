@@ -6,6 +6,7 @@ license = "GPL-3.0-only"
 
 [dependencies]
 anyhow.workspace = true
+sqlx.workspace = true
 tracing.workspace = true
 common = { path = "../common", features = ["metrics"] }
 

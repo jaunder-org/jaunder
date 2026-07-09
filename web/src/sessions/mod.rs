@@ -25,10 +25,7 @@ pub async fn list_sessions() -> WebResult<Vec<SessionInfo>> {
     boundary!("list_sessions", {
         let auth = require_auth().await?;
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
-        let records = sessions
-            .list_sessions(auth.user_id)
-            .await
-            .map_err(InternalError::storage)?;
+        let records = sessions.list_sessions(auth.user_id).await?;
         Ok(records
             .into_iter()
             .map(|r| SessionInfo {
@@ -62,10 +59,7 @@ pub async fn create_app_password(label: String) -> WebResult<AppPassword> {
             return Err(InternalError::validation("a label is required"));
         }
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
-        let token = sessions
-            .create_session(auth.user_id, label)
-            .await
-            .map_err(InternalError::storage)?;
+        let token = sessions.create_session(auth.user_id, label).await?;
         Ok(AppPassword {
             token,
             label: label.to_string(),
@@ -79,10 +73,7 @@ pub async fn revoke_session(token_hash: String) -> WebResult<()> {
     boundary!("revoke_session", {
         let auth = require_auth().await?;
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
-        let session_records = sessions
-            .list_sessions(auth.user_id)
-            .await
-            .map_err(InternalError::storage)?;
+        let session_records = sessions.list_sessions(auth.user_id).await?;
         // `revoke_session` keys only on the token hash, so confirm the target
         // belongs to the caller before revoking — otherwise any authenticated
         // user could revoke another account's session by its hash.

@@ -33,18 +33,14 @@ pub async fn backup_warning_visible() -> WebResult<bool> {
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let is_operator = users
             .get_user(auth.user_id)
-            .await
-            .map_err(InternalError::storage)?
+            .await?
             .is_some_and(|u| u.is_operator);
 
         if !is_operator {
             return Ok(false);
         }
 
-        let config = site_config
-            .get_backup_config()
-            .await
-            .map_err(InternalError::storage)?;
+        let config = site_config.get_backup_config().await?;
 
         Ok(config.destination_path.is_none())
     })
@@ -66,8 +62,7 @@ pub async fn current_user_is_operator() -> WebResult<bool> {
         let users = expect_context::<Arc<dyn UserStorage>>();
         Ok(users
             .get_user(auth.user_id)
-            .await
-            .map_err(InternalError::storage)?
+            .await?
             .is_some_and(|u| u.is_operator))
     })
 }

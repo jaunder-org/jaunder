@@ -73,10 +73,7 @@ pub async fn apply_post_tag_diff(
     post_id: i64,
     desired: &[String],
 ) -> InternalResult<()> {
-    let existing = posts
-        .get_tags_for_post(post_id)
-        .await
-        .map_err(InternalError::storage)?;
+    let existing = posts.get_tags_for_post(post_id).await?;
     let diff = post_tag_diff(&existing, desired);
 
     for display in diff.to_add {
@@ -181,7 +178,14 @@ pub fn parse_post_cursor(
         (None, None) => Ok(None),
         (Some(created_at), Some(post_id)) => {
             let created_at = chrono::DateTime::parse_from_rfc3339(created_at.trim())
-                .map_err(|_| InternalError::validation("invalid cursor_created_at"))?
+                .map_err(|e| {
+                    InternalError::masked(
+                        ErrorKind::Validation,
+                        ErrorClass::Client,
+                        "invalid cursor_created_at",
+                        anyhow::Error::new(e),
+                    )
+                })?
                 .with_timezone(&Utc);
             Ok(Some(PostCursor {
                 created_at,
@@ -210,8 +214,7 @@ pub async fn find_draft_by_permalink_for_user(
     for _ in 0..200 {
         let drafts = posts
             .list_drafts_by_user(user_id, cursor.as_ref(), 50, chrono::Utc::now())
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
         if drafts.is_empty() {
             return Ok(None);
         }
