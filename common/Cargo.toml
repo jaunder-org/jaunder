@@ -21,7 +21,6 @@ quick-xml = "0.41"
 serde_json = "1"
 sha2 = "0.10"
 unicode-normalization = "0.1"
-opentelemetry = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
@@ -29,14 +28,11 @@ getrandom = { version = "0.2", features = ["js"] }
 [features]
 test-utils = ["cheap-kdf"]
 cheap-kdf = []
-metrics = ["dep:opentelemetry"]
 
 [dev-dependencies]
 axum = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true }
-opentelemetry = { workspace = true }
-opentelemetry_sdk = { workspace = true, features = ["metrics", "testing"] }
 
 [lints]
 workspace = true

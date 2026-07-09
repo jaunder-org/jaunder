@@ -133,10 +133,10 @@ pub async fn cmd_user_create(
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // CLI user creation bypasses the site registration policy entirely.
-    common::metrics::registration(
-        common::metrics::RegistrationSource::Cli,
-        common::metrics::RegistrationPolicy::CliBypass,
-        common::metrics::RegistrationResult::Ok,
+    host::metrics::registration(
+        host::metrics::RegistrationSource::Cli,
+        host::metrics::RegistrationPolicy::CliBypass,
+        host::metrics::RegistrationResult::Ok,
     );
 
     println!("Created user '{username}' with id {user_id}");
@@ -203,7 +203,7 @@ pub async fn cmd_user_invite(storage: &StorageArgs, expires_in: Option<u64>) -> 
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(hours);
 
     let code = state.invites.create_invite(expires_at).await?;
-    common::metrics::invite(common::metrics::InviteEvent::Created);
+    host::metrics::invite(host::metrics::InviteEvent::Created);
     println!("{code}");
     Ok(())
 }

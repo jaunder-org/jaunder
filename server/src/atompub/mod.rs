@@ -60,7 +60,7 @@ async fn record_atompub_request(
     );
     let response = next.run(request).await;
     if let Some(op) = op {
-        common::metrics::atompub_request(op, atompub_result(response.status()));
+        host::metrics::atompub_request(op, atompub_result(response.status()));
     }
     response
 }
@@ -87,13 +87,13 @@ fn atompub_op(matched_path: Option<&str>, method: &axum::http::Method) -> Option
 }
 
 /// Classifies a response status into the bounded `result` attribute.
-fn atompub_result(status: StatusCode) -> common::metrics::AtompubResult {
+fn atompub_result(status: StatusCode) -> host::metrics::AtompubResult {
     if status.is_server_error() {
-        common::metrics::AtompubResult::ServerError
+        host::metrics::AtompubResult::ServerError
     } else if status.is_client_error() {
-        common::metrics::AtompubResult::ClientError
+        host::metrics::AtompubResult::ClientError
     } else {
-        common::metrics::AtompubResult::Ok
+        host::metrics::AtompubResult::Ok
     }
 }
 
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn atompub_result_classifies_status_ranges() {
-        use common::metrics::AtompubResult;
+        use host::metrics::AtompubResult;
         assert!(matches!(atompub_result(StatusCode::OK), AtompubResult::Ok));
         assert!(matches!(
             atompub_result(StatusCode::CREATED),

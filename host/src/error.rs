@@ -327,7 +327,7 @@ impl InternalError {
             tracing::Level::WARN => emit!(warn),
             _ => emit!(error),
         }
-        common::metrics::error(self.kind.as_metric_str(), self.class.as_metric_str());
+        crate::metrics::error(self.kind.as_metric_str(), self.class.as_metric_str());
     }
 }
 

@@ -46,8 +46,8 @@ pub async fn request_email_verification(email: String) -> WebResult<()> {
         let started = std::time::Instant::now();
         let send_result = mailer.send_email(&message).await;
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        common::metrics::email_send_duration_ms(elapsed_ms);
-        common::metrics::email_send_result(common::metrics::EmailKind::Verification, &send_result);
+        host::metrics::email_send_duration_ms(elapsed_ms);
+        host::metrics::email_send_result(host::metrics::EmailKind::Verification, &send_result);
         send_result?;
 
         Ok(())

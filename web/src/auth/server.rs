@@ -68,7 +68,7 @@ where
 
         match sessions.authenticate(&credential.token).await {
             Ok(record) => {
-                common::metrics::session_validation(common::metrics::SessionOutcome::Ok);
+                host::metrics::session_validation(host::metrics::SessionOutcome::Ok);
                 verify_basic_username(&record.username, credential.expected_username.as_deref())?;
                 Ok(AuthUser {
                     user_id: record.user_id,
@@ -77,7 +77,7 @@ where
                 })
             }
             Err(error) => {
-                common::metrics::session_validation(storage::session_outcome(&error));
+                host::metrics::session_validation(storage::session_outcome(&error));
                 Err(AuthRejection::Session(error))
             }
         }

@@ -117,7 +117,7 @@ impl MediaManager {
     #[must_use]
     pub fn map_error(err: &anyhow::Error) -> StatusCode {
         let media_err = err.downcast_ref::<MediaError>();
-        common::metrics::media_upload(Self::upload_outcome(media_err));
+        host::metrics::media_upload(Self::upload_outcome(media_err));
         match media_err {
             Some(MediaError::BadRequest(_)) => StatusCode::BAD_REQUEST,
             Some(MediaError::PayloadTooLarge) => StatusCode::PAYLOAD_TOO_LARGE,
@@ -129,12 +129,12 @@ impl MediaManager {
     /// Maps a failed upload to its bounded `outcome` attribute for the
     /// `jaunder.media.uploads` metric. A non-`MediaError` (unexpected I/O, etc.)
     /// counts as `error`. Exhaustively tested so every arm's mapping is covered.
-    fn upload_outcome(err: Option<&MediaError>) -> common::metrics::UploadOutcome {
+    fn upload_outcome(err: Option<&MediaError>) -> host::metrics::UploadOutcome {
         match err {
-            Some(MediaError::BadRequest(_)) => common::metrics::UploadOutcome::Invalid,
-            Some(MediaError::PayloadTooLarge) => common::metrics::UploadOutcome::TooLarge,
-            Some(MediaError::InsufficientStorage) => common::metrics::UploadOutcome::QuotaExceeded,
-            Some(MediaError::Internal(_)) | None => common::metrics::UploadOutcome::Error,
+            Some(MediaError::BadRequest(_)) => host::metrics::UploadOutcome::Invalid,
+            Some(MediaError::PayloadTooLarge) => host::metrics::UploadOutcome::TooLarge,
+            Some(MediaError::InsufficientStorage) => host::metrics::UploadOutcome::QuotaExceeded,
+            Some(MediaError::Internal(_)) | None => host::metrics::UploadOutcome::Error,
         }
     }
 
@@ -272,11 +272,11 @@ impl MediaManager {
             metadata.size_bytes,
         )
         .await?;
-        common::metrics::media_upload_bytes(u64::try_from(metadata.size_bytes).unwrap_or(0));
-        common::metrics::media_upload(if deduplicated {
-            common::metrics::UploadOutcome::Deduplicated
+        host::metrics::media_upload_bytes(u64::try_from(metadata.size_bytes).unwrap_or(0));
+        host::metrics::media_upload(if deduplicated {
+            host::metrics::UploadOutcome::Deduplicated
         } else {
-            common::metrics::UploadOutcome::Stored
+            host::metrics::UploadOutcome::Stored
         });
         let url = media_url("upload", &metadata.sha256_hex, &metadata.filename);
         Ok(crate::media::UploadResponse {
@@ -378,7 +378,7 @@ mod tests {
 
     #[test]
     fn upload_outcome_maps_each_media_error() {
-        use common::metrics::UploadOutcome;
+        use host::metrics::UploadOutcome;
         assert!(matches!(
             MediaManager::upload_outcome(Some(&MediaError::BadRequest("x".to_owned()))),
             UploadOutcome::Invalid

@@ -98,10 +98,10 @@ impl From<UserAuthError> for host::error::InternalError {
 /// `jaunder.auth.logins` metric. Exhaustively tested so every variant's mapping
 /// is covered independent of which failures the login path is exercised with.
 #[must_use]
-pub fn login_outcome(error: &UserAuthError) -> common::metrics::LoginOutcome {
+pub fn login_outcome(error: &UserAuthError) -> host::metrics::LoginOutcome {
     match error {
-        UserAuthError::InvalidCredentials => common::metrics::LoginOutcome::InvalidCredentials,
-        UserAuthError::Internal(_) => common::metrics::LoginOutcome::InternalError,
+        UserAuthError::InvalidCredentials => host::metrics::LoginOutcome::InvalidCredentials,
+        UserAuthError::Internal(_) => host::metrics::LoginOutcome::InternalError,
     }
 }
 
@@ -671,7 +671,7 @@ mod tests {
 
     #[test]
     fn login_outcome_maps_each_variant() {
-        use common::metrics::LoginOutcome;
+        use host::metrics::LoginOutcome;
         assert!(matches!(
             login_outcome(&UserAuthError::InvalidCredentials),
             LoginOutcome::InvalidCredentials

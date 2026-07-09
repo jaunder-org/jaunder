@@ -39,7 +39,7 @@ pub async fn create_invite(expires_in_hours: Option<u64>) -> WebResult<String> {
             .await
             .map_err(InternalError::storage);
         if result.is_ok() {
-            common::metrics::invite(common::metrics::InviteEvent::Created);
+            host::metrics::invite(host::metrics::InviteEvent::Created);
         }
         result
     })

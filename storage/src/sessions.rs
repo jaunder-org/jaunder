@@ -42,11 +42,11 @@ pub enum SessionAuthError {
 /// tested) so every variant's mapping is covered independent of which errors a
 /// given request path happens to produce.
 #[must_use]
-pub fn session_outcome(error: &SessionAuthError) -> common::metrics::SessionOutcome {
+pub fn session_outcome(error: &SessionAuthError) -> host::metrics::SessionOutcome {
     match error {
-        SessionAuthError::InvalidToken => common::metrics::SessionOutcome::InvalidToken,
-        SessionAuthError::SessionNotFound => common::metrics::SessionOutcome::SessionNotFound,
-        SessionAuthError::Internal(_) => common::metrics::SessionOutcome::Internal,
+        SessionAuthError::InvalidToken => host::metrics::SessionOutcome::InvalidToken,
+        SessionAuthError::SessionNotFound => host::metrics::SessionOutcome::SessionNotFound,
+        SessionAuthError::Internal(_) => host::metrics::SessionOutcome::Internal,
     }
 }
 
@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn session_outcome_maps_each_variant() {
-        use common::metrics::SessionOutcome;
+        use host::metrics::SessionOutcome;
         assert!(matches!(
             session_outcome(&SessionAuthError::InvalidToken),
             SessionOutcome::InvalidToken
