@@ -64,14 +64,21 @@ server affordances.**
      of #140**: `serve` has a graceful-shutdown hook that, on SIGINT/SIGTERM,
      drains in-flight requests and lets the serve loop return so the RAII guard
      removes the file; a second signal forces an immediate exit that still
-     removes the file explicitly first. Contents are minimal for now —
-     `{ "ip": <ip>, "port": <port> }` — making a `--bind …:0` subprocess
-     discoverable race-free and acting as a binding handshake. The write is
-     best-effort (a failure is logged, not fatal); removal is best-effort too (a
-     hard SIGKILL still skips it — recovered by the stale-detection follow-on).
-     It is the forward-compatible base for follow-ons: **signal-robust removal —
-     delivered in #140**; a start-up mutex (refuse on a live `pid`, with stale
-     detection — #141, still deferred); and a local admin token for a
+     removes the file explicitly first. Contents are
+     `{ "ip": <ip>, "port": <port>, "pid": <pid>, "start_time": <jiffies> }` —
+     the address makes a `--bind …:0` subprocess discoverable race-free (a
+     binding handshake), and the `pid` + `start_time` (from `/proc/<pid>/stat`
+     field 22) identify the exact writer process for the start-up mutex. The
+     write is best-effort (a failure is logged, not fatal); removal is
+     best-effort too (a hard SIGKILL still skips it — recovered by the start-up
+     mutex's stale detection). It is the forward-compatible base for follow-ons:
+     **signal-robust removal — delivered in #140**; a **start-up mutex —
+     delivered in #141**: on `serve` startup, if the file names a live writer
+     (its `pid` is alive **and** has the recorded `start_time`) the server
+     refuses to start; a dead/mismatched holder is treated as stale (warn +
+     overwrite), and an unusable `/proc` is a hard fail. pid + start-time is
+     used rather than `comm`/`exe` so a recycled pid running another `jaunder`
+     is not mistaken for the writer. Remaining: a local admin token for a
      `jaunder shut-down` channel (#142, still deferred).
 
 2. **The harness owns the server lifecycle.** A `jaunder-test--with-live-server`
