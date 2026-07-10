@@ -457,7 +457,7 @@ async fn audience_membership_round_trip(#[case] backend: Backend) {
 
     assert!(state
         .audiences
-        .list_members(audience)
+        .list_members(author, audience)
         .await
         .unwrap()
         .is_empty());
@@ -474,14 +474,22 @@ async fn audience_membership_round_trip(#[case] backend: Backend) {
         .await
         .unwrap();
     assert_eq!(
-        state.audiences.list_members(audience).await.unwrap(),
+        state
+            .audiences
+            .list_members(author, audience)
+            .await
+            .unwrap(),
         vec![sub]
     );
 
-    state.audiences.remove_member(audience, sub).await.unwrap();
+    state
+        .audiences
+        .remove_member(author, audience, sub)
+        .await
+        .unwrap();
     assert!(state
         .audiences
-        .list_members(audience)
+        .list_members(author, audience)
         .await
         .unwrap()
         .is_empty());
@@ -531,10 +539,127 @@ async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
     ));
     assert!(state
         .audiences
-        .list_members(alice_audience)
+        .list_members(alice, alice_audience)
         .await
         .unwrap()
         .is_empty());
+}
+
+// `list_members` / `remove_member` are author-scoped: a different author can
+// neither see nor mutate another author's audience membership (the WHERE clause
+// filters by `author_user_id`, so a cross-author `audience_id` matches nothing).
+// This is the storage guarantee that replaced web's `assert_owns_audience` check.
+#[apply(backends)]
+#[tokio::test]
+async fn audience_members_are_author_scoped(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let alice = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let bob = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let local = local_channel_id(backend, &env).await;
+    // A subscription and audience both owned by ALICE, with the sub as a member.
+    let alice_sub = state
+        .subscriptions
+        .subscribe(alice, local, &bob.to_string())
+        .await
+        .unwrap();
+    let alice_audience = state
+        .audiences
+        .create_audience(alice, "Friends")
+        .await
+        .unwrap();
+    state
+        .audiences
+        .add_member(alice, alice_audience, alice_sub)
+        .await
+        .unwrap();
+
+    // Bob cannot list Alice's members...
+    assert!(state
+        .audiences
+        .list_members(bob, alice_audience)
+        .await
+        .unwrap()
+        .is_empty());
+    // ...and a Bob-scoped remove leaves Alice's membership untouched (no-op).
+    state
+        .audiences
+        .remove_member(bob, alice_audience, alice_sub)
+        .await
+        .unwrap();
+    assert_eq!(
+        state
+            .audiences
+            .list_members(alice, alice_audience)
+            .await
+            .unwrap(),
+        vec![alice_sub]
+    );
+}
+
+// `delete_audience` must remove the audience's membership rows in the same
+// transaction, not just the `audiences` row. The schema declares no
+// `ON DELETE CASCADE` and SQLite enforces foreign keys off by default, so a
+// dropped `DELETE FROM audience_members` would silently orphan membership rows.
+// A raw `COUNT(*)` proves they are gone (`list_members` on a deleted audience is
+// trivially empty regardless, so it cannot catch the orphan).
+#[apply(backends)]
+#[tokio::test]
+async fn audience_delete_cascades_memberships(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let alice = state
+        .users
+        .create_user(&username("alice"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let bob = state
+        .users
+        .create_user(&username("bob"), &password("password123"), None, false)
+        .await
+        .unwrap();
+    let local = local_channel_id(backend, &env).await;
+    let sub = state
+        .subscriptions
+        .subscribe(alice, local, &bob.to_string())
+        .await
+        .unwrap();
+    let audience = state
+        .audiences
+        .create_audience(alice, "Friends")
+        .await
+        .unwrap();
+    state
+        .audiences
+        .add_member(alice, audience, sub)
+        .await
+        .unwrap();
+
+    // Precondition: the membership row exists.
+    let members_sql =
+        format!("SELECT COUNT(*) FROM audience_members WHERE audience_id = {audience}");
+    assert_eq!(raw_scalar_i64(backend, &env, &members_sql).await, 1);
+
+    state
+        .audiences
+        .delete_audience(alice, audience)
+        .await
+        .unwrap();
+
+    // The membership row is gone, not orphaned.
+    assert_eq!(
+        raw_scalar_i64(backend, &env, &members_sql).await,
+        0,
+        "delete_audience must cascade-remove its membership rows"
+    );
 }
 
 fn username(s: &str) -> Username {
@@ -7288,6 +7413,25 @@ async fn raw_try_exec(backend: Backend, env: &TestEnv, sql: &str) -> Result<(), 
             // `recorded_postgres_url`.
             let pool = env.base.pool().postgres();
             sqlx::query(sql).execute(pool).await.map(|_| ())
+        }
+    }
+}
+
+// Reads a single `i64` (e.g. a `COUNT(*)`) on the FK-enabled pool for `backend`,
+// so a test can observe rows the trait API cannot reach (e.g. membership rows of a
+// deleted audience). Mirrors `raw_exec`'s per-backend pool selection.
+async fn raw_scalar_i64(backend: Backend, env: &TestEnv, sql: &str) -> i64 {
+    match backend {
+        Backend::Sqlite => sqlx::query_scalar::<_, i64>(sql)
+            .fetch_one(&open_pool(&env.base).await)
+            .await
+            .unwrap(),
+        Backend::Postgres => {
+            let pool = env.base.pool().postgres();
+            sqlx::query_scalar::<_, i64>(sql)
+                .fetch_one(pool)
+                .await
+                .unwrap()
         }
     }
 }

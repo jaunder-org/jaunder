@@ -174,6 +174,45 @@ export async function register(
 }
 
 /**
+ * Register a fresh user and return both the generated username and the fixed
+ * password `register` sets, so the account can be re-driven across browser
+ * contexts via `login`.
+ */
+export async function registerKnown(
+  page: Page,
+  firstNavigationTimeoutMs: number,
+): Promise<{ username: string; password: string }> {
+  const username = await register(page, firstNavigationTimeoutMs);
+  return { username, password: "testpassword123" };
+}
+
+/**
+ * Subscribe the current (authenticated) page's user to `authorUsername` via the
+ * author's profile page, waiting for the button to flip to "Unsubscribe".
+ */
+export async function subscribeTo(
+  page: Page,
+  authorUsername: string,
+): Promise<void> {
+  await goto(page, `/~${authorUsername}`);
+  await click(page, 'button:has-text("Subscribe")');
+  await waitForSelector(page, 'button:has-text("Unsubscribe")');
+}
+
+/**
+ * Unsubscribe the current page's user from `authorUsername` via the profile
+ * page, waiting for the button to flip back to "Subscribe".
+ */
+export async function unsubscribeFrom(
+  page: Page,
+  authorUsername: string,
+): Promise<void> {
+  await goto(page, `/~${authorUsername}`);
+  await click(page, 'button:has-text("Unsubscribe")');
+  await waitForSelector(page, 'button:has-text("Subscribe")');
+}
+
+/**
  * Assert that a confirmation flash `<p>` containing `text` becomes visible,
  * standardising the `expect(locator('p:has-text(...)')).toBeVisible()` idiom and
  * its ad-hoc timeout.

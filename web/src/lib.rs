@@ -39,6 +39,7 @@ pub mod subscriptions;
 pub mod tags;
 #[cfg(all(test, feature = "server"))]
 mod test_support;
+pub mod ui;
 pub mod viewer;
 
 pub use error::server_resource;

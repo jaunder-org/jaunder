@@ -15,6 +15,7 @@
 
 use crate::posts::{PostResponse, TimelinePage, TimelinePostSummary};
 use crate::tags::TagSummary;
+use crate::ui::topbar::render_topbar;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 
@@ -127,7 +128,7 @@ pub fn format_post_time(ts: &str) -> String {
 }
 
 /// Escape text for safe interpolation into HTML element or attribute content.
-fn escape_html(input: &str) -> String {
+pub(crate) fn escape_html(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
         match ch {
@@ -356,20 +357,6 @@ pub(crate) fn permalink_article(post: &PostResponse) -> String {
         tags: &post.tags,
         tag_ctx: &ctx,
     })
-}
-
-/// The `<div class="j-topbar">` bar, mirroring the reactive `pages::ui::Topbar`.
-/// `right` is trusted HTML for the `j-topbar-right` slot (e.g. the home Sign-in /
-/// Register buttons); `title`/`sub` are escaped.
-#[must_use]
-fn render_topbar(title: &str, sub: Option<&str>, right: &str) -> String {
-    let sub_html = sub.map_or_else(String::new, |s| {
-        format!("<div class=\"j-sub\">{}</div>", escape_html(s))
-    });
-    format!(
-        "<div class=\"j-topbar\"><div><h1>{title}</h1>{sub_html}</div><div class=\"j-topbar-right\">{right}</div></div>",
-        title = escape_html(title),
-    )
 }
 
 /// The home page hero block (constant copy), mirroring `home.rs`.
@@ -1101,17 +1088,6 @@ mod tests {
 
         let without = render_body(&PageSeed::SiteTimeline(one_post_page()));
         assert!(!without.contains("Load more"), "{without}");
-    }
-
-    #[test]
-    fn topbar_without_sub_omits_the_sub_div() {
-        let html = render_topbar("Title", None, "");
-        assert!(html.contains("<h1>Title</h1>"), "{html}");
-        assert!(!html.contains("j-sub"), "{html}");
-        assert!(
-            html.contains("<div class=\"j-topbar-right\"></div>"),
-            "{html}"
-        );
     }
 
     #[test]

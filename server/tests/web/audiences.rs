@@ -307,8 +307,23 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK, "add_member failed: {body}");
     assert_eq!(
-        state.audiences.list_members(aud_id).await.unwrap(),
+        state.audiences.list_members(author, aud_id).await.unwrap(),
         vec![sub_id]
+    );
+
+    // Adding the same subscriber again is idempotent through the boundary.
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/add_subscriber_to_audience",
+        &format!("audience_id={aud_id}&subscription_id={sub_id}"),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "idempotent add failed: {body}");
+    assert_eq!(
+        state.audiences.list_members(author, aud_id).await.unwrap(),
+        vec![sub_id],
+        "a duplicate add must not duplicate the membership"
     );
 
     let (status, body) = post_form(
@@ -321,54 +336,95 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "remove_member failed: {body}");
     assert!(state
         .audiences
-        .list_members(aud_id)
+        .list_members(author, aud_id)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Removing a subscriber who is no longer a member is a no-op, not an error.
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/remove_subscriber_from_audience",
+        &format!("audience_id={aud_id}&subscription_id={sub_id}"),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "redundant remove should be a no-op: {body}"
+    );
+    assert!(state
+        .audiences
+        .list_members(author, aud_id)
         .await
         .unwrap()
         .is_empty());
 }
 
-// AUTHORIZATION: a client-supplied audience_id owned by another author must be
-// rejected by remove_member / list_members (not author-scoped in the store).
+// AUTHORIZATION: every store method is author-scoped, so a client-supplied
+// audience_id owned by another author matches nothing — the request succeeds but
+// sees/changes none of the other author's data. (This replaced web's
+// `assert_owns_audience` NotFound gate; the storage-layer guarantee is covered by
+// `audience_members_are_author_scoped`.)
 #[apply(backends)]
 #[tokio::test]
-async fn cross_author_audience_id_is_rejected(#[case] backend: Backend) {
+async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let alice = make_user(&state, "alice").await;
     let bob = make_user(&state, "bob").await;
-    // Alice owns the audience.
+    let subscriber = make_user(&state, "subscriber").await;
+    let channel = state.subscriptions.local_channel_id().await.unwrap();
+    // Alice owns an audience with a member.
+    let alice_sub = state
+        .subscriptions
+        .subscribe(alice, channel, &subscriber.to_string())
+        .await
+        .unwrap();
     let alice_aud = state
         .audiences
         .create_audience(alice, "Secret")
         .await
         .unwrap();
+    state
+        .audiences
+        .add_member(alice, alice_aud, alice_sub)
+        .await
+        .unwrap();
     let bob_cookie = cookie_for(&state, bob).await;
 
-    // Bob tries to list Alice's audience members → must be rejected.
-    let (status, _body) = post_form(
+    // Bob lists Alice's audience members → succeeds, but sees nothing of hers.
+    let (status, body) = post_form(
         Arc::clone(&state),
         "/api/list_audience_members",
         &format!("audience_id={alice_aud}"),
         Some(&bob_cookie),
     )
     .await;
-    assert_ne!(
-        status,
-        StatusCode::OK,
-        "listing another author's audience members must be rejected"
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body.trim(),
+        "[]",
+        "another author's audience must list as empty, leaking no member id: {body}"
     );
 
-    // Bob tries to remove a member from Alice's audience → must be rejected.
-    let (status, _body) = post_form(
+    // Bob removes from Alice's audience → succeeds, but changes nothing.
+    let (status, body) = post_form(
         Arc::clone(&state),
         "/api/remove_subscriber_from_audience",
-        &format!("audience_id={alice_aud}&subscription_id=1"),
+        &format!("audience_id={alice_aud}&subscription_id={alice_sub}"),
         Some(&bob_cookie),
     )
     .await;
-    assert_ne!(
-        status,
-        StatusCode::OK,
-        "removing a member from another author's audience must be rejected"
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Alice's membership is intact.
+    assert_eq!(
+        state
+            .audiences
+            .list_members(alice, alice_aud)
+            .await
+            .unwrap(),
+        vec![alice_sub]
     );
 }
 
@@ -401,18 +457,139 @@ async fn list_my_subscribers_resolves_usernames(#[case] backend: Backend) {
     );
 }
 
-// Audience management requires authentication.
+// Every audience endpoint independently calls `require_auth`, so each must reject
+// an unauthenticated request (a dropped guard on any one would otherwise slip
+// through). One table covers all of them.
 #[apply(backends)]
 #[tokio::test]
-async fn audience_create_unauthenticated_is_rejected(#[case] backend: Backend) {
+async fn audience_endpoints_require_authentication(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _body) = post_form(
+    let endpoints = [
+        ("/api/create_audience", "name=Friends"),
+        ("/api/rename_audience", "audience_id=1&name=X"),
+        ("/api/delete_audience", "audience_id=1"),
+        ("/api/list_my_audiences", ""),
+        ("/api/list_my_subscribers", ""),
+        (
+            "/api/add_subscriber_to_audience",
+            "audience_id=1&subscription_id=1",
+        ),
+        (
+            "/api/remove_subscriber_from_audience",
+            "audience_id=1&subscription_id=1",
+        ),
+        ("/api/list_audience_members", "audience_id=1"),
+    ];
+    for (uri, body) in endpoints {
+        let (status, _body) = post_form(Arc::clone(&state), uri, body, None).await;
+        assert_eq!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{uri} must require authentication"
+        );
+    }
+}
+
+// A cross-author ADD is asymmetric with the scoped-away reads/removes: `add_member`
+// writes `author_user_id = bob`, so the composite FK `(audience_id, author_user_id)`
+// rejects a pairing with Alice's audience and it surfaces as a Storage error — NOT
+// a silent no-op. This is the write path the deleted `assert_owns_audience` used to
+// guard, so it must be refused at the boundary.
+#[apply(backends)]
+#[tokio::test]
+async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let alice = make_user(&state, "alice").await;
+    let bob = make_user(&state, "bob").await;
+    let subscriber = make_user(&state, "subscriber").await;
+    let channel = state.subscriptions.local_channel_id().await.unwrap();
+    // Alice owns a subscription and an audience (no members yet).
+    let alice_sub = state
+        .subscriptions
+        .subscribe(alice, channel, &subscriber.to_string())
+        .await
+        .unwrap();
+    let alice_aud = state
+        .audiences
+        .create_audience(alice, "Secret")
+        .await
+        .unwrap();
+    let bob_cookie = cookie_for(&state, bob).await;
+
+    // Bob tries to inject Alice's subscription into Alice's audience.
+    let (status, body) = post_form(
         Arc::clone(&state),
-        "/api/create_audience",
-        "name=Friends",
-        None,
+        "/api/add_subscriber_to_audience",
+        &format!("audience_id={alice_aud}&subscription_id={alice_sub}"),
+        Some(&bob_cookie),
     )
     .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "cross-author add must be rejected: {body}"
+    );
+    // Alice's audience is still empty — nothing was added on her behalf.
+    assert!(
+        state
+            .audiences
+            .list_members(alice, alice_aud)
+            .await
+            .unwrap()
+            .is_empty(),
+        "no member should have been added to another author's audience"
+    );
+}
+
+// Cross-author rename and delete at the boundary: rename surfaces the store's
+// NotFound (a non-OK error, name untouched); delete is a silent author-scoped
+// no-op (OK, audience intact). Complements `cross_author_audience_id_is_scoped_away`
+// (reads/removes) and `cross_author_add_member_is_rejected` (add) so every mutation
+// path is pinned now that `assert_owns_audience` is gone.
+#[apply(backends)]
+#[tokio::test]
+async fn cross_author_rename_and_delete_are_scoped(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let alice = make_user(&state, "alice").await;
+    let bob = make_user(&state, "bob").await;
+    let alice_aud = state
+        .audiences
+        .create_audience(alice, "Secret")
+        .await
+        .unwrap();
+    let bob_cookie = cookie_for(&state, bob).await;
+
+    // Bob renames Alice's audience → refused (store NotFound); name unchanged.
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/rename_audience",
+        &format!("audience_id={alice_aud}&name=Hijacked"),
+        Some(&bob_cookie),
+    )
+    .await;
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "cross-author rename must be refused: {body}"
+    );
+
+    // Bob deletes Alice's audience → author-scoped no-op (OK), still present.
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/delete_audience",
+        &format!("audience_id={alice_aud}"),
+        Some(&bob_cookie),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "cross-author delete is a scoped no-op: {body}"
+    );
+
+    // Alice's audience is intact under its original name.
+    let audiences = state.audiences.list_audiences(alice).await.unwrap();
+    assert_eq!(audiences.len(), 1);
+    assert_eq!(audiences[0].name, "Secret", "name must be unchanged");
 }

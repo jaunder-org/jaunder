@@ -7,8 +7,8 @@
 #[path = "../helpers/mod.rs"]
 mod helpers;
 
+mod audiences;
 mod web_account;
-mod web_audiences;
 mod web_auth;
 mod web_backup;
 mod web_email;

@@ -11,7 +11,9 @@ import {
   click,
   waitForSelector,
   login,
-  register,
+  registerKnown,
+  subscribeTo,
+  unsubscribeFrom,
 } from "./helpers";
 import { SEL } from "./selectors";
 
@@ -26,21 +28,6 @@ import { SEL } from "./selectors";
 // layer returns the same masked not-found for both private and audience-gated
 // posts), so "cannot see" is asserted as `.error` "Post not found" on the
 // permalink and absence of the title on the timeline.
-
-/**
- * Register a fresh user, set a password we control, and return both so the
- * same account can be re-used across browser contexts via `login`.
- *
- * `register` generates a unique username and uses the fixed password
- * "testpassword123" (see helpers.ts), so we surface that here for re-login.
- */
-async function registerKnown(
-  page: Page,
-  firstNavigationTimeoutMs: number,
-): Promise<{ username: string; password: string }> {
-  const username = await register(page, firstNavigationTimeoutMs);
-  return { username, password: "testpassword123" };
-}
 
 /** Open the editor, write a titled post, pick a base audience, and publish. */
 async function publishWithBaseAudience(
@@ -185,9 +172,7 @@ test("Subscribers post: visible after Subscribe, hidden again after Unsubscribe"
     await expect(viewerPage.locator(SEL.error)).toContainText("Post not found");
 
     // Subscribe via the author's profile page.
-    await goto(viewerPage, `/~${author.username}`);
-    await click(viewerPage, 'button:has-text("Subscribe")');
-    await waitForSelector(viewerPage, 'button:has-text("Unsubscribe")');
+    await subscribeTo(viewerPage, author.username);
 
     // Now the subscriber can see it.
     await goto(viewerPage, permalink);
@@ -196,9 +181,7 @@ test("Subscribers post: visible after Subscribe, hidden again after Unsubscribe"
     );
 
     // Unsubscribe via the profile page.
-    await goto(viewerPage, `/~${author.username}`);
-    await click(viewerPage, 'button:has-text("Unsubscribe")');
-    await waitForSelector(viewerPage, 'button:has-text("Subscribe")');
+    await unsubscribeFrom(viewerPage, author.username);
 
     // After unsubscribing the post is hidden again.
     await goto(viewerPage, permalink);
@@ -233,9 +216,7 @@ test("Named audience: assigned member sees a Friends post; an unassigned non-mem
   const xCtx = await browser.newContext();
   const xPage = await xCtx.newPage();
   const userX = await registerKnown(xPage, firstNav);
-  await goto(xPage, `/~${author.username}`);
-  await click(xPage, 'button:has-text("Subscribe")');
-  await waitForSelector(xPage, 'button:has-text("Unsubscribe")');
+  await subscribeTo(xPage, author.username);
 
   // Y registers but never subscribes — it is neither a subscriber nor a member.
   const yCtx = await browser.newContext();
