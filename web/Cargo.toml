@@ -13,6 +13,7 @@ leptos_dom.workspace = true
 leptos_meta.workspace = true
 leptos_router.workspace = true
 leptos_axum = { workspace = true, optional = true }
+reactive_stores.workspace = true
 
 axum = { workspace = true, optional = true }
 common.workspace = true

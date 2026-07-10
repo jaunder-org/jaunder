@@ -227,3 +227,66 @@ When in doubt, mirror `home.rs`: a plain `Effect::new` (gated with
 `#[cfg(target_arch = "wasm32")]`) that copies the resolved page into signals and
 only writes when the value actually changes (to prevent remounting child
 components).
+
+## 10. Keyed lists (reactive `Store`)
+
+Decision record: `docs/adr/0061-web-keyed-list-reactive-store.md`.
+
+A `map`/`collect` list rendered inside a reactive closure rebuilds **every** row
+whenever its source signal changes. For a list whose rows carry **per-row
+identity that can mutate** (a rename) or **nested component state to preserve**
+(a child that has fetched its own data), that rebuild remounts every row and
+loses the child state — e.g. the audiences screen's per-row `MemberChecklist`
+reflashing "Loading members…" on an unrelated create/rename/delete (#348).
+
+Render such a list from a `reactive_stores::Store`, wired with
+`Invalidator::patched`:
+
+```rust
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Store, Patch)]
+struct Row { id: i64, name: String }
+#[derive(Default, Store, Patch)]
+struct Rows { #[store(key: i64 = |r| r.id)] rows: Vec<Row> }
+
+let store = Store::new(Rows::default());
+let state = list.patched(fetch_rows, move |rows| store.rows().patch(rows)); // Signal<ListState>
+// <ul><For each=move || store.rows() key=|r| r.key() let:row>
+//   <Row name={move || row.name().get()} /> …
+// </For></ul>
+// {move || match state.get() { ListState::Loading => …, Empty => …, Error(e) => …, Loaded => () }}
+```
+
+- **`Invalidator::patched(fetch, patch) -> Signal<ListState>`** owns the
+  plumbing: it refetches `fetch` when the invalidator fires, and on **success
+  only** hands the rows to your `patch` closure (never on a pending or failed
+  fetch — last-good rows are retained), returning the list's `ListState`
+  (`Loading` / `Empty` / `Loaded` / `Error`). Later verticals copy the two-line
+  wiring, not a hand-rolled effect.
+- The `patch` step is a **closure** (`move |rows| store.rows().patch(rows)`),
+  and that is load-bearing. `store.rows().patch(vec)` is the keyed field's
+  **inherent, in-place** patch: it reconciles by key and notifies only the
+  subfields whose value changed, so unchanged rows keep their DOM (and their
+  children's state) and a rename updates just that row's field. **Never**
+  `.write()`/`.set()`, and never route the patch through a _generic_ bound — a
+  generic `field.patch(vec)` resolves to the `Patch` trait's **unkeyed,
+  positional** patch and remounts the whole list (the bug this pattern exists to
+  prevent), which is exactly why `patched` takes a closure rather than the
+  field.
+- Iterate with a keyed
+  `<For each=move || store.rows() key=|r| r.key() let:row>`, **mounted
+  unconditionally** — never inside a reactive loading/error branch that would
+  tear the whole `<For>` down on a refetch. Render `state` (loading / empty /
+  error) in a **sibling** node.
+- Read a row's mutable fields as reactive subfields
+  (`{move || row.name().get()}`) so a rename updates in place. Keep fields bound
+  to editable inputs **uncontrolled** (an initial `row.name().get_untracked()`
+  snapshot), so a background refetch cannot clobber an in-progress edit.
+  `patch`-on-success also doubles as the sticky retention from §9 (never blanks
+  to "Loading…"); the refetch is driven by an `Invalidator` (ADR-0060 / #359).
+
+**Do not** reach for `Store` for a flat, read-only, or stateless list — one with
+no per-row identity that mutates and no nested state to keep (the audiences
+screen's subscriber roster, or a `MemberChecklist`'s own `<li>` items). Those
+stay plain `map`/`collect`; a keyed store there is ceremony for no benefit. The
+audiences vertical is the reference: `Store` for the audience list, plain
+rendering for the two flat lists inside it.

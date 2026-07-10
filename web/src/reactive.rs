@@ -3,6 +3,9 @@
 //! [`Invalidator`] is the canonical revalidation idiom (design record:
 //! `docs/adr/0060-web-invalidator-revalidation-idiom.md`): a committed mutation
 //! `notify()`s an invalidator, and every resource that `track()`s it refetches.
+//! [`Invalidator::patched`] extends it to a keyed `reactive_stores` list (design record:
+//! `docs/adr/0061-web-keyed-list-reactive-store.md`): a refetch `patch`es the store in
+//! place so unchanged rows keep their DOM, and [`ListState`] tracks the list's load status.
 
 use leptos::prelude::*;
 use leptos::server_fn::ServerFn;
@@ -69,6 +72,47 @@ impl Invalidator {
         });
         action
     }
+
+    /// Drives a keyed [`reactive_stores`](https://docs.rs/reactive_stores) list from a refetch
+    /// of `fetch` (revalidated by this invalidator). On each successful refetch it hands the
+    /// rows to `patch` — supplied as a closure so the caller's concrete keyed field runs its
+    /// **in-place** `patch` (a generic bound would instead resolve to the unkeyed, positional
+    /// patch and lose per-row identity). Returns the list's [`ListState`]; a pending or failed
+    /// refetch never patches, so the last-good rows are retained.
+    #[must_use]
+    pub fn patched<T, Fut, E>(
+        &self,
+        fetch: impl Fn() -> Fut + Send + Sync + 'static,
+        patch: impl Fn(Vec<T>) + 'static,
+    ) -> Signal<ListState>
+    where
+        T: Clone + serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
+        E: Clone
+            + std::fmt::Display
+            + serde::Serialize
+            + serde::de::DeserializeOwned
+            + Send
+            + Sync
+            + 'static,
+        Fut: std::future::Future<Output = Result<Vec<T>, E>> + Send + 'static,
+    {
+        let resource = self.resource(fetch);
+        let state = RwSignal::new(ListState::Loading);
+        Effect::new(move |_| match resource.get() {
+            None => {}
+            Some(Ok(rows)) => {
+                let empty = rows.is_empty();
+                patch(rows);
+                state.set(if empty {
+                    ListState::Empty
+                } else {
+                    ListState::Loaded
+                });
+            }
+            Some(Err(e)) => state.set(ListState::Error(e.to_string())),
+        });
+        state.into()
+    }
     // cov:ignore-stop
 }
 
@@ -76,6 +120,22 @@ impl Default for Invalidator {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The load status of a store-backed list, returned by [`Invalidator::patched`]: `Loading`
+/// until the first resolve, then `Empty` / `Loaded` per the row count, or `Error` on a failed
+/// fetch. Rendered as a sibling to the (unconditionally mounted) list, so the list itself is
+/// never inside a branch that could tear it down on a refetch. Derive-only.
+#[derive(Clone, Debug)]
+pub enum ListState {
+    /// The first fetch has not resolved yet.
+    Loading,
+    /// Resolved with no rows.
+    Empty,
+    /// Resolved with at least one row.
+    Loaded,
+    /// The fetch failed; the payload is the error's `Display`.
+    Error(String),
 }
 
 /// Declares a distinct context-scope newtype over an [`Invalidator`], with `Deref` so the

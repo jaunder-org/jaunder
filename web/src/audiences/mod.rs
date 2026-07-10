@@ -15,9 +15,10 @@
 //! no-op delete).
 
 use crate::error::WebResult;
-use crate::reactive::{invalidator_scope, Invalidator};
+use crate::reactive::{invalidator_scope, Invalidator, ListState};
 use crate::ui::Topbar;
 use leptos::prelude::*;
+use reactive_stores::{Field, Patch, Store};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "server")]
@@ -29,10 +30,19 @@ use {
 };
 
 /// A named audience as shown in the management screen.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Store, Patch)]
 pub struct AudienceSummary {
     pub audience_id: i64,
     pub name: String,
+}
+
+/// The reactive store backing the audience list: a keyed collection so a refetch
+/// `patch`es row-identically (only changed rows' subfields notify), never remounting
+/// unchanged rows. Distinct from `AudienceList` (#359's invalidator scope).
+#[derive(Default, Store, Patch)]
+struct AudienceListData {
+    #[store(key: i64 = |a| a.audience_id)]
+    audiences: Vec<AudienceSummary>,
 }
 
 /// One of the author's active subscribers, for the assignment checklist.
@@ -234,29 +244,26 @@ invalidator_scope! {
 /// checklist over their active subscribers.
 #[component]
 pub fn AudiencesPage() -> impl IntoView {
+    // The audience list: a keyed reactive store, refetched via the `AudienceList` invalidator
+    // and `patch`ed in place on success (`Invalidator::patched` owns the plumbing) — so
+    // unchanged rows keep their DOM (and their `MemberChecklist`'s loaded members) and a rename
+    // updates just that row's name. `state` drives the sibling loading/empty/error node.
     let list = AudienceList(Invalidator::new());
     provide_context(list);
+    let store = Store::new(AudienceListData::default());
+    let state = list.patched(list_my_audiences, move |rows| store.audiences().patch(rows));
 
-    let audiences_res = list.resource(list_my_audiences);
-    // The subscriber roster is independent of audience/membership ops, so it is
-    // fetched once (constant source).
+    // The subscriber roster: fetched once (constant source — never refetched, so no sticky
+    // retention is needed), derived straight from the resource and provided as a signal so
+    // each `MemberChecklist` reflects it reactively when it resolves, without rebuilding rows.
     let subscribers_res = crate::server_resource(|| (), |()| list_my_subscribers());
-
-    // Copy each resolved resource into a signal, updating only on `Some`, so a
-    // re-fetch retains the last value instead of flashing "Loading…"
-    // (web-style-guide §9, as `home.rs`). `None` only until the first resolve.
-    let audiences = RwSignal::new(None::<Result<Vec<AudienceSummary>, String>>);
-    let subscribers = RwSignal::new(Vec::<SubscriberSummary>::new());
-    Effect::new(move |_| {
-        if let Some(result) = audiences_res.get() {
-            audiences.set(Some(result.map_err(|e| e.to_string())));
-        }
+    let subscribers = Signal::derive(move || {
+        subscribers_res
+            .get()
+            .and_then(Result::ok)
+            .unwrap_or_default()
     });
-    Effect::new(move |_| {
-        if let Some(Ok(list)) = subscribers_res.get() {
-            subscribers.set(list);
-        }
-    });
+    provide_context(subscribers);
 
     view! {
         <Topbar title="Audiences".to_string() sub="Named subscriber groups".to_string() />
@@ -273,33 +280,22 @@ pub fn AudiencesPage() -> impl IntoView {
                             </div>
                         </div>
                     </div>
-                    {move || {
-                        let subscribers = subscribers.get();
-                        match audiences.get() {
-                            None => view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any(),
-                            Some(Ok(list)) if list.is_empty() => {
-                                view! { <p>"No audiences yet."</p> }.into_any()
-                            }
-                            Some(Ok(list)) => {
-                                view! {
-                                    <ul class="j-audience-list">
-                                        {list
-                                            .into_iter()
-                                            .map(|audience| {
-                                                view! {
-                                                    <AudienceRow
-                                                        audience=audience
-                                                        subscribers=subscribers.clone()
-                                                    />
-                                                }
-                                            })
-                                            .collect::<Vec<_>>()}
-                                    </ul>
-                                }
-                                    .into_any()
-                            }
-                            Some(Err(e)) => view! { <p class="error">{e}</p> }.into_any(),
+                    // Mounted unconditionally: never inside a load/error branch that could
+                    // tear it down, so only keyed reconciliation ever touches rows.
+                    <ul class="j-audience-list">
+                        <For each=move || store.audiences() key=|row| row.key() let:row>
+                            <AudienceRow row=row.into() />
+                        </For>
+                    </ul>
+                    // Sibling status: loading / empty / error sit next to the list, not
+                    // wrapped around it.
+                    {move || match state.get() {
+                        ListState::Loading => {
+                            Some(view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any())
                         }
+                        ListState::Empty => Some(view! { <p>"No audiences yet."</p> }.into_any()),
+                        ListState::Error(e) => Some(view! { <p class="error">{e}</p> }.into_any()),
+                        ListState::Loaded => None,
                     }}
                 </section>
             </div>
@@ -341,16 +337,17 @@ fn CreateAudienceForm() -> impl IntoView {
 }
 
 /// One audience: its name with rename/delete controls and a checklist of the
-/// author's active subscribers (checked = member).
+/// author's active subscribers (checked = member). Takes the row's keyed store field, so
+/// a rename updates the `<h3>` name in place (the row is never remounted).
 #[component]
-fn AudienceRow(audience: AudienceSummary, subscribers: Vec<SubscriberSummary>) -> impl IntoView {
-    let audience_id = audience.audience_id;
-    let name = audience.name.clone();
+fn AudienceRow(row: Field<AudienceSummary>) -> impl IntoView {
+    let audience_id = row.audience_id().get_untracked();
+    let initial_name = row.name().get_untracked();
     view! {
         <li class="j-audience-item">
-            <h3 class="j-audience-name">{name}</h3>
-            <AudienceHeader audience=audience />
-            <MemberChecklist audience_id=audience_id subscribers=subscribers />
+            <h3 class="j-audience-name">{move || row.name().get()}</h3>
+            <AudienceHeader audience_id=audience_id name=initial_name />
+            <MemberChecklist audience_id=audience_id />
         </li>
     }
 }
@@ -358,13 +355,11 @@ fn AudienceRow(audience: AudienceSummary, subscribers: Vec<SubscriberSummary>) -
 /// The `j-audience-head` controls: rename and delete forms for one audience. Both actions
 /// refetch the audience list on success via the `AudienceList` invalidator.
 #[component]
-fn AudienceHeader(audience: AudienceSummary) -> impl IntoView {
+fn AudienceHeader(audience_id: i64, name: String) -> impl IntoView {
     let list = expect_context::<AudienceList>();
     let rename_action = list.action::<RenameAudience>();
     let delete_action = list.action::<DeleteAudience>();
 
-    let audience_id = audience.audience_id;
-    let name = audience.name;
     view! {
         <div class="j-audience-head">
             <ActionForm action=rename_action>
@@ -388,7 +383,10 @@ fn AudienceHeader(audience: AudienceSummary) -> impl IntoView {
 /// the members resource, all bound to a *local* `Invalidator` so a toggle refetches only
 /// this audience's members — never the list.
 #[component]
-fn MemberChecklist(audience_id: i64, subscribers: Vec<SubscriberSummary>) -> impl IntoView {
+fn MemberChecklist(audience_id: i64) -> impl IntoView {
+    // The subscriber roster, reactive: it updates the checklist in place when it resolves,
+    // without the row being rebuilt (provided by `AudiencesPage`).
+    let subscribers = expect_context::<Signal<Vec<SubscriberSummary>>>();
     // Local to this checklist: an add/remove here refetches only this audience's members,
     // not every audience's (and never the list).
     let members = Invalidator::new();
@@ -407,7 +405,7 @@ fn MemberChecklist(audience_id: i64, subscribers: Vec<SubscriberSummary>) -> imp
 
     view! {
         {move || {
-            let subscribers = subscribers.clone();
+            let subscribers = subscribers.get();
             match member_ids.get() {
                 None => view! { <p class="j-loading">"Loading members\u{2026}"</p> }.into_any(),
                 Some(member_ids) => {
