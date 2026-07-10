@@ -72,7 +72,7 @@ server-assigned binary URL from the response entry's `<content src>' via
                (jaunder--harvest-response-fields (plist-get resp :body))))))
 
 (defun jaunder--collect-media-links ()
-  "Collect qualifying local-image links in the current buffer's body region, in order.
+  "Collect qualifying local-image links in the buffer's body region, in order.
 Each neutral link record from `jaunder--org-body-links' that qualifies as an
 uploadable image (`jaunder--media-link-p') becomes a plist (:raw-link RAW
 :content-type MIME :path ABS), taking the record's resolved :file.  In document
@@ -88,8 +88,8 @@ order, one-for-one with the links in the sent body."
 
 (defun jaunder--substitute-media (body urls)
   "Return BODY with its qualifying media links rewritten to URLS, in order.
-Delegates the org rewrite to `jaunder--org-substitute-links', selecting the media
-links via `jaunder--media-link-p'."
+Delegates the org rewrite to `jaunder--org-substitute-links', selecting the
+media links via `jaunder--media-link-p'."
   (jaunder--org-substitute-links body #'jaunder--media-link-p urls))
 
 (defun jaunder--media-preflight (records)
