@@ -24,15 +24,6 @@
 
 (require 'org)
 
-(defconst jaunder--header-keyword-re
-  "^[ \t]*#\\+[A-Za-z][A-Za-z0-9_-]*:"
-  "Regexp matching any org file-keyword line (`#+KEY:').
-The metadata header block is the leading run of these; matching *any*
-keyword (not just the mapped ones) means an interleaved keyword such as
-`#+AUTHOR:' cannot halt stripping and leak a later `#+PROPERTY: JAUNDER_*'
-into the sent body.  The trailing colon excludes block markers like
-`#+begin_src'.")
-
 (defconst jaunder--blank-line-re "^[ \t]*$"
   "Regexp matching a blank (whitespace-only) line.")
 
@@ -56,15 +47,18 @@ Whitespace is trimmed and empty terms dropped."
 
 (defun jaunder--body-start ()
   "Return the position after the leading metadata header block in this buffer.
-The header block is the leading contiguous run of header-keyword and blank lines.
-Shared by `jaunder--strip-header-block' and media detection so both see the same
-body region."
+The header block is the leading contiguous run of blank lines and org file
+keywords (`org-keyword-regexp' — any `#+KEY:' line, not just the mapped ones, so
+an interleaved keyword such as `#+AUTHOR:' cannot halt stripping and leak a later
+`#+PROPERTY: JAUNDER_*' into the sent body).  Shared by
+`jaunder--strip-header-block' and media detection so both see the same body
+region."
   (save-excursion
     (goto-char (point-min))
     (let ((case-fold-search t))
       (while (and (not (eobp))
                   (or (looking-at-p jaunder--blank-line-re)
-                      (looking-at-p jaunder--header-keyword-re)))
+                      (looking-at-p org-keyword-regexp)))
         (forward-line 1)))
     (point)))
 
@@ -94,7 +88,7 @@ touched."
                  (insert new-line))
         (goto-char (point-min))
         (let ((insert-at (point-min)))
-          (while (looking-at-p jaunder--header-keyword-re)
+          (while (looking-at-p org-keyword-regexp)
             (forward-line 1)
             (setq insert-at (point)))
           (goto-char insert-at)
