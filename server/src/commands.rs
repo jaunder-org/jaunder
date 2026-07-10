@@ -8,6 +8,7 @@ use sqlx::postgres::PgConnectOptions;
 
 use crate::cli::StorageArgs;
 use crate::mailer::LettreMailSender;
+use crate::runtime_file;
 use common::backup::BackupMode;
 use common::mailer::{EmailMessage, MailSender};
 use common::password::Password;
@@ -358,7 +359,7 @@ pub struct PreparedServer {
     backup_scheduler: Option<tokio_cron_scheduler::JobScheduler>,
     feed_scheduler: tokio_cron_scheduler::JobScheduler,
     /// Removes the runtime-info file on drop (see ADR-0035).
-    runtime_guard: crate::runtime_file::RuntimeFileGuard,
+    runtime_guard: runtime_file::RuntimeFileGuard,
 }
 
 /// Performs all of [`cmd_serve`]'s setup — open the database (auto-initializing
@@ -383,7 +384,19 @@ pub async fn prepare_server(
     // Establish our own start-time up front (before opening the DB): if `/proc` is
     // unusable we cannot enforce the start-up mutex, so refuse rather than serve with
     // a silently-broken guard (#141). Threaded into the post-bind runtime-file write.
-    let start_time = crate::runtime_file::require_start_time_at(Path::new("/proc/self/stat"))?;
+    let start_time = runtime_file::require_start_time_at(Path::new("/proc/self/stat"))?;
+
+    // Start-up mutex: if the runtime file names a live writer process, refuse before
+    // opening the DB / touching a data dir another instance owns (#141).
+    let runtime_path = runtime_file::resolve_runtime_path(runtime_file, &storage.storage_path);
+    match runtime_file::check_startup_mutex(&runtime_path)? {
+        runtime_file::StartupCheck::Refuse { pid } => anyhow::bail!(
+            "another jaunder instance is already running on data dir {} (pid {pid}); \
+             refusing to start",
+            storage.storage_path.display()
+        ),
+        runtime_file::StartupCheck::Stale | runtime_file::StartupCheck::Proceed => {}
+    }
 
     let db = match open_existing_database(&storage.db).await {
         Ok(db) => db,
@@ -451,8 +464,9 @@ pub async fn prepare_server(
     // `local_addr` cannot fail on a just-bound listener; fall back to the
     // requested `bind` rather than add a never-taken error branch.
     let addr = listener.local_addr().unwrap_or(bind);
-    let runtime_guard = crate::runtime_file::RuntimeFileGuard::for_serve(
-        runtime_file,
+    // Reuse the path already resolved for the mutex check (no re-resolve / clone).
+    let runtime_guard = runtime_file::RuntimeFileGuard::for_serve(
+        Some(runtime_path),
         &storage.storage_path,
         addr,
         start_time,
@@ -481,7 +495,7 @@ async fn serve_with_shutdown(
     // Held only for its `Drop`, which removes runtime.json when this function
     // returns (the graceful path). Underscore-named so it lives to scope end
     // rather than dropping immediately.
-    _runtime_guard: crate::runtime_file::RuntimeFileGuard,
+    _runtime_guard: runtime_file::RuntimeFileGuard,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     axum::serve(listener, router)
@@ -527,7 +541,7 @@ fn spawn_shutdown_supervisor(
         tokio::select! { _ = sigint.recv() => {}, _ = sigterm.recv() => {} }
         tracing::warn!("second shutdown signal; forcing immediate exit");
         if let Some(p) = &runtime_path {
-            crate::runtime_file::remove_runtime_file(p);
+            runtime_file::remove_runtime_file(p);
         }
         std::process::exit(0);
         // cov:ignore-stop
@@ -763,6 +777,46 @@ mod tests {
         drop(prepared);
     }
 
+    #[tokio::test]
+    async fn prepare_server_refuses_on_live_holder_before_db_open() {
+        // A planted runtime.json naming a live writer (our own pid + real
+        // start-time) must make prepare_server refuse *before* opening/creating
+        // the DB (#141). Uses dev mode (prod == false) so, absent the mutex, it
+        // would auto-init — proving the refusal precedes that.
+        let temp = TempDir::new().expect("temp dir");
+        let db_path = temp.path().join("jaunder.db");
+        let db_url = format!("sqlite:{}", db_path.display());
+        let opts: DbConnectOptions = db_url.parse().expect("parse sqlite url");
+        let storage = StorageArgs {
+            storage_path: temp.path().to_path_buf(),
+            db: opts,
+        };
+        let start = runtime_file::require_start_time_at(std::path::Path::new("/proc/self/stat"))
+            .expect("read own start-time");
+        std::fs::write(
+            temp.path().join("runtime.json"),
+            serde_json::json!({
+                "ip": "127.0.0.1", "port": 1,
+                "pid": std::process::id(), "start_time": start,
+            })
+            .to_string(),
+        )
+        .expect("plant runtime file");
+
+        let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        // `.err()` discards the Ok(PreparedServer) (which isn't Debug) and keeps the
+        // error, so the whole check is one covered assertion (no standalone panic line).
+        let err = prepare_server(&storage, bind, false, None).await.err();
+        assert!(
+            err.is_some_and(|e| e.to_string().contains("already running")),
+            "prepare_server must refuse when a live writer holds runtime.json"
+        );
+        assert!(
+            !db_path.exists(),
+            "must refuse before creating the database"
+        );
+    }
+
     // The two shutdown tests below raise a REAL signal to their own process. This
     // is safe only under `cargo nextest` (one process per test) — the tokio
     // handler, installed synchronously by spawn_shutdown_supervisor *before* we
@@ -776,7 +830,7 @@ mod tests {
         let path = dir.path().join("runtime.json");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let guard = crate::runtime_file::RuntimeFileGuard::write(path.clone(), addr, 0);
+        let guard = runtime_file::RuntimeFileGuard::write(path.clone(), addr, 0);
         assert!(path.exists(), "guard wrote the runtime file");
 
         // Installs the SIGINT/SIGTERM handlers synchronously, so the raise below

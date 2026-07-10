@@ -64,6 +64,75 @@ pub(crate) fn require_start_time_at(path: &Path) -> anyhow::Result<u64> {
         .ok_or_else(|| anyhow::anyhow!("cannot read own start-time from {}", path.display()))
 }
 
+/// Reads a process's start-time from `/proc/<pid>/stat` (the `/proc` binding over
+/// [`read_start_time_at`]). `Ok(None)` = no such pid (dead); `Err` = unusable `/proc`.
+pub(crate) fn read_proc_start_time(pid: u32) -> std::io::Result<Option<u64>> {
+    read_start_time_at(Path::new(&format!("/proc/{pid}/stat")))
+}
+
+/// `Ok(true)` iff `pid` is live **and** its start-time matches `recorded` — i.e. the
+/// exact process that wrote the runtime file is still running. `Ok(false)` = dead pid
+/// or start-time mismatch (a recycled pid). `Err` = unusable `/proc` (hard fail).
+pub(crate) fn holder_is_live(pid: u32, recorded: u64) -> std::io::Result<bool> {
+    Ok(match read_proc_start_time(pid)? {
+        Some(actual) => actual == recorded,
+        None => false,
+    })
+}
+
+/// The runtime-file path: the explicit `override_path`, else
+/// `<storage_path>/runtime.json`. Shared by the start-up check and the write.
+pub(crate) fn resolve_runtime_path(override_path: Option<PathBuf>, storage_path: &Path) -> PathBuf {
+    override_path.unwrap_or_else(|| storage_path.join("runtime.json"))
+}
+
+/// Outcome of the start-up mutex check.
+pub(crate) enum StartupCheck {
+    /// A live writer holds the file — refuse to start (its pid).
+    Refuse { pid: u32 },
+    /// The recorded process is gone, or the file is unusable — warn and overwrite.
+    Stale,
+    /// No runtime file — a fresh start.
+    Proceed,
+}
+
+/// Reads the runtime file at `path` and decides whether a live writer holds it.
+/// A corrupt / legacy / missing-field `runtime.json` is `Stale` (our own file,
+/// non-authoritative if damaged); a `/proc` failure while probing the holder
+/// propagates as `Err` (hard fail). Emits the stale `WARN` here, so callers only
+/// map the outcome.
+pub(crate) fn check_startup_mutex(path: &Path) -> std::io::Result<StartupCheck> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        // No file: the common fresh-start case.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(StartupCheck::Proceed),
+        // Exists but unreadable (e.g. it's a directory): our own file is unusable, so
+        // warn + overwrite (Stale) — not a hard fail, since it isn't the /proc mechanism.
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "unreadable runtime file");
+            return Ok(StartupCheck::Stale);
+        }
+    };
+    let (Some(pid), Some(recorded)) = serde_json::from_str::<serde_json::Value>(&contents)
+        .ok()
+        .map_or((None, None), |v| {
+            (
+                v["pid"].as_u64().and_then(|p| u32::try_from(p).ok()),
+                v["start_time"].as_u64(),
+            )
+        })
+    else {
+        tracing::warn!(path = %path.display(), "stale runtime file (unusable); overwriting");
+        return Ok(StartupCheck::Stale);
+    };
+    Ok(if holder_is_live(pid, recorded)? {
+        StartupCheck::Refuse { pid }
+    } else {
+        tracing::warn!(path = %path.display(), pid, "stale runtime file (gone); overwriting");
+        StartupCheck::Stale
+    })
+}
+
 /// Best-effort removal of the runtime file at `path`, ignoring errors (it may
 /// already be gone). Shared by `RuntimeFileGuard::drop` and the forced-shutdown
 /// path in `cmd_serve`, which must remove explicitly because `process::exit`
@@ -109,7 +178,7 @@ impl RuntimeFileGuard {
         addr: SocketAddr,
         start_time: u64,
     ) -> Self {
-        let path = override_path.unwrap_or_else(|| storage_path.join("runtime.json"));
+        let path = resolve_runtime_path(override_path, storage_path);
         Self::write(path, addr, start_time)
     }
 
@@ -278,5 +347,98 @@ mod tests {
         assert_eq!(v["port"], 34567);
         assert_eq!(v["pid"], std::process::id());
         assert_eq!(v["start_time"], 4242);
+    }
+
+    fn own_start_time() -> u64 {
+        require_start_time_at(std::path::Path::new("/proc/self/stat")).unwrap()
+    }
+
+    fn write_runtime(path: &std::path::Path, json: &serde_json::Value) {
+        std::fs::write(path, json.to_string()).unwrap();
+    }
+
+    #[test]
+    fn read_proc_start_time_self_and_dead() {
+        assert!(read_proc_start_time(std::process::id()).unwrap().is_some());
+        // u32::MAX is above pid_max on any Linux system => /proc entry never exists.
+        assert_eq!(read_proc_start_time(u32::MAX).unwrap(), None);
+    }
+
+    #[test]
+    fn holder_is_live_matrix() {
+        let me = std::process::id();
+        assert!(holder_is_live(me, own_start_time()).unwrap()); // exact writer
+        assert!(!holder_is_live(me, own_start_time() + 1).unwrap()); // pid reuse (start-time differs)
+        assert!(!holder_is_live(u32::MAX, 0).unwrap()); // dead pid
+    }
+
+    #[test]
+    fn check_startup_mutex_outcomes() {
+        let dir = TempDir::new().unwrap();
+        let p = dir.path().join("runtime.json");
+        let me = std::process::id();
+
+        // absent -> Proceed
+        assert!(matches!(
+            check_startup_mutex(&p).unwrap(),
+            StartupCheck::Proceed
+        ));
+
+        // live writer (our pid + real start-time) -> Refuse { pid: me }
+        write_runtime(
+            &p,
+            &serde_json::json!({"ip":"127.0.0.1","port":1,"pid":me,"start_time":own_start_time()}),
+        );
+        assert!(
+            matches!(check_startup_mutex(&p).unwrap(), StartupCheck::Refuse { pid } if pid == me)
+        );
+
+        // our pid + wrong start-time (reuse) -> Stale
+        write_runtime(
+            &p,
+            &serde_json::json!({"ip":"127.0.0.1","port":1,"pid":me,"start_time":own_start_time()+1}),
+        );
+        assert!(matches!(
+            check_startup_mutex(&p).unwrap(),
+            StartupCheck::Stale
+        ));
+
+        // dead pid -> Stale
+        write_runtime(
+            &p,
+            &serde_json::json!({"ip":"127.0.0.1","port":1,"pid":u32::MAX,"start_time":0}),
+        );
+        assert!(matches!(
+            check_startup_mutex(&p).unwrap(),
+            StartupCheck::Stale
+        ));
+
+        // legacy {ip,port}-only -> Stale
+        write_runtime(&p, &serde_json::json!({"ip":"127.0.0.1","port":1}));
+        assert!(matches!(
+            check_startup_mutex(&p).unwrap(),
+            StartupCheck::Stale
+        ));
+
+        // corrupt JSON -> Stale
+        std::fs::write(&p, "not json").unwrap();
+        assert!(matches!(
+            check_startup_mutex(&p).unwrap(),
+            StartupCheck::Stale
+        ));
+    }
+
+    #[test]
+    fn check_startup_mutex_unreadable_file_is_stale() {
+        // A path that exists but can't be read_to_string'd (a directory) is a
+        // non-NotFound I/O error: treated as a stale/unusable own file, not a fresh
+        // start and not a hard fail.
+        let dir = TempDir::new().unwrap();
+        let p = dir.path().join("runtime.json");
+        std::fs::create_dir(&p).unwrap();
+        assert!(matches!(
+            check_startup_mutex(&p).unwrap(),
+            StartupCheck::Stale
+        ));
     }
 }
