@@ -1,8 +1,8 @@
-;;; jaunder-media-integration.el --- C3 live media upload tests -*- lexical-binding: t; -*-
+;;; jaunder-media-integration.el --- live media upload tests -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;; Exercises media upload + content-src substitution end-to-end against a real
-;; server (#137 harness, ADR-0035).  Runs via `cargo xtask elisp-integration'.
+;; server (harness, ADR-0035).  Runs via `cargo xtask elisp-integration'.
 
 ;;; Code:
 
@@ -60,7 +60,7 @@ the 200 (vs 201) distinguishes the `existed' branch (media.rs)."
   "A rejected upload (wrong-user path) returns a non-2xx status, not a signal.
 Confirms over the wire that the server really rejects with a 4xx — the condition
 `jaunder--upload-media' turns into an error (its own abort branch is unit-tested
-with a stub in Task 7).  Uses a mismatched username in the path with valid alice
+with a stub).  Uses a mismatched username in the path with valid alice
 credentials, so `require_user_match' fails deterministically (403)."
   (jaunder-test--with-live-server
    (let* ((dir (make-temp-file "jaunder-media-" t))

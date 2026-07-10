@@ -149,10 +149,10 @@ the auth header under load (ADR-0038)."
              (jaunder--plz-response->plist resp)
            (signal (car err) (cdr err))))))))
 
-;;; org -> atom mapping (unit C, issue #74/#160)
+;;; org -> atom mapping
 
 (cl-defstruct (jaunder-entry (:constructor jaunder--make-entry))
-              "Structured AtomPub entry mapped from an org buffer (issue #160).
+              "Structured AtomPub entry mapped from an org buffer.
 Holds abstract field values only; wire encoding (namespaces, media types,
 `app:draft' nesting) lives in `jaunder--atom-entry->xml'.  `body' is the
 body-only content with the metadata header block stripped."
@@ -165,7 +165,7 @@ The metadata header block is the leading run of these; matching *any*
 keyword (not just the mapped ones) means an interleaved keyword such as
 `#+AUTHOR:' cannot halt stripping and leak a later `#+PROPERTY: JAUNDER_*'
 into the sent body.  The trailing colon excludes block markers like
-`#+begin_src' (issue #160).")
+`#+begin_src'.")
 
 (defconst jaunder--blank-line-re "^[ \t]*$"
   "Regexp matching a blank (whitespace-only) line.")
@@ -175,7 +175,7 @@ into the sent body.  The trailing colon excludes block markers like
 `jaunder--org->atom' converts an org buffer, so its content is always org;
 the media type is knowable from the converter, not from any header field.
 Non-org authoring buffers (markdown/html) are separate future converters,
-out of scope for v1 (issue #160).")
+out of scope for v1.")
 
 (defun jaunder--collect-properties (keywords)
   "Return an alist of file-level #+PROPERTY: KEY/VALUE pairs from KEYWORDS.
@@ -199,7 +199,7 @@ Whitespace is trimmed and empty terms dropped."
   "Return the position after the leading metadata header block in this buffer.
 The header block is the leading contiguous run of header-keyword and blank lines.
 Shared by `jaunder--strip-header-block' and media detection so both see the same
-body region (#161)."
+body region."
   (save-excursion
     (goto-char (point-min))
     (let ((case-fold-search t))
@@ -221,7 +221,7 @@ Drops the leading contiguous run of header keyword lines and blank lines
   "Parse a numeric UTC OFFSET string (\"±HHMM\" or \"±HH:MM\") to integer seconds.
 Returns nil when OFFSET is not a numeric offset.  Used only for the
 JAUNDER_DATE_TZ fallback: `encode-time' silently misreads an offset *string*
-as UTC, so a numeric offset must be handed to it as integer seconds (#160)."
+as UTC, so a numeric offset must be handed to it as integer seconds."
   (when (and offset
              (string-match
               "\\`\\([+-]\\)\\([0-9]\\{2\\}\\):?\\([0-9]\\{2\\}\\)\\'" offset))
@@ -235,7 +235,7 @@ as UTC, so a numeric offset must be handed to it as integer seconds (#160)."
 An IANA name is preferred and returned as-is (DST-correct); a numeric offset
 is parsed to integer seconds (the fallback — see `jaunder--offset->seconds').
 nil or empty TZ falls back to the local zone.  A typo'd IANA name is silently
-treated as UTC by `encode-time'; time zones are hard and we do our best (#160)."
+treated as UTC by `encode-time'; time zones are hard and we do our best."
   (cond
    ((or (null tz) (string= (string-trim tz) "")) nil)
    ((jaunder--offset->seconds tz))
@@ -252,7 +252,7 @@ Returns nil when DATE-RAW does not parse to a time."
       (format-time-string "%Y-%m-%dT%H:%M:%SZ" (encode-time decoded) t))))
 
 (defun jaunder--utc->org-date (utc tz)
-  "Render an org inactive timestamp for UTC interpreted in zone TZ (C4 / #162).
+  "Render an org inactive timestamp for UTC interpreted in zone TZ.
 UTC is an RFC-3339 UTC string (e.g. \"2026-07-01T13:00:00Z\"); TZ a
 JAUNDER_DATE_TZ string.  Inverse of `jaunder--org-date->utc' at org's minute
 resolution: a server UTC carrying non-zero seconds is truncated to the minute
@@ -262,7 +262,7 @@ resolution: a server UTC carrying non-zero seconds is truncated to the minute
                       (jaunder--resolve-zone tz)))
 
 (defun jaunder--current-zone-name ()
-  "Return the machine's current IANA zone name, else a numeric offset string (C4 / #162).
+  "Return the machine's current IANA zone name, else a numeric offset string.
 Prefers a `TZ' IANA name, then the /etc/localtime symlink target; falls back to
 the current numeric UTC offset (IANA preferred, offset caveat).  The TZ branch
 trusts a non-empty, non-`:'-prefixed value as an IANA name; a POSIX-style TZ
@@ -275,7 +275,7 @@ trusts a non-empty, non-`:'-prefixed value as an IANA name; a POSIX-style TZ
       (format-time-string "%z")))
 
 (defun jaunder--ensure-date-tz ()
-  "Ensure the buffer records a JAUNDER_DATE_TZ; return the effective zone string (C4 / #162).
+  "Ensure the buffer records a JAUNDER_DATE_TZ; return the effective zone string.
 When unset, captures the machine's current zone (`jaunder--current-zone-name')
 so #+DATE: is interpreted in a recorded zone, not one silently re-inferred on a
 later machine.  Idempotent: an existing value is preserved verbatim."
@@ -285,12 +285,12 @@ later machine.  Idempotent: an existing value is preserved verbatim."
         zone)))
 
 (defun jaunder--org->atom ()
-  "Map the current org buffer to a `jaunder-entry' (issue #160).
+  "Map the current org buffer to a `jaunder-entry'.
 Reads the metadata header block via `org-collect-keywords' and carries the
 body-only content with the header block stripped.  Non-mutating.  The
 `published' slot is filled by the timezone computation (see
 `jaunder--org-date->utc'); `body' still holds local media links, substituted
-later by the media unit (#161)."
+later by the media unit."
   (let* ((kws (org-collect-keywords
                '("TITLE" "DATE" "KEYWORDS" "DESCRIPTION" "PROPERTY")))
          (props (jaunder--collect-properties kws))
@@ -329,7 +329,7 @@ attribute values.  Emits only set fields: `<title>'/`<summary>'/`<published>'
 are omitted when nil, one `<category term>' per tag, and the
 `<app:control><app:draft>yes>' marker (with the `app' namespace) only for a
 draft.  All wire knowledge (namespaces, media types, element order) lives
-here (issue #160)."
+here."
   (let* ((draft (jaunder-entry-draft entry))
          (attrs (append
                  (list (cons 'xmlns jaunder--atom-ns))
@@ -357,13 +357,14 @@ here (issue #160)."
       (dom-print (append (list 'entry attrs) (nreverse children)))
       (buffer-string))))
 
-;;; media upload + content-addressed link substitution (unit C, issue #161)
+;;; media upload + content-addressed link substitution
 
 (defun jaunder--atom-entry-fields (xml)
   "Parse AtomPub entry XML into an alist of harvested fields.
 Returns `content-src'/`content-type' from `<content>', `slug' from `<j:slug>',
-and `published' from `<published>'.  The shared entry-parse primitive: C3 uses
-the content subset, C4 the slug/published subset, Unit D extends it further.
+and `published' from `<published>'.  The shared entry-parse primitive; callers
+take different subsets of the parsed fields (the media-upload path the content,
+the publish path the slug and published time).
 `libxml-parse-xml-region' folds the default namespace, so `<content>' and
 `<published>' are `content'/`published'; the `j:'-prefixed slug is matched by
 local name via `dom-by-tag' on the `slug' symbol."
@@ -385,9 +386,9 @@ local name via `dom-by-tag' on the `slug' symbol."
     ("gif" . "image/gif")
     ("webp" . "image/webp")
     ("svg" . "image/svg+xml"))
-  "Alist of lowercase image extension → MIME type for uploadable media (#161).
+  "Alist of lowercase image extension → MIME type for uploadable media.
 Its key set is the qualification predicate: only links whose file extension is a
-key are uploaded.  Non-image media is #25.")
+key are uploaded.  Non-image media types are out of scope for now.")
 
 (defun jaunder--media-content-type (filename)
   "Return the media MIME type for FILENAME by extension, or nil if unqualified.
@@ -400,7 +401,7 @@ The extension match is case-insensitive."
 Qualifies a `file:'- or `attachment:'-type link whose target has an image
 extension; nil otherwise.  The single source of truth for \"qualifies\", shared by
 detection and substitution so the two stay in lockstep — their positional
-one-for-one alignment rides on agreeing here (#161)."
+one-for-one alignment rides on agreeing here."
   (and (member (org-element-property :type link) '("file" "attachment"))
        (jaunder--media-content-type (org-element-property :path link))))
 
@@ -409,7 +410,7 @@ one-for-one alignment rides on agreeing here (#161)."
 POSTs the raw bytes to `/atompub/{user}/media' with the filename in a `Slug'
 header (the server sha256-dedups: 201 new / 200 re-upload), then harvests the
 server-assigned binary URL from the response entry's `<content src>' via
-`jaunder--atom-entry-fields'.  Signals an error on any non-2xx status (#161)."
+`jaunder--atom-entry-fields'.  Signals an error on any non-2xx status."
   (let* ((url (jaunder--build-url (jaunder--active-base-url) "atompub"
                                   (jaunder--active-username) "media"))
          (resp (jaunder--http-request
@@ -429,7 +430,7 @@ keeping `file:'-type links whose extension is an image and `attachment:' links
 \(:raw-link RAW :path ABS :content-type MIME).  `file:' paths resolve against
 `default-directory'; `attachment:' paths via `org-attach-expand' at the link's
 heading.  Restricting to the body region keeps this list aligned one-for-one and
-in order with the links in the C2 sent body (#161)."
+in order with the links in the sent body."
   (save-restriction
     (narrow-to-region (jaunder--body-start) (point-max))
     (let ((tree (org-element-parse-buffer)))
@@ -453,7 +454,7 @@ in order with the links in the C2 sent body (#161)."
   "Return BODY with its qualifying media links rewritten to URLS, in order.
 URLS has one entry per qualifying link in document order.  Each link's whole inner
 target is replaced with its URL, brackets and any `[…][description]' preserved
-\(result stays `[[URL]]' / `[[URL][desc]]').  Rewrites right-to-left (#161)."
+\(result stays `[[URL]]' / `[[URL][desc]]').  Rewrites right-to-left."
   (with-temp-buffer
     (insert body)
     (org-mode)
@@ -480,7 +481,7 @@ target is replaced with its URL, brackets and any `[…][description]' preserved
 (defun jaunder--media-preflight (records)
   "Signal an error if any RECORDS `:path' is not a readable file.
 RECORDS is a `jaunder--collect-media-links' list.  Checks every path and, if any
-are missing, signals one error listing them all — fail-fast, upload nothing (#161)."
+are missing, signals one error listing them all — fail-fast, upload nothing."
   (let ((missing (delq nil
                        (mapcar (lambda (r)
                                  (let ((p (plist-get r :path)))
@@ -494,8 +495,8 @@ are missing, signals one error listing them all — fail-fast, upload nothing (#
   "Upload the current buffer's local images and return BODY with links localized.
 Detects qualifying media links in the buffer's body region, pre-flights that all
 exist (else errors, uploading nothing), uploads each distinct file once (server
-sha256-dedups), and rewrites those links in BODY — the C2 sent body — to the
-harvested server URLs, in order.  The authoring buffer is never modified (#161)."
+sha256-dedups), and rewrites those links in BODY — the sent body — to the
+harvested server URLs, in order.  The authoring buffer is never modified."
   (let ((records (jaunder--collect-media-links)))
     (jaunder--media-preflight records)
     (let ((cache (make-hash-table :test 'equal)))
@@ -509,7 +510,7 @@ harvested server URLs, in order.  The authoring buffer is never modified (#161).
        body
        (mapcar (lambda (r) (gethash (plist-get r :path) cache)) records)))))
 
-;;; buffer read/write helpers (unit C4, issue #162)
+;;; buffer read/write helpers
 
 (defun jaunder--set-keyword-line (line-re new-line)
   "Replace the first LINE-RE match in the leading header block with NEW-LINE.
@@ -553,7 +554,7 @@ touched."
   "Return the #+KEY: value in the current buffer, or nil."
   (cadr (assoc key (org-collect-keywords (list key)))))
 
-;;; multi-blog config + resolution (unit C4, issue #162)
+;;; multi-blog config + resolution
 
 (defun jaunder--blog-entry-for (file-or-dir)
   "Return the `jaunder-blogs' entry (DIRECTORY . PLIST) governing FILE-OR-DIR, or nil.
@@ -622,7 +623,7 @@ Signals when FILE resolves to no configured, fully-specified blog."
   `(let ((jaunder--active-blog (jaunder--resolve-blog ,file)))
      ,@body))
 
-;;; publish validation + Location->id + force-draft (unit C4, issue #162)
+;;; publish validation + Location->id + force-draft
 
 (defun jaunder--validate-publish (entry status date-raw tz)
   "Signal an error if ENTRY is not publishable; return nil otherwise.
@@ -704,7 +705,7 @@ send); absent it, the render falls back to the local zone via
     (save-buffer)
     slug))
 
-;;; new-post command (unit C4, issue #162)
+;;; new-post command
 
 (defun jaunder--new-post-in (dir now-string)
   "Create and save a timestamped draft in DIR stamped NOW-STRING; return its path.
@@ -734,7 +735,7 @@ minimal template and visits the file."
     (switch-to-buffer (find-file-noselect path))
     (goto-char (point-max))))
 
-;;; publish commands (unit C4, issue #162)
+;;; publish commands
 
 (defconst jaunder--entry-content-type "application/atom+xml;type=entry"
   "Request Content-Type for an AtomPub <entry> POST/PUT.")
@@ -793,8 +794,8 @@ file pristine."
   (jaunder-publish t))
 
 (defun jaunder--atom->org (&rest _args)
-  "Atom->Org mapping seam.  Implemented by units C/D (issues #74/#75)."
-  (error "jaunder: atom->org mapping not yet implemented (units C/D, issues #74/#75)"))
+  "Atom->Org mapping seam; not yet implemented."
+  (error "jaunder: atom->org mapping not yet implemented"))
 
 (provide 'jaunder)
 ;;; jaunder.el ends here

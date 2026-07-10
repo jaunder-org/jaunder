@@ -67,7 +67,7 @@
     (should (equal (jaunder--response-header r "X-A") "1"))
     (should (null (jaunder--response-header r "x-missing")))))
 
-;;; org->atom — field mapping (C2 / issue #160)
+;;; org->atom — field mapping
 
 (defun jaunder-test--entry (org)
   "Map ORG text to a `jaunder-entry' via a temp org buffer."
@@ -111,7 +111,7 @@
 
 (ert-deftest jaunder-org->atom-content-type-is-always-org ()
   ;; org->atom converts an org buffer, so the content is org regardless of any
-  ;; JAUNDER_FORMAT header (which would only lie about org body — issue #160).
+  ;; JAUNDER_FORMAT header (which would only lie about org body).
   (should (equal (jaunder-entry-content-type
                   (jaunder-test--entry "#+TITLE: T\n\nB\n"))
                  "text/org"))
@@ -165,7 +165,7 @@
     (should-not (string-match-p "JAUNDER_" (jaunder-entry-body e)))
     (should-not (string-match-p "#\\+AUTHOR" (jaunder-entry-body e)))))
 
-;;; offset parsing / zone resolution (C2 / issue #160)
+;;; offset parsing / zone resolution
 
 (ert-deftest jaunder-offset->seconds-negative ()
   (should (= (jaunder--offset->seconds "-0500") (* -5 3600))))
@@ -196,7 +196,7 @@
   (should (null (jaunder--resolve-zone nil)))
   (should (null (jaunder--resolve-zone "   "))))
 
-;;; org->atom — publish time / timezone (C2 / issue #160)
+;;; org->atom — publish time / timezone
 
 (ert-deftest jaunder-org->atom-published-iana-dst-summer ()
   (should (equal (jaunder-entry-published
@@ -260,7 +260,7 @@
                   (concat "#+PROPERTY: JAUNDER_STATUS scheduled\n"
                           "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n\nB\n"))))))
 
-;;; utc->org-date + machine-zone capture (C4 / issue #162)
+;;; utc->org-date + machine-zone capture
 
 (ert-deftest jaunder-utc->org-date-renders-in-zone ()
   ;; 13:00Z in America/New_York (EDT, -04:00) is 09:00 local.
@@ -291,7 +291,7 @@
       (jaunder--ensure-date-tz)
       (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "Europe/Paris")))))
 
-;;; multi-blog config + resolution (C4 / issue #162)
+;;; multi-blog config + resolution
 
 (ert-deftest jaunder-resolve-blog-longest-prefix ()
   (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a" :username "a")
@@ -336,7 +336,7 @@
     (should-error (jaunder--active-base-url))
     (should-error (jaunder--active-username))))
 
-;;; atom-entry -> xml serializer (C2 / issue #160)
+;;; atom-entry -> xml serializer
 
 (ert-deftest jaunder-atom-entry->xml-full-entry ()
   (let ((xml (jaunder--atom-entry->xml
@@ -408,7 +408,7 @@
       (insert xml)
       (should (consp (libxml-parse-xml-region (point-min) (point-max)))))))
 
-;;; media upload (unit C, issue #161)
+;;; media upload
 
 (ert-deftest jaunder-atom-entry-fields-harvests-content-src-and-type ()
   (skip-unless (fboundp 'libxml-parse-xml-region))
@@ -624,7 +624,7 @@
                  (should (equal (jaunder--localize-media body) body))
                  (should-not called))))))
 
-;;; buffer read/write helpers (unit C4, issue #162)
+;;; buffer read/write helpers
 
 (ert-deftest jaunder-set-property-replaces-existing ()
   (with-temp-buffer
@@ -654,7 +654,7 @@
     (jaunder--set-keyword "DATE" "[2027-01-01 Fri 00:00]")
     (should (equal (jaunder--buffer-keyword "DATE") "[2027-01-01 Fri 00:00]"))))
 
-;;; publish validation + Location->id + force-draft (C4 / issue #162)
+;;; publish validation + Location->id + force-draft
 
 (ert-deftest jaunder-validate-publish-rejects-empty-body ()
   (let ((e (jaunder--make-entry :body "   \n")))
@@ -683,7 +683,7 @@
     ;; And the wire entry indeed omits <published>.
     (should-not (string-match-p "<published>" (jaunder--atom-entry->xml e)))))
 
-;;; rename temp draft to <slug>.org (C4 / issue #162)
+;;; rename temp draft to <slug>.org
 
 (ert-deftest jaunder-rename-to-slug-renames-and-handles-collision ()
   (let ((dir (make-temp-file "jaunder-rn-" t)))

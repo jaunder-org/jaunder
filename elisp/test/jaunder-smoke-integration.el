@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 ;; End-to-end smoke over real HTTP: proves boot + provisioning + auth, driving the
-;; real client transport (`jaunder--http-request', Unit C #74, plz/ADR-0038).  The
+;; real client transport (`jaunder--http-request', plz/ADR-0038).  The
 ;; AtomPub surface (including the service document) requires authentication;
 ;; `jaunder--http-request' supplies the app-password Basic header via auth-source.
 ;; See ADR-0035.

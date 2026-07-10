@@ -1,7 +1,7 @@
-;;; jaunder-transport-integration.el --- C1 live transport test -*- lexical-binding: t; -*-
+;;; jaunder-transport-integration.el --- live transport test -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Exercises `jaunder--http-request' end-to-end against a real server (#137 harness).
+;; Exercises `jaunder--http-request' end-to-end against a real server (harness).
 
 ;;; Code:
 
