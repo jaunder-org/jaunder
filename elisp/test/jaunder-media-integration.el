@@ -49,7 +49,7 @@ the 200 (vs 201) distinguishes the `existed' branch (media.rs)."
                           (list 'file img) "image/png"
                           (list (cons "Slug" "same.png"))))
                   (u2 (cdr (assq 'content-src
-                                 (jaunder--atom-entry-fields
+                                 (jaunder--harvest-response-fields
                                   (plist-get resp2 :body))))))
              (should (string-match-p "/media/upload/" u1))
              (should (= (plist-get resp2 :status) 200))

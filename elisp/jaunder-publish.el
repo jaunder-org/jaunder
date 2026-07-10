@@ -88,7 +88,7 @@ Precondition for the publish-now `#+DATE:' render: the buffer's JAUNDER_DATE_TZ
 must already be recorded (the command calls `jaunder--ensure-date-tz' before the
 send); absent it, the render falls back to the local zone via
 `jaunder--resolve-zone'."
-  (let* ((fields (jaunder--atom-entry-fields (plist-get response :body)))
+  (let* ((fields (jaunder--harvest-response-fields (plist-get response :body)))
          (slug (cdr (assq 'slug fields)))
          (published (cdr (assq 'published fields)))
          (etag (jaunder--response-header response "ETag"))

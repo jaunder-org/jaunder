@@ -421,7 +421,7 @@
 
 ;;; media upload
 
-(ert-deftest jaunder-atom-entry-fields-harvests-content-src-and-type ()
+(ert-deftest jaunder-harvest-response-fields-content-src-and-type ()
   (skip-unless (fboundp 'libxml-parse-xml-region))
   (let ((xml (concat "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
                      "<entry xmlns=\"http://www.w3.org/2005/Atom\">"
@@ -433,24 +433,24 @@
                      "<link rel=\"edit-media\""
                      " href=\"https://h/media/upload/ab/cd/abcd/p.png\"/>"
                      "</entry>")))
-    (should (equal (cdr (assq 'content-src (jaunder--atom-entry-fields xml)))
+    (should (equal (cdr (assq 'content-src (jaunder--harvest-response-fields xml)))
                    "https://h/media/upload/ab/cd/abcd/p.png"))
-    (should (equal (cdr (assq 'content-type (jaunder--atom-entry-fields xml)))
+    (should (equal (cdr (assq 'content-type (jaunder--harvest-response-fields xml)))
                    "image/png"))))
 
-(ert-deftest jaunder-atom-entry-fields-harvests-slug-and-published ()
+(ert-deftest jaunder-harvest-response-fields-slug-and-published ()
   (let ((xml (concat
               "<entry xmlns=\"http://www.w3.org/2005/Atom\""
               " xmlns:j=\"https://jaunder.org/ns/atompub\">"
               "<content type=\"text/org\">Body</content>"
               "<published>2026-07-01T13:00:00+00:00</published>"
               "<j:slug>my-post</j:slug></entry>")))
-    (let ((fields (jaunder--atom-entry-fields xml)))
+    (let ((fields (jaunder--harvest-response-fields xml)))
       (should (equal (cdr (assq 'slug fields)) "my-post"))
       (should (equal (cdr (assq 'published fields)) "2026-07-01T13:00:00+00:00"))
       (should (equal (cdr (assq 'content-type fields)) "text/org")))))
 
-(ert-deftest jaunder-atom-entry-fields-absent-slug-published-are-nil ()
+(ert-deftest jaunder-harvest-response-fields-absent-slug-published-are-nil ()
   ;; A content-only entry (no <j:slug>, no <published> — e.g. a draft, which
   ;; the server stamps <published> onto only when live) yields nil for both,
   ;; exercising the `(and NODE (dom-text NODE))' nil-guard branches.
@@ -458,7 +458,7 @@
               "<entry xmlns=\"http://www.w3.org/2005/Atom\""
               " xmlns:j=\"https://jaunder.org/ns/atompub\">"
               "<content type=\"text/org\">Body</content></entry>")))
-    (let ((fields (jaunder--atom-entry-fields xml)))
+    (let ((fields (jaunder--harvest-response-fields xml)))
       (should (null (cdr (assq 'slug fields))))
       (should (null (cdr (assq 'published fields))))
       (should (equal (cdr (assq 'content-type fields)) "text/org")))))

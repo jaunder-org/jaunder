@@ -66,12 +66,12 @@ here."
       (dom-print (append (list 'entry attrs) (nreverse children)))
       (buffer-string))))
 
-(defun jaunder--atom-entry-fields (xml)
-  "Parse AtomPub entry XML into an alist of harvested fields.
+(defun jaunder--harvest-response-fields (xml)
+  "Harvest server-assigned fields from an AtomPub response entry's XML.
 Returns `content-src'/`content-type' from `<content>', `slug' from `<j:slug>',
-and `published' from `<published>'.  The shared entry-parse primitive; callers
-take different subsets of the parsed fields (the media-upload path the content,
-the publish path the slug and published time).
+and `published' from `<published>'.  A metadata harvest, not a full entry parse;
+callers take different subsets (the media-upload path the content, the publish
+path the slug and published time).
 `libxml-parse-xml-region' folds the default namespace, so `<content>' and
 `<published>' are `content'/`published'; the `j:'-prefixed slug is matched by
 local name via `dom-by-tag' on the `slug' symbol."

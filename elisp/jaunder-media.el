@@ -61,7 +61,7 @@ one-for-one alignment rides on agreeing here."
 POSTs the raw bytes to `/atompub/{user}/media' with the filename in a `Slug'
 header (the server sha256-dedups: 201 new / 200 re-upload), then harvests the
 server-assigned binary URL from the response entry's `<content src>' via
-`jaunder--atom-entry-fields'.  Signals an error on any non-2xx status."
+`jaunder--harvest-response-fields'.  Signals an error on any non-2xx status."
   (let* ((url (jaunder--build-url (jaunder--active-base-url) "atompub"
                                   (jaunder--active-username) "media"))
          (resp (jaunder--http-request
@@ -71,7 +71,7 @@ server-assigned binary URL from the response entry's `<content src>' via
     (unless (memq status '(200 201))
       (error "jaunder: media upload of %s failed (HTTP %s)" path status))
     (cdr (assq 'content-src
-               (jaunder--atom-entry-fields (plist-get resp :body))))))
+               (jaunder--harvest-response-fields (plist-get resp :body))))))
 
 (defun jaunder--collect-media-links ()
   "Collect qualifying local-image links in the current buffer's body region, in order.
