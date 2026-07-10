@@ -86,20 +86,20 @@ Thin I/O wrapper over `auth-source-search' using `jaunder--auth-source-spec'."
 plz writes each header as `--header \"NAME: VALUE\"' into a curl `--config' file
 without escaping VALUE (plz 0.9.1, plz.el:503).  A raw double quote — as in a
 strong `ETag' echoed back via `If-Match' — closes the config-file string early,
-truncating the header to an empty value that curl then drops, so the precondition
-never reaches the server.  Backslash-escaping `\\' and `\"' lets curl's config
-parser rebuild the literal value."
+truncating the header to an empty value that curl then drops, so the
+precondition never reaches the server.  Backslash-escaping `\\' and `\"' lets
+curl's config parser rebuild the literal value."
   (replace-regexp-in-string "[\\\"]" "\\\\\\&" value))
 
 (defun jaunder--http-request (method url &optional body content-type extra-headers)
   "Make an authenticated METHOD request to URL via `plz', returning a plist.
 METHOD is an HTTP verb string; URL an absolute URL.  BODY is a request body: a
 string, or the `plz' file form `(file PATH)' to upload a file's raw bytes.
-CONTENT-TYPE and EXTRA-HEADERS (an alist of extra (NAME . VALUE) headers) apply to
-write requests.  Basic-auth credentials come from `jaunder--auth-secret' for the
-active blog's user.  Returns the `jaunder--plz-response->plist' plist; HTTP error
-statuses (4xx/5xx) are reported in :status, not signalled.  A transport-level
-failure re-signals.
+CONTENT-TYPE and EXTRA-HEADERS (an alist of extra (NAME . VALUE) headers) apply
+to write requests.  Basic-auth credentials come from `jaunder--auth-secret' for
+the active blog's user.  Returns the `jaunder--plz-response->plist' plist; HTTP
+error statuses (4xx/5xx) are reported in :status, not signalled.  A
+transport-level failure re-signals.
 
 `plz' drives the `curl' binary, so request construction does not depend on
 the finicky dynamic-variable handling that made `url.el' occasionally drop

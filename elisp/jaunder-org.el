@@ -202,8 +202,8 @@ org-element."
 
 (defun jaunder--org-substitute-links (body predicate urls)
   "Return BODY with each org link satisfying PREDICATE rewritten to a URL in URLS.
-PREDICATE receives a neutral link record (`jaunder--org-link->record').  URLS has
-one entry per satisfying link, in document order.  Each link's whole inner
+PREDICATE receives a neutral link record (`jaunder--org-link->record').  URLS
+has one entry per satisfying link, in document order.  Each link's whole inner
 target is replaced, brackets and any `[…][description]' preserved (result stays
 `[[URL]]' / `[[URL][desc]]').  Rewrites right-to-left."
   (with-temp-buffer

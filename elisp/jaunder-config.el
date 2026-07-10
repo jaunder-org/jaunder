@@ -39,7 +39,7 @@ compatibility but not used in v1 — org is the only converter)."
   :group 'jaunder)
 
 (defun jaunder--blog-entry-for (file-or-dir)
-  "Return the `jaunder-blogs' entry (DIRECTORY . PLIST) governing FILE-OR-DIR, or nil.
+  "Return the `jaunder-blogs' entry (DIRECTORY . PLIST) for FILE-OR-DIR, or nil.
 Longest-prefix match: the entry whose DIRECTORY is the longest prefix of
 FILE-OR-DIR's expanded directory, so a nested blog root wins over its parent.
 Both `jaunder--resolve-blog' (which blog to publish to) and `jaunder-new-post'

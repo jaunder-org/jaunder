@@ -127,7 +127,7 @@ DESCRIPTION, JAUNDER_STATUS draft) and leaves point in the body."
     path))
 
 (defun jaunder-new-post ()
-  "Create a new Jaunder draft in the blog whose directory contains `default-directory'.
+  "Create a new draft in the blog whose directory contains `default-directory'.
 When no blog matches, prompt to choose one from `jaunder-blogs'.  Inserts the
 minimal template and visits the file."
   (interactive)
