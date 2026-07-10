@@ -167,14 +167,6 @@ later machine.  Idempotent: an existing value is preserved verbatim."
 
 ;;; Org link primitives (media-agnostic)
 
-(defun jaunder--org-body-links ()
-  "Return the `org-element' link objects in the current buffer's body region.
-Walks links after the metadata header block (`jaunder--body-start'), in document
-order — the org traversal media detection builds on."
-  (save-restriction
-    (narrow-to-region (jaunder--body-start) (point-max))
-    (org-element-map (org-element-parse-buffer) 'link #'identity)))
-
 (defun jaunder--org-link-file (link)
   "Resolve `org-element' LINK's local target to an absolute file path.
 A `file:' path resolves against `default-directory'; an `attachment:' path via
@@ -186,18 +178,43 @@ A `file:' path resolves against `default-directory'; an `attachment:' path via
           (org-attach-expand path))
       (expand-file-name path))))
 
+(defun jaunder--org-link->record (link)
+  "Convert `org-element' LINK to a neutral plist so callers need no org details.
+Fields: :type (\"file\"/\"attachment\"/\"https\"/…), :path (raw target), :raw-link
+\(the whole `[[…]]' target), and :file (resolved absolute path for a local
+`file:'/`attachment:' link, else nil)."
+  (let ((type (org-element-property :type link)))
+    (list :type type
+          :path (org-element-property :path link)
+          :raw-link (org-element-property :raw-link link)
+          :file (when (member type '("file" "attachment"))
+                  (jaunder--org-link-file link)))))
+
+(defun jaunder--org-body-links ()
+  "Return neutral link records for the current buffer's body region, in order.
+Each is a `jaunder--org-link->record' plist for a link after the metadata header
+block (`jaunder--body-start').  Callers reason about the records, not
+org-element."
+  (save-restriction
+    (narrow-to-region (jaunder--body-start) (point-max))
+    (mapcar #'jaunder--org-link->record
+            (org-element-map (org-element-parse-buffer) 'link #'identity))))
+
 (defun jaunder--org-substitute-links (body predicate urls)
   "Return BODY with each org link satisfying PREDICATE rewritten to a URL in URLS.
-URLS has one entry per satisfying link, in document order.  Each link's whole
-inner target is replaced, brackets and any `[…][description]' preserved (result
-stays `[[URL]]' / `[[URL][desc]]').  Rewrites right-to-left."
+PREDICATE receives a neutral link record (`jaunder--org-link->record').  URLS has
+one entry per satisfying link, in document order.  Each link's whole inner
+target is replaced, brackets and any `[…][description]' preserved (result stays
+`[[URL]]' / `[[URL][desc]]').  Rewrites right-to-left."
   (with-temp-buffer
     (insert body)
     (org-mode)
     (let* ((links (delq nil
                         (org-element-map (org-element-parse-buffer) 'link
                                          (lambda (link)
-                                           (when (funcall predicate link) link)))))
+                                           (when (funcall predicate
+                                                          (jaunder--org-link->record link))
+                                             link)))))
            (pairs (cl-mapcar #'cons links urls)))
       (dolist (pair (nreverse pairs))
         (let* ((link (car pair))

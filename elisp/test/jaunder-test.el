@@ -589,16 +589,16 @@
              (should-error (jaunder--upload-media "/tmp/x.png" "image/png") :type 'error))))
 
 (ert-deftest jaunder-media-link-p-qualifies-file-and-attachment ()
-  ;; file: (image ext) and attachment: (image ext) qualify; http, non-image
-  ;; file:, and bare fuzzy links do not.  Pure coverage of attachment
-  ;; *qualification* (resolution needs a live org-attach dir — see the live tests).
-  (with-temp-buffer
-    (insert "[[file:a.png]] [[attachment:b.gif]] [[https://x/c.png]] "
-            "[[file:d.txt]] [[e.png]]")
-    (org-mode)
-    (let ((links (org-element-map (org-element-parse-buffer) 'link #'identity)))
-      (should (equal (mapcar (lambda (l) (and (jaunder--media-link-p l) t)) links)
-                     '(t t nil nil nil))))))
+  ;; file:/attachment: with an image extension qualify; http, a non-image file:,
+  ;; and a bare fuzzy link do not.  Operates on neutral link records — no org.
+  (should (equal
+           (mapcar (lambda (r) (and (jaunder--media-link-p r) t))
+                   '((:type "file" :path "a.png")
+                     (:type "attachment" :path "b.gif")
+                     (:type "https" :path "//x/c.png")
+                     (:type "file" :path "d.txt")
+                     (:type "fuzzy" :path "e.png")))
+           '(t t nil nil nil))))
 
 (ert-deftest jaunder-localize-media-uploads-each-file-once ()
   ;; Two links to the same file upload once (dedup cache); both rewrite to the

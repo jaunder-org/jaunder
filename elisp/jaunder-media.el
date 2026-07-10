@@ -22,7 +22,6 @@
 
 ;;; Code:
 
-(require 'org)
 (require 'jaunder-org)
 (require 'jaunder-atom)
 (require 'jaunder-config)
@@ -45,14 +44,15 @@ The extension match is case-insensitive."
   (let ((ext (downcase (or (file-name-extension filename) ""))))
     (cdr (assoc ext jaunder--media-image-types))))
 
-(defun jaunder--media-link-p (link)
-  "Return the media MIME type if org-element LINK is a qualifying local-image link.
-Qualifies a `file:'- or `attachment:'-type link whose target has an image
-extension; nil otherwise.  The single source of truth for \"qualifies\", shared by
-detection and substitution so the two stay in lockstep — their positional
-one-for-one alignment rides on agreeing here."
-  (and (member (org-element-property :type link) '("file" "attachment"))
-       (jaunder--media-content-type (org-element-property :path link))))
+(defun jaunder--media-link-p (link-record)
+  "Return the media MIME type if LINK-RECORD is a qualifying local-image link.
+LINK-RECORD is a `jaunder--org-link->record' plist.  Qualifies a `file:'- or
+`attachment:'-type link whose target has an image extension; nil otherwise.  The
+single source of truth for \"qualifies\", shared by detection and substitution so
+the two stay in lockstep — their positional one-for-one alignment rides on
+agreeing here."
+  (and (member (plist-get link-record :type) '("file" "attachment"))
+       (jaunder--media-content-type (plist-get link-record :path))))
 
 (defun jaunder--upload-media (path content-type)
   "Upload the file at PATH as CONTENT-TYPE to the media collection; return its URL.
@@ -73,17 +73,17 @@ server-assigned binary URL from the response entry's `<content src>' via
 
 (defun jaunder--collect-media-links ()
   "Collect qualifying local-image links in the current buffer's body region, in order.
-Each `org-element' body link (`jaunder--org-body-links') that qualifies as an
+Each neutral link record from `jaunder--org-body-links' that qualifies as an
 uploadable image (`jaunder--media-link-p') becomes a plist (:raw-link RAW
-:content-type MIME :path ABS), its file resolved via `jaunder--org-link-file'.
-In document order, one-for-one with the links in the sent body."
+:content-type MIME :path ABS), taking the record's resolved :file.  In document
+order, one-for-one with the links in the sent body."
   (delq nil
-        (mapcar (lambda (link)
-                  (let ((mime (jaunder--media-link-p link)))
+        (mapcar (lambda (rec)
+                  (let ((mime (jaunder--media-link-p rec)))
                     (when mime
-                      (list :raw-link (org-element-property :raw-link link)
+                      (list :raw-link (plist-get rec :raw-link)
                             :content-type mime
-                            :path (jaunder--org-link-file link)))))
+                            :path (plist-get rec :file)))))
                 (jaunder--org-body-links))))
 
 (defun jaunder--substitute-media (body urls)
