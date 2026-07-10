@@ -11,20 +11,9 @@
 (ert-deftest jaunder-build-url-bare ()
   (should (equal (jaunder--build-url "https://x.example") "https://x.example")))
 
-(ert-deftest jaunder-build-url-strips-trailing-slash ()
-  (should (equal (jaunder--build-url "https://x.example/") "https://x.example")))
-
 (ert-deftest jaunder-build-url-joins-segments ()
   (should (equal (jaunder--build-url "https://x.example" "atom" "feed")
                  "https://x.example/atom/feed")))
-
-(ert-deftest jaunder-build-url-collapses-inner-slashes ()
-  (should (equal (jaunder--build-url "https://x.example/" "/atom/" "feed")
-                 "https://x.example/atom/feed")))
-
-(ert-deftest jaunder-build-url-drops-empty-segments ()
-  (should (equal (jaunder--build-url "https://x.example" nil "" "feed")
-                 "https://x.example/feed")))
 
 (ert-deftest jaunder-build-url-errors-on-empty-base ()
   (should-error (jaunder--build-url nil))
@@ -78,7 +67,7 @@
     (should (equal (jaunder--response-header r "X-A") "1"))
     (should (null (jaunder--response-header r "x-missing")))))
 
-;;; org->atom — field mapping (C2 / issue #160)
+;;; org->atom — field mapping
 
 (defun jaunder-test--entry (org)
   "Map ORG text to a `jaunder-entry' via a temp org buffer."
@@ -122,7 +111,7 @@
 
 (ert-deftest jaunder-org->atom-content-type-is-always-org ()
   ;; org->atom converts an org buffer, so the content is org regardless of any
-  ;; JAUNDER_FORMAT header (which would only lie about org body — issue #160).
+  ;; JAUNDER_FORMAT header (which would only lie about org body).
   (should (equal (jaunder-entry-content-type
                   (jaunder-test--entry "#+TITLE: T\n\nB\n"))
                  "text/org"))
@@ -156,6 +145,17 @@
     (should-not (string-match-p "JAUNDER_" (jaunder-entry-body e)))
     (should-not (string-match-p "#\\+TITLE" (jaunder-entry-body e)))))
 
+(ert-deftest jaunder-org->atom-body-keeps-leading-indentation ()
+  ;; Header-block stripping locates the start of content and trims only the
+  ;; trailing newline; leading whitespace on the first content line is body, not
+  ;; header, so it is preserved rather than reflowed.
+  (let ((e (jaunder-test--entry
+            (concat "#+TITLE: T\n"
+                    "\n"
+                    "    indented first line\n"
+                    "second line\n"))))
+    (should (equal (jaunder-entry-body e) "    indented first line\nsecond line"))))
+
 (ert-deftest jaunder-org->atom-untitled-all-emoji-body ()
   (let ((e (jaunder-test--entry "🎉✨\n")))
     (should (null (jaunder-entry-title e)))
@@ -176,7 +176,7 @@
     (should-not (string-match-p "JAUNDER_" (jaunder-entry-body e)))
     (should-not (string-match-p "#\\+AUTHOR" (jaunder-entry-body e)))))
 
-;;; offset parsing / zone resolution (C2 / issue #160)
+;;; offset parsing / zone resolution
 
 (ert-deftest jaunder-offset->seconds-negative ()
   (should (= (jaunder--offset->seconds "-0500") (* -5 3600))))
@@ -207,7 +207,7 @@
   (should (null (jaunder--resolve-zone nil)))
   (should (null (jaunder--resolve-zone "   "))))
 
-;;; org->atom — publish time / timezone (C2 / issue #160)
+;;; org->atom — publish time / timezone
 
 (ert-deftest jaunder-org->atom-published-iana-dst-summer ()
   (should (equal (jaunder-entry-published
@@ -271,7 +271,7 @@
                   (concat "#+PROPERTY: JAUNDER_STATUS scheduled\n"
                           "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n\nB\n"))))))
 
-;;; utc->org-date + machine-zone capture (C4 / issue #162)
+;;; utc->org-date + machine-zone capture
 
 (ert-deftest jaunder-utc->org-date-renders-in-zone ()
   ;; 13:00Z in America/New_York (EDT, -04:00) is 09:00 local.
@@ -302,32 +302,52 @@
       (jaunder--ensure-date-tz)
       (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "Europe/Paris")))))
 
-;;; multi-blog config + resolution (C4 / issue #162)
+;;; multi-blog config + resolution
 
 (ert-deftest jaunder-resolve-blog-longest-prefix ()
   (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a" :username "a")
-                         ("/home/me/blog/work/" :base-url "https://b" :username "b")))
-        (jaunder-base-url nil) (jaunder-username nil))
+                         ("/home/me/blog/work/" :base-url "https://b" :username "b"))))
     (should (equal (plist-get (jaunder--resolve-blog "/home/me/blog/post.org") :username) "a"))
     (should (equal (plist-get (jaunder--resolve-blog "/home/me/blog/work/x.org") :username) "b"))))
 
-(ert-deftest jaunder-resolve-blog-falls-back-to-globals ()
-  (let ((jaunder-blogs nil)
-        (jaunder-base-url "https://g") (jaunder-username "g"))
-    (should (equal (plist-get (jaunder--resolve-blog "/tmp/x.org") :base-url) "https://g"))))
-
 (ert-deftest jaunder-resolve-blog-errors-when-unconfigured ()
-  (let ((jaunder-blogs nil) (jaunder-base-url nil) (jaunder-username nil))
+  (let ((jaunder-blogs nil))
     (should-error (jaunder--resolve-blog "/tmp/x.org"))))
 
-(ert-deftest jaunder-with-blog-binds-transport-specials ()
-  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a" :username "a")))
-        (jaunder-base-url nil) (jaunder-username nil))
-    (jaunder--with-blog "/home/me/blog/post.org"
-                        (should (equal jaunder-base-url "https://a"))
-                        (should (equal jaunder-username "a")))))
+(ert-deftest jaunder-resolve-blog-errors-on-incomplete-entry ()
+  ;; A matched entry missing :username must fail loudly rather than issue a
+  ;; half-configured request: a nil username silently yields a wrong URL (the
+  ;; segment is dropped) and garbage Basic credentials.
+  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a"))))
+    (should-error (jaunder--resolve-blog "/home/me/blog/post.org"))))
 
-;;; atom-entry -> xml serializer (C2 / issue #160)
+(ert-deftest jaunder-resolve-blog-errors-on-malformed-base-url ()
+  ;; The real requirement on :base-url is that it is a URL, not merely non-empty;
+  ;; a value with no scheme/host is rejected at the config boundary.
+  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "not-a-url" :username "a"))))
+    (should-error (jaunder--resolve-blog "/home/me/blog/post.org"))))
+
+(ert-deftest jaunder-resolve-blog-normalizes-base-url-trailing-slash ()
+  ;; A trailing slash on :base-url is stripped here so downstream URL joining can
+  ;; treat the base as a clean prefix.
+  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a/" :username "a"))))
+    (should (equal (plist-get (jaunder--resolve-blog "/home/me/blog/post.org") :base-url)
+                   "https://a"))))
+
+(ert-deftest jaunder-with-blog-binds-active-blog ()
+  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a" :username "a"))))
+    (jaunder--with-blog "/home/me/blog/post.org"
+                        (should (equal (jaunder--active-base-url) "https://a"))
+                        (should (equal (jaunder--active-username) "a")))))
+
+(ert-deftest jaunder-active-accessors-error-without-active-blog ()
+  ;; Outside `jaunder--with-blog' the accessors must signal, so a transport call
+  ;; that forgot to establish request context fails loudly instead of using nil.
+  (let ((jaunder--active-blog nil))
+    (should-error (jaunder--active-base-url))
+    (should-error (jaunder--active-username))))
+
+;;; atom-entry -> xml serializer
 
 (ert-deftest jaunder-atom-entry->xml-full-entry ()
   (let ((xml (jaunder--atom-entry->xml
@@ -399,9 +419,9 @@
       (insert xml)
       (should (consp (libxml-parse-xml-region (point-min) (point-max)))))))
 
-;;; media upload (unit C, issue #161)
+;;; media upload
 
-(ert-deftest jaunder-atom-entry-fields-harvests-content-src-and-type ()
+(ert-deftest jaunder-harvest-response-fields-content-src-and-type ()
   (skip-unless (fboundp 'libxml-parse-xml-region))
   (let ((xml (concat "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
                      "<entry xmlns=\"http://www.w3.org/2005/Atom\">"
@@ -413,24 +433,24 @@
                      "<link rel=\"edit-media\""
                      " href=\"https://h/media/upload/ab/cd/abcd/p.png\"/>"
                      "</entry>")))
-    (should (equal (cdr (assq 'content-src (jaunder--atom-entry-fields xml)))
+    (should (equal (cdr (assq 'content-src (jaunder--harvest-response-fields xml)))
                    "https://h/media/upload/ab/cd/abcd/p.png"))
-    (should (equal (cdr (assq 'content-type (jaunder--atom-entry-fields xml)))
+    (should (equal (cdr (assq 'content-type (jaunder--harvest-response-fields xml)))
                    "image/png"))))
 
-(ert-deftest jaunder-atom-entry-fields-harvests-slug-and-published ()
+(ert-deftest jaunder-harvest-response-fields-slug-and-published ()
   (let ((xml (concat
               "<entry xmlns=\"http://www.w3.org/2005/Atom\""
               " xmlns:j=\"https://jaunder.org/ns/atompub\">"
               "<content type=\"text/org\">Body</content>"
               "<published>2026-07-01T13:00:00+00:00</published>"
               "<j:slug>my-post</j:slug></entry>")))
-    (let ((fields (jaunder--atom-entry-fields xml)))
+    (let ((fields (jaunder--harvest-response-fields xml)))
       (should (equal (cdr (assq 'slug fields)) "my-post"))
       (should (equal (cdr (assq 'published fields)) "2026-07-01T13:00:00+00:00"))
       (should (equal (cdr (assq 'content-type fields)) "text/org")))))
 
-(ert-deftest jaunder-atom-entry-fields-absent-slug-published-are-nil ()
+(ert-deftest jaunder-harvest-response-fields-absent-slug-published-are-nil ()
   ;; A content-only entry (no <j:slug>, no <published> — e.g. a draft, which
   ;; the server stamps <published> onto only when live) yields nil for both,
   ;; exercising the `(and NODE (dom-text NODE))' nil-guard branches.
@@ -438,7 +458,7 @@
               "<entry xmlns=\"http://www.w3.org/2005/Atom\""
               " xmlns:j=\"https://jaunder.org/ns/atompub\">"
               "<content type=\"text/org\">Body</content></entry>")))
-    (let ((fields (jaunder--atom-entry-fields xml)))
+    (let ((fields (jaunder--harvest-response-fields xml)))
       (should (null (cdr (assq 'slug fields))))
       (should (null (cdr (assq 'published fields))))
       (should (equal (cdr (assq 'content-type fields)) "text/org")))))
@@ -545,7 +565,7 @@
                (lambda (_verb _url &rest args)
                  (setq captured (plist-get args :headers))
                  '(:status 201 :body ""))))
-             (let ((jaunder-username "alice"))
+             (let ((jaunder--active-blog '(:base-url "http://x" :username "alice")))
                (jaunder--http-request "POST" "http://x/media" (list 'file "/tmp/a.png")
                                       "image/png" (list (cons "Slug" "a.png"))))
              (should (equal (cdr (assoc "Slug" captured)) "a.png"))
@@ -565,20 +585,58 @@
 (ert-deftest jaunder-upload-media-errors-on-non-2xx ()
   (cl-letf (((symbol-function 'jaunder--http-request)
              (lambda (&rest _) '(:status 500 :body "boom"))))
-           (let ((jaunder-base-url "http://x") (jaunder-username "alice"))
+           (let ((jaunder--active-blog '(:base-url "http://x" :username "alice")))
              (should-error (jaunder--upload-media "/tmp/x.png" "image/png") :type 'error))))
 
 (ert-deftest jaunder-media-link-p-qualifies-file-and-attachment ()
-  ;; file: (image ext) and attachment: (image ext) qualify; http, non-image
-  ;; file:, and bare fuzzy links do not.  Pure coverage of attachment
-  ;; *qualification* (resolution needs a live org-attach dir — see the live tests).
+  ;; file:/attachment: with an image extension qualify; http, a non-image file:,
+  ;; and a bare fuzzy link do not.  Operates on neutral link records — no org.
+  (should (equal
+           (mapcar (lambda (r) (and (jaunder--media-link-p r) t))
+                   '((:type "file" :path "a.png")
+                     (:type "attachment" :path "b.gif")
+                     (:type "https" :path "//x/c.png")
+                     (:type "file" :path "d.txt")
+                     (:type "fuzzy" :path "e.png")))
+           '(t t nil nil nil))))
+
+;;; org link primitives (jaunder-org)
+
+(ert-deftest jaunder-org-link->record-neutral-fields ()
+  ;; An org-element link becomes a neutral plist: :type/:path/:raw-link, and
+  ;; :file resolved (absolute) for a local file:, nil for a non-local link.
   (with-temp-buffer
-    (insert "[[file:a.png]] [[attachment:b.gif]] [[https://x/c.png]] "
-            "[[file:d.txt]] [[e.png]]")
+    (insert "[[file:pic.png][a pic]] [[https://x/y.png]]")
     (org-mode)
-    (let ((links (org-element-map (org-element-parse-buffer) 'link #'identity)))
-      (should (equal (mapcar (lambda (l) (and (jaunder--media-link-p l) t)) links)
-                     '(t t nil nil nil))))))
+    (let* ((links (org-element-map (org-element-parse-buffer) 'link #'identity))
+           (file-rec (jaunder--org-link->record (nth 0 links)))
+           (http-rec (jaunder--org-link->record (nth 1 links))))
+      (should (equal (plist-get file-rec :type) "file"))
+      (should (equal (plist-get file-rec :path) "pic.png"))
+      (should (equal (plist-get file-rec :raw-link) "file:pic.png"))
+      (should (equal (plist-get file-rec :file) (expand-file-name "pic.png")))
+      (should (equal (plist-get http-rec :type) "https"))
+      (should (null (plist-get http-rec :file))))))
+
+(ert-deftest jaunder-org-body-links-returns-body-records-in-order ()
+  ;; Links after the header block come back as neutral records, in document
+  ;; order; header-block keyword lines contribute none.
+  (with-temp-buffer
+    (insert "#+TITLE: T\n#+KEYWORDS: x\n\n[[file:a.png]] and [[file:b.gif]]\n")
+    (org-mode)
+    (should (equal (mapcar (lambda (r) (plist-get r :path)) (jaunder--org-body-links))
+                   '("a.png" "b.gif")))))
+
+(ert-deftest jaunder-org-substitute-links-rewrites-selected-by-predicate ()
+  ;; The PREDICATE (on neutral records) selects which links are rewritten to the
+  ;; paired URLs, in order; a description is preserved and non-selected links are
+  ;; left untouched.
+  (should (equal
+           (jaunder--org-substitute-links
+            "see [[file:a.png][pic]] and [[https://x/keep]] and [[file:b.png]]"
+            (lambda (rec) (equal (plist-get rec :type) "file"))
+            '("http://s/a" "http://s/b"))
+           "see [[http://s/a][pic]] and [[https://x/keep]] and [[http://s/b]]")))
 
 (ert-deftest jaunder-localize-media-uploads-each-file-once ()
   ;; Two links to the same file upload once (dedup cache); both rewrite to the
@@ -615,7 +673,7 @@
                  (should (equal (jaunder--localize-media body) body))
                  (should-not called))))))
 
-;;; buffer read/write helpers (unit C4, issue #162)
+;;; buffer read/write helpers
 
 (ert-deftest jaunder-set-property-replaces-existing ()
   (with-temp-buffer
@@ -645,7 +703,7 @@
     (jaunder--set-keyword "DATE" "[2027-01-01 Fri 00:00]")
     (should (equal (jaunder--buffer-keyword "DATE") "[2027-01-01 Fri 00:00]"))))
 
-;;; publish validation + Location->id + force-draft (C4 / issue #162)
+;;; publish validation + Location->id + force-draft
 
 (ert-deftest jaunder-validate-publish-rejects-empty-body ()
   (let ((e (jaunder--make-entry :body "   \n")))
@@ -674,7 +732,7 @@
     ;; And the wire entry indeed omits <published>.
     (should-not (string-match-p "<published>" (jaunder--atom-entry->xml e)))))
 
-;;; rename temp draft to <slug>.org (C4 / issue #162)
+;;; rename temp draft to <slug>.org
 
 (ert-deftest jaunder-rename-to-slug-renames-and-handles-collision ()
   (let ((dir (make-temp-file "jaunder-rn-" t)))

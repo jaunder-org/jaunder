@@ -1,8 +1,8 @@
-;;; jaunder-media-integration.el --- C3 live media upload tests -*- lexical-binding: t; -*-
+;;; jaunder-media-integration.el --- live media upload tests -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;; Exercises media upload + content-src substitution end-to-end against a real
-;; server (#137 harness, ADR-0035).  Runs via `cargo xtask elisp-integration'.
+;; server (harness, ADR-0035).  Runs via `cargo xtask elisp-integration'.
 
 ;;; Code:
 
@@ -44,12 +44,12 @@ the 200 (vs 201) distinguishes the `existed' branch (media.rs)."
            (let* ((u1 (jaunder--upload-media img "image/png"))
                   (resp2 (jaunder--http-request
                           "POST"
-                          (jaunder--build-url jaunder-base-url "atompub"
-                                              jaunder-username "media")
+                          (jaunder--build-url jaunder-test-base-url "atompub"
+                                              jaunder-test-username "media")
                           (list 'file img) "image/png"
                           (list (cons "Slug" "same.png"))))
                   (u2 (cdr (assq 'content-src
-                                 (jaunder--atom-entry-fields
+                                 (jaunder--harvest-response-fields
                                   (plist-get resp2 :body))))))
              (should (string-match-p "/media/upload/" u1))
              (should (= (plist-get resp2 :status) 200))
@@ -60,7 +60,7 @@ the 200 (vs 201) distinguishes the `existed' branch (media.rs)."
   "A rejected upload (wrong-user path) returns a non-2xx status, not a signal.
 Confirms over the wire that the server really rejects with a 4xx — the condition
 `jaunder--upload-media' turns into an error (its own abort branch is unit-tested
-with a stub in Task 7).  Uses a mismatched username in the path with valid alice
+with a stub).  Uses a mismatched username in the path with valid alice
 credentials, so `require_user_match' fails deterministically (403)."
   (jaunder-test--with-live-server
    (let* ((dir (make-temp-file "jaunder-media-" t))
@@ -70,7 +70,7 @@ credentials, so `require_user_match' fails deterministically (403)."
            (with-temp-file img (insert "X"))
            (let ((resp (jaunder--http-request
                         "POST"
-                        (jaunder--build-url jaunder-base-url "atompub" "not-alice" "media")
+                        (jaunder--build-url jaunder-test-base-url "atompub" "not-alice" "media")
                         (list 'file img) "image/png"
                         (list (cons "Slug" "x.png")))))
              (should (>= (plist-get resp :status) 400))

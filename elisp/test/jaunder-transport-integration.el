@@ -1,7 +1,7 @@
-;;; jaunder-transport-integration.el --- C1 live transport test -*- lexical-binding: t; -*-
+;;; jaunder-transport-integration.el --- live transport test -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Exercises `jaunder--http-request' end-to-end against a real server (#137 harness).
+;; Exercises `jaunder--http-request' end-to-end against a real server (harness).
 
 ;;; Code:
 
@@ -14,7 +14,7 @@
   (jaunder-test--with-live-server
    (let ((r (jaunder--http-request
              "GET"
-             (jaunder--build-url jaunder-base-url "atompub" jaunder-username "posts"))))
+             (jaunder--build-url jaunder-test-base-url "atompub" jaunder-test-username "posts"))))
      (should (eq (plist-get r :status) 200))
      (should (string-match-p "<feed" (plist-get r :body))))))
 
@@ -23,7 +23,7 @@
   (jaunder-test--with-live-server
    (let ((r (jaunder--http-request
              "GET"
-             (jaunder--build-url jaunder-base-url "atompub" jaunder-username
+             (jaunder--build-url jaunder-test-base-url "atompub" jaunder-test-username
                                  "posts" "does-not-exist-999999"))))
      (should (>= (plist-get r :status) 400))
      (should (< (plist-get r :status) 500)))))
