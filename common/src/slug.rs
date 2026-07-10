@@ -3,14 +3,16 @@ use std::{fmt, str::FromStr};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use unicode_normalization::UnicodeNormalization;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Maximum slug length, in Unicode scalar values counted after NFC
 /// normalization. Bounds the percent-encoded URL and the stored value (CJK
 /// inflates ~3 bytes/char in UTF-8, more percent-encoded).
 pub const MAX_SLUG_CHARS: usize = 80;
 
-/// A validated post slug: NFC-normalized, Unicode-lowercased, made of Unicode
-/// letters/digits (`char::is_alphanumeric`) and `-`, at most [`MAX_SLUG_CHARS`].
+/// A validated post slug: NFC-normalized, Unicode-lowercased, made of grapheme
+/// clusters whose base is a Unicode letter/digit (carrying any attached combining
+/// marks) and `-`, at most [`MAX_SLUG_CHARS`] scalars.
 ///
 /// Constructed via [`FromStr`], the single chokepoint both slug *generation* and
 /// inbound *URL resolution* funnel through; it normalizes so the stored form and
@@ -25,7 +27,7 @@ pub struct Slug(String);
 /// Error returned when a string cannot be parsed as a [`Slug`].
 #[derive(Debug, Error)]
 #[error(
-    "slug must be non-empty, at most {MAX_SLUG_CHARS} characters, and contain only Unicode letters/digits and '-'"
+    "slug must be non-empty, at most {MAX_SLUG_CHARS} characters, and contain only Unicode letters/digits (with their combining marks) and '-'"
 )]
 pub struct InvalidSlug;
 
@@ -38,17 +40,19 @@ impl FromStr for Slug {
         // then NFC-compose. Idempotent on an already-stored slug, so the read-path
         // re-parse (storage::helpers) and inbound lookups agree on bytes.
         let normalized: String = s.to_lowercase().nfc().collect();
-        let mut chars = normalized.chars();
-        // First character must be a Unicode letter or digit (no leading '-').
-        let first = chars.next().ok_or(InvalidSlug)?;
-        if !first.is_alphanumeric() {
-            return Err(InvalidSlug);
-        }
-        // Remaining characters: Unicode letters/digits or hyphen.
-        if !chars.all(|c| c.is_alphanumeric() || c == '-') {
-            return Err(InvalidSlug);
-        }
         if normalized.chars().count() > MAX_SLUG_CHARS {
+            return Err(InvalidSlug);
+        }
+        let mut graphemes = normalized.graphemes(true);
+        // First grapheme must be a letter/digit-based cluster (no leading '-' or
+        // combining mark).
+        let first = graphemes.next().ok_or(InvalidSlug)?;
+        if !base_is_alphanumeric(first) {
+            return Err(InvalidSlug);
+        }
+        // Remaining graphemes: a hyphen, or a letter/digit-based cluster (its
+        // attached combining marks come with it).
+        if !graphemes.all(|g| g == "-" || base_is_alphanumeric(g)) {
             return Err(InvalidSlug);
         }
         Ok(Slug(normalized))
@@ -82,9 +86,19 @@ impl fmt::Display for Slug {
     }
 }
 
-/// Converts a title to a slug: NFC-normalized, Unicode-lowercased, keeping only
-/// `char::is_alphanumeric()` characters and collapsing other runs into single
-/// hyphens, truncated to [`MAX_SLUG_CHARS`].
+/// A grapheme cluster is kept in a slug iff its base scalar is a Unicode letter
+/// or digit (`char::is_alphanumeric`). Attached combining marks — vowel signs,
+/// viramas, harakat, nuktas — ride along with the base; a standalone mark, a
+/// symbol, or an emoji has a non-alphanumeric base and is dropped. This one rule
+/// is shared by generation and the `from_str` chokepoint so they always agree.
+fn base_is_alphanumeric(grapheme: &str) -> bool {
+    grapheme.chars().next().is_some_and(char::is_alphanumeric)
+}
+
+/// Converts a title to a slug: NFC-normalized, Unicode-lowercased, keeping
+/// grapheme clusters whose base is a letter/digit (with their attached combining
+/// marks) and collapsing other runs into single hyphens, truncated on a cluster
+/// boundary to [`MAX_SLUG_CHARS`] scalars.
 ///
 /// Never fails: when nothing usable remains (emoji/symbol-only, untitled) it
 /// returns the bare fallback `"post"`, and the caller's per-author-per-day
@@ -92,12 +106,13 @@ impl fmt::Display for Slug {
 /// it back through [`Slug::from_str`] is idempotent.
 #[must_use]
 pub fn slugify_title(title: &str) -> String {
+    let normalized: String = title.to_lowercase().nfc().collect();
+
     let mut slug = String::new();
     let mut previous_was_dash = false;
-
-    for ch in title.to_lowercase().nfc() {
-        if ch.is_alphanumeric() {
-            slug.push(ch);
+    for g in normalized.graphemes(true) {
+        if base_is_alphanumeric(g) {
+            slug.push_str(g);
             previous_was_dash = false;
         } else if !slug.is_empty() && !previous_was_dash {
             slug.push('-');
@@ -105,13 +120,20 @@ pub fn slugify_title(title: &str) -> String {
         }
     }
 
-    // Truncate to the cap, then trim a trailing '-' (present originally or exposed
-    // by truncation). `trim_end_matches` avoids an explicit pop loop.
-    let capped: String = slug
-        .trim_end_matches('-')
-        .chars()
-        .take(MAX_SLUG_CHARS)
-        .collect();
+    // Trim a trailing '-', then truncate on a grapheme boundary: a cluster (base
+    // + its marks) is never split, and the result stays within the
+    // MAX_SLUG_CHARS scalar budget that `from_str` enforces.
+    let trimmed = slug.trim_end_matches('-');
+    let mut capped = String::new();
+    let mut count = 0usize;
+    for g in trimmed.graphemes(true) {
+        let glen = g.chars().count();
+        if count + glen > MAX_SLUG_CHARS {
+            break;
+        }
+        capped.push_str(g);
+        count += glen;
+    }
     let capped = capped.trim_end_matches('-');
 
     if capped.is_empty() {
@@ -140,6 +162,50 @@ mod tests {
         assert_eq!("日本語".parse::<Slug>().unwrap().as_str(), "日本語");
         assert_eq!("Москва".parse::<Slug>().unwrap().as_str(), "москва");
         assert_eq!("café".parse::<Slug>().unwrap().as_str(), "café");
+    }
+
+    #[test]
+    fn slug_preserves_indic_conjunct_marks() {
+        // Virama/pulli (Mn, not Alphabetic) were dropped, breaking conjuncts.
+        for word in ["नमस्ते", "हिन्दी", "தமிழ்"] {
+            let nfc: String = word.to_lowercase().nfc().collect();
+            assert_eq!(
+                slugify_title(word),
+                nfc,
+                "slugify dropped a mark in {word:?}"
+            );
+            // Chokepoint agreement: the generated slug re-parses to itself.
+            assert_eq!(slugify_title(word).parse::<Slug>().unwrap().as_str(), nfc);
+        }
+    }
+
+    #[test]
+    fn slug_keeps_alphabetic_marks_regression() {
+        // Arabic harakat already survived (Other_Alphabetic); keep it so.
+        let arabic = "مَرْحَبًا";
+        let nfc: String = arabic.to_lowercase().nfc().collect();
+        assert_eq!(slugify_title(arabic), nfc);
+        assert_eq!(arabic.parse::<Slug>().unwrap().as_str(), nfc);
+    }
+
+    #[test]
+    fn slug_drops_standalone_mark_and_rejects_leading_mark() {
+        // A lone virama (no base) is degenerate: generation lands on the fallback...
+        assert_eq!(slugify_title("\u{094D}"), "post");
+        // ...and from_str rejects a slug that starts with a combining mark...
+        assert!("\u{094D}a".parse::<Slug>().is_err());
+        // ...while a mark attached to a base is accepted.
+        assert!("क\u{093E}".parse::<Slug>().is_ok());
+    }
+
+    #[test]
+    fn slugify_truncates_on_grapheme_boundary_within_cap() {
+        // 2-scalar clusters (consonant + vowel sign) well over the cap.
+        let title = "क\u{093E}".repeat(MAX_SLUG_CHARS); // 2*MAX scalars
+        let slug = slugify_title(&title);
+        assert!(slug.chars().count() <= MAX_SLUG_CHARS); // cap honored
+        assert_eq!(slug.chars().count() % 2, 0); // never split a 2-scalar cluster
+        assert!(slug.parse::<Slug>().is_ok()); // still valid
     }
 
     #[test]
