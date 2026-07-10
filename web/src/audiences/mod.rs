@@ -379,36 +379,35 @@ fn AudienceHeader(audience_id: i64, name: String) -> impl IntoView {
     }
 }
 
-/// Per-subscriber add/remove checklist for one audience. Owns the add/remove actions and
-/// the members resource, all bound to a *local* `Invalidator` so a toggle refetches only
-/// this audience's members — never the list.
+/// Per-subscriber add/remove checklist for one audience. Owns the add/remove actions and a
+/// *local* `Invalidator` whose `sticky` member list refetches only this audience's members
+/// on a toggle — never the whole list.
 #[component]
 fn MemberChecklist(audience_id: i64) -> impl IntoView {
     // The subscriber roster, reactive: it updates the checklist in place when it resolves,
     // without the row being rebuilt (provided by `AudiencesPage`).
     let subscribers = expect_context::<Signal<Vec<SubscriberSummary>>>();
     // Local to this checklist: an add/remove here refetches only this audience's members,
-    // not every audience's (and never the list).
+    // not every audience's (and never the list). `sticky` retains the last member list across
+    // that refetch so a toggle never flashes "Loading members…" (`None` until first resolve).
     let members = Invalidator::new();
     let add_action = members.action::<AddSubscriberToAudience>();
     let remove_action = members.action::<RemoveSubscriberFromAudience>();
-
-    let members_res = members.resource(move || list_audience_members(audience_id));
-    // Sticky: retain the last member list across a re-fetch so a toggle does
-    // not flash "Loading members…" (as `AudiencesPage`). `None` until first resolve.
-    let member_ids = RwSignal::new(None::<Vec<i64>>);
-    Effect::new(move |_| {
-        if let Some(result) = members_res.get() {
-            member_ids.set(Some(result.unwrap_or_default()));
-        }
-    });
+    let member_ids = members.sticky(move || list_audience_members(audience_id));
 
     view! {
         {move || {
             let subscribers = subscribers.get();
             match member_ids.get() {
                 None => view! { <p class="j-loading">"Loading members\u{2026}"</p> }.into_any(),
-                Some(member_ids) => {
+                Some(Err(e)) => {
+                    // Surface a members fetch error rather than swallowing it into an empty set
+                    // (which would misrepresent everyone as a non-member) — consistent with the
+                    // audience list (#346).
+                    view! { <p class="error">{e}</p> }
+                        .into_any()
+                }
+                Some(Ok(member_ids)) => {
                     if subscribers.is_empty() {
                         return view! { <p class="j-sub">"No active subscribers yet."</p> }
                             .into_any();

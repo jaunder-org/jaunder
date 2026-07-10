@@ -228,6 +228,21 @@ When in doubt, mirror `home.rs`: a plain `Effect::new` (gated with
 only writes when the value actually changes (to prevent remounting child
 components).
 
+**Don't hand-roll the sticky copy for a flat list.** When the retained value is
+a plain `Vec`/scalar (not a keyed store — that's §10's `patched`) driven by an
+`Invalidator`, use
+**`Invalidator::sticky(fetch) -> Signal<Option<Result<T, String>>>`**: it owns
+the `resource` + retain-on-resolve effect, is `None` until the first resolve,
+then holds the last **result** across every refetch — `Some(Ok(v))` on success,
+`Some(Err(msg))` on failure. **Surface the `Err`** (render `<p class="error">`);
+do **not** swallow it into a default — that silently misrepresents state (e.g.
+an empty member set reading as "nobody is a member", #346), and is inconsistent
+with the list-level resource which shows its error. `MemberChecklist` is the
+reference (`members.sticky(move || list_audience_members(id))`, matched
+three-way `None` / `Some(Err)` / `Some(Ok)`). A **constant-source** resource
+that never refetches needs no retention — use a one-line `Signal::derive`
+instead (the audiences subscriber roster).
+
 ## 10. Keyed lists (reactive `Store`)
 
 Decision record: `docs/adr/0061-web-keyed-list-reactive-store.md`.
