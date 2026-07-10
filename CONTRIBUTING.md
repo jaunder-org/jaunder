@@ -237,8 +237,9 @@ job. Running every combo in parallel across runners cuts e2e wall-clock;
 - `prettier --check end2end '**/*.md'` checks Playwright/frontend test assets
   and all tracked Markdown (`proseWrap: always`; scoped by `.prettierignore`,
   which excludes `docs/archive/`).
-- `elisp-fmt` and `ert` run the elisp subproject's formatter and ERT suite under
-  `emacs --batch` (see the Elisp subproject section below).
+- `elisp-fmt`, `ert`, and `byte-compile` run the elisp subproject's formatter,
+  ERT suite, and warnings-as-errors byte-compilation under `emacs --batch` (see
+  the Elisp subproject section below).
 - `cargo clippy --all-targets -- -D warnings` checks the whole workspace,
   including test, bench, and example targets, for lint errors.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
@@ -254,14 +255,16 @@ job. Running every combo in parallel across runners cuts e2e wall-clock;
 ### Elisp subproject (`elisp/`)
 
 The Emacs client lives in `elisp/` (see [`elisp/README.md`](elisp/README.md)).
-Its ERT suite and formatter run in the verify ladder: `ert` and `elisp-fmt` are
-`cargo xtask check`/`validate` steps that run through `devtool check` — the same
-implementation the `static-checks` Nix check runs, so `nix flake check` covers
-them too, with no duplicated sibling to drift (#188). prettier cannot format
-Emacs Lisp, so `elisp-fmt` uses built-in `emacs-lisp-mode` indentation (auto-fix
-under `check`, verify under `validate`). elisp is interim-exempt from the Rust
-coverage gate (cargo-llvm-cov is Rust-only; follow-on #82) — instead, write an
-ERT test for every pure mapping/transform function. Rationale:
+Its ERT suite, formatter, and byte-compilation run in the verify ladder: `ert`,
+`elisp-fmt`, and `byte-compile` (which byte-compiles the package modules with
+warnings promoted to errors) are `cargo xtask check`/`validate` steps that run
+through `devtool check` — the same implementation the `static-checks` Nix check
+runs, so `nix flake check` covers them too, with no duplicated sibling to drift
+(#188). prettier cannot format Emacs Lisp, so `elisp-fmt` uses built-in
+`emacs-lisp-mode` indentation (auto-fix under `check`, verify under `validate`).
+elisp is interim-exempt from the Rust coverage gate (cargo-llvm-cov is
+Rust-only; follow-on #82) — instead, write an ERT test for every pure
+mapping/transform function. Rationale:
 [ADR-0031](docs/adr/0031-elisp-separately-tested-subproject.md).
 
 ### Observability and Performance Analysis
@@ -556,10 +559,11 @@ request; it is deliberately **not** part of per-commit `check`/`validate`
 
 - `checks.x86_64-linux.nextest` — Rust nextest suite
 - `checks.x86_64-linux.clippy` — clippy
-- `checks.x86_64-linux.static-checks` — the 7 non-compiling static checks
-  (`fmt`, `leptosfmt`, `prettier`, `tsc`, `elisp-fmt`, `ert`, `tools-fmt`) run
-  in one derivation via `devtool check --all` — the same implementation the host
-  verify ladder runs, so there is no hand-duplicated sibling to drift (#188)
+- `checks.x86_64-linux.static-checks` — the 8 non-compiling static checks
+  (`fmt`, `leptosfmt`, `prettier`, `tsc`, `elisp-fmt`, `ert`, `byte-compile`,
+  `tools-fmt`) run in one derivation via `devtool check --all` — the same
+  implementation the host verify ladder runs, so there is no hand-duplicated
+  sibling to drift (#188)
 - `checks.x86_64-linux.deny` — cargo-deny
 - `checks.x86_64-linux.e2e-sqlite-chromium` — Playwright end-to-end flow against
   SQLite on Chromium with `JAUNDER_E2E_WARMUP=1` (default)

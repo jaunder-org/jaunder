@@ -1,4 +1,4 @@
-//! The 7 non-compiling static checks (#188). This is the single home of their tool +
+//! The 8 non-compiling static checks (#188). This is the single home of their tool +
 //! args: the host verify ladder runs them via `cargo run -p devtool -- check <name>`
 //! (so a local `tools/` edit is reflected) and the nix `static-checks` derivation runs
 //! `devtool check --all` from the prebuilt `devtoolBin`. The *compiling* checks
@@ -9,7 +9,7 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
-/// The 7 non-compiling static checks devtool owns, in the host gate's order.
+/// The 8 non-compiling static checks devtool owns, in the host gate's order.
 ///
 /// Kept in sync with the `devtool_check(<name>)` calls in
 /// `xtask/src/steps/static_checks.rs::specs()` (the host mirror — it can't import this
@@ -21,12 +21,13 @@ pub const ALL: &[&str] = &[
     "tsc",
     "elisp-fmt",
     "ert",
+    "byte-compile",
     "tools-fmt",
 ];
 
 /// Pure: the `(program, args)` for `name` in the given mode. `fix` makes the five
 /// formatters (`fmt`, `leptosfmt`, `prettier`, `elisp-fmt`, `tools-fmt`) mutate in place;
-/// `ert`/`tsc` have no autofix and ignore it. Args are verbatim from the former
+/// `ert`/`tsc`/`byte-compile` have no autofix and ignore it. Args are verbatim from the
 /// `xtask::steps::static_checks::specs` — this is now their single source of truth.
 fn spec(name: &str, fix: bool) -> Result<(&'static str, Vec<String>)> {
     let owned = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
@@ -83,6 +84,10 @@ fn spec(name: &str, fix: bool) -> Result<(&'static str, Vec<String>)> {
         "ert" => (
             "emacs",
             owned(&["--batch", "-Q", "-l", "elisp/scripts/run-tests.el"]),
+        ),
+        "byte-compile" => (
+            "emacs",
+            owned(&["--batch", "-Q", "-l", "elisp/scripts/byte-compile.el"]),
         ),
         "tools-fmt" => (
             "cargo",
@@ -161,6 +166,27 @@ mod tests {
     fn ert_and_tsc_ignore_fix() {
         assert_eq!(spec("ert", true).unwrap(), spec("ert", false).unwrap());
         assert_eq!(spec("tsc", true).unwrap(), spec("tsc", false).unwrap());
+    }
+
+    #[test]
+    fn byte_compile_runs_the_script_and_ignores_fix() {
+        assert_eq!(
+            spec("byte-compile", false).unwrap(),
+            (
+                "emacs",
+                vec![
+                    "--batch".to_string(),
+                    "-Q".into(),
+                    "-l".into(),
+                    "elisp/scripts/byte-compile.el".into(),
+                ]
+            )
+        );
+        // No autofix — a warning is fixed by hand, so --fix is ignored.
+        assert_eq!(
+            spec("byte-compile", true).unwrap(),
+            spec("byte-compile", false).unwrap()
+        );
     }
 
     #[test]

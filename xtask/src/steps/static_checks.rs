@@ -14,8 +14,9 @@ pub struct StepSpec {
 /// The ordered static-check steps for `mode`. Pure (no I/O) so the step list
 /// and its mode-dependent arguments can be unit-tested without shelling out.
 ///
-/// The 7 non-compiling checks (`fmt`, `leptosfmt`, `prettier`, `tsc`, `elisp-fmt`,
-/// `ert`, `tools-fmt`) run through `devtool check <name>` — devtool owns their tool +
+/// The 8 non-compiling checks (`fmt`, `leptosfmt`, `prettier`, `tsc`, `elisp-fmt`,
+/// `ert`, `byte-compile`, `tools-fmt`) run through `devtool check <name>` — devtool owns
+/// their tool +
 /// args (the single source of truth; #188), and the nix `static-checks` derivation runs
 /// the same command. The *compiling* checks (`clippy`, `cargo-deny`, `tools-clippy`) and
 /// the `xtask` self-lint stay native `cargo` invocations here — they need built deps, or
@@ -42,6 +43,7 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
         devtool_check("tsc", mode),
         devtool_check("elisp-fmt", mode),
         devtool_check("ert", mode),
+        devtool_check("byte-compile", mode),
         StepSpec {
             name: "cargo-deny",
             program: "cargo",
@@ -206,7 +208,7 @@ mod tests {
 
     #[test]
     fn migrated_checks_delegate_to_devtool() {
-        // The 7 non-compiling checks now run via `cargo run -p devtool -- check <name>`
+        // The 8 non-compiling checks now run via `cargo run -p devtool -- check <name>`
         // (devtool owns their tool+args); fix mode appends --fix.
         let s = specs(Mode::Check);
         let fmt = find(&s, "fmt");
@@ -257,6 +259,7 @@ mod tests {
             "tsc",
             "elisp-fmt",
             "ert",
+            "byte-compile",
             "cargo-deny",
             "clippy",
             "wasm-clippy",
