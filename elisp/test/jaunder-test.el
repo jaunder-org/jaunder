@@ -600,6 +600,44 @@
                      (:type "fuzzy" :path "e.png")))
            '(t t nil nil nil))))
 
+;;; org link primitives (jaunder-org)
+
+(ert-deftest jaunder-org-link->record-neutral-fields ()
+  ;; An org-element link becomes a neutral plist: :type/:path/:raw-link, and
+  ;; :file resolved (absolute) for a local file:, nil for a non-local link.
+  (with-temp-buffer
+    (insert "[[file:pic.png][a pic]] [[https://x/y.png]]")
+    (org-mode)
+    (let* ((links (org-element-map (org-element-parse-buffer) 'link #'identity))
+           (file-rec (jaunder--org-link->record (nth 0 links)))
+           (http-rec (jaunder--org-link->record (nth 1 links))))
+      (should (equal (plist-get file-rec :type) "file"))
+      (should (equal (plist-get file-rec :path) "pic.png"))
+      (should (equal (plist-get file-rec :raw-link) "file:pic.png"))
+      (should (equal (plist-get file-rec :file) (expand-file-name "pic.png")))
+      (should (equal (plist-get http-rec :type) "https"))
+      (should (null (plist-get http-rec :file))))))
+
+(ert-deftest jaunder-org-body-links-returns-body-records-in-order ()
+  ;; Links after the header block come back as neutral records, in document
+  ;; order; header-block keyword lines contribute none.
+  (with-temp-buffer
+    (insert "#+TITLE: T\n#+KEYWORDS: x\n\n[[file:a.png]] and [[file:b.gif]]\n")
+    (org-mode)
+    (should (equal (mapcar (lambda (r) (plist-get r :path)) (jaunder--org-body-links))
+                   '("a.png" "b.gif")))))
+
+(ert-deftest jaunder-org-substitute-links-rewrites-selected-by-predicate ()
+  ;; The PREDICATE (on neutral records) selects which links are rewritten to the
+  ;; paired URLs, in order; a description is preserved and non-selected links are
+  ;; left untouched.
+  (should (equal
+           (jaunder--org-substitute-links
+            "see [[file:a.png][pic]] and [[https://x/keep]] and [[file:b.png]]"
+            (lambda (rec) (equal (plist-get rec :type) "file"))
+            '("http://s/a" "http://s/b"))
+           "see [[http://s/a][pic]] and [[https://x/keep]] and [[http://s/b]]")))
+
 (ert-deftest jaunder-localize-media-uploads-each-file-once ()
   ;; Two links to the same file upload once (dedup cache); both rewrite to the
   ;; harvested URL; the authoring buffer is never modified.

@@ -20,8 +20,10 @@ argument, and ID-first safe-to-resume write-back are all unchanged.
   a single-blog user writes a one-entry alist.
 - **D1 fallback step (2) — removed.** `jaunder--resolve-blog` resolves _only_
   via `jaunder-blogs` (longest-prefix) and now also **validates**: a matched
-  entry lacking a non-empty `:base-url` or `:username` is a loud error, never a
-  half-configured request. An unmatched directory errors loudly as before.
+  entry whose `:base-url` is not an absolute URL (scheme + host), or whose
+  `:username` is empty, is a loud error, never a half-configured request; the
+  resolved `:base-url` is normalized (trailing slash stripped). An unmatched
+  directory errors loudly as before.
 - **D2 mechanism — a private special, not the user customs.** The commands still
   dynamically bind rather than thread a `blog` argument (D2's core choice
   holds), but the bound value is a private `jaunder--active-blog` plist, read
