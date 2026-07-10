@@ -23,9 +23,7 @@
 ;;; Code:
 
 (require 'org)
-
-(defconst jaunder--blank-line-re "^[ \t]*$"
-  "Regexp matching a blank (whitespace-only) line.")
+(require 'org-element)
 
 (defun jaunder--collect-properties (keywords)
   "Return an alist of file-level #+PROPERTY: KEY/VALUE pairs from KEYWORDS.
@@ -46,32 +44,25 @@ Whitespace is trimmed and empty terms dropped."
         (unless (string= term "") (push term out))))))
 
 (defun jaunder--body-start ()
-  "Return the position after the leading metadata header block in this buffer.
-The header block is the leading contiguous run of blank lines and org file
-keywords (`org-keyword-regexp' — any `#+KEY:' line, not just the mapped ones, so
-an interleaved keyword such as `#+AUTHOR:' cannot halt stripping and leak a later
-`#+PROPERTY: JAUNDER_*' into the sent body).  Shared by
-`jaunder--strip-header-block' and media detection so both see the same body
-region."
-  (save-excursion
-    (goto-char (point-min))
-    (let ((case-fold-search t))
-      (while (and (not (eobp))
-                  (or (looking-at-p jaunder--blank-line-re)
-                      (looking-at-p org-keyword-regexp)))
-        (forward-line 1)))
-    (point)))
-
-(defun jaunder--strip-header-block (text)
-  "Return TEXT with its leading metadata header block removed.
-Drops the leading contiguous run of header keyword lines and blank lines
-(`jaunder--body-start'), which already positions at the start of content, then
-strips only trailing whitespace (the buffer's final newline) — leading
-whitespace on the first content line is body, not the header block, and is kept."
-  (with-temp-buffer
-    (insert text)
-    (string-trim-right
-     (buffer-substring-no-properties (jaunder--body-start) (point-max)))))
+  "Return the buffer position where content begins, after the metadata header.
+The header block is the leading run of org file keywords (`#+KEY:' lines); this
+returns the start of the first non-keyword top-level element via `org-element',
+so \"keyword\" is org's own notion, not a regexp — an interleaved keyword such as
+`#+AUTHOR:' is skipped too, so a later `#+PROPERTY: JAUNDER_*' cannot leak into
+the body.  A buffer that opens on a headline has no header block, so content
+starts at its beginning.  Shared by media detection and the org->atom body
+extraction."
+  (let ((tree (org-element-parse-buffer 'element))
+        (pos (point-max)))
+    (dolist (top (org-element-contents tree))
+      (pcase (org-element-type top)
+        ('headline
+         (setq pos (min pos (org-element-property :begin top))))
+        ('section
+         (dolist (child (org-element-contents top))
+           (unless (eq (org-element-type child) 'keyword)
+             (setq pos (min pos (org-element-property :begin child))))))))
+    pos))
 
 (defun jaunder--set-keyword-line (line-re new-line)
   "Replace the first LINE-RE match in the leading header block with NEW-LINE.

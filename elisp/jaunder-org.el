@@ -63,7 +63,8 @@ later by the media unit."
      :summary summary
      :draft draft
      :content-type jaunder--org-media-type
-     :body (jaunder--strip-header-block (buffer-string))
+     :body (string-trim-right
+            (buffer-substring-no-properties (jaunder--body-start) (point-max)))
      :published published)))
 
 (provide 'jaunder-org)
