@@ -1,15 +1,29 @@
 ;;; jaunder.el --- Jaunder blogging client (AtomPub) -*- lexical-binding: t; -*-
 
+;; Copyright (C) 2026 Jaunder contributors
+
 ;; Author: Jaunder contributors
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: hypermedia, comm, outlines
 ;; URL: https://jaunder.org
 
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+;;
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 ;;; Commentary:
-;; Shared plumbing for the Jaunder Emacs blogging front-end over AtomPub.
-;; This is the Infra-unit skeleton (issue #73): pure helpers plus seams that
-;; units C (#74, authoring/publish) and D (#75, management/reconcile) extend.
+;; Publish and reconcile Org-mode blog posts against a Jaunder server over
+;; AtomPub.  See `jaunder-blogs' to configure one or more blogs.
 
 ;;; Code:
 
