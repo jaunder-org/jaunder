@@ -8,23 +8,26 @@ import { goto, click, register, subscribeTo } from "./helpers";
 
 // Audiences management UI (`/audiences`, converged into `web::audiences`).
 //
-// Guards the reactive re-fetch behaviour of the decomposed screen — two hazards
-// the decomposition introduced and that the `#[component]` coverage exemption
-// leaves to e2e:
+// Guards the reactive re-fetch behaviour of the decomposed screen — hazards the
+// `#[component]` coverage exemption leaves to e2e:
 //   1. A membership toggle must NOT rebuild (remount) the audience list, and must
-//      re-fetch only that audience's members. The list re-fetch is a context signal
-//      (create/rename/delete); each MemberChecklist owns a *local* members trigger,
-//      so an add/remove re-fetches only its own audience. Verified with a stable
-//      element handle on an untouched row + a `list_audience_members` request count.
-//   2. A mutation must not blank content into a "Loading…" flash: resolved values
-//      are held in sticky signals across a re-fetch.
+//      re-fetch only that audience's members (#359). Each MemberChecklist owns a *local*
+//      members trigger, so an add/remove re-fetches only its own audience. Verified with a
+//      stable element handle on an untouched row + a `list_audience_members` request count.
+//   2. A list-level mutation (create/rename/delete) must `patch` the keyed reactive store
+//      in place (#348): unchanged rows keep their DOM — their MemberChecklists are never
+//      remounted (no "Loading members…" reflash) — and a rename updates the row's name in
+//      place. Verified with stable element handles on the rows' checklist <ul>s held across
+//      create, rename, and delete.
+//   3. A mutation must not blank content into a "Loading…" flash: resolved values are
+//      retained across a re-fetch (sticky signals / store patch-on-success).
 // The happy-path CRUD is exercised through the real forms along the way.
 
 test("Audiences: CRUD + membership toggle re-fetch without list remount or flash", async ({
   page,
   browser,
 }, testInfo) => {
-  setTestBudget(90_000);
+  setTestBudget(120_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
 
   const author = await register(page, firstNav);
@@ -70,6 +73,16 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   await expect(friendsX.locator('button:has-text("Add")')).toBeVisible();
   await expect(familyX.locator('button:has-text("Add")')).toBeVisible();
 
+  // #348: stable handles on each row's checklist <ul>. A list-level refetch must `patch`
+  // the keyed store in place, so these exact DOM nodes survive create/rename/delete of
+  // *other* rows (and of this row, on rename) — a rebuild would detach them.
+  const friendsChecklist = await friends
+    .locator("ul.j-audience-members")
+    .elementHandle();
+  const familyChecklist = await family
+    .locator("ul.j-audience-members")
+    .elementHandle();
+
   // The members trigger is local to each MemberChecklist, so adding X to Friends
   // re-fetches ONLY Friends' members — one `list_audience_members` round-trip. A
   // shared trigger would produce two (Friends + Family).
@@ -103,6 +116,18 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   await friendsX.locator('button:has-text("Remove")').click();
   await expect(friendsX.locator('button:has-text("Add")')).toBeVisible();
 
+  // #348 (create): creating another audience refetches the list; the keyed store `patch`es
+  // in place, so the two existing rows' checklists are not remounted (handles stay
+  // connected). The new "Extras" row loads its own checklist, so a global "Loading members"
+  // count would be a false negative here — the per-row handles are the real observable.
+  await page.fill(createName, "Extras");
+  await click(page, 'button:has-text("Create")');
+  await expect(
+    page.locator(".j-audience-item", { hasText: "Extras" }),
+  ).toBeVisible();
+  expect(await friendsChecklist!.evaluate((el) => el.isConnected)).toBe(true);
+  expect(await familyChecklist!.evaluate((el) => el.isConnected)).toBe(true);
+
   // Rename Friends -> BestFriends; the list re-fetches (a `list` bump) and both
   // audiences remain.
   const renameForm = friends.locator("form").filter({ hasText: "Rename" });
@@ -115,6 +140,21 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   // The rename re-fetched the list (its own scope fired), so the guard above is a live
   // counter — it stayed at 0 on the toggle because of scoping, not because it never moves.
   expect(listFetches).toBeGreaterThanOrEqual(1);
+  // #348 (rename in place): the renamed row updated its <h3> to the new name WITHOUT being
+  // remounted — its checklist <ul> is the same DOM node (handle still connected), as is the
+  // unrelated Family one. Keying on audience_id + a reactive name subfield is what updates
+  // the name in place instead of rebuilding the row (which would reflash its members).
+  expect(await friendsChecklist!.evaluate((el) => el.isConnected)).toBe(true);
+  expect(await familyChecklist!.evaluate((el) => el.isConnected)).toBe(true);
+
+  // #348 (delete): deleting one audience removes only its row; the others' checklists are
+  // not remounted. Delete "Extras"; Family's checklist node survives.
+  const extras = page.locator(".j-audience-item", { hasText: "Extras" });
+  await extras.locator('button:has-text("Delete")').click();
+  await expect(
+    page.locator(".j-audience-item", { hasText: "Extras" }),
+  ).toHaveCount(0);
+  expect(await familyChecklist!.evaluate((el) => el.isConnected)).toBe(true);
 
   // Success-gating: a FAILED create (duplicate name) must NOT fire the list invalidator,
   // so the list does not re-fetch. Record the count, attempt the dup, assert it's flat.
