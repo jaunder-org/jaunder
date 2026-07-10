@@ -42,16 +42,6 @@
   :group 'comm
   :prefix "jaunder-")
 
-(defcustom jaunder-base-url nil
-  "Base URL of the Jaunder instance, e.g. \"https://blog.example.com\"."
-  :type '(choice (const :tag "Unset" nil) string)
-  :group 'jaunder)
-
-(defcustom jaunder-username nil
-  "Username used for AtomPub authentication."
-  :type '(choice (const :tag "Unset" nil) string)
-  :group 'jaunder)
-
 (defcustom jaunder-blogs nil
   "Alist mapping a local directory to a Jaunder blog.
 Each element is (DIRECTORY . PLIST), where PLIST carries :base-url and
@@ -115,16 +105,16 @@ them up case-insensitively."
   (cdr (assoc (downcase name) (plist-get response :headers))))
 
 (defun jaunder--auth-secret ()
-  "Retrieve the app password for `jaunder-username' via auth-source.
+  "Retrieve the app password for the active blog's user via auth-source.
 Thin I/O wrapper over `auth-source-search' using `jaunder--auth-source-spec'."
   (let* ((match (car (apply #'auth-source-search
-                            (jaunder--auth-source-spec jaunder-base-url
-                                                       jaunder-username))))
+                            (jaunder--auth-source-spec (jaunder--active-base-url)
+                                                       (jaunder--active-username)))))
          (secret (and match (plist-get match :secret))))
     (cond ((functionp secret) (funcall secret))
           (secret secret)
           (t (error "jaunder: no auth-source entry for %s@%s"
-                    jaunder-username jaunder-base-url)))))
+                    (jaunder--active-username) (jaunder--active-base-url))))))
 
 (defun jaunder--curl-header-value (value)
   "Escape VALUE so `plz' transmits the header intact through curl's config file.
@@ -141,8 +131,8 @@ parser rebuild the literal value."
 METHOD is an HTTP verb string; URL an absolute URL.  BODY is a request body: a
 string, or the `plz' file form `(file PATH)' to upload a file's raw bytes.
 CONTENT-TYPE and EXTRA-HEADERS (an alist of extra (NAME . VALUE) headers) apply to
-write requests.  Basic-auth credentials come from `jaunder--auth-secret' for
-`jaunder-username'.  Returns the `jaunder--plz-response->plist' plist; HTTP error
+write requests.  Basic-auth credentials come from `jaunder--auth-secret' for the
+active blog's user.  Returns the `jaunder--plz-response->plist' plist; HTTP error
 statuses (4xx/5xx) are reported in :status, not signalled.  A transport-level
 failure re-signals.
 
@@ -152,7 +142,7 @@ the auth header under load (ADR-0038)."
   (let ((headers (mapcar
                   (lambda (h) (cons (car h) (jaunder--curl-header-value (cdr h))))
                   (append
-                   (list (jaunder--basic-auth-header jaunder-username
+                   (list (jaunder--basic-auth-header (jaunder--active-username)
                                                      (jaunder--auth-secret)))
                    (when content-type (list (cons "Content-Type" content-type)))
                    extra-headers)))
@@ -428,7 +418,8 @@ POSTs the raw bytes to `/atompub/{user}/media' with the filename in a `Slug'
 header (the server sha256-dedups: 201 new / 200 re-upload), then harvests the
 server-assigned binary URL from the response entry's `<content src>' via
 `jaunder--atom-entry-fields'.  Signals an error on any non-2xx status (#161)."
-  (let* ((url (jaunder--build-url jaunder-base-url "atompub" jaunder-username "media"))
+  (let* ((url (jaunder--build-url (jaunder--active-base-url) "atompub"
+                                  (jaunder--active-username) "media"))
          (resp (jaunder--http-request
                 "POST" url (list 'file path) content-type
                 (list (cons "Slug" (file-name-nondirectory path)))))
@@ -589,26 +580,55 @@ Both `jaunder--resolve-blog' (which blog to publish to) and `jaunder-new-post'
           (setq best entry best-len (length root)))))
     best))
 
+(defvar jaunder--active-blog nil
+  "Plist (:base-url :username) of the blog for the in-flight request.
+Dynamically bound by `jaunder--with-blog' for the extent of one request; it is
+internal request context, not user configuration.  The transport reads it only
+through `jaunder--active-base-url' / `jaunder--active-username', which fail
+loudly when it is unset.")
+
+(defun jaunder--active-base-url ()
+  "Return the in-flight blog's base URL.
+Errors when there is no active blog — i.e. a transport call made outside
+`jaunder--with-blog' — rather than silently issuing a half-configured request."
+  (or (plist-get jaunder--active-blog :base-url)
+      (error "jaunder: no active blog (call within `jaunder--with-blog')")))
+
+(defun jaunder--active-username ()
+  "Return the in-flight blog's username.
+Errors when there is no active blog — i.e. a transport call made outside
+`jaunder--with-blog' — rather than silently issuing a half-configured request."
+  (or (plist-get jaunder--active-blog :username)
+      (error "jaunder: no active blog (call within `jaunder--with-blog')")))
+
 (defun jaunder--resolve-blog (file-or-dir)
-  "Return the active-blog plist (:base-url :username) for FILE-OR-DIR.
-Longest-prefix match against `jaunder-blogs' (`jaunder--blog-entry-for'); else
-the single-blog globals; else an error naming FILE-OR-DIR."
+  "Return the blog plist (:base-url :username) governing FILE-OR-DIR.
+Longest-prefix match against `jaunder-blogs' (`jaunder--blog-entry-for').
+Errors when no blog matches, when the entry's :base-url is not an absolute URL,
+or when it lacks a non-empty :username — a request is never issued
+half-configured.  The returned :base-url is normalized (trailing slashes
+stripped), so downstream URL joining can treat it as a clean prefix."
   (let ((best (cdr (jaunder--blog-entry-for file-or-dir))))
-    (cond
-     (best (list :base-url (plist-get best :base-url)
-                 :username (plist-get best :username)))
-     ((and jaunder-base-url jaunder-username)
-      (list :base-url jaunder-base-url :username jaunder-username))
-     (t (error "jaunder: no blog configured for %s" file-or-dir)))))
+    (unless best
+      (error "jaunder: no blog configured for %s (see `jaunder-blogs')" file-or-dir))
+    (let* ((base-url (plist-get best :base-url))
+           (username (plist-get best :username))
+           (parsed (and (stringp base-url) (url-generic-parse-url base-url))))
+      (unless (and parsed (url-type parsed)
+                   (url-host parsed) (not (string= (url-host parsed) "")))
+        (error "jaunder: blog for %s has a malformed :base-url: %S"
+               file-or-dir base-url))
+      (when (or (null username) (string= username ""))
+        (error "jaunder: blog for %s has no :username" file-or-dir))
+      (list :base-url (replace-regexp-in-string "/+\\'" "" base-url)
+            :username username))))
 
 (defmacro jaunder--with-blog (file &rest body)
-  "Resolve the blog for FILE and run BODY with the transport specials bound."
+  "Resolve the blog for FILE and run BODY with `jaunder--active-blog' bound.
+Signals when FILE resolves to no configured, fully-specified blog."
   (declare (indent 1) (debug t))
-  (let ((blog (make-symbol "blog")))
-    `(let* ((,blog (jaunder--resolve-blog ,file))
-            (jaunder-base-url (plist-get ,blog :base-url))
-            (jaunder-username (plist-get ,blog :username)))
-       ,@body)))
+  `(let ((jaunder--active-blog (jaunder--resolve-blog ,file)))
+     ,@body))
 
 ;;; publish validation + Location->id + force-draft (unit C4, issue #162)
 
@@ -759,14 +779,14 @@ file pristine."
                                  (resp (if id
                                            (jaunder--http-request
                                             "PUT"
-                                            (jaunder--build-url jaunder-base-url "atompub"
-                                                                jaunder-username "posts" id)
+                                            (jaunder--build-url (jaunder--active-base-url) "atompub"
+                                                                (jaunder--active-username) "posts" id)
                                             xml jaunder--entry-content-type
                                             (when synced (list (cons "If-Match" synced))))
                                          (jaunder--http-request
                                           "POST"
-                                          (jaunder--build-url jaunder-base-url "atompub"
-                                                              jaunder-username "posts")
+                                          (jaunder--build-url (jaunder--active-base-url) "atompub"
+                                                              (jaunder--active-username) "posts")
                                           xml jaunder--entry-content-type)))
                                  (code (plist-get resp :status)))
                             (unless (memq code '(200 201))

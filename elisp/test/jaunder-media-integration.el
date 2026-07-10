@@ -44,8 +44,8 @@ the 200 (vs 201) distinguishes the `existed' branch (media.rs)."
            (let* ((u1 (jaunder--upload-media img "image/png"))
                   (resp2 (jaunder--http-request
                           "POST"
-                          (jaunder--build-url jaunder-base-url "atompub"
-                                              jaunder-username "media")
+                          (jaunder--build-url jaunder-test-base-url "atompub"
+                                              jaunder-test-username "media")
                           (list 'file img) "image/png"
                           (list (cons "Slug" "same.png"))))
                   (u2 (cdr (assq 'content-src
@@ -70,7 +70,7 @@ credentials, so `require_user_match' fails deterministically (403)."
            (with-temp-file img (insert "X"))
            (let ((resp (jaunder--http-request
                         "POST"
-                        (jaunder--build-url jaunder-base-url "atompub" "not-alice" "media")
+                        (jaunder--build-url jaunder-test-base-url "atompub" "not-alice" "media")
                         (list 'file img) "image/png"
                         (list (cons "Slug" "x.png")))))
              (should (>= (plist-get resp :status) 400))

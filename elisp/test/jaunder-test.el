@@ -306,26 +306,46 @@
 
 (ert-deftest jaunder-resolve-blog-longest-prefix ()
   (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a" :username "a")
-                         ("/home/me/blog/work/" :base-url "https://b" :username "b")))
-        (jaunder-base-url nil) (jaunder-username nil))
+                         ("/home/me/blog/work/" :base-url "https://b" :username "b"))))
     (should (equal (plist-get (jaunder--resolve-blog "/home/me/blog/post.org") :username) "a"))
     (should (equal (plist-get (jaunder--resolve-blog "/home/me/blog/work/x.org") :username) "b"))))
 
-(ert-deftest jaunder-resolve-blog-falls-back-to-globals ()
-  (let ((jaunder-blogs nil)
-        (jaunder-base-url "https://g") (jaunder-username "g"))
-    (should (equal (plist-get (jaunder--resolve-blog "/tmp/x.org") :base-url) "https://g"))))
-
 (ert-deftest jaunder-resolve-blog-errors-when-unconfigured ()
-  (let ((jaunder-blogs nil) (jaunder-base-url nil) (jaunder-username nil))
+  (let ((jaunder-blogs nil))
     (should-error (jaunder--resolve-blog "/tmp/x.org"))))
 
-(ert-deftest jaunder-with-blog-binds-transport-specials ()
-  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a" :username "a")))
-        (jaunder-base-url nil) (jaunder-username nil))
+(ert-deftest jaunder-resolve-blog-errors-on-incomplete-entry ()
+  ;; A matched entry missing :username must fail loudly rather than issue a
+  ;; half-configured request: a nil username silently yields a wrong URL (the
+  ;; segment is dropped) and garbage Basic credentials.
+  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a"))))
+    (should-error (jaunder--resolve-blog "/home/me/blog/post.org"))))
+
+(ert-deftest jaunder-resolve-blog-errors-on-malformed-base-url ()
+  ;; The real requirement on :base-url is that it is a URL, not merely non-empty;
+  ;; a value with no scheme/host is rejected at the config boundary.
+  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "not-a-url" :username "a"))))
+    (should-error (jaunder--resolve-blog "/home/me/blog/post.org"))))
+
+(ert-deftest jaunder-resolve-blog-normalizes-base-url-trailing-slash ()
+  ;; A trailing slash on :base-url is stripped here so downstream URL joining can
+  ;; treat the base as a clean prefix.
+  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a/" :username "a"))))
+    (should (equal (plist-get (jaunder--resolve-blog "/home/me/blog/post.org") :base-url)
+                   "https://a"))))
+
+(ert-deftest jaunder-with-blog-binds-active-blog ()
+  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a" :username "a"))))
     (jaunder--with-blog "/home/me/blog/post.org"
-                        (should (equal jaunder-base-url "https://a"))
-                        (should (equal jaunder-username "a")))))
+                        (should (equal (jaunder--active-base-url) "https://a"))
+                        (should (equal (jaunder--active-username) "a")))))
+
+(ert-deftest jaunder-active-accessors-error-without-active-blog ()
+  ;; Outside `jaunder--with-blog' the accessors must signal, so a transport call
+  ;; that forgot to establish request context fails loudly instead of using nil.
+  (let ((jaunder--active-blog nil))
+    (should-error (jaunder--active-base-url))
+    (should-error (jaunder--active-username))))
 
 ;;; atom-entry -> xml serializer (C2 / issue #160)
 
@@ -545,7 +565,7 @@
                (lambda (_verb _url &rest args)
                  (setq captured (plist-get args :headers))
                  '(:status 201 :body ""))))
-             (let ((jaunder-username "alice"))
+             (let ((jaunder--active-blog '(:base-url "http://x" :username "alice")))
                (jaunder--http-request "POST" "http://x/media" (list 'file "/tmp/a.png")
                                       "image/png" (list (cons "Slug" "a.png"))))
              (should (equal (cdr (assoc "Slug" captured)) "a.png"))
@@ -565,7 +585,7 @@
 (ert-deftest jaunder-upload-media-errors-on-non-2xx ()
   (cl-letf (((symbol-function 'jaunder--http-request)
              (lambda (&rest _) '(:status 500 :body "boom"))))
-           (let ((jaunder-base-url "http://x") (jaunder-username "alice"))
+           (let ((jaunder--active-blog '(:base-url "http://x" :username "alice")))
              (should-error (jaunder--upload-media "/tmp/x.png" "image/png") :type 'error))))
 
 (ert-deftest jaunder-media-link-p-qualifies-file-and-attachment ()

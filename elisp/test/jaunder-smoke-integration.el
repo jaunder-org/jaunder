@@ -17,7 +17,7 @@
   "The service document advertises the j:extension capability."
   (jaunder-test--with-live-server
    (let ((r (jaunder--http-request
-             "GET" (jaunder--build-url jaunder-base-url "atompub" "service"))))
+             "GET" (jaunder--build-url jaunder-test-base-url "atompub" "service"))))
      (should (eq (plist-get r :status) 200))
      (should (string-match-p "j:extension" (plist-get r :body)))
      (should (string-match-p "format-media-type" (plist-get r :body)))
@@ -27,7 +27,7 @@
   "An app-password Basic request returns the user's (empty) posts collection."
   (jaunder-test--with-live-server
    (let ((r (jaunder--http-request
-             "GET" (jaunder--build-url jaunder-base-url "atompub" jaunder-username "posts"))))
+             "GET" (jaunder--build-url jaunder-test-base-url "atompub" jaunder-test-username "posts"))))
      (should (eq (plist-get r :status) 200)))))
 
 (provide 'jaunder-smoke-integration)

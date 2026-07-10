@@ -17,6 +17,12 @@
 (defvar jaunder-test-app-password nil
   "Raw app-password token, bound inside `jaunder-test--with-live-server'.")
 
+(defvar jaunder-test-base-url nil
+  "Live server base URL, bound inside `jaunder-test--with-live-server'.")
+
+(defvar jaunder-test-username nil
+  "Provisioned username, bound inside `jaunder-test--with-live-server'.")
+
 (defun jaunder-test--binary ()
   "Locate the jaunder binary or signal an error (never silently skip)."
   (or (getenv "JAUNDER_TEST_BINARY")
@@ -85,8 +91,9 @@ is exactly what this suite exists to avoid (ADR-0038)."
 
 (defmacro jaunder-test--with-live-server (&rest body)
   "Boot a jaunder server in a tempdir, provision creds, then run BODY.
-Bound in BODY: `jaunder-base-url', `jaunder-username',
-`jaunder-test-app-password', and `auth-sources' (a temp netrc with the token)."
+Bound in BODY: `jaunder-test-base-url', `jaunder-test-username',
+`jaunder-test-app-password', `jaunder--active-blog' (so a low-level transport
+call in BODY has request context), and `auth-sources' (a temp netrc)."
   (declare (indent 0) (debug t))
   `(let* ((bin (jaunder-test--binary))
           (tmp (make-temp-file "jaunder-it-" t))
@@ -115,14 +122,17 @@ Bound in BODY: `jaunder-base-url', `jaunder-username',
                                         "--environment" "dev")))
              (let* ((addr (jaunder-test--wait
                            (lambda () (jaunder-test--read-runtime-file rf)) "runtime.json"))
-                    (jaunder-base-url (format "http://%s:%s" (car addr) (cdr addr)))
-                    (jaunder-username "alice")
+                    (base-url (format "http://%s:%s" (car addr) (cdr addr)))
+                    (username "alice")
+                    (jaunder-test-base-url base-url)
+                    (jaunder-test-username username)
                     (jaunder-test-app-password token)
+                    (jaunder--active-blog (list :base-url base-url :username username))
                     (authinfo (expand-file-name "authinfo" tmp))
                     (auth-source-do-cache nil)
                     (auth-sources (list authinfo)))
                (jaunder-test--wait
-                (lambda () (jaunder-test--http-reachable-p (concat jaunder-base-url "/")))
+                (lambda () (jaunder-test--http-reachable-p (concat base-url "/")))
                 "server readiness")
                ;; Auth readiness: an unauthed GET / can succeed before the
                ;; just-provisioned session is reliably usable by the serving
@@ -131,13 +141,12 @@ Bound in BODY: `jaunder-base-url', `jaunder-username',
                (jaunder-test--wait
                 (lambda ()
                   (jaunder-test--authed-200-p
-                   (jaunder--build-url jaunder-base-url "atompub"
-                                       jaunder-username "posts")
-                   jaunder-username jaunder-test-app-password))
+                   (jaunder--build-url base-url "atompub" username "posts")
+                   username jaunder-test-app-password))
                 "auth readiness")
                (with-temp-file authinfo
                  (insert (format "machine %s login %s password %s\n"
-                                 (car addr) jaunder-username jaunder-test-app-password)))
+                                 (car addr) username jaunder-test-app-password)))
                ,@body)))
        (when (process-live-p proc) (delete-process proc))
        (when (buffer-live-p stderr) (kill-buffer stderr))

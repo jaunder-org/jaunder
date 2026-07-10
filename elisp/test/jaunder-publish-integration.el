@@ -1,9 +1,9 @@
 ;;; jaunder-publish-integration.el --- C4 live publish tests -*- lexical-binding: t; -*-
 ;;; Commentary:
 ;; End-to-end publish flow against a real server (#137 harness, ADR-0035).
-;; Runs via `cargo xtask elisp-integration'.  The harness binds
-;; `jaunder-base-url'/`jaunder-username', so the publish commands resolve the
-;; blog via the single-blog globals fallback (jaunder-blogs unset here).
+;; Runs via `cargo xtask elisp-integration'.  Each post lives in its own tempdir
+;; registered in `jaunder-blogs' (pointing at the harness's live server), so the
+;; publish commands resolve the blog by directory the way real usage does.
 ;;; Code:
 
 (require 'ert)
@@ -15,6 +15,9 @@
   (declare (indent 1) (debug t))
   `(let* ((dir (make-temp-file "jaunder-pub-" t))
           (path (expand-file-name "draft-20260101T000000.org" dir))
+          (jaunder-blogs (list (cons (file-name-as-directory dir)
+                                     (list :base-url jaunder-test-base-url
+                                           :username jaunder-test-username))))
           (buf (progn (with-temp-file path (insert ,contents))
                       (find-file-noselect path))))
      (unwind-protect

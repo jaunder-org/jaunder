@@ -4,6 +4,37 @@
 - Deciders: mdorman, Claude
 - Date: 2026-07-03
 
+## Amendment — 2026-07-10 (#366, emacs interface cleanup)
+
+Reviewing the shipped code, the single-blog globals `jaunder-base-url` /
+`jaunder-username` were removed and the transport's dynamic-binding channel was
+made private. This revises the specifics below; the **core shape stands** —
+directory→blog resolution, dynamic binding in preference to threading a `blog`
+argument, and ID-first safe-to-resume write-back are all unchanged.
+
+- **Decision Driver "a single-blog user who only sets the two globals must keep
+  working" — dropped.** A directory-less global resolves _any_ buffer anywhere
+  to one server and cannot feed the per-directory reconcile design (Unit D); it
+  modelled a placeless blog, not a simpler one. `jaunder-blogs` already carries
+  the same fields plus the directory join key, so it is now the **sole** config;
+  a single-blog user writes a one-entry alist.
+- **D1 fallback step (2) — removed.** `jaunder--resolve-blog` resolves _only_
+  via `jaunder-blogs` (longest-prefix) and now also **validates**: a matched
+  entry lacking a non-empty `:base-url` or `:username` is a loud error, never a
+  half-configured request. An unmatched directory errors loudly as before.
+- **D2 mechanism — a private special, not the user customs.** The commands still
+  dynamically bind rather than thread a `blog` argument (D2's core choice
+  holds), but the bound value is a private `jaunder--active-blog` plist, read
+  only through the `jaunder--active-base-url` / `jaunder--active-username`
+  accessors. Those accessors are the sole read path and **error when no blog is
+  active**, so a transport call made outside `jaunder--with-blog` fails loudly
+  instead of silently reading a user `defcustom` (or `nil`). This stops the
+  client from rebinding a user-facing config variable behind the user's back and
+  closes the silent `nil`-username footgun (a dropped URL segment +
+  `":password"` Basic credentials).
+- **Verification — the "globals fallback" ERT case is replaced** by
+  incomplete-entry and no-active-blog error cases.
+
 ## Context and Problem Statement
 
 C4 (#162) is the final Unit-C sub-issue: it wires the C1 transport, C2 org→atom
