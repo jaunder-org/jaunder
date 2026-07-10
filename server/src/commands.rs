@@ -380,6 +380,11 @@ pub async fn prepare_server(
     prod: bool,
     runtime_file: Option<std::path::PathBuf>,
 ) -> anyhow::Result<PreparedServer> {
+    // Establish our own start-time up front (before opening the DB): if `/proc` is
+    // unusable we cannot enforce the start-up mutex, so refuse rather than serve with
+    // a silently-broken guard (#141). Threaded into the post-bind runtime-file write.
+    let start_time = crate::runtime_file::require_start_time_at(Path::new("/proc/self/stat"))?;
+
     let db = match open_existing_database(&storage.db).await {
         Ok(db) => db,
         Err(_) if !prod => {
@@ -446,8 +451,12 @@ pub async fn prepare_server(
     // `local_addr` cannot fail on a just-bound listener; fall back to the
     // requested `bind` rather than add a never-taken error branch.
     let addr = listener.local_addr().unwrap_or(bind);
-    let runtime_guard =
-        crate::runtime_file::RuntimeFileGuard::for_serve(runtime_file, &storage.storage_path, addr);
+    let runtime_guard = crate::runtime_file::RuntimeFileGuard::for_serve(
+        runtime_file,
+        &storage.storage_path,
+        addr,
+        start_time,
+    );
 
     Ok(PreparedServer {
         listener,
@@ -767,7 +776,7 @@ mod tests {
         let path = dir.path().join("runtime.json");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let guard = crate::runtime_file::RuntimeFileGuard::write(path.clone(), addr);
+        let guard = crate::runtime_file::RuntimeFileGuard::write(path.clone(), addr, 0);
         assert!(path.exists(), "guard wrote the runtime file");
 
         // Installs the SIGINT/SIGTERM handlers synchronously, so the raise below
