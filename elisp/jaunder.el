@@ -54,22 +54,14 @@ compatibility but not used in v1 — org is the only converter)."
 ;;; Pure helpers
 
 (defun jaunder--build-url (base &rest segments)
-  "Join BASE and path SEGMENTS into a normalized URL.
-Trailing slashes on BASE and surrounding slashes on each segment are
-collapsed to single separators; nil or empty segments are dropped.
-Signals an error when BASE is nil or empty."
+  "Join BASE and path SEGMENTS into a URL with single-slash separators.
+Callers pass clean, non-empty path tokens; BASE is a normalized base URL (see
+`jaunder--resolve-blog', which validates it and strips its trailing slash).
+Signals an error when BASE is nil or empty — a broken invariant, not user input
+to be massaged."
   (when (or (null base) (string= base ""))
     (error "jaunder--build-url: BASE must be non-empty"))
-  (let ((head (replace-regexp-in-string "/+\\'" "" base))
-        (tail (delq nil
-                    (mapcar (lambda (s)
-                              (when (and s (not (string= s "")))
-                                (let ((stripped (replace-regexp-in-string "\\`/+\\|/+\\'" "" s)))
-                                  ;; An all-slash segment (e.g. "/") strips to ""; drop it
-                                  ;; rather than relying on `delq' matching interned "".
-                                  (unless (string= stripped "") stripped))))
-                            segments))))
-    (mapconcat #'identity (cons head tail) "/")))
+  (mapconcat #'identity (cons base segments) "/"))
 
 (defun jaunder--basic-auth-header (user password)
   "Return the HTTP Basic Authorization header cons for USER and PASSWORD.

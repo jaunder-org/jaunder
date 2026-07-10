@@ -11,20 +11,9 @@
 (ert-deftest jaunder-build-url-bare ()
   (should (equal (jaunder--build-url "https://x.example") "https://x.example")))
 
-(ert-deftest jaunder-build-url-strips-trailing-slash ()
-  (should (equal (jaunder--build-url "https://x.example/") "https://x.example")))
-
 (ert-deftest jaunder-build-url-joins-segments ()
   (should (equal (jaunder--build-url "https://x.example" "atom" "feed")
                  "https://x.example/atom/feed")))
-
-(ert-deftest jaunder-build-url-collapses-inner-slashes ()
-  (should (equal (jaunder--build-url "https://x.example/" "/atom/" "feed")
-                 "https://x.example/atom/feed")))
-
-(ert-deftest jaunder-build-url-drops-empty-segments ()
-  (should (equal (jaunder--build-url "https://x.example" nil "" "feed")
-                 "https://x.example/feed")))
 
 (ert-deftest jaunder-build-url-errors-on-empty-base ()
   (should-error (jaunder--build-url nil))
