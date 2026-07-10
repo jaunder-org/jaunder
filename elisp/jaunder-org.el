@@ -27,8 +27,10 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'org)
 (require 'org-element)
+(require 'org-attach)
 (require 'jaunder-entry)
 (require 'jaunder-datetime)
 
@@ -162,6 +164,54 @@ later machine.  Idempotent: an existing value is preserved verbatim."
       (let ((zone (jaunder--current-zone-name)))
         (jaunder--set-property "JAUNDER_DATE_TZ" zone)
         zone)))
+
+;;; Org link primitives (media-agnostic)
+
+(defun jaunder--org-body-links ()
+  "Return the `org-element' link objects in the current buffer's body region.
+Walks links after the metadata header block (`jaunder--body-start'), in document
+order — the org traversal media detection builds on."
+  (save-restriction
+    (narrow-to-region (jaunder--body-start) (point-max))
+    (org-element-map (org-element-parse-buffer) 'link #'identity)))
+
+(defun jaunder--org-link-file (link)
+  "Resolve `org-element' LINK's local target to an absolute file path.
+A `file:' path resolves against `default-directory'; an `attachment:' path via
+`org-attach-expand' at the link's heading."
+  (let ((path (org-element-property :path link)))
+    (if (string= (org-element-property :type link) "attachment")
+        (save-excursion
+          (goto-char (org-element-property :begin link))
+          (org-attach-expand path))
+      (expand-file-name path))))
+
+(defun jaunder--org-substitute-links (body predicate urls)
+  "Return BODY with each org link satisfying PREDICATE rewritten to a URL in URLS.
+URLS has one entry per satisfying link, in document order.  Each link's whole
+inner target is replaced, brackets and any `[…][description]' preserved (result
+stays `[[URL]]' / `[[URL][desc]]').  Rewrites right-to-left."
+  (with-temp-buffer
+    (insert body)
+    (org-mode)
+    (let* ((links (delq nil
+                        (org-element-map (org-element-parse-buffer) 'link
+                                         (lambda (link)
+                                           (when (funcall predicate link) link)))))
+           (pairs (cl-mapcar #'cons links urls)))
+      (dolist (pair (nreverse pairs))
+        (let* ((link (car pair))
+               (url (cdr pair))
+               (beg (org-element-property :begin link))
+               (end (- (org-element-property :end link)
+                       (or (org-element-property :post-blank link) 0)))
+               (cb (org-element-property :contents-begin link))
+               (ce (org-element-property :contents-end link))
+               (desc (and cb ce (buffer-substring-no-properties cb ce))))
+          (delete-region beg end)
+          (goto-char beg)
+          (insert (if desc (format "[[%s][%s]]" url desc) (format "[[%s]]" url))))))
+    (buffer-substring-no-properties (point-min) (point-max))))
 
 (provide 'jaunder-org)
 ;;; jaunder-org.el ends here

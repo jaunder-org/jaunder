@@ -22,9 +22,7 @@
 
 ;;; Code:
 
-(require 'cl-lib)
 (require 'org)
-(require 'org-attach)
 (require 'jaunder-org)
 (require 'jaunder-atom)
 (require 'jaunder-config)
@@ -75,59 +73,24 @@ server-assigned binary URL from the response entry's `<content src>' via
 
 (defun jaunder--collect-media-links ()
   "Collect qualifying local-image links in the current buffer's body region, in order.
-Walks `org-element' `link' objects after the header block (`jaunder--body-start'),
-keeping `file:'-type links whose extension is an image and `attachment:' links
-(both via `jaunder--media-content-type').  Returns an ordered list of plists
-\(:raw-link RAW :path ABS :content-type MIME).  `file:' paths resolve against
-`default-directory'; `attachment:' paths via `org-attach-expand' at the link's
-heading.  Restricting to the body region keeps this list aligned one-for-one and
-in order with the links in the sent body."
-  (save-restriction
-    (narrow-to-region (jaunder--body-start) (point-max))
-    (let ((tree (org-element-parse-buffer)))
-      (delq nil
-            (org-element-map tree 'link
-                             (lambda (link)
-                               (let ((mime (jaunder--media-link-p link)))
-                                 (when mime
-                                   (let ((raw (org-element-property :raw-link link))
-                                         (path (org-element-property :path link)))
-                                     (list :raw-link raw
-                                           :content-type mime
-                                           :path (if (string= (org-element-property :type link)
-                                                              "attachment")
-                                                     (save-excursion
-                                                       (goto-char (org-element-property :begin link))
-                                                       (org-attach-expand path))
-                                                   (expand-file-name path))))))))))))
+Each `org-element' body link (`jaunder--org-body-links') that qualifies as an
+uploadable image (`jaunder--media-link-p') becomes a plist (:raw-link RAW
+:content-type MIME :path ABS), its file resolved via `jaunder--org-link-file'.
+In document order, one-for-one with the links in the sent body."
+  (delq nil
+        (mapcar (lambda (link)
+                  (let ((mime (jaunder--media-link-p link)))
+                    (when mime
+                      (list :raw-link (org-element-property :raw-link link)
+                            :content-type mime
+                            :path (jaunder--org-link-file link)))))
+                (jaunder--org-body-links))))
 
 (defun jaunder--substitute-media (body urls)
   "Return BODY with its qualifying media links rewritten to URLS, in order.
-URLS has one entry per qualifying link in document order.  Each link's whole inner
-target is replaced with its URL, brackets and any `[…][description]' preserved
-\(result stays `[[URL]]' / `[[URL][desc]]').  Rewrites right-to-left."
-  (with-temp-buffer
-    (insert body)
-    (org-mode)
-    (let* ((tree (org-element-parse-buffer))
-           (links (delq nil
-                        (org-element-map tree 'link
-                                         (lambda (link)
-                                           (when (jaunder--media-link-p link) link)))))
-           (pairs (cl-mapcar #'cons links urls)))
-      (dolist (pair (nreverse pairs))
-        (let* ((link (car pair))
-               (url (cdr pair))
-               (beg (org-element-property :begin link))
-               (end (- (org-element-property :end link)
-                       (or (org-element-property :post-blank link) 0)))
-               (cb (org-element-property :contents-begin link))
-               (ce (org-element-property :contents-end link))
-               (desc (and cb ce (buffer-substring-no-properties cb ce))))
-          (delete-region beg end)
-          (goto-char beg)
-          (insert (if desc (format "[[%s][%s]]" url desc) (format "[[%s]]" url))))))
-    (buffer-substring-no-properties (point-min) (point-max))))
+Delegates the org rewrite to `jaunder--org-substitute-links', selecting the media
+links via `jaunder--media-link-p'."
+  (jaunder--org-substitute-links body #'jaunder--media-link-p urls))
 
 (defun jaunder--media-preflight (records)
   "Signal an error if any RECORDS `:path' is not a readable file.
