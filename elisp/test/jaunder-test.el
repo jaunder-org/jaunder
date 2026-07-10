@@ -145,6 +145,17 @@
     (should-not (string-match-p "JAUNDER_" (jaunder-entry-body e)))
     (should-not (string-match-p "#\\+TITLE" (jaunder-entry-body e)))))
 
+(ert-deftest jaunder-org->atom-body-keeps-leading-indentation ()
+  ;; Header-block stripping locates the start of content and trims only the
+  ;; trailing newline; leading whitespace on the first content line is body, not
+  ;; header, so it is preserved rather than reflowed.
+  (let ((e (jaunder-test--entry
+            (concat "#+TITLE: T\n"
+                    "\n"
+                    "    indented first line\n"
+                    "second line\n"))))
+    (should (equal (jaunder-entry-body e) "    indented first line\nsecond line"))))
+
 (ert-deftest jaunder-org->atom-untitled-all-emoji-body ()
   (let ((e (jaunder-test--entry "🎉✨\n")))
     (should (null (jaunder-entry-title e)))

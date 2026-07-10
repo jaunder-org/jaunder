@@ -212,10 +212,13 @@ body region."
 (defun jaunder--strip-header-block (text)
   "Return TEXT with its leading metadata header block removed.
 Drops the leading contiguous run of header keyword lines and blank lines
-(`jaunder--body-start'), then trims surrounding whitespace from the remaining body."
+(`jaunder--body-start'), which already positions at the start of content, then
+strips only trailing whitespace (the buffer's final newline) — leading
+whitespace on the first content line is body, not the header block, and is kept."
   (with-temp-buffer
     (insert text)
-    (string-trim (buffer-substring-no-properties (jaunder--body-start) (point-max)))))
+    (string-trim-right
+     (buffer-substring-no-properties (jaunder--body-start) (point-max)))))
 
 (defun jaunder--offset->seconds (offset)
   "Parse a numeric UTC OFFSET string (\"±HHMM\" or \"±HH:MM\") to integer seconds.
