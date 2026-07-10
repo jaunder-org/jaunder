@@ -1,7 +1,7 @@
 //! Reactive plumbing shared across `web` verticals.
 //!
 //! [`Invalidator`] is the canonical revalidation idiom (design record:
-//! `docs/adr/drafts/web-invalidator-revalidation-idiom.md`): a committed mutation
+//! `docs/adr/0060-web-invalidator-revalidation-idiom.md`): a committed mutation
 //! `notify()`s an invalidator, and every resource that `track()`s it refetches.
 
 use leptos::prelude::*;

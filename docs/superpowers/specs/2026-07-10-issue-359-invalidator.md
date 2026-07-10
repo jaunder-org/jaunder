@@ -1,7 +1,7 @@
 # Spec — #359: the `Invalidator` revalidation primitive
 
 **Status:** proposed. **Decision record:**
-`docs/adr/drafts/web-invalidator-revalidation-idiom.md` (numbered at ship).
+`docs/adr/0060-web-invalidator-revalidation-idiom.md` (numbered at ship).
 **Supersedes proposal of:** #359 itself — renames `Revalidator`→`Invalidator`
 and fires on **success**, not on dispatch (§2).
 

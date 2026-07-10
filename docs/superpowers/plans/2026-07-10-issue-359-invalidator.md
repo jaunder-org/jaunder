@@ -1,7 +1,7 @@
 # Plan — Issue #359: the `Invalidator` revalidation primitive
 
 Spec of record: `docs/superpowers/specs/2026-07-10-issue-359-invalidator.md`.
-Decision record: `docs/adr/drafts/web-invalidator-revalidation-idiom.md`. The
+Decision record: `docs/adr/0060-web-invalidator-revalidation-idiom.md`. The
 `Err`⟹no-mutation precondition is split out to #362 (ast-grep gate) / #363
 (storage-API rework) — not this cycle.
 
