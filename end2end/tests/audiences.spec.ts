@@ -73,9 +73,16 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   // The members trigger is local to each MemberChecklist, so adding X to Friends
   // re-fetches ONLY Friends' members — one `list_audience_members` round-trip. A
   // shared trigger would produce two (Friends + Family).
+  // Two request counts. `memberFetches`: a local per-checklist trigger, so a toggle
+  // re-fetches only its own audience (one round-trip). `listFetches`: the audience LIST
+  // must NOT re-fetch on a membership toggle (the scoped-invalidation guard) — its scope
+  // fires only on create/rename/delete, and only on *success*.
   let memberFetches = 0;
+  let listFetches = 0;
   page.on("request", (req) => {
-    if (req.url().includes("/api/list_audience_members")) memberFetches += 1;
+    const url = req.url();
+    if (url.includes("/api/list_audience_members")) memberFetches += 1;
+    if (url.includes("/api/list_my_audiences")) listFetches += 1;
   });
 
   // Add X to Friends; the button flips Add -> Remove.
@@ -86,6 +93,9 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   expect(await familyName!.evaluate((el) => el.isConnected)).toBe(true);
   // Only Friends' checklist re-fetched (local trigger), not Family's.
   expect(memberFetches).toBe(1);
+  // The audience LIST did NOT re-fetch on the membership toggle — scoped invalidation.
+  // A single shared invalidator (over-invalidating) would have re-fetched it here.
+  expect(listFetches).toBe(0);
   // No members list left stuck on the loading placeholder.
   await expect(page.getByText("Loading members")).toHaveCount(0);
 
@@ -102,4 +112,17 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
     page.locator("h3.j-audience-name", { hasText: "BestFriends" }),
   ).toBeVisible();
   await expect(family).toBeVisible();
+  // The rename re-fetched the list (its own scope fired), so the guard above is a live
+  // counter — it stayed at 0 on the toggle because of scoping, not because it never moves.
+  expect(listFetches).toBeGreaterThanOrEqual(1);
+
+  // Success-gating: a FAILED create (duplicate name) must NOT fire the list invalidator,
+  // so the list does not re-fetch. Record the count, attempt the dup, assert it's flat.
+  const beforeDup = listFetches;
+  await page.fill(createName, "BestFriends");
+  await click(page, 'button:has-text("Create")');
+  // Any create error will do — the point is that a failed create does not refetch. Not
+  // coupled to the exact store message (rewording it shouldn't hang this to a timeout).
+  await expect(page.locator("p.error")).toBeVisible();
+  expect(listFetches).toBe(beforeDup);
 });
