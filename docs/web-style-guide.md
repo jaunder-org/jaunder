@@ -230,7 +230,7 @@ components).
 
 ## 10. Keyed lists (reactive `Store`)
 
-Decision record: `docs/adr/drafts/web-keyed-list-reactive-store.md`.
+Decision record: `docs/adr/0061-web-keyed-list-reactive-store.md`.
 
 A `map`/`collect` list rendered inside a reactive closure rebuilds **every** row
 whenever its source signal changes. For a list whose rows carry **per-row

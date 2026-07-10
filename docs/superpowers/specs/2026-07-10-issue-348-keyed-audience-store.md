@@ -1,7 +1,7 @@
 # Spec — #348: Keyed audience list via a reactive Store
 
 **Issue:** [#348](https://github.com/jaunder-org/jaunder/issues/348) **Status:**
-proposed **Decision record:** `docs/adr/drafts/web-keyed-list-reactive-store.md`
+proposed **Decision record:** `docs/adr/0061-web-keyed-list-reactive-store.md`
 **Depends on:** #359 (the `Invalidator` primitive, merged) — still drives the
 refetch.
 

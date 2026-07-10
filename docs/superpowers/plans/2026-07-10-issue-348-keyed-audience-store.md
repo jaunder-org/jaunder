@@ -1,7 +1,7 @@
 # Plan — #348: Keyed audience list via a reactive Store
 
 **Spec:** `docs/superpowers/specs/2026-07-10-issue-348-keyed-audience-store.md`
-**ADR draft:** `docs/adr/drafts/web-keyed-list-reactive-store.md` (already
+**ADR draft:** `docs/adr/0061-web-keyed-list-reactive-store.md` (already
 written; promoted at ship) **Branch/worktree:**
 `worktree-issue-348-keyed-audience-list`
 

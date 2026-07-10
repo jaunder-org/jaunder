@@ -4,7 +4,7 @@
 //! `docs/adr/0060-web-invalidator-revalidation-idiom.md`): a committed mutation
 //! `notify()`s an invalidator, and every resource that `track()`s it refetches.
 //! [`Invalidator::patched`] extends it to a keyed `reactive_stores` list (design record:
-//! `docs/adr/drafts/web-keyed-list-reactive-store.md`): a refetch `patch`es the store in
+//! `docs/adr/0061-web-keyed-list-reactive-store.md`): a refetch `patch`es the store in
 //! place so unchanged rows keep their DOM, and [`ListState`] tracks the list's load status.
 
 use leptos::prelude::*;
