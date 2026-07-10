@@ -37,6 +37,8 @@
 (require 'seq)
 (require 'plz)
 
+(require 'jaunder-entry)
+
 (defgroup jaunder nil
   "Emacs blogging front-end for Jaunder over AtomPub."
   :group 'comm
@@ -150,13 +152,6 @@ the auth header under load (ADR-0038)."
            (signal (car err) (cdr err))))))))
 
 ;;; org -> atom mapping
-
-(cl-defstruct (jaunder-entry (:constructor jaunder--make-entry))
-              "Structured AtomPub entry mapped from an org buffer.
-Holds abstract field values only; wire encoding (namespaces, media types,
-`app:draft' nesting) lives in `jaunder--atom-entry->xml'.  `body' is the
-body-only content with the metadata header block stripped."
-              title categories summary draft content-type body published)
 
 (defconst jaunder--header-keyword-re
   "^[ \t]*#\\+[A-Za-z][A-Za-z0-9_-]*:"
