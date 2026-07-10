@@ -39,6 +39,7 @@
 
 (require 'jaunder-entry)
 (require 'jaunder-config)
+(require 'jaunder-buffer)
 
 ;;; Pure helpers
 
@@ -140,67 +141,12 @@ the auth header under load (ADR-0038)."
 
 ;;; org -> atom mapping
 
-(defconst jaunder--header-keyword-re
-  "^[ \t]*#\\+[A-Za-z][A-Za-z0-9_-]*:"
-  "Regexp matching any org file-keyword line (`#+KEY:').
-The metadata header block is the leading run of these; matching *any*
-keyword (not just the mapped ones) means an interleaved keyword such as
-`#+AUTHOR:' cannot halt stripping and leak a later `#+PROPERTY: JAUNDER_*'
-into the sent body.  The trailing colon excludes block markers like
-`#+begin_src'.")
-
-(defconst jaunder--blank-line-re "^[ \t]*$"
-  "Regexp matching a blank (whitespace-only) line.")
-
 (defconst jaunder--org-media-type "text/org"
   "The atom:content media type for org source.
 `jaunder--org->atom' converts an org buffer, so its content is always org;
 the media type is knowable from the converter, not from any header field.
 Non-org authoring buffers (markdown/html) are separate future converters,
 out of scope for v1.")
-
-(defun jaunder--collect-properties (keywords)
-  "Return an alist of file-level #+PROPERTY: KEY/VALUE pairs from KEYWORDS.
-KEYWORDS is the result of `org-collect-keywords'; each PROPERTY entry is a
-\"KEY VALUE\" string split on the first run of whitespace."
-  (delq nil
-        (mapcar (lambda (line)
-                  (when (string-match "\\`\\([^ \t]+\\)[ \t]+\\(.*\\)\\'" line)
-                    (cons (match-string 1 line) (match-string 2 line))))
-                (cdr (assoc "PROPERTY" keywords)))))
-
-(defun jaunder--split-keywords (values)
-  "Split each #+KEYWORDS: string in VALUES on commas and flatten.
-Whitespace is trimmed and empty terms dropped."
-  (let (out)
-    (dolist (line values (nreverse out))
-      (dolist (term (split-string line "," t "[ \t]+"))
-        (unless (string= term "") (push term out))))))
-
-(defun jaunder--body-start ()
-  "Return the position after the leading metadata header block in this buffer.
-The header block is the leading contiguous run of header-keyword and blank lines.
-Shared by `jaunder--strip-header-block' and media detection so both see the same
-body region."
-  (save-excursion
-    (goto-char (point-min))
-    (let ((case-fold-search t))
-      (while (and (not (eobp))
-                  (or (looking-at-p jaunder--blank-line-re)
-                      (looking-at-p jaunder--header-keyword-re)))
-        (forward-line 1)))
-    (point)))
-
-(defun jaunder--strip-header-block (text)
-  "Return TEXT with its leading metadata header block removed.
-Drops the leading contiguous run of header keyword lines and blank lines
-(`jaunder--body-start'), which already positions at the start of content, then
-strips only trailing whitespace (the buffer's final newline) — leading
-whitespace on the first content line is body, not the header block, and is kept."
-  (with-temp-buffer
-    (insert text)
-    (string-trim-right
-     (buffer-substring-no-properties (jaunder--body-start) (point-max)))))
 
 (defun jaunder--offset->seconds (offset)
   "Parse a numeric UTC OFFSET string (\"±HHMM\" or \"±HH:MM\") to integer seconds.
@@ -494,50 +440,6 @@ harvested server URLs, in order.  The authoring buffer is never modified."
       (jaunder--substitute-media
        body
        (mapcar (lambda (r) (gethash (plist-get r :path) cache)) records)))))
-
-;;; buffer read/write helpers
-
-(defun jaunder--set-keyword-line (line-re new-line)
-  "Replace the first LINE-RE match in the leading header block with NEW-LINE.
-When absent, insert NEW-LINE after the last contiguous header-keyword line
-\(before any blank line or the body).  Header block only; the body is never
-touched."
-  (save-excursion
-    (goto-char (point-min))
-    (let ((case-fold-search t)
-          (limit (jaunder--body-start)))
-      (if (re-search-forward line-re limit t)
-          (progn (beginning-of-line)
-                 (delete-region (point) (line-end-position))
-                 (insert new-line))
-        (goto-char (point-min))
-        (let ((insert-at (point-min)))
-          (while (looking-at-p jaunder--header-keyword-re)
-            (forward-line 1)
-            (setq insert-at (point)))
-          (goto-char insert-at)
-          (insert new-line "\n"))))))
-
-(defun jaunder--set-property (key value)
-  "Set the file-level #+PROPERTY: KEY to VALUE (idempotent replace or insert)."
-  (jaunder--set-keyword-line
-   (format "^[ \t]*#\\+PROPERTY:[ \t]+%s\\(?:[ \t].*\\)?$" (regexp-quote key))
-   (format "#+PROPERTY: %s %s" key value)))
-
-(defun jaunder--set-keyword (keyword value)
-  "Set the file-level #+KEYWORD: to VALUE (idempotent replace or insert)."
-  (jaunder--set-keyword-line
-   (format "^[ \t]*#\\+%s:.*$" (regexp-quote keyword))
-   (format "#+%s: %s" keyword value)))
-
-(defun jaunder--buffer-property (key)
-  "Return the #+PROPERTY: KEY value in the current buffer, or nil."
-  (cdr (assoc key (jaunder--collect-properties
-                   (org-collect-keywords '("PROPERTY"))))))
-
-(defun jaunder--buffer-keyword (key)
-  "Return the #+KEY: value in the current buffer, or nil."
-  (cadr (assoc key (org-collect-keywords (list key)))))
 
 ;;; publish validation + Location->id + force-draft
 
