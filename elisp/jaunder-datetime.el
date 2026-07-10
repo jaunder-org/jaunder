@@ -23,7 +23,6 @@
 ;;; Code:
 
 (require 'org)
-(require 'jaunder-buffer)
 
 (defun jaunder--offset->seconds (offset)
   "Parse a numeric UTC OFFSET string (\"±HHMM\" or \"±HH:MM\") to integer seconds.
@@ -81,16 +80,6 @@ trusts a non-empty, non-`:'-prefixed value as an IANA name; a POSIX-style TZ
         (and link (string-match "zoneinfo/\\(.+\\)\\'" link)
              (match-string 1 link)))
       (format-time-string "%z")))
-
-(defun jaunder--ensure-date-tz ()
-  "Ensure the buffer records a JAUNDER_DATE_TZ; return the effective zone string.
-When unset, captures the machine's current zone (`jaunder--current-zone-name')
-so #+DATE: is interpreted in a recorded zone, not one silently re-inferred on a
-later machine.  Idempotent: an existing value is preserved verbatim."
-  (or (jaunder--buffer-property "JAUNDER_DATE_TZ")
-      (let ((zone (jaunder--current-zone-name)))
-        (jaunder--set-property "JAUNDER_DATE_TZ" zone)
-        zone)))
 
 (provide 'jaunder-datetime)
 ;;; jaunder-datetime.el ends here

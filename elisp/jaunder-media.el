@@ -25,7 +25,7 @@
 (require 'cl-lib)
 (require 'org)
 (require 'org-attach)
-(require 'jaunder-buffer)
+(require 'jaunder-org)
 (require 'jaunder-atom)
 (require 'jaunder-config)
 (require 'jaunder-transport)
