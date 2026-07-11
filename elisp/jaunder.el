@@ -29,6 +29,7 @@
 
 (require 'jaunder-entry)
 (require 'jaunder-config)
+(require 'jaunder-warn)
 (require 'jaunder-datetime)
 (require 'jaunder-atom)
 (require 'jaunder-org)

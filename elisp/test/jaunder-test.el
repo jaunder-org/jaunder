@@ -827,4 +827,69 @@
               (kill-buffer buf))))
       (delete-directory dir t))))
 
+;;; Publish-time warnings (shared idiom) ----------------------------------
+
+(defmacro jaunder-test--capturing-warnings (&rest body)
+  "Run BODY with `display-warning' captured; return the list of (TYPE MSG LEVEL).
+Lets the warning tests assert on emitted warnings without touching the real
+`*Warnings*' buffer."
+  (declare (indent 0))
+  `(let (jaunder-test--warnings)
+     (cl-letf (((symbol-function 'display-warning)
+                (lambda (type message &optional level &rest _)
+                  (push (list type message level) jaunder-test--warnings))))
+              ,@body)
+     (nreverse jaunder-test--warnings)))
+
+;;; #217 — zone-mismatch warning
+
+(ert-deftest jaunder-zone-offset-p-recognizes-offsets ()
+  (should (jaunder--zone-offset-p "-0400"))
+  (should (jaunder--zone-offset-p "+0000"))
+  (should-not (jaunder--zone-offset-p "America/New_York"))
+  (should-not (jaunder--zone-offset-p nil)))
+
+(ert-deftest jaunder-warn-zone-mismatch-fires-on-difference ()
+  ;; AC-217a: recorded IANA zone differs from the machine's current zone.
+  (cl-letf (((symbol-function 'jaunder--current-zone-name)
+             (lambda () "Europe/London")))
+           (let ((warnings (jaunder-test--capturing-warnings
+                            (jaunder--warn-zone-mismatch "America/New_York"))))
+             (should (= (length warnings) 1))
+             (pcase-let ((`(,type ,message ,level) (car warnings)))
+               (should (eq type 'jaunder))
+               (should (eq level :warning))
+               (should (string-prefix-p "jaunder: " message))
+               (should (string-match-p "America/New_York" message))
+               (should (string-match-p "Europe/London" message))))))
+
+(ert-deftest jaunder-warn-zone-mismatch-silent-when-unset ()
+  ;; AC-217b: no recorded zone yet (captured this publish) → nothing to warn about.
+  (cl-letf (((symbol-function 'jaunder--current-zone-name)
+             (lambda () "Europe/London")))
+           (should-not (jaunder-test--capturing-warnings
+                        (jaunder--warn-zone-mismatch nil)))))
+
+(ert-deftest jaunder-warn-zone-mismatch-silent-when-equal ()
+  ;; AC-217c (IANA): recorded == current.
+  (cl-letf (((symbol-function 'jaunder--current-zone-name)
+             (lambda () "America/New_York")))
+           (should-not (jaunder-test--capturing-warnings
+                        (jaunder--warn-zone-mismatch "America/New_York")))))
+
+(ert-deftest jaunder-warn-zone-mismatch-silent-both-offsets ()
+  ;; AC-217c (offset): two numeric offsets differ only across DST on one machine.
+  (cl-letf (((symbol-function 'jaunder--current-zone-name)
+             (lambda () "-0400")))
+           (should-not (jaunder-test--capturing-warnings
+                        (jaunder--warn-zone-mismatch "-0500")))))
+
+(ert-deftest jaunder-warn-zone-mismatch-suppressed ()
+  ;; AC-217d: the defcustom silences it even on a real difference.
+  (cl-letf (((symbol-function 'jaunder--current-zone-name)
+             (lambda () "Europe/London")))
+           (let ((jaunder-warn-zone-mismatch nil))
+             (should-not (jaunder-test--capturing-warnings
+                          (jaunder--warn-zone-mismatch "America/New_York"))))))
+
 ;;; jaunder-test.el ends here

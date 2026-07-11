@@ -168,6 +168,10 @@ file pristine."
                           ;; recorded zone on later machines.  A first-publish's org->atom above
                           ;; already used the local zone, which equals the captured name.
                           (jaunder--ensure-date-tz)
+                          ;; Authoring-hygiene warning: `tz' is the zone recorded
+                          ;; *before* the capture above, so a difference means the
+                          ;; author moved machines since recording it.
+                          (jaunder--warn-zone-mismatch tz)
                           (setf (jaunder-entry-body entry)
                                 (jaunder--localize-media (jaunder-entry-body entry)))
                           (let* ((xml (jaunder--atom-entry->xml entry))
