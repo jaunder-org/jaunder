@@ -16,6 +16,7 @@
 
 use crate::error::WebResult;
 use crate::reactive::{invalidator_scope, Invalidator, ListState};
+use crate::render::Icons;
 use crate::ui::Topbar;
 use leptos::prelude::*;
 use reactive_stores::{Field, Patch, Store};
@@ -259,12 +260,13 @@ pub fn AudiencesPage() -> impl IntoView {
     let store = Store::new(AudienceListData::default());
     let state = list.patched(list_my_audiences, move |rows| store.audiences().patch(rows));
 
-    // The subscriber roster: fetched once (constant source — never refetched, so no sticky
-    // retention is needed), provided as a `RosterSignal` so one source of truth drives both
-    // the page-level error node below and each `MemberChecklist`, without rebuilding rows.
-    // A fetch error is surfaced, never swallowed into an empty roster (#346).
-    let subscribers_res = crate::server_resource(|| (), |()| list_my_subscribers());
-    let subscribers: RosterSignal = Signal::derive(move || subscribers_res.get());
+    // The subscriber roster: an `Invalidator`-driven `sticky` resource so the refresh
+    // control (in the card head below) refetches it while retaining the current roster —
+    // flash-free (#347). Provided as a `RosterSignal`: one source of truth for the
+    // page-level error node below and each `MemberChecklist`. A fetch error is surfaced,
+    // never swallowed into an empty roster (#346).
+    let roster = Invalidator::new();
+    let subscribers: RosterSignal = roster.sticky(list_my_subscribers);
     provide_context(subscribers);
 
     view! {
@@ -281,6 +283,29 @@ pub fn AudiencesPage() -> impl IntoView {
                                 "Rename, delete, or assign subscribers to each audience."
                             </div>
                         </div>
+                        // Inline `<svg>` (not `<Icon>`): that component is in the target_arch-gated
+                        // `pages/ui.rs`, unreachable from this dual-target module; it relocates to
+                        // `web::ui` under #312. Glyph data is shared via `Icons::REFRESH`.
+                        <button
+                            type="button"
+                            class="j-icon-btn"
+                            aria-label="Refresh subscribers"
+                            on:click=move |_| roster.notify()
+                        >
+                            <svg
+                                class="j-icon"
+                                width="16"
+                                height="16"
+                                viewBox="0 0 20 20"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="1.6"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <path d=Icons::REFRESH />
+                            </svg>
+                        </button>
                     </div>
                     // Roster fetch error: surfaced once here (the roster feeds every
                     // checklist), mirroring the audience-list error sibling below. Silent
@@ -421,8 +446,9 @@ fn MemberChecklist(audience_id: i64) -> impl IntoView {
                 Some(Err(e)) => {
                     // Surface a members fetch error rather than swallowing it into an empty set
                     // (which would misrepresent everyone as a non-member) — consistent with the
-                    // audience list (#346).
-                    view! { <p class="error">{e}</p> }
+                    // audience list (#346). Stringify at the render site: `sticky` now preserves
+                    // the structured `WebError`, which is `Display` but not `IntoRender` (#347).
+                    view! { <p class="error">{e.to_string()}</p> }
                         .into_any()
                 }
                 Some(Ok(member_ids)) => {

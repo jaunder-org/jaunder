@@ -130,7 +130,8 @@ impl Invalidator {
 
     /// A [`Signal`] that stickily retains the latest resolved *result* of a refetch of `fetch`
     /// (revalidated by this invalidator): `None` until the first resolve, then `Some(Ok(v))`
-    /// on success or `Some(Err(msg))` on failure — retained across a pending refetch, so a
+    /// on success or `Some(Err(e))` on failure (the caller's error type `E`, preserved) — retained
+    /// across a pending refetch, so a
     /// mutation-triggered refetch never blanks the view back to "Loading…". The fetch error is
     /// **surfaced** (`Err`) for the caller to render, never swallowed into a default: a
     /// swallowed error silently misrepresents state (#346). The flat peer of
@@ -143,23 +144,17 @@ impl Invalidator {
     pub fn sticky<T, Fut, E>(
         &self,
         fetch: impl Fn() -> Fut + Send + Sync + 'static,
-    ) -> Signal<Option<Result<T, String>>>
+    ) -> Signal<Option<Result<T, E>>>
     where
         T: Clone + serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
-        E: Clone
-            + std::fmt::Display
-            + serde::Serialize
-            + serde::de::DeserializeOwned
-            + Send
-            + Sync
-            + 'static,
+        E: Clone + serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
     {
         let resource = self.resource(fetch);
-        let signal = RwSignal::new(None::<Result<T, String>>);
+        let signal = RwSignal::new(None::<Result<T, E>>);
         Effect::new(move |_| {
             if let Some(result) = resource.get() {
-                signal.set(Some(result.map_err(|e| e.to_string())));
+                signal.set(Some(result));
             }
         });
         signal.into()
