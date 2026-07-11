@@ -98,6 +98,18 @@ pub(crate) async fn restore_database(
         .execute(&mut *connection)
         .await?;
     let result = async {
+        // Clear every table before loading any. `SET CONSTRAINTS` defers foreign-key
+        // *checks*, not `ON DELETE CASCADE` *actions* — so a per-table DELETE could
+        // fire a cascade that wipes a row already loaded for an earlier table in the
+        // alphabetical manifest. A full clear-then-load avoids that entirely; restore
+        // is an authoritative replace of a database the emptiness preflight already
+        // proved unused.
+        for table in &manifest.tables {
+            sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
+                .execute(&mut *connection)
+                .await
+                .map_err(map_restore_error)?;
+        }
         for table in &manifest.tables {
             let columns = columns(&mut connection, table).await?;
             import_table(&mut connection, source_path, table, &columns).await?;
@@ -147,15 +159,6 @@ async fn import_table(
     table: &str,
     columns: &[ColumnInfo],
 ) -> Result<(), BackupError> {
-    // Authoritative replace: clear the target table before loading the backup's
-    // rows, so a table the target already seeds (the migration lookups) does not
-    // duplicate-key. Safe inside the FK-deferred restore transaction; empty
-    // backups still clear stale rows.
-    sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
-        .execute(&mut *connection)
-        .await
-        .map_err(map_restore_error)?;
-
     let rows = read_table_rows(source_path, table)?;
     if rows.is_empty() {
         return Ok(());

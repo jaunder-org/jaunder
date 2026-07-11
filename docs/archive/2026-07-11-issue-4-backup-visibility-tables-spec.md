@@ -97,15 +97,17 @@ Two moving parts:
   includes the migration-seeded lookups (`channels`, `subscription_statuses`,
   `target_kinds`), restoring into a freshly-initialized target — whose
   migrations already seeded those rows — would duplicate-key on INSERT. Restore
-  therefore `DELETE`s each table before inserting its rows, making it an
-  authoritative replace rather than assuming an empty target. This is safe under
-  the FK-off (SQLite) / deferred (Postgres) import transaction, where
-  delete/insert order is immaterial and integrity is checked once at the end.
-  For a fresh target it is a no-op on every table except the three seeded
-  lookups (identical rows cleared and re-inserted). Keeping the lookups in the
-  backup set — rather than denylisting them — means that if a lookup ever gains
-  user-writable rows they are carried, instead of silently dropped (which would
-  reintroduce exactly the data-loss class this issue closes).
+  is therefore an authoritative replace: it runs in **two passes inside the one
+  transaction — clear every table, then load every table**. A single interleaved
+  DELETE-then-INSERT per table would be unsafe on Postgres, because
+  `SET CONSTRAINTS` defers FK _checks_ but not `ON DELETE CASCADE` _actions_: a
+  later `DELETE FROM users`/`posts`/`tags` could cascade-wipe rows already
+  loaded for an earlier (alphabetical) table. Clearing everything before loading
+  anything removes that hazard structurally. For a fresh target the clear pass
+  is a no-op on every table except the three seeded lookups. Keeping the lookups
+  in the backup set — rather than denylisting them — means that if a lookup ever
+  gains user-writable rows they are carried, instead of silently dropped (which
+  would reintroduce exactly the data-loss class this issue closes).
 
 - **Tighten the restore emptiness guard (`server/src/commands.rs`,
   `storage/src/db.rs`).** `ensure_restore_target_empty` currently refuses only
@@ -125,12 +127,12 @@ Two moving parts:
 - **Row ordering is derived, not mapped (`backup.rs::order_by_clause`).** The
   hand-written per-table key map with a `rowid` fallback breaks for any
   auto-included table: Postgres has no `rowid`, so `ORDER BY rowid` on a new
-  table errors. Replace the map with **primary-key-derived ordering**: order by
-  the table's PK columns (introspected — SQLite `PRAGMA table_info` `pk`,
-  Postgres primary-key columns), falling back to **all columns** for a PK-less
-  table. This reproduces today's ordering for the existing 10 tables (their map
-  entries already _are_ their keys) and handles `post_audiences`, which has **no
-  PK** (only partial unique indexes) via the all-columns fallback.
+  table errors. Replace the map with **all-column ordering**: `ORDER BY` every
+  column in schema order (the `ColumnInfo` list each dialect already fetches for
+  the SELECT). This is deterministic on both backends, needs no PK
+  introspection, reproduces today's ordering for the existing tables (their key
+  is the leading, unique column, so ties never reach the trailing columns), and
+  handles `post_audiences`, which has **no PK** (only partial unique indexes).
 
 - **Guardrail test — nothing silently unbacked.** A harness test (per backend)
   enumerates the live schema tables and asserts each is either in the derived

@@ -84,6 +84,15 @@ pub(crate) async fn restore_database(
         .await?;
 
     let result = async {
+        // Clear every table before loading any (authoritative replace), keeping the
+        // two backends' restore shape identical. FK enforcement is off here, so a
+        // DELETE never cascades; the clear-then-load split matches Postgres, where
+        // deferral does not suppress cascade actions.
+        for table in &manifest.tables {
+            sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
+                .execute(&mut *connection)
+                .await?;
+        }
         for table in &manifest.tables {
             let columns = columns(&mut connection, table).await?;
             import_table(&mut connection, source_path, table, &columns).await?;
@@ -133,14 +142,6 @@ async fn import_table(
     table: &str,
     columns: &[ColumnInfo],
 ) -> Result<(), BackupError> {
-    // Authoritative replace: clear the target table before loading the backup's
-    // rows, so a table the target already seeds (the migration lookups) does not
-    // duplicate-key. Safe inside the FK-off restore transaction; empty backups
-    // still clear stale rows.
-    sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
-        .execute(&mut *connection)
-        .await?;
-
     let rows = read_table_rows(source_path, table)?;
     if rows.is_empty() {
         return Ok(());
