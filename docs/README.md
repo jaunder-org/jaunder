@@ -90,6 +90,7 @@ convention). See the Status column below for each ADR's current status.
 | [0060](adr/0060-web-invalidator-revalidation-idiom.md)             | web revalidation goes through the `Invalidator` primitive, not `action.version()`                            | proposed   |
 | [0061](adr/0061-web-keyed-list-reactive-store.md)                  | Web keyed lists render via a reactive Store, patch-fed                                                       | proposed   |
 | [0062](adr/0062-macros-crate-proc-macro-home.md)                   | A `macros` crate as the workspace's proc-macro home                                                          | proposed   |
+| [0063](adr/0063-domain-value-newtype-convention.md)                | Domain-value newtypes — when to introduce one, and the standard trailer                                      | proposed   |
 
 <!-- adr-table:end -->
 
