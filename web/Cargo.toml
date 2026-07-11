@@ -18,6 +18,7 @@ reactive_stores.workspace = true
 axum = { workspace = true, optional = true }
 common.workspace = true
 host = { path = "../host", optional = true }
+macros = { path = "../macros" }
 storage = { workspace = true, optional = true }
 http.workspace = true
 cfg-if.workspace = true
