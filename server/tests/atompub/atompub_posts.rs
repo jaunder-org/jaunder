@@ -1329,6 +1329,303 @@ async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
     assert_eq!(updated.status(), StatusCode::OK);
 }
 
+const ETAG_POST_XML: &str = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>T</title>
+  <category term="rust"/>
+  <content type="text">body</content>
+</entry>"#;
+
+/// POST `ETAG_POST_XML` as alice; return the create response's (`Location`, `ETag`).
+async fn create_location_etag(app: axum::Router, token: &str) -> (String, String) {
+    let created = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", token))
+                .body(Body::from(ETAG_POST_XML))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let location = created
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let etag = created
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    (location, etag)
+}
+
+/// POST `ETAG_POST_XML` as alice and return the create response's `ETag`.
+async fn create_etag(app: axum::Router, token: &str) -> String {
+    create_location_etag(app, token).await.1
+}
+
+/// GET `location` as alice, returning the response status.
+async fn get_status(app: axum::Router, token: &str, location: &str) -> StatusCode {
+    app.oneshot(
+        Request::builder()
+            .uri(location)
+            .header(header::AUTHORIZATION, basic_header("alice", token))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+    .status()
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn delete_with_stale_if_match_returns_412(#[case] backend: Backend) {
+    // AC7: a stale If-Match blocks the DELETE (412) and the post survives.
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base);
+    let (location, _etag) = create_location_etag(app.clone(), &token).await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(&location)
+                .header(header::IF_MATCH, "\"0\"")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(get_status(app, &token, &location).await, StatusCode::OK);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn delete_with_matching_if_match_succeeds(#[case] backend: Backend) {
+    // AC7: a matching If-Match deletes the post.
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base);
+    let (location, etag) = create_location_etag(app.clone(), &token).await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(&location)
+                .header(header::IF_MATCH, etag)
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        get_status(app, &token, &location).await,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn delete_without_if_match_succeeds(#[case] backend: Backend) {
+    // AC7: absent If-Match deletes unconditionally (unchanged default).
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base);
+    let (location, _etag) = create_location_etag(app.clone(), &token).await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(&location)
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn delete_with_wildcard_if_match_succeeds(#[case] backend: Backend) {
+    // AC7: `If-Match: *` deletes unconditionally (wildcard matches any current ETag).
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base);
+    let (location, _etag) = create_location_etag(app.clone(), &token).await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(&location)
+                .header(header::IF_MATCH, "*")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        get_status(app, &token, &location).await,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn editing_content_via_put_changes_etag(#[case] backend: Backend) {
+    // AC4 (HTTP): a PUT that changes the body changes the ETag end-to-end.
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base);
+    let (location, e1) = create_location_etag(app.clone(), &token).await;
+
+    let edited = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>T</title>
+  <category term="rust"/>
+  <content type="text">a different body</content>
+</entry>"#;
+    let updated = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&location)
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::IF_MATCH, &e1)
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(edited))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+    let e2 = updated
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(e1, e2);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn etag_is_content_hash_format(#[case] backend: Backend) {
+    // AC1: the emitted ETag is a strong, quoted "sha256-<64 lowercase hex>" token.
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base);
+
+    let etag = create_etag(app, &token).await;
+    let hex = etag
+        .strip_prefix("\"sha256-")
+        .and_then(|s| s.strip_suffix('"'))
+        .expect("ETag is a quoted sha256- token");
+    assert_eq!(hex.len(), 64);
+    assert!(hex
+        .chars()
+        .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn identical_posts_share_etag(#[case] backend: Backend) {
+    // AC2: two distinct posts with identical content get the same ETag — the
+    // per-post id / tag ids / slug are excluded from the hash.
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base);
+
+    let e1 = create_etag(app.clone(), &token).await;
+    let e2 = create_etag(app, &token).await;
+    assert_eq!(e1, e2);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn idempotent_reput_keeps_etag(#[case] backend: Backend) {
+    // AC3 + AC5: re-PUT byte-identical content → the ETag is unchanged (a
+    // timestamp ETag would have bumped on the write).
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base);
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(ETAG_POST_XML))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let location = created
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let e1 = created
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let updated = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&location)
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::IF_MATCH, &e1)
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(ETAG_POST_XML))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+    let e2 = updated
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(e1, e2);
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
