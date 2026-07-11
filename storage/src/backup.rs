@@ -750,6 +750,56 @@ mod tests {
         Ok(())
     }
 
+    // The restore emptiness guard: a freshly-initialized database counts as empty
+    // (only the migration-seeded lookups are populated), and any other row makes
+    // it non-empty. A future migration that seeds a new table would make the fresh
+    // database read as non-empty and fail the first assertion here.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn database_is_empty_ignores_only_seeded_lookups(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let env = backend.setup().await;
+        let db = backup_db_options(backend, &env.base)?;
+
+        assert!(
+            crate::database_is_empty(&db).await?,
+            "a freshly-initialized database must count as empty"
+        );
+        for table in ["channels", "subscription_statuses", "target_kinds"] {
+            let count: i64 = match env.base.pool() {
+                CloseablePool::Sqlite(pool) => {
+                    sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
+                        .fetch_one(pool)
+                        .await?
+                }
+                CloseablePool::Postgres(pool) => {
+                    sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
+                        .fetch_one(pool)
+                        .await?
+                }
+            };
+            assert!(count > 0, "{table} must be seeded by migrations");
+        }
+
+        // A single non-seeded row (a user) makes the database non-empty.
+        env.state
+            .users
+            .create_user(
+                &"alice".parse().expect("valid username"),
+                &"password123".parse().expect("valid password"),
+                None,
+                false,
+            )
+            .await
+            .expect("create user");
+        assert!(
+            !crate::database_is_empty(&db).await?,
+            "a database holding a user must not count as empty"
+        );
+        Ok(())
+    }
+
     #[test]
     fn empty_or_absent_destination_accepts_missing_and_empty_paths() -> Result<(), BackupError> {
         let temp = TempDir::new()?;

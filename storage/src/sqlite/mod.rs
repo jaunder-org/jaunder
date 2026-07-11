@@ -126,15 +126,32 @@ pub(super) async fn open_sqlite_database(
         .0)
 }
 
-/// Returns `true` if the `SQLite` database already contains at least one user.
-pub(super) async fn database_has_users(options: &SqliteConnectOptions) -> sqlx::Result<bool> {
+/// Returns `true` if the `SQLite` database holds no user data — every table
+/// except the migration-seeded lookups is empty.
+pub(super) async fn database_is_empty(options: &SqliteConnectOptions) -> sqlx::Result<bool> {
     let pool = SqlitePool::connect_with(options.clone()).await?;
-    Ok(
-        sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM users LIMIT 1)")
-            .fetch_one(&pool)
-            .await?
-            != 0,
+    let tables = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM sqlite_master \
+         WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> '_sqlx_migrations'",
     )
+    .fetch_all(&pool)
+    .await?;
+    for table in tables {
+        if crate::db::MIGRATION_SEEDED_TABLES.contains(&table.as_str()) {
+            continue;
+        }
+        let has_row = sqlx::query_scalar::<_, i64>(&format!(
+            "SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)",
+            crate::sql::quote_identifier(&table)
+        ))
+        .fetch_one(&pool)
+        .await?
+            != 0;
+        if has_row {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
